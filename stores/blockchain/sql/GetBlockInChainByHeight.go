@@ -69,7 +69,38 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	q := `
+	// The fast path filters blocks by on_main_chain = true and height <=
+	// startHash's height. That matches the CTE's walk-from-startHash semantics
+	// only when startHash is itself on the main chain. When it is a fork tip
+	// (a known hash with on_main_chain = false), the two paths disagree — the
+	// CTE follows the fork's ancestors, the fast path would substitute whichever
+	// main-chain block sits at the same height. Fall back to the CTE in that
+	// case. Treat DB errors or unknown hashes as "not on main chain" so the CTE
+	// (which also surfaces that error) stays authoritative.
+	//
+	// TOCTOU: the guard check and startOnMain preflight are non-atomic with the
+	// main query that follows. A concurrent writer can bump the guard after this
+	// check but before the main query runs. In the worst case the caller sees
+	// one call's worth of slightly-stale data; on the next call the guard is
+	// observed > 0 and the CTE path is taken. Acceptable under the store's
+	// single-writer model, where these transient inconsistencies are bounded
+	// and self-healing.
+	rebuilding := s.mainChainRebuilding.Load() > 0
+	startOnMain := false
+	if !rebuilding {
+		if scanErr := s.db.QueryRowContext(ctx,
+			`SELECT COALESCE((SELECT on_main_chain FROM blocks WHERE hash = $1 LIMIT 1), false)`,
+			startHash.CloneBytes(),
+		).Scan(&startOnMain); scanErr != nil {
+			// Error falls through to the CTE path, which will re-run the same
+			// kind of DB access and surface the error to the caller.
+			startOnMain = false
+		}
+	}
+
+	var q string
+	if rebuilding || !startOnMain {
+		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height
 			FROM blocks
@@ -102,6 +133,37 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		WHERE cb.height = $1
 		LIMIT 1
 	`
+	} else {
+		// Fast path: use on_main_chain flag instead of the recursive CTE walk.
+		// We still enforce the startHash height upper bound so that only blocks
+		// that are ancestors-of or equal-to startHash are considered — matching
+		// the CTE's walk-from-startHash semantics exactly. The height <= bound
+		// ensures we return no row when height > startHash.height, identical to
+		// the CTE. If startHash is not in the DB the subquery returns NULL and
+		// the height comparison yields no rows, producing the same ErrNoRows as
+		// the CTE path.
+		q = `
+		SELECT
+		 b.ID
+		,b.version
+		,b.block_time
+		,b.n_bits
+		,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+		,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.subtree_count
+		,b.subtrees
+		,b.invalid
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND b.height = $1
+		  AND b.height <= (SELECT height FROM blocks WHERE hash = $2 LIMIT 1)
+		LIMIT 1
+	`
+	}
 
 	block = &model.Block{
 		Header: &model.BlockHeader{},

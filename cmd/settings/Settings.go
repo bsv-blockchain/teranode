@@ -165,11 +165,17 @@ func sortValue(v interface{}) interface{} {
 // Side effects:
 //   - Prints the settings, version, and commit information to stdout.
 //   - Logs errors if the settings cannot be marshaled to JSON.
-func PrintSettings(logger ulogger.Logger, settings *settings.Settings, version, commit string) {
+func PrintSettings(logger ulogger.Logger, s *settings.Settings, version, commit string) {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	settingsJSON, err := marshalSortedJSON(settings, "  ")
+	redacted, err := settings.Redact(s)
+	if err != nil {
+		logger.Errorf("Failed to redact settings before logging: %v", err)
+		return
+	}
+
+	settingsJSON, err := marshalSortedJSON(redacted, "  ")
 	if err != nil {
 		logger.Errorf("Failed to marshal settings: %v", err)
 	} else {

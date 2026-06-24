@@ -1,30 +1,40 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Component } from 'svelte'
   import { toUnit } from '$lib/styles/utils/css'
   import { iconNameOverrides, useLibIcons } from '$lib/stores/media'
 
-  export let testId: string | undefined | null = null
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    name = null,
+    size = 24,
+    opacity = 1,
+    color = 'currentColor',
+    iconSvg = null,
+    onclick,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    name?: string | null | undefined
+    size?: number
+    opacity?: number
+    color?: string
+    iconSvg?: string | null
+    onclick?: (e: MouseEvent) => void
+  } = $props()
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
-
-  export let style = ''
-
-  export let name: string | null | undefined = null
-  export let size = 24
-  export let opacity = 1
-  export let color = 'currentColor'
-  export let iconSvg = null
-
-  let finalName = name
-  $: {
-    finalName = name
-
+  const finalName = $derived.by(() => {
     if (name && $iconNameOverrides[name]) {
-      finalName = $iconNameOverrides[name]
+      return $iconNameOverrides[name]
     }
-  }
+    return name
+  })
 
-  let SvgIcon
+  let SvgIcon = $state<Component | null>(null)
 
   async function loadSvgComp(name) {
     SvgIcon = null
@@ -49,33 +59,30 @@
     }
   }
 
-  $: {
+  $effect(() => {
     if (finalName) {
       loadSvgComp(finalName)
     }
-  }
+  })
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
-      `--width:${toUnit(size)}`,
-      `--height:${toUnit(size)}`,
-      `--opacity:${opacity}`,
-      `--color:${color}`,
-      `--margin:0`,
-    ]
-  }
+  const cssVars = $derived([
+    `--width:${toUnit(size)}`,
+    `--height:${toUnit(size)}`,
+    `--opacity:${opacity}`,
+    `--color:${color}`,
+    `--margin:0`,
+  ])
 </script>
 
-<!-- svelte-ignore a11y-click-events-have-key-events -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   role="button"
   tabindex="0"
   data-test-id={testId}
   class={`tui-icon${clazz ? ' ' + clazz : ''}`}
   style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
-  on:click
-  on:keydown={(e) => {
+  {onclick}
+  onkeydown={(e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
       e.currentTarget.click()
@@ -84,7 +91,7 @@
 >
   {#if finalName && SvgIcon}
     {#key finalName}
-      <svelte:component this={SvgIcon} />
+      <SvgIcon />
     {/key}
   {:else if iconSvg}
     {@html iconSvg}

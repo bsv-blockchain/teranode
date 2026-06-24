@@ -1,10 +1,12 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   // TODO component is a mess, redo later
 
-  export let open = false
-  let size = 24
+  let { open = false }: { open?: boolean } = $props()
+  const size = 24
 
-  $: scaleLocal = (18 / 60) * (size / 24)
+  const scaleLocal = $derived((18 / 60) * (size / 24))
 </script>
 
 <div class="anim-menu-icon" style:--scale={scaleLocal} style:--size={`${size}px`}>

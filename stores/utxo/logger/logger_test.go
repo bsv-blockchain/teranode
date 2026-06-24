@@ -57,6 +57,11 @@ func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
+func (m *MockStore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func (m *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	args := m.Called(ctx, tx, blockHeight, opts)
 	return args.Get(0).(*meta.Data), args.Error(1)
@@ -113,6 +118,24 @@ func (m *MockStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
 }
 
+func (m *MockStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
+}
+
+func (m *MockStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
+func (m *MockStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
 func (m *MockStore) GetSpend(ctx context.Context, spendArg *utxo.Spend) (*utxo.SpendResponse, error) {
 	args := m.Called(ctx, spendArg)
 	return args.Get(0).(*utxo.SpendResponse), args.Error(1)
@@ -166,6 +189,24 @@ func (m *MockStore) SetConflicting(ctx context.Context, txHashes []chainhash.Has
 func (m *MockStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	args := m.Called(ctx, txHashes, setValue)
 	return args.Error(0)
+}
+
+func (m *MockStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	args := m.Called(ctx, intent)
+	return args.Error(0)
+}
+
+func (m *MockStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	args := m.Called(ctx, intentID)
+	return args.Error(0)
+}
+
+func (m *MockStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]utxo.ConflictIntent), args.Error(1)
 }
 
 func (m *MockStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {

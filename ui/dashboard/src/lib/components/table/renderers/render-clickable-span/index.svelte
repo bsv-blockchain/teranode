@@ -1,13 +1,17 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  export let text: string = ''
-  export let onClick: () => void = () => {}
-  export let className: string = ''
+  let {
+    text = '',
+    onClick = () => {},
+    className = '',
+  }: { text?: string; onClick?: () => void; className?: string } = $props()
 </script>
 
-<span 
-  class="clickable-span {className}" 
-  on:click={onClick}
-  on:keydown={(e) => e.key === 'Enter' && onClick()}
+<span
+  class="clickable-span {className}"
+  onclick={onClick}
+  onkeydown={(e) => e.key === 'Enter' && onClick()}
   role="button"
   tabindex="0"
 >

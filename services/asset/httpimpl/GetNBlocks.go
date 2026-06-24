@@ -115,7 +115,7 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetNBlocks_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] Get %s Blocks in %s for %s", mode, c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] Get %s Blocks in %s for %s", mode, c.RealIP(), hashStr),
 		)
 
 		defer deferFn()

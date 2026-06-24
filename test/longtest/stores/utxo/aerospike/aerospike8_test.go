@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/assert"
@@ -16,7 +16,7 @@ func TestAerospike8TransactionSupport(t *testing.T) {
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike/aerospike-server:8.0"), aeroTest.WithTTLSupport("test"))
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike/aerospike-server:8.1"), aeroTest.WithTTLSupport("test"))
 	require.NoError(t, err)
 
 	t.Cleanup(func() {

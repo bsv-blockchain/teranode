@@ -170,6 +170,10 @@ func (c *LocalClient) GetNextBlockID(ctx context.Context) (uint64, error) {
 	return c.store.GetNextBlockID(ctx)
 }
 
+func (c *LocalClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	return c.store.AssignBlockID(ctx, blockHash)
+}
+
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }
@@ -471,10 +475,6 @@ func (c *LocalClient) ReportPeerFailure(ctx context.Context, hash *chainhash.Has
 	return nil
 }
 
-func (c *LocalClient) LegacySync(ctx context.Context) error {
-	return nil
-}
-
 // GetBlockLocator returns a block locator for the latest block.
 // This function will be much faster, when moved to the server side.
 func (c *LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
@@ -595,6 +595,13 @@ func (c *LocalClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken 
 
 // GetMedianTimePastForHeights returns the MTP for one or more block heights.
 // MTP values are read from pre-stored block metadata rather than recomputed on demand.
+//
+// Note: this implementation intentionally bypasses the in-process MTP cache held by
+// the Blockchain service instance (mtpCache). LocalClient is used by callers that do
+// not share a Blockchain service instance — it wraps the store directly. Wiring a
+// shared cache across the LocalClient/Server boundary is out of scope; callers that
+// need cache-accelerated MTP lookups should use the Blockchain gRPC/service interface
+// instead.
 func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
 	if len(heights) == 0 {
 		return []uint32{}, nil
@@ -631,6 +638,13 @@ func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights [
 // GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
 // Returns a dense slice where result[i] = MTP for height (fromHeight + i).
 // Blocks missing from the canonical chain (e.g. heights below 11) are left as zero.
+//
+// Note: this implementation intentionally bypasses the in-process MTP cache held by
+// the Blockchain service instance (mtpCache). LocalClient is used by callers that do
+// not share a Blockchain service instance — it wraps the store directly. Wiring a
+// shared cache across the LocalClient/Server boundary is out of scope; callers that
+// need cache-accelerated MTP lookups should use the Blockchain gRPC/service interface
+// instead.
 func (c *LocalClient) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
 	if toHeight < fromHeight {
 		return []uint32{}, nil

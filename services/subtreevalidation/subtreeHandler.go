@@ -156,9 +156,11 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 		return err
 	}
 
-	// if no error was thrown, remove all the transactions from this subtree from the orphanage
-	for _, node := range subtree.Nodes {
-		u.orphanage.Delete(node.Hash)
+	if subtree == nil {
+		// ValidateSubtreeInternal returned (nil, nil) because the subtree already existed in the
+		// store - another goroutine completed the write between TryLockIfFileNotExists and the
+		// in-store existence check. Nothing to clean up.
+		return nil
 	}
 
 	return nil

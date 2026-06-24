@@ -1,5 +1,6 @@
 ---
 name: bitcoin-expert
+description: Use for Bitcoin/BSV protocol correctness — consensus rules, script & opcodes, UTXO model, merkle proofs, proof-of-work, transaction finality (nLockTime / BIP68 / median-time-past), and BSV-specific semantics. Invoke when reviewing or reasoning about consensus-critical Bitcoin/BSV code.
 ---
 
 # bitcoin-expert

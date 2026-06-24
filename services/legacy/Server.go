@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	legacypeer "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
@@ -253,6 +254,17 @@ func (s *Server) Init(ctx context.Context) error {
 
 	wire.SetLimits(4000000000)
 
+	// Stream-decode incoming "block" messages straight from the socket
+	// instead of buffering the full payload first. On multi-GB blocks the
+	// default ReadMessageWithEncodingN path allocated a fresh []byte the
+	// size of the entire block, ~2.86 GB of inuse heap at peak per the
+	// 2026-05-16 fat-block capture. The wire-level DoubleHash checksum
+	// is not preserved on this path; payload integrity is enforced by
+	// the existing downstream validation in netsync.HandleBlockDirect
+	// (PoW, merkle reconstruction, per-tx parse). See the doc comment
+	// on streamingBlockHandler for the full rationale.
+	legacypeer.RegisterStreamingBlockHandler()
+
 	// get the public IP and listen on it
 	ip, err := GetOutboundIP()
 	if err != nil {
@@ -390,6 +402,21 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 	}
 
 	return resp, nil
+}
+
+// RebroadcastDropCounts exposes the rebroadcast queue's drop counters for
+// operator observability. Returns (adds, capHits): `adds` counts
+// AddRebroadcastInventory sends that were dropped because
+// modifyRebroadcastInv was full; `capHits` counts in-handler adds that
+// were dropped because pendingInvs was at maxRebroadcastInventory.
+//
+// Both counters are cumulative since process start and are never reset.
+// Returns (0, 0) when the internal server is not initialised.
+func (s *Server) RebroadcastDropCounts() (adds, capHits uint64) {
+	if s.server == nil {
+		return 0, 0
+	}
+	return s.server.RebroadcastDropCounts()
 }
 
 // IsBanned checks if a specific IP address or subnet is currently banned.
@@ -672,7 +699,13 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // Parameters:
 //   - _: Context parameter (unused in the current implementation)
 //
-// Returns an error if the shutdown process encounters problems, or nil on successful shutdown
+// Returns an error if the shutdown process encounters problems, or nil on successful shutdown.
+// Returns nil immediately if the inner server was never initialized (e.g. when Init failed
+// before newServer succeeded), so the daemon error path cannot dereference a nil server.
 func (s *Server) Stop(_ context.Context) error {
+	if s.server == nil {
+		return nil
+	}
+
 	return s.server.Stop()
 }

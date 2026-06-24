@@ -773,3 +773,80 @@ func TestWithSampleRate_ChildSpanInheritsOverride(t *testing.T) {
 	defer endChild()
 	assert.True(t, childSpan.IsRecording(), "child should be recording due to inherited context override")
 }
+
+// TestStart_DisabledSkipsStatCreation verifies that when tracing is disabled the
+// per-span gocore.Stat is not created/injected (it is the dominant unconditional
+// cost on the hot sync path), and that StartTime is not injected by default
+// (it is opt-in via WithStartTime; see TestStart_StartTimeOptIn).
+func TestStart_DisabledSkipsStatCreation(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	tracer := Tracer("test-service")
+	ctx := context.Background()
+
+	newCtx, _, endFn := tracer.Start(ctx, "op",
+		WithTag("key", "value"),
+		WithParentStat(gocore.NewStat("parent")),
+	)
+	defer endFn()
+
+	// No gocore.Stat should be injected when tracing is disabled.
+	require.Nil(t, newCtx.Value(statsKey{}), "no gocore.Stat should be injected when tracing disabled")
+
+	// StartTime is opt-in (WithStartTime) and must not be injected by default.
+	require.Nil(t, newCtx.Value(StartTime), "StartTime should not be injected without WithStartTime")
+}
+
+// TestStart_StartTimeOptIn verifies StartTime is injected into the context only
+// when WithStartTime is supplied (blockvalidation catchup reads it), and is absent
+// otherwise — avoiding the per-span context.WithValue boxing on the hot path.
+func TestStart_StartTimeOptIn(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	tracer := Tracer("test-service")
+
+	// Without WithStartTime: absent.
+	ctxNo, _, endNo := tracer.Start(context.Background(), "no-opt")
+	require.Nil(t, ctxNo.Value(StartTime), "StartTime should be absent without WithStartTime")
+
+	endNo()
+
+	// With WithStartTime: present and a time.Time.
+	ctxYes, _, endYes := tracer.Start(context.Background(), "opt", WithStartTime())
+	st := ctxYes.Value(StartTime)
+	require.NotNil(t, st, "StartTime should be injected with WithStartTime")
+
+	_, ok := st.(time.Time)
+	require.True(t, ok, "StartTime should be a time.Time")
+
+	endYes()
+}
+
+// BenchmarkStart_Disabled measures per-span allocation on the disabled hot path
+// (the legacy sync path creates millions of these per block).
+func BenchmarkStart_Disabled(b *testing.B) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	tracer := Tracer("bench")
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, _, endFn := tracer.Start(ctx, "op",
+			WithTag("txid", "abc123"),
+			WithTag("height", "875800"),
+		)
+		endFn()
+	}
+}

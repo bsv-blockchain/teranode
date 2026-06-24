@@ -3,8 +3,8 @@ package uaerospike
 import (
 	"sync"
 
-	"github.com/aerospike/aerospike-client-go/v8"
-	"github.com/aerospike/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 )
 
 // MockAerospikeClient is a mock implementation of the aerospike.IClient interface

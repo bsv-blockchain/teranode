@@ -7,7 +7,7 @@ x-teranode-base: &teranode-base
     - e2etest
 
 x-aerospike-base: &aerospike-base
-  image: aerospike/aerospike-server:8.0
+  image: aerospike/aerospike-server:8.1
   networks:
     - e2etest
   command: --config-file /etc/aerospike.conf

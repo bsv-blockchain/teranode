@@ -6,7 +6,7 @@
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| BootstrapPeers | []string | [] | p2p_bootstrap_peers | DHT bootstrapping entry points |
+| BootstrapPeers | []string | [] (settings.conf ships with `/dnsaddr/${network}.bootstrap.teranode.bsvb.tech`) | p2p_bootstrap_peers | Peer discovery entry points (required for dht_mode "off" and "client") |
 | GRPCAddress | string | "" | p2p_grpcAddress | gRPC client connections |
 | GRPCListenAddress | string | ":9906" (Go default; overridden to `:9904` by `settings.conf` via `P2P_GRPC_PORT`) | p2p_grpcListenAddress | **CRITICAL** - gRPC server binding |
 | HTTPAddress | string | "localhost:9906" | p2p_httpAddress | HTTP client connections |
@@ -15,7 +15,7 @@
 | AdvertiseAddresses | []string | [] | p2p_advertise_addresses | Address advertisement to peers |
 | ListenMode | string | "full" | listen_mode | Node operation mode ("full" or "listen_only") |
 | PeerID | string | "" | p2p_peer_id | Peer network identifier |
-| Port | int | 9906 (Code default; settings.conf ships with 9905 via `P2P_PORT`) | p2p_port | Default P2P communication port |
+| Port | int | 9905 | p2p_port | Default P2P communication port (multiaddrs in ListenAddresses/AdvertiseAddresses are the source of truth) |
 | PrivateKey | string | "" | p2p_private_key | **CRITICAL** - Cryptographic peer identity |
 | BlockTopic | string | "" | p2p_block_topic | Block propagation topic |
 | NodeStatusTopic | string | "" | p2p_node_status_topic | Node status communication topic |
@@ -28,7 +28,7 @@
 | ForceSyncPeer | string | "" | p2p_force_sync_peer | **CRITICAL** - Forced sync peer override |
 | SharePrivateAddresses | bool | true | p2p_share_private_addresses | Private address advertisement |
 | AllowPrunedNodeFallback | bool | true | p2p_allow_pruned_node_fallback | **CRITICAL** - Pruned node fallback behavior |
-| DHTMode | string | "server" | p2p_dht_mode | DHT operation mode ("server" or "client") |
+| DHTMode | string | "server" (Code default; settings.conf ships with "off") | p2p_dht_mode | DHT operation mode ("server", "client", or "off") |
 | DHTCleanupInterval | time.Duration | 24h | p2p_dht_cleanup_interval | DHT provider record cleanup interval |
 | EnableNAT | bool | false | p2p_enable_nat | **CRITICAL** - UPnP/NAT-PMP port mapping (triggers network scanning) |
 | EnableMDNS | bool | false | p2p_enable_mdns | **CRITICAL** - mDNS peer discovery (triggers network scanning) |
@@ -113,22 +113,38 @@ p2p_sync_coordinator_periodic_evaluation_interval=30s
 
 ### DHT Configuration
 
-The DHT (Distributed Hash Table) can operate in two modes:
+The DHT (Distributed Hash Table) can operate in three modes:
 
 ```bash
-# Server mode (default) - advertises on DHT and stores provider records
+# Server mode - full DHT participation: advertises on DHT, stores provider
+# records, routes queries for other peers
 p2p_dht_mode=server
 p2p_dht_cleanup_interval=24h
 
 # Client mode - query-only, no provider storage (reduces network overhead)
 p2p_dht_mode=client
+
+# Off - no DHT at all; topic-only network (settings.conf default)
+p2p_dht_mode=off
 ```
+
+**When to use server mode:**
+
+- Publicly dialable nodes that should strengthen the network with direct connections
+- Required for inclusion in the BSV Association DNS bootstrap pool (contact BSVA)
+- Highest resource usage; pair with explicit `p2p_advertise_addresses` — see [How to Expose the P2P Service Publicly (Kubernetes)](../../../howto/miners/kubernetes/minersHowToExposeP2P.md)
 
 **When to use client mode:**
 
 - Nodes that don't need to be discoverable by others
 - Reduced network overhead and storage requirements
 - Behind restrictive NAT/firewall
+
+**When to use off:**
+
+- Most lightweight: no DHT crawling, no random connections; peer addresses come from bootstrap servers
+- **Recommended for abuse-sensitive hosting providers (e.g. Hetzner, OVH)** — `server` and `client` modes connect to 100+ semi-random IPs, which these providers may flag as network scanning and answer with abuse warnings or suspension
+- The node still participates fully in block and transaction propagation via topics
 
 ### Peer Registry Configuration
 

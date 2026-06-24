@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	as "github.com/aerospike/aerospike-client-go/v8"
+	as "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -33,7 +33,7 @@ type consistencyScanIterator struct {
 // all records to find unmined_since inconsistencies.
 func (s *Store) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
 	if s.client == nil {
-		return nil, errors.NewProcessingError("aerospike client not initialized")
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
 	}
 
 	numPartitionQueries, err := calculatePartitionQueries(s)

@@ -73,9 +73,6 @@ type Server struct {
     // invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
     invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
 
-    // orphanage manages orphaned transactions that are missing their parent transactions
-    orphanage *Orphanage
-
     // bestBlockHeader is used to store the current best block header
     bestBlockHeader atomic.Pointer[model.BlockHeader]
 
@@ -154,7 +151,6 @@ Creates a new `Server` instance with the provided dependencies. This factory fun
 - **Quorum management**: Initializes singleton quorum manager for distributed locking
 - **Transaction metadata caching**: Optionally wraps UTXO store with caching layer
 - **Kafka producer setup**: Configures invalid subtree event publishing if enabled
-- **Orphanage initialization**: Sets up orphaned transaction storage with configurable timeout
 - **Blockchain subscription**: Establishes blockchain event listener for block updates
 - **Best block tracking**: Initializes current blockchain state tracking
 
@@ -256,7 +252,6 @@ Validates a subtree and its transactions based on the provided request. This met
 - **Backward compatibility**: Support for both legacy and current validation paths
 - **Resource cleanup**: Proper cleanup even in error conditions
 - **Structured responses**: Appropriate gRPC status codes
-- **Orphan processing**: Handles orphaned transactions after subtree validation
 
 !!! success "Validation Criteria"
     The validation process ensures that:
@@ -283,7 +278,6 @@ Validates all subtrees referenced in a block to ensure they exist in storage and
 - **Parallel processing**: Validates multiple subtrees concurrently for performance
 - **Level-based validation**: Processes transactions in dependency order across all subtrees
 - **Stream processing**: Efficiently processes subtree data directly from HTTP streams
-- **Orphan handling**: Manages orphaned transactions discovered during validation
 
 **Validation Process:**
 
@@ -293,7 +287,6 @@ Validates all subtrees referenced in a block to ensure they exist in storage and
 4. **Transaction extraction**: Extracts all transactions from all subtrees
 5. **Level-based processing**: Validates transactions in dependency order
 6. **Subtree validation**: Validates individual subtrees after transaction processing
-7. **Orphan processing**: Handles any orphaned transactions found during validation
 
 !!! info "Performance Optimization"
     The method uses several optimization techniques including stream processing for direct HTTP data handling, block-wide validation for better dependency resolution, parallel subtree processing, and efficient memory management during large block processing.
@@ -547,21 +540,6 @@ func (u *Server) isPrioritySubtreeCheckActive(subtreeHash string) bool
 ```
 
 Checks if a priority subtree check is active for the given subtree hash. Priority checks get special handling and resource allocation to ensure critical subtrees are validated promptly.
-
-### processOrphans
-
-```go
-func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool)
-```
-
-Processes orphaned transactions that were discovered during subtree validation. This method attempts to validate transactions that were previously missing parents, organizing them by dependency level and processing them in parallel where possible.
-
-**Orphan Processing:**
-
-- **Dependency analysis**: Organizes orphaned transactions by dependency level
-- **Parallel validation**: Processes independent transactions concurrently
-- **Automatic cleanup**: Removes successfully validated transactions from the orphanage
-- **Metrics tracking**: Tracks the number of orphans processed for monitoring
 
 ### publishInvalidSubtree
 

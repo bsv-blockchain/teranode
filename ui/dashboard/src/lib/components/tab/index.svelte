@@ -1,5 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
+  import type { Snippet } from 'svelte'
   import { FocusRect, Icon } from '$lib/components'
   import {
     ComponentSize,
@@ -13,51 +15,65 @@
     FlexDirectionType,
   } from '$lib/styles/types'
 
-  const dispatch = createEventDispatcher()
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    variant = ComponentVariant.primary,
+    icon = null,
+    iconAfter = null,
+    border = true,
+    disabled = false,
+    selected = false,
+    toggle = false,
+    width = -1,
+    round = false,
+    hasFocusRect = true,
+    stretch = false,
+    size = ComponentSize.medium,
+    children,
+    onclick,
+    onkeydown,
+    onfocus,
+    onblur,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    variant?: ComponentVariantType
+    icon?: string | undefined | null
+    iconAfter?: string | undefined | null
+    border?: boolean
+    disabled?: boolean
+    selected?: boolean
+    toggle?: boolean
+    width?: number
+    round?: boolean
+    hasFocusRect?: boolean
+    stretch?: boolean
+    size?: ComponentSizeType
+    children?: Snippet
+    onclick?: (e: MouseEvent | KeyboardEvent) => void
+    onkeydown?: (e: KeyboardEvent) => void
+    onfocus?: () => void
+    onblur?: () => void
+  } = $props()
 
-  export let testId: string | undefined | null = null
+  const hasIcon = $derived(Boolean(icon) || Boolean(iconAfter))
+  const direction: FlexDirectionType = $derived(
+    hasIcon ? (icon ? FlexDirection.row : FlexDirection.rowReverse) : FlexDirection.row,
+  )
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
+  const styleSize = $derived(getStyleSizeFromComponentSize(size))
 
-  export let style = ''
+  const compVarStr = $derived(`--comp-${variant}`)
+  const tabVarStr = `--tab-default`
+  const compSizeStr = $derived(`--comp-size-${styleSize}`)
+  const tabSizeStr = $derived(`--tab-size-${styleSize}`)
 
-  export let variant: ComponentVariantType = ComponentVariant.primary
-  export let icon: string | undefined | null = null
-  export let iconAfter: string | undefined | null = null
-  export let border = true
-
-  let hasIcon = false
-  let direction: FlexDirectionType = FlexDirection.row
-
-  $: {
-    hasIcon = Boolean(icon) || Boolean(iconAfter)
-
-    if (hasIcon) {
-      direction = icon ? FlexDirection.row : FlexDirection.rowReverse
-    }
-  }
-
-  export let disabled = false
-  export let selected = false
-  export let toggle = false
-  export let width = -1
-  export let round = false
-  export let hasFocusRect = true
-  export let stretch = false
-
-  export let size: ComponentSizeType = ComponentSize.medium
-  $: styleSize = getStyleSizeFromComponentSize(size)
-
-  $: compVarStr = `--comp-${variant}`
-  $: tabVarStr = `--tab-default`
-  $: compSizeStr = `--comp-size-${styleSize}`
-  $: tabSizeStr = `--tab-size-${styleSize}`
-
-  let cssVars: string[] = []
-  $: {
-    let states = ['enabled', 'hover', 'selected', 'focus', 'disabled']
-    cssVars = [
+  const cssVars = $derived.by(() => {
+    const states = ['enabled', 'hover', 'selected', 'focus', 'disabled']
+    return [
       ...states.reduce(
         (acc, state) => [
           ...acc,
@@ -82,11 +98,11 @@
       `--gap:var(--button-icon-gap, 6px)`,
       `--min-width:var(${tabSizeStr}-height, var(${compSizeStr}-height))`,
     ]
-  }
+  })
 
   let focused = false
 
-  function onFocusAction(eventName) {
+  function onFocusAction(eventName: 'focus' | 'blur') {
     switch (eventName) {
       case 'blur':
         focused = false
@@ -95,17 +111,18 @@
         focused = true
         break
     }
-    dispatch(eventName)
+    if (eventName === 'focus') onfocus?.()
+    else if (eventName === 'blur') onblur?.()
   }
 
-  function onKeyDown(e) {
-    if (!e) e = window.event
+  function onKeyDown(e: KeyboardEvent) {
+    if (!e) e = window.event as KeyboardEvent
     const keyCode = e.code || e.key
     if (keyCode === 'Enter') {
-      dispatch('click', e)
+      onclick?.(e)
       return false
     }
-    dispatch('keydown', e)
+    onkeydown?.(e)
   }
 </script>
 
@@ -118,8 +135,8 @@
   {stretch}
   style="--focus-rect-bg-color:transparent;"
 >
-  <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
     role="tab"
     aria-selected={selected}
@@ -133,10 +150,10 @@
     style:--direction={direction}
     style:--width={width === -1 ? 'auto' : `${width}px`}
     tabindex="0"
-    on:click
-    on:focus={() => onFocusAction('focus')}
-    on:blur={() => onFocusAction('blur')}
-    on:keydown={onKeyDown}
+    {onclick}
+    onfocus={() => onFocusAction('focus')}
+    onblur={() => onFocusAction('blur')}
+    onkeydown={onKeyDown}
   >
     {#if hasIcon}
       <Icon
@@ -144,8 +161,8 @@
         style={`--width:var(${tabSizeStr}-icon-size, var(${compSizeStr}-icon-size));--height:var(${tabSizeStr}-icon-size, var(${compSizeStr}-icon-size))`}
       />
     {/if}
-    {#if $$slots.default}
-      <div class="label"><slot /></div>
+    {#if children}
+      <div class="label">{@render children()}</div>
     {/if}
   </div>
 </FocusRect>

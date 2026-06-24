@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { FocusRect, FootnoteContainer, Icon, LabelContainer } from '$lib/components'
   import {
     ComponentSize,
@@ -10,39 +11,54 @@
   import type { LabelAlignmentType, LabelPlacementType } from '$lib/styles/types'
   import type { InputSizeType } from '$lib/styles/types/input'
 
-  const dispatch = createEventDispatcher()
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    label = '',
+    footnote = '',
+    required = false,
+    name = '',
+    checked = $bindable(false),
+    disabled = false,
+    valid = true,
+    error = '',
+    labelPlacement = LabelPlacement.right,
+    labelAlignment = LabelAlignment.center,
+    size = ComponentSize.medium,
+    onchange,
+    onfocus,
+    onblur,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    label?: any
+    footnote?: any
+    required?: boolean
+    name?: string
+    checked?: boolean
+    disabled?: boolean
+    valid?: boolean
+    error?: string
+    labelPlacement?: LabelPlacementType
+    labelAlignment?: LabelAlignmentType
+    size?: InputSizeType
+    onchange?: (e: { name: string; type: string; checked: boolean }) => void
+    onfocus?: () => void
+    onblur?: () => void
+  } = $props()
 
-  export let testId: string | undefined | null = null
+  const type = 'checkbox'
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
+  const styleSize = $derived(getStyleSizeFromComponentSize(size))
 
-  export let style = ''
+  const cbVarStr = $derived(`--checkbox-default`)
+  const cbSizeStr = $derived(`--checkbox-size-${styleSize}`)
 
-  export let label: any = ''
-  export let footnote: any = ''
-  export let required = false
-  export let name = ''
-  export let checked = false
-  export let disabled = false
-  export let valid = true
-  export let error = ''
-
-  let type = 'checkbox'
-
-  export let labelPlacement: LabelPlacementType = LabelPlacement.right
-  export let labelAlignment: LabelAlignmentType = LabelAlignment.center
-
-  export let size: InputSizeType = ComponentSize.medium
-  $: styleSize = getStyleSizeFromComponentSize(size)
-
-  $: cbVarStr = `--checkbox-default`
-  $: cbSizeStr = `--checkbox-size-${styleSize}`
-
-  let cssVars: string[] = []
-  $: {
-    let states = ['enabled', 'hover', 'focused', 'checked', 'disabled']
-    cssVars = [
+  const cssVars = $derived.by(() => {
+    const states = ['enabled', 'hover', 'focused', 'checked', 'disabled']
+    return [
       ...states.reduce(
         (acc, state) => [
           ...acc,
@@ -58,35 +74,33 @@
       `--border-radius:var(--checkbox-border-radius)`,
       `--icon-size:var(${cbSizeStr}-icon-size)`,
     ]
-  }
+  })
 
   // TODO: fix check icon, this is a tmp workaround
-  let iconMarginTop = '0'
-  $: {
+  const iconMarginTop = $derived.by(() => {
     switch (size) {
       case ComponentSize.small:
-        iconMarginTop = '-7px'
-        break
+        return '-7px'
       case ComponentSize.medium:
-        iconMarginTop = '-3px'
-        break
+        return '-3px'
       case ComponentSize.large:
-        iconMarginTop = '0'
-        break
+        return '0'
+      default:
+        return '0'
     }
-  }
+  })
 
-  let focused = false
+  let focused = $state(false)
 
-  let inputRef
+  let inputRef = $state<HTMLInputElement>()
 
   function onInputParentClick() {
-    inputRef.focus()
+    inputRef?.focus()
     checked = !checked
-    dispatch('change', { name, type, checked })
+    onchange?.({ name, type, checked })
   }
 
-  function onFocusAction(eventName) {
+  function onFocusAction(eventName: 'focus' | 'blur') {
     switch (eventName) {
       case 'blur':
         focused = false
@@ -95,13 +109,13 @@
         focused = true
         break
     }
-    dispatch(eventName)
+    if (eventName === 'focus') onfocus?.()
+    else if (eventName === 'blur') onblur?.()
   }
 </script>
 
 <FootnoteContainer {footnote} {error} {disabled} stretch={false}>
   <LabelContainer
-    variant="body"
     {name}
     {size}
     {disabled}
@@ -112,9 +126,9 @@
     stretch={false}
     margin="-2px 0 0 0"
     interactive
-    on:click={disabled ? null : onInputParentClick}
+    onclick={disabled ? null : onInputParentClick}
   >
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       data-test-id={testId}
       class={`tui-checkbox${clazz ? ' ' + clazz : ''}`}
@@ -130,8 +144,8 @@
             {type}
             {name}
             {checked}
-            on:focus={() => onFocusAction('focus')}
-            on:blur={() => onFocusAction('blur')}
+            onfocus={() => onFocusAction('focus')}
+            onblur={() => onFocusAction('blur')}
             aria-labelledby={`${name}_label`}
           />
           <Icon

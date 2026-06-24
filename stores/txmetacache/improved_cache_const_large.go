@@ -7,7 +7,6 @@ package txmetacache
 import "github.com/bsv-blockchain/teranode/ulogger"
 
 // BucketsCount defines the number of cache buckets (8,192 for production environments).
-// Also used as the shard count for SplitSwissLockFreeMapUint64 (bucketNative, bucketTrimmed).
 const BucketsCount = 8 * 1024
 
 // MapInitialCapacity is the expected total number of entries across the entire cache (1M for 24GB cache).

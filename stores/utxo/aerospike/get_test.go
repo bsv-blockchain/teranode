@@ -86,6 +86,7 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 
 	t.Run("TestStore_GetTxFromExternalStore concurrent", func(t *testing.T) {
 		s := &teranode_aerospike.Store{}
+		s.SetSettings(test.CreateBaseTestSettings(t)) // getExternalOutpoints reads ChainCfgParams.GenesisActivationHeight
 		s.SetExternalStore(memory.New())
 		s.SetClient(client)
 		s.SetNamespace(aerospikeNamespace)
@@ -109,7 +110,10 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 		g := errgroup.Group{}
 		for i := 0; i < 100; i++ {
 			g.Go(func() error {
-				fetchedTx, err := s.GetOutpointsFromExternalStore(ctx, *txHash)
+				// creationHeight 0 (pre-Genesis era) is not "don't care" — it
+				// selects an era for the unspendable predicate. It is irrelevant
+				// here: this subtest only asserts concurrency safety of the fetch.
+				fetchedTx, err := s.GetOutpointsFromExternalStore(ctx, *txHash, 0)
 				if err != nil {
 					return err
 				}
@@ -240,7 +244,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 	t.Logf("Extending %d transactions from block %s", len(block.Tx), blockHex)
 	g, gCtx := errgroup.WithContext(ctx) // we don't want the tracing to be linked to these calls
 
-	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, store.GetSettings(), store, nil, nil, nil, nil)
+	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, store.GetSettings(), store, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	mockBlockchain := &blockchain.MockStore{}
@@ -316,7 +320,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 		t.Fatal(err)
 	}
 
-	if err = sm.PreValidateTransactions(ctx, txMap, *blockHash, uint32(block.Height)); err != nil {
+	if err = sm.PreValidateTransactions(ctx, txMap, *blockHash, uint32(block.Height), 0, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -330,7 +334,7 @@ func ProcessTx(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, s *
 	blockHeight uint32, parentTxs *map[string]struct{}) (err error) {
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, 32)
+	util.SafeSetLimit(ulogger.TestLogger{}, g, 32)
 
 	parentTxsMu := sync.Mutex{}
 

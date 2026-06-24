@@ -539,6 +539,66 @@ func (x *KafkaRejectedTxTopicMessage) GetPeerId() string {
 	return ""
 }
 
+type KafkaTxPolicyRejectedTopicMessage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TxHash        []byte                 `protobuf:"bytes,1,opt,name=txHash,proto3" json:"txHash,omitempty"` // 32-byte raw tx hash
+	RawTx         []byte                 `protobuf:"bytes,2,opt,name=rawTx,proto3" json:"rawTx,omitempty"`   // Full serialized transaction bytes
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"` // Policy rejection reason
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KafkaTxPolicyRejectedTopicMessage) Reset() {
+	*x = KafkaTxPolicyRejectedTopicMessage{}
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KafkaTxPolicyRejectedTopicMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KafkaTxPolicyRejectedTopicMessage) ProtoMessage() {}
+
+func (x *KafkaTxPolicyRejectedTopicMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KafkaTxPolicyRejectedTopicMessage.ProtoReflect.Descriptor instead.
+func (*KafkaTxPolicyRejectedTopicMessage) Descriptor() ([]byte, []int) {
+	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *KafkaTxPolicyRejectedTopicMessage) GetTxHash() []byte {
+	if x != nil {
+		return x.TxHash
+	}
+	return nil
+}
+
+func (x *KafkaTxPolicyRejectedTopicMessage) GetRawTx() []byte {
+	if x != nil {
+		return x.RawTx
+	}
+	return nil
+}
+
+func (x *KafkaTxPolicyRejectedTopicMessage) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 type KafkaTxMetaTopicMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TxHash        string                 `protobuf:"bytes,1,opt,name=txHash,proto3" json:"txHash,omitempty"`
@@ -550,7 +610,7 @@ type KafkaTxMetaTopicMessage struct {
 
 func (x *KafkaTxMetaTopicMessage) Reset() {
 	*x = KafkaTxMetaTopicMessage{}
-	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[7]
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -562,7 +622,7 @@ func (x *KafkaTxMetaTopicMessage) String() string {
 func (*KafkaTxMetaTopicMessage) ProtoMessage() {}
 
 func (x *KafkaTxMetaTopicMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[7]
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -575,7 +635,7 @@ func (x *KafkaTxMetaTopicMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KafkaTxMetaTopicMessage.ProtoReflect.Descriptor instead.
 func (*KafkaTxMetaTopicMessage) Descriptor() ([]byte, []int) {
-	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{7}
+	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *KafkaTxMetaTopicMessage) GetTxHash() string {
@@ -609,7 +669,7 @@ type KafkaInvTopicMessage struct {
 
 func (x *KafkaInvTopicMessage) Reset() {
 	*x = KafkaInvTopicMessage{}
-	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[8]
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -621,7 +681,7 @@ func (x *KafkaInvTopicMessage) String() string {
 func (*KafkaInvTopicMessage) ProtoMessage() {}
 
 func (x *KafkaInvTopicMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[8]
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -634,7 +694,7 @@ func (x *KafkaInvTopicMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KafkaInvTopicMessage.ProtoReflect.Descriptor instead.
 func (*KafkaInvTopicMessage) Descriptor() ([]byte, []int) {
-	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{8}
+	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *KafkaInvTopicMessage) GetPeerAddress() string {
@@ -661,7 +721,7 @@ type Inv struct {
 
 func (x *Inv) Reset() {
 	*x = Inv{}
-	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[9]
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -673,7 +733,7 @@ func (x *Inv) String() string {
 func (*Inv) ProtoMessage() {}
 
 func (x *Inv) ProtoReflect() protoreflect.Message {
-	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[9]
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -686,7 +746,7 @@ func (x *Inv) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Inv.ProtoReflect.Descriptor instead.
 func (*Inv) Descriptor() ([]byte, []int) {
-	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{9}
+	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Inv) GetType() InvType {
@@ -717,7 +777,7 @@ type KafkaBlocksFinalTopicMessage struct {
 
 func (x *KafkaBlocksFinalTopicMessage) Reset() {
 	*x = KafkaBlocksFinalTopicMessage{}
-	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[10]
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -729,7 +789,7 @@ func (x *KafkaBlocksFinalTopicMessage) String() string {
 func (*KafkaBlocksFinalTopicMessage) ProtoMessage() {}
 
 func (x *KafkaBlocksFinalTopicMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[10]
+	mi := &file_util_kafka_kafka_message_kafka_messages_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -742,7 +802,7 @@ func (x *KafkaBlocksFinalTopicMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KafkaBlocksFinalTopicMessage.ProtoReflect.Descriptor instead.
 func (*KafkaBlocksFinalTopicMessage) Descriptor() ([]byte, []int) {
-	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{10}
+	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *KafkaBlocksFinalTopicMessage) GetHeader() []byte {
@@ -819,7 +879,11 @@ const file_util_kafka_kafka_message_kafka_messages_proto_rawDesc = "" +
 	"\x1bKafkaRejectedTxTopicMessage\x12\x16\n" +
 	"\x06txHash\x18\x01 \x01(\tR\x06txHash\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x17\n" +
-	"\apeer_id\x18\x03 \x01(\tR\x06peerId\"\x88\x01\n" +
+	"\apeer_id\x18\x03 \x01(\tR\x06peerId\"i\n" +
+	"!KafkaTxPolicyRejectedTopicMessage\x12\x16\n" +
+	"\x06txHash\x18\x01 \x01(\fR\x06txHash\x12\x14\n" +
+	"\x05rawTx\x18\x02 \x01(\fR\x05rawTx\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\x88\x01\n" +
 	"\x17KafkaTxMetaTopicMessage\x12\x16\n" +
 	"\x06txHash\x18\x01 \x01(\tR\x06txHash\x12;\n" +
 	"\x06action\x18\x02 \x01(\x0e2#.kafkamessage.KafkaTxMetaActionTypeR\x06action\x12\x18\n" +
@@ -861,26 +925,27 @@ func file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP() []byte {
 }
 
 var file_util_kafka_kafka_message_kafka_messages_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_util_kafka_kafka_message_kafka_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_util_kafka_kafka_message_kafka_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_util_kafka_kafka_message_kafka_messages_proto_goTypes = []any{
-	(KafkaTxMetaActionType)(0),              // 0: kafkamessage.KafkaTxMetaActionType
-	(InvType)(0),                            // 1: kafkamessage.InvType
-	(*KafkaBlockTopicMessage)(nil),          // 2: kafkamessage.KafkaBlockTopicMessage
-	(*KafkaInvalidBlockTopicMessage)(nil),   // 3: kafkamessage.KafkaInvalidBlockTopicMessage
-	(*KafkaInvalidSubtreeTopicMessage)(nil), // 4: kafkamessage.KafkaInvalidSubtreeTopicMessage
-	(*KafkaSubtreeTopicMessage)(nil),        // 5: kafkamessage.KafkaSubtreeTopicMessage
-	(*KafkaTxValidationTopicMessage)(nil),   // 6: kafkamessage.KafkaTxValidationTopicMessage
-	(*KafkaTxValidationOptions)(nil),        // 7: kafkamessage.KafkaTxValidationOptions
-	(*KafkaRejectedTxTopicMessage)(nil),     // 8: kafkamessage.KafkaRejectedTxTopicMessage
-	(*KafkaTxMetaTopicMessage)(nil),         // 9: kafkamessage.KafkaTxMetaTopicMessage
-	(*KafkaInvTopicMessage)(nil),            // 10: kafkamessage.KafkaInvTopicMessage
-	(*Inv)(nil),                             // 11: kafkamessage.Inv
-	(*KafkaBlocksFinalTopicMessage)(nil),    // 12: kafkamessage.KafkaBlocksFinalTopicMessage
+	(KafkaTxMetaActionType)(0),                // 0: kafkamessage.KafkaTxMetaActionType
+	(InvType)(0),                              // 1: kafkamessage.InvType
+	(*KafkaBlockTopicMessage)(nil),            // 2: kafkamessage.KafkaBlockTopicMessage
+	(*KafkaInvalidBlockTopicMessage)(nil),     // 3: kafkamessage.KafkaInvalidBlockTopicMessage
+	(*KafkaInvalidSubtreeTopicMessage)(nil),   // 4: kafkamessage.KafkaInvalidSubtreeTopicMessage
+	(*KafkaSubtreeTopicMessage)(nil),          // 5: kafkamessage.KafkaSubtreeTopicMessage
+	(*KafkaTxValidationTopicMessage)(nil),     // 6: kafkamessage.KafkaTxValidationTopicMessage
+	(*KafkaTxValidationOptions)(nil),          // 7: kafkamessage.KafkaTxValidationOptions
+	(*KafkaRejectedTxTopicMessage)(nil),       // 8: kafkamessage.KafkaRejectedTxTopicMessage
+	(*KafkaTxPolicyRejectedTopicMessage)(nil), // 9: kafkamessage.KafkaTxPolicyRejectedTopicMessage
+	(*KafkaTxMetaTopicMessage)(nil),           // 10: kafkamessage.KafkaTxMetaTopicMessage
+	(*KafkaInvTopicMessage)(nil),              // 11: kafkamessage.KafkaInvTopicMessage
+	(*Inv)(nil),                               // 12: kafkamessage.Inv
+	(*KafkaBlocksFinalTopicMessage)(nil),      // 13: kafkamessage.KafkaBlocksFinalTopicMessage
 }
 var file_util_kafka_kafka_message_kafka_messages_proto_depIdxs = []int32{
 	7,  // 0: kafkamessage.KafkaTxValidationTopicMessage.options:type_name -> kafkamessage.KafkaTxValidationOptions
 	0,  // 1: kafkamessage.KafkaTxMetaTopicMessage.action:type_name -> kafkamessage.KafkaTxMetaActionType
-	11, // 2: kafkamessage.KafkaInvTopicMessage.inv:type_name -> kafkamessage.Inv
+	12, // 2: kafkamessage.KafkaInvTopicMessage.inv:type_name -> kafkamessage.Inv
 	1,  // 3: kafkamessage.Inv.type:type_name -> kafkamessage.InvType
 	4,  // [4:4] is the sub-list for method output_type
 	4,  // [4:4] is the sub-list for method input_type
@@ -900,7 +965,7 @@ func file_util_kafka_kafka_message_kafka_messages_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_util_kafka_kafka_message_kafka_messages_proto_rawDesc), len(file_util_kafka_kafka_message_kafka_messages_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -289,21 +289,39 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			return ctx.Err()
 
 		case <-ch:
-			if err := s.trigger(ctx, "blockchain"); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, "blockchain"), "blockchain")
 
 		case source := <-s.triggerCh:
-			if err := s.trigger(ctx, source); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, source), source)
 
 		case <-time.After(duration):
-			if err := s.trigger(ctx, "timer"); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, "timer"), "timer")
 		}
 	}
+}
+
+// handleTriggerError swallows transient errors from a trigger so the
+// long-running Start loop is not torn down by a single bad iteration.
+// Returning a non-nil error here would propagate into ServiceManager's
+// errgroup and cause it to gracefully stop every other service in the
+// process - so a transient storage error (e.g. blob-store read semaphore
+// timed out under load) would shut down the entire core sidecar daemon
+// rather than be retried on the next iteration.
+//
+// The trigger already converts the expected "no work to do" signal
+// (errors.ErrNotFound) into a nil return, so anything reaching here is
+// either ctx.Err (already handled by the main select on ctx.Done) or an
+// operational error. Both are recoverable by simply waiting for the next
+// blockchain notification, timer tick, or triggerCh push. The next
+// iteration will retry whatever failed.
+func (s *Server) handleTriggerError(ctx context.Context, err error, source string) {
+	if err == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	s.logger.Errorf("[UTXOPersister] trigger from %s failed, will retry on next iteration: %v", source, err)
 }
 
 // Stop stops the server's processing operations.
@@ -475,9 +493,22 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight+1, maxHeight)
 
 	if err := c.ConsolidateBlockRange(ctx, s.lastHeight+1, maxHeight); err != nil {
-		if !errors.Is(err, errors.ErrNotFound) {
-			return 0, nil
+		if errors.Is(err, errors.ErrNotFound) {
+			// BlockPersister hasn't yet written the per-block UTXO files
+			// for this range. Wait for the next trigger; caller treats
+			// ErrNotFound as "no new block to process".
+			return 0, err
 		}
+		return 0, err
+	}
+
+	if c.lastBlockHash == nil {
+		// ConsolidateBlockRange returned successfully but didn't advance
+		// past genesis (range was empty, or contained only the genesis
+		// block which the loop skips). Nothing new to persist; signal
+		// "no new block" so the caller waits for the next trigger
+		// rather than spinning on an empty iteration.
+		return 0, errors.ErrNotFound
 	}
 
 	// At the end of this, we have a rollup of deletions and additions.  Add these to the last UTXOSet
@@ -615,26 +646,17 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 	)
 }
 
-// verifyLastSet verifies the integrity of the last UTXO set.
-// It checks if the UTXO set for the given hash exists and has valid header and footer.
-// This verification ensures that the UTXO set was completely written and is not corrupted.
-// Returns an error if verification fails.
+// verifyLastSet verifies that a UTXO set file exists and is openable for
+// the given block hash. A successful open via the blob store layer is
+// sufficient evidence that the file is present and (in the file store)
+// has the right fileformat magic + FileType — those checks live in
+// stores/blob/file/file.go validateFileHeader. The memory store advances
+// past the header by size without validating the magic, which is fine
+// because that path is test-only.
 //
-// Parameters:
-// - ctx: Context for controlling the verification operation
-// - hash: Pointer to the block hash for which to verify the UTXO set
-//
-// Returns:
-// - error: Any error encountered during verification, or nil if verification succeeds
-//
-// This method performs several integrity checks on the UTXO set:
-// 1. Verifies that a UTXO set file exists for the given block hash
-// 2. Checks that the header record is valid and matches the expected block hash
-// 3. Ensures that the footer exists and is correctly formatted
-//
-// These checks confirm that the UTXO set for the block was completely written
-// and can be used for subsequent operations. This is crucial for maintaining
-// blockchain state consistency, especially after system restarts.
+// (The previous docstring also promised a footer integrity check that
+// this function never implemented; scope is the existence/openability
+// check only.)
 func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error {
 	us := &UTXOSet{
 		ctx:       ctx,
@@ -643,15 +665,17 @@ func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error 
 		store:     s.blockStore,
 	}
 
+	// Do NOT call fileformat.ReadHeader on the returned reader: the store
+	// layer has already advanced past the 8-byte magic. Reading it again
+	// would consume the first 8 bytes of the body, which per the layout
+	// written by CreateUTXOSet are the current block hash field — random
+	// bytes that reliably fail as "unknown magic: [...]" and bring the
+	// whole core sidecar down via ServiceManager.
 	r, err := us.GetUTXOSetReader(hash)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
-
-	if _, err := fileformat.ReadHeader(r); err != nil {
-		return err
-	}
 
 	return nil
 }

@@ -1,4 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   // import { Typo } from '$lib/components'
   import {
     ComponentSize,
@@ -7,67 +10,76 @@
     getStyleSizeFromComponentSize,
   } from '$lib/styles/types'
   import type { ComponentSizeType, LabelAlignmentType, LabelPlacementType } from '$lib/styles/types'
-  import type { TypoVariantType } from '../typo/types'
+  // import type { TypoVariantType } from '../typo/types'
 
-  export let testId: string | undefined | null = null
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    name = '',
+    disabled = false,
+    required = false,
+    label = '',
+    // variant = 'heading',
+    interactive = false,
+    margin = '0',
+    stretch = true,
+    labelPlacement = LabelPlacement.top,
+    labelAlignment = LabelAlignment.start,
+    size = ComponentSize.medium,
+    onclick,
+    children,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    name?: string
+    disabled?: boolean
+    required?: boolean
+    label?: any
+    interactive?: boolean
+    margin?: string
+    stretch?: boolean
+    labelPlacement?: LabelPlacementType
+    labelAlignment?: LabelAlignmentType
+    size?: ComponentSizeType
+    onclick?: ((e: MouseEvent) => void) | null
+    children?: Snippet
+  } = $props()
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
+  const styleSize = $derived(getStyleSizeFromComponentSize(size))
 
-  export let style = ''
-
-  export let name = ''
-  export let disabled = false
-  export let required = false
-  export let label: any = ''
-  // export let variant: TypoVariantType = 'heading'
-  export let interactive = false
-  export let margin = '0'
-  export let stretch = true
-
-  export let labelPlacement: LabelPlacementType = LabelPlacement.top
-  export let labelAlignment: LabelAlignmentType = LabelAlignment.start
-
-  export let size: ComponentSizeType = ComponentSize.medium
-  $: styleSize = getStyleSizeFromComponentSize(size)
-
-  let direction = 'row'
-  let justify = 'flex-start'
-
-  $: {
+  const direction = $derived.by(() => {
     switch (labelPlacement) {
       case 'top':
-        direction = 'column'
-        break
+        return 'column'
       case 'bottom':
-        direction = 'column-reverse'
-        justify = 'flex-end'
-        break
+        return 'column-reverse'
       case 'left':
-        direction = 'row'
-        break
+        return 'row'
       case 'right':
-        direction = 'row-reverse'
-        justify = 'flex-end'
-        break
+        return 'row-reverse'
+      default:
+        return 'row'
     }
-  }
+  })
 
-  let labelAlign = 'center'
+  const justify = $derived(
+    labelPlacement === 'bottom' || labelPlacement === 'right' ? 'flex-end' : 'flex-start',
+  )
 
-  $: {
+  const labelAlign = $derived.by(() => {
     switch (labelAlignment) {
       case 'start':
-        labelAlign = 'flex-start'
-        break
+        return 'flex-start'
       case 'center':
-        labelAlign = 'center'
-        break
+        return 'center'
       case 'end':
-        labelAlign = 'flex-end'
-        break
+        return 'flex-end'
+      default:
+        return 'center'
     }
-  }
+  })
 
   // TODO: handle sizes differently
   // let typoSize = 1
@@ -92,35 +104,31 @@
   //   }
   // }
 
-  $: compSizeStr = `--comp-size-${styleSize}`
-  // $: labelSizeStr = `--label-size-${styleSize}`
+  const compSizeStr = $derived(`--comp-size-${styleSize}`)
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
-      `--direction:${direction}`,
-      `--justify:${justify}`,
-      `--label-align:${labelAlign}`,
-      `--gap:var(--comp-label-gap, 8px)`,
-      `--flex:${stretch ? 1 : 0}`,
-      `--content-with:${stretch ? '100%' : 'auto'}`,
-      `--font-family:var(--label-font-family, var(--comp-font-family))`,
-      `--font-size:var(${compSizeStr}-font-size)`,
-      `--color:${disabled ? 'var(--comp-label-disabled-color)' : 'var(--comp-label-color)'}`,
-      `--margin:${margin}`,
-    ]
-  }
+  const cssVars = $derived([
+    `--direction:${direction}`,
+    `--justify:${justify}`,
+    `--label-align:${labelAlign}`,
+    `--gap:var(--comp-label-gap, 8px)`,
+    `--flex:${stretch ? 1 : 0}`,
+    `--content-with:${stretch ? '100%' : 'auto'}`,
+    `--font-family:var(--label-font-family, var(--comp-font-family))`,
+    `--font-size:var(${compSizeStr}-font-size)`,
+    `--color:${disabled ? 'var(--comp-label-disabled-color)' : 'var(--comp-label-color)'}`,
+    `--margin:${margin}`,
+  ])
 </script>
 
-<!-- svelte-ignore a11y-click-events-have-key-events -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   role={interactive && !disabled ? 'button' : null}
   data-test-id={testId}
   class={`tui-label-container${clazz ? ' ' + clazz : ''}`}
   class:interactive={interactive && !disabled}
   style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
-  on:click
-  on:keydown={(e) => {
+  {onclick}
+  onkeydown={(e) => {
     if (interactive && !disabled && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault()
       e.currentTarget.click()
@@ -143,7 +151,7 @@
     </label>
   {/if}
   <div class="content">
-    <slot />
+    {@render children?.()}
   </div>
 </div>
 

@@ -778,6 +778,17 @@ Error responses include a JSON object with an error message:
     - Parameters: `hash` - Transaction hash
     - Returns: UTXO data array (JSON)
 
+- **POST `/api/v1/utxos`** (and `/api/v1/utxos/hex`, `/api/v1/utxos/json`)
+    - Purpose: Bulk UTXO spend-status lookup. Avoids per-record HTTP overhead and the redundant transaction fetch that would otherwise be paid per `GET /api/v1/utxo/:hash` request.
+    - Request body (identical for all three routes): concatenated 36-byte records, each `[32 bytes txid][4 bytes vout LE]`. Body length must be a multiple of 36.
+    - Response formats:
+        - **`POST /api/v1/utxos`** — Binary. Concatenated fixed-length 48-byte records in input order, each `[8 bytes status LE][4 bytes lockTime LE][4 bytes spendingVin LE][32 bytes spendingTxID]`. Unspent UTXOs have the trailing 36 bytes zero-filled; not-found records report status `utxo.Status_NOT_FOUND`. Clients can index by `i*48`.
+        - **`POST /api/v1/utxos/hex`** — Lowercase hex-encoding of the binary response. Same record layout once decoded.
+        - **`POST /api/v1/utxos/json`** — JSON array of `utxo.SpendResponse` objects in input order, e.g. `[{"status":1,"spendingData":{"txId":"...","vin":0},"lockTime":1234567}, ...]`. Use this when client tooling prefers JSON; for highest throughput, prefer the binary route.
+    - Limits: body size capped by the global `asset_httpBodyLimit` setting (default 100MB, ≈2.9M records per request). The endpoint is also gated by the heavy-route tiered rate limiter (`asset_rateLimit_heavy_*`), shared with `POST /api/v1/subtree/:hash/txs` and other fan-out endpoints.
+    - Error responses: `400` (body length not a multiple of 36), `413` (body exceeds the cap), `429` (rate-limited), `500` (transport, store failure, or recovered per-record panic).
+    - Known gap: the `lockTime` field in the response carries different semantics by backend (SQL: coinbase maturity height; Aerospike: the transaction's `nLockTime`). Pre-existing in `GET /api/v1/utxo`; surfaced more visibly here. Treat `lockTime == 0` as "not coinbase / unlocked" until the divergence is reconciled in a follow-up.
+
 ### Subtree Endpoints
 
 - **GET `/api/v1/subtree/:hash`**

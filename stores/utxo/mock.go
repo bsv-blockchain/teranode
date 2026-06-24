@@ -38,6 +38,12 @@ func (m *MockUtxostore) Health(ctx context.Context, checkLiveness bool) (int, st
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
+// Close mocks store shutdown. Returns the configured mock error or nil.
+func (m *MockUtxostore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 // Create mocks the creation of transaction metadata in the UTXO store.
 // Returns the configured mock response for transaction creation operations.
 func (m *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error) {
@@ -71,10 +77,16 @@ func (m *MockUtxostore) GetSpend(ctx context.Context, spend *Spend) (*SpendRespo
 
 // GetMeta mocks the retrieval of complete transaction metadata from the UTXO store.
 // Returns the configured mock response for full metadata lookup operations.
+//
+// Accepts either Return(*meta.Data) for the success path (data populated, no error),
+// Return(nil) for an empty metadata result, or Return(error) to surface a lookup failure.
 func (m *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
 	args := m.Called(ctx, hash, data)
 	if result := args.Get(0); result != nil {
-		*data = *result.(*meta.Data)
+		if md, ok := result.(*meta.Data); ok {
+			*data = *md
+			return nil
+		}
 	}
 	return args.Error(0)
 }
@@ -94,10 +106,14 @@ func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsLock
 }
 
 // SetMinedMulti mocks the batch setting of mined status for multiple transactions.
-// Returns the configured mock response for batch mined status operations.
+// Accepts either a static map or a func that computes one from the call args (useful
+// for tests that need a realistic blockIDsMap matching the submitted hashes).
 func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	args := m.Called(ctx, hashes, minedBlockInfo)
 
+	if fn, ok := args.Get(0).(func(context.Context, []*chainhash.Hash, MinedBlockInfo) map[chainhash.Hash][]uint32); ok {
+		return fn(ctx, hashes, minedBlockInfo), args.Error(1)
+	}
 	return args.Get(0).(map[chainhash.Hash][]uint32), args.Error(1)
 }
 
@@ -121,6 +137,27 @@ func (m *MockUtxostore) ScanInconsistentUnminedTxs() (ConsistencyScanIterator, e
 func (m *MockUtxostore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (UnminedTxIterator, error) {
 	args := m.Called(cutoffBlockHeight)
 	return args.Get(0).(UnminedTxIterator), args.Error(1)
+}
+
+// GetConflictingTxIterator mocks the iterator over conflicting transactions.
+func (m *MockUtxostore) GetConflictingTxIterator() (UnminedTxIterator, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(UnminedTxIterator), args.Error(1)
+}
+
+// RemoveFromConflictingChildren mocks batched removal of conflicting-child entries.
+func (m *MockUtxostore) RemoveFromConflictingChildren(ctx context.Context, removals []ConflictingChildRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
+// RemoveBlockIDs mocks batched trimming of block IDs across many transactions.
+func (m *MockUtxostore) RemoveBlockIDs(ctx context.Context, removals []BlockIDsRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
 }
 
 // BatchDecorate mocks the batch decoration of unresolved metadata with field data.
@@ -190,6 +227,24 @@ func (m *MockUtxostore) SetConflicting(ctx context.Context, txHashes []chainhash
 func (m *MockUtxostore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	args := m.Called(ctx, txHashes, value)
 	return args.Error(0)
+}
+
+// BeginConflictIntent is a safe no-op on the mock: the conflict-resolution WAL
+// is exercised against a real store in dedicated tests, so the many mock-based
+// ProcessConflicting/ReverseProcessConflicting tests need not set expectations
+// for it. (Does not call m.Called, so unset expectations do not panic.)
+func (m *MockUtxostore) BeginConflictIntent(ctx context.Context, intent ConflictIntent) error {
+	return nil
+}
+
+// CompleteConflictIntent is a safe no-op on the mock (see BeginConflictIntent).
+func (m *MockUtxostore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return nil
+}
+
+// PendingConflictIntents is a safe no-op on the mock (see BeginConflictIntent).
+func (m *MockUtxostore) PendingConflictIntents(ctx context.Context) ([]ConflictIntent, error) {
+	return nil, nil
 }
 
 // MarkTransactionsOnLongestChain mocks the marking of transactions as being on the longest chain.

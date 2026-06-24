@@ -43,11 +43,14 @@ var (
 	prometheusBlockAssemblerSubtrees                    prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration           prometheus.Histogram
 	prometheusBlockAssemblerReorg                       prometheus.Counter
+	prometheusBlockAssemblerCatchUp                     prometheus.Counter
 	prometheusBlockAssemblerReorgDuration               prometheus.Histogram
 	prometheusBlockAssemblerGetReorgBlocksDuration      prometheus.Histogram
 	prometheusBlockAssemblerUpdateBestBlock             prometheus.Histogram
 	prometheusBlockAssemblyBestBlockHeight              prometheus.Gauge
 	prometheusBlockAssemblyCurrentBlockHeight           prometheus.Gauge
+	prometheusBlockAssemblyTipLagBlocks                 prometheus.Gauge
+	prometheusBlockAssemblyProcessingStuck              *prometheus.CounterVec
 	prometheusBlockAssemblerCurrentState                prometheus.Gauge
 	prometheusBlockAssemblerStateTransitions            *prometheus.CounterVec
 	prometheusBlockAssemblerStateDuration               *prometheus.HistogramVec
@@ -67,6 +70,8 @@ var (
 	prometheusBlockAssemblerAddDirectlyTotal            prometheus.Counter
 	prometheusBlockAssemblerAddDirectlyBatchTime        prometheus.Histogram
 	prometheusBlockAssemblerSubtreeStoredHist           prometheus.Histogram
+	prometheusBlockAssemblerConflictIntentsPending      prometheus.Gauge
+	prometheusBlockAssemblerConflictIntentReplay        *prometheus.CounterVec
 )
 
 var (
@@ -169,6 +174,25 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockAssemblerConflictIntentsPending = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "conflict_intents_pending",
+			Help:      "Number of pending conflict-resolution WAL intents found at startup (interrupted ProcessConflicting/ReverseProcessConflicting operations awaiting replay)",
+		},
+	)
+
+	prometheusBlockAssemblerConflictIntentReplay = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "conflict_intent_replay_total",
+			Help:      "Total conflict-resolution WAL intent replays at startup, by result",
+		},
+		[]string{"result"},
+	)
+
 	prometheusBlockAssemblerTransactions = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
@@ -212,6 +236,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "reorg",
 			Help:      "Number of reorgs in block assembler",
+		},
+	)
+
+	prometheusBlockAssemblerCatchUp = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "catchup",
+			Help:      "Number of forward-only catch-ups (moveBack=0) handled in block assembler",
 		},
 	)
 
@@ -261,6 +294,25 @@ func _initPrometheusMetrics() {
 			Name:      "current_block_height",
 			Help:      "Current block height in block assembly",
 		},
+	)
+
+	prometheusBlockAssemblyTipLagBlocks = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "tip_lag_blocks",
+			Help:      "Number of blocks block assembly is behind the blockchain tip (0 when caught up). Sustained non-zero values indicate block assembly is stuck (issue #980).",
+		},
+	)
+
+	prometheusBlockAssemblyProcessingStuck = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "processing_stuck_total",
+			Help:      "Count of block assembly catch-up/reorg/move-forward failures that left the assembler behind the tip, labelled by reason (issue #980).",
+		},
+		[]string{"reason"},
 	)
 
 	prometheusBlockAssemblerCurrentState = promauto.NewGauge(

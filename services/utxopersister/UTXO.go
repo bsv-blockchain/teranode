@@ -55,9 +55,8 @@ type UTXOWrapper struct {
 
 	// Reusable buffer for reading fixed-size fields
 	// not concurrently accessed
-	b8             [8]byte
-	b16            [16]byte
-	reusableScript []byte
+	b8  [8]byte
+	b16 [16]byte
 }
 
 // UTXO represents an Unspent Transaction Output.
@@ -230,13 +229,19 @@ func (uw *UTXOWrapper) FromReader(ctx context.Context, r io.Reader, readUtxos ..
 		uw.Coinbase = (encodedHeight & 1) == 1
 
 		if useReadUtxos {
-			uw.UTXOs = make([]*UTXO, numUTXOs)
+			// numUTXOs is an untrusted field read from the file. Cap the
+			// speculative pre-allocation and append as records are read, so a
+			// bogus count errors on the first missing record instead of
+			// forcing a multi-GB allocation up front.
+			uw.UTXOs = make([]*UTXO, 0, min(numUTXOs, 1024))
 
 			for i := uint32(0); i < numUTXOs; i++ {
-				uw.UTXOs[i] = &UTXO{}
-				if err = uw.NewUTXOFromReader(r, uw.UTXOs[i]); err != nil {
+				u := &UTXO{}
+				if err = uw.NewUTXOFromReader(r, u); err != nil {
 					return err
 				}
+
+				uw.UTXOs = append(uw.UTXOs, u)
 			}
 		} else {
 			var (
@@ -344,12 +349,20 @@ func (uw *UTXOWrapper) NewUTXOFromReader(r io.Reader, utxo *UTXO) error {
 	// Read the script length
 	l := uint32(uw.b16[12]) | uint32(uw.b16[13])<<8 | uint32(uw.b16[14])<<16 | uint32(uw.b16[15])<<24
 
-	// Read the script
-	utxo.Script = make([]byte, l)
-
-	if _, err := io.ReadFull(r, utxo.Script); err != nil {
-		return err
+	// l is an untrusted length from the file, so do NOT do make([]byte, l).
+	// io.CopyN here resolves to bytes.Buffer.ReadFrom(io.LimitReader(r, l)),
+	// and ReadFrom grows the buffer in fixed-size (512-byte) increments sized
+	// to the bytes actually read, stopping at the underlying EOF — it never
+	// pre-sizes to l. So a truncated record claiming a 4 GB script allocates
+	// only what is really there (~KB) and then errors, rather than forcing a
+	// multi-GB allocation. A script that genuinely contains l bytes still
+	// allocates l, but that is bounded by the real file size, not the claim.
+	var script bytes.Buffer
+	if _, err := io.CopyN(&script, r, int64(l)); err != nil {
+		return errors.NewStorageError("failed to read utxo script (%d bytes)", l, err)
 	}
+
+	utxo.Script = script.Bytes()
 
 	return nil
 }
@@ -364,17 +377,13 @@ func (uw *UTXOWrapper) NewUTXOValueFromReader(r io.Reader) (uint64, error) {
 	// Read the script length
 	l := uint32(uw.b16[12]) | uint32(uw.b16[13])<<8 | uint32(uw.b16[14])<<16 | uint32(uw.b16[15])<<24
 
-	// Read the script into reusable buffer
-	var script []byte
-	if cap(uw.reusableScript) < int(l) {
-		script = make([]byte, l)
-		uw.reusableScript = script
-	} else {
-		script = uw.reusableScript[:l]
-	}
-
-	if _, err := io.ReadFull(r, script); err != nil {
-		return 0, err
+	// We only need the value here, not the script bytes, so advance past the
+	// script with a streaming discard. l is untrusted, so io.CopyN (which
+	// streams in fixed-size chunks and stops at EOF) avoids pre-allocating l
+	// bytes for a truncated record claiming a huge script. io.Discard's
+	// ReadFrom uses a pooled buffer, so this is allocation-free.
+	if _, err := io.CopyN(io.Discard, r, int64(l)); err != nil {
+		return 0, errors.NewStorageError("failed to read utxo script (%d bytes)", l, err)
 	}
 
 	return value, nil

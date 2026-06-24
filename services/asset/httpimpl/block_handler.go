@@ -105,7 +105,7 @@ func (h *BlockHandler) handleBlockOperation(c echo.Context, operationName string
 
 	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "BlockHandler."+operationName,
 		tracing.WithParentStat(AssetStat),
-		tracing.WithLogMessage(h.logger, "[Asset_http] %s block: %s", operationName, blockHash),
+		tracing.WithDebugLogMessage(h.logger, "[Asset_http] %s block: %s", operationName, blockHash),
 	)
 
 	defer deferFn()

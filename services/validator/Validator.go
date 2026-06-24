@@ -2,8 +2,7 @@
 Package validator implements BSV Blockchain transaction validation functionality.
 
 This package provides comprehensive transaction validation for BSV Blockchain nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters and implements the full Bitcoin transaction validation ruleset.
+including BDK transaction validation, UTXO management, and policy enforcement.
 */
 package validator
 
@@ -13,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -34,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -43,27 +45,17 @@ import (
 // These constants establish the fundamental constraints that govern transaction and block validation,
 // ensuring compliance with Bitcoin protocol specifications and network consensus requirements.
 const (
-	// MaxBlockSize defines the maximum allowed size of a block in bytes (4GB).
-	// This limit governs the maximum amount of transaction data that can be included in a single block,
-	// directly impacting network throughput and scalability. Blocks exceeding this size are rejected
-	// as invalid by the consensus rules, ensuring network stability and preventing resource exhaustion.
-	MaxBlockSize = 4 * 1024 * 1024 * 1024
-
-	// MaxTxSizeConsensusBeforeGenesis defines the consensus limit for transaction size before Genesis (1 MB).
-	// This matches C++ bitcoin-sv: MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS in consensus/consensus.h
-	// Transactions exceeding this size are invalid by consensus rules pre-Genesis.
-	MaxTxSizeConsensusBeforeGenesis = 1_000_000 // 1 MB
-
-	// MaxTxSizeConsensusAfterGenesis defines the consensus limit for transaction size after Genesis (1 GB).
-	// This matches C++ bitcoin-sv: MAX_TX_SIZE_CONSENSUS_AFTER_GENESIS in consensus/consensus.h
-	// Transactions exceeding this size are invalid by consensus rules post-Genesis.
-	MaxTxSizeConsensusAfterGenesis = 1_000_000_000 // 1 GB
-
 	// MaxSatoshis defines the maximum number of satoshis that can exist in the Bitcoin SV ecosystem (21M BSV).
 	// This represents the absolute monetary supply limit, with each BSV consisting of 100,000,000 satoshis.
 	// Any transaction that would create more satoshis than this limit violates consensus rules and must be
 	// rejected to maintain the integrity of the monetary system and prevent inflation attacks.
 	MaxSatoshis = 21_000_000_00_000_000
+
+	// maxAggregatedSpendErrs caps how many per-spend errors are wrapped into the
+	// aggregate attached to a failed-validation error. The failure count scales
+	// with the tx's input count; an uncapped chain makes error construction and
+	// every errors.Is on it quadratic. See errors.JoinCapped.
+	maxAggregatedSpendErrs = 10
 
 	// coinbaseTxID represents the special transaction ID used for coinbase transactions.
 	// Coinbase transactions are the first transaction in each block and create new bitcoins as mining rewards.
@@ -71,21 +63,37 @@ const (
 	// during validation, as they have special rules and don't spend existing UTXOs.
 	coinbaseTxID = "0000000000000000000000000000000000000000000000000000000000000000"
 
-	// MaxTxSigopsCountPolicyAfterGenesis defines the maximum number of signature
-	// operations allowed in a transaction after the Genesis upgrade (UINT32_MAX).
-	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0)
-
 	// DustLimit defines the minimum output value in satoshis (1 satoshi)
 	// Outputs with less than this value are considered dust unless they are
 	// not spendable (OP_FALSE OP_RETURN).  This applies to outputs after the
 	// Genesis upgrade.
 	DustLimit = uint64(1)
 
-	// txmetaActionADD represents the ADD action for txmeta batch messages
-	txmetaActionADD = byte(0)
-	// txmetaActionDELETE represents the DELETE action for txmeta batch messages
-	txmetaActionDELETE = byte(1)
+	// unconfirmedParentHeight is the teranode-internal sentinel written into
+	// utxoHeights when a parent transaction is not present in the UTXO store
+	// with recorded block heights (i.e. the parent UTXO is not yet confirmed).
+	//
+	// Chosen as 0xFFFFFFFF — an impossible block height (no real chain reaches
+	// 4.29 billion blocks) — so it cannot collide with any value produced by
+	// the only other height-population branch (a UTXO-store hit, which uses the
+	// real stored height). The collision matters because in mainline block
+	// validation `blockState.Height + 1` equals the candidate height, making
+	// height-based identification of unconfirmed slots ambiguous.
+	//
+	// It is **distinct** from BDK / svnode's MEMPOOL_HEIGHT = 0x7FFFFFFF on
+	// purpose: that constant is a BDK-adapter concept and lives only inside
+	// ScriptVerifierGoBDK.ValidateTransaction, which translates this sentinel
+	// outward (→ MEMPOOL_HEIGHT in consensus mode so BDK rejects with
+	// bad-txns-unconfirmed-input-in-block; → the candidate block height in
+	// policy mode, matching svnode's GetInputScriptBlockHeight conversion at
+	// bitcoin-sv/src/validation.cpp:2668).
+	unconfirmedParentHeight uint32 = 0xFFFFFFFF
 )
+
+// Txmeta Kafka wire-format constants live in stores/txmetacache (see wire.go
+// in that package). They are imported here as the single source of truth
+// shared between the producer (this package) and all consumers
+// (services/subtreevalidation, services/legacy/netsync, ...).
 
 // txmetaBatchItem represents an item to be batched for TxMeta Kafka messages.
 type txmetaBatchItem struct {
@@ -146,6 +154,20 @@ type Validator struct {
 	// rejectedTxKafkaProducerClient publishes rejected transaction events
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
+	// policyRejectedTxKafkaProducerClient publishes consensus-valid transactions that were
+	// rejected by local policy (ErrTxPolicy). This is a separate topic from
+	// rejectedTxKafkaProducerClient for two reasons:
+	//   1. Different message schema: this topic carries the full raw tx bytes
+	//      (KafkaTxPolicyRejectedTopicMessage.RawTx) so that consumers can reconstruct
+	//      the transaction without an extra HTTP roundtrip. The rejected-tx topic only
+	//      carries {TxHash, Reason, PeerId} and is not suitable for raw-byte delivery.
+	//   2. Different consumers: subtree validation pods consume this topic to populate a
+	//      local cache of policy-rejected txs; the rejected-tx topic is consumed by P2P
+	//      gossip components that only need the hash and rejection reason.
+	// Merging the two topics would require either sending raw bytes for every rejection
+	// (wasted bandwidth) or adding a type tag that consumers must filter (added complexity).
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+
 	// txmetaKafkaBatcher batches TxMeta Kafka messages for efficient publishing
 	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
 
@@ -157,8 +179,19 @@ type Validator struct {
 	// Memory cost: ~4 MB per million blocks (one uint32 per block), negligible for any
 	// foreseeable chain length.
 	//
-	// EnsureMTPLoaded must be called (once, serially) before concurrent per-tx goroutines
-	// access this slice, so no locking is required for reads.
+	// mtpMu guards concurrent access to mtpStore.
+	//   - EnsureMTPLoaded acquires the write lock for the duration of the fetch + append +
+	//     in-place overlap patch. Concurrent EnsureMTPLoaded callers serialise; the second
+	//     one fast-paths out after acquiring the lock if the first already populated the
+	//     range it needs.
+	//   - validateTransaction acquires the read lock around its MTP lookups. This protects
+	//     against the cross-block case where block N's per-tx goroutines are still reading
+	//     while block N+1's EnsureMTPLoaded is appending or patching overlap entries (the
+	//     append re-allocates the backing array; the in-place patch mutates indices that
+	//     readers may be addressing).
+	// Same-block contention is negligible: EnsureMTPLoaded runs once per block before per-tx
+	// goroutines start, and per-tx readers only contend with each other on the read lock.
+	mtpMu    sync.RWMutex
 	mtpStore []uint32
 }
 
@@ -167,6 +200,7 @@ type Validator struct {
 // Returns an error if initialization fails.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store,
 	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blockAssemblyClient blockassembly.ClientI, blockchainClient blockchain.ClientI) (Interface, error) {
 	initPrometheusMetrics()
 
@@ -177,15 +211,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	v := &Validator{
-		logger:                        logger,
-		settings:                      tSettings,
-		txValidator:                   NewTxValidator(logger, tSettings),
-		utxoStore:                     store,
-		blockAssembler:                ba,
-		stats:                         gocore.NewStat("validator"),
-		txmetaKafkaProducerClient:     txMetaKafkaProducerClient,
-		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
-		blockchainClient:              blockchainClient,
+		logger:                              logger,
+		settings:                            tSettings,
+		txValidator:                         NewTxValidator(logger, tSettings),
+		utxoStore:                           store,
+		blockAssembler:                      ba,
+		stats:                               gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:           txMetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
+		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
+		blockchainClient:                    blockchainClient,
 	}
 
 	txmetaKafkaURL := v.settings.Kafka.TxMetaConfig
@@ -199,6 +234,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 		v.rejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
+	}
+
+	if v.policyRejectedTxKafkaProducerClient != nil {
+		v.policyRejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
 	}
 
 	// Initialize TxMeta Kafka batcher if batch size is configured
@@ -215,6 +254,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 			batcher.WithMetrics(batchermetrics.Provider()),
 			batcher.WithTracer(tracing.Tracer("validator").OTelTracer()),
 		)
+		if ms := tSettings.Validator.TxMetaKafkaBatchTickerIntervalMillis; ms > 0 {
+			b.SetTickInterval(time.Duration(ms) * time.Millisecond)
+		}
 		v.txmetaKafkaBatcher = b
 		logger.Infof("TxMeta Kafka batching enabled: batchSize=%d, timeout=%dms", txmetaKafkaBatchSize, txmetaKafkaBatchTimeout)
 	}
@@ -298,6 +340,60 @@ func (v *Validator) GetMedianBlockTime() uint32 {
 // these values separately, ensuring consistency during validation.
 func (v *Validator) GetBlockState() utxo.BlockState {
 	return v.utxoStore.GetBlockState()
+}
+
+// selectFinalityComparisonTime returns the time value to compare nLockTime
+// against, plus a flag indicating that finality should be skipped entirely
+// for this combination of context.
+//
+//	Policy mode (!SkipPolicyChecks): tip MTP in all eras. Matches bitcoin-sv's
+//	TxnValidation calling StandardNonFinalVerifyFlags (src/policy/policy.h),
+//	which unconditionally sets LOCKTIME_MEDIAN_TIME_PAST — no Genesis / CSV
+//	gating, no GetAdjustedTime() fallback.
+//
+//	Consensus mode (SkipPolicyChecks=true):
+//	- blockHeight < CSVHeight  → candidate block header time, supplied by the
+//	  caller via Options.CandidateBlockTime. Matches bitcoin-sv
+//	  ContextualCheckBlock at src/validation.cpp:6020-6022, which uses
+//	  block.GetBlockTime() for pre-CSV blocks. When the caller does not
+//	  supply a value (zero), this returns skipFinality=true rather than
+//	  fabricating one — block-context callers that haven't migrated yet
+//	  keep their previous skip-finality behaviour, no regression.
+//	- blockHeight >= CSVHeight → candidate-parent MTP (equivalent to
+//	  bitcoin-sv's pindexPrev->GetMedianTimePast() at src/validation.cpp:6001
+//	  once BIP113 activates), supplied by the caller via
+//	  Options.CandidateParentMedianTime. All block-validation callers MUST
+//	  populate this field — there is no tip-MTP fallback. Missing values
+//	  return a ProcessingError so a forgotten populate-callsite cannot
+//	  silently degrade to blockState.MedianTime (which is updated
+//	  asynchronously from blockchain notifications and would race with tip
+//	  advance / reorg during validation). The hard-error stance replaces an
+//	  earlier doc-only contract that proved fragile under review.
+func selectFinalityComparisonTime(opts *Options, blockHeight uint32, csvHeight uint32, blockState utxo.BlockState) (comparisonTime uint32, skipFinality bool, err error) {
+	switch {
+	case !opts.SkipPolicyChecks:
+		if blockState.MedianTime == 0 {
+			return 0, false, errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, blockState.MedianTime)
+		}
+
+		return blockState.MedianTime, false, nil
+	case blockHeight < csvHeight:
+		if opts.CandidateBlockTime == 0 {
+			return 0, true, nil
+		}
+
+		return opts.CandidateBlockTime, false, nil
+	default:
+		// blockHeight >= csvHeight: use the caller-supplied candidate-parent MTP.
+		// No tip-MTP soft-fall — a missing value is a caller-side bug and we
+		// surface it instead of silently picking blockState.MedianTime (which
+		// races with asynchronous tip-advance / reorg updates).
+		if opts.CandidateParentMedianTime == 0 {
+			return 0, false, errors.NewProcessingError("post-CSV consensus path requires Options.CandidateParentMedianTime, got zero (block height: %d, csv height: %d)", blockHeight, csvHeight)
+		}
+
+		return opts.CandidateParentMedianTime, false, nil
+	}
 }
 
 // Validate performs comprehensive validation of a transaction.
@@ -398,7 +494,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 						return
 					}
 
-					if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+					if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 						// ignore notifications while syncing or catching up
 						return
 					}
@@ -414,22 +510,89 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 					PeerId: "", // Empty peer_id indicates internal rejection
 				}
 
-				value, err := proto.Marshal(m)
-				if err != nil {
-					return nil, err
+				value, marshalErr := proto.Marshal(m)
+				if marshalErr != nil {
+					ctxLogger.Errorf("[ValidateWithOptions] failed to marshal rejected tx message: %v", marshalErr)
+				} else {
+					v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
+						Key:   []byte(txID),
+						Value: value,
+					})
 				}
-
-				v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
-					Key:   []byte(txID),
-					Value: value,
-				})
 
 				prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 			}
 		}
+
+		// Publish consensus-valid but policy-rejected transactions so subtree validation
+		// pods can cache the raw tx bytes and avoid HTTP roundtrips to other miners.
+		if errors.Is(err, errors.ErrTxPolicy) {
+			v.publishPolicyRejectedTx(ctx, ctxLogger, tx, err)
+		}
 	}
 
 	return txMetaData, err
+}
+
+// publishPolicyRejectedTx publishes the raw bytes of a policy-rejected transaction to
+// the KAFKA_TX_POLICY_REJECTED topic. Subtree validation pods consume from this topic
+// to populate a local cache, avoiding expensive HTTP fetches when a subtree from another
+// miner contains transactions our node rejected on policy grounds.
+func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogger.Logger, tx *bt.Tx, validationErr error) {
+	if v.policyRejectedTxKafkaProducerClient == nil {
+		return
+	}
+
+	// Stay quiet while catching up, mirroring the rejected-tx producer above.
+	// During CATCHINGBLOCKS the node replays large volumes of historical
+	// transactions; publishing a policy-rejected message for every one would flood the
+	// topic with cache entries that subtree validation does not need yet.
+	if v.blockchainClient != nil {
+		state, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			ctxLogger.Errorf("[publishPolicyRejectedTx] failed to get blockchain FSM state: %v", err)
+			return
+		}
+
+		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
+			return
+		}
+	}
+
+	// Skip oversized transactions before serializing (tx.Size() is computed, not
+	// allocated): the broker rejects messages over message.max.bytes, and consumers
+	// skip txs over maxCachedTxBytes anyway. Skipping is lossless — subtree validation
+	// falls back to the HTTP fetch path on a cache miss. Same pattern as propagation's
+	// large-tx HTTP fallback (see PropagationServer.ProcessTransaction).
+	if maxBytes := v.settings.Validator.KafkaMaxMessageBytes; maxBytes > 0 && tx.Size() > maxBytes {
+		ctxLogger.Debugf("[publishPolicyRejectedTx] skipping tx %s: size %d exceeds validator_kafka_maxMessageBytes %d", tx.TxIDChainHash().String(), tx.Size(), maxBytes)
+		return
+	}
+
+	txHash := tx.TxIDChainHash()
+
+	m := &kafkamessage.KafkaTxPolicyRejectedTopicMessage{
+		TxHash: txHash.CloneBytes(),
+		RawTx:  tx.SerializeBytes(),
+		Reason: validationErr.Error(),
+	}
+
+	value, marshalErr := proto.Marshal(m)
+	if marshalErr != nil {
+		ctxLogger.Errorf("[publishPolicyRejectedTx] proto marshal error for tx %s: %v", txHash.String(), marshalErr)
+		return
+	}
+
+	// Non-blocking publish: this runs on the validation hot path, and the
+	// policy-rejected cache is strictly best-effort (a drop just falls back to the HTTP
+	// fetch path on the consumer side). Blocking here on Kafka back-pressure would stall
+	// validateTransaction, so a full producer buffer drops the message instead.
+	if !v.policyRejectedTxKafkaProducerClient.TryPublish(&kafka.Message{
+		Key:   txHash.CloneBytes(),
+		Value: value,
+	}) {
+		ctxLogger.Debugf("[publishPolicyRejectedTx] dropped tx %s: policy-rejected producer buffer full", txHash.String())
+	}
 }
 
 // validateInternal performs the core validation logic for a transaction.
@@ -497,32 +660,32 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		blockHeight = blockState.Height + 1
 	}
 
-	// We do not check IsFinal for transactions before BIP113 change (block height 419328)
-	// This is an exception for transactions before the media block time was used
-	if blockHeight > v.settings.ChainCfgParams.CSVHeight {
-
-		utxoStoreMedianBlockTime := blockState.MedianTime
-		if utxoStoreMedianBlockTime == 0 {
-			err = errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
-			span.RecordError(err)
-
-			return nil, err
-		}
-
-		// this function should be moved into go-bt
-		if err = util.IsTransactionFinal(tx, blockHeight, utxoStoreMedianBlockTime); err != nil {
-			err = errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
-			span.RecordError(err)
-
-			return nil, err
-		}
-	}
-
+	// Reject coinbase first, matching bitcoin-sv CheckRegularTransaction
+	// (src/validation.cpp:601-603) which short-circuits before any contextual
+	// (finality / MTP) check.
 	if tx.IsCoinbase() {
 		err = errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
 		span.RecordError(err)
 
 		return nil, err
+	}
+
+	comparisonTime, skipFinality, finalityErr := selectFinalityComparisonTime(validationOptions, blockHeight, uint32(v.settings.ChainCfgParams.CSVHeight), blockState)
+	if finalityErr != nil {
+		err = finalityErr
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	if !skipFinality {
+		// this function should be moved into go-bt
+		if err = util.IsTransactionFinal(tx, blockHeight, comparisonTime); err != nil {
+			err = errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
+			span.RecordError(err)
+
+			return nil, err
+		}
 	}
 
 	var utxoHeights []uint32
@@ -553,18 +716,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// validate the transaction format, consensus rules etc.
-	// this does not validate the signatures in the transaction yet
+	// Run Teranode-owned checks and BDK transaction validation.
 	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
-		span.RecordError(err)
-
-		return nil, err
-	}
-
-	// validate the transaction scripts and signatures
-	if err = v.validateTransactionScripts(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err = errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
 		span.RecordError(err)
 
 		return nil, err
@@ -594,7 +748,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
 
-			var spendErrs *errors.Error
+			// Collect failed spends and attach a capped aggregate to the
+			// returned error. The failure count scales with the tx's input
+			// count; an uncapped chain makes every subsequent errors.Is on it
+			// walk the full chain (mainnet IBD stall, block 820116).
+			failedSpends := make([]error, 0, 8)
 
 			for _, spend := range spentUtxos {
 				if spend.Err != nil {
@@ -602,20 +760,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 						saveAsConflicting = true
 					}
 
-					var spendErr *errors.Error
-					if errors.As(spend.Err, &spendErr) {
-						if spendErrs == nil {
-							spendErrs = errors.New(spendErr.Code(), spendErr.Message(), spendErr)
-						} else {
-							spendErrs = errors.New(spendErrs.Code(), spendErrs.Message(), spendErr)
-						}
-					}
+					failedSpends = append(failedSpends, spend.Err)
 				}
 			}
 
-			if spendErrs != nil {
+			if len(failedSpends) > 0 {
 				if errors.As(err, &tErr) {
-					tErr.SetWrappedErr(spendErrs)
+					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
 				}
 			}
 
@@ -662,14 +813,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return txMetaData, err
 			}
 		} else if errors.Is(err, errors.ErrTxNotFound) {
-			// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
-			// the utxo store. We can check whether the tx already exists, which means it has been validated and
-			// blessed. In this case we can just return early.
+			// The parent transaction was not found. This can legitimately happen when the parent has been DAH-evicted
+			// long after the child was mined. Only short-circuit if the stored metadata confirms prior full validation:
+			//   - tx has been included in at least one block (BlockIDs non-empty), AND
+			//   - tx is NOT marked conflicting, AND
+			//   - tx is NOT locked
+			// Otherwise, surface the original ErrTxNotFound — a "tx exists in store" alone is not proof of validation
+			// (a re-org or DAH window could expose a stale or mid-flight record).
 			txMetaData = &meta.Data{}
-			if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err == nil {
-				v.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", txID)
+			if metaErr := v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); metaErr == nil {
+				if len(txMetaData.BlockIDs) > 0 && !txMetaData.Conflicting && !txMetaData.Locked {
+					v.logger.Warnf("[Validate][%s] parent tx DAH-evicted, child already mined and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
 
-				return txMetaData, nil
+					return txMetaData, nil
+				}
 			}
 		}
 
@@ -747,6 +904,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// been validated, spent, and created in the UTXO store — returning an error would
 	// cause callers to treat an accepted tx as failed and trigger duplicate retries.
 	if v.txmetaKafkaProducerClient != nil && !validationOptions.SkipTxMetaPublishing {
+		// InBlock is set explicitly by block-context callers (block validation,
+		// subtree validation, legacy sync) whose transactions arrived as part
+		// of a block or announced subtree rather than via mempool submission.
+		// Mark the published txmeta so relay consumers (legacy netsync) don't
+		// announce it as a fresh mempool tx.
+		txMetaData.InBlock = validationOptions.InBlock
+
 		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); txMetaErr != nil {
 			v.logger.Errorf("[Validate][%s] failed to serialize/enqueue txmeta for kafka, continuing to 2PC: %v", txID, txMetaErr)
 		}
@@ -773,7 +937,7 @@ func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Conte
 	defer endSpan()
 
 	// get the utxo heights for each input
-	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions)
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions.PrefetchedParents)
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
@@ -802,11 +966,13 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 	return nil
 }
 
-// getUtxoBlockHeightsAndExtendTx returns the block heights for each input of the transaction
-func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, error) {
+// getUtxoBlockHeightsAndExtendTx returns the block heights for each input of the transaction.
+// prefetched, when non-nil, supplies parent metadata already read in bulk so per-parent
+// store Gets can be skipped (see Options.PrefetchedParents).
+func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data) ([]uint32, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, v.settings.UtxoStore.GetBatcherSize)
+	util.SafeSetLimit(v.logger, g, v.settings.UtxoStore.GetBatcherSize)
 
 	parentTxHashes := make(map[chainhash.Hash][]int)
 	utxoHeights := make([]uint32, len(tx.Inputs))
@@ -828,7 +994,7 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 		inputIdxs := idxs
 
 		g.Go(func() error {
-			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend, validationOptions); err != nil {
+			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend, prefetched); err != nil {
 				if errors.Is(err, errors.ErrTxNotFound) {
 					return errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 				}
@@ -849,30 +1015,22 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 
 // getUtxoBlockHeightAndExtendForParentTx retrieves the block height for a parent transaction
 // and extends the inputs of the transaction if it is not already extended.
+//
+// Two height-population branches exist; exactly one writes utxoHeights[idx]
+// for any given parent:
+//
+//  1. UTXO-store hit with non-empty BlockHeights (confirmed prior-block parent)
+//     — writes the real stored block height.
+//  2. UTXO-store fallback with empty BlockHeights (parent in the store but not
+//     yet mined into a block, e.g. an in-block parent of the candidate block)
+//     — writes the unconfirmedParentHeight sentinel. The sentinel is later
+//     resolved by Options.UnconfirmedParentsAtCandidateHeight (block-validation
+//     paths substitute the candidate height before BDK/BIP68 consume the
+//     heights) or translated at the BDK boundary: MEMPOOL_HEIGHT in consensus
+//     (BDK rejects with bad-txns-unconfirmed-input-in-block) or the candidate
+//     height in policy mode.
 func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int,
-	utxoHeights []uint32, tx *bt.Tx, extend bool, validationOptions *Options) error {
-
-	// OPTIMIZATION: Check if parent metadata is provided in options (for in-block parents)
-	// This allows validation without UTXO store lookups for in-block parent transactions
-	// SAFETY: Parent metadata only includes transactions that successfully validated AND created UTXOs
-	// (see check_block_subtrees.go:buildParentMetadata which filters by successful validations)
-	if validationOptions != nil && validationOptions.ParentMetadata != nil {
-		if parentMeta, found := validationOptions.ParentMetadata[parentTxHash]; found {
-			// Use pre-fetched metadata instead of UTXO store lookup
-			// Safe because metadata only includes transactions that completed full validation+storage
-			for _, idx := range idxs {
-				utxoHeights[idx] = parentMeta.BlockHeight
-			}
-
-			// If transaction is already extended, we have all the data we need
-			// The parent metadata optimization works best with pre-extended transactions
-			if !extend {
-				return nil
-			}
-			// Otherwise fall through to UTXO store to get full transaction for extending
-		}
-	}
-
+	utxoHeights []uint32, tx *bt.Tx, extend bool, prefetched map[chainhash.Hash]*meta.Data) error {
 	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
 
 	if extend {
@@ -880,16 +1038,31 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		f = append(f, fields.Tx)
 	}
 
-	txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, f...)
-	if err != nil {
-		return err
+	// Use a bulk-prefetched parent if the caller supplied one that carries
+	// everything we need (the parent tx outputs too, when extending). This is a
+	// read-source swap only: the height/sentinel logic below is unchanged, and
+	// any parent not prefetched — or prefetched without the Tx needed for
+	// extension — falls back to a store Get, so correctness is never reduced.
+	var txMeta *meta.Data
+	if pf, ok := prefetched[parentTxHash]; ok && pf != nil && (!extend || pf.Tx != nil) {
+		txMeta = pf
+	} else {
+		var err error
+		if txMeta, err = v.utxoStore.Get(gCtx, &parentTxHash, f...); err != nil {
+			return err
+		}
 	}
 
 	if len(txMeta.BlockHeights) == 0 {
-		// Get atomic block state to ensure consistency
-		blockState := v.utxoStore.GetBlockState()
+		// Parent is in the UTXO store but has no block heights recorded — i.e.
+		// the parent UTXO is not yet confirmed. Mark each slot with the
+		// teranode-internal sentinel so the BDK adapter can translate it at
+		// the boundary: MEMPOOL_HEIGHT in consensus (BDK rejects with
+		// bad-txns-unconfirmed-input-in-block) or the candidate height in
+		// policy mode (matching svnode's GetInputScriptBlockHeight). See
+		// ScriptVerifierGoBDK.ValidateTransaction for the translation.
 		for _, idx := range idxs {
-			utxoHeights[idx] = blockState.Height + 1
+			utxoHeights[idx] = unconfirmedParentHeight
 		}
 	} else {
 		for _, idx := range idxs {
@@ -968,17 +1141,23 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 			isDelete:  false,
 		})
 	} else {
-		// Fallback: send single item as batch format for consistency
-		value := serializeTxMetaBatch([]*txmetaBatchItem{{
+		// Fallback: send single item as batch format for consistency.
+		item := &txmetaBatchItem{
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
-		}})
-
-		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-			Key:   nil,
-			Value: value,
-		})
+		}
+		if v.settings.Validator.TxMetaWireFormat == "v2" {
+			v.sendTxMetaBatchV2([]*txmetaBatchItem{item})
+		} else {
+			value := serializeTxMetaBatch([]*txmetaBatchItem{item})
+			// Hash key spreads single-item fallback messages evenly across partitions
+			// instead of bunching on franz-go's StickyKeyPartitioner default for nil keys.
+			v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+				Key:   txHash[:],
+				Value: value,
+			})
+		}
 	}
 
 	prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
@@ -987,15 +1166,31 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 }
 
 // sendTxMetaBatch serializes and publishes a batch of TxMeta items to Kafka.
+//
+// The Kafka message key is set to the first item's tx hash. With franz-go's default
+// StickyKeyPartitioner this hashes onto a single partition deterministically, which:
+//  1. Distributes traffic evenly across the topic's partitions (tx hashes are uniform).
+//  2. Keeps every record from one batch on the same partition (preserves any
+//     intra-batch ordering the consumer might rely on).
+//
+// Previously Key was nil, which makes StickyKeyPartitioner equivalent to a
+// StickyPartitioner — bunching consecutive batches onto the same partition until
+// linger expires. That created bursty partition usage and the observed Kafka-read
+// throughput oscillation on the consumer side.
 func (v *Validator) sendTxMetaBatch(batch []*txmetaBatchItem) {
 	if len(batch) == 0 {
+		return
+	}
+
+	if v.settings.Validator.TxMetaWireFormat == "v2" {
+		v.sendTxMetaBatchV2(batch)
 		return
 	}
 
 	value := serializeTxMetaBatch(batch)
 
 	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-		Key:   nil,
+		Key:   batch[0].hash[:],
 		Value: value,
 	})
 }
@@ -1034,9 +1229,9 @@ func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 
 		// Write action (1 byte)
 		if item.isDelete {
-			buf[offset] = txmetaActionDELETE
+			buf[offset] = txmetacache.WireActionDELETE
 		} else {
-			buf[offset] = txmetaActionADD
+			buf[offset] = txmetacache.WireActionADD
 		}
 		offset++
 
@@ -1054,6 +1249,156 @@ func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 	}
 
 	return buf
+}
+
+// txmetaItemWithHash bundles a batch item with its pre-computed xxhash so
+// per-partition grouping and serialization don't re-hash.
+type txmetaItemWithHash struct {
+	item *txmetaBatchItem
+	h    uint64
+}
+
+// serializeTxMetaBatchV2 writes a v2-format txmeta Kafka payload for a set of
+// items that have already been grouped into a single Kafka partition.
+//
+// Layout (see services/subtreevalidation/txmetaHandler.go for the symmetric
+// parser):
+//
+//	[1 byte]    magic = 0xFF
+//	[1 byte]    version = 0x02
+//	[2 bytes]   reserved (zero)
+//	[4 bytes]   entry count (uint32 LE)
+//	per entry:
+//	  [8 bytes]  xxhash(tx hash) (uint64 LE)
+//	  [32 bytes] tx hash
+//	  [1 byte]   action (0=ADD, 1=DELETE)
+//	  [4 bytes]  content length (uint32 LE)
+//	  [N bytes]  content (only for ADD)
+//
+// Putting the pre-computed xxhash on the wire lets the receiver skip its own
+// xxhash on every entry — a small per-entry saving that compounds at the
+// production rates this is designed for.
+func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
+	size := 8 // header: magic + version + 2 reserved + count
+	for _, it := range items {
+		size += 8 + 32 + 1 + 4
+		if !it.item.isDelete {
+			size += len(it.item.metaBytes)
+		}
+	}
+
+	buf := make([]byte, size)
+	buf[0] = txmetacache.WireV2Magic
+	buf[1] = txmetacache.WireV2Version
+	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
+	off := 8
+
+	for _, it := range items {
+		binary.LittleEndian.PutUint64(buf[off:], it.h)
+		off += 8
+		copy(buf[off:], it.item.hash[:])
+		off += 32
+		if it.item.isDelete {
+			buf[off] = txmetacache.WireActionDELETE
+			off++
+			binary.LittleEndian.PutUint32(buf[off:], 0)
+			off += 4
+		} else {
+			buf[off] = txmetacache.WireActionADD
+			off++
+			binary.LittleEndian.PutUint32(buf[off:], uint32(len(it.item.metaBytes)))
+			off += 4
+			copy(buf[off:], it.item.metaBytes)
+			off += len(it.item.metaBytes)
+		}
+	}
+
+	return buf
+}
+
+// sendTxMetaBatchV2 splits the batch into per-partition sub-batches keyed by
+// xxhash(tx hash) and emits one Kafka record per non-empty partition with the
+// partition number set explicitly on the record (requires the txmeta producer
+// to have been built with kafka.KafkaProducerConfig.ManualPartitioning=true).
+//
+// Routing rule:
+//
+//	bucketIdx           = xxhash(hash) % BucketsCount
+//	bucketsPerPartition = BucketsCount / NumPartitions
+//	partition           = bucketIdx / bucketsPerPartition
+//
+// Each partition therefore owns a contiguous, disjoint range of receiver
+// cache buckets. The subtreevalidation handler can write its partition's
+// records to the cache without taking locks contended by any other
+// partition's records (modulo the cache's own bucket-lock granularity).
+// txmetaPartitionsScratch is the per-call scratch held in
+// txmetaPartitionsScratchPool. partitions[p] is the per-partition group of
+// items being assembled before serialization. The outer slice header and the
+// per-partition inner slices' backing arrays are both reused across calls;
+// only newly-required capacity (e.g. when a hot partition gets a bigger
+// group than any prior call) triggers a fresh allocation. The byte buffer
+// produced by serializeTxMetaBatchV2 is NOT pooled — it is handed to
+// franz-go via Publish and we have no callback hook for safe return.
+type txmetaPartitionsScratch struct {
+	partitions [][]txmetaItemWithHash
+}
+
+var txmetaPartitionsScratchPool = sync.Pool{
+	New: func() any { return &txmetaPartitionsScratch{} },
+}
+
+func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
+	if len(batch) == 0 {
+		return
+	}
+
+	numPartitions := v.settings.Validator.TxMetaNumPartitions
+	if numPartitions <= 0 {
+		numPartitions = 1
+	}
+	bucketsPerPartition := txmetacache.BucketsCount / numPartitions
+	if bucketsPerPartition < 1 {
+		bucketsPerPartition = 1
+	}
+
+	scratch := txmetaPartitionsScratchPool.Get().(*txmetaPartitionsScratch)
+	// Ensure outer slice has the right shape, growing only if needed.
+	if cap(scratch.partitions) < numPartitions {
+		scratch.partitions = make([][]txmetaItemWithHash, numPartitions)
+	} else {
+		scratch.partitions = scratch.partitions[:numPartitions]
+	}
+	// Reset every per-partition slice's length to 0 but retain capacity for
+	// reuse on the next pool hit. We do NOT nil the elements: they're past
+	// len, GC can still collect the txmetaBatchItem pointers when no live
+	// slice header references them, and they get overwritten the next time
+	// this partition is hit.
+	for i := range scratch.partitions {
+		scratch.partitions[i] = scratch.partitions[i][:0]
+	}
+	defer txmetaPartitionsScratchPool.Put(scratch)
+
+	for _, item := range batch {
+		h := xxhash.Sum64(item.hash[:])
+		bucket := int(h % uint64(txmetacache.BucketsCount))
+		p := bucket / bucketsPerPartition
+		if p >= numPartitions {
+			// Defensive cap; only fires if BucketsCount is not an exact
+			// multiple of NumPartitions, which is documented as a constraint.
+			p = numPartitions - 1
+		}
+		scratch.partitions[p] = append(scratch.partitions[p], txmetaItemWithHash{item: item, h: h})
+	}
+
+	for p, items := range scratch.partitions {
+		if len(items) == 0 {
+			continue
+		}
+		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+			Partition: int32(p), //nolint:gosec // p < numPartitions, bounded by setting
+			Value:     serializeTxMetaBatchV2(items),
+		})
+	}
 }
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
@@ -1190,12 +1535,19 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	// The highest MTP index we guarantee is blockHeight:
 	//   - blockMTPHeight = blockHeight: GetMedianTimePastRange computes stored_mtp(N)
 	//     on the fly for the not-yet-persisted block N from block_time values [N-11, N-1].
-	//   - utxoHeights *may* exceed blockHeight when the chain tip advances during
-	//     validation (unconfirmed parents get blockState.Height+1); validateTransaction
-	//     clamps those lookups to blockMTPHeight.
+	//   - utxoHeights *may* exceed blockHeight: unconfirmed parents are stamped with the
+	//     unconfirmedParentHeight sentinel (0xFFFFFFFF). In consensus mode BDK rejects
+	//     before BIP68 runs; in policy mode BIP68 is gated out — so readMTPsLocked never
+	//     actually sees the sentinel, but its `h >= storeLen` clamp still protects.
+
 	needed := blockHeight
 
-	// Fast path: store already covers the needed height.
+	v.mtpMu.Lock()
+	defer v.mtpMu.Unlock()
+
+	// Fast path: store already covers the needed height.  A concurrent EnsureMTPLoaded
+	// that won the lock may have already populated the store; re-checking here avoids a
+	// redundant gRPC fetch.
 	currentLen := uint32(len(v.mtpStore))
 	if currentLen > needed {
 		return nil
@@ -1242,9 +1594,14 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	return nil
 }
 
-// validateTransaction performs transaction-level validation checks in two phases:
-//  1. Full transaction validation (structure, scripts, fees) via txValidator.ValidateTransaction.
-//  2. BIP68 sequence-lock validation (block context only) via txValidator.ValidateBIP68.
+// validateTransaction performs Teranode-owned transaction checks, BDK
+// transaction validation, and BIP68 sequence-lock validation.
+//
+// Phase 1 keeps checks that need local node context, including fee policy and
+// cache-size limits, and runs BDK transaction validation.
+//
+// Phase 2 is BIP68 sequence-lock validation (block context only) via
+// txValidator.ValidateBIP68.
 //
 // Phase 2 is only executed when phase 1 succeeds and SkipPolicyChecks is true (block context).
 // This avoids the cost of MTP lookups when a transaction fails normal validation.
@@ -1267,15 +1624,66 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	// Phase 1: run the internal tx validation, checking policies, scripts, signatures etc.
+	// Legacy block-sync resolution: substitute the unconfirmedParentHeight
+	// sentinel with the candidate block height BEFORE any consumer sees it —
+	// both the BDK call in phase 1 (per-input era-flag selection, where the
+	// sentinel would otherwise translate to MEMPOOL_HEIGHT and reject with
+	// bad-txns-unconfirmed-input-in-block) and the BIP68/MTP lookups in
+	// phase 2. On the legacy path an unconfirmed parent IS a same-block
+	// parent, so the candidate height is its true height. See
+	// Options.UnconfirmedParentsAtCandidateHeight for the consensus-safety
+	// contract; the floater backstop is block validation's
+	// checkParentsExistOnChain.
+	// No AddTXToBlockAssembly guard here, deliberately (an earlier revision
+	// hard-errored on flag+assembly): the legacy branch must set this flag in
+	// EVERY FSM state — a restarted node with FSM restored to RUNNING catches
+	// up over the legacy bridge and wedges without it — while assembly stays
+	// enabled in RUNNING for reorg resilience. The combination is safe: a
+	// floater child blessed at the candidate height and added to assembly is
+	// the same tx policy-mode admission would have accepted into assembly
+	// (policy substitutes tip+1 for unconfirmed parents — equal to the
+	// candidate height at the tip; era flags cannot differ post-Genesis), and
+	// accepted-block txs are mined-removed from assembly as always.
+	if validationOptions.UnconfirmedParentsAtCandidateHeight {
+		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
+	}
+
+	// Phase 1: run Teranode-owned checks and BDK transaction validation.
 	if err := v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		span.RecordError(err)
 		return err
 	}
 
-	// Phase 2: BIP68 sequence-lock validation — only for block context (SkipPolicyChecks == true)
-	// and only when BIP68 is active (blockHeight >= CSVHeight).
-	// Performed after phase 1 so that MTP lookups are skipped for invalid transactions.
+	// Phase 2: BIP68 sequence-lock validation — only for block context
+	// (SkipPolicyChecks == true) and only when BIP68 is active
+	// (blockHeight >= CSVHeight). Performed after phase 1 so that MTP lookups
+	// are skipped for invalid transactions.
+	//
+	// Policy mode (peer-received txs) deliberately does NOT run BIP68 — this
+	// is a stable design decision, not a missing check. Two reasons:
+	//
+	//  1. Post-Genesis, BIP68 short-circuits to no-op anyway. BSV Genesis
+	//     restored the original Bitcoin nSequence semantics (RBF signalling
+	//     only, no relative lock-time enforcement); see the post-Genesis
+	//     early-return in TxValidator.sequenceLocks. Running BIP68 in
+	//     current-mainnet policy mode would do zero observable work.
+	//
+	//  2. Pre-Genesis policy mode is only reachable in regtest / synthetic
+	//     test scenarios. Mainnet IBD validates historical pre-Genesis
+	//     blocks via consensus mode (SkipPolicyChecks=true), which already
+	//     runs BIP68 below — peer-received txs never arrive in a
+	//     pre-Genesis state on a real mainnet node.
+	//
+	// Benefits of confining BIP68 to consensus mode:
+	//  - Keeps the peer-tx admission hot path simple — no MTP plumbing.
+	//  - Keeps the MTP store and EnsureMTPLoaded pre-warming entirely out
+	//    of the policy path; MTP infrastructure exists solely for
+	//    block-validation batching.
+	//  - Per-tx policy-mode MTP lookups (synchronous gRPC / DB I/O per
+	//    peer tx) are avoided. Consensus mode amortises a single
+	//    EnsureMTPLoaded call across an entire block of txs validated
+	//    concurrently; policy mode would have to either pay that cost
+	//    per-tx or keep the MTP cache always warm regardless of need.
 	if !validationOptions.SkipPolicyChecks || v.blockchainClient == nil || blockHeight < uint32(v.settings.ChainCfgParams.CSVHeight) {
 		return nil
 	}
@@ -1298,16 +1706,39 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	//   ARE in the DB, and EnsureMTPLoaded stores the result at mtpStore[blockHeight].
 	blockMTPHeight := blockHeight
 
-	// Guard against a missing EnsureMTPLoaded call. In normal operation this cannot
-	// happen because Server.go calls EnsureMTPLoaded before spawning goroutines.
-	if uint32(len(v.mtpStore)) <= blockMTPHeight {
-		err := errors.NewProcessingError("[Validator][validateTransaction] MTP store not loaded up to height %d (store length %d); EnsureMTPLoaded must be called before block validation", blockMTPHeight, len(v.mtpStore))
+	// Hold the read lock only for the MTP lookups themselves, not for the subsequent
+	// ValidateBIP68 call which works on the copied utxoMTPs / blockMTP values. This
+	// serialises against EnsureMTPLoaded writers (append + in-place overlap patch) for
+	// the cross-block case (block N+1 extending mtpStore while block N's per-tx
+	// goroutines read it) without holding the lock through ECDSA / sequence-lock
+	// arithmetic. RLock is uncontended in the steady-state path where EnsureMTPLoaded
+	// has already populated the range.
+	utxoMTPs, blockMTP, err := v.readMTPsLocked(blockMTPHeight, utxoHeights)
+	if err != nil {
 		span.RecordError(err)
 		return err
 	}
 
+	return v.txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
+}
+
+// readMTPsLocked returns the per-input MTP values and the block MTP for use by
+// validateTransaction. It takes the mtpStore read lock for the duration of the
+// reads only and releases it before returning. The caller is free to use the
+// returned slice / value without further synchronisation.
+func (v *Validator) readMTPsLocked(blockMTPHeight uint32, utxoHeights []uint32) ([]uint32, uint32, error) {
+	v.mtpMu.RLock()
+	defer v.mtpMu.RUnlock()
+
+	// Guard against a missing EnsureMTPLoaded call. In normal operation this cannot
+	// happen because Server.go calls EnsureMTPLoaded before spawning goroutines.
+	if uint32(len(v.mtpStore)) <= blockMTPHeight {
+		return nil, 0, errors.NewProcessingError("[Validator][validateTransaction] MTP store not loaded up to height %d (store length %d); EnsureMTPLoaded must be called before block validation", blockMTPHeight, len(v.mtpStore))
+	}
+
 	storeLen := uint32(len(v.mtpStore))
 	utxoMTPs := make([]uint32, len(utxoHeights))
+
 	for i, h := range utxoHeights {
 		if h >= storeLen {
 			utxoMTPs[i] = v.mtpStore[blockMTPHeight]
@@ -1315,31 +1746,6 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 			utxoMTPs[i] = v.mtpStore[h]
 		}
 	}
-	blockMTP := v.mtpStore[blockMTPHeight]
 
-	return v.txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
-}
-
-// validateTransactionScripts performs script validation for a transaction
-// Returns error if validation fails
-func (v *Validator) validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32,
-	validationOptions *Options) error {
-	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransactionScripts",
-		tracing.WithHistogram(prometheusTransactionValidateScripts),
-	)
-	defer deferFn()
-
-	// 0) Check whether we have a complete transaction in extended format, with all input information
-	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
-	if !tx.IsExtended() {
-		err := v.extendTransaction(ctx, tx)
-		if err != nil {
-			// error is already wrapped in our errors package
-			span.RecordError(err)
-			return err
-		}
-	}
-
-	// run the internal tx validation, checking policies, scripts, signatures etc.
-	return v.txValidator.ValidateTransactionScripts(tx, blockHeight, utxoHeights, validationOptions)
+	return utxoMTPs, v.mtpStore[blockMTPHeight], nil
 }

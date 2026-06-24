@@ -88,6 +88,13 @@ func (m *SafeMockKafkaProducer) Publish(msg *kafka.Message) {
 	m.publishCalled = true
 }
 
+func (m *SafeMockKafkaProducer) TryPublish(msg *kafka.Message) bool {
+	m.Lock()
+	defer m.Unlock()
+	m.publishCalled = true
+	return true
+}
+
 func (m *SafeMockKafkaProducer) Start(ctx context.Context, ch chan *kafka.Message) {
 	m.Lock()
 	defer m.Unlock()
@@ -142,6 +149,13 @@ type trackingBlockchainClient struct {
 	notificationCh   chan *blockchain_api.Notification
 	setMinedOnce     sync.Once
 	setMinedCalled   chan struct{}
+
+	// fsmStateOverride, when non-nil, makes GetFSMCurrentState report this state
+	// instead of delegating to the embedded client. LocalClient hardwires
+	// FSMStateRUNNING, so this is how a test drives CATCHINGBLOCKS
+	// (or an error) through BlockValidation.isCaughtUp.
+	fsmStateOverride    *blockchain.FSMStateType
+	fsmStateOverrideErr error
 }
 
 func newTrackingBlockchainClient(client blockchain.ClientI) *trackingBlockchainClient {
@@ -172,12 +186,50 @@ func (t *trackingBlockchainClient) withSetMinedTracking() *trackingBlockchainCli
 	return t
 }
 
+// withFSMState forces GetFSMCurrentState to report the given state, bypassing
+// the embedded LocalClient (which always reports RUNNING). Used to drive the
+// catchup branch of BlockValidation.isCaughtUp.
+func (t *trackingBlockchainClient) withFSMState(state blockchain.FSMStateType) *trackingBlockchainClient {
+	t.fsmStateOverride = &state
+	return t
+}
+
+// withFSMError forces GetFSMCurrentState to fail, exercising the fail-safe
+// branch of isCaughtUp (an FSM-query error must be treated as not-caught-up so
+// a transient hiccup never wrongly invalidates a #1031 catchup block).
+func (t *trackingBlockchainClient) withFSMError(err error) *trackingBlockchainClient {
+	t.fsmStateOverrideErr = err
+	return t
+}
+
+func (t *trackingBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockchain.FSMStateType, error) {
+	if t.fsmStateOverrideErr != nil {
+		return nil, t.fsmStateOverrideErr
+	}
+	if t.fsmStateOverride != nil {
+		return t.fsmStateOverride, nil
+	}
+	return t.ClientI.GetFSMCurrentState(ctx)
+}
+
 func (t *trackingBlockchainClient) InvalidateBlock(ctx context.Context, hash *chainhash.Hash) ([]chainhash.Hash, error) {
 	hashes, err := t.ClientI.InvalidateBlock(ctx, hash)
 	t.invalidateOnce.Do(func() {
 		close(t.invalidateCalled)
 	})
 	return hashes, err
+}
+
+// invalidateWasCalled reports whether InvalidateBlock has been observed yet
+// (non-blocking). Used by the #1031 guard test to assert a catchup floater is
+// NOT rolled back.
+func (t *trackingBlockchainClient) invalidateWasCalled() bool {
+	select {
+	case <-t.invalidateCalled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *trackingBlockchainClient) Subscribe(ctx context.Context, tag string) (chan *blockchain_api.Notification, error) {
@@ -292,7 +344,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -1815,7 +1867,11 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	// genesis+1 block: ValidateBlock's difficulty gate runs GetNextWorkRequired
+	// BEFORE subtree blessing, so the header must carry the regtest-expected target
+	// (207fffff). 2000ffff would be rejected on the nBits check before reaching
+	// CheckBlockSubtrees and the subtree-error classification path under test.
+	nBits, _ := model.NewNBitFromString("207fffff")
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
@@ -2315,6 +2371,472 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "are not from current chain")
 	})
+}
+
+// Test_checkOldBlockIDs_inMemoryChainCheckRoute exercises the in-memory-chain-check
+// route (blockchain_use_in_memory_chain_check=true). Post-#1055 the route holds no
+// local set: it resolves every tx by deferring to the authoritative
+// CheckBlockIsInCurrentChain, so it never calls the on-chain-prefetch
+// GetBlockHeaderIDs RPC. Mirrors the subtests of Test_checkOldBlockIDs above so the
+// two routes stay behaviourally equivalent (same pass/fail outcomes per input).
+func Test_checkOldBlockIDs_inMemoryChainCheckRoute(t *testing.T) {
+	initPrometheusMetrics()
+
+	testBlock := func() *model.Block {
+		prevHash := chainhash.HashH([]byte("prev"))
+		merkleRoot := chainhash.HashH([]byte("merkle"))
+		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+	}
+
+	// newBlockValidation returns a BlockValidation configured to dispatch to the
+	// in-memory-chain-check route. That route resolves every set via
+	// CheckBlockIsInCurrentChain; the on-chain-prefetch GetBlockHeaderIDs RPC should
+	// never be called — if it is, that is a bug in the dispatch.
+	newBlockValidation := func(blockchainMock *blockchain.Mock) *BlockValidation {
+		s := &settings.Settings{}
+		s.BlockChain.UseInMemoryChainCheck = true
+		return &BlockValidation{
+			blockchainClient: blockchainMock,
+			settings:         s,
+		}
+	}
+
+	t.Run("dispatches to in-memory chain check (no prefetch calls)", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		txHash := chainhash.HashH([]byte("only-tx"))
+		oldBlockIDsMap.Set(txHash, []uint32{42})
+
+		// Only CheckBlockIsInCurrentChain should be invoked.
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).Return(true, nil).Once()
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.NoError(t, err)
+
+		// Belt-and-braces: assert the on-chain-prefetch RPC was not called.
+		blockchainMock.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
+		blockchainMock.AssertExpectations(t)
+	})
+
+	t.Run("empty map", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.NoError(t, err)
+		blockchainMock.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+	})
+
+	t.Run("empty parents returns ProcessingError", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		for i := uint32(0); i < 100; i++ {
+			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
+			oldBlockIDsMap.Set(txHash, []uint32{})
+		}
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "blockIDs is empty for txID")
+	})
+
+	t.Run("all parents on chain", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		for i := uint32(0); i < 100; i++ {
+			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
+			oldBlockIDsMap.Set(txHash, []uint32{i})
+		}
+
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.NoError(t, err)
+	})
+
+	t.Run("dedupe cache: identical blockIDs slice hits cache after first lookup", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		for i := uint32(0); i < 100; i++ {
+			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
+			oldBlockIDsMap.Set(txHash, []uint32{1})
+		}
+
+		// Once() — if the dedupe cache fails the mock will fail on the second call.
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{1}).Return(true, nil).Once()
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.NoError(t, err)
+		blockchainMock.AssertExpectations(t)
+	})
+
+	t.Run("not on chain returns BlockInvalidError", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		for i := uint32(0); i < 100; i++ {
+			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
+			oldBlockIDsMap.Set(txHash, []uint32{1})
+		}
+
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{1}).Return(false, nil).Once()
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "are not from current chain")
+	})
+
+	t.Run("RPC error returns ProcessingError", func(t *testing.T) {
+		// CheckBlockIsInCurrentChain returning an error (network blip,
+		// blockchain service unavailable, etc.) must surface as a
+		// ProcessingError — *not* a BlockInvalidError — so the caller
+		// retries rather than invalidating the block.
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap.Set(chainhash.HashH([]byte("only")), []uint32{42})
+
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).
+			Return(false, errors.NewServiceError("blockchain unavailable")).Once()
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to check if old blocks are part of the current chain")
+		require.NotContains(t, err.Error(), "are not from current chain")
+	})
+
+}
+
+// Test_checkOldBlockIDs_inMemoryChainCheck_consensusEquivalence proves the
+// in-memory-chain-check route forwards every parent-block-ID set verbatim to the
+// authoritative CheckBlockIsInCurrentChain and mirrors its verdict — the property
+// that keeps a useInMemoryChainCheck=on node consensus-equivalent with an off
+// node. Post-#1055 the route makes no local accept/reject of its own: the cases
+// the old off-chain prefetch resolved locally (a set with one on-chain id, an
+// all-off-chain set, an above-maxBlockID id) are all decided by the store now.
+func Test_checkOldBlockIDs_inMemoryChainCheck_consensusEquivalence(t *testing.T) {
+	initPrometheusMetrics()
+
+	testBlock := func() *model.Block {
+		prevHash := chainhash.HashH([]byte("prev"))
+		merkleRoot := chainhash.HashH([]byte("merkle"))
+		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+	}
+
+	newBlockValidation := func(blockchainMock *blockchain.Mock) *BlockValidation {
+		s := &settings.Settings{}
+		s.BlockChain.UseInMemoryChainCheck = true
+		return &BlockValidation{blockchainClient: blockchainMock, settings: s}
+	}
+
+	t.Run("set with one on-chain id is forwarded whole and accepted", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		// The full slice {5,7} is forwarded to the authority — ANY-of semantics are
+		// the store's job; the route must not pre-filter 5 just because a local set
+		// could look off-chain. The store reports on-chain ⇒ accept.
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{5, 7}).Return(true, nil).Once()
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{5, 7})
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.NoError(t, err)
+		blockchainMock.AssertExpectations(t)
+	})
+
+	t.Run("all-off-chain set is rejected by the authority", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{1}).Return(false, nil).Once()
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{1})
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "are not from current chain")
+		blockchainMock.AssertExpectations(t)
+	})
+
+	t.Run("above-maxBlockID id is rejected by the authority (no local short-circuit)", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		// An id above the store's maxBlockID has no row; the store rejects it. The
+		// route must consult the store rather than accepting it locally — the
+		// chain-split the old maxBlockID guard defended against is now wholly the
+		// store's responsibility.
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{10}).Return(false, nil).Once()
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{10})
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "are not from current chain")
+		blockchainMock.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{10})
+		blockchainMock.AssertExpectations(t)
+	})
+
+	t.Run("RPC error surfaces as ProcessingError (not BlockInvalid)", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{1}).
+			Return(false, errors.NewServiceError("blockchain unavailable")).Once()
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{1})
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to check if old blocks are part of the current chain")
+		require.NotContains(t, err.Error(), "are not from current chain")
+	})
+}
+
+// Test_checkOldBlockIDs_inMemoryChainCheck_gapIDRejected is the #1055 regression.
+// The in-memory-chain-check route must not treat a parent block id as on-chain
+// merely because it is absent from the off-chain (negative) set: a phantom /
+// id-sequence-gap id (<= maxBlockID, no on_main_chain row) is exactly such an id.
+// The route must defer to the authoritative CheckBlockIsInCurrentChain, which
+// rejects it, so a useInMemoryChainCheck=on node stays consensus-equivalent with
+// an off node. Before the fix the route short-circuited the gap id to on-chain
+// locally (absent from the prefetched off-chain set ⇒ "on chain") and never
+// consulted CheckBlockIsInCurrentChain, accepting a block the store rejects.
+func Test_checkOldBlockIDs_inMemoryChainCheck_gapIDRejected(t *testing.T) {
+	initPrometheusMetrics()
+
+	prevHash := chainhash.HashH([]byte("prev"))
+	merkleRoot := chainhash.HashH([]byte("merkle"))
+	testBlock := &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+
+	blockchainMock := &blockchain.Mock{}
+	s := &settings.Settings{}
+	s.BlockChain.UseInMemoryChainCheck = true
+	blockValidation := &BlockValidation{blockchainClient: blockchainMock, settings: s}
+
+	// Gap id 50: well below any plausible maxBlockID and in no off-chain set, yet
+	// it has no committed on_main_chain row. The authoritative check rejects it.
+	const gapID uint32 = 50
+	blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{gapID}).Return(false, nil).Once()
+
+	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{gapID})
+
+	err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "are not from current chain")
+
+	// The fix: the route consulted the authoritative check rather than accepting
+	// the gap id from its absence in a local set. (It also no longer fetches the
+	// off-chain set into this service — only CheckBlockIsInCurrentChain is called.)
+	blockchainMock.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{gapID})
+	blockchainMock.AssertExpectations(t)
+}
+
+// Test_checkOldBlockIDs_nilHeader guards the round-1 fix: a nil block header (or
+// nil HashPrevBlock) must return a clean error rather than panicking when the
+// guard, tracing, or logging dereferences the header. Regression test for the
+// panic Copilot flagged.
+func Test_checkOldBlockIDs_nilHeader(t *testing.T) {
+	initPrometheusMetrics()
+
+	blockValidation := &BlockValidation{
+		blockchainClient: &blockchain.Mock{},
+		settings:         &settings.Settings{},
+	}
+
+	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{1})
+
+	t.Run("nil header", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{Header: nil})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "header or HashPrevBlock is nil")
+		})
+	})
+
+	t.Run("nil HashPrevBlock", func(t *testing.T) {
+		merkleRoot := chainhash.HashH([]byte("merkle"))
+		block := &model.Block{Header: &model.BlockHeader{HashPrevBlock: nil, HashMerkleRoot: &merkleRoot}}
+		require.NotPanics(t, func() {
+			err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, block)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "header or HashPrevBlock is nil")
+		})
+	})
+}
+
+// Test_checkOldBlockIDs_inMemoryChainCheck_realStore is the sqlitememory +
+// LocalClient end-to-end guard for the in-memory-chain-check route, run against a
+// REAL blockchain store (per the repo testing rules — no mocking the blockchain
+// store). It proves the route stays consensus-equivalent with the authoritative
+// CheckBlockIsInCurrentChain: an id above maxBlockID is rejected by BOTH, and an
+// on-chain id is accepted by BOTH. Post-#1055 the route defers every set to
+// CheckBlockIsInCurrentChain, so equivalence holds by construction; this
+// differential assertion is the regression guard that fails loudly if a future
+// change re-introduces a local accept/reject path that can diverge from the store
+// (the interior-gap divergence #1055 fixed is covered deterministically by
+// Test_checkOldBlockIDs_inMemoryChainCheck_gapIDRejected).
+func Test_checkOldBlockIDs_inMemoryChainCheck_realStore(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockChain.UseInMemoryChainCheck = true
+
+	blockChainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	bv := &BlockValidation{blockchainClient: blockchainClient, settings: tSettings}
+
+	testBlock := func() *model.Block {
+		prevHash := chainhash.HashH([]byte("prev"))
+		merkleRoot := chainhash.HashH([]byte("merkle"))
+		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+	}
+
+	// Genesis is the only (hence best) block, so its id is the highest known block id.
+	_, bestMeta, err := blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	maxBlockID := bestMeta.ID
+
+	// Wait until the best block reports on-chain, so the store is in a stable,
+	// queryable state before the differential checks below.
+	//
+	// Note: this does NOT prove the async startup rebuild has finished. While
+	// mainChainRebuilding > 0, CheckBlockIsInCurrentChain takes the CTE fallback
+	// (CheckBlockIsInCurrentChain.go), which already finds the best block on-chain —
+	// so this gate can pass mid-rebuild, before the in-memory off-chain set is the
+	// active path. That's fine: the differential below asserts route == store
+	// regardless of which internal path the store takes, so it holds either way. The
+	// exact "rebuild done" signal was the OffChainBlockIDs rebuilding flag, removed
+	// with that RPC in this PR.
+	require.Eventually(t, func() bool {
+		onChain, e := blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{maxBlockID})
+		return e == nil && onChain
+	}, 15*time.Second, 25*time.Millisecond, "best block should report on-chain")
+
+	// Differential test: for each candidate block id, the route's accept/reject MUST
+	// match the authoritative CheckBlockIsInCurrentChain bool. The above-maxBlockID
+	// case is the one the old local fast path got wrong (it would accept while the
+	// store rejects); the differential assertion catches any such divergence
+	// regardless of the store's exact maxBlockID.
+	candidates := []uint32{maxBlockID + 1000, maxBlockID + 1, maxBlockID}
+	for _, id := range candidates {
+		onChain, rpcErr := blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{id})
+		require.NoError(t, rpcErr, "RPC error for id %d", id)
+
+		m := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		m.Set(chainhash.HashH([]byte(fmt.Sprintf("tx-%d", id))), []uint32{id})
+		routeErr := bv.checkOldBlockIDs(ctx, m, testBlock())
+		accepted := routeErr == nil
+		if !accepted {
+			require.Contains(t, routeErr.Error(), "are not from current chain", "id %d rejected for the wrong reason", id)
+		}
+
+		require.Equal(t, onChain, accepted,
+			"consensus divergence at id %d: store on-chain=%v but in-memory-chain-check route accepted=%v (maxBlockID=%d)",
+			id, onChain, accepted, maxBlockID)
+	}
+}
+
+// BenchmarkCheckOldBlockIDs measures the per-block cost of both chain-membership
+// routes at realistic tx counts, with parents referencing a small set of recent
+// on-chain blocks (so every tx resolves via the local fastPath — the production
+// happy path). It is the guard Oli asked for against a silent regression to the
+// per-tx CheckBlockIsInCurrentChain lookup: if a change stops the fastPath from
+// resolving locally, ns/op and allocs/op here jump (and lookups would dominate),
+// surfacing the regression instead of letting callers fall back to SQL unnoticed.
+//
+//	go test -tags testtxmetacache -bench BenchmarkCheckOldBlockIDs -benchmem ./services/blockvalidation/
+func BenchmarkCheckOldBlockIDs(b *testing.B) {
+	initPrometheusMetrics()
+
+	const distinctParents = uint32(64) // recent main-chain blocks the block's txs spend from
+
+	testBlock := func() *model.Block {
+		prevHash := chainhash.HashH([]byte("prev"))
+		merkleRoot := chainhash.HashH([]byte("merkle"))
+		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+	}
+
+	buildMap := func(numTxs int) *txmap.SyncedMap[chainhash.Hash, []uint32] {
+		m := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		for i := 0; i < numTxs; i++ {
+			parent := uint32(i)%distinctParents + 1 // ids 1..distinctParents, all on chain
+			m.Set(chainhash.HashH([]byte(fmt.Sprintf("bench-tx-%d", i))), []uint32{parent})
+		}
+		return m
+	}
+
+	for _, numTxs := range []int{1_000, 10_000} {
+		oldBlockIDsMap := buildMap(numTxs)
+
+		b.Run(fmt.Sprintf("on-chain-prefetch/%d", numTxs), func(b *testing.B) {
+			recent := make([]uint32, distinctParents)
+			for i := range recent {
+				recent[i] = uint32(i) + 1
+			}
+			mockClient := &blockchain.Mock{}
+			mockClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(recent, nil)
+			mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
+
+			s := &settings.Settings{} // UseInMemoryChainCheck=false → on-chain prefetch route
+			bv := &BlockValidation{blockchainClient: mockClient, settings: s}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := bv.checkOldBlockIDs(context.Background(), oldBlockIDsMap, testBlock()); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+
+		b.Run(fmt.Sprintf("in-memory-chain-check/%d", numTxs), func(b *testing.B) {
+			mockClient := &blockchain.Mock{}
+			// Post-#1055 this route defers every distinct parent-set to the
+			// authoritative CheckBlockIsInCurrentChain. buildMap spreads the N txs
+			// across 64 distinct single-parent sets ({1}…{64}), so the dedupe cache
+			// collapses the N txs to one lookup per distinct set (64 lookups), not one;
+			// measures that delegated cost.
+			mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
+
+			s := &settings.Settings{}
+			s.BlockChain.UseInMemoryChainCheck = true // in-memory-chain-check route
+			bv := &BlockValidation{blockchainClient: mockClient, settings: s}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := bv.checkOldBlockIDs(context.Background(), oldBlockIDsMap, testBlock()); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
@@ -3496,6 +4018,38 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	require.False(t, exists, "block hash should be deleted from blockHashesCurrentlyValidated after success")
 }
 
+// TestSetMinedRetryBackoff pins the exponential-with-cap backoff sequence used
+// by the setMinedChan worker. Operators rely on this curve to size alert
+// thresholds: 1s + 2s + 4s + 8s + 6×16s = 111s total before drop on a
+// permanently-unrecoverable block.
+func TestSetMinedRetryBackoff(t *testing.T) {
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{attempt: 0, want: 1 * time.Second},  // defensive: 0/negative -> base
+		{attempt: 1, want: 1 * time.Second},  // first retry
+		{attempt: 2, want: 2 * time.Second},  // doubling
+		{attempt: 3, want: 4 * time.Second},  // doubling
+		{attempt: 4, want: 8 * time.Second},  // doubling
+		{attempt: 5, want: 16 * time.Second}, // hits the cap
+		{attempt: 6, want: 16 * time.Second}, // stays at the cap
+		{attempt: 9, want: 16 * time.Second}, // stays at the cap
+		{attempt: 63, want: 16 * time.Second},
+	}
+	for _, tc := range cases {
+		got := setMinedRetryBackoff(tc.attempt)
+		require.Equalf(t, tc.want, got, "setMinedRetryBackoff(%d)", tc.attempt)
+	}
+
+	// Sanity-check the total budget so changes to the constants are obvious in code review.
+	var total time.Duration
+	for i := 1; i <= setMinedMaxRetries; i++ {
+		total += setMinedRetryBackoff(i)
+	}
+	require.Equal(t, 111*time.Second, total, "total worst-case backoff before drop changed - update operator docs")
+}
+
 // TestBlockValidation_BlockchainSubscription_TriggersSetMined ensures that receiving a NotificationType_Block on the blockchainSubscription triggers setMined.
 func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	initPrometheusMetrics()
@@ -3727,4 +4281,308 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 
 	// Use the thread-safe method to check if Publish was called
 	require.True(t, mockKafka.IsPublishCalled(), "Kafka Publish should be called for invalid block (duplicate transaction)")
+}
+
+func TestBlockValidation_SubtreeError_Classification(t *testing.T) {
+	initPrometheusMetrics()
+
+	tests := []struct {
+		name          string
+		subtreeErr    error
+		wantContains  string // substring expected in ValidateBlock's returned error
+		wantPersisted bool   // whether the block should end up stored (as invalid)
+	}{
+		{
+			name:          "missing parent is transient, not persisted",
+			subtreeErr:    errors.NewTxMissingParentError("parent tx not yet in store"),
+			wantContains:  "BLOCK_INCOMPLETE",
+			wantPersisted: false,
+		},
+		{
+			name:          "tx not found is transient, not persisted",
+			subtreeErr:    errors.NewTxNotFoundError("tx not yet in store"),
+			wantContains:  "BLOCK_INCOMPLETE",
+			wantPersisted: false,
+		},
+		{
+			name:          "tx invalid is a consensus violation, persisted",
+			subtreeErr:    errors.NewTxInvalidError("tx fails script validation"),
+			wantContains:  "BLOCK_INVALID",
+			wantPersisted: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
+			defer deferFunc()
+
+			tSettings := test.CreateBaseTestSettings(t)
+			blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+			require.NoError(t, err)
+			blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+			require.NoError(t, err)
+
+			// Inject the subtree-validation error at the CheckBlockSubtrees boundary.
+			subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+			subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(tc.subtreeErr)
+
+			block := createValidBlock(t, tSettings, utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore)
+
+			blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+			err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost")
+			require.Error(t, err)
+			require.ErrorContains(t, err, tc.wantContains)
+
+			exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
+			require.NoError(t, existsErr)
+			require.Equal(t, tc.wantPersisted, exists,
+				"transient errors must NOT persist the block; consensus errors must")
+		})
+	}
+}
+
+// TestBlockValidation_BlockValidMissingParent_NotPersistedInvalid drives the synchronous
+// block.Valid path (OptimisticMining=false) with a block whose only non-coinbase tx spends
+// an EXTERNAL parent (the parentTx fixture) that is absent from the utxo store. block.Valid's
+// parent-existence check (getParentTxMetaBlockIDs) then hits ErrTxNotFound which Task 2 maps
+// to ErrBlockIncomplete — a transient catchup state, not a consensus violation. The
+// ValidateBlock consumer must surface BLOCK_INCOMPLETE and must NOT persist the block as
+// invalid. See issue #1031.
+//
+// Note: the child tx must spend an external parent (NOT the in-block coinbase). A tx whose
+// parent is in the same block is resolved via b.txMap and never reaches the store lookup, so
+// it would not exercise the ErrBlockIncomplete path.
+func TestBlockValidation_BlockValidMissingParent_NotPersistedInvalid(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = false // force the synchronous block.Valid path
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	localClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	// Force CATCHINGBLOCKS so isCaughtUp() is false: a not-yet-absorbed parent is a
+	// transient #1031 catchup-ordering state, NOT a floater. The block must surface
+	// BLOCK_INCOMPLETE (retry) and must NOT be persisted invalid. LocalClient hardwires
+	// FSMStateRUNNING (caught up), which would wrongly route to the floater
+	// invalidate+persist path — see TestBlockValidation_FloaterPersistedInvalidWhenCaughtUp.
+	blockchainClient := newTrackingBlockchainClient(localClient).withFSMState(blockchain.FSMStateCATCHINGBLOCKS)
+
+	// Subtree validation succeeds — the failure must come from block.Valid's parent lookup.
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Coinbase paying exactly the block subsidy so checkBlockRewardAndFees passes.
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	require.NoError(t, err)
+
+	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
+	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
+	childTx := newTx(7, parentTx.TxIDChainHash())
+	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	require.NoError(t, err)
+
+	// Subtree: coinbase + childTx.
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), 100, 0))
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	// Merkle root with coinbase swapped into the placeholder position.
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+	// Use the regtest expected target so the ValidateBlock difficulty gate (GetNextWorkRequired
+	// at genesis+1) accepts the block and we reach block.Valid.
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()), //nolint:gosec
+		uint64(coinbaseTx.Size()+childTx.Size()), //nolint:gosec
+		100, 0,
+	)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "BLOCK_INCOMPLETE")
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
+
+	exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
+	require.NoError(t, existsErr)
+	require.False(t, exists, "transient missing-parent during block.Valid must not persist the block as invalid")
+}
+
+func TestCheckParentInvalid_CascadeIsIntentional(t *testing.T) {
+	bv := &BlockValidation{}
+
+	// A genuinely-invalid parent cascades to its child (intended; see issue #1031 site D).
+	require.True(t, bv.checkParentInvalid(&model.BlockHeaderMeta{Invalid: true}))
+
+	// A valid parent does not.
+	require.False(t, bv.checkParentInvalid(&model.BlockHeaderMeta{Invalid: false}))
+
+	// Unknown parent metadata is not treated as invalid.
+	require.False(t, bv.checkParentInvalid(nil))
+}
+
+func TestBlockValidation_FloaterPersistedInvalidWhenCaughtUp(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = false // force the synchronous block.Valid path
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	// Subtree validation succeeds — the failure must come from block.Valid's parent lookup.
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Coinbase paying exactly the block subsidy so checkBlockRewardAndFees passes.
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	require.NoError(t, err)
+
+	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
+	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
+	childTx := newTx(7, parentTx.TxIDChainHash())
+	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	require.NoError(t, err)
+
+	// Subtree: coinbase + childTx.
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), 100, 0))
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	// Merkle root with coinbase swapped into the placeholder position.
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+	// Use the regtest expected target so the ValidateBlock difficulty gate (GetNextWorkRequired
+	// at genesis+1) accepts the block and we reach block.Valid.
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()), //nolint:gosec
+		uint64(coinbaseTx.Size()+childTx.Size()), //nolint:gosec
+		100, 0,
+	)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "caught-up floater must surface BLOCK_INVALID, got: %v", err)
+
+	exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
+	require.NoError(t, existsErr)
+	require.True(t, exists, "caught-up floater must be persisted as invalid (storeInvalidBlock)")
 }

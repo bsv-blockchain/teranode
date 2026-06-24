@@ -42,6 +42,7 @@ type MockPeerServiceClient struct {
 	IsPeerUnhealthyFunc         func(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error)
 	GetPeerRegistryFunc         func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeerRegistryResponse, error)
 	GetPeerFunc                 func(ctx context.Context, in *p2p_api.GetPeerRequest, opts ...grpc.CallOption) (*p2p_api.GetPeerResponse, error)
+	RecordBytesDownloadedFunc   func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error)
 }
 
 func (m *MockPeerServiceClient) GetPeers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
@@ -201,6 +202,9 @@ func (m *MockPeerServiceClient) GetPeerRegistry(ctx context.Context, in *emptypb
 }
 
 func (m *MockPeerServiceClient) RecordBytesDownloaded(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error) {
+	if m.RecordBytesDownloadedFunc != nil {
+		return m.RecordBytesDownloadedFunc(ctx, in, opts...)
+	}
 	return &p2p_api.RecordBytesDownloadedResponse{Ok: true}, nil
 }
 
@@ -426,5 +430,474 @@ func TestSimpleClientDisconnectPeer(t *testing.T) {
 		err := client.DisconnectPeer(ctx, "peer1")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "peer not found")
+	})
+}
+
+// --- Catchup-recording wrapper coverage ---
+//
+// Each Client.go wrapper has the same shape: build proto, call gRPC, propagate
+// the gRPC error if any, return a service error when the response Ok flag is
+// false, otherwise return nil. These tests cover the three exit paths per
+// method, plus the data-shaping conversions in GetPeer/GetPeerRegistry/
+// GetPeersForCatchup/ResetReputation.
+
+func newClientWithMock(m *MockPeerServiceClient) *Client {
+	return &Client{
+		client: m,
+		logger: ulogger.New("test"),
+	}
+}
+
+func TestSimpleClientRecordCatchupAttempt(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupAttemptFunc: func(ctx context.Context, in *p2p_api.RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupAttemptResponse, error) {
+				assert.Equal(t, "peer1", in.PeerId)
+				return &p2p_api.RecordCatchupAttemptResponse{Ok: true}, nil
+			},
+		})
+		assert.NoError(t, client.RecordCatchupAttempt(context.Background(), "peer1"))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupAttemptFunc: func(ctx context.Context, in *p2p_api.RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupAttemptResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.ErrorIs(t, client.RecordCatchupAttempt(context.Background(), "peer1"), assert.AnError)
+	})
+	t.Run("not_ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupAttemptFunc: func(ctx context.Context, in *p2p_api.RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupAttemptResponse, error) {
+				return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, nil
+			},
+		})
+		err := client.RecordCatchupAttempt(context.Background(), "peer1")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to record catchup attempt")
+	})
+}
+
+func TestSimpleClientRecordCatchupSuccess(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupSuccessFunc: func(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error) {
+				assert.Equal(t, "peer1", in.PeerId)
+				assert.Equal(t, int64(1500), in.DurationMs)
+				return &p2p_api.RecordCatchupSuccessResponse{Ok: true}, nil
+			},
+		})
+		assert.NoError(t, client.RecordCatchupSuccess(context.Background(), "peer1", 1500))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupSuccessFunc: func(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.Error(t, client.RecordCatchupSuccess(context.Background(), "peer1", 0))
+	})
+	t.Run("not_ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupSuccessFunc: func(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error) {
+				return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, nil
+			},
+		})
+		err := client.RecordCatchupSuccess(context.Background(), "peer1", 0)
+		assert.Contains(t, err.Error(), "failed to record catchup success")
+	})
+}
+
+func TestSimpleClientRecordCatchupFailure(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupFailureFunc: func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error) {
+				return &p2p_api.RecordCatchupFailureResponse{Ok: true}, nil
+			},
+		})
+		assert.NoError(t, client.RecordCatchupFailure(context.Background(), "peer1"))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupFailureFunc: func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.Error(t, client.RecordCatchupFailure(context.Background(), "peer1"))
+	})
+	t.Run("not_ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupFailureFunc: func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error) {
+				return &p2p_api.RecordCatchupFailureResponse{Ok: false}, nil
+			},
+		})
+		err := client.RecordCatchupFailure(context.Background(), "peer1")
+		assert.Contains(t, err.Error(), "failed to record catchup failure")
+	})
+}
+
+func TestSimpleClientRecordCatchupMalicious(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupMaliciousFunc: func(ctx context.Context, in *p2p_api.RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupMaliciousResponse, error) {
+				return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
+			},
+		})
+		assert.NoError(t, client.RecordCatchupMalicious(context.Background(), "peer1"))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupMaliciousFunc: func(ctx context.Context, in *p2p_api.RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupMaliciousResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.Error(t, client.RecordCatchupMalicious(context.Background(), "peer1"))
+	})
+	t.Run("not_ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupMaliciousFunc: func(ctx context.Context, in *p2p_api.RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupMaliciousResponse, error) {
+				return &p2p_api.RecordCatchupMaliciousResponse{Ok: false}, nil
+			},
+		})
+		err := client.RecordCatchupMalicious(context.Background(), "peer1")
+		assert.Contains(t, err.Error(), "failed to record catchup malicious")
+	})
+}
+
+func TestSimpleClientUpdateCatchupError(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			UpdateCatchupErrorFunc: func(ctx context.Context, in *p2p_api.UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupErrorResponse, error) {
+				assert.Equal(t, "peer1", in.PeerId)
+				assert.Equal(t, "boom", in.ErrorMsg)
+				return &p2p_api.UpdateCatchupErrorResponse{Ok: true}, nil
+			},
+		})
+		assert.NoError(t, client.UpdateCatchupError(context.Background(), "peer1", "boom"))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			UpdateCatchupErrorFunc: func(ctx context.Context, in *p2p_api.UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupErrorResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.Error(t, client.UpdateCatchupError(context.Background(), "peer1", "boom"))
+	})
+	t.Run("not_ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			UpdateCatchupErrorFunc: func(ctx context.Context, in *p2p_api.UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupErrorResponse, error) {
+				return &p2p_api.UpdateCatchupErrorResponse{Ok: false}, nil
+			},
+		})
+		err := client.UpdateCatchupError(context.Background(), "peer1", "boom")
+		assert.Contains(t, err.Error(), "failed to update catchup error")
+	})
+}
+
+func TestSimpleClientUpdateCatchupReputation(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			UpdateCatchupReputationFunc: func(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error) {
+				assert.InDelta(t, 75.0, in.Score, 0.001)
+				return &p2p_api.UpdateCatchupReputationResponse{Ok: true}, nil
+			},
+		})
+		assert.NoError(t, client.UpdateCatchupReputation(context.Background(), "peer1", 75.0))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			UpdateCatchupReputationFunc: func(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.Error(t, client.UpdateCatchupReputation(context.Background(), "peer1", 75.0))
+	})
+	t.Run("not_ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			UpdateCatchupReputationFunc: func(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error) {
+				return &p2p_api.UpdateCatchupReputationResponse{Ok: false}, nil
+			},
+		})
+		err := client.UpdateCatchupReputation(context.Background(), "peer1", 75.0)
+		assert.Contains(t, err.Error(), "failed to update catchup reputation")
+	})
+}
+
+func TestSimpleClientResetReputation(t *testing.T) {
+	t.Run("ok_specific_peer", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ResetReputationFunc: func(ctx context.Context, in *p2p_api.ResetReputationRequest, opts ...grpc.CallOption) (*p2p_api.ResetReputationResponse, error) {
+				assert.Equal(t, "peer1", in.PeerId)
+				return &p2p_api.ResetReputationResponse{Ok: true, PeersReset: 1}, nil
+			},
+		})
+		n, err := client.ResetReputation(context.Background(), "peer1")
+		assert.NoError(t, err)
+		assert.Equal(t, 1, n)
+	})
+	t.Run("ok_all_peers", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ResetReputationFunc: func(ctx context.Context, in *p2p_api.ResetReputationRequest, opts ...grpc.CallOption) (*p2p_api.ResetReputationResponse, error) {
+				return &p2p_api.ResetReputationResponse{Ok: true, PeersReset: 7}, nil
+			},
+		})
+		n, err := client.ResetReputation(context.Background(), "")
+		assert.NoError(t, err)
+		assert.Equal(t, 7, n)
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ResetReputationFunc: func(ctx context.Context, in *p2p_api.ResetReputationRequest, opts ...grpc.CallOption) (*p2p_api.ResetReputationResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		_, err := client.ResetReputation(context.Background(), "peer1")
+		assert.Error(t, err)
+	})
+	t.Run("not_ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ResetReputationFunc: func(ctx context.Context, in *p2p_api.ResetReputationRequest, opts ...grpc.CallOption) (*p2p_api.ResetReputationResponse, error) {
+				return &p2p_api.ResetReputationResponse{Ok: false}, nil
+			},
+		})
+		_, err := client.ResetReputation(context.Background(), "peer1")
+		assert.Contains(t, err.Error(), "failed to reset reputation")
+	})
+}
+
+func TestSimpleClientGetPeersForCatchup(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			GetPeersForCatchupFunc: func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error) {
+				return &p2p_api.GetPeersForCatchupResponse{
+					Peers: []*p2p_api.PeerInfoForCatchup{
+						{
+							Id:                     "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
+							Height:                 42,
+							CatchupReputationScore: 88.5,
+							CatchupAttempts:        3,
+							CatchupSuccesses:       2,
+							CatchupFailures:        1,
+						},
+					},
+				}, nil
+			},
+		})
+		peers, err := client.GetPeersForCatchup(context.Background())
+		assert.NoError(t, err)
+		assert.Len(t, peers, 1)
+		assert.Equal(t, uint32(42), peers[0].Height)
+		assert.InDelta(t, 88.5, peers[0].ReputationScore, 0.001)
+		assert.Equal(t, int64(3), peers[0].InteractionAttempts)
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			GetPeersForCatchupFunc: func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		_, err := client.GetPeersForCatchup(context.Background())
+		assert.Error(t, err)
+	})
+}
+
+func TestSimpleClientReportValidSubtree(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidSubtreeFunc: func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error) {
+				assert.Equal(t, "peer1", in.PeerId)
+				assert.Equal(t, "subtreehash", in.SubtreeHash)
+				return &p2p_api.ReportValidSubtreeResponse{Success: true}, nil
+			},
+		})
+		assert.NoError(t, client.ReportValidSubtree(context.Background(), "peer1", "subtreehash"))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidSubtreeFunc: func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.Error(t, client.ReportValidSubtree(context.Background(), "peer1", "h"))
+	})
+	t.Run("not_success", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidSubtreeFunc: func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error) {
+				return &p2p_api.ReportValidSubtreeResponse{Success: false, Message: "rejected"}, nil
+			},
+		})
+		err := client.ReportValidSubtree(context.Background(), "peer1", "h")
+		assert.Contains(t, err.Error(), "rejected")
+	})
+}
+
+func TestSimpleClientReportValidBlock(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidBlockFunc: func(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error) {
+				return &p2p_api.ReportValidBlockResponse{Success: true}, nil
+			},
+		})
+		assert.NoError(t, client.ReportValidBlock(context.Background(), "peer1", "blockhash"))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidBlockFunc: func(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.Error(t, client.ReportValidBlock(context.Background(), "peer1", "h"))
+	})
+	t.Run("not_success", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidBlockFunc: func(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error) {
+				return &p2p_api.ReportValidBlockResponse{Success: false, Message: "stale"}, nil
+			},
+		})
+		err := client.ReportValidBlock(context.Background(), "peer1", "h")
+		assert.Contains(t, err.Error(), "stale")
+	})
+}
+
+func TestSimpleClientIsPeerMalicious(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			IsPeerMaliciousFunc: func(ctx context.Context, in *p2p_api.IsPeerMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerMaliciousResponse, error) {
+				return &p2p_api.IsPeerMaliciousResponse{IsMalicious: true, Reason: "spam"}, nil
+			},
+		})
+		mal, reason, err := client.IsPeerMalicious(context.Background(), "peer1")
+		assert.NoError(t, err)
+		assert.True(t, mal)
+		assert.Equal(t, "spam", reason)
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			IsPeerMaliciousFunc: func(ctx context.Context, in *p2p_api.IsPeerMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerMaliciousResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		_, _, err := client.IsPeerMalicious(context.Background(), "peer1")
+		assert.Error(t, err)
+	})
+}
+
+func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			IsPeerUnhealthyFunc: func(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error) {
+				return &p2p_api.IsPeerUnhealthyResponse{IsUnhealthy: true, Reason: "low rep", ReputationScore: 12.5}, nil
+			},
+		})
+		unhealthy, reason, score, err := client.IsPeerUnhealthy(context.Background(), "peer1")
+		assert.NoError(t, err)
+		assert.True(t, unhealthy)
+		assert.Equal(t, "low rep", reason)
+		assert.InDelta(t, 12.5, score, 0.001)
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			IsPeerUnhealthyFunc: func(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		_, _, _, err := client.IsPeerUnhealthy(context.Background(), "peer1")
+		assert.Error(t, err)
+	})
+}
+
+func TestSimpleClientGetPeerRegistry(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			GetPeerRegistryFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeerRegistryResponse, error) {
+				return &p2p_api.GetPeerRegistryResponse{
+					Peers: []*p2p_api.PeerRegistryInfo{
+						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Height: 99, IsConnected: true},
+					},
+				}, nil
+			},
+		})
+		peers, err := client.GetPeerRegistry(context.Background())
+		assert.NoError(t, err)
+		assert.Len(t, peers, 1)
+		assert.Equal(t, uint32(99), peers[0].Height)
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			GetPeerRegistryFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeerRegistryResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		_, err := client.GetPeerRegistry(context.Background())
+		assert.Error(t, err)
+	})
+}
+
+func TestSimpleClientRecordBytesDownloaded(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordBytesDownloadedFunc: func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error) {
+				assert.Equal(t, uint64(2048), in.BytesDownloaded)
+				return &p2p_api.RecordBytesDownloadedResponse{Ok: true}, nil
+			},
+		})
+		assert.NoError(t, client.RecordBytesDownloaded(context.Background(), "peer1", 2048))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordBytesDownloadedFunc: func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		assert.Error(t, client.RecordBytesDownloaded(context.Background(), "peer1", 0))
+	})
+	t.Run("not_ok", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordBytesDownloadedFunc: func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error) {
+				return &p2p_api.RecordBytesDownloadedResponse{Ok: false}, nil
+			},
+		})
+		err := client.RecordBytesDownloaded(context.Background(), "peer1", 0)
+		assert.Contains(t, err.Error(), "failed to record bytes downloaded")
+	})
+}
+
+func TestSimpleClientGetPeer(t *testing.T) {
+	t.Run("found", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			GetPeerFunc: func(ctx context.Context, in *p2p_api.GetPeerRequest, opts ...grpc.CallOption) (*p2p_api.GetPeerResponse, error) {
+				assert.Equal(t, "peer1", in.PeerId)
+				return &p2p_api.GetPeerResponse{
+					Found: true,
+					Peer: &p2p_api.PeerRegistryInfo{
+						Id:     "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
+						Height: 17,
+					},
+				}, nil
+			},
+		})
+		info, err := client.GetPeer(context.Background(), "peer1")
+		assert.NoError(t, err)
+		assert.NotNil(t, info)
+		assert.Equal(t, uint32(17), info.Height)
+	})
+	t.Run("not_found", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			GetPeerFunc: func(ctx context.Context, in *p2p_api.GetPeerRequest, opts ...grpc.CallOption) (*p2p_api.GetPeerResponse, error) {
+				return &p2p_api.GetPeerResponse{Found: false}, nil
+			},
+		})
+		info, err := client.GetPeer(context.Background(), "peer1")
+		assert.NoError(t, err)
+		assert.Nil(t, info, "not-found should return nil PeerInfo with no error")
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			GetPeerFunc: func(ctx context.Context, in *p2p_api.GetPeerRequest, opts ...grpc.CallOption) (*p2p_api.GetPeerResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		_, err := client.GetPeer(context.Background(), "peer1")
+		assert.Error(t, err)
 	})
 }

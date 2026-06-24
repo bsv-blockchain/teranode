@@ -24,7 +24,7 @@ func TestGetSubtree(t *testing.T) {
 	t.Run("Valid JSON response", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(testSubtree, nil)
+		mockRepo.On("GetSubtreePage", mock.Anything, mock.Anything, mock.Anything).Return(testSubtree, 0, testSubtree.Length(), nil)
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -67,13 +67,12 @@ func TestGetSubtree(t *testing.T) {
 	t.Run("Valid BINARY response", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		// create a buffer to write the subtree to
-		subtreeBytes, err := testSubtree.Serialize()
+		subtreeBytes, err := testSubtree.SerializeNodes()
 		require.NoError(t, err)
 
 		reader := bytes.NewReader(subtreeBytes)
 
-		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
+		mockRepo.On("GetSubtreeNodeHashesReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -118,13 +117,12 @@ func TestGetSubtree(t *testing.T) {
 	t.Run("Valid HEX response", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		// create a buffer to write the subtree to
-		subtreeBytes, err := testSubtree.Serialize()
+		subtreeBytes, err := testSubtree.SerializeNodes()
 		require.NoError(t, err)
 
 		reader := bytes.NewReader(subtreeBytes)
 
-		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
+		mockRepo.On("GetSubtreeNodeHashesReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -151,7 +149,7 @@ func TestGetSubtree(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("subtree could not found"))
+		mockRepo.On("GetSubtreePage", mock.Anything, mock.Anything, mock.Anything).Return(nil, 0, 0, errors.NewNotFoundError("subtree could not found"))
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -174,7 +172,7 @@ func TestGetSubtree(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("subtree could not found"))
+		mockRepo.On("GetSubtreeNodeHashesReader", mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("subtree could not found"))
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -196,10 +194,7 @@ func TestGetSubtree(t *testing.T) {
 	t.Run("invalid subtree reader", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		// create a buffer to write the subtree to
-		reader := bytes.NewReader([]byte{0x01, 0x02, 0x03, 0x04})
-
-		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
+		mockRepo.On("GetSubtreeNodeHashesReader", mock.Anything, mock.Anything).Return(nil, errors.NewProcessingError("unable to read subtree root information", io.ErrUnexpectedEOF))
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -215,7 +210,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "unable to read subtree root information: unexpected EOF", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): unable to read subtree root information -> UNKNOWN (0): unexpected EOF", echoErr.Message)
 	})
 
 	t.Run("Invalid hash length", func(t *testing.T) {
@@ -259,15 +254,7 @@ func TestGetSubtree(t *testing.T) {
 	})
 
 	t.Run("Invalid read mode", func(t *testing.T) {
-		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
-
-		// create a buffer to write the subtree to
-		subtreeBytes, err := testSubtree.Serialize()
-		require.NoError(t, err)
-
-		reader := bytes.NewReader(subtreeBytes)
-
-		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
+		httpServer, _, echoContext, _ := GetMockHTTP(t, nil)
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -277,7 +264,7 @@ func TestGetSubtree(t *testing.T) {
 		var invalidReadMode ReadMode = 999
 
 		// Call GetSubtree handler
-		err = httpServer.GetSubtree(invalidReadMode)(echoContext)
+		err := httpServer.GetSubtree(invalidReadMode)(echoContext)
 		echoErr := &echo.HTTPError{}
 		require.True(t, errors.As(err, &echoErr))
 

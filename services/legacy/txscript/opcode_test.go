@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestOpcodeDisabled tests the opcodeDisabled function manually because all
@@ -208,4 +210,79 @@ func TestOpcodeDisasm(t *testing.T) {
 			continue
 		}
 	}
+}
+
+// TestOpcodeInvert_NoAliasing ensures opcodeInvert does not mutate stack items
+// that share a backing array with the top of stack (e.g. after OP_DUP).
+func TestOpcodeInvert_NoAliasing(t *testing.T) {
+	originalBytes := []byte{0x00, 0x0F, 0xF0, 0xFF}
+	expectedInverted := []byte{0xFF, 0xF0, 0x0F, 0x00}
+
+	vm := &Engine{}
+	vm.dstack.PushByteArray(originalBytes)
+
+	require.NoError(t, vm.dstack.DupN(1))
+	require.Equal(t, int32(2), vm.dstack.Depth())
+
+	pop := parsedOpcode{opcode: &opcodeArray[OP_INVERT], data: nil}
+	require.NoError(t, opcodeInvert(&pop, vm))
+
+	top, err := vm.dstack.PeekByteArray(0)
+	require.NoError(t, err)
+	require.Equal(t, expectedInverted, top, "top of stack must contain bitwise NOT of original bytes")
+
+	below, err := vm.dstack.PeekByteArray(1)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x00, 0x0F, 0xF0, 0xFF}, below,
+		"duplicate copy on stack must remain unchanged after OP_INVERT")
+}
+
+// TestOpcodeInvert_BasicCorrectness ensures opcodeInvert performs a bitwise
+// NOT on the top stack item.
+func TestOpcodeInvert_BasicCorrectness(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []byte
+		want []byte
+	}{
+		{"empty", []byte{}, []byte{}},
+		{"single byte zero", []byte{0x00}, []byte{0xFF}},
+		{"single byte ff", []byte{0xFF}, []byte{0x00}},
+		{"mixed", []byte{0xAA, 0x55, 0x0F, 0xF0}, []byte{0x55, 0xAA, 0xF0, 0x0F}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vm := &Engine{}
+			vm.dstack.PushByteArray(tc.in)
+
+			pop := parsedOpcode{opcode: &opcodeArray[OP_INVERT], data: nil}
+			require.NoError(t, opcodeInvert(&pop, vm))
+
+			got, err := vm.dstack.PeekByteArray(0)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestOpcodeNum2binSizeTooBig verifies that OP_NUM2BIN rejects sizes greater
+// than MaxScriptElementSize and that the returned error message references
+// the correct constant (the value of MaxScriptElementSize, not
+// defaultScriptNumLen). Regression for issue #4591.
+func TestOpcodeNum2binSizeTooBig(t *testing.T) {
+	vm := Engine{}
+
+	vm.dstack.PushByteArray([]byte{0x01})
+	vm.dstack.PushInt(scriptNum(MaxScriptElementSize + 1))
+
+	pop := parsedOpcode{opcode: &opcodeArray[OP_NUM2BIN], data: nil}
+
+	err := opcodeNum2bin(&pop, &vm)
+	require.Error(t, err)
+	require.True(t, IsErrorCode(err, ErrNumberTooBig),
+		"expected ErrNumberTooBig, got %v", err)
+	require.Contains(t, err.Error(), strconv.Itoa(MaxScriptElementSize),
+		"error message should reference MaxScriptElementSize (%d), got %q",
+		MaxScriptElementSize, err.Error())
 }

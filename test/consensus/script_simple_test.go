@@ -69,9 +69,7 @@ func TestScriptValidationSimple(t *testing.T) {
 			tx := CreateExtendedTx()
 
 			// Set up the previous transaction ID for the input
-			// Use a dummy transaction ID (32 zero bytes)
-			prevTxIDBytes := make([]byte, 32)
-			prevTxID, _ := chainhash.NewHash(prevTxIDBytes)
+			prevTxID, _ := chainhash.NewHashFromStr(testPrevTxID)
 			_ = tx.Inputs[0].PreviousTxIDAdd(prevTxID)
 
 			// Set up the scripts
@@ -90,7 +88,7 @@ func TestScriptValidationSimple(t *testing.T) {
 			utxoHeights := []uint32{0} // One height per input
 
 			// Validate with the GoBDK validator
-			result := validatorIntegration.ValidateScript(ValidatorGoBDK, tx, blockHeight, utxoHeights)
+			result := validatorIntegration.ValidateTransaction(ValidatorGoBDK, tx, blockHeight, utxoHeights)
 
 			// Check if the result matches expectations
 			if test.Expected == "OK" {

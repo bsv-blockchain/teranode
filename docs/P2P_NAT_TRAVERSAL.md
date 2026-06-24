@@ -119,7 +119,7 @@ To debug NAT traversal issues:
 ## Best Practices
 
 1. **For Production**: Always set explicit `p2p_advertise_addresses` with your public IP
-2. **For Cloud/Kubernetes**: Use the load balancer or ingress IP in `p2p_advertise_addresses`
+2. **For Cloud/Kubernetes**: Use the load balancer or ingress IP in `p2p_advertise_addresses`. On AWS this requires an NLB with `externalTrafficPolicy: Local` — see [How to Expose the P2P Service Publicly (Kubernetes)](howto/miners/kubernetes/minersHowToExposeP2P.md)
 3. **For Development**: Enable `p2p_enable_nat_service` for automatic address detection
 4. **For Home Networks**: Enable `p2p_enable_nat_port_map` if your router supports it
 

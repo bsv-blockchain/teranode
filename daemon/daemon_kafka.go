@@ -68,6 +68,10 @@ func getKafkaSubtreesAsyncProducer(ctx context.Context, logger ulogger.Logger,
 }
 
 // getKafkaTxmetaAsyncProducer creates a new Kafka async producer for txmeta using the configuration from settings.
+//
+// When settings.Validator.TxMetaWireFormat == "v2" the producer is built with
+// ManualPartitioning: the validator computes each record's partition number
+// from xxhash(tx hash) so receivers see partition-aligned bucket batches.
 func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 	settings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
 	kafkaTxmetaConfig := settings.Kafka.TxMetaConfig
@@ -75,7 +79,12 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 		return nil, errors.NewConfigurationError("missing Kafka URL for txmeta producer - txmetaConfig")
 	}
 
-	return getKafkaAsyncProducer(ctx, logger, kafkaTxmetaConfig, &settings.Kafka)
+	var opts []kafka.ProducerOption
+	if settings.Validator.TxMetaWireFormat == "v2" {
+		opts = append(opts, kafka.WithManualPartitioning())
+	}
+
+	return kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaTxmetaConfig, &settings.Kafka, opts...)
 }
 
 // getKafkaTxAsyncProducer creates a new Kafka async producer for validator transactions using the configuration from gocore.
@@ -193,4 +202,25 @@ func getKafkaInvalidSubtreeConsumerGroup(logger ulogger.Logger, settings *settin
 	}
 
 	return getKafkaConsumerGroup(logger, kafkaInvalidSubtreeConfig, consumerGroupID, true, &settings.Kafka)
+}
+
+func getKafkaTxPolicyRejectedAsyncProducer(ctx context.Context, logger ulogger.Logger, settings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
+	cfg := settings.Kafka.TxPolicyRejectedConfig
+	if cfg == nil {
+		return nil, nil
+	}
+
+	return getKafkaAsyncProducer(ctx, logger, cfg, &settings.Kafka)
+}
+
+func getKafkaTxPolicyRejectedConsumerGroup(logger ulogger.Logger, settings *settings.Settings,
+	consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
+	cfg := settings.Kafka.TxPolicyRejectedConfig
+	if cfg == nil {
+		return nil, nil
+	}
+
+	consumerGroupID = consumerGroupID + "." + random.String(16, random.Alphanumeric)
+
+	return getKafkaConsumerGroup(logger, cfg, consumerGroupID, true, &settings.Kafka)
 }

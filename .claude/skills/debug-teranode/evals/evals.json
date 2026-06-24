@@ -1,0 +1,60 @@
+{
+  "skill_name": "debug-teranode",
+  "notes": "Knowledge + methodology skill. Baseline = no skill. Outputs are reasoning; assertions check factual correctness against the docs and absence of hallucinations.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "tx-lifecycle-handoffs",
+      "prompt": "Walk me through what happens to a transaction in Teranode from the moment it arrives until it's included in a mined block. I specifically want to know which service hands off to which, and over what transport (gRPC vs Kafka).",
+      "expected_output": "An accurate end-to-end pipeline: Propagation ingress (stores raw tx), hands to Validator (Kafka validatortxs), Validator validates + updates UTXO store, sends validated tx to Block Assembly via DIRECT gRPC Store() (not Kafka), tx-meta to Subtree Validation via Kafka txmeta; Block Assembly builds subtrees + mining candidate; on mine, Block Validation SetMinedMulti marks txs mined (two-phase commit). Must NOT claim a mempool exists.",
+      "assertions": [
+        "Identifies Propagation as ingress and Validator as the validator",
+        "States Validator to Block Assembly is direct gRPC (Store), not Kafka",
+        "Mentions Propagation to Validator over Kafka (validatortxs topic) or HTTP fallback",
+        "Explains subtrees as the unit feeding block assembly / mining candidate",
+        "Mentions SetMinedMulti or the two-phase-commit locked flag for marking mined",
+        "Does NOT claim Teranode uses a mempool"
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "tx-stuck-not-mined",
+      "prompt": "One of our wallets broadcast a transaction about an hour ago. The block explorer shows it as known, but it's still not in a block even though we are actively mining. Where do I start looking inside Teranode?",
+      "expected_output": "Points at the UTXO record's locked flag (two-phase commit) and unminedSince; Block Assembly's unmined-tx handling; checks whether the tx is conflicting/double-spend or missing a parent (ErrTxMissingParent); confirms FSM is RUNNING. Should not invent components.",
+      "assertions": [
+        "Checks the UTXO record locked flag and/or unminedSince",
+        "Considers conflicting/double-spend or ErrTxMissingParent (missing parent / CPFP)",
+        "Considers FSM / mining state as a factor",
+        "Does not invent nonexistent Teranode components"
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "node-not-mining-no-errors",
+      "prompt": "A Teranode node has been up for 20 minutes but isn't mining or producing subtrees, and the logs show no obvious errors. What are the likely causes and what would you check first?",
+      "expected_output": "FSM state is the prime suspect: IDLE (does nothing) or CATCHINGBLOCKS (syncing, no mining), and the node only mines/creates subtrees in RUNNING. Also Kafka/Redpanda health (Teranode pauses on unhealthy Kafka). Checks how to read/drive FSM state.",
+      "assertions": [
+        "Identifies FSM state (IDLE or CATCHINGBLOCKS) as the prime suspect",
+        "States the node only mines/creates subtrees in RUNNING",
+        "Considers Kafka/Redpanda health as a cause of a silent stall",
+        "Suggests how to read or drive the FSM state"
+      ],
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "what-is-a-subtree",
+      "prompt": "What exactly is a 'subtree' in Teranode, how does it relate to a block's merkle root, and why was it designed this way?",
+      "expected_output": "A subtree is a power-of-2 batch of transaction IDs plus their merkle root (not full tx data). Block merkle root is computed over subtree roots (with the coinbase-placeholder substitution). The 'why': continuous propagation + peer pre-validation so block validation just confirms known subtrees, enabling unbounded block size / >1M tps.",
+      "assertions": [
+        "Defines a subtree as a power-of-2 batch of tx IDs + a merkle root (not full tx data)",
+        "Connects subtree roots to the block's merkle root",
+        "Explains the design rationale (continuous propagation / pre-validation / unbounded block size)",
+        "Mentions the coinbase placeholder caveat OR that subtrees are persisted/announced (bonus)"
+      ],
+      "files": []
+    }
+  ]
+}

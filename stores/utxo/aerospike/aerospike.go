@@ -66,8 +66,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
-	asl "github.com/aerospike/aerospike-client-go/v8/logger"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	asl "github.com/bsv-blockchain/aerospike-client-go/v8/logger"
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -109,6 +109,11 @@ type batcherIfc[T any] interface {
 	PutCtx(ctx context.Context, item *T, payloadSize ...int)
 	Trigger()
 	SetDrainMode(enabled bool)
+	SetTickInterval(d time.Duration)
+	// Close signals the batcher to drain any queued items, dispatch them via
+	// the configured callback, and shut down its worker goroutines. Must not
+	// be called concurrently with Put / PutCtx.
+	Close()
 }
 
 // Store implements the UTXO store interface using Aerospike.
@@ -140,8 +145,30 @@ type Store struct {
 	indexOnce           sync.Once     // Ensures index creation/wait is only done once per process
 	spendLuaPackages    []string      // Pre-initialized array of Lua package names for spend operations
 
+	// batchKeysPool is a per-Store sync.Pool of *[]*aerospike.Key slices reused
+	// across SetMinedMulti calls. Per-Store scoping ensures the Key's intrinsic
+	// namespace/setName never crosses Store instances.
+	batchKeysPool sync.Pool
+
 	// batchOperateFn is a test-only override for s.client.BatchOperate; nil means use the real client.
 	batchOperateFn func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+
+	// batcherWait bounds how long a submitter waits for a batcher to deliver a
+	// result before giving up, so a wedged dispatch fn can never park a caller
+	// for the life of the process. Computed once from the batch policy.
+	batcherWait time.Duration
+}
+
+// batchOperate runs a batch through the underlying Aerospike client, honouring
+// the test-only batchOperateFn override when set. Centralising the call lets
+// unit tests drive the dispatch functions' panic/error/result paths without a
+// live Aerospike instance.
+func (s *Store) batchOperate(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+	if s.batchOperateFn != nil {
+		return s.batchOperateFn(policy, records)
+	}
+
+	return s.client.BatchOperate(policy, records)
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -219,6 +246,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		utxoBatchSize:    utxoBatchSize,
 		externalTxCache:  externalTxCache,
 		externalStoreSem: externalStoreSem,
+		batcherWait:      batcherWaitTimeout(tSettings),
 	}
 
 	// Initialize spendLuaPackages array with configurable count
@@ -374,6 +402,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// Drain mode is beneficial for stages that receive bursts (Get, Create)
 	// but harmful for stages where items trickle in one-at-a-time (Spend,
 	// SetLocked) — single-item batches trigger Aerospike executeSingle fallback.
+	// Outpoint sits between the two. Benchmarking the post-#893
+	// BatchPreviousOutputsDecorate fan-out (drain on vs off, see
+	// BenchmarkBatchPreviousOutputsDecorateDrainMode) showed drain mode is
+	// bimodal/heavy-tailed on that concurrent path: at mid tx counts (~64-256)
+	// drain=false is rock-stable while drain=true has an unpredictable mean
+	// (some runs several× slower). A node's concurrent decorate path wants
+	// predictable latency, so it stays default off there. The clean win is the
+	// single-producer, separate-process caller cmd/rewindblockchain, where each
+	// PreviousOutputsDecorate otherwise idles the full 10 ms timer with nothing
+	// else to fill the batch. Operators opt in.
 	if tSettings.UtxoStore.GetBatcherDrainMode {
 		s.getBatcher.SetDrainMode(true)
 	}
@@ -385,6 +423,35 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 	if tSettings.UtxoStore.LockedBatcherDrainMode {
 		s.lockedBatcher.SetDrainMode(true)
+	}
+	if tSettings.UtxoStore.OutpointBatcherDrainMode {
+		s.outpointBatcher.SetDrainMode(true)
+	}
+
+	// Per-batcher tick interval (fixed-cadence flushing). Applied after drain mode
+	// so go-batcher's mutual-exclusion guard sees the final drain state: when a
+	// batcher is in drain mode SetTickInterval is a no-op and logs a warning
+	// (drain wins). Default 0 = disabled, so behaviour is unchanged.
+	if ms := tSettings.UtxoStore.StoreBatcherTickerIntervalMillis; ms > 0 {
+		s.storeBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.GetBatcherTickerIntervalMillis; ms > 0 {
+		s.getBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.SpendBatcherTickerIntervalMillis; ms > 0 {
+		s.spendBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.OutpointBatcherTickerIntervalMillis; ms > 0 {
+		s.outpointBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.IncrementBatcherTickerIntervalMillis; ms > 0 {
+		s.incrementBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.SetDAHBatcherTickerIntervalMillis; ms > 0 {
+		s.setDAHBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.LockedBatcherTickerIntervalMillis; ms > 0 {
+		s.lockedBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
 	}
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
@@ -448,6 +515,99 @@ func (s *Store) GetBlockState() utxo.BlockState {
 	return utxo.BlockState{
 		Height:     s.blockHeight.Load(),
 		MedianTime: s.medianBlockTime.Load(),
+	}
+}
+
+// Close drains all batched-write workers and releases the Aerospike client.
+//
+// Closing the batchers blocks until any items still queued have been
+// dispatched through their configured callbacks (this is the contract
+// of go-batcher's Close — see batcher.go:Close, which closes the input
+// channel, drains it, and dispatches the residual batch with reason
+// "shutdown"). Without this drain, a SIGTERM mid-flight silently loses
+// the in-channel items: the caller has already received a successful
+// Create/Spend/etc. return because background batchers ack on enqueue,
+// not on dispatch, so the parent block gets committed elsewhere but the
+// UTXO write never reaches Aerospike. On restart, blocks that spend
+// those outputs fail with missing-parent errors.
+//
+// Close honors the context for the overall drain timeout. Implementations
+// of batcherIfc.Close are expected to drain promptly; if the context
+// deadline expires first, an error is returned but draining — and the
+// release of the Aerospike client and external blob store — continues
+// best-effort. The client and external store are released inside the drain
+// goroutine so they are not leaked even when ctx expires first; leaking the
+// client in particular would leave a closed-or-stale entry that a later
+// in-process restart for the same host would reuse and fail with
+// INVALID_NODE_ERROR.
+func (s *Store) Close(ctx context.Context) error {
+	done := make(chan struct{})
+
+	var extErr error
+
+	go func() {
+		defer close(done)
+		// Order is dependency-driven: a batcher whose drain callback enqueues
+		// into another batcher MUST be closed before that downstream batcher,
+		// otherwise the drain Puts into an already-closed input channel and
+		// go-batcher panics with "send on closed channel". The only such edge
+		// is the spend batcher: sendSpendBatchLua -> processSpendBatchResults
+		// -> SetDAHForChildRecords / IncrementSpentRecords enqueue into
+		// setDAHBatcher (spend.go) and incrementBatcher (spend.go). So spend
+		// must be drained before setDAH and increment.
+		//
+		// We therefore drain the producer/durable writers first (store, then
+		// spend), then spend's downstream consumers (setDAH, increment), then
+		// the remaining independent batchers (get, outpoint, locked). store
+		// feeds no other batcher; get/outpoint/locked are not fed by any
+		// batcher drain. (Closing each batcher blocks until its worker has
+		// drained — go-batcher v2.0.4.)
+		if s.storeBatcher != nil {
+			s.storeBatcher.Close()
+		}
+		if s.spendBatcher != nil {
+			s.spendBatcher.Close()
+		}
+		// Downstream consumers of the spend drain — must come after spend.
+		if s.setDAHBatcher != nil {
+			s.setDAHBatcher.Close()
+		}
+		if s.incrementBatcher != nil {
+			s.incrementBatcher.Close()
+		}
+		// Independent batchers (no inbound batcher-drain edge).
+		if s.getBatcher != nil {
+			s.getBatcher.Close()
+		}
+		if s.outpointBatcher != nil {
+			s.outpointBatcher.Close()
+		}
+		if s.lockedBatcher != nil {
+			s.lockedBatcher.Close()
+		}
+
+		// Drains complete; close the external blob store (created in
+		// Store.New) so its handles/connections are not leaked.
+		if s.externalStore != nil {
+			extErr = s.externalStore.Close(ctx)
+		}
+
+		// Close the Aerospike client. The client is shared per host via
+		// util's connection cache, so close-and-evict it rather than closing
+		// in place — otherwise the cache would keep a closed client and a
+		// later store for the same host (e.g. an in-process daemon restart)
+		// would reuse it and fail with INVALID_NODE_ERROR. Done inside the
+		// goroutine so it still runs even when ctx has already expired.
+		if s.client != nil {
+			util.CloseAerospikeClient(s.url.Host)
+		}
+	}()
+
+	select {
+	case <-done:
+		return extErr
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

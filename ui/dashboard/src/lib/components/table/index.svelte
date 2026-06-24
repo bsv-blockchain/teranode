@@ -1,94 +1,127 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
+  import { untrack } from 'svelte'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { SortOrder } from './utils'
   import { filterData, sortData, paginateData } from './hooks'
   import type { I18n } from '$lib/types'
-  import { TableVariant, type ColDef, type TableVariantType } from './types'
+  import { TableVariant, type ColDef } from './types'
 
-  const dispatch = createEventDispatcher()
-
-  export let testId: string | undefined | null = null
-
-  //   export let selectable = false
-  //   export let i18n = {}
-  //   export let selectedRowIds = []
-  //   export let onRowSelect
-  //   export let getRowClassName
-  //
-  //
-
-  // core
-  export let variant: string = TableVariant.dynamic
-  export let name
-  export let colDefs: ColDef[] = []
-  export let data: any[] = []
-  export let idField = 'id'
-  export let renderCells = {}
-  export let renderTypes = {}
-  export let disabled = false
-  export let expandUp = false
-  export let wrapTitles = true
-
-  // i18n
-  export let i18n: I18n | null | undefined
-
-  // cosmetics - legacy
-  export let maxHeight = -1
-  export let fullWidth = true
-  export let bgColorTable = null // = '#FCFCFF'
-  export let bgColorHead = null // = '#FFFFFF'
-  // more legacy
-  export let selectable = false
-  export let selectedRowIds = []
-  export let getRowIconActions
-  export let getRenderProps
-  // export let getRowClassName
-
-  // filters
-  export let filters = {}
-  export let filtersEnabled = true
-  export let useServerFilters = false
-  // sort
-  export let sort: { sortColumn?: string; sortOrder?: string } = {}
-  export let sortEnabled = true
-  export let useServerSort = false
-  export let sortByTypeFunctions = {}
-  // paginate
-  export let pagination = { page: 1, pageSize: 10 }
-  export let paginationEnabled = true
-  export let useServerPagination = false
-  export let hasBoundaryRight = true
-  export let pager = true // show pager?
-  export let alignPager = 'center'
-
-  // use server catch-all
-  export let useServerAll = false
+  let {
+    testId = null,
+    // core
+    variant = TableVariant.dynamic,
+    name,
+    colDefs = [],
+    data = [],
+    idField = 'id',
+    renderCells = {},
+    renderTypes = {},
+    disabled = false,
+    expandUp = false,
+    wrapTitles = true,
+    // i18n
+    i18n,
+    // cosmetics - legacy
+    maxHeight = -1,
+    fullWidth = true,
+    bgColorTable = null, // = '#FCFCFF'
+    bgColorHead = null, // = '#FFFFFF'
+    // more legacy
+    selectable = false,
+    selectedRowIds = [],
+    getRowIconActions,
+    getRenderProps,
+    // filters
+    filters = {},
+    filtersEnabled = true,
+    useServerFilters = false,
+    // sort
+    sort = {},
+    sortEnabled = true,
+    useServerSort = false,
+    sortByTypeFunctions = {},
+    // paginate
+    pagination = $bindable({ page: 1, pageSize: 10 }),
+    paginationEnabled = true,
+    useServerPagination = false,
+    hasBoundaryRight = true,
+    pager = true, // show pager?
+    alignPager = 'center',
+    // use server catch-all
+    useServerAll = false,
+    onfilter,
+    onsort,
+    onpaginate,
+    onaction,
+  }: {
+    testId?: string | undefined | null
+    variant?: string
+    name?: any
+    colDefs?: ColDef[]
+    data?: any[]
+    idField?: string
+    renderCells?: any
+    renderTypes?: any
+    disabled?: boolean
+    expandUp?: boolean
+    wrapTitles?: boolean
+    i18n?: I18n | null | undefined
+    maxHeight?: number
+    fullWidth?: boolean
+    bgColorTable?: any
+    bgColorHead?: any
+    selectable?: boolean
+    selectedRowIds?: any[]
+    getRowIconActions?: any
+    getRenderProps?: any
+    filters?: any
+    filtersEnabled?: boolean
+    useServerFilters?: boolean
+    sort?: { sortColumn?: string; sortOrder?: string }
+    sortEnabled?: boolean
+    useServerSort?: boolean
+    sortByTypeFunctions?: any
+    pagination?: { page: number; pageSize: number }
+    paginationEnabled?: boolean
+    useServerPagination?: boolean
+    hasBoundaryRight?: boolean
+    pager?: boolean
+    alignPager?: string
+    useServerAll?: boolean
+    onfilter?: (e: { name: any; filters: any }) => void
+    onsort?: (e: { name: any; colId: any; value: any }) => void
+    onpaginate?: (e: any) => void
+    onaction?: (e: { name: any; type: any; value: any }) => void
+  } = $props()
 
   // define preferences for server interaction
-  let serverPagination = false
-  let serverSort = false
-  let serverFilters = false
-
-  $: {
-    serverPagination = useServerAll || useServerPagination
-    serverSort = useServerAll || useServerSort
-    serverFilters = useServerAll || useServerFilters
-  }
+  const serverPagination = $derived(useServerAll || useServerPagination)
+  const serverSort = $derived(useServerAll || useServerSort)
+  const serverFilters = $derived(useServerAll || useServerFilters)
 
   // filter
-  let filteredData: any[] = data ? [...data] : []
-  $: filtersState = { ...filters }
+  // filtersState is derived from the `filters` prop but is also reassigned
+  // imperatively by updateFilters(), so keep it as $state synced via $effect.
+  // untrack() in the initializer makes the intentional initial-value capture
+  // explicit (avoids the state_referenced_locally warning).
+  let filtersState = $state(untrack(() => ({ ...filters })))
+  $effect(() => {
+    filtersState = { ...filters }
+  })
 
-  $: {
-    filteredData = filterData(data, filtersEnabled, serverFilters, filtersState)
-  }
+  const filteredData: any[] = $derived(
+    filterData(data, filtersEnabled, serverFilters, filtersState),
+  )
 
   // if either data changes or our filters change the number of data items, we need to reset
   // page to 1, to avoid pointing to out-of-bounds pages
-  $: if (filteredData) {
-    pagination.page = 1
-  }
+  $effect(() => {
+    if (filteredData) {
+      pagination.page = 1
+    }
+  })
 
   function updateFilters(key, filter) {
     if (!filtersEnabled) {
@@ -101,23 +134,19 @@
         ...filter,
       },
     }
-    dispatch('filter', { name, filters: { ...filtersState } })
+    onfilter?.({ name, filters: { ...filtersState } })
   }
 
   // sort
-  let sortedData = [...filteredData]
-  $: sortState = { ...sort }
+  // sortState mirrors the `sort` prop but is also reassigned by toggleSort().
+  let sortState = $state(untrack(() => ({ ...sort })))
+  $effect(() => {
+    sortState = { ...sort }
+  })
 
-  $: {
-    sortedData = sortData(
-      filteredData,
-      sortEnabled,
-      serverSort,
-      sortState,
-      colDefs,
-      sortByTypeFunctions,
-    )
-  }
+  const sortedData = $derived(
+    sortData(filteredData, sortEnabled, serverSort, sortState, colDefs, sortByTypeFunctions),
+  )
 
   function toggleSort(colId) {
     if (!sortEnabled) {
@@ -130,23 +159,27 @@
       value = SortOrder.desc
     }
     sortState = { sortColumn: colId, sortOrder: value }
-    dispatch('sort', { name, colId, value })
+    onsort?.({ name, colId, value })
   }
 
   // paginate
-  let pageData = [...sortedData]
-  $: paginationState = { ...pagination }
+  // paginationState mirrors the `pagination` prop but is also reassigned by
+  // updatePagination().
+  let paginationState = $state(untrack(() => ({ ...pagination })))
+  $effect(() => {
+    paginationState = { ...pagination }
+  })
 
-  $: {
-    pageData = paginateData(sortedData, paginationEnabled, serverPagination, paginationState)
-  }
+  const pageData = $derived(
+    paginateData(sortedData, paginationEnabled, serverPagination, paginationState),
+  )
 
   function updatePagination(state) {
     paginationState = { ...state }
-    dispatch('paginate', { name, ...paginationState })
+    onpaginate?.({ name, ...paginationState })
   }
 
-  let renderComp: any = null
+  let renderComp: any = $state(null)
 
   async function setRenderComp(variant: string) {
     try {
@@ -159,79 +192,73 @@
       console.error('Error loading table variant:', e)
     }
   }
-  $: {
+  $effect(() => {
     let useVariant = variant
     if (variant === TableVariant.dynamic) {
       useVariant = $mediaSize <= MediaSize.sm ? TableVariant.div : TableVariant.standard
     }
     setRenderComp(useVariant)
-  }
+  })
 
-  let renderProps = {}
-  $: {
-    renderProps = {
-      name,
-      colDefs,
-      data: pageData,
-      idField,
-      renderCells,
-      renderTypes,
-      disabled,
-      expandUp,
-      wrapTitles,
-      i18n,
-      maxHeight,
-      fullWidth,
-      bgColorTable,
-      bgColorHead,
-      selectable,
-      selectedRowIds,
-      filtersEnabled,
-      filtersState,
-      sortEnabled,
-      sortState,
-      paginationEnabled,
-      paginationState,
-      totalItems: sortedData.length,
-      hasBoundaryRight,
-      pager,
-      alignPager,
-      getRowIconActions,
-      getRenderProps,
-      // getRowClassName,
-    }
-  }
+  const renderProps = $derived({
+    name,
+    colDefs,
+    data: pageData,
+    idField,
+    renderCells,
+    renderTypes,
+    disabled,
+    expandUp,
+    wrapTitles,
+    i18n,
+    maxHeight,
+    fullWidth,
+    bgColorTable,
+    bgColorHead,
+    selectable,
+    selectedRowIds,
+    filtersEnabled,
+    filtersState,
+    sortEnabled,
+    sortState,
+    paginationEnabled,
+    paginationState,
+    totalItems: sortedData.length,
+    hasBoundaryRight,
+    pager,
+    alignPager,
+    getRowIconActions,
+    getRenderProps,
+  })
 
   function onFilterClick(e) {
-    const colId = e.detail.colId
+    const colId = e.colId
     console.log('onFilterClick: colId =', colId)
   }
 
   function onHeaderClick(e) {
-    toggleSort(e.detail.colId)
+    toggleSort(e.colId)
   }
 
   function onPaginate(e) {
-    updatePagination(e.detail.value)
+    updatePagination(e.value)
   }
 
   function onAction(e) {
-    const { type, value } = e.detail
-    dispatch('action', { name, type, value })
+    const { type, value } = e
+    onaction?.({ name, type, value })
   }
 </script>
 
 <div class="tui-table" data-test-id={testId}>
   {#if renderComp}
-    <!-- ts-lint-ignore -->
-    <svelte:component
-      this={renderComp}
+    {@const RenderComp = renderComp}
+    <RenderComp
       {...renderProps}
-      on:filter={onFilterClick}
-      on:header={onHeaderClick}
-      on:paginate={onPaginate}
-      on:action={onAction}
-    />
+      onfilter={onFilterClick}
+      onheader={onHeaderClick}
+      onpaginate={onPaginate}
+      onaction={onAction} />
   {:else}
     <div>Unknown table variant.</div>
   {/if}

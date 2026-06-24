@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	aero "github.com/aerospike/aerospike-client-go/v8"
+	aero "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"

@@ -99,7 +99,7 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 
 	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetLastNBlocks_http",
 		tracing.WithParentStat(AssetStat),
-		tracing.WithDebugLogMessage(h.logger, "GetLastNBlocks_http for %s for last %s blocks from height %d", c.Request().RemoteAddr, queryN, queryFromHeight),
+		tracing.WithDebugLogMessage(h.logger, "GetLastNBlocks_http for %s for last %s blocks from height %d", c.RealIP(), queryN, queryFromHeight),
 	)
 
 	defer deferFn()

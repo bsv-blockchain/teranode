@@ -1,12 +1,22 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import { onMount } from 'svelte'
 
-  export let renderKey = ''
+  let {
+    renderKey = $bindable(''),
+    width = '100%',
+    height = '500px',
+    children,
+  }: {
+    renderKey?: string
+    width?: string
+    height?: string
+    children?: Snippet
+  } = $props()
 
-  export let width = '100%'
-  export let height = '500px'
-
-  let containerRef
+  let containerRef = $state<HTMLDivElement>()
 
   onMount(() => {
     const resizeObserver = new ResizeObserver((entries) => {
@@ -16,8 +26,14 @@
         renderKey = `${contentRect.width}_${contentRect.height}`
       }
     })
-    resizeObserver.observe(containerRef)
-    return () => resizeObserver.unobserve(containerRef)
+    if (containerRef) {
+      resizeObserver.observe(containerRef)
+    }
+    return () => {
+      if (containerRef) {
+        resizeObserver.unobserve(containerRef)
+      }
+    }
   })
 </script>
 
@@ -27,7 +43,7 @@
   style:--height={height}
   style:--width={width}
 >
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

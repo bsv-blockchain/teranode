@@ -24,8 +24,6 @@ import (
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util"
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -117,10 +115,10 @@ func getPorts(ctx context.Context, t *testing.T, compose compose.ComposeStack, s
 		var mappedPort int
 
 		if servicePort.IsMapped {
-			p, err := t1.MappedPort(ctx, nat.Port(strconv.Itoa(servicePort.Port)))
+			p, err := t1.MappedPort(ctx, strconv.Itoa(servicePort.Port))
 			require.NoError(t, err)
 
-			mappedPort = p.Int()
+			mappedPort = int(p.Num())
 		} else {
 			mappedPort = servicePort.Port
 		}
@@ -293,6 +291,9 @@ func (tc *TestContainer) Cleanup(t *testing.T) {
 func WaitForHealthLiveness(port int, timeout time.Duration) error {
 	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
 	timeoutElapsed := time.After(timeout)
+	// Use a local client rather than util.DoHTTPRequest: the shared client now blocks
+	// loopback addresses for SSRF protection, which would reject these localhost checks.
+	localHealthClient := &http.Client{Timeout: time.Second}
 
 	var err error
 
@@ -301,8 +302,18 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 		case <-timeoutElapsed:
 			return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 		default:
-			_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
-			if err != nil {
+			resp, requestErr := localHealthClient.Get(healthReadinessEndpoint)
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			if requestErr != nil {
+				err = requestErr
+				time.Sleep(100 * time.Millisecond)
+
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				err = errors.NewError("health check returned status code %d", resp.StatusCode)
 				time.Sleep(100 * time.Millisecond)
 
 				continue

@@ -28,6 +28,7 @@ const (
 	FileTypeBatchData      FileType = "batch-data"
 	FileTypeBatchKeys      FileType = "batch-keys"
 	FileTypePreserveUntil  FileType = "preserveUntil"
+	FileTypePeerRegistry   FileType = "peer-registry"
 	FileTypeUnknown        FileType = ""
 )
 
@@ -60,6 +61,7 @@ var (
 	magicBatchData      = [8]byte{'B', 'D', '-', '1', '.', '0', ' ', ' '} // BD-1.0
 	magicBatchKeys      = [8]byte{'B', 'K', '-', '1', '.', '0', ' ', ' '} // BK-1.0
 	magicPreserveUntil  = [8]byte{'P', 'U', '-', '1', '.', '0', ' ', ' '} // PU-1.0
+	magicPeerRegistry   = [8]byte{'P', 'R', '-', '1', '.', '0', ' ', ' '} // PR-1.0
 )
 
 var fileTypeToMagic = map[FileType][8]byte{
@@ -81,6 +83,7 @@ var fileTypeToMagic = map[FileType][8]byte{
 	FileTypeBatchData:      magicBatchData,
 	FileTypeBatchKeys:      magicBatchKeys,
 	FileTypePreserveUntil:  magicPreserveUntil,
+	FileTypePeerRegistry:   magicPeerRegistry,
 }
 
 var magicToFileType = map[[8]byte]FileType{
@@ -103,6 +106,7 @@ var magicToFileType = map[[8]byte]FileType{
 	magicBatchData:      FileTypeBatchData,
 	magicBatchKeys:      FileTypeBatchKeys,
 	magicPreserveUntil:  FileTypePreserveUntil,
+	magicPeerRegistry:   FileTypePeerRegistry,
 }
 
 type Header struct {
@@ -162,26 +166,31 @@ func (h Header) Write(w io.Writer) error {
 	return nil
 }
 
-func (h *Header) Read(r io.Reader) error {
-	n, err := r.Read(h.magic[:])
-	if err != nil {
-		// nolint: forbidigo
-		return fmt.Errorf("error reading magic: %w", err)
-	}
-
-	if n != 8 {
-		// nolint: forbidigo
-		return fmt.Errorf("expected to read 8 bytes, got %d", n)
-	}
-
-	// For backward compatibility, replace any trailing 0x00 with 0x20 (space)
+// normalizeMagic rewrites trailing 0x00 bytes to 0x20 (space) for backward
+// compatibility with older files that padded the 8-byte magic with NULs rather
+// than spaces. Both header readers must apply it so they agree on which files
+// are valid.
+func normalizeMagic(magic *[8]byte) {
 	for i := 7; i >= 0; i-- {
-		if h.magic[i] == 0 {
-			h.magic[i] = ' '
+		if magic[i] == 0 {
+			magic[i] = ' '
 		} else {
 			break
 		}
 	}
+}
+
+func (h *Header) Read(r io.Reader) error {
+	// Use io.ReadFull, not a single r.Read: io.Reader.Read may return fewer
+	// than 8 bytes with a nil error (sockets, TLS, io.Pipe, bufio over a slow
+	// source), and a single Read would then reject a valid header that simply
+	// arrived in chunks.
+	if _, err := io.ReadFull(r, h.magic[:]); err != nil {
+		// nolint: forbidigo
+		return fmt.Errorf("error reading magic: expected to read 8 bytes: %w", err)
+	}
+
+	normalizeMagic(&h.magic)
 
 	if _, ok := magicToFileType[h.magic]; !ok {
 		// nolint: forbidigo
@@ -212,6 +221,8 @@ func ReadHeaderFromBytes(b []byte) (Header, error) {
 	header.magic = [8]byte{
 		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
 	}
+
+	normalizeMagic(&header.magic)
 
 	if _, ok := magicToFileType[header.magic]; !ok {
 		// nolint: forbidigo

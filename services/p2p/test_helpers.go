@@ -207,11 +207,14 @@ func (tbs *TestBlockchainSetup) Cleanup() {
 }
 
 // CreatePeerWithReputation creates a test peer with specific reputation metrics
-func CreatePeerWithReputation(id peer.ID, reputation float64, successes, failures int64) *PeerInfo {
-	return &PeerInfo{
-		ID:                     id,
+// against the centralized blockchain peer registry's PeerInfo type.
+func CreatePeerWithReputation(id peer.ID, reputation float64, successes, failures int64) *blockchain.PeerInfo {
+	return &blockchain.PeerInfo{
+		ID:                     id.String(),
+		TransportType:          blockchain_api.TransportType_TRANSPORT_HTTP,
+		TransportTypeSet:       true,
 		Height:                 100,
-		BlockHash:              nil, // test-hash
+		BlockHash:              nil,
 		DataHubURL:             "http://test.com",
 		IsBanned:               false,
 		BanScore:               0,
@@ -226,20 +229,20 @@ func CreatePeerWithReputation(id peer.ID, reputation float64, successes, failure
 		Storage:                "full",
 		LastInteractionAttempt: time.Now(),
 		LastInteractionSuccess: time.Now(),
-		AvgResponseTime:        100 * time.Millisecond,
+		AvgResponseTimeMs:      100,
 	}
 }
 
 // SimulateSuccessfulCatchup records multiple successful catchup interactions
-func SimulateSuccessfulCatchup(pr *PeerRegistry, peerID peer.ID, blockCount int) {
+// against the centralized peer registry via its in-process client.
+func SimulateSuccessfulCatchup(ctx context.Context, c blockchain.PeerRegistryClientI, peerID peer.ID, blockCount int) {
 	for i := 0; i < blockCount; i++ {
-		pr.RecordInteractionAttempt(peerID)
-		pr.RecordInteractionSuccess(peerID, time.Duration(50+i)*time.Millisecond)
+		_ = c.UpdatePeerMetrics(ctx, peerID.String(), 0, 0, 0, true, false, false, int64(50+i))
 	}
 }
 
-// SimulateInvalidFork records malicious behavior from invalid fork
-func SimulateInvalidFork(pr *PeerRegistry, peerID peer.ID) {
-	pr.RecordInteractionAttempt(peerID)
-	pr.RecordMaliciousInteraction(peerID)
+// SimulateInvalidFork records malicious behavior from invalid fork against the
+// centralized peer registry via its in-process client.
+func SimulateInvalidFork(ctx context.Context, c blockchain.PeerRegistryClientI, peerID peer.ID) {
+	_ = c.UpdatePeerMetrics(ctx, peerID.String(), 0, 0, 0, false, false, true, 0)
 }

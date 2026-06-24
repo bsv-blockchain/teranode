@@ -63,6 +63,16 @@ var (
 	prometheusBlockchainGetBlockLocator                      prometheus.Histogram
 	prometheusBlockchainLocateBlockHeaders                   prometheus.Histogram
 	// prometheusExportBlockDb                        prometheus.Histogram
+
+	prometheusBlockchainMTPCacheHits        prometheus.Counter
+	prometheusBlockchainMTPCacheMisses      prometheus.Counter
+	prometheusBlockchainMTPCacheTruncations prometheus.Counter
+	prometheusBlockchainMTPCacheResets      prometheus.Counter
+
+	// Fan-out health metrics (issue #872).
+	prometheusBlockchainSubscriberPendingFull *prometheus.CounterVec
+	prometheusBlockchainSubscriberSendErrors  *prometheus.CounterVec
+	prometheusBlockchainWatchdogFires         *prometheus.CounterVec
 )
 
 var (
@@ -460,6 +470,72 @@ func _initPrometheusMetrics() {
 			Help:      "Histogram of LocateBlockHeaders calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
+	)
+
+	prometheusBlockchainMTPCacheHits = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "mtp_cache_hits_total",
+			Help:      "Total number of in-process MTP cache hits",
+		},
+	)
+
+	prometheusBlockchainMTPCacheMisses = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "mtp_cache_misses_total",
+			Help:      "Total number of in-process MTP cache misses",
+		},
+	)
+
+	prometheusBlockchainMTPCacheTruncations = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "mtp_cache_truncations_total",
+			Help:      "Total number of in-process MTP cache truncations",
+		},
+	)
+
+	prometheusBlockchainMTPCacheResets = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "mtp_cache_resets_total",
+			Help:      "Total number of in-process MTP cache resets",
+		},
+	)
+
+	prometheusBlockchainSubscriberPendingFull = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "subscriber_pending_full_total",
+			Help:      "Number of times a subscriber was evicted from the broadcast loop because its pending buffer was full (issue #872 backpressure indicator).",
+		},
+		[]string{"source"},
+	)
+
+	prometheusBlockchainSubscriberSendErrors = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "subscriber_send_errors_total",
+			Help:      "Number of times a subscriber was evicted because its Send returned an error or exceeded the send deadline.",
+		},
+		[]string{"source"},
+	)
+
+	prometheusBlockchainWatchdogFires = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "watchdog_fires_total",
+			Help:      "Number of times the client-side stream-progress watchdog cancelled a stale gRPC subscription stream (issue #872 zombie-stream detector).",
+		},
+		[]string{"source"},
 	)
 }
 

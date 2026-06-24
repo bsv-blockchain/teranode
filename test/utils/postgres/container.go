@@ -3,7 +3,10 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"strings"
+	"fmt"
+	"net/url"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -13,24 +16,106 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// sharedConnStr is the base connStr for the single PostgreSQL container shared across
+// the test binary. The container is started exactly once via containerOnce; its handle
+// is not retained — its lifecycle is bound to the test process / CI runner teardown
+// (Ryuk is disabled in CI). containerErr is permanent if that one-time start fails, so a
+// transient first-start failure fails every caller in the binary (see startSharedContainer's
+// internal 3-attempt retry, which mitigates this).
+var (
+	containerOnce sync.Once
+	sharedConnStr string // base connStr pointing at the default "testdb" database
+	containerErr  error
+
+	// dbCounter is incremented atomically to produce unique per-test database names.
+	dbCounter atomic.Uint64
+
+	// createMu serialises CREATE DATABASE statements so that concurrent callers
+	// (e.g. future t.Parallel tests) never race on template1 being accessed by
+	// another CREATE DATABASE.
+	createMu sync.Mutex
+)
+
+// SetupTestPostgresContainer returns a connection string for a freshly created,
+// isolated database on a shared PostgreSQL 16 container.
+//
+// The shared container is started once per test binary (lazy, via sync.Once) with a
+// 3-attempt retry. Every call creates a unique database (testdb_N) on that server and
+// returns a connStr pointing at it. The returned cleanup func drops that database.
+//
+// The public signature is intentionally unchanged so no callers need updating.
 func SetupTestPostgresContainer() (string, func() error, error) {
+	// Initialise the shared container exactly once.
+	containerOnce.Do(func() {
+		sharedConnStr, containerErr = startSharedContainer()
+	})
+	if containerErr != nil {
+		return "", nil, containerErr
+	}
+
+	// Derive a unique database name for this test.
+	n := dbCounter.Add(1)
+	dbName := fmt.Sprintf("testdb_%d", n)
+
+	// Build a connStr targeting the postgres system database to run CREATE DATABASE.
+	// CREATE DATABASE still copies from template1 by default regardless of which DB we
+	// connect to; the point of connecting the admin session to the "postgres" system DB
+	// (rather than template1) is that this session is not itself counted as an active
+	// template1 user, so it can't block the template copy. Combined with the createMu
+	// serialisation below, this avoids "template1 is being accessed by other users".
+	adminConnStr, err := swapDatabase(sharedConnStr, "postgres")
+	if err != nil {
+		return "", nil, errors.NewProcessingError("build admin connStr", err)
+	}
+
+	// Serialize CREATE DATABASE to avoid concurrent template access errors.
+	createMu.Lock()
+	err = execAdmin(adminConnStr, fmt.Sprintf("CREATE DATABASE %s", pq.QuoteIdentifier(dbName)))
+	createMu.Unlock()
+	if err != nil {
+		return "", nil, errors.NewProcessingError("create database %s", dbName, err)
+	}
+
+	// Build the per-test connStr.
+	testConnStr, err := swapDatabase(sharedConnStr, dbName)
+	if err != nil {
+		return "", nil, errors.NewProcessingError("build test connStr", err)
+	}
+
+	cleanup := func() error {
+		// Drop with FORCE so any lingering backend connections are killed.
+		// PostgreSQL 16 supports WITH (FORCE). The caller's store connections
+		// are terminated by the server; the Go-side pool is abandoned (it goes
+		// out of scope with the test), which is acceptable for test helpers.
+		dropSQL := fmt.Sprintf(
+			"DROP DATABASE IF EXISTS %s WITH (FORCE)",
+			pq.QuoteIdentifier(dbName),
+		)
+		return execAdmin(adminConnStr, dropSQL)
+	}
+
+	return testConnStr, cleanup, nil
+}
+
+// startSharedContainer starts (with up to 3 attempts) and validates a single
+// shared postgres:16-alpine container. It returns the base connection string.
+func startSharedContainer() (string, error) {
 	ctx := context.Background()
 
-	dbName := "testdb"
-	dbUser := "postgres"
-	dbPassword := "password"
+	const (
+		dbName     = "testdb"
+		dbUser     = "postgres"
+		dbPassword = "password"
+	)
 
-	// Implement retry logic with random delays for more reliable container creation
 	var (
 		postgresC *postgres.PostgresContainer
 		err       error
 	)
 
 	for attempt := 0; attempt < 3; attempt++ {
-		// Add random delay to reduce chance of simultaneous container creation conflicts
 		if attempt > 0 {
-			// Random delay between 100-600ms
-			delay := time.Duration(100+time.Now().Nanosecond()%500) * time.Millisecond
+			delay := time.Duration(500*attempt) * time.Millisecond
 			time.Sleep(delay)
 		}
 
@@ -41,99 +126,123 @@ func SetupTestPostgresContainer() (string, func() error, error) {
 			postgres.WithPassword(dbPassword),
 			testcontainers.WithWaitStrategy(
 				wait.ForLog("database system is ready to accept connections").
-					WithOccurrence(2).WithStartupTimeout(30*time.Second),
-				wait.ForListeningPort("5432/tcp")),
+					WithOccurrence(2).WithStartupTimeout(60*time.Second),
+				wait.ForListeningPort("5432/tcp"),
+			),
 		)
-
 		if err == nil {
-			break // Successfully created container
+			break
 		}
 	}
-
-	// If all attempts failed, return the last error
 	if err != nil {
-		return "", nil, err
+		return "", errors.NewProcessingError("start postgres container", err)
 	}
 
 	connStr, err := postgresC.ConnectionString(ctx)
 	if err != nil {
-		return "", nil, err
+		// Don't leak the container if we created it but can't get its conn string.
+		_ = postgresC.Terminate(ctx)
+		return "", errors.NewProcessingError("get connection string", err)
 	}
 
-	// Ensure SSL is disabled in the connection string
-	// This is needed because the default ConnectionString doesn't always include sslmode=disable
-	if !strings.Contains(connStr, "sslmode=") {
-		connStr += "&sslmode=disable"
-		// If there's no query parameter yet, use ? instead of &
-		if !strings.Contains(connStr, "?") {
-			connStr = strings.Replace(connStr, "&sslmode=disable", "?sslmode=disable", 1)
-		}
-	}
+	// Ensure sslmode=disable is present before storing as sharedConnStr.
+	connStr = ensureSSLDisabled(connStr)
 
-	// Add a database validation step to ensure PostgreSQL is truly ready
-	// This mitigates the "EOF" error that occurs when the container's port is open
-	// but the database isn't fully initialized yet
 	if err := validateDatabaseConnection(connStr, 5); err != nil {
-		_ = postgresC.Terminate(ctx) // Clean up container if validation fails
-
-		return "", nil, errors.NewProcessingError("database validation failed", err)
+		_ = postgresC.Terminate(ctx)
+		return "", errors.NewProcessingError("database validation failed", err)
 	}
 
-	cleanup := func() error {
-		// Create a new context with timeout for cleanup to prevent hanging
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return postgresC.Terminate(cleanupCtx)
-	}
+	// postgresC is intentionally not retained: there is no per-test teardown for the
+	// shared container, so it is reaped by the testcontainers Ryuk reaper when the test
+	// process exits. Only the per-test databases are dropped (see cleanup above).
+	return connStr, nil
+}
 
-	return connStr, cleanup, nil
+// swapDatabase replaces the database name component of a postgres connStr (URL form)
+// with newDB, preserving all other parameters (user, password, host, port, query).
+func swapDatabase(connStr, newDB string) (string, error) {
+	u, err := url.Parse(connStr)
+	if err != nil {
+		return "", errors.NewProcessingError("parse connStr", err)
+	}
+	u.Path = "/" + newDB
+	return u.String(), nil
+}
+
+// execAdmin opens a short-lived connection to adminConnStr, executes stmt, then closes.
+func execAdmin(adminConnStr, stmt string) error {
+	db, err := sql.Open("postgres", adminConnStr)
+	if err != nil {
+		return errors.NewProcessingError("open admin connection", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err = db.ExecContext(ctx, stmt)
+	return err
+}
+
+// ensureSSLDisabled appends sslmode=disable to connStr if not already present.
+func ensureSSLDisabled(connStr string) string {
+	u, err := url.Parse(connStr)
+	if err != nil {
+		// Fallback: return unchanged; url.Parse should never fail on a well-formed connStr.
+		return connStr
+	}
+	q := u.Query()
+	if q.Get("sslmode") == "" {
+		q.Set("sslmode", "disable")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
 
 // validateDatabaseConnection attempts to connect to the database and run a simple query
-// to verify it's truly ready for operations. It will retry with exponential backoff.
+// to verify it is truly ready for operations. It retries with increasing delays.
 func validateDatabaseConnection(connStr string, maxRetries int) error {
-	var (
-		db  *sql.DB
-		err error
-	)
-
-	// Import the PostgreSQL driver
-	_ = pq.Driver{}
+	var lastErr error
 
 	for i := 0; i < maxRetries; i++ {
-		// Try to open a connection
-		db, err = sql.Open("postgres", connStr)
+		if i > 0 {
+			time.Sleep(time.Duration(500*i) * time.Millisecond)
+		}
+
+		db, err := sql.Open("postgres", connStr)
 		if err != nil {
-			time.Sleep(time.Duration(500*(i+1)) * time.Millisecond)
+			lastErr = err
 			continue
 		}
 
-		// Try a simple query to verify the connection works
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err = db.PingContext(ctx)
+		func() {
+			defer db.Close()
 
-		cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-		if err == nil {
-			// Connection successful, do a sample query to verify
-			var result int
-
-			err = db.QueryRowContext(context.Background(), "SELECT 1").Scan(&result)
-			if err == nil && result == 1 {
-				db.Close()
-
-				return nil // Success!
+			if err = db.PingContext(ctx); err != nil {
+				lastErr = err
+				return
 			}
-		}
 
-		// Close the connection before retrying
-		if db != nil {
-			db.Close()
-		}
+			var result int
+			if err = db.QueryRowContext(ctx, "SELECT 1").Scan(&result); err != nil {
+				lastErr = err
+				return
+			}
+			if result == 1 {
+				lastErr = nil
+			}
+		}()
 
-		// Wait with increasing delay before retry
-		time.Sleep(time.Duration(500*(i+1)) * time.Millisecond)
+		if lastErr == nil {
+			return nil
+		}
 	}
 
-	return errors.NewProcessingError("failed to validate database connection after %d attempts: %v", maxRetries, err)
+	// Pass lastErr as the trailing arg so it is wrapped as the cause (preserving the
+	// error chain for debugging flaky startup), with %d for the attempt count.
+	return errors.NewProcessingError("failed to validate database connection after %d attempts", maxRetries, lastErr)
 }

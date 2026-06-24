@@ -115,7 +115,6 @@ This extension process happens transparently at multiple checkpoints throughout 
 
 - `Validator.Validate()` in `services/validator/Validator.go` - Main validation entry point
 - `Validator.validateTransaction()` in `services/validator/Validator.go` - Before transaction format validation
-- `Validator.validateTransactionScripts()` in `services/validator/Validator.go` - Before script validation
 - `BlockValidation.quickValidateBlock()` in `services/blockvalidation/quick_validate.go` - During block validation for historical blocks
 - `BlockValidation.ExtendTransaction()` in `services/blockvalidation/quick_validate.go` - During block processing when transactions are not extended
 

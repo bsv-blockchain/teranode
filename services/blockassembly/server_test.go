@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -240,14 +241,12 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		// Use a common parent hash for all transactions (simulating they all spend from same output)
 		genesisHash := chainhash.HashH([]byte("genesis"))
 		for i := uint64(0); i < 10; i++ {
+			// Different output index for each tx
 			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}}, []*subtreepkg.TxInpoints{{
-				ParentTxHashes: []chainhash.Hash{genesisHash},
-				Idxs:           [][]uint32{{uint32(i)}}, // Different output index for each tx
-			}})
+			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))})
 		}
 
 		require.Eventually(t, func() bool {
@@ -299,7 +298,15 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, s
 		txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
 		_ = subtree.AddNode(txHash, i, i)
 
-		txMap.Set(txHash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{previousHash}, Idxs: [][]uint32{{0, 1}}})
+		in0 := &bt.Input{PreviousTxOutIndex: 0}
+		require.NoError(t, in0.PreviousTxIDAdd(&previousHash))
+		in1 := &bt.Input{PreviousTxOutIndex: 1}
+		require.NoError(t, in1.PreviousTxIDAdd(&previousHash))
+
+		ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in0, in1})
+		require.NoError(t, err)
+
+		txMap.Set(txHash, &ti)
 		previousHash = txHash
 	}
 
@@ -474,6 +481,59 @@ func TestAddTxBatch(t *testing.T) {
 		require.Nil(t, resp)
 		require.Contains(t, err.Error(), "unable to deserialize tx inpoints")
 	})
+
+	t.Run("add transaction batch with invalid txid length", func(t *testing.T) {
+		testCases := []struct {
+			name string
+			txid []byte
+		}{
+			{
+				name: "short txid",
+				txid: []byte{1, 2, 3},
+			},
+			{
+				name: "long txid",
+				txid: append(make([]byte, 32), 1),
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				server, _ := setupServer(t)
+
+				validTxHash := chainhash.HashH([]byte("valid-batch-tx"))
+				txInpoints := subtreepkg.TxInpoints{}
+				txInpointsBytes, err := txInpoints.Serialize()
+				require.NoError(t, err)
+
+				req := &blockassembly_api.AddTxBatchRequest{
+					TxRequests: []*blockassembly_api.AddTxRequest{
+						{
+							Txid:       validTxHash[:],
+							Fee:        100,
+							Size:       250,
+							TxInpoints: txInpointsBytes,
+						},
+						{
+							Txid:       tc.txid,
+							Fee:        200,
+							Size:       300,
+							TxInpoints: txInpointsBytes,
+						},
+					},
+				}
+
+				var resp *blockassembly_api.AddTxBatchResponse
+				require.NotPanics(t, func() {
+					resp, err = server.AddTxBatch(t.Context(), req)
+				})
+				require.Error(t, err)
+				require.Nil(t, resp)
+				require.Contains(t, err.Error(), "invalid txid length")
+				require.Contains(t, err.Error(), "index 1")
+			})
+		}
+	})
 }
 
 // TestTxCount tests the TxCount method
@@ -640,6 +700,20 @@ func TestGetBlockAssemblyTxsCoverage(t *testing.T) {
 			assert.NotNil(t, err)
 		}
 	})
+}
+
+func TestGetBlockAssemblyTxsReturnsWhenContextCancelled(t *testing.T) {
+	server, _, _, _ := setup(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	resp, err := server.GetBlockAssemblyTxs(ctx, &blockassembly_api.EmptyMessage{})
+
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Less(t, time.Since(start), time.Second)
 }
 
 // TestRetryFunctionsCoverage tests the retry-related functions coverage
@@ -1170,6 +1244,33 @@ func TestStartStopIntensive(t *testing.T) {
 	})
 }
 
+func TestStartReturnsErrorWhenGRPCFailsBeforeReady(t *testing.T) {
+	server, _ := setupServer(t)
+	server.settings.BlockAssembly.GRPCListenAddress = "invalid-address:xyz"
+
+	readyCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- server.Start(t.Context(), readyCh)
+	}()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "GRPC server failed to listen")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start blocked waiting for grpc readiness after startup failure")
+	}
+
+	select {
+	case <-readyCh:
+		// readyCh should always be closed on return (success or error)
+	default:
+		t.Fatal("readyCh was not closed when Start returned")
+	}
+}
+
 // TestAddTxIntensive tests AddTx method with comprehensive scenarios
 func TestAddTxIntensive(t *testing.T) {
 	t.Run("AddTx with block assembly disabled", func(t *testing.T) {
@@ -1685,8 +1786,9 @@ func TestRunBackgroundProcessors(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 
-		// Start the listener
-		go server.runBlockSubmissionListener(ctx)
+		// Start the listener with its own done channel so it doesn't interfere
+		// with the listener already started by setupServer's Init.
+		go server.runBlockSubmissionListener(ctx, make(chan struct{}))
 
 		// Give it time to start
 		time.Sleep(10 * time.Millisecond)

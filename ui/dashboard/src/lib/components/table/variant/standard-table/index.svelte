@@ -1,77 +1,113 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { Button, Checkbox, Icon, Pager } from '$lib/components'
   import { getDisplay, SortOrder } from '../../utils'
   import type { ColDef } from '../../types'
 
-  const dispatch = createEventDispatcher()
-
-  export let name
-  export let colDefs: ColDef[] = []
-  export let data = []
-  export let idField
-  export let renderCells = {}
-  export let renderTypes = {}
-  export let disabled = false
-  export let expandUp = false
-  export let i18n
-  export let maxHeight = -1
-  export let fullWidth
-  export let bgColorTable
-  export let bgColorHead
-  export let selectable
-  export let selectedRowIds = []
-  export let filtersEnabled
-  export let filtersState
-  export let sortEnabled
-  export let sortState
-  export let paginationEnabled
-  export let paginationState
-  export let totalItems = -1
-  export let hasBoundaryRight = true
-  export let pager = true
-  export let alignPager = 'center'
-  export let getRowIconActions
-  export let getRenderProps
-  // export let getRowClassName
-  export let wrapTitles = true
+  let {
+    name,
+    colDefs = [],
+    data = [],
+    idField,
+    renderCells = {},
+    renderTypes = {},
+    disabled = false,
+    expandUp = false,
+    i18n,
+    maxHeight = -1,
+    fullWidth,
+    bgColorTable,
+    bgColorHead,
+    selectable,
+    selectedRowIds = [],
+    filtersEnabled,
+    filtersState,
+    sortEnabled,
+    sortState,
+    paginationEnabled,
+    paginationState,
+    totalItems = -1,
+    hasBoundaryRight = true,
+    pager = true,
+    alignPager = 'center',
+    getRowIconActions,
+    getRenderProps,
+    wrapTitles = true,
+    onfilter,
+    onheader,
+    onselect,
+    onpaginate,
+    onaction,
+  }: {
+    name?: any
+    colDefs?: ColDef[]
+    data?: any[]
+    idField?: any
+    renderCells?: any
+    renderTypes?: any
+    disabled?: boolean
+    expandUp?: boolean
+    i18n?: any
+    maxHeight?: number
+    fullWidth?: any
+    bgColorTable?: any
+    bgColorHead?: any
+    selectable?: any
+    selectedRowIds?: any[]
+    filtersEnabled?: any
+    filtersState?: any
+    sortEnabled?: any
+    sortState?: any
+    paginationEnabled?: any
+    paginationState?: any
+    totalItems?: number
+    hasBoundaryRight?: boolean
+    pager?: boolean
+    alignPager?: string
+    getRowIconActions?: any
+    getRenderProps?: any
+    wrapTitles?: boolean
+    onfilter?: (e: { colId: string }) => void
+    onheader?: (e: { colId: string }) => void
+    onselect?: (e: { id: any }) => void
+    onpaginate?: (e: { page: any }) => void
+    onaction?: (e: { name: any; type: any; value: any }) => void
+  } = $props()
 
   function onFilterClick(colId) {
-    dispatch('filter', { colId })
+    onfilter?.({ colId })
   }
 
   function onHeaderClick(colId) {
-    dispatch('header', { colId })
+    onheader?.({ colId })
   }
 
   function onRowSelect(id) {
-    dispatch('select', { id })
+    onselect?.({ id })
   }
 
   function onPage(e) {
-    dispatch('paginate', { page: e.detail.value })
+    onpaginate?.({ page: e.value })
   }
 
   function onActionIcon(type, value) {
-    dispatch('action', { name, type, value })
+    onaction?.({ name, type, value })
   }
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
-      `--max-height-local:${maxHeight + 'px'}`,
-      `--bg-col-head-local:${
-        bgColorHead
-          ? bgColorHead
-          : bgColorTable
-            ? bgColorTable
-            : 'var(--table-th-bg-color, #ffffff)'
-      }`,
-      `--row-col-local:${bgColorTable ? bgColorTable : 'var(--table-bg-color, none)'}`,
-      `--align-pager-local:${alignPager}`,
-      `--header-wrap-titles:${wrapTitles ? 'wrap' : 'nowrap'}`,
-    ]
-  }
+  const cssVars: string[] = $derived([
+    `--max-height-local:${maxHeight + 'px'}`,
+    `--bg-col-head-local:${
+      bgColorHead
+        ? bgColorHead
+        : bgColorTable
+          ? bgColorTable
+          : 'var(--table-th-bg-color, #ffffff)'
+    }`,
+    `--row-col-local:${bgColorTable ? bgColorTable : 'var(--table-bg-color, none)'}`,
+    `--align-pager-local:${alignPager}`,
+    `--header-wrap-titles:${wrapTitles ? 'wrap' : 'nowrap'}`,
+  ])
 </script>
 
 <div class="table-and-tools" style={`${cssVars.join(';')}`}>
@@ -96,11 +132,11 @@
       <thead>
         <tr>
           {#if selectable}
-            <th />
+            <th></th>
           {/if}
           {#each colDefs as colDef, i (colDef.id)}
             <th
-              on:click={() => onHeaderClick(colDef.id)}
+              onclick={() => onHeaderClick(colDef.id)}
               class:right={i > 0 && colDef?.type === 'number'}
             >
               <div class="table-cell-row">
@@ -115,14 +151,14 @@
                 {/if}
                 {#if filtersEnabled && filtersState[colDef.id]}
                   <div class="header-icon">
-                    <Icon name="filters" size={18} on:click={() => onFilterClick(colDef.id)} />
+                    <Icon name="filters" size={18} onclick={() => onFilterClick(colDef.id)} />
                   </div>
                 {/if}
               </div>
             </th>
           {/each}
           {#if getRowIconActions}
-            <th />
+            <th></th>
           {/if}
         </tr>
       </thead>
@@ -134,22 +170,22 @@
                 <Checkbox
                   name={item[idField]}
                   checked={selectedRowIds.includes(item[idField])}
-                  on:change={() => onRowSelect(item[idField])}
+                  onchange={() => onRowSelect(item[idField])}
                 />
               </td>
             {/if}
             {#each colDefs as colDef, i (colDef.id)}
+              {@const display = getDisplay(renderCells, renderTypes, colDef, idField, item)}
               <td class:left={i === 0}>
-                {#if getDisplay(renderCells, renderTypes, colDef, idField, item).component}
-                  <svelte:component
-                    this={getDisplay(renderCells, renderTypes, colDef, idField, item).component}
+                {#if display.component}
+                  {@const CellComponent = display.component}
+                  <CellComponent
                     {...{
-                      ...getDisplay(renderCells, renderTypes, colDef, idField, item).props,
+                      ...display.props,
                       ...(getRenderProps ? getRenderProps(name, colDef, idField, item) : {}),
-                    }}
-                  />
+                    }} />
                 {:else}
-                  {getDisplay(renderCells, renderTypes, colDef, idField, item).value}
+                  {display.value}
                 {/if}
               </td>
             {/each}
@@ -158,11 +194,11 @@
                 {#if !disabled}
                   <div class="table-cell-row">
                     {#each getRowIconActions(name, item, idField) || [] as actionItem (actionItem.icon)}
-                      <!-- svelte-ignore a11y-click-events-have-key-events -->
+                      <!-- svelte-ignore a11y_click_events_have_key_events -->
                       <button
                         class="action"
                         class:disabled={actionItem.disabled}
-                        on:click={actionItem.disabled
+                        onclick={actionItem.disabled
                           ? null
                           : () => onActionIcon(actionItem.type, item)}
                         disabled={actionItem.disabled}
@@ -202,7 +238,7 @@
         {totalItems}
         value={paginationState}
         {hasBoundaryRight}
-        on:change={onPage}
+        onchange={onPage}
       />
     </div>
   {/if}

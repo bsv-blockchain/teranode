@@ -5,7 +5,10 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
+
+const testPrevTxID = "0100000000000000000000000000000000000000000000000000000000000000"
 
 // CreateSimpleTx creates a simple transaction for testing
 func CreateSimpleTx() *bt.Tx {
@@ -19,6 +22,9 @@ func CreateSimpleTx() *bt.Tx {
 		UnlockingScript:    &bscript.Script{},
 		SequenceNumber:     0xffffffff,
 	}}
+
+	prevTxHash, _ := chainhash.NewHashFromStr(testPrevTxID)
+	_ = tx.Inputs[0].PreviousTxIDAdd(prevTxHash)
 
 	// Create a simple output
 	tx.Outputs = []*bt.Output{{
@@ -58,6 +64,9 @@ func CreateMultiInputTx(numInputs int) *bt.Tx {
 			PreviousTxSatoshis: 10000000, // 0.1 BTC per input
 			PreviousTxScript:   &bscript.Script{},
 		}
+
+		prevTxHash, _ := chainhash.NewHashFromStr(testPrevTxID)
+		_ = tx.Inputs[i].PreviousTxIDAdd(prevTxHash)
 	}
 
 	// Create output with slightly less than total input (for fee)

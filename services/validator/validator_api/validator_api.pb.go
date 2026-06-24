@@ -136,13 +136,17 @@ type ValidateTransactionRequest struct {
 	TransactionData []byte                 `protobuf:"bytes,1,opt,name=transaction_data,json=transactionData,proto3" json:"transaction_data,omitempty"` // Raw transaction data to validate
 	BlockHeight     uint32                 `protobuf:"varint,2,opt,name=block_height,json=blockHeight,proto3" json:"block_height,omitempty"`            // Block height for validation context
 	// validation options
-	SkipUtxoCreation     *bool `protobuf:"varint,3,opt,name=skip_utxo_creation,json=skipUtxoCreation,proto3,oneof" json:"skip_utxo_creation,omitempty"`                 // Skip UTXO creation for validation
-	AddTxToBlockAssembly *bool `protobuf:"varint,4,opt,name=add_tx_to_block_assembly,json=addTxToBlockAssembly,proto3,oneof" json:"add_tx_to_block_assembly,omitempty"` // Add transaction to block assembly
-	SkipPolicyChecks     *bool `protobuf:"varint,5,opt,name=skip_policy_checks,json=skipPolicyChecks,proto3,oneof" json:"skip_policy_checks,omitempty"`                 // Skip policy checks
-	CreateConflicting    *bool `protobuf:"varint,6,opt,name=create_conflicting,json=createConflicting,proto3,oneof" json:"create_conflicting,omitempty"`                // Create conflicting transaction
-	SkipTxmetaPublishing *bool `protobuf:"varint,7,opt,name=skip_txmeta_publishing,json=skipTxmetaPublishing,proto3,oneof" json:"skip_txmeta_publishing,omitempty"`     // Skip publishing txmeta to Kafka
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	SkipUtxoCreation                    *bool   `protobuf:"varint,3,opt,name=skip_utxo_creation,json=skipUtxoCreation,proto3,oneof" json:"skip_utxo_creation,omitempty"`                                                               // Skip UTXO creation for validation
+	AddTxToBlockAssembly                *bool   `protobuf:"varint,4,opt,name=add_tx_to_block_assembly,json=addTxToBlockAssembly,proto3,oneof" json:"add_tx_to_block_assembly,omitempty"`                                               // Add transaction to block assembly
+	SkipPolicyChecks                    *bool   `protobuf:"varint,5,opt,name=skip_policy_checks,json=skipPolicyChecks,proto3,oneof" json:"skip_policy_checks,omitempty"`                                                               // Skip policy checks
+	CreateConflicting                   *bool   `protobuf:"varint,6,opt,name=create_conflicting,json=createConflicting,proto3,oneof" json:"create_conflicting,omitempty"`                                                              // Create conflicting transaction
+	SkipTxmetaPublishing                *bool   `protobuf:"varint,7,opt,name=skip_txmeta_publishing,json=skipTxmetaPublishing,proto3,oneof" json:"skip_txmeta_publishing,omitempty"`                                                   // Skip publishing txmeta to Kafka
+	CandidateBlockTime                  *uint32 `protobuf:"varint,8,opt,name=candidate_block_time,json=candidateBlockTime,proto3,oneof" json:"candidate_block_time,omitempty"`                                                         // Candidate block header timestamp; consumed by the server for pre-CSV block-validation finality. Sender omits when not running block-context validation.
+	CandidateParentMedianTime           *uint32 `protobuf:"varint,9,opt,name=candidate_parent_median_time,json=candidateParentMedianTime,proto3,oneof" json:"candidate_parent_median_time,omitempty"`                                  // Candidate-parent MTP (equivalent to bitcoin-sv's pindexPrev->GetMedianTimePast()); consumed by the server for post-CSV block-validation finality. REQUIRED on every post-CSV consensus request — selectFinalityComparisonTime returns a ProcessingError when this field is missing. The server provides no tip-MTP soft-fall because blockState.MedianTime is updated asynchronously from blockchain notifications and would race with tip advance / reorg during validation.
+	InBlock                             *bool   `protobuf:"varint,11,opt,name=in_block,json=inBlock,proto3,oneof" json:"in_block,omitempty"`                                                                                           // Provenance: the transaction arrived as part of a block or announced subtree (block validation, subtree validation, legacy sync) rather than via mempool submission. The validator publishes this on the txmeta topic so relay consumers never announce such transactions. Explicit by design — do NOT infer from skip_policy_checks, which external submitters may set on genuinely fresh transactions.
+	UnconfirmedParentsAtCandidateHeight *bool   `protobuf:"varint,12,opt,name=unconfirmed_parents_at_candidate_height,json=unconfirmedParentsAtCandidateHeight,proto3,oneof" json:"unconfirmed_parents_at_candidate_height,omitempty"` // Resolve unconfirmed-parent heights to the candidate block height instead of failing closed (consensus-mode sentinel → MEMPOOL_HEIGHT → bad-txns-unconfirmed-input-in-block). CONSENSUS SAFETY: fail-open — the height feeds per-input script-era flag selection in BDK, and the floater backstop is block validation's parent-membership check. Compatible with add_tx_to_block_assembly=true (a floater child blessed at the candidate height equals what policy-mode admission would put in assembly anyway). Set by the legacy block-sync path (subtreevalidation checkSubtreeFromBlock, BaseUrl "legacy") and by the block-validation path (CheckBlockSubtrees, which runs after ValidateBlock's PoW checks); MUST NOT be set on peer-facing or mempool-admission paths. DEPLOYMENT SKEW (request-only field, no data migration in any direction): new sender → old validator ignores the unknown field and keeps the old fail-closed behaviour, so it stamps the unconfirmedParentHeight sentinel for genuine in-block parents and BDK rejects them with bad-txns-unconfirmed-input-in-block — this now degrades ORDINARY block validation (any block with intra-block parent chains, via the CheckBlockSubtrees setter), not just legacy catchup, for the whole skew window; old sender → new validator reconstructs absent as false (old behaviour); mixed validator fleets behind load balancing make identical legacy requests pass or wedge depending on which instance serves them. Upgrade subtreevalidation and validator together; downgrade reintroduces the wedge for future legacy catchup but corrupts nothing.
+	unknownFields                       protoimpl.UnknownFields
+	sizeCache                           protoimpl.SizeCache
 }
 
 func (x *ValidateTransactionRequest) Reset() {
@@ -220,6 +224,34 @@ func (x *ValidateTransactionRequest) GetCreateConflicting() bool {
 func (x *ValidateTransactionRequest) GetSkipTxmetaPublishing() bool {
 	if x != nil && x.SkipTxmetaPublishing != nil {
 		return *x.SkipTxmetaPublishing
+	}
+	return false
+}
+
+func (x *ValidateTransactionRequest) GetCandidateBlockTime() uint32 {
+	if x != nil && x.CandidateBlockTime != nil {
+		return *x.CandidateBlockTime
+	}
+	return 0
+}
+
+func (x *ValidateTransactionRequest) GetCandidateParentMedianTime() uint32 {
+	if x != nil && x.CandidateParentMedianTime != nil {
+		return *x.CandidateParentMedianTime
+	}
+	return 0
+}
+
+func (x *ValidateTransactionRequest) GetInBlock() bool {
+	if x != nil && x.InBlock != nil {
+		return *x.InBlock
+	}
+	return false
+}
+
+func (x *ValidateTransactionRequest) GetUnconfirmedParentsAtCandidateHeight() bool {
+	if x != nil && x.UnconfirmedParentsAtCandidateHeight != nil {
+		return *x.UnconfirmedParentsAtCandidateHeight
 	}
 	return false
 }
@@ -344,7 +376,7 @@ func (x *ValidateTransactionBatchRequest) GetTransactions() []*ValidateTransacti
 // swagger:model ValidateTransactionBatchResponse
 type ValidateTransactionBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Valid         bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`      // Overall batch validation status
+	Valid         bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`      // Always true; callers must inspect per-item errors below.
 	Errors        []*errors.TError       `protobuf:"bytes,2,rep,name=errors,proto3" json:"errors,omitempty"`     // Array of error messages, one per transaction
 	Metadata      [][]byte               `protobuf:"bytes,3,rep,name=metadata,proto3" json:"metadata,omitempty"` // Array of metadata for each transaction
 	unknownFields protoimpl.UnknownFields
@@ -503,7 +535,7 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xf9\x03\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xfb\x06\n" +
 	"\x1aValidateTransactionRequest\x12)\n" +
 	"\x10transaction_data\x18\x01 \x01(\fR\x0ftransactionData\x12!\n" +
 	"\fblock_height\x18\x02 \x01(\rR\vblockHeight\x121\n" +
@@ -511,12 +543,21 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x18add_tx_to_block_assembly\x18\x04 \x01(\bH\x01R\x14addTxToBlockAssembly\x88\x01\x01\x121\n" +
 	"\x12skip_policy_checks\x18\x05 \x01(\bH\x02R\x10skipPolicyChecks\x88\x01\x01\x122\n" +
 	"\x12create_conflicting\x18\x06 \x01(\bH\x03R\x11createConflicting\x88\x01\x01\x129\n" +
-	"\x16skip_txmeta_publishing\x18\a \x01(\bH\x04R\x14skipTxmetaPublishing\x88\x01\x01B\x15\n" +
+	"\x16skip_txmeta_publishing\x18\a \x01(\bH\x04R\x14skipTxmetaPublishing\x88\x01\x01\x125\n" +
+	"\x14candidate_block_time\x18\b \x01(\rH\x05R\x12candidateBlockTime\x88\x01\x01\x12D\n" +
+	"\x1ccandidate_parent_median_time\x18\t \x01(\rH\x06R\x19candidateParentMedianTime\x88\x01\x01\x12\x1e\n" +
+	"\bin_block\x18\v \x01(\bH\aR\ainBlock\x88\x01\x01\x12Y\n" +
+	"'unconfirmed_parents_at_candidate_height\x18\f \x01(\bH\bR#unconfirmedParentsAtCandidateHeight\x88\x01\x01B\x15\n" +
 	"\x13_skip_utxo_creationB\x1b\n" +
 	"\x19_add_tx_to_block_assemblyB\x15\n" +
 	"\x13_skip_policy_checksB\x15\n" +
 	"\x13_create_conflictingB\x19\n" +
-	"\x17_skip_txmeta_publishing\"{\n" +
+	"\x17_skip_txmeta_publishingB\x17\n" +
+	"\x15_candidate_block_timeB\x1f\n" +
+	"\x1d_candidate_parent_median_timeB\v\n" +
+	"\t_in_blockB*\n" +
+	"(_unconfirmed_parents_at_candidate_heightJ\x04\b\n" +
+	"\x10\vR\x0fparent_metadata\"{\n" +
 	"\x1bValidateTransactionResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x12\n" +
 	"\x04txid\x18\x02 \x01(\fR\x04txid\x12\x16\n" +

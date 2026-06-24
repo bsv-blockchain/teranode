@@ -52,9 +52,10 @@ type notificationMsg struct {
 	SyncPeerBlockHash string `json:"sync_peer_block_hash,omitempty"` // Best block hash of the sync peer
 	SyncConnectedAt   int64  `json:"sync_connected_at,omitempty"`    // Unix timestamp when we first connected to this sync peer
 	// New fields for enhanced node status
-	MinMiningTxFee      *float64 `json:"min_mining_tx_fee,omitempty"`     // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee)
-	ConnectedPeersCount int      `json:"connected_peers_count,omitempty"` // Number of connected peers
-	Storage             string   `json:"storage,omitempty"`               // Storage mode: "full" (block persister running and caught up), "pruned" (no persister or lagging), or empty (old version)
+	MinMiningTxFee      *float64   `json:"min_mining_tx_fee,omitempty"`     // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee). Prefer FeePolicy.MiningFee.
+	FeePolicy           *FeePolicy `json:"fee_policy,omitempty"`            // Full fee policy advertised to peers (nil = unknown/old peer)
+	ConnectedPeersCount int        `json:"connected_peers_count,omitempty"` // Number of connected peers
+	Storage             string     `json:"storage,omitempty"`               // Storage mode: "full" (block persister running and caught up), "pruned" (no persister or lagging), or empty (old version)
 }
 
 // clientChannelMap manages a thread-safe collection of WebSocket client channels.
@@ -97,6 +98,12 @@ func (cm *clientChannelMap) remove(ch chan []byte) {
 	delete(cm.channels, ch)
 }
 
+// maxConcurrentBroadcasts caps the number of in-flight broadcast goroutines so a
+// notification burst with many connected clients can't exhaust goroutines/timers.
+// Declared as a var (not const) so tests can override it; not exposed to settings
+// because the cap is an internal resource ceiling, not a behavioural knob.
+var maxConcurrentBroadcasts = 256
+
 func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	// Get a snapshot of channels under the lock
 	cm.RLock()
@@ -112,12 +119,20 @@ func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	}
 
 	// Send to all channels in parallel without holding the lock
-	// This prevents O(N) delay accumulation from blocking clients
+	// This prevents O(N) delay accumulation from blocking clients.
+	// Clamp poolSize to at least 1 so a misconfigured/test-overridden cap can't
+	// deadlock the loop: with capacity 0, sem <- struct{}{} would block forever
+	// because the receiving goroutine is launched only after the send returns.
+	poolSize := max(maxConcurrentBroadcasts, 1)
+	sem := make(chan struct{}, poolSize)
+
 	var wg sync.WaitGroup
 	for _, ch := range channels {
 		wg.Add(1)
+		sem <- struct{}{} // blocks if pool is full — caps in-flight goroutines
 		go func(ch chan []byte) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			timer := time.NewTimer(time.Second)
 			defer func() {
 				// Ensure timer resources are released promptly when the send succeeds.
@@ -272,35 +287,33 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 	newClientCh := make(chan chan []byte, 1_000)
 	deadClientCh := make(chan chan []byte, 1_000)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	serverCtx := s.gCtx
 
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, serverCtx)
 
 	return func(c echo.Context) error {
-		ch := make(chan []byte, 100) // Add buffer to help prevent blocking
+		connCtx, connCancel := context.WithCancel(serverCtx)
+		defer connCancel()
+
+		ch := make(chan []byte, 100)
 
 		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 		if err != nil {
-			cancel() // Cancel context if upgrade fails
 			return err
 		}
 
-		// Start message handling goroutine FIRST
-		// This needs to be ready to process messages from the channel
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			s.handleClientMessages(ws, ch, deadClientCh)
 		}()
 
-		// Add client channel to the notification processor
 		newClientCh <- ch
 
-		// Wait for either context cancellation or message handling to complete
 		select {
-		case <-ctx.Done():
+		case <-connCtx.Done():
 			ws.Close()
-		case <-done: // Message handling completed normally
+		case <-done:
 		}
 
 		return nil

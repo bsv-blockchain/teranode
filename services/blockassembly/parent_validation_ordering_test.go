@@ -4,6 +4,7 @@ package blockassembly
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -16,29 +17,28 @@ func createTestTx(txID string, parentIDs ...string) *utxo.UnminedTransaction {
 	var txInpoints subtree.TxInpoints
 
 	if len(parentIDs) > 0 {
-		// Create parent transaction hashes and indices
-		parentHashes := make([]chainhash.Hash, 0, len(parentIDs))
-		idxs := make([][]uint32, 0, len(parentIDs))
+		// For simplicity, always use output index 0. Build one bt.Input per
+		// parentID and let NewTxInpointsFromInputs handle the dedup of
+		// repeated parent hashes — this matches the prior parentMap step.
+		inputs := make([]*bt.Input, 0, len(parentIDs))
 
-		// Group parents by hash
-		parentMap := make(map[string][]uint32)
 		for _, parentID := range parentIDs {
-			if _, exists := parentMap[parentID]; !exists {
-				parentMap[parentID] = []uint32{}
-			}
-			// For simplicity, always use output index 0
-			parentMap[parentID] = append(parentMap[parentID], 0)
-		}
-
-		// Build the arrays
-		for parentID, indices := range parentMap {
 			parentHash, _ := chainhash.NewHashFromStr(parentID)
-			parentHashes = append(parentHashes, *parentHash)
-			idxs = append(idxs, indices)
+			in := &bt.Input{PreviousTxOutIndex: 0}
+
+			if err := in.PreviousTxIDAdd(parentHash); err != nil {
+				panic(err)
+			}
+
+			inputs = append(inputs, in)
 		}
 
-		txInpoints.ParentTxHashes = parentHashes
-		txInpoints.Idxs = idxs
+		var err error
+
+		txInpoints, err = subtree.NewTxInpointsFromInputs(inputs)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	// Create hash from the txID string

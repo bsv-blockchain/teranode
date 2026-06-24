@@ -3,7 +3,6 @@ package subtreeprocessor
 
 import (
 	"sync/atomic"
-	"time"
 
 	"github.com/bsv-blockchain/go-subtree"
 )
@@ -24,6 +23,7 @@ type LockFreeQueue struct {
 	head        *TxBatch                // Points to the head of the queue (sentinel node)
 	tail        atomic.Pointer[TxBatch] // Atomic pointer to the tail
 	queueLength atomic.Int64            // Tracks the current number of batches in the queue
+	clock       clock                   // Source of batch timestamps; replaced in tests
 }
 
 // NewLockFreeQueue creates and initializes a new LockFreeQueue instance.
@@ -35,6 +35,7 @@ func NewLockFreeQueue() *LockFreeQueue {
 		head:        &TxBatch{},
 		tail:        atomic.Pointer[TxBatch]{},
 		queueLength: atomic.Int64{},
+		clock:       realClock{},
 	}
 }
 
@@ -59,7 +60,7 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 	batch := &TxBatch{
 		nodes:      nodes,
 		txInpoints: txInpoints,
-		time:       time.Now().UnixMilli(),
+		time:       q.clock.Now().UnixMilli(),
 	}
 	batch.next.Store(nil)
 
@@ -93,6 +94,37 @@ func (q *LockFreeQueue) dequeueBatch(validFromMillis int64) (*TxBatch, bool) {
 	}
 
 	if validFromMillis > 0 && next.time >= validFromMillis {
+		return nil, false
+	}
+
+	q.head = next
+	q.queueLength.Add(-int64(len(next.nodes))) // gosec:nolint
+
+	return next, true
+}
+
+// dequeueBatchUntil removes and returns the next batch only if its time
+// is at or before maxTimeMillis. The "inclusive-until" semantics
+// (batch.time <= maxTimeMillis admits) complement dequeueBatch's
+// "exclusive-from" semantics (batch.time < validFromMillis admits).
+//
+// Unlike dequeueBatch, this method peeks at batch.time BEFORE removing
+// the batch from the queue, so callers that want to stop at a time
+// boundary do not lose the boundary batch on the floor.
+//
+// NOTE - This operation is not thread-safe and should only be called
+// from a single thread.
+//
+// Parameters:
+//   - maxTimeMillis: Inclusive upper bound on batch.time for admission.
+//
+// Returns:
+//   - *TxBatch: The dequeued batch, or nil if the queue is empty or the
+//     head batch's time exceeds maxTimeMillis.
+//   - bool: True iff a batch was dequeued.
+func (q *LockFreeQueue) dequeueBatchUntil(maxTimeMillis int64) (*TxBatch, bool) {
+	next := q.head.next.Load()
+	if next == nil || next.time > maxTimeMillis {
 		return nil, false
 	}
 

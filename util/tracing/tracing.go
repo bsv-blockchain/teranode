@@ -69,6 +69,7 @@ type TraceOptions struct {
 	LogMessages      []logMessage            // log messages to be added to the span
 	Timeout          time.Duration           // timeout for the span, if set
 	SampleRate       *float64                // per-span sample rate override (nil = use default)
+	InjectStartTime  bool                    // inject the span start time into the context under StartTime
 }
 
 // addLogMessage adds a log message to the trace options
@@ -213,9 +214,29 @@ func WithParentStat(stat *gocore.Stat) Options {
 	}
 }
 
+// WithStartTime injects the span's start time into the returned context under the
+// StartTime key, so callers can read it back via ctx.Value(tracing.StartTime).
+//
+// This is opt-in because injecting it costs a context.WithValue (and boxing the
+// time.Time) on every span, and only a few call sites read it. The hot validation
+// path opens many spans per transaction and does not need it, so it must not pay
+// the cost by default.
+func WithStartTime() Options {
+	return func(s *TraceOptions) {
+		s.InjectStartTime = true
+	}
+}
+
 // WithTag adds a key-value tag to the trace
 func WithTag(key, value string) Options {
 	return func(s *TraceOptions) {
+		// Tags are only consumed when building OpenTelemetry span attributes, which
+		// is skipped entirely when tracing is disabled. Avoid the slice allocation
+		// (and append growth) on the disabled hot path.
+		if !tracingEnabled.Load() {
+			return
+		}
+
 		if s.Tags == nil {
 			s.Tags = make([]tracingTag, 0)
 		}
@@ -386,20 +407,37 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		ctx, cancelFunc = context.WithTimeout(ctx, options.Timeout)
 	}
 
-	// Create gocore.Stat (only if enabled)
+	// Create gocore.Stat (only when tracing is enabled).
+	//
+	// The gocore.Stat tree is consumed by the /stats perf endpoint via
+	// WithParentStat. Creating it allocates a Stat (each with its own RWMutex and
+	// child sync.Map) and takes the parent's child-map lock on every span. On the
+	// hot sync path the validator opens several spans per transaction across
+	// millions of transactions per block, so this allocation + lock is a dominant,
+	// contended cost. When tracing is disabled (the documented "zero overhead"
+	// state) skip it; start is still computed for metrics/log durations and for the
+	// StartTime context value when a caller opts in via WithStartTime.
 	var (
 		start time.Time
 		stat  *gocore.Stat
 	)
 
-	if options.ParentStat != nil {
-		start, stat, ctx = NewStatFromContext(ctx, spanName, options.ParentStat)
+	if tracingEnabled {
+		if options.ParentStat != nil {
+			start, stat, ctx = NewStatFromContext(ctx, spanName, options.ParentStat)
+		} else {
+			start, stat, ctx = NewStatFromContext(ctx, spanName, defaultStat)
+		}
 	} else {
-		start, stat, ctx = NewStatFromContext(ctx, spanName, defaultStat)
+		start = gocore.CurrentTime()
 	}
 
-	// add the start time to the context
-	ctx = context.WithValue(ctx, StartTime, start)
+	// add the start time to the context only when a caller opts in (read downstream,
+	// e.g. blockvalidation catchup). Skipped by default to avoid the context.WithValue
+	// boxing on the hot path, where many spans are opened per transaction.
+	if options.InjectStartTime {
+		ctx = context.WithValue(ctx, StartTime, start)
+	}
 
 	// inject sample rate override into context for the custom sampler
 	if options.SampleRate != nil {

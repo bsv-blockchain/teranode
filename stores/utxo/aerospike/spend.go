@@ -57,22 +57,30 @@ package aerospike
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
+
+// maxAggregatedSpendErrs caps how many per-spend errors are wrapped into the
+// aggregate error returned by Spend. The failure count scales with the tx's
+// input count, and an uncapped chain makes error construction and every
+// errors.Is on it quadratic. See errors.JoinCapped.
+const maxAggregatedSpendErrs = 10
 
 // Spend operations in the Aerospike UTXO store handle spending UTXOs through
 // batched Lua operations with automatic DAH management and error handling.
@@ -127,7 +135,7 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 		))
 	}
 
-	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
 		*batchRecordsPtr = batchRecords
 		putBatchRecordsSlice(batchRecordsPtr)
 		return errors.NewStorageError("[IncrementSpentRecordsMulti] error in aerospike batch", err)
@@ -200,7 +208,7 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 		}
 	}
 
-	if err := s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
 		return errors.NewStorageError("[SetDAHForChildRecordsMulti] failed to set DAH", err)
 	}
 
@@ -230,6 +238,28 @@ type batchDAH struct {
 	childIdx       uint32          // Child record index
 	deleteAtHeight uint32          // DeleteAtHeight (0 = no delete)
 	errCh          chan error      // Error Result channel
+}
+
+// handleSpendPanic processes a recovered value from Spend's deferred recover
+// and propagates it as an error. Without this, a panic during Spend would be
+// logged but the caller would observe (nil, nil) — a silent failure that can
+// mask UTXO state corruption.
+//
+// Uses ERR_UNKNOWN rather than ERR_PROCESSING so the block-validation retry
+// classifier (services/blockvalidation/BlockValidation.go) does not treat a
+// recovered panic as a transient infrastructure error and retry indefinitely
+// against a broken path.
+func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
+	if recovered == nil {
+		return
+	}
+
+	prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
+	logger.Errorf("ERROR panic in aerospike Spend: %v\n%s", recovered, debug.Stack())
+
+	if *err == nil {
+		*err = errors.NewUnknownError("panic in Spend: %v", recovered)
+	}
 }
 
 // Spend marks UTXOs as spent in a batch operation.
@@ -264,12 +294,9 @@ type batchDAH struct {
 //	}
 //
 //	err := store.Spend(ctx, tx)
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
 	defer func() {
-		if recoverErr := recover(); recoverErr != nil {
-			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
-			s.logger.Errorf("ERROR panic in aerospike Spend: %v\n", recoverErr)
-		}
+		handleSpendPanic(recover(), &err, s.logger)
 	}()
 
 	if blockHeight == 0 {
@@ -279,7 +306,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 
-	spends, err := utxo.GetSpends(tx)
+	spends, err = utxo.GetSpends(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -301,6 +328,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
+			// Per-worker panic recovery. The parent's defer only catches panics in the
+			// parent goroutine — errgroup propagates errors but does not recover panics
+			// inside g.Go bodies, so without this a worker panic would crash the process.
+			defer func() {
+				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
+			}()
+
 			// Fast-fail check: if circuit breaker is already open, reject immediately
 			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
 				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
@@ -402,20 +436,21 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 		}
 
-		var spendErrors error
+		// Aggregate with a hard cap. The failure count scales with the tx's
+		// input count (a mass DEVICE_OVERLOAD on a 50k-input consolidation tx
+		// fails every spend); an uncapped chain is O(N²) to build via pairwise
+		// Join and makes every subsequent errors.Is on it walk the full chain.
+		// The per-spend errors stay available to the caller via spends[i].Err.
+		failedSpends := make([]error, 0, len(spends))
 
 		for _, spend := range spends {
 			if spend.Err != nil {
-				if spendErrors != nil {
-					spendErrors = errors.Join(spendErrors, spend.Err)
-				} else {
-					spendErrors = spend.Err
-				}
+				failedSpends = append(failedSpends, spend.Err)
 			}
 		}
 
 		// return the errors found
-		return spends, errors.NewUtxoError("error in aerospike spend (batched mode) - errors", spendErrors)
+		return spends, errors.NewUtxoError("error in aerospike spend (batched mode) - errors", errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))
@@ -468,12 +503,52 @@ func (s *Store) useExpressionSpend() bool {
 //  5. Manages DAH settings
 //  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
+	// go-batcher recovers panics in this fn; re-signal every item's errCh on
+	// panic (e.g. the unchecked .(int) in processSpendBatchResults) so a crash
+	// cannot orphan waiting spenders. trySignal is a no-op for items already
+	// signalled (buffered-1 full), so this never double-delivers or blocks.
+	defer func() {
+		signalBatchPanic(recover(), batch, "sendSpendBatchLua", s.logger, func(it *batchSpend, err error) {
+			if it != nil {
+				trySignal(it.errCh, err)
+			}
+		})
+	}()
+
+	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+		func(item *batchSpend) *utxo.Spend {
+			if item == nil {
+				return nil
+			}
+			return item.spend
+		},
+		func(item *batchSpend, err error) {
+			item.errCh <- err
+		},
+	)
+	if len(batch) == 0 {
+		return
+	}
+
 	// Use expression-based implementation only when each Aerospike record holds a single
 	// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
 	// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which
 	// performs the strict precondition check inside the UDF.
 	if s.useExpressionSpend() {
 		s.SpendMultiWithExpressions(s.ctx, batch)
+		return
+	}
+
+	s.executeLuaSpendBatch(batch)
+}
+
+// executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
+// shared backend used by sendSpendBatchLua's Lua route and by the expression path's
+// retry-through-Lua handler. Callers MUST have already run any duplicate-claim
+// filtering, since this method does not re-run it and assumes every item still expects
+// exactly one response on its errCh.
+func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
+	if len(batch) == 0 {
 		return
 	}
 
@@ -493,7 +568,6 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	batchID := s.batchID.Add(1)
 	s.logSpendBatchStart(batchID, len(batch))
 
-	// Prepare and execute batch
 	batchesByKey, err := s.prepareSpendBatches(batch, batchID)
 	if err != nil {
 		return
@@ -505,7 +579,6 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		return
 	}
 
-	// Process results
 	s.processSpendBatchResults(ctx, batchRecords, batchRecordKeys, batchesByKey, batch, batchID)
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
@@ -615,10 +688,14 @@ func (s *Store) createBatchRecords(batchesByKey map[keyIgnoreLocked][]aerospike.
 // executeSpendBatch executes the batch operation
 func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch []*batchSpend, batchID uint64) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	err := s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
+		// trySignal (not a blocking send): items skipped in prepareSpendBatches
+		// already have a queued result on their buffered-1 errCh, and a blocking
+		// re-send here would wedge the dispatch worker permanently.
 		for idx, bItem := range batch {
-			bItem.errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchID, idx, err)
+			var sendErr error = errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchID, idx, err)
+			trySignal(bItem.errCh, sendErr)
 		}
 		return err
 	}
@@ -684,8 +761,10 @@ func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batch
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
 	}
-	// Record batch-level failure for circuit breaker
-	if s.spendCircuitBreaker != nil {
+	// Only count infrastructure failures toward the circuit breaker.
+	// Per-record data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing
+	// parents during catch-up sync) must not trip the breaker — issue #953.
+	if s.spendCircuitBreaker != nil && isInfrastructureFailure(err) {
 		s.spendCircuitBreaker.RecordFailure()
 	}
 }
@@ -843,7 +922,9 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 	errs := make([]error, childCount)
 
 	for i := uint32(0); i < uint32(childCount); i++ { // nolint: gosec
-		errCh := make(chan error)
+		// Buffered-1 so the dispatch fn's trySignal always delivers and never
+		// wedges the batcher worker if this caller has already given up below.
+		errCh := make(chan error, 1)
 
 		go func() {
 			s.setDAHBatcher.Put(&batchDAH{
@@ -854,7 +935,19 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 			})
 		}()
 
-		errs[i] = <-errCh
+		// Bound the wait so a wedged setDAH batcher cannot pin this caller forever.
+		if s.batcherWait > 0 {
+			timer := time.NewTimer(s.batcherWait)
+			select {
+			case errs[i] = <-errCh:
+			case <-timer.C:
+				errs[i] = errors.NewServiceUnavailableError("[setDAHForChildRecords][%s] set DAH for child record %d did not complete within %s", txID.String(), i, s.batcherWait)
+			}
+			timer.Stop()
+		} else {
+			errs[i] = <-errCh
+		}
+
 		if errs[i] != nil {
 			s.logger.Errorf("[setDAHForChildRecords][%s] failed to set DAH for child record %d: %v", txID.String(), i, errs[i])
 		}
@@ -989,7 +1082,7 @@ func (s *Store) verifyAllChildrenSpent(ctx context.Context, txID *chainhash.Hash
 		))
 	}
 
-	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
 		return false, errors.NewStorageError("[verifyAllChildrenSpent][%s] batch read failed", txID.String(), err)
 	}
 
@@ -1057,43 +1150,51 @@ func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int) (inte
 }
 
 func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
-	var err error
+	// go-batcher recovers panics in this fn; re-signal every res channel on panic.
+	defer func() {
+		signalBatchPanic(recover(), batch, "sendIncrementBatch", s.logger, func(it *batchIncrement, err error) {
+			trySignal(it.res, incrementSpentRecordsRes{err: err})
+		})
+	}()
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 
-	// Create a batch of records to read, with a max size of the batch
-	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
+	// Keep batchRecords index-aligned 1:1 with batch. A key-creation failure used
+	// to skip the append, after which the result loop indexed batch[idx] with the
+	// wrong position — signalling the wrong item and orphaning the tail. Use a
+	// NOOP placeholder + handled[] guard instead so alignment is preserved.
+	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+	handled := make([]bool, len(batch))
 
 	currentBlockHeight := s.blockHeight.Load()
 
-	// Create a batch of records to read from the txHashes
-	for _, item := range batch {
+	for i, item := range batch {
 		aeroKey, err := aerospike.NewKey(s.namespace, s.setName, item.txID[:])
 		if err != nil {
-			item.res <- incrementSpentRecordsRes{
-				res: nil,
-				err: errors.NewProcessingError("failed to init new aerospike key for txMeta", err),
-			}
+			trySignal(item.res, incrementSpentRecordsRes{err: errors.NewProcessingError("failed to init new aerospike key for txMeta", err)})
+
+			handled[i] = true
+			batchRecords[i] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 			continue
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementSpentExtraRecs",
+		batchRecords[i] = aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementSpentExtraRecs",
 			aerospike.NewIntegerValue(item.increment),
 			aerospike.NewIntegerValue(int(currentBlockHeight)),
 			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
-		))
+		)
 	}
 
 	// send the batch to aerospike
-	err = s.client.BatchOperate(batchPolicy, batchRecords)
-	if err != nil {
-		for _, item := range batch {
-			item.res <- incrementSpentRecordsRes{
-				res: nil,
-				err: errors.NewStorageError("error in aerospike send outpoint batch records", err),
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
+		for i, item := range batch {
+			if handled[i] {
+				continue
 			}
+
+			trySignal(item.res, incrementSpentRecordsRes{err: errors.NewStorageError("error in aerospike increment batch records", err)})
 		}
 
 		return
@@ -1101,39 +1202,44 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 
 	// Process the batch records
 	for idx, batchRecordIfc := range batchRecords {
+		if handled[idx] {
+			continue
+		}
+
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
-			batch[idx].res <- incrementSpentRecordsRes{
-				res: nil,
-				err: errors.NewStorageError("error in aerospike send outpoint batch records", err),
-			}
+			trySignal(batch[idx].res, incrementSpentRecordsRes{err: errors.NewStorageError("error in aerospike increment batch record", batchRecord.Err)})
+			continue
+		}
 
+		if batchRecord.Record == nil {
+			trySignal(batch[idx].res, incrementSpentRecordsRes{err: errors.NewProcessingError("no record returned from Lua")})
 			continue
 		}
 
 		// Get the raw response from Lua
 		rawResponse := batchRecord.Record.Bins[LuaSuccess.String()]
 		if rawResponse == nil {
-			batch[idx].res <- incrementSpentRecordsRes{
-				res: nil,
-				err: errors.NewProcessingError("no response from Lua"),
-			}
+			trySignal(batch[idx].res, incrementSpentRecordsRes{err: errors.NewProcessingError("no response from Lua")})
 			continue
 		}
 
 		// Pass through the raw response - let the caller handle parsing
-		batch[idx].res <- incrementSpentRecordsRes{
-			res: rawResponse,
-			err: nil,
-		}
+		trySignal(batch[idx].res, incrementSpentRecordsRes{res: rawResponse})
 	}
 }
 
 func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
-	var err error
+	// go-batcher recovers panics in this fn; re-signal every errCh on panic.
+	defer func() {
+		signalBatchPanic(recover(), batch, "sendSetDAHBatch", s.logger, func(it *batchDAH, err error) {
+			trySignal(it.errCh, err)
+		})
+	}()
 
 	// Create batch records with individual TTLs
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+	handled := make([]bool, len(batch))
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 	dahBinName := fields.DeleteAtHeight.String()
 	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
@@ -1143,7 +1249,18 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
+			// Previously this only logged and continued, leaving batchRecords[i]
+			// nil (→ nil-deref panic in the result loop) AND never signalling the
+			// item's errCh (→ the submitter blocked forever). Signal it and keep
+			// the slot index-aligned with a NOOP placeholder.
 			s.logger.Errorf("[SetDAHBatch][%s] failed to create key for pagination record %d: %v", b.txID.String(), b.childIdx, err)
+
+			var keyErr error = errors.NewProcessingError("[SetDAHBatch] failed to create key", err)
+			trySignal(b.errCh, keyErr)
+
+			handled[i] = true
+			batchRecords[i] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+
 			continue
 		}
 
@@ -1155,10 +1272,14 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 	}
 
 	// Execute batch operation
-	err = s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords)
-	if err != nil {
-		for _, bItem := range batch {
-			bItem.errCh <- errors.NewStorageError("[SetDAHBatch][%s] failed to set DAH", err)
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
+		for i, bItem := range batch {
+			if handled[i] {
+				continue
+			}
+
+			var sendErr error = errors.NewStorageError("[SetDAHBatch][%s] failed to set DAH", bItem.txID.String(), err)
+			trySignal(bItem.errCh, sendErr)
 		}
 
 		return
@@ -1166,13 +1287,16 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 
 	// batchOperate may have no errors, but some of the records may have failed
 	for batchIdx, batchRecord := range batchRecords {
-		err = batchRecord.BatchRec().Err
-
-		if err != nil {
-			batch[batchIdx].errCh <- err
+		if handled[batchIdx] {
 			continue
 		}
 
-		batch[batchIdx].errCh <- nil
+		if recErr := batchRecord.BatchRec().Err; recErr != nil {
+			var sendErr error = recErr
+			trySignal(batch[batchIdx].errCh, sendErr)
+			continue
+		}
+
+		trySignal(batch[batchIdx].errCh, error(nil))
 	}
 }

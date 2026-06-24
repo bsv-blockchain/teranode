@@ -38,6 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -167,9 +168,16 @@ type syncPeerState struct {
 	mu                sync.RWMutex // Protects all fields
 	recvBytes         uint64
 	recvBytesLastTick uint64
-	lastBlockTime     time.Time
-	violations        int
-	ticks             uint64
+	// assocReadBytes tracks byte-granular read progress across the sync peer's
+	// whole association (GENERAL + DATA1). Unlike recvBytes (the GENERAL peer's
+	// message-granular total) it advances while a large block is still
+	// streaming in on DATA1, so it can tell an active fat-block download apart
+	// from a stalled peer.
+	assocReadBytes         uint64
+	assocReadBytesLastTick uint64
+	lastBlockTime          time.Time
+	violations             int
+	ticks                  uint64
 }
 
 // validNetworkSpeed checks if the peer is slow and
@@ -214,6 +222,43 @@ func (sps *syncPeerState) updateNetwork(syncPeer *peerpkg.Peer) {
 	sps.ticks++
 	sps.recvBytesLastTick = sps.recvBytes
 	sps.recvBytes = syncPeer.BytesReceived()
+
+	sps.assocReadBytesLastTick = sps.assocReadBytes
+	sps.assocReadBytes = syncPeer.AssociationReadBytes()
+}
+
+// hasHealthyDownloadThroughput reports whether the sync peer's association
+// pulled in data over the last tick at or above minSyncPeerNetworkSpeed. It is
+// used to keep a sync peer that is actively downloading a large block — which
+// streams in on DATA1 and so completes no block within maxLastBlockTime — from
+// being rotated as if it were stalled. It does not mutate violation state.
+func (sps *syncPeerState) hasHealthyDownloadThroughput(minSyncPeerNetworkSpeed uint64) bool {
+	sps.mu.RLock()
+	defer sps.mu.RUnlock()
+
+	// Need at least one prior sample to compute a delta.
+	if sps.ticks == 0 {
+		return false
+	}
+
+	// Association.ReadBytes sums over the streams present at sample time. If a
+	// stream (e.g. DATA1) was removed between samples the sum drops, so guard
+	// the unsigned subtraction: a decrease means a stream just died, which is
+	// the opposite of healthy progress — treat it as no throughput.
+	if sps.assocReadBytes < sps.assocReadBytesLastTick {
+		return false
+	}
+
+	recvDiff := sps.assocReadBytes - sps.assocReadBytesLastTick
+
+	// Require actual bytes to have moved: a peer that delivered nothing is not
+	// "downloading", regardless of how the speed threshold is configured (it may
+	// be 0, which would otherwise make any rate pass).
+	if recvDiff == 0 {
+		return false
+	}
+
+	return recvDiff/uint64(syncPeerTickerInterval.Seconds()) >= minSyncPeerNetworkSpeed
 }
 
 // updateLastBlockTime updates the last block time
@@ -362,6 +407,14 @@ type SyncManager struct {
 	syncPeerState   *syncPeerState
 	peerStates      *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
 
+	// blockBacklog counts blocks sitting in the local processing pipeline:
+	// queued in blockHandler's blockQueue plus the one inside handleBlockMsg.
+	// While it is non-zero the node is backpressuring its own network reads
+	// (OnBlock blocks until the previous block is processed), so the stall
+	// detector must not hold the resulting zero throughput against the sync
+	// peer. Written by the blockHandler goroutines, read by handleCheckSyncPeer.
+	blockBacklog atomic.Int64
+
 	// The following fields are used for headers-first mode.
 	headersFirstMode atomic.Bool // accessed from multiple goroutines, must be atomic
 	headerList       *list.List
@@ -390,6 +443,28 @@ func (sm *SyncManager) loadSyncPeerAndState() (*peerpkg.Peer, *syncPeerState) {
 	sm.syncPeerMu.RLock()
 	defer sm.syncPeerMu.RUnlock()
 	return sm.syncPeer, sm.syncPeerState
+}
+
+// syncPeerStateFor returns the sync peer's state if p is the current sync peer
+// or another stream of its association, and whether it matched. Under the
+// BlockPriority policy a block is delivered on the DATA1 stream — a different
+// Peer from the GENERAL sync peer — so a plain `p == syncPeer` check misses it
+// and the sync peer's lastBlockTime is never refreshed during multistream sync.
+func (sm *SyncManager) syncPeerStateFor(p *peerpkg.Peer) (*syncPeerState, bool) {
+	sp, sps := sm.loadSyncPeerAndState()
+	if sp == nil || sps == nil || p == nil {
+		return nil, false
+	}
+
+	if p == sp {
+		return sps, true
+	}
+
+	if a := p.AssociationRef(); a != nil && a == sp.AssociationRef() {
+		return sps, true
+	}
+
+	return nil, false
 }
 
 // storeSyncPeer sets the sync peer and its state, safe for concurrent access.
@@ -474,6 +549,17 @@ func (sm *SyncManager) startSync() {
 	for peer, state := range sm.peerStates.Range() {
 		if !state.syncCandidate {
 			sm.logger.Debugf("[startSync] peer %v is not a sync candidate", peer.String())
+
+			continue
+		}
+
+		// Defence-in-depth: never elect a peer whose socket has already been
+		// torn down. If one slips into peerStates (e.g. a future regression in
+		// the new-peer registration path), picking it here would push
+		// getheaders into a closed connection and stall sync for the duration
+		// of maxLastBlockTime before rotating.
+		if !peer.Connected() {
+			sm.logger.Debugf("[startSync] peer %v is not connected, skipping", peer.String())
 
 			continue
 		}
@@ -703,22 +789,31 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 		return
 	}
 
+	// If the peer's socket was already torn down by the time this newPeerMsg
+	// drained from msgChan, don't insert it into peerStates at all. Pairs
+	// with the Connected() guard in startSync to close the window during
+	// which a dead pointer can sit in the map waiting for a donePeerMsg.
+	if !peer.Connected() {
+		sm.logger.Debugf("[handleNewPeerMsg] peer %s already disconnected before registration, skipping", peer.String())
+		return
+	}
+
 	sm.logger.Infof("New valid peer %s (%s)", peer, peer.UserAgent())
 
 	// Initialize the peer state
 	isSyncCandidate := sm.isSyncCandidate(peer)
 
-	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
-	if err != nil {
-		sm.logger.Debugf("Error getting FSM current state: %v", err)
-	}
-
-	if *state == teranodeblockchain.FSMStateLEGACYSYNCING && sm.currentFeeFilter.Load() != bsvutil.SatoshiPerBitcoin {
-		// Set fee filter to inform peers that we don't want to be notified of transactions while we're syncing
+	// While catching up, ask every newly-connected peer to hold back
+	// transaction announcements to reduce load during sync. The raise is queued
+	// per-peer; the global currentFeeFilter is only the marker the reset path
+	// (resetFeeFilterToDefault) checks, so it must NOT gate the per-peer queue —
+	// otherwise only the first peer to connect during catch-up would be told.
+	// The filter is restored to the policy default once we reach RUNNING.
+	if state, ferr := sm.blockchainClient.GetFSMCurrentState(sm.ctx); ferr != nil {
+		sm.logger.Errorf("[handleNewPeerMsg] failed to get current FSM state: %v", ferr)
+	} else if state != nil && *state == teranodeblockchain.FSMStateCATCHINGBLOCKS {
 		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
-
 		peer.QueueMessage(feeFilter, nil)
-
 		sm.currentFeeFilter.Store(bsvutil.SatoshiPerBitcoin)
 	}
 
@@ -753,6 +848,18 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	// Update network stats at the end of this tick.
 	defer sps.updateNetwork(sp)
 
+	// While blocks are queued or mid-validation locally, OnBlock deliberately
+	// stops reading from the peer (it blocks on blockProcessed), so zero
+	// throughput and a stale last-block-time measure our own validation speed,
+	// not the peer's health. Skip stall checks until the backlog drains — a
+	// genuinely stalled peer keeps failing them afterwards. The deferred
+	// updateNetwork still runs, keeping throughput samples fresh for the next
+	// tick.
+	if backlog := sm.blockBacklog.Load(); backlog > 0 {
+		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check skipped: %d blocks pending local processing", sp.String(), backlog)
+		return
+	}
+
 	headersFirst := sm.headersFirstMode.Load()
 	lastBlockSince := time.Since(sps.getLastBlockTime())
 
@@ -768,6 +875,25 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check (headers-first mode, speed check skipped), time since last block: %v (limit %v)", sp.String(), lastBlockSince, maxLastBlockTime)
 	}
 	isLastBlockTimeViolation := lastBlockSince > maxLastBlockTime
+
+	// A multi-GB block can take longer than maxLastBlockTime to arrive. Under
+	// the BlockPriority stream policy it streams in on the DATA1 stream, so no
+	// block "completes" (lastBlockTime stays put) even though bytes are
+	// actively flowing across the association. Don't rotate a sync peer that is
+	// still pulling data at a healthy rate — it is making progress on a large
+	// block, not stalled. A genuinely stalled peer delivers no throughput and
+	// is still rotated.
+	//
+	// This suppression is itself capped at peer.MaxBlockDownloadTime: past that
+	// wall-clock window the peer is rotated regardless of throughput, so a
+	// malicious peer cannot dribble bytes just above the threshold forever to
+	// hold the single sync-peer slot and stall IBD.
+	if isLastBlockTimeViolation &&
+		lastBlockSince < peerpkg.MaxBlockDownloadTime &&
+		sps.hasHealthyDownloadThroughput(sm.minSyncPeerNetworkSpeed) {
+		sm.logger.Debugf("[CheckSyncPeer] sync peer %s exceeded last-block-time but association still downloading at a healthy rate (%.0fs in, cap %s); not rotating", sp.String(), lastBlockSince.Seconds(), peerpkg.MaxBlockDownloadTime)
+		isLastBlockTimeViolation = false
+	}
 
 	// If no violations detected, the sync peer is healthy — nothing to do.
 	if !isNetworkSpeedViolation && !isLastBlockTimeViolation {
@@ -929,6 +1055,9 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	buf := bytes.NewBuffer(make([]byte, 0, tmsg.tx.MsgTx().SerializeSize()))
 	_ = tmsg.tx.MsgTx().Serialize(buf)
 
+	// Single inbound tx per call, passed downstream to the validator. Stays
+	// on the standard heap path — no arena amortisation possible for a
+	// one-shot decode where the tx must outlive this function frame.
 	btTx, err := bt.NewTxFromBytes(buf.Bytes())
 	if err != nil {
 		sm.logger.Errorf("Failed to create transaction from bytes: %v", err)
@@ -1147,7 +1276,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
-	legacySyncMode := false
 	catchingBlocks := false
 
 	sm.logger.Debugf("[handleBlockMsg][%s] checking current FSM state", bmsg.blockHash)
@@ -1157,13 +1285,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		return errors.NewProcessingError("[handleBlockMsg] failed to get current FSM state", err)
 	}
 
-	if fsmState != nil {
-		switch *fsmState {
-		case teranodeblockchain.FSMStateLEGACYSYNCING:
-			legacySyncMode = true
-		case teranodeblockchain.FSMStateCATCHINGBLOCKS:
-			catchingBlocks = true
-		}
+	if fsmState != nil && *fsmState == teranodeblockchain.FSMStateCATCHINGBLOCKS {
+		catchingBlocks = true
 	}
 
 	// If we didn't ask for this block then the peer is misbehaving.
@@ -1228,18 +1351,37 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	sm.logger.Debugf("[handleBlockMsg][%s] calling HandleBlockDirect", bmsg.blockHash)
 
-	// if not in Legacy Sync mode, we need to potentially download the block,
-	// promote block to the block validation via kafka (p2p -> blockvalidation message),
-	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
-	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, bmsg.block); err != nil {
-		if (legacySyncMode || catchingBlocks) && errors.Is(err, errors.ErrBlockNotFound) {
-			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
-			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)
-			return nil
-		} else if errors.Is(err, errors.ErrBlockNotFound) {
-			// We don't have the parent of this block/header, so we'll request it.
+	// Hand sole ownership of the decoded block to HandleBlockDirect. The
+	// blockHandler goroutine keeps *bmsg alive until the reply is sent, so
+	// leaving the field set would pin the multi-GB wire block (and its decode
+	// arena) for the whole minutes-long processing of a big block. Copy the
+	// parent hash first — the missing-parent error path below needs it.
+	msgBlock := bmsg.block
+	if msgBlock == nil {
+		return errors.NewProcessingError("[handleBlockMsg][%s] block message carries no block", bmsg.blockHash)
+	}
+
+	prevBlockHash := msgBlock.Header.PrevBlock
+	bmsg.block = nil
+
+	// Process the block directly. A missing-parent error (ErrBlockNotFound)
+	// always triggers a getblocks request from our best block so block
+	// validation can proceed in order — see the orphan-continuation note below.
+	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, msgBlock); err != nil {
+		if errors.Is(err, errors.ErrBlockNotFound) {
+			// We don't have the parent of this block. While catching blocks
+			// this is typically the peer announcing its tip while we are
+			// still behind — and in the legacy sync protocol that orphan tip
+			// doubles as the batch-continuation signal: the peer pushes its
+			// tip inv after delivering a getblocks batch and waits for the
+			// next getblocks before sending more. Swallowing the orphan here
+			// stalls the sync until the stall detector rotates the peer, so
+			// always answer with a getblocks from our best block.
+			// PushGetBlocksMsg filters duplicate requests and the peer only
+			// invs blocks past the locator fork point, so a redundant
+			// request costs one inv message at most.
 			sm.logger.Infof("Block %v has missing parent %v, requesting missing blocks",
-				bmsg.blockHash, bmsg.block.Header.PrevBlock)
+				bmsg.blockHash, prevBlockHash)
 
 			bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 			if err != nil {
@@ -1269,7 +1411,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
-			if !legacySyncMode && !catchingBlocks && !serviceError {
+			if !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
 			}
 
@@ -1294,7 +1436,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		blkHashUpdate *chainhash.Hash
 	)
 
-	if sp, sps := sm.loadSyncPeerAndState(); peer == sp && sps != nil {
+	if sps, ok := sm.syncPeerStateFor(peer); ok {
 		sps.updateLastBlockTime()
 	}
 
@@ -1455,9 +1597,11 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		headerListLen, currentInFlight, dynamicMaxInFlight, avgBlockSize, maxBlocks)
 
 	// Build up a getdata request for the list of blocks the headers
-	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
-	// the function, so no need to double check it here.
-	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len())) // nolint:gosec
+	// describe. Size the InvList to maxBlocks rather than headerList.Len()
+	// because the loop below breaks at maxBlocks — sizing to headerList.Len()
+	// (often 2000) caused large repeated allocations (~16 KB) when only a
+	// handful of slots ever get used (maxBlocks shrinks to 1 for >2 GB blocks).
+	getDataMessage := wire.NewMsgGetDataSizeHint(uint(maxBlocks)) // nolint:gosec
 	numRequested := 0
 
 	for e := sm.startHeader; e != nil; e = e.Next() {
@@ -1930,8 +2074,17 @@ func (sm *SyncManager) blockHandler() {
 	ticker := time.NewTicker(syncPeerTickerInterval)
 	defer ticker.Stop()
 
-	// TODO make this configurable
-	maxBlockQueue := 10_000
+	// TODO make this configurable.
+	//
+	// This buffer pins one *wire.MsgBlock per slot. Each MsgBlock carries
+	// its go-wire decode arena (≥4 MiB per block today), so the previous
+	// 10_000-deep queue could pin ~40 GiB of arena memory ahead of the
+	// sequential processor. On a memory-constrained box that turns into
+	// the dominant live-heap source and starves the GC. Cap at a small
+	// value: enough to absorb processor-stall jitter, far below anything
+	// that would meaningfully pin memory. The downloader naturally
+	// back-pressures via TCP when the queue is full.
+	maxBlockQueue := 100
 
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
@@ -1946,6 +2099,9 @@ func (sm *SyncManager) blockHandler() {
 				sm.logger.Debugf("[blockHandler][%s] processing block queue message into handleBlockMsg", msg.blockHash)
 
 				err := sm.handleBlockMsg(msg)
+
+				sm.blockBacklog.Add(-1)
+
 				if msg.reply != nil {
 					msg.reply <- err
 				}
@@ -1996,6 +2152,8 @@ out:
 
 			case *blockMsg:
 				sm.logger.Debugf("[blockHandler][%s] queueing block for validation", msg.block.Hash())
+
+				sm.blockBacklog.Add(1)
 
 				blockQueue <- &blockQueueMsg{
 					block:       msg.block.MsgBlock(),
@@ -2050,7 +2208,9 @@ out:
 func (sm *SyncManager) NewPeer(peer *peerpkg.Peer, done chan struct{}) {
 	// Ignore if we are shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 	sm.msgChan <- &newPeerMsg{peer: peer, reply: done}
@@ -2062,7 +2222,9 @@ func (sm *SyncManager) NewPeer(peer *peerpkg.Peer, done chan struct{}) {
 func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan struct{}) {
 	// Don't accept more transactions if we're shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 
@@ -2080,6 +2242,28 @@ func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done
 	}
 
 	sm.msgChan <- &blockMsg{block: block, peer: peer, reply: done}
+}
+
+// sendDuringShutdown delivers v on ch, recovering from the "send on closed
+// channel" panic that races teardown. Inv delivery runs on peer read-loop
+// goroutines (OnInv -> QueueInv), but the channels they target are torn down by
+// a different goroutine during shutdown: the kafka async producer closes
+// legacyKafkaInvCh in its Stop(), and the block handler stops draining msgChan.
+// The shutdown flag check in QueueInv narrows but cannot close that window — a
+// flag check and a channel send are not atomic against a concurrent close — so
+// a late inv would otherwise crash the whole process. Dropping an inv during
+// shutdown is safe: inv is an advisory announcement, re-sent by the peer (or a
+// later session) on the next connection. Returns false if the channel was closed.
+func sendDuringShutdown[T any](ch chan T, v T) (sent bool) {
+	defer func() {
+		if recover() != nil {
+			sent = false
+		}
+	}()
+
+	ch <- v
+
+	return true
 }
 
 // QueueInv adds the passed inv message and peer to the block handling queue.
@@ -2113,7 +2297,7 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 
 		if len(invBlockMsg.InvList) > 0 {
 			netsyncInvMsg := invMsg{inv: invBlockMsg, peer: peer}
-			sm.msgChan <- &netsyncInvMsg
+			sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
 		}
 
 		if len(invTxMsg.InvList) > 0 {
@@ -2127,13 +2311,13 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 
 			// write to Kafka
 			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.String(), len(value))
-			sm.legacyKafkaInvCh <- &kafka.Message{
+			sendDuringShutdown(sm.legacyKafkaInvCh, &kafka.Message{
 				Value: value,
-			}
+			})
 		}
 	} else {
 		netsyncInvMsg := invMsg{inv: inv, peer: peer}
-		sm.msgChan <- &netsyncInvMsg
+		sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
 	}
 }
 
@@ -2153,7 +2337,9 @@ func (sm *SyncManager) QueueHeaders(headers *wire.MsgHeaders, peer *peerpkg.Peer
 func (sm *SyncManager) DonePeer(peer *peerpkg.Peer, done chan struct{}) {
 	// Ignore if we are shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 
@@ -2231,7 +2417,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		settings:     tSettings,
 		peerNotifier: config.PeerNotifier,
 		// txMemPool:     config.TxMemPool,
-		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration),
+		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
 		chainParams:     config.ChainParams,
 		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
 		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
@@ -2286,6 +2472,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// add the number of orphan transactions to the prometheus metric
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 
 		for {
 			select {
@@ -2330,7 +2517,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	txControlChan := make(chan bool, 1)    // control channel for transaction-related listeners (buffered to prevent blocking)
 
 	// start a go routine to control the kafka listeners based on FSM state
-	// Block-related listeners (INV, blocks final): enabled when NOT in LEGACYSYNCING state
+	// Block-related listeners (INV, blocks final): always enabled
 	// Transaction-related listeners (txmeta): enabled only when in RUNNING state
 	go func() {
 		for {
@@ -2338,9 +2525,11 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 			case <-ctx.Done():
 				return
 			case <-time.After(1 * time.Second):
-				// Block-related listeners: enable when NOT in LEGACYSYNCING
-				isLegacySyncing, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, teranodeblockchain.FSMStateLEGACYSYNCING)
-				blockEnabled := !isLegacySyncing
+				// Block-related listeners are always enabled. The only FSM state
+				// that previously disabled them (legacy sync mode) was removed; no
+				// automated path ever entered it — an operator could only reach it
+				// manually via the setfsmstate CLI / FSM admin endpoint.
+				blockEnabled := true
 
 				// Non-blocking send to avoid deadlock if no one is reading
 				select {
@@ -2380,7 +2569,6 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		}()
 
 		// INV listener receives inventory messages from other nodes
-		// Disabled during LEGACYSYNCING to reduce processing load during catch-up
 		controlCh := make(chan bool)
 		blockListenersCh = append(blockListenersCh, controlCh)
 
@@ -2524,32 +2712,81 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 	}, &sm.settings.Kafka)
 }
 
-const (
-	txmetaActionADD    = byte(0)
-	txmetaActionDELETE = byte(1)
-)
-
 // processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
 // It parses the batch format, deserializes metadata for ADD entries, and announces
 // non-coinbase transactions to peers via the txAnnounceBatcher.
 // Coinbase transactions are intentionally skipped to avoid peer bans.
+//
+// Two wire formats are accepted, distinguished by a multi-byte signature at
+// the start of the message (mirrors services/subtreevalidation/txmetaHandler.go):
+//
+//	v1 (legacy)
+//	  [4 bytes] entry count (uint32 LE)
+//	  per entry: [32 hash][1 action][4 contentLen][N content]
+//
+//	v2 (partition-aware)
+//	  [1 byte magic=0xFF][1 byte version=0x02][2 reserved=0][4 entry count LE]
+//	  per entry: [8 xxhash][32 hash][1 action][4 contentLen][N content]
+//
+// v2 detection requires the full 4-byte header signature AND a plausible
+// entry count for the buffer length, otherwise the message is parsed as v1.
+// This avoids misclassifying v1 messages whose entry count happens to begin
+// with 0xFF (counts 255, 511, 767, ...).
+//
+// The xxhash prefix in v2 is read and discarded — netsync only needs the
+// 32-byte tx hash to announce; partition-aligned cache writes are a
+// subtreevalidation concern.
 func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 	if len(data) < 4 {
 		return nil
 	}
 
-	offset := 0
+	var (
+		offset     int
+		entryCount uint32
+		isV2       bool
+	)
 
-	// Read entry count
-	entryCount := binary.LittleEndian.Uint32(data[offset:])
-	offset += 4
+	// Speculative v2 detection: require the full header signature
+	// (magic + version + reserved bytes) and an entry count that fits in the
+	// remaining buffer at the minimum v2 entry size. Any failure falls
+	// through to v1 — never silently drops a valid v1 message.
+	if len(data) >= txmetacache.WireV2HeaderLen &&
+		data[0] == txmetacache.WireV2Magic &&
+		data[1] == txmetacache.WireV2Version &&
+		data[2] == 0 && data[3] == 0 {
+		candidateCount := binary.LittleEndian.Uint32(data[4:])
+		remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
+		if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
+			entryCount = candidateCount
+			offset = txmetacache.WireV2HeaderLen
+			isV2 = true
+		}
+	}
+
+	if !isV2 {
+		entryCount = binary.LittleEndian.Uint32(data[:4])
+		offset = 4
+	}
+
+	// Per-entry header size (excluding content). The shared constants in
+	// stores/txmetacache encode the same numbers; using them here keeps
+	// the producer and the receiver pinned to one source of truth.
+	entryHeaderSize := txmetacache.WireV1MinEntrySize
+	if isV2 {
+		entryHeaderSize = txmetacache.WireV2MinEntrySize
+	}
 
 	// Process each entry
 	for i := uint32(0); i < entryCount; i++ {
-		// Check minimum bytes for hash + action + length
-		if offset+32+1+4 > len(data) {
+		if offset+entryHeaderSize > len(data) {
 			sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
 			return nil
+		}
+
+		// v2: skip the 8-byte xxhash prefix; netsync doesn't use it.
+		if isV2 {
+			offset += 8
 		}
 
 		// Read hash (32 bytes)
@@ -2565,7 +2802,7 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		if action == txmetaActionADD {
+		if action == txmetacache.WireActionADD {
 			// Handle ADD
 			if offset+int(contentLen) > len(data) {
 				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
@@ -2584,6 +2821,16 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 			}
 
 			if txMeta.IsCoinbase {
+				continue
+			}
+
+			// Never announce transactions that arrived as part of a block or
+			// announced subtree. The txmeta topic also carries those (block
+			// validation, subtree validation, legacy sync pre-warm) to populate
+			// the subtree-validation cache; relaying them as fresh mempool txs
+			// floods peers with getdata for transactions that are long mined —
+			// and often already pruned.
+			if txMeta.InBlock {
 				continue
 			}
 

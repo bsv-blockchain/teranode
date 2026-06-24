@@ -62,7 +62,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -80,6 +80,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -182,16 +183,38 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	if value != nil {
 		utxos, ok := value.Bins[fields.Utxos.String()].([]interface{})
 		if ok {
-			b, ok := utxos[spend.Vout%uint32(s.utxoBatchSize)].([]byte)
+			// The Utxos bin holds only the actual outputs for this batch, not a
+			// fixed-size slot table padded to utxoBatchSize. A caller passing a
+			// vout greater than the tx's output count (possible via the HTTP
+			// /api/v1/utxo and /api/v1/utxos endpoints, which no longer
+			// pre-validate vout against the output count) would index past the
+			// slice and panic with index-out-of-range — crashing the asset
+			// process when the panic surfaces in an errgroup goroutine outside
+			// echo's recover middleware. Treat it as NOT_FOUND, mirroring
+			// ErrKeyNotFound above.
+			idx := spend.Vout % uint32(s.utxoBatchSize)
+			if int(idx) >= len(utxos) {
+				return &utxo.SpendResponse{
+					Status: int(utxo.Status_NOT_FOUND),
+				}, nil
+			}
+
+			b, ok := utxos[idx].([]byte)
 			if ok {
 				if len(b) < 32 {
 					return nil, errors.NewProcessingError("invalid utxo hash length", nil)
 				}
 
-				// check utxoHash is the same as the one we expect
-				utxoHash := chainhash.Hash(b[:32])
-				if !utxoHash.IsEqual(spend.UTXOHash) {
-					return nil, errors.NewProcessingError("utxo hash mismatch", nil)
+				// Verify the caller-supplied hash matches the stored one. When the
+				// caller passes nil (e.g. the bulk /api/v1/utxos endpoint, which
+				// intentionally avoids fetching the full transaction to recompute
+				// it) we trust the stored hash — the record was located by primary
+				// key (txid, vout) and the stored hash is canonical.
+				if spend.UTXOHash != nil {
+					utxoHash := chainhash.Hash(b[:32])
+					if !utxoHash.IsEqual(spend.UTXOHash) {
+						return nil, errors.NewProcessingError("utxo hash mismatch", nil)
+					}
 				}
 
 				if len(b) == 68 {
@@ -356,6 +379,21 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		}()
 	}
 
+	// Bound the wait so a wedged batcher (e.g. a stuck v8 batch op, or a dispatch
+	// fn that failed to signal) cannot pin this goroutine for the life of the
+	// process. The legacy/validation callers thread a deadline-less context down
+	// here, so ctx.Done() alone is not enough. A nil timeout channel (batcherWait
+	// == 0, e.g. a Store built without New) disables the arm and preserves the
+	// original behaviour.
+	var timeoutCh <-chan time.Time
+
+	if s.batcherWait > 0 {
+		timer := time.NewTimer(s.batcherWait)
+		defer timer.Stop()
+
+		timeoutCh = timer.C
+	}
+
 	select {
 	case data := <-done:
 		if data.Err != nil {
@@ -371,6 +409,9 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	case <-ctx.Done():
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", "ContextCanceled").Inc()
 		return nil, ctx.Err()
+	case <-timeoutCh:
+		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", "BatchTimeout").Inc()
+		return nil, errors.NewServiceUnavailableError("aerospike get batch did not complete within %s", s.batcherWait)
 	}
 }
 
@@ -567,7 +608,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 		return nil
 	}
 
-	err = s.client.BatchOperate(batchPolicy, batchRecords)
+	err = s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		s.logger.Errorf("error in aerospike map store batch records:\n%v\n%v", batchRecords, err)
 		return errors.NewStorageError("error in aerospike map store batch records", err)
@@ -809,6 +850,16 @@ NEXT_BATCH_RECORD:
 					}
 
 					items[idx].Data.UnminedSince = unminedSinceUint32
+				}
+
+			case fields.CreatedAt:
+				if v := bins[key.String()]; v != nil {
+					switch t := v.(type) {
+					case int:
+						items[idx].Data.CreatedAt = int64(t)
+					case int64:
+						items[idx].Data.CreatedAt = t
+					}
 				}
 			}
 		}
@@ -1167,10 +1218,25 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 		})
 	}
 
-	// Wait for all error channels to receive a result
+	// Wait for all error channels to receive a result, bounded so a wedged
+	// outpoint batcher cannot pin this goroutine for the life of the process.
+	var timeoutCh <-chan time.Time
+
+	if s.batcherWait > 0 {
+		timer := time.NewTimer(s.batcherWait)
+		defer timer.Stop()
+
+		timeoutCh = timer.C
+	}
+
 	for _, errChan := range errChans {
-		if err := <-errChan; err != nil {
-			return err
+		select {
+		case err := <-errChan:
+			if err != nil {
+				return err
+			}
+		case <-timeoutCh:
+			return errors.NewServiceUnavailableError("aerospike outpoint batch did not complete within %s", s.batcherWait)
 		}
 	}
 
@@ -1178,18 +1244,44 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 }
 
 // BatchPreviousOutputsDecorate fetches previous output information for inputs across
-// multiple transactions. The Aerospike implementation delegates to per-tx PreviousOutputsDecorate
-// which already uses an internal batcher for efficiency.
+// multiple transactions, fanning the per-tx decorations out across goroutines so the
+// shared outpoint batcher fills by size from concurrent pushes instead of idling at
+// its per-tx duration timer.
+//
+// A serial per-tx loop was correct but pathologically slow during legacy sync: a
+// typical tx contributes ~2 inputs - far below OutpointBatcherSize - so each call
+// waited the full OutpointBatcherDurationMillis before the batch fired, making wall
+// time scale as O(N_tx * duration) - e.g. 2856 tx x 5 ms ~= 14 s observed in
+// production.
+//
+// Fan-out is bounded by UtxoStore.OutpointBatcherSize to keep memory predictable
+// on large blocks and to mirror the Phase 1 errgroup bound in the legacy caller
+// (services/legacy/netsync/handle_block.go). Throughput is not affected by the
+// bound: the actual ceiling is BatcherMaxConcurrent aerospike batches in flight,
+// not the goroutine count, since producers are mostly parked on errChan receives.
 func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(s.logger, g, s.settings.UtxoStore.OutpointBatcherSize)
+
 	for _, tx := range txs {
-		if err := s.PreviousOutputsDecorate(ctx, tx); err != nil {
-			return err
-		}
+		tx := tx
+		g.Go(func() error {
+			return s.PreviousOutputsDecorate(gCtx, tx)
+		})
 	}
-	return nil
+
+	return g.Wait()
 }
 
 func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
+	// go-batcher recovers panics in this fn; re-signal every errCh on panic so a
+	// crash mid-decoration cannot orphan the waiting submitters.
+	defer func() {
+		signalBatchPanic(recover(), batch, "sendOutpointBatch", s.logger, func(it *batchOutpoint, err error) {
+			util.SafeSend(it.errCh, err, batchSignalTimeout)
+		})
+	}()
+
 	start := gocore.CurrentTime()
 	defer func() {
 		previousOutputsDecorateStat.AddTimeForRange(start, len(batch))
@@ -1226,7 +1318,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			return
 		}
 
-		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External}
+		// BlockHeights is read so external parents can be reconstructed with the
+		// era-aware unspendable rule keyed to their creation height.
+		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External, fields.BlockHeights}
 		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
@@ -1235,7 +1329,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	}
 
 	// send the batch to aerospike
-	err = s.client.BatchOperate(batchPolicy, batchRecords)
+	err = s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		for _, item := range batch {
 			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike send outpoint batch records", err))
@@ -1268,7 +1362,14 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		external, ok := bins[fields.External.String()].(bool)
 		if ok && external {
-			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash); err != nil {
+			// Resolve the parent's creation-height era so the reconstruction
+			// applies the same unspendable rule create used. A missing/empty
+			// BlockHeights (unmined parent) yields the Genesis activation height
+			// (post-Genesis), which only ever over-retains — never over-excludes.
+			blockHeights, _ := processBlockHeights(bins)
+			creationHeight := creationHeightFromBlockHeights(blockHeights, s.settings.ChainCfgParams.GenesisActivationHeight)
+
+			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash, creationHeight); err != nil {
 				txErrors[previousTxHash] = err
 
 				continue
@@ -1298,8 +1399,17 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			continue
 		}
 
-		batchItem.outpoint.PreviousTxSatoshis = previousTx.Outputs[batchItem.outpoint.PreviousTxOutIndex].Satoshis
-		batchItem.outpoint.PreviousTxScript = previousTx.Outputs[batchItem.outpoint.PreviousTxOutIndex].LockingScript
+		// Guard the output index: a corrupt/short Outputs slice (or a nil-padded
+		// entry from OP_RETURN removal) would otherwise panic here and, because
+		// go-batcher recovers the panic, orphan every remaining errCh in the batch.
+		outIdx := batchItem.outpoint.PreviousTxOutIndex
+		if int(outIdx) >= len(previousTx.Outputs) || previousTx.Outputs[outIdx] == nil {
+			sendErrorAndClose(batchItem.errCh, errors.NewTxInvalidError("previous tx %s has no output at index %d", batchItem.outpoint.PreviousTxID, outIdx))
+			continue
+		}
+
+		batchItem.outpoint.PreviousTxSatoshis = previousTx.Outputs[outIdx].Satoshis
+		batchItem.outpoint.PreviousTxScript = previousTx.Outputs[outIdx].LockingScript
 		batchItem.errCh <- nil
 		close(batchItem.errCh)
 	}
@@ -1308,14 +1418,34 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
 }
 
-func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+// GetOutpointsFromExternalStore reconstructs an externally-stored parent tx's
+// spendable outputs for outpoint resolution. creationHeight is the parent's
+// mining height, used to apply the era-aware unspendable rule (see
+// getExternalOutpoints).
+//
+// The reconstruction is cached by txid (externalTxCache). That is correct
+// because the era-filtered output set is fixed per tx once the parent is mined,
+// and an unmined parent is necessarily post-Genesis on production networks
+// (mainnet/testnet/teratestnet activation heights sit far below any live tip),
+// so the unmined fallback and a real mining at that height resolve to the same
+// era.
+//
+// Known, accepted seam on low-activation networks only (regtest=10000, stn=100):
+// there a node can be at a genuinely pre-Genesis height with an unmined external
+// parent. The fallback then classifies it post-Genesis and caches that set; if
+// the parent later mines at a pre-Genesis height, nothing re-derives the era or
+// evicts the entry, so the stale post-Genesis (over-retaining) reconstruction
+// persists. This only ever over-retains a provably-unspendable output, never
+// over-excludes a spendable one, so it cannot orphan a valid spend; it is
+// unreachable on production networks.
+func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash, creationHeight uint32) (*bt.Tx, error) {
 	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetOutpointsFromExternalStore",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
 
 	if s.externalTxCache != nil {
 		return s.externalTxCache.GetOrSet(previousTxHash, func() (*bt.Tx, bool, error) {
-			tx, numberOfActiveOutputs, err := s.getExternalOutpoints(ctx, previousTxHash)
+			tx, numberOfActiveOutputs, err := s.getExternalOutpoints(ctx, previousTxHash, creationHeight)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1332,7 +1462,7 @@ func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHas
 		})
 	}
 
-	tx, _, err := s.getExternalOutpoints(ctx, previousTxHash)
+	tx, _, err := s.getExternalOutpoints(ctx, previousTxHash, creationHeight)
 	if err != nil {
 		return nil, err
 	}
@@ -1340,7 +1470,33 @@ func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHas
 	return tx, nil
 }
 
-func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, int, error) {
+// creationHeightFromBlockHeights returns the era height used to reconstruct an
+// externally-stored parent's spendable outputs: the earliest block the tx was
+// mined in. An unmined parent (no recorded block heights) falls back to the
+// Genesis activation height (post-Genesis). On production networks this is exact
+// — a live unmined parent is always post-Genesis. On low-activation networks
+// (regtest=10000, stn=100) the fallback can misclassify a genuinely pre-Genesis
+// unmined parent as post-Genesis; this only over-retains a provably-unspendable
+// output (never over-excludes a spendable one), so it is safe and accepted. See
+// GetOutpointsFromExternalStore for the matching cache-coherence note.
+func creationHeightFromBlockHeights(blockHeights []uint32, genesisActivationHeight uint32) uint32 {
+	minHeight := uint32(0)
+	found := false
+
+	for _, h := range blockHeights {
+		if !found || h < minHeight {
+			minHeight, found = h, true
+		}
+	}
+
+	if !found {
+		return genesisActivationHeight
+	}
+
+	return minHeight
+}
+
+func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainhash.Hash, creationHeight uint32) (*bt.Tx, int, error) {
 	// get the full transaction from the external store
 	tx, err := s.getExternalTransaction(ctx, previousTxHash)
 	if err != nil {
@@ -1352,16 +1508,18 @@ func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainha
 
 	numberOfActiveOutputs := 0
 
-	// remove all non-spendable (OP_RETURN) outputs
+	// Drop the provably-unspendable outputs that were never stored as UTXOs,
+	// using the same era-aware, value-agnostic rule as create
+	// (ShouldStoreOutputAsUTXO) keyed to the parent's creation height. This
+	// keeps the reconstructed outpoint set identical to what create stored —
+	// in particular it retains post-Genesis bare OP_RETURN outputs, which are
+	// spendable and must resolve when later spent.
 	for i, output := range tx.Outputs {
 		if output != nil && output.LockingScript != nil {
-			script := *output.LockingScript
-
-			// check whether this output is an OP_RETURN with 0 sat value
-			if len(script) > 0 && (script[0] == 0x00 || script[0] == 0x6a) && output.Satoshis == 0 {
-				tx.Outputs[i] = nil
-			} else {
+			if utxo.ShouldStoreOutputAsUTXO(output, creationHeight, s.settings.ChainCfgParams.GenesisActivationHeight) {
 				numberOfActiveOutputs++
+			} else {
+				tx.Outputs[i] = nil
 			}
 		}
 	}
@@ -1473,6 +1631,16 @@ func (s *Store) GetTxInpointsFromExternalStore(ctx context.Context, txHash chain
 
 // sendGetBatch processes a batch of get requests efficiently
 func (s *Store) sendGetBatch(batch []*batchGetItem) {
+	// go-batcher recovers panics raised in this fn, so without re-signalling the
+	// per-item done channels a panic (e.g. a malformed bin tripping an unchecked
+	// type assertion in getTxFromBins) would orphan every waiter in this batch
+	// and leak their goroutines permanently.
+	defer func() {
+		signalBatchPanic(recover(), batch, "sendGetBatch", s.logger, func(it *batchGetItem, err error) {
+			trySignal(it.done, batchGetItemData{Err: err})
+		})
+	}()
+
 	items := make([]*utxo.UnresolvedMetaData, 0, len(batch))
 
 	for idx, item := range batch {
@@ -1483,30 +1651,19 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 		})
 	}
 
-	retries := 0
+	// BatchDecorate already retries internally up to the batch policy MaxRetries
+	// within its TotalTimeout. The previous extra 3x retry-with-sleep loop here
+	// stacked on top of that (worst case ~3 x TotalTimeout, observed ~15m),
+	// turning a transient stall into a multi-minute pin of every waiting
+	// submitter. Make a single attempt and surface the error.
+	if err := s.BatchDecorate(s.ctx, items); err != nil {
+		s.logger.Errorf("failed to get batch of txmeta: %v", err)
 
-	for {
-		if err := s.BatchDecorate(s.ctx, items); err != nil {
-			if retries < 3 {
-				retries++
-
-				s.logger.Errorf("failed to get batch of txmeta: %v", err)
-				time.Sleep(time.Duration(retries) * time.Second)
-
-				continue
-			}
-
-			// mark all items as errored
-			for _, bItem := range batch {
-				bItem.done <- batchGetItemData{
-					Err: err,
-				}
-			}
-
-			return
+		for _, bItem := range batch {
+			bItem.done <- batchGetItemData{Err: err}
 		}
 
-		break
+		return
 	}
 
 	for _, item := range items {

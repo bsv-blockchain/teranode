@@ -33,6 +33,7 @@ import (
 func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string) (*catchup.Result, *model.BlockHeader, error) {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "catchupGetBlockHeaders",
 		tracing.WithParentStat(u.stats),
+		tracing.WithStartTime(), // startTime is read back from ctx below
 		tracing.WithLogMessage(u.logger, "[catchup][%s] fetching headers up to %s from peer %s", blockUpTo.Hash().String(), baseURL, peerID),
 		tracing.WithContextTimeout(time.Duration(u.settings.BlockValidation.CatchupOperationTimeout)*time.Second),
 	)
@@ -67,9 +68,17 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		}
 	}
 
-	// Check peer reputation via P2P service
+	// Check peer reputation via P2P service. A peer the P2P service has already
+	// flagged as malicious must not be used for catchup at all — abort before
+	// fetching or processing any headers from it.
 	if u.isPeerMalicious(ctx, identifier) {
-		u.logger.Warnf("[catchup][%s] peer %s is marked as malicious by P2P service", blockUpTo.Hash().String(), identifier)
+		u.logger.Warnf("[catchup][%s] aborting catchup: peer %s is marked as malicious by P2P service", blockUpTo.Hash().String(), identifier)
+
+		if circuitBreaker != nil {
+			circuitBreaker.RecordFailure()
+		}
+
+		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", identifier)
 	}
 
 	// Check if target block already exists
@@ -192,9 +201,18 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			u.logger.Warnf("[catchup][%s] No peerID provided for peer at %s", blockUpTo.Hash().String(), baseURL)
 			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No peerID provided"), nil, errors.NewProcessingError("[catchup][%s] peerID is required but not provided for peer %s", blockUpTo.Hash().String(), baseURL)
 		}
-		// Check if peer is marked as malicious by P2P service
+		// Check if peer is marked as malicious by P2P service. The peer can be
+		// flagged mid-catchup (e.g. based on behaviour reported during earlier
+		// iterations), so abort as soon as we see the flag rather than fetching
+		// the next header batch.
 		if u.isPeerMalicious(ctx, identifier) {
-			u.logger.Warnf("[catchup][%s] peer %s is marked as malicious by P2P service, should skip catchup", chainTipHash.String(), baseURL)
+			u.logger.Warnf("[catchup][%s] aborting catchup: peer %s is marked as malicious by P2P service", chainTipHash.String(), identifier)
+
+			if circuitBreaker != nil {
+				circuitBreaker.RecordFailure()
+			}
+
+			return catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", identifier)
 		}
 
 		// Create context with iteration timeout to prevent slow-loris attacks

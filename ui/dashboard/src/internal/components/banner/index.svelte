@@ -1,5 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  export let text = ''
+  let { text = '' }: { text?: string } = $props()
 </script>
 
 <div class="tui-banner">

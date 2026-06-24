@@ -107,13 +107,14 @@ func createNode(t *testing.T, _ context.Context, nodeNumber int) *daemon.TestDae
 	storeType := "aerospike"
 
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		EnableP2P:            true,
-		EnableValidator:      true,
-		EnableBlockPersister: true, // Enable block persister for integrity verification
-		UTXOStoreType:        storeType,
-		SkipRemoveDataDir:    nodeNumber > 1, // Only first node cleans the shared parent data dir; subsequent nodes share it
-		EnableDebugLogging:   true,
+		EnableRPC:              true,
+		EnableP2P:              true,
+		EnableValidator:        true,
+		EnableBlockPersister:   true, // Enable block persister for integrity verification
+		UTXOStoreType:          storeType,
+		SkipRemoveDataDir:      nodeNumber > 1, // Only first node cleans the shared parent data dir; subsequent nodes share it
+		EnableDebugLogging:     true,
+		WaitForHealthReadiness: true,
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),
 			test.MultiNodeSettings(nodeNumber),

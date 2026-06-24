@@ -483,9 +483,8 @@ In addition to the core methods described in the Functionality section, the Bloc
 
 - **SendFSMEvent**: Sends an event to the blockchain FSM to trigger state transitions.
 - **GetFSMCurrentState**: Retrieves the current state of the FSM.
-- **WaitFSMToTransitionToGivenState**: Waits for FSM to reach a specific state.
 - **WaitUntilFSMTransitionFromIdleState**: Waits for FSM to transition from IDLE state.
-- **Run, CatchUpBlocks, LegacySync, Idle**: Transitions the service to specific operational modes.
+- **Run, CatchUpBlocks, Idle**: Transitions the service to specific operational modes.
 
 #### State Management
 
@@ -512,7 +511,7 @@ The Blockchain Service uses a Finite State Machine (FSM) to manage its operation
 
 For a comprehensive understanding of the Blockchain Service's FSM implementation, please refer to the dedicated [State Management in Teranode](../architecture/stateManagement.md) documentation, which covers:
 
-- FSM states (Idle, Running, CatchingBlocks, LegacySyncing)
+- FSM states (Idle, Running, CatchingBlocks)
 - State transitions and events
 - Allowed operations in each state
 - FSM initialization and access methods
@@ -521,9 +520,8 @@ For a comprehensive understanding of the Blockchain Service's FSM implementation
 The FSM implementation in the Blockchain Service exposes several gRPC methods for state management:
 
 - **GetFSMCurrentState**: Returns the current state of the FSM
-- **WaitFSMToTransitionToGivenState**: Waits for the FSM to reach a specific state
 - **SendFSMEvent**: Sends events to trigger state transitions
-- **Run, CatchUpBlocks, LegacySync, Idle**: Convenience methods that delegate to SendFSMEvent
+- **Run, CatchUpBlocks, Idle**: Convenience methods that delegate to SendFSMEvent
 
 The FSM ensures that the service only performs operations appropriate for its current state, providing isolation and predictable behavior.
 

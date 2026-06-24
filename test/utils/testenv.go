@@ -28,7 +28,7 @@ import (
 	"github.com/bsv-blockchain/teranode/test/utils/tconfig"
 	"github.com/bsv-blockchain/teranode/test/utils/tstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 	"google.golang.org/grpc"
@@ -142,9 +142,9 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 
 func (t *TeranodeTestEnv) setupSharedStorageClient() error {
 	teststorageServiceName := "teststorage"
-	teststorageInternalPort := nat.Port(fmt.Sprintf("%d/tcp", 50051))
+	teststorageInternalPort := fmt.Sprintf("%d/tcp", 50051)
 	teststorageMappedPort, _ := t.GetMappedPort(teststorageServiceName, teststorageInternalPort)
-	teststorageURL := fmt.Sprintf("localhost:%d", teststorageMappedPort.Int())
+	teststorageURL := fmt.Sprintf("localhost:%d", int(teststorageMappedPort.Num()))
 
 	conn, err := grpc.NewClient(teststorageURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -263,7 +263,7 @@ func (t *TeranodeTestEnv) getServiceAddress(serviceName string, port string) (st
 		return fmt.Sprintf("%s:%s", serviceName, port), nil
 	}
 	// In local mode, use localhost with mapped ports
-	mappedPort, err := t.GetMappedPort(serviceName, nat.Port(port))
+	mappedPort, err := t.GetMappedPort(serviceName, port)
 	if err != nil {
 		t.Logger.Errorf("Failed to get mapped port: %v", err)
 		return "", err
@@ -377,7 +377,7 @@ func (t *TeranodeTestEnv) setupPropagationClient(node *TeranodeTestClient) error
 			port := parts[1]
 
 			// Get mapped port for this node's grpc port
-			mappedPort, err := t.GetMappedPort(nodeName, nat.Port(fmt.Sprintf("%s/tcp", port)))
+			mappedPort, err := t.GetMappedPort(nodeName, fmt.Sprintf("%s/tcp", port))
 			if err != nil {
 				return errors.NewConfigurationError("error getting mapped port:", err)
 			}
@@ -418,14 +418,14 @@ func (t *TeranodeTestEnv) setupBlobStores() error {
 
 		// Set the blob blockstore client
 		blobblockstoreServiceName := fmt.Sprintf("blobblockstore%v", i+1)
-		blobblockstoreInternalPort := nat.Port(fmt.Sprintf("%d/tcp", 8080))
+		blobblockstoreInternalPort := fmt.Sprintf("%d/tcp", 8080)
 		blobblockstoreMappedPort, err := t.GetMappedPort(blobblockstoreServiceName, blobblockstoreInternalPort)
 
 		if err != nil {
 			return err
 		}
 
-		blobBlockstoreURL := fmt.Sprintf("localhost:%d", blobblockstoreMappedPort.Int())
+		blobBlockstoreURL := fmt.Sprintf("localhost:%d", int(blobblockstoreMappedPort.Num()))
 		bbURL, err := url.Parse(fmt.Sprintf("http://%v", blobBlockstoreURL))
 
 		if err != nil {
@@ -443,14 +443,14 @@ func (t *TeranodeTestEnv) setupBlobStores() error {
 
 		// Set the blob subtree client
 		blobSubtreestoreServiceName := fmt.Sprintf("blobsubtreestore%v", i+1)
-		blobSubtreestoreInternalPort := nat.Port(fmt.Sprintf("%d/tcp", 8080))
+		blobSubtreestoreInternalPort := fmt.Sprintf("%d/tcp", 8080)
 		blobSubtreestoreMappedPort, err := t.GetMappedPort(blobSubtreestoreServiceName, blobSubtreestoreInternalPort)
 
 		if err != nil {
 			return err
 		}
 
-		blobSubtreestoreURL := fmt.Sprintf("localhost:%d", blobSubtreestoreMappedPort.Int())
+		blobSubtreestoreURL := fmt.Sprintf("localhost:%d", int(blobSubtreestoreMappedPort.Num()))
 		bsURL, err := url.Parse(fmt.Sprintf("http://%v", blobSubtreestoreURL))
 
 		if err != nil {
@@ -492,7 +492,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		aerospikePort := hostParts[1]
 
 		// Get the mapped port for the aerospike instance
-		mappedPort, err := t.GetMappedPort(aerospikeHost, nat.Port(aerospikePort+"/tcp"))
+		mappedPort, err := t.GetMappedPort(aerospikeHost, aerospikePort+"/tcp")
 		if err != nil {
 			t.Logger.Errorf("Failed to get mapped port for %s: %v", aerospikeHost, err)
 			return err
@@ -545,7 +545,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		postgresPort := hostParts[1]
 
 		// Get the mapped port for the postgres instance
-		mappedPort, err = t.GetMappedPort(postgresHost, nat.Port(postgresPort+"/tcp"))
+		mappedPort, err = t.GetMappedPort(postgresHost, postgresPort+"/tcp")
 		if err != nil {
 			t.Logger.Errorf("Failed to get mapped port for %s: %v", postgresHost, err)
 			return err
@@ -590,22 +590,22 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 }
 
 // GetMappedPort retrieves the mapped port for a service running in Docker Compose.
-func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port nat.Port) (nat.Port, error) {
+func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port string) (network.Port, error) {
 	if t.Compose != nil {
 		node, err := t.Compose.ServiceContainer(t.Context, nodeName)
 		if err != nil {
-			return "", err
+			return network.Port{}, err
 		}
 
 		mappedPort, err := node.MappedPort(t.Context, port)
 		if err != nil {
-			return "", err
+			return network.Port{}, err
 		}
 
 		return mappedPort, nil
 	}
 
-	return "", nil
+	return network.Port{}, nil
 }
 
 // StopDockerNodes stops the Docker Compose services and removes volumes.

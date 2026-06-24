@@ -35,7 +35,10 @@
 package utxo
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"sort"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -56,6 +59,75 @@ const ReAssignedUtxoSpendableAfterBlocks = 1_000
 type BlockState struct {
 	Height     uint32 // Current block height
 	MedianTime uint32 // Median time of recent blocks
+}
+
+// ConflictIntentKind identifies the direction of a conflict-resolution
+// operation recorded in the write-ahead log.
+type ConflictIntentKind string
+
+const (
+	// ConflictIntentForward records a ProcessConflicting invocation.
+	ConflictIntentForward ConflictIntentKind = "forward"
+
+	// ConflictIntentReverse records a ReverseProcessConflicting invocation.
+	ConflictIntentReverse ConflictIntentKind = "reverse"
+)
+
+// ConflictIntent is a write-ahead-log record describing one in-flight
+// conflict-resolution operation (ProcessConflicting or
+// ReverseProcessConflicting). It is persisted durably BEFORE the operation's
+// first state mutation and removed once the operation's terminal step
+// completes, so a process kill between any two steps can be detected and the
+// operation replayed on restart. See ProcessConflicting / ReverseProcessConflicting.
+type ConflictIntent struct {
+	// Kind is the operation direction: forward = ProcessConflicting,
+	// reverse = ReverseProcessConflicting.
+	Kind ConflictIntentKind
+
+	// BlockHeight is the block height the operation was invoked with.
+	BlockHeight uint32
+
+	// BlockHash is the hash of the block whose movement triggered the operation
+	// — the moved-forward block for a forward intent, the moved-back block for a
+	// reverse intent. Startup replay gates on this block's chain membership so a
+	// stale intent (whose block was reorged out from under it) is discarded rather
+	// than blindly re-applied, which would undo a later, valid reorg.
+	BlockHash chainhash.Hash
+
+	// TxHashes is the operation's input hash slice — conflictingTxHashes for
+	// forward, demotedTxHashes for reverse.
+	TxHashes []chainhash.Hash
+
+	// StartedAt is the unix-nanosecond timestamp the intent was recorded.
+	StartedAt int64
+}
+
+// IntentID derives a deterministic identifier for the intent from its kind,
+// block hash, block height and the (sorted) set of tx hashes. Two invocations
+// with the same (kind, block, height, hashes) yield the same id, which makes
+// BeginConflictIntent idempotent across a crash-retry of the same operation
+// and lets startup replay deduplicate naturally. The hash ordering is
+// normalised so callers need not pre-sort.
+func (ci ConflictIntent) IntentID() chainhash.Hash {
+	sorted := make([]chainhash.Hash, len(ci.TxHashes))
+	copy(sorted, ci.TxHashes)
+	sort.Slice(sorted, func(i, j int) bool {
+		return bytes.Compare(sorted[i][:], sorted[j][:]) < 0
+	})
+
+	buf := make([]byte, 0, len(ci.Kind)+chainhash.HashSize+4+len(sorted)*chainhash.HashSize)
+	buf = append(buf, []byte(ci.Kind)...)
+	buf = append(buf, ci.BlockHash[:]...)
+
+	var heightBytes [4]byte
+	binary.BigEndian.PutUint32(heightBytes[:], ci.BlockHeight)
+	buf = append(buf, heightBytes[:]...)
+
+	for i := range sorted {
+		buf = append(buf, sorted[i][:]...)
+	}
+
+	return chainhash.HashH(buf)
 }
 
 // Spend represents a UTXO spending operation, containing both the UTXO being spent
@@ -127,6 +199,22 @@ func (s *Spend) Clone() *Spend {
 type IgnoreFlags struct {
 	IgnoreConflicting bool
 	IgnoreLocked      bool
+}
+
+// ConflictingChildRemoval identifies one (parent, child) pair that should be
+// scrubbed from the parent's conflictingChildren list.
+// Used with utxo.Store.RemoveFromConflictingChildren.
+type ConflictingChildRemoval struct {
+	ParentHash *chainhash.Hash
+	ChildHash  *chainhash.Hash
+}
+
+// BlockIDsRemoval identifies the set of block IDs to strip from one
+// transaction's blockIDs membership.
+// Used with utxo.Store.RemoveBlockIDs.
+type BlockIDsRemoval struct {
+	TxHash   *chainhash.Hash
+	BlockIDs []uint32
 }
 
 var (
@@ -231,6 +319,26 @@ type Store interface {
 	// Returns status code, status message and any error encountered.
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
+	// Close drains any in-flight batched writes (Create, Spend, Get, Unlock,
+	// or any other batched operations the implementation owns) and releases
+	// backing resources (connection pools, file handles, batcher workers).
+	//
+	// After Close returns, no further Store operations are valid.
+	//
+	// Unless the supplied context expires first, implementations MUST wait
+	// for outstanding batched writes to complete before returning. Returning
+	// before pending writes have committed risks silently losing UTXO state:
+	// callers (block validation, legacy sync) will have already received
+	// successful responses for those writes and will have committed the
+	// parent block, but on restart the UTXOs will be missing — breaking
+	// subsequent blocks that spend them.
+	//
+	// The context bounds the drain. If it expires before the drain completes,
+	// implementations should return its error; the underlying drain and
+	// resource release may continue best-effort in the background, but the
+	// caller must treat a context error as "drain not confirmed complete".
+	Close(ctx context.Context) error
+
 	// Create stores a new transaction's outputs as UTXOs and returns associated metadata.
 	// The blockHeight parameter is used to determine coinbase maturity.
 	// Additional options can be specified using CreateOption functions.
@@ -256,7 +364,15 @@ type Store interface {
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
-	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
+	// SetMinedMulti marks transactions as mined in the block described by minedBlockInfo.
+	//
+	// Postcondition (when minedBlockInfo.UnsetMined is false and a nil error is returned):
+	//   - Every hash in `hashes` MUST appear as a key in the returned map.
+	//   - Every returned slice MUST contain minedBlockInfo.BlockID.
+	// Implementations that cannot prove this MUST return a non-nil error.
+	//
+	// When minedBlockInfo.UnsetMined is true, missing or empty entries are tolerated:
+	// the call may no-op for transactions that no longer exist.
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error)
 
 	// GetUnminedTxIterator returns an iterator for unmined transactions in the store.
@@ -328,8 +444,52 @@ type Store interface {
 	// SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
 	SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
 
+	// RemoveFromConflictingChildren removes each child hash from its parent's
+	// conflictingChildren list. Used by repair tooling when child transactions
+	// are deleted and must no longer appear in any surviving parent's
+	// conflictingChildren field. The call is idempotent — missing parents,
+	// missing list bins, and missing list entries are silently tolerated.
+	// Implementations must use the backend's batch API (e.g. Aerospike
+	// BatchOperate) so large removals stay fast.
+	RemoveFromConflictingChildren(ctx context.Context, removals []ConflictingChildRemoval) error
+
+	// RemoveBlockIDs trims the supplied block IDs from each transaction's
+	// blockIDs membership without deleting the transaction record. Used by
+	// repair tooling when transactions are referenced by multiple blocks and
+	// only a subset is being removed. Idempotent.
+	// Implementations must batch across removals using the backend's batch
+	// API.
+	RemoveBlockIDs(ctx context.Context, removals []BlockIDsRemoval) error
+
+	// GetConflictingTxIterator returns an iterator over transactions currently
+	// marked conflicting=true. Complements GetUnminedTxIterator, which filters
+	// out conflicting records. Used by repair tooling to purge losing-side
+	// transactions during a rewind.
+	GetConflictingTxIterator() (UnminedTxIterator, error)
+
 	// SetLocked marks transactions as locked for spending.
 	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
+
+	// conflict-resolution write-ahead log (crash safety for ProcessConflicting /
+	// ReverseProcessConflicting — see #861)
+
+	// BeginConflictIntent durably records a conflict-resolution intent BEFORE the
+	// operation's first state mutation. It MUST be committed durably before
+	// returning. Recording the same intent id more than once is idempotent (the
+	// id is deterministic over kind+height+hashes), so a crash-retry of the same
+	// operation does not create a duplicate. A non-nil error MUST abort the
+	// caller — the operation must not proceed without a durable intent record.
+	BeginConflictIntent(ctx context.Context, intent ConflictIntent) error
+
+	// CompleteConflictIntent deletes the intent record identified by intentID
+	// after the operation's terminal step has committed. Removing an
+	// already-absent intent is idempotent (no error).
+	CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error
+
+	// PendingConflictIntents returns every intent that was begun but not yet
+	// completed — i.e. operations that may have been interrupted by a crash.
+	// Called once at BlockAssembler startup to drive replay.
+	PendingConflictIntents(ctx context.Context) ([]ConflictIntent, error)
 
 	// MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.
 	// When onLongestChain is true, the unminedSince field is unset (transaction is mined).

@@ -654,3 +654,137 @@ broadcastComplete:
 		// Don't fail the test - the important part is demonstrating the DoS vulnerability is fixed
 	}
 }
+
+// TestHandleWebSocket_PerConnectionContext is a regression test for issue #4573.
+// A single failed WebSocket upgrade must not cancel the shared notification
+// processor and starve all other connected clients.
+func TestHandleWebSocket_PerConnectionContext(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode: settings.ListenModeFull,
+				EnableNAT:  false,
+			},
+		},
+	}
+
+	notificationCh := make(chan *notificationMsg, 1)
+	handler := s.HandleWebSocket(notificationCh)
+
+	e := echo.New()
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := e.NewContext(r, w)
+		_ = handler(c)
+	}))
+	defer httpServer.Close()
+
+	resp, err := http.Get(httpServer.URL)
+	require.NoError(t, err, "Plain HTTP GET should fail upgrade but not error at the HTTP layer")
+	require.NotNil(t, resp)
+	_ = resp.Body.Close()
+	require.NotEqual(t, http.StatusSwitchingProtocols, resp.StatusCode, "Upgrade should have failed")
+
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "Second connection should still upgrade after the first one's upgrade failed")
+	defer ws.Close()
+
+	require.NoError(t, ws.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, initialMessage, err := ws.ReadMessage()
+	require.NoError(t, err, "Should receive initial node_status; processor must still be alive")
+
+	var initial notificationMsg
+	require.NoError(t, json.Unmarshal(initialMessage, &initial))
+	require.Equal(t, "node_status", initial.Type)
+
+	notificationCh <- &notificationMsg{Type: "post_failed_upgrade", BaseURL: baseURL}
+
+	require.NoError(t, ws.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, message, err := ws.ReadMessage()
+	require.NoError(t, err, "Notification must still be delivered after the prior upgrade failure")
+
+	var received notificationMsg
+	require.NoError(t, json.Unmarshal(message, &received))
+	require.Equal(t, "post_failed_upgrade", received.Type)
+	require.Equal(t, baseURL, received.BaseURL)
+}
+
+// TestBroadcast_BoundedPool verifies the broadcast goroutine pool caps in-flight goroutines.
+// It overrides maxConcurrentBroadcasts to a small value, then submits 4x that many unresponsive
+// (unbuffered, unread) channels. Every channel hits the 1s send-timeout. With the cap, total
+// wall-clock time is ceil(channels/poolSize) * 1s; without it, all timeouts run concurrently
+// and total wall-clock is ~1s. The lower bound asserts the semaphore actually serialises work.
+func TestBroadcast_BoundedPool(t *testing.T) {
+	originalPoolSize := maxConcurrentBroadcasts
+	defer func() { maxConcurrentBroadcasts = originalPoolSize }()
+	maxConcurrentBroadcasts = 2
+
+	cm := newClientChannelMap()
+
+	const numChannels = 8
+	channels := make([]chan []byte, numChannels)
+
+	for i := 0; i < numChannels; i++ {
+		channels[i] = make(chan []byte)
+		cm.add(channels[i])
+	}
+
+	require.Equal(t, numChannels, cm.count(), "All channels should be registered")
+
+	logger := &ulogger.TestLogger{}
+
+	startTime := time.Now()
+	cm.broadcast([]byte("test"), logger)
+	elapsed := time.Since(startTime)
+
+	expectedMin := time.Duration(numChannels/maxConcurrentBroadcasts) * time.Second
+	expectedMax := expectedMin + 2*time.Second
+
+	require.GreaterOrEqual(t, elapsed, expectedMin,
+		"Broadcast finished too quickly (%v); pool of %d should have serialised %d unresponsive channels into batches taking ~%v",
+		elapsed, maxConcurrentBroadcasts, numChannels, expectedMin)
+	require.LessOrEqual(t, elapsed, expectedMax,
+		"Broadcast took too long (%v); expected at most %v", elapsed, expectedMax)
+
+	require.Equal(t, 0, cm.count(), "All timed-out channels should be removed")
+
+	t.Logf("Broadcast of %d unresponsive channels with pool=%d completed in %v (expected %v..%v)",
+		numChannels, maxConcurrentBroadcasts, elapsed, expectedMin, expectedMax)
+}
+
+// TestBroadcast_NonPositivePoolSizeDoesNotDeadlock verifies that a misconfigured
+// (zero or negative) maxConcurrentBroadcasts is clamped to a usable value rather
+// than deadlocking the broadcast loop. With cap=0, sem <- struct{}{} on an
+// unbuffered channel would block forever because the receiver runs only after
+// the send returns.
+func TestBroadcast_NonPositivePoolSizeDoesNotDeadlock(t *testing.T) {
+	originalPoolSize := maxConcurrentBroadcasts
+	defer func() { maxConcurrentBroadcasts = originalPoolSize }()
+	maxConcurrentBroadcasts = 0
+
+	cm := newClientChannelMap()
+
+	const numChannels = 3
+	for i := 0; i < numChannels; i++ {
+		cm.add(make(chan []byte, 1)) // buffered so sends succeed immediately
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		cm.broadcast([]byte("test"), &ulogger.TestLogger{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("broadcast deadlocked with maxConcurrentBroadcasts <= 0")
+	}
+
+	require.Equal(t, numChannels, cm.count(), "responsive channels should still be registered")
+}

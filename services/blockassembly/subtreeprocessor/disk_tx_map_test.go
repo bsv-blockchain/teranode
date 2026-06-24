@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/require"
@@ -158,9 +159,18 @@ func TestDiskTxMap_ConcurrentSetIfNotExists(t *testing.T) {
 }
 
 func TestDiskTxMap_SerializationRoundtrip(t *testing.T) {
-	ip := makeInpoints(42)
-	ip.ParentTxHashes = append(ip.ParentTxHashes, chainhash.HashH([]byte("parent1")))
-	ip.Idxs = append(ip.Idxs, []uint32{0, 1})
+	parent := chainhash.HashH([]byte("parent1"))
+
+	in0 := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, in0.PreviousTxIDAdd(&parent))
+	in1 := &bt.Input{PreviousTxOutIndex: 1}
+	require.NoError(t, in1.PreviousTxIDAdd(&parent))
+
+	built, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in0, in1})
+	require.NoError(t, err)
+
+	built.SubtreeIndex = 42
+	ip := &built
 
 	serialized := serializeTxMapValue(ip)
 	deserialized := deserializeTxMapValue(serialized)

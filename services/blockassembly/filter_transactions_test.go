@@ -64,11 +64,9 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 					Fee:         1000,
 					SizeInBytes: 250,
 				},
-				TxInpoints: &subtree.TxInpoints{
-					ParentTxHashes: []chainhash.Hash{{}}, // Empty hash means mined parent
-					Idxs:           [][]uint32{{0}},
-				},
-				CreatedAt: i,
+				// Empty hash means mined parent
+				TxInpoints: singleParentInpointsPtr(chainhash.Hash{}, 0),
+				CreatedAt:  i,
 			}
 			unminedTxs = append(unminedTxs, tx)
 		}
@@ -88,11 +86,8 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 					Fee:         1000,
 					SizeInBytes: 250,
 				},
-				TxInpoints: &subtree.TxInpoints{
-					ParentTxHashes: []chainhash.Hash{parentTxHashes[i]},
-					Idxs:           [][]uint32{{0}},
-				},
-				CreatedAt: 50 + i,
+				TxInpoints: singleParentInpointsPtr(parentTxHashes[i], 0),
+				CreatedAt:  50 + i,
 			}
 			unminedTxs = append(unminedTxs, tx)
 		}
@@ -109,11 +104,9 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 				Fee:         1000,
 				SizeInBytes: 250,
 			},
-			TxInpoints: &subtree.TxInpoints{
-				ParentTxHashes: []chainhash.Hash{childTxHashes[0]}, // Depends on tx at index 50
-				Idxs:           [][]uint32{{0}},
-			},
-			CreatedAt: 100,
+			// Depends on tx at index 50
+			TxInpoints: singleParentInpointsPtr(childTxHashes[0], 0),
+			CreatedAt:  100,
 		}
 		unminedTxs = append(unminedTxs, grandchildTx)
 
@@ -224,11 +217,8 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 				Fee:         1000,
 				SizeInBytes: 250,
 			},
-			TxInpoints: &subtree.TxInpoints{
-				ParentTxHashes: []chainhash.Hash{parentHash},
-				Idxs:           [][]uint32{{0}},
-			},
-			CreatedAt: 0,
+			TxInpoints: singleParentInpointsPtr(parentHash, 0),
+			CreatedAt:  0,
 		}
 
 		// Parent transaction (index 1) - no unmined parents
@@ -238,11 +228,9 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 				Fee:         1000,
 				SizeInBytes: 250,
 			},
-			TxInpoints: &subtree.TxInpoints{
-				ParentTxHashes: []chainhash.Hash{{}}, // Empty hash = mined parent
-				Idxs:           [][]uint32{{0}},
-			},
-			CreatedAt: 1,
+			// Empty hash = mined parent
+			TxInpoints: singleParentInpointsPtr(chainhash.Hash{}, 0),
+			CreatedAt:  1,
 		}
 
 		unminedTxs := []*utxo.UnminedTransaction{childTx, parentTx}
@@ -336,11 +324,8 @@ func TestValidateParentChain_RejectsChildOfConflictingParent(t *testing.T) {
 			Fee:         1000,
 			SizeInBytes: 250,
 		},
-		TxInpoints: &subtree.TxInpoints{
-			ParentTxHashes: []chainhash.Hash{parentHash},
-			Idxs:           [][]uint32{{0}},
-		},
-		CreatedAt: 1,
+		TxInpoints: singleParentInpointsPtr(parentHash, 0),
+		CreatedAt:  1,
 	}
 	unminedTxs := []*utxo.UnminedTransaction{childTx}
 
@@ -408,10 +393,7 @@ func TestValidateParentChain_BatchDecorateRequestsConflicting(t *testing.T) {
 			Fee:         1000,
 			SizeInBytes: 250,
 		},
-		TxInpoints: &subtree.TxInpoints{
-			ParentTxHashes: []chainhash.Hash{parentHash},
-			Idxs:           [][]uint32{{0}},
-		},
+		TxInpoints: singleParentInpointsPtr(parentHash, 0),
 	}
 
 	var capturedFields []fields.FieldName
@@ -486,17 +468,17 @@ func TestValidateParentChain_RecursivelyFiltersConflictingDescendants(t *testing
 
 	childB := &utxo.UnminedTransaction{
 		Node:       &subtree.Node{Hash: bHash, Fee: 1000, SizeInBytes: 250},
-		TxInpoints: &subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{conflictingParentHash}, Idxs: [][]uint32{{0}}},
+		TxInpoints: singleParentInpointsPtr(conflictingParentHash, 0),
 		CreatedAt:  1,
 	}
 	childC := &utxo.UnminedTransaction{
 		Node:       &subtree.Node{Hash: cHash, Fee: 1000, SizeInBytes: 250},
-		TxInpoints: &subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{bHash}, Idxs: [][]uint32{{0}}},
+		TxInpoints: singleParentInpointsPtr(bHash, 0),
 		CreatedAt:  2,
 	}
 	childD := &utxo.UnminedTransaction{
 		Node:       &subtree.Node{Hash: dHash, Fee: 1000, SizeInBytes: 250},
-		TxInpoints: &subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{cHash}, Idxs: [][]uint32{{0}}},
+		TxInpoints: singleParentInpointsPtr(cHash, 0),
 		CreatedAt:  3,
 	}
 
@@ -591,12 +573,12 @@ func TestValidateParentChain_RecursivelyFiltersOtherInvalidDescendants(t *testin
 
 	childB := &utxo.UnminedTransaction{
 		Node:       &subtree.Node{Hash: bHash, Fee: 1000, SizeInBytes: 250},
-		TxInpoints: &subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{missingParentHash}, Idxs: [][]uint32{{0}}},
+		TxInpoints: singleParentInpointsPtr(missingParentHash, 0),
 		CreatedAt:  1,
 	}
 	childC := &utxo.UnminedTransaction{
 		Node:       &subtree.Node{Hash: cHash, Fee: 1000, SizeInBytes: 250},
-		TxInpoints: &subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{bHash}, Idxs: [][]uint32{{0}}},
+		TxInpoints: singleParentInpointsPtr(bHash, 0),
 		CreatedAt:  2,
 	}
 

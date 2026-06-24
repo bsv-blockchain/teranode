@@ -424,7 +424,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	require.Equal(t, &meta.Data{
 		Fee:         1,
 		SizeInBytes: 1,
-		TxInpoints:  subtreepkg.TxInpoints{ParentTxHashes: nil, Idxs: nil},
+		TxInpoints:  subtreepkg.TxInpoints{},
 		BlockIDs:    []uint32{},
 	}, data)
 

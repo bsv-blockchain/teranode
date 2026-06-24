@@ -1,26 +1,35 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { TypoVariant } from './types'
   import type { TypoVariantType } from './types'
 
-  export let testId: string | undefined | null = null
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    variant = TypoVariant.heading,
+    size = 1,
+    color = null,
+    html = false,
+    value = '',
+    wrap = true,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    variant?: TypoVariantType
+    size?: number
+    color?: string | null
+    html?: boolean
+    value?: any
+    wrap?: boolean
+  } = $props()
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
-
-  export let style = ''
-
-  export let variant: TypoVariantType = TypoVariant.heading
-  export let size = 1
-  export let color: string | null = null
-  export let html = false
-  export let value: any = ''
-  export let wrap = true
-
-  let cssVars: string[] = []
-  $: {
-    let varStr = `--typo-${variant}`
-    let sizeStr = `${varStr}-${size}`
-    cssVars = [
+  const cssVars: string[] = $derived.by(() => {
+    const varStr = `--typo-${variant}`
+    const sizeStr = `${varStr}-${size}`
+    return [
       `--color:${color ? color : `var(${varStr}-color)`}`,
       `--font-family:var(${varStr}-font-family)`,
       `--font-weight:var(${varStr}-font-weight)`,
@@ -29,7 +38,7 @@
       `--wrap:${wrap ? 'normal' : 'nowrap'}`,
       `--margin:0`,
     ]
-  }
+  })
 </script>
 
 <span

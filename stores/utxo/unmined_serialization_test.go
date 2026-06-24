@@ -3,6 +3,7 @@ package utxo
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/assert"
@@ -17,10 +18,13 @@ func TestSerializeDeserialize_Roundtrip(t *testing.T) {
 	parentHash, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
 	require.NoError(t, err)
 
-	txInpoints := &subtree.TxInpoints{
-		ParentTxHashes: []chainhash.Hash{*parentHash},
-		Idxs:           [][]uint32{{0}}, // Must match ParentTxHashes length
-	}
+	parentInput := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, parentInput.PreviousTxIDAdd(parentHash))
+
+	txInpointsVal, err := subtree.NewTxInpointsFromInputs([]*bt.Input{parentInput})
+	require.NoError(t, err)
+
+	txInpoints := &txInpointsVal
 
 	original := &UnminedTransaction{
 		Node: &subtree.Node{
@@ -179,10 +183,20 @@ func TestSerializeDeserialize_MultipleParents(t *testing.T) {
 	parent3, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000009")
 	require.NoError(t, err)
 
-	txInpoints := &subtree.TxInpoints{
-		ParentTxHashes: []chainhash.Hash{*parent1, *parent2, *parent3},
-		Idxs:           [][]uint32{{0}, {1}, {2}}, // Must match ParentTxHashes length
+	mkInput := func(parent *chainhash.Hash, vout uint32) *bt.Input {
+		in := &bt.Input{PreviousTxOutIndex: vout}
+		require.NoError(t, in.PreviousTxIDAdd(parent))
+		return in
 	}
+
+	txInpointsVal2, err := subtree.NewTxInpointsFromInputs([]*bt.Input{
+		mkInput(parent1, 0),
+		mkInput(parent2, 1),
+		mkInput(parent3, 2),
+	})
+	require.NoError(t, err)
+
+	txInpoints := &txInpointsVal2
 
 	original := &UnminedTransaction{
 		Node: &subtree.Node{

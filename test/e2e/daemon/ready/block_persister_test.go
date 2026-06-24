@@ -133,19 +133,13 @@ func TestBlockPersister(t *testing.T) {
 	// Phase 4: Verify all blocks are marked as persisted in the database
 	t.Log("Phase 4: Verifying no unpersisted blocks remain...")
 
-	// Give the persister a moment to finish any remaining work
-	time.Sleep(2 * time.Second)
-
-	// Check that there are no unpersisted blocks
-	unpersistedBlocks, err := node.BlockchainClient.GetBlocksNotPersisted(node.Ctx, 100)
-	require.NoError(t, err, "Failed to get unpersisted blocks")
-
-	if len(unpersistedBlocks) > 0 {
-		for _, b := range unpersistedBlocks {
-			t.Logf("  Unpersisted block: height=%d, hash=%s", b.Height, b.Hash().String())
-		}
-	}
-	require.Empty(t, unpersistedBlocks, "All blocks should be persisted, but found %d unpersisted", len(unpersistedBlocks))
+	// Poll until the persister has marked all blocks persisted.
+	var unpersistedBlocks []*model.Block
+	require.Eventually(t, func() bool {
+		var err error
+		unpersistedBlocks, err = node.BlockchainClient.GetBlocksNotPersisted(node.Ctx, 100)
+		return err == nil && len(unpersistedBlocks) == 0
+	}, 15*time.Second, 500*time.Millisecond, "all blocks should be persisted")
 	t.Log("  All blocks are marked as persisted in the database")
 
 	// Phase 5: Verify block data can be retrieved from store and parsed correctly
@@ -443,11 +437,13 @@ func TestBlockPersisterMultipleBlocksSequential(t *testing.T) {
 		currentTx = newTx
 	}
 
-	// Final check: no unpersisted blocks should remain
-	time.Sleep(2 * time.Second) // Give persister time to finish
-	unpersistedBlocks, err := node.BlockchainClient.GetBlocksNotPersisted(node.Ctx, 100)
-	require.NoError(t, err)
-	require.Empty(t, unpersistedBlocks, "All blocks should be persisted")
+	// Final check: poll until no unpersisted blocks remain.
+	var unpersistedBlocks []*model.Block
+	require.Eventually(t, func() bool {
+		var err error
+		unpersistedBlocks, err = node.BlockchainClient.GetBlocksNotPersisted(node.Ctx, 100)
+		return err == nil && len(unpersistedBlocks) == 0
+	}, 15*time.Second, 500*time.Millisecond, "all blocks should be persisted")
 
 	t.Logf("=== Test Passed: All %d blocks persisted correctly ===", numBlocks)
 }

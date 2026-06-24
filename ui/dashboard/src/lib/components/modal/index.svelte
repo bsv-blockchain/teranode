@@ -1,20 +1,31 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import { fade, fly } from 'svelte/transition'
 
-  export let coverCol = 'rgba(40, 41, 51, 0.7)'
-  export let maxContentW = '900px'
-  export let fadeCoverDuration = 200
-  export let flyContent = true
+  let {
+    coverCol = 'rgba(40, 41, 51, 0.7)',
+    maxContentW = '900px',
+    fadeCoverDuration = 200,
+    flyContent = true,
+    children,
+  }: {
+    coverCol?: string
+    maxContentW?: string
+    fadeCoverDuration?: number
+    flyContent?: boolean
+    children?: Snippet
+  } = $props()
 
-  let w
-  let h
+  let w = $state<number>()
+  let h = $state<number>()
 </script>
 
 <div
   class="cover"
   transition:fade={{ duration: fadeCoverDuration }}
-  style:--cover-col-local={coverCol}
-/>
+  style:--cover-col-local={coverCol}></div>
 
 <div
   class="tui-modal"
@@ -26,7 +37,7 @@
   style:--height-local="{h}px"
   style:--max-content-width={maxContentW}
 >
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

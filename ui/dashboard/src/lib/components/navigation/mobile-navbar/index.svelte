@@ -1,9 +1,19 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  export let offsetTop = ''
+  import type { Snippet } from 'svelte'
+
+  let {
+    offsetTop = '',
+    children,
+  }: {
+    offsetTop?: string
+    children?: Snippet
+  } = $props()
 </script>
 
 <div class="tui-mobile-navbar" style:--offset-top={offsetTop}>
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

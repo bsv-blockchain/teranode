@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "data": {
+    "best_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "height": 800000,
+    "chain": "mainnet",
+    "difficulty": 1.0,
+    "median_time": 1700000000,
+    "verification_progress": 1.0
+  }
+}

@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import Table from '$lib/components/table/index.svelte'
   import Pager from '$internal/components/pager/index.svelte'
@@ -11,40 +13,44 @@
 
   const baseKey = 'page.viewer-subtree.txs'
 
-  $: t = $i18n.t
-  $: i18nLocal = { t, baseKey: 'comp.pager' }
+  const t = $derived($i18n.t)
+  const i18nLocal = $derived({ t, baseKey: 'comp.pager' })
 
-  let colDefs: any[] = []
-  $: colDefs = getColDefs(t) || []
+  const colDefs = $derived(getColDefs(t) || [])
 
-  export let subtree: any
-  export let blockHash = ''
+  let {
+    subtree,
+    blockHash = '',
+  }: {
+    subtree: any
+    blockHash?: string
+  } = $props()
 
-  let data: any[] = []
-  let coinbaseTxId = ''
+  let data: any[] = $state([])
+  let coinbaseTxId = $state('')
   let fetchingCoinbase = false
   let fetchedBlockHashes = new Set()
 
-  $: renderCells = getRenderCells(t, blockHash, coinbaseTxId) || {}
+  const renderCells = $derived(getRenderCells(t, blockHash, coinbaseTxId) || {})
 
-  let page = 1
-  let pageSize = 10
-  let totalItems = 0
+  let page = $state(1)
+  let pageSize = $state(10)
+  let totalItems = $state(0)
 
   function onPage(e) {
-    const data = e.detail
+    const data = e
     page = data.value.page
     pageSize = data.value.pageSize
   }
 
-  $: totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
-  $: showPagerNav = totalPages > 1
-  $: showPagerSize = showPagerNav || (totalPages === 1 && data.length > 5)
-  $: showTableFooter = showPagerSize
+  const totalPages = $derived(Math.max(1, Math.ceil(totalItems / pageSize)))
+  const showPagerNav = $derived(totalPages > 1)
+  const showPagerSize = $derived(showPagerNav || (totalPages === 1 && data.length > 5))
+  const showTableFooter = $derived(showPagerSize)
 
-  let variant = 'dynamic'
+  let variant = $state('dynamic')
   function onToggle(e) {
-    const value = e.detail.value
+    const value = e.value
     variant = $tableVariant = value
   }
 
@@ -65,23 +71,29 @@
     }
   }
 
-  $: if (subtree) {
-    fetchData(subtree.expandedData.hash, page, pageSize)
-  }
+  $effect(() => {
+    if (subtree) {
+      fetchData(subtree.expandedData.hash, page, pageSize)
+    }
+  })
 
   // Reset coinbaseTxId when blockHash changes
-  $: if (blockHash) {
-    coinbaseTxId = ''
-  }
+  $effect(() => {
+    if (blockHash) {
+      coinbaseTxId = ''
+    }
+  })
 
-  $: if (
-    blockHash &&
-    blockHash.length === 64 &&
-    !coinbaseTxId &&
-    !fetchedBlockHashes.has(blockHash)
-  ) {
-    fetchCoinbaseId(blockHash)
-  }
+  $effect(() => {
+    if (
+      blockHash &&
+      blockHash.length === 64 &&
+      !coinbaseTxId &&
+      !fetchedBlockHashes.has(blockHash)
+    ) {
+      fetchCoinbaseId(blockHash)
+    }
+  })
 
   async function fetchCoinbaseId(hash) {
     if (fetchingCoinbase || fetchedBlockHashes.has(hash)) return
@@ -107,12 +119,14 @@
   contentPadding="0"
   showFooter={showTableFooter}
 >
-  <div slot="subtitle">
-    {data?.length === 1
-      ? t(`${baseKey}.subtitle_singular`, { count: data?.length || 0 })
-      : t(`${baseKey}.subtitle`, { count: data?.length || 0 })}
-  </div>
-  <svelte:fragment slot="header-tools">
+  {#snippet subtitle()}
+    <div>
+      {data?.length === 1
+        ? t(`${baseKey}.subtitle_singular`, { count: data?.length || 0 })
+        : t(`${baseKey}.subtitle`, { count: data?.length || 0 })}
+    </div>
+  {/snippet}
+  {#snippet headerTools()}
     <Pager
       i18n={i18nLocal}
       expandUp={true}
@@ -125,10 +139,10 @@
         pageSize,
       }}
       hasBoundaryRight={true}
-      on:change={onPage}
+      onchange={onPage}
     />
-    <TableToggle value={variant} on:change={onToggle} />
-  </svelte:fragment>
+    <TableToggle value={variant} onchange={onToggle} />
+  {/snippet}
   <Table
     name="txss"
     {variant}
@@ -147,22 +161,24 @@
     {renderCells}
     getRenderProps={null}
     getRowIconActions={null}
-    on:action={() => {}}
+    onaction={() => {}}
   />
-  <div slot="footer">
-    <Pager
-      i18n={i18nLocal}
-      expandUp={true}
-      {totalItems}
-      showPageSize={showPagerSize}
-      showQuickNav={showPagerNav}
-      showNav={showPagerNav}
-      value={{
-        page,
-        pageSize,
-      }}
-      hasBoundaryRight={true}
-      on:change={onPage}
-    />
-  </div>
+  {#snippet footer()}
+    <div>
+      <Pager
+        i18n={i18nLocal}
+        expandUp={true}
+        {totalItems}
+        showPageSize={showPagerSize}
+        showQuickNav={showPagerNav}
+        showNav={showPagerNav}
+        value={{
+          page,
+          pageSize,
+        }}
+        hasBoundaryRight={true}
+        onchange={onPage}
+      />
+    </div>
+  {/snippet}
 </Card>

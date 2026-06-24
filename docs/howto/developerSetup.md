@@ -226,7 +226,7 @@ Once OrbStack is installed and running, start PostgreSQL with:
 ./scripts/postgres.sh
 ```
 
-> **Note on Kafka**: Development mode uses in-memory Kafka by default (no setup required). For production-like testing with Docker-based Kafka, see [Kafka Settings Reference](../../references/settings/kafka_settings.md). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:
+> **Note on Kafka**: Development mode uses in-memory Kafka by default (no setup required). For production-like testing with Docker-based Kafka, see [Kafka Settings Reference](../references/settings/kafka_settings.md). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:
 >
 > ```bash
 > # Start Aerospike in Docker

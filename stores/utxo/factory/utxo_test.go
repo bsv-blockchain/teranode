@@ -29,6 +29,11 @@ func (m *MockUTXOStore) Health(ctx context.Context, checkLiveness bool) (int, st
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
+func (m *MockUTXOStore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func (m *MockUTXOStore) SetBlockHeight(height uint32) error {
 	args := m.Called(height)
 	return args.Error(0)
@@ -101,6 +106,18 @@ func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (
 	return nil, nil
 }
 
+func (m *MockUTXOStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+
+func (m *MockUTXOStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
+}
+
 func (m *MockUTXOStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
 	return nil, nil
 }
@@ -151,6 +168,18 @@ func (m *MockUTXOStore) SetConflicting(ctx context.Context, txHashes []chainhash
 
 func (m *MockUTXOStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	return nil
+}
+
+func (m *MockUTXOStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	return nil
+}
+
+func (m *MockUTXOStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return nil
+}
+
+func (m *MockUTXOStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	return nil, nil
 }
 
 func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {

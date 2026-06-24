@@ -1,11 +1,12 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  export let value = ''
-  export let statusColor = '#54adff'
+  let { value = '', statusColor = '#54adff' }: { value?: string; statusColor?: string } = $props()
 </script>
 
 {#if value}
   <div class="row" style:--status-color-local={statusColor}>
-    <div class="status" />
+    <div class="status"></div>
     <div class="value">{value}</div>
   </div>
 {:else}

@@ -248,7 +248,7 @@ The admin page (`/admin`) provides administrative operations. **This page requir
 
 **Current State Display:**
 
-- Shows blockchain state: IDLE, RUNNING, CATCHING BLOCKS, LEGACY SYNCING, DISCONNECTED
+- Shows blockchain state: IDLE, RUNNING, CATCHING BLOCKS, DISCONNECTED
 
 **State Transitions:**
 
@@ -257,7 +257,6 @@ The admin page (`/admin`) provides administrative operations. **This page requir
 | RUN | Start blockchain processing |
 | STOP | Stop blockchain (transition to IDLE) |
 | CATCHUPBLOCKS | Enter block catchup mode |
-| LEGACYSYNC | Enter legacy sync mode |
 
 - Dynamic button UI showing available events for current state
 - Custom event submission
@@ -400,7 +399,6 @@ The dashboard connects to these Asset Server endpoints:
 - `POST /fsm/run`: Start blockchain
 - `POST /fsm/idle`: Stop blockchain
 - `POST /fsm/catchup`: Enter catchup mode
-- `POST /fsm/legacysync`: Enter legacy sync mode
 
 **Block Operations:**
 

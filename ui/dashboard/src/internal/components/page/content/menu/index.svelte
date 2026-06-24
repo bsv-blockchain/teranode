@@ -1,14 +1,20 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import { mediaSize, MediaSize } from '$lib/stores/media'
 
-  $: gutterW =
+  let { children }: { children?: Snippet } = $props()
+
+  const gutterW = $derived(
     $mediaSize <= MediaSize.lg
       ? $mediaSize <= MediaSize.sm
         ? $mediaSize <= MediaSize.xs
           ? 16
           : 20
         : 32
-      : 90
+      : 90,
+  )
 
   const marginTop = 15
   const marginBottom = 36
@@ -21,7 +27,7 @@
   style:--margin-bottom={marginBottom + 'px'}
   style:--min-height-local="calc(100% - {marginTop + marginBottom}px - var(--footer-height, 0px))"
 >
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

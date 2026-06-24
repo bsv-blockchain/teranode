@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -37,10 +40,13 @@ type HTTP struct {
 	logger              ulogger.Logger
 	settings            *settings.Settings
 	repository          repository.Interface
+	mainChainCache      *mainChainCache
 	blockAssemblyClient blockassembly.ClientI
 	e                   *echo.Echo
 	startTime           time.Time
 	privKey             crypto.PrivKey
+	peerAuth            *peerAuthVerifier
+	rateLimiters        []*tieredRateLimiter
 }
 
 // New creates and configures a new HTTP server instance with all routes and middleware.
@@ -123,6 +129,44 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.HideBanner = true
 	e.HidePort = true
 
+	// Configure real IP extraction for reverse proxy deployments. When
+	// asset_trustedProxyCIDRs is non-empty but no valid CIDRs are parsed,
+	// fail loudly rather than silently falling back to "trust all private
+	// ranges" — operator typos must not weaken the trust boundary.
+	if tSettings.Asset.TrustedProxyCIDRs != "" {
+		var trustOpts []echo.TrustOption
+		var parseErrors []string
+		for _, cidrStr := range strings.Split(tSettings.Asset.TrustedProxyCIDRs, "|") {
+			cidrStr = strings.TrimSpace(cidrStr)
+			if cidrStr == "" {
+				continue
+			}
+			_, ipNet, err := net.ParseCIDR(cidrStr)
+			if err != nil {
+				parseErrors = append(parseErrors, fmt.Sprintf("%q (%v)", cidrStr, err))
+				continue
+			}
+			trustOpts = append(trustOpts, echo.TrustIPRange(ipNet))
+		}
+		if len(trustOpts) == 0 {
+			return nil, errors.NewConfigurationError(
+				"[Asset] asset_trustedProxyCIDRs is set but no valid CIDRs were parsed: %s",
+				strings.Join(parseErrors, ", "),
+			)
+		}
+		if len(parseErrors) > 0 {
+			// Some valid, some invalid: still fail. Mixed input is almost
+			// always a typo and silently using only the valid subset masks it.
+			return nil, errors.NewConfigurationError(
+				"[Asset] asset_trustedProxyCIDRs contains invalid entries: %s",
+				strings.Join(parseErrors, ", "),
+			)
+		}
+		e.IPExtractor = echo.ExtractIPFromXFFHeader(trustOpts...)
+	} else {
+		e.IPExtractor = echo.ExtractIPFromXFFHeader()
+	}
+
 	e.HTTPErrorHandler = customHTTPErrorHandler(logger)
 
 	e.Use(middleware.Recover())
@@ -146,24 +190,96 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		MaxAge:           86400,
 	}))
 
-	e.Use(middleware.Gzip())
+	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
+		Skipper: shouldSkipGzipForLargeBinaryAssetResponse,
+	}))
 
 	e.Use(securityHeadersMiddleware())
 
-	if e.Debug {
-		e.Use(customLoggerMiddleware(logger))
+	// Body size limit runs BEFORE peer-auth so the auth middleware (which reads
+	// the body to verify the SHA-256 digest header) cannot be turned into a
+	// DoS surface by an oversized body.
+	if tSettings.Asset.HTTPBodyLimit != "" {
+		e.Use(middleware.BodyLimit(tSettings.Asset.HTTPBodyLimit))
+	}
+
+	// Peer authentication — verifies Ed25519 signed requests and sets peer_tier in context.
+	// The verifier owns the tier cache and the replay cache; both are started in
+	// Start() when a context is available.
+	//
+	// Tier elevation requires explicit operator opt-in via asset_peerAuthAllowlist.
+	// An empty allowlist (the default) means signatures are still verified
+	// (replay cache + body digest + freshness window all apply) but every
+	// authenticated peer is treated as tierUnverified for rate-limit purposes.
+	var peerAuth *peerAuthVerifier
+	p2pClient := repo.GetP2PClient()
+	if p2pClient != nil {
+		peerCache := newPeerTierCache(logger, p2pClient, tSettings.Asset.PeerMinerReputationThreshold)
+		allowlist := parsePeerAuthAllowlist(logger, tSettings.Asset.PeerAuthAllowlist)
+		peerAuth = newPeerAuthVerifier(logger, peerCache, allowlist)
+		e.Use(peerAuth.Middleware())
+	}
+
+	// Always-on access logging with Prometheus metrics.
+	e.Use(accessLogMiddleware(logger))
+
+	// Global tiered rate limiting. Unverified clients are IP-keyed (IPv6 to
+	// /64) in a bounded LRU; authenticated peers are peer-ID-keyed.
+	// Rate limiters are created here; cleanup goroutines are started in Start() with a context.
+	var rateLimiters []*tieredRateLimiter
+	if tSettings.Asset.HTTPRateLimit > 0 {
+		globalRL := newTieredRateLimiter(
+			tSettings.Asset.HTTPRateLimit,
+			tSettings.Asset.HTTPPeerRateMultiplier,
+			tSettings.Asset.HTTPMinerRateLimit,
+			"global",
+		)
+		e.Use(globalRL.Middleware())
+		rateLimiters = append(rateLimiters, globalRL)
+	}
+
+	// Heavy-endpoint rate limiter (applied per-route below).
+	var heavyRateLimiter echo.MiddlewareFunc
+	if tSettings.Asset.HTTPHeavyRateLimit > 0 {
+		heavyRL := newTieredRateLimiter(
+			tSettings.Asset.HTTPHeavyRateLimit,
+			tSettings.Asset.HTTPPeerRateMultiplier,
+			tSettings.Asset.HTTPMinerRateLimit,
+			"heavy",
+		)
+		heavyRateLimiter = heavyRL.Middleware()
+		rateLimiters = append(rateLimiters, heavyRL)
+	}
+	heavyMW := func() []echo.MiddlewareFunc {
+		if heavyRateLimiter != nil {
+			return []echo.MiddlewareFunc{heavyRateLimiter}
+		}
+		return nil
 	}
 
 	h := &HTTP{
-		logger:     logger,
-		settings:   tSettings,
-		repository: repo,
-		e:          e,
-		startTime:  time.Now(),
+		logger:       logger,
+		settings:     tSettings,
+		repository:   repo,
+		e:            e,
+		startTime:    time.Now(),
+		peerAuth:     peerAuth,
+		rateLimiters: rateLimiters,
 	}
 
 	if len(blockAssemblyClient) > 0 && blockAssemblyClient[0] != nil {
 		h.blockAssemblyClient = blockAssemblyClient[0]
+	}
+
+	// In-process cache for main-chain membership lookups. Avoids a gRPC
+	// round-trip on every /merkle_proof and /txmeta request: a window of the
+	// last GlobalBlockHeightRetention main-chain block IDs is rebuilt on each
+	// block notification and answers in-window lookups authoritatively; older
+	// blocks use a lazily-filled fallback. Falls back to direct gRPC at the
+	// call sites if the cache is nil (e.g. tests that construct HTTP without
+	// a blockchain client).
+	if repo != nil && repo.BlockchainClient != nil {
+		h.mainChainCache = newMainChainCache(repo.BlockchainClient, logger, tSettings.GlobalBlockHeightRetention)
 	}
 
 	// add the private key for signing responses
@@ -200,7 +316,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	})
 
 	apiRestGroup := e.Group("/rest")
-	apiRestGroup.GET("/block/:hash.bin", h.GetRestLegacyBlock()) // BINARY_STREAM
+	apiRestGroup.GET("/block/:hash.bin", h.GetRestLegacyBlock(), heavyMW()...) // BINARY_STREAM
 
 	apiPrefix := tSettings.Asset.APIPrefix
 	apiGroup := e.Group(apiPrefix)
@@ -225,11 +341,11 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/txmeta_raw/:hash/hex", h.GetTxMetaByTxID(HEX))
 	apiGroup.GET("/txmeta_raw/:hash/json", h.GetTxMetaByTxID(JSON))
 
-	apiGroup.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
-	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
-	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON))
-	apiGroup.GET("/subtree_data/:hash", h.GetSubtreeData())
-	apiGroup.POST("/subtree/:hash/txs", h.GetTransactions()) // BINARY_STREAM only
+	apiGroup.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX), heavyMW()...)
+	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON), heavyMW()...)
+	apiGroup.GET("/subtree_data/:hash", h.GetSubtreeData(), heavyMW()...)
+	apiGroup.POST("/subtree/:hash/txs", h.GetTransactions(), heavyMW()...) // BINARY_STREAM only
 
 	apiGroup.GET("/subtree/:hash/txs/json", h.GetSubtreeTxs(JSON))
 
@@ -253,15 +369,15 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/blocks", h.GetBlocks)
 	apiGroup.GET("/block_locator", h.GetBlockLocator)
 
-	apiGroup.GET("/blocks/:hash", h.GetNBlocks(BINARY_STREAM))
-	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX))
-	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON))
+	apiGroup.GET("/blocks/:hash", h.GetNBlocks(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX), heavyMW()...)
+	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON), heavyMW()...)
 
-	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM (also supports ?type=miningcandidate)
+	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock(), heavyMW()...) // BINARY_STREAM (also supports ?type=miningcandidate)
 
-	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
-	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
-	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))
+	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX), heavyMW()...)
+	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON), heavyMW()...)
 	apiGroup.GET("/block/:hash/forks", h.GetBlockForks)
 	apiGroup.GET("/block/:hash/nearestforks", h.GetNearestForkHeights)
 
@@ -282,6 +398,16 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/utxo/:hash/json", h.GetUTXO(JSON))
 
 	apiGroup.GET("/utxos/:hash/json", h.GetUTXOsByTxID(JSON))
+
+	// Bulk UTXO spend-status lookup. All three modes accept the same 36-byte
+	// binary request body; only the response format differs. Routed through
+	// heavyMW() so a single request (up to 1024-way Aerospike fan-out) is
+	// gated by the same tiered rate limiter that protects /subtree/:hash/txs
+	// and other heavy endpoints. Body size is capped by the global
+	// asset_httpBodyLimit middleware.
+	apiGroup.POST("/utxos", h.GetUTXOs(BINARY_STREAM), heavyMW()...)
+	apiGroup.POST("/utxos/hex", h.GetUTXOs(HEX), heavyMW()...)
+	apiGroup.POST("/utxos/json", h.GetUTXOs(JSON), heavyMW()...)
 
 	apiGroup.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
 	apiGroup.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
@@ -417,6 +543,31 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	return h, nil
 }
 
+func shouldSkipGzipForLargeBinaryAssetResponse(c echo.Context) bool {
+	path := c.Path()
+	if path == "" && c.Request() != nil && c.Request().URL != nil {
+		path = c.Request().URL.Path
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, part := range parts {
+		switch part {
+		case "subtree_data":
+			return true
+		case "subtree":
+			tail := parts[i+1:]
+			if len(tail) == 1 {
+				return true
+			}
+			if len(tail) == 2 && tail[1] == "txs" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func AdaptStdHandler(handler func(w http.ResponseWriter, r *http.Request)) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		handler(c.Response().Writer, c.Request())
@@ -429,6 +580,23 @@ func (h *HTTP) Init(_ context.Context) error {
 }
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
+	// Start background goroutines (all stop when ctx is cancelled).
+	if h.peerAuth != nil {
+		h.peerAuth.Start(ctx)
+	}
+	for _, rl := range h.rateLimiters {
+		rl.StartCleanup(ctx)
+	}
+	if h.mainChainCache != nil {
+		if err := h.mainChainCache.Start(ctx); err != nil {
+			// Non-fatal: nil the cache so call sites fall back to direct gRPC.
+			// Leaving it non-nil would serve stale data forever — consume() never
+			// started, so no invalidation will ever fire.
+			h.logger.Warnf("[Asset] failed to start main-chain cache, falling back to direct gRPC: %v", err)
+			h.mainChainCache = nil
+		}
+	}
+
 	mode := "HTTPS"
 	if level := h.settings.SecurityLevelHTTP; level == 0 {
 		mode = "HTTP"
@@ -531,8 +699,10 @@ func customHTTPErrorHandler(logger ulogger.Logger) echo.HTTPErrorHandler {
 			}
 		}
 
-		// Log the error with context
-		logger.Errorf("[Asset HTTP] Error handling request [%s %s]: status=%d, error=%v", c.Request().Method, c.Request().RequestURI, code, err)
+		// Log the error with the route pattern (c.Path()) rather than the
+		// raw RequestURI. Error paths are precisely where query-string values
+		// (tokens, search terms, etc.) should not leak into logs.
+		logger.Errorf("[Asset HTTP] Error handling request [%s %s]: status=%d, error=%v", c.Request().Method, c.Path(), code, err)
 
 		// Send JSON response if not already sent
 		if !c.Response().Committed {
@@ -550,26 +720,56 @@ func customHTTPErrorHandler(logger ulogger.Logger) echo.HTTPErrorHandler {
 	}
 }
 
-// Middleware to log HTTP requests using the custom logger
-func customLoggerMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
+// accessLogMiddleware logs every HTTP request with real client IP, duration, status,
+// response size, and peer tier. It also records Prometheus histogram metrics.
+func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			prometheusAssetHTTPInFlight.Inc()
+			defer prometheusAssetHTTPInFlight.Dec()
+
 			start := time.Now()
 
-			// Process the request
 			err := next(c)
-
-			// Log response status and duration
-			status := c.Response().Status
-			duration := time.Since(start)
-
 			if err != nil {
-				c.Error(err) // Ensure Echo's default error handling
+				// Invoke the error handler so the response status/size are finalized
+				// before we read them for metrics and logging. Return nil afterward
+				// to prevent Echo from invoking the error handler a second time.
+				c.Error(err)
 			}
 
-			logger.Infof("http request: Method=%s, URI=%s, RemoteAddr=%s Status=%d, Duration=%v, err=%v", c.Request().Method, c.Request().RequestURI, c.Request().RemoteAddr, status, duration, err)
+			duration := time.Since(start)
+			status := c.Response().Status
+			size := c.Response().Size
+			method := c.Request().Method
+			path := c.Path() // route pattern, not full URI — keeps Prometheus cardinality bounded
+			ip := c.RealIP()
+			statusStr := strconv.Itoa(status)
 
-			return err
+			tier, _ := c.Get("peer_tier").(peerTier)
+
+			prometheusAssetHTTPRequestDuration.WithLabelValues(method, path, statusStr).Observe(duration.Seconds())
+			prometheusAssetHTTPResponseSize.WithLabelValues(method, path, statusStr).Observe(float64(size))
+
+			// Log only the route pattern (already bounded for Prometheus). The raw
+			// RequestURI is intentionally omitted to keep query-string values out
+			// of the access log; any future endpoint adding sensitive query
+			// parameters won't accidentally leak them here.
+			//
+			// Level is chosen by status so healthy traffic (2xx/3xx, including the
+			// high-frequency /health probes) stays at DEBUG and does not flood the
+			// logs; only client (4xx) and server (5xx) errors surface by default.
+			const logFmt = "[Asset_http] %s %s client_ip=%s status=%d duration=%v size=%d tier=%s"
+			switch {
+			case status >= 500:
+				logger.Errorf(logFmt, method, path, ip, status, duration, size, tier)
+			case status >= 400:
+				logger.Warnf(logFmt, method, path, ip, status, duration, size, tier)
+			default:
+				logger.Debugf(logFmt, method, path, ip, status, duration, size, tier)
+			}
+
+			return nil
 		}
 	}
 }

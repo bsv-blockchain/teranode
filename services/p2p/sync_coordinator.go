@@ -23,14 +23,17 @@ import (
 type SyncCoordinator struct {
 	logger           ulogger.Logger
 	settings         *settings.Settings
-	registry         *PeerRegistry
+	registry         blockchain.PeerRegistryClientI
 	selector         *PeerSelector
-	banManager       PeerBanManagerI
 	blockchainClient blockchain.ClientI
 
-	// Current sync state
+	// Coordinator-scoped context used for the gRPC calls into the registry.
+	// Per-RPC contexts are derived from this when needed.
+	ctx context.Context
+
+	// Current sync state. currentSyncPeer holds the canonical libp2p ID string.
 	mu              sync.RWMutex
-	currentSyncPeer peer.ID
+	currentSyncPeer string
 	syncStartTime   time.Time
 	lastSyncTrigger time.Time // Track when we last triggered sync
 	lastLocalHeight uint32    // Track last known local height
@@ -53,11 +56,11 @@ type SyncCoordinator struct {
 
 // NewSyncCoordinator creates a new sync coordinator
 func NewSyncCoordinator(
+	ctx context.Context,
 	logger ulogger.Logger,
 	settings *settings.Settings,
-	registry *PeerRegistry,
+	registry blockchain.PeerRegistryClientI,
 	selector *PeerSelector,
-	banManager PeerBanManagerI,
 	blockchainClient blockchain.ClientI,
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) *SyncCoordinator {
@@ -66,9 +69,9 @@ func NewSyncCoordinator(
 		settings:                  settings,
 		registry:                  registry,
 		selector:                  selector,
-		banManager:                banManager,
 		blockchainClient:          blockchainClient,
 		blocksKafkaProducerClient: blocksKafkaProducerClient,
+		ctx:                       ctx,
 		stopCh:                    make(chan struct{}),
 		backoffMultiplier:         1,
 		maxBackoffMultiplier:      32, // Max backoff of 64 seconds (32 * 2s)
@@ -101,8 +104,29 @@ const (
 // height is handled elsewhere, via catchup validation, reputation
 // downgrades after failed catchup, and banning — not by a height-delta
 // tolerance here.
-func isViableSyncCandidate(p *PeerInfo) bool {
+func isViableSyncCandidate(p *blockchain.PeerInfo) bool {
 	return !p.IsBanned && p.DataHubURL != "" && p.Height != 0 && p.ReputationScore >= 20
+}
+
+// listAllPeers returns every peer known to the centralized registry. Errors
+// are logged and treated as "no peers" so callers can keep their structure.
+func (sc *SyncCoordinator) listAllPeers() []*blockchain.PeerInfo {
+	peers, err := sc.registry.ListPeers(sc.ctx, nil, 0, 0, false, false)
+	if err != nil {
+		sc.logger.Warnf("[SyncCoordinator] ListPeers failed: %v", err)
+		return nil
+	}
+	return peers
+}
+
+// getPeer fetches a single peer by libp2p ID from the centralized registry.
+func (sc *SyncCoordinator) getPeer(id peer.ID) (*blockchain.PeerInfo, bool) {
+	info, found, err := sc.registry.GetPeer(sc.ctx, id.String())
+	if err != nil {
+		sc.logger.Warnf("[SyncCoordinator] GetPeer failed for %s: %v", id, err)
+		return nil, false
+	}
+	return info, found
 }
 
 // isCaughtUp determines if we're caught up with the network
@@ -110,7 +134,7 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 	localHeight := sc.getLocalHeightSafe()
 
 	// Get all peers
-	peers := sc.registry.GetAll()
+	peers := sc.listAllPeers()
 
 	// Check if any eligible peer is ahead of us.
 	// This must align with sync peer selection criteria; otherwise, a low-quality
@@ -155,8 +179,8 @@ func (sc *SyncCoordinator) Stop() {
 	sc.wg.Wait()
 }
 
-// GetCurrentSyncPeer returns the current sync peer
-func (sc *SyncCoordinator) GetCurrentSyncPeer() peer.ID {
+// GetCurrentSyncPeer returns the current sync peer (canonical libp2p ID string).
+func (sc *SyncCoordinator) GetCurrentSyncPeer() string {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
 	return sc.currentSyncPeer
@@ -188,7 +212,9 @@ func (sc *SyncCoordinator) TriggerSync() error {
 	}
 
 	// Record the sync attempt for this peer
-	sc.registry.RecordSyncAttempt(newPeer)
+	if err := sc.registry.RecordSyncAttempt(sc.ctx, newPeer); err != nil {
+		sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", newPeer, err)
+	}
 
 	// Update current sync peer
 	sc.mu.Lock()
@@ -214,16 +240,19 @@ func (sc *SyncCoordinator) TriggerSync() error {
 	return nil
 }
 
-// HandlePeerDisconnected handles peer disconnection
+// HandlePeerDisconnected handles peer disconnection. peerID is the libp2p peer.ID.
 func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
-	sc.registry.Remove(peerID)
+	idStr := peerID.String()
+	if err := sc.registry.RemovePeer(sc.ctx, idStr); err != nil {
+		sc.logger.Warnf("[SyncCoordinator] RemovePeer %s failed: %v", idStr, err)
+	}
 
 	sc.mu.RLock()
-	isSyncPeer := sc.currentSyncPeer == peerID
+	isSyncPeer := sc.currentSyncPeer == idStr
 	sc.mu.RUnlock()
 
 	if isSyncPeer {
-		sc.logger.Infof("[SyncCoordinator] Sync peer %s disconnected", peerID)
+		sc.logger.Infof("[SyncCoordinator] Sync peer %s disconnected", idStr)
 		sc.ClearSyncPeer()
 
 		// Trigger selection of new sync peer
@@ -247,7 +276,9 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 	// This ensures reputation is updated so the peer selector won't re-select the same peer
 	if failedPeer != "" {
 		sc.logger.Infof("[SyncCoordinator] Recording failure for failed peer %s", failedPeer)
-		sc.registry.RecordCatchupFailure(failedPeer)
+		if err := sc.registry.UpdatePeerMetrics(sc.ctx, failedPeer, 0, 0, 0, false, true, false, 0); err != nil {
+			sc.logger.Warnf("[SyncCoordinator] UpdatePeerMetrics(failure) for %s: %v", failedPeer, err)
+		}
 	}
 
 	// Clear current sync peer
@@ -259,8 +290,9 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 	}
 }
 
-// selectNewSyncPeer selects a new sync peer based on current criteria
-func (sc *SyncCoordinator) selectNewSyncPeer() peer.ID {
+// selectNewSyncPeer selects a new sync peer based on current criteria.
+// The returned ID is a canonical libp2p ID string.
+func (sc *SyncCoordinator) selectNewSyncPeer() string {
 	// Get local height
 	localHeight := uint32(0)
 	if sc.getLocalHeight != nil {
@@ -281,19 +313,19 @@ func (sc *SyncCoordinator) selectNewSyncPeer() peer.ID {
 
 	// Check for forced peer
 	if sc.settings.P2P.ForceSyncPeer != "" {
-		// Try to decode as a proper peer ID first
+		// Try to decode as a proper peer ID first; on success store its canonical
+		// string form, on failure store the raw configured value.
 		if forcedPeer, err := peer.Decode(sc.settings.P2P.ForceSyncPeer); err == nil {
-			criteria.ForcedPeerID = forcedPeer
-			sc.logger.Debugf("[SyncCoordinator] Using forced sync peer %s", forcedPeer)
+			criteria.ForcedPeerID = forcedPeer.String()
+			sc.logger.Debugf("[SyncCoordinator] Using forced sync peer %s", criteria.ForcedPeerID)
 		} else {
-			// If decode fails, use it as a raw peer ID string
-			criteria.ForcedPeerID = peer.ID(sc.settings.P2P.ForceSyncPeer)
+			criteria.ForcedPeerID = sc.settings.P2P.ForceSyncPeer
 			sc.logger.Debugf("[SyncCoordinator] Using forced sync peer %s", sc.settings.P2P.ForceSyncPeer)
 		}
 	}
 
 	// Get all peers and select
-	peers := sc.registry.GetAll()
+	peers := sc.listAllPeers()
 
 	return sc.selector.SelectSyncPeer(peers, criteria)
 }
@@ -371,7 +403,11 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 		if currentPeer != "" {
 			// Get local height and peer height to determine if this is a failure
 			localHeight := sc.getLocalHeightSafe()
-			peerInfo, exists := sc.registry.Get(currentPeer)
+			peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, currentPeer)
+			if err != nil {
+				sc.logger.Warnf("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
+				return false
+			}
 
 			if !exists {
 				// Peer no longer exists in registry (likely disconnected)
@@ -385,38 +421,16 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 				// Only consider it a failure if we're still behind the sync peer
 				sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed (local height: %d < peer height: %d)",
 					currentPeer, localHeight, peerInfo.Height)
-
-				// Record catchup failure for reputation tracking
-				/* if sc.registry != nil {
-					// Get peer info to check failure count
-					peerInfo, _ := sc.registry.GetPeer(currentPeer)
-
-					// If this peer has failed multiple times recently, treat as malicious
-					// (likely on an invalid chain)
-					if peerInfo.InteractionFailures > 2 &&
-						time.Since(peerInfo.LastInteractionFailure) < 5*time.Minute {
-						sc.registry.RecordMaliciousInteraction(currentPeer)
-						sc.logger.Warnf("[SyncCoordinator] Peer %s has failed %d times recently, marking as potentially malicious",
-							currentPeer, peerInfo.InteractionFailures)
-					} else {
-						sc.registry.RecordCatchupFailure(currentPeer)
-						sc.logger.Infof("[SyncCoordinator] Recorded catchup failure for peer %s (reputation will decrease)", currentPeer)
-					}
-				}*/
-
 				sc.ClearSyncPeer()
 				_ = sc.TriggerSync()
 				return true // Transition handled
-			} else {
-				// We've caught up or surpassed the peer, this is success not failure
-				sc.logger.Infof("[SyncCoordinator] Sync completed successfully with peer %s (local height: %d, peer height: %d)",
-					currentPeer, localHeight, peerInfo.Height)
-				// Reset backoff on success
-				sc.resetBackoff()
-				// Look for a better peer if needed
-				_ = sc.TriggerSync()
-				return true // Transition handled
 			}
+			// We've caught up or surpassed the peer, this is success not failure
+			sc.logger.Infof("[SyncCoordinator] Sync completed successfully with peer %s (local height: %d, peer height: %d)",
+				currentPeer, localHeight, peerInfo.Height)
+			sc.resetBackoff()
+			_ = sc.TriggerSync()
+			return true // Transition handled
 		}
 	}
 	return false // No transition to handle
@@ -441,13 +455,14 @@ func (sc *SyncCoordinator) getLocalHeightSafe() uint32 {
 	return 0
 }
 
-// selectAndActivateNewPeer selects a new sync peer and activates it
-func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer peer.ID) {
+// selectAndActivateNewPeer selects a new sync peer and activates it.
+// oldPeer is the previously selected peer's canonical libp2p ID string (or empty).
+func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer string) {
 	// Clear current sync peer
 	sc.ClearSyncPeer()
 
 	// Get all peers
-	peers := sc.registry.GetAll()
+	peers := sc.listAllPeers()
 
 	// Filter eligible peers
 	eligiblePeers := sc.filterEligiblePeers(peers, oldPeer, localHeight)
@@ -482,8 +497,8 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 }
 
 // filterEligiblePeers filters peers that are eligible for syncing
-func (sc *SyncCoordinator) filterEligiblePeers(peers []*PeerInfo, oldPeer peer.ID, localHeight uint32) []*PeerInfo {
-	eligiblePeers := make([]*PeerInfo, 0, len(peers))
+func (sc *SyncCoordinator) filterEligiblePeers(peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32) []*blockchain.PeerInfo {
+	eligiblePeers := make([]*blockchain.PeerInfo, 0, len(peers))
 	for _, p := range peers {
 		// Skip the old peer and peers not ahead of us
 		if p.ID == oldPeer || p.Height <= localHeight {
@@ -499,8 +514,8 @@ func (sc *SyncCoordinator) filterEligiblePeers(peers []*PeerInfo, oldPeer peer.I
 	return eligiblePeers
 }
 
-// activateSyncPeer sets and activates a new sync peer
-func (sc *SyncCoordinator) activateSyncPeer(newSyncPeer peer.ID) {
+// activateSyncPeer sets and activates a new sync peer (canonical libp2p ID string).
+func (sc *SyncCoordinator) activateSyncPeer(newSyncPeer string) {
 	// Set the new sync peer
 	sc.mu.Lock()
 	sc.currentSyncPeer = newSyncPeer
@@ -517,7 +532,7 @@ func (sc *SyncCoordinator) activateSyncPeer(newSyncPeer peer.ID) {
 }
 
 // logPeerList logs the list of peers for debugging
-func (sc *SyncCoordinator) logPeerList(peers []*PeerInfo) {
+func (sc *SyncCoordinator) logPeerList(peers []*blockchain.PeerInfo) {
 	for _, p := range peers {
 		sc.logger.Infof("[SyncCoordinator] Peer: %s (url=%s, height=%d, banScore=%d)",
 			p.ID, p.DataHubURL, p.Height, p.BanScore)
@@ -525,7 +540,7 @@ func (sc *SyncCoordinator) logPeerList(peers []*PeerInfo) {
 }
 
 // logCandidateList logs the list of candidate peers that were skipped
-func (sc *SyncCoordinator) logCandidateList(candidates []*PeerInfo) {
+func (sc *SyncCoordinator) logCandidateList(candidates []*blockchain.PeerInfo) {
 	for _, p := range candidates {
 		// Include more details about why peer might be skipped
 		lastAttemptStr := "never"
@@ -574,7 +589,11 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	}
 
 	// Get peer info
-	peerInfo, exists := sc.registry.Get(currentPeer)
+	peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, currentPeer)
+	if err != nil {
+		sc.logger.Warnf("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
+		return
+	}
 	if !exists {
 		sc.logger.Warnf("[SyncCoordinator] Sync peer %s no longer exists", currentPeer)
 		sc.ClearSyncPeer()
@@ -595,8 +614,9 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		timeSinceLastMessage := time.Since(peerInfo.LastMessageTime)
 		if timeSinceLastMessage > 1*time.Minute {
 			sc.logger.Warnf("[SyncCoordinator] Sync peer %s inactive for %v", currentPeer, timeSinceLastMessage)
-			// Record failure due to inactivity
-			sc.registry.RecordCatchupFailure(currentPeer)
+			if err := sc.registry.UpdatePeerMetrics(sc.ctx, currentPeer, 0, 0, 0, false, true, false, 0); err != nil {
+				sc.logger.Warnf("[SyncCoordinator] UpdatePeerMetrics(failure) for %s: %v", currentPeer, err)
+			}
 			sc.ClearSyncPeer()
 			_ = sc.TriggerSync()
 			return
@@ -618,29 +638,42 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	}
 }
 
-// UpdatePeerInfo updates peer information
+// UpdatePeerInfo updates peer information in the centralized registry.
 func (sc *SyncCoordinator) UpdatePeerInfo(peerID peer.ID, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
-	sc.registry.Put(peerID, "", height, blockHash, dataHubURL)
+	info := &blockchain.PeerInfo{
+		ID:               peerID.String(),
+		TransportType:    blockchain_api.TransportType_TRANSPORT_HTTP,
+		TransportTypeSet: true,
+		Height:           height,
+		BlockHash:        blockHash,
+		DataHubURL:       dataHubURL,
+	}
+	if err := sc.registry.RegisterPeer(sc.ctx, info); err != nil {
+		sc.logger.Warnf("[SyncCoordinator] RegisterPeer %s failed: %v", info.ID, err)
+	}
 }
 
-// UpdateBanStatus updates ban status from ban manager
+// UpdateBanStatus is a legacy entrypoint preserved for callers that previously
+// re-synced ban state from the local BanManager into the registry. The
+// blockchain-side AddBanScore now writes BanScore/IsBanned atomically, so this
+// only needs to react to a peer becoming the sync target.
 func (sc *SyncCoordinator) UpdateBanStatus(peerID peer.ID) {
-	if sc.banManager != nil {
-		// Use raw string conversion instead of String() method
-		peerIDStr := string(peerID)
-		score, banned, _ := sc.banManager.GetBanScore(peerIDStr)
-		sc.registry.UpdateBanStatus(peerID, score, banned)
+	idStr := peerID.String()
 
-		// If sync peer got banned, find new one
-		sc.mu.RLock()
-		isSyncPeer := sc.currentSyncPeer == peerID
-		sc.mu.RUnlock()
+	banned, err := sc.registry.IsPeerBanned(sc.ctx, idStr)
+	if err != nil {
+		sc.logger.Warnf("[SyncCoordinator] IsPeerBanned %s failed: %v", idStr, err)
+		return
+	}
 
-		if isSyncPeer && banned {
-			sc.logger.Warnf("[SyncCoordinator] Sync peer %s got banned", peerID)
-			sc.ClearSyncPeer()
-			_ = sc.TriggerSync()
-		}
+	sc.mu.RLock()
+	isSyncPeer := sc.currentSyncPeer == idStr
+	sc.mu.RUnlock()
+
+	if isSyncPeer && banned {
+		sc.logger.Warnf("[SyncCoordinator] Sync peer %s got banned", idStr)
+		sc.ClearSyncPeer()
+		_ = sc.TriggerSync()
 	}
 }
 
@@ -707,7 +740,10 @@ func (sc *SyncCoordinator) enterBackoffMode() {
 
 	sc.mu.Unlock()
 
-	peersCleared := sc.registry.ClearAllSyncAttempts()
+	peersCleared, err := sc.registry.ClearAllSyncAttempts(sc.ctx)
+	if err != nil {
+		sc.logger.Warnf("[SyncCoordinator] ClearAllSyncAttempts failed: %v", err)
+	}
 	sc.logger.Warnf("[SyncCoordinator] All eligible peers attempted, entering backoff for %v (multiplier: %dx). Cleared sync attempts for %d peers.",
 		backoffDuration, currentMultiplier, peersCleared)
 }
@@ -715,7 +751,7 @@ func (sc *SyncCoordinator) enterBackoffMode() {
 // checkAllPeersAttempted checks if all eligible peers have been attempted recently
 func (sc *SyncCoordinator) checkAllPeersAttempted() {
 	// Get all peers and check how many were attempted recently
-	peers := sc.registry.GetAll()
+	peers := sc.listAllPeers()
 	localHeight := sc.getLocalHeightSafe()
 
 	eligibleCount := 0
@@ -759,7 +795,11 @@ func (sc *SyncCoordinator) considerReputationRecovery() {
 		baseCooldown *= time.Duration(cooldownMultiplier)
 	}
 
-	peersRecovered := sc.registry.ReconsiderBadPeers(baseCooldown)
+	peersRecovered, err := sc.registry.ReconsiderBadPeers(sc.ctx, baseCooldown)
+	if err != nil {
+		sc.logger.Warnf("[SyncCoordinator] ReconsiderBadPeers failed: %v", err)
+		return
+	}
 	if peersRecovered > 0 {
 		sc.logger.Infof("[SyncCoordinator] Recovered reputation for %d peers after %v cooldown",
 			peersRecovered, baseCooldown)
@@ -768,25 +808,25 @@ func (sc *SyncCoordinator) considerReputationRecovery() {
 	}
 }
 
-// sendSyncTriggerToKafka sends a sync trigger message to Kafka
-func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer peer.ID, bestHash string) {
+// sendSyncTriggerToKafka sends a sync trigger message to Kafka.
+// syncPeer is the canonical libp2p ID string.
+func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash string) {
 	if sc.blocksKafkaProducerClient == nil || bestHash == "" {
 		return
 	}
 
 	// Get the peer's DataHub URL if available
 	dataHubURL := ""
-	if peerInfo, exists := sc.registry.Get(syncPeer); exists {
+	if peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, syncPeer); err == nil && exists {
 		dataHubURL = peerInfo.DataHubURL
 	}
 
-	// No longer collecting fallback URLs - relying on ban scoring and FSM monitoring instead
 	sc.logger.Infof("[sendSyncTriggerToKafka] Sending sync trigger with primary URL %s from peer %s", dataHubURL, syncPeer)
 
 	msg := &kafkamessage.KafkaBlockTopicMessage{
 		Hash:   bestHash,
 		URL:    dataHubURL,
-		PeerId: syncPeer.String(),
+		PeerId: syncPeer,
 	}
 
 	value, err := proto.Marshal(msg)
@@ -802,23 +842,26 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer peer.ID, bestHash str
 	sc.logger.Infof("[sendSyncTriggerToKafka] Sent sync trigger to Kafka for block %s from peer %s", bestHash, syncPeer)
 }
 
-// sendSyncMessage sends a sync message to a specific peer
-func (sc *SyncCoordinator) sendSyncMessage(peerID peer.ID) error {
+// sendSyncMessage sends a sync message to a specific peer (canonical libp2p ID string).
+func (sc *SyncCoordinator) sendSyncMessage(peerID string) error {
 	sc.logger.Infof("[sendSyncMessage] Preparing to send sync message to peer %s", peerID)
-	// Get peer's best known block hash from registry
-	var bestHash string
-	if sc.registry != nil {
-		if peerInfo, exists := sc.registry.Get(peerID); exists {
-			if peerInfo.BlockHash != nil {
-				bestHash = peerInfo.BlockHash.String()
-				sc.logger.Infof("[sendSyncMessage] Found block hash %s for peer %s", bestHash, peerID)
-			} else {
-				sc.logger.Warnf("[sendSyncMessage] No block hash found in registry for peer %s", peerID)
-			}
-		} else {
-			sc.logger.Errorf("[sendSyncMessage] Peer %s not found in registry", peerID)
-			return errors.NewServiceError(fmt.Sprintf("peer %s not found in registry", peerID))
-		}
+
+	peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, peerID)
+	if err != nil {
+		sc.logger.Errorf("[sendSyncMessage] GetPeer %s failed: %v", peerID, err)
+		return errors.NewServiceError(fmt.Sprintf("get peer %s: %v", peerID, err))
+	}
+	if !exists {
+		sc.logger.Errorf("[sendSyncMessage] Peer %s not found in registry", peerID)
+		return errors.NewServiceError(fmt.Sprintf("peer %s not found in registry", peerID))
+	}
+
+	bestHash := ""
+	if peerInfo.BlockHash != nil {
+		bestHash = peerInfo.BlockHash.String()
+		sc.logger.Infof("[sendSyncMessage] Found block hash %s for peer %s", bestHash, peerID)
+	} else {
+		sc.logger.Warnf("[sendSyncMessage] No block hash found in registry for peer %s", peerID)
 	}
 
 	if bestHash != "" {

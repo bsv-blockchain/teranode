@@ -51,7 +51,6 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
@@ -99,22 +98,12 @@ func (u *Server) SetSubtreeExists(_ *chainhash.Hash) error {
 }
 
 // GetSubtreeExists checks if a subtree exists in the local storage.
-//
-// This method queries the local storage to determine whether a specific subtree
-// has already been processed and stored. It's used to optimize processing by
-// avoiding duplicate work on subtrees that have already been validated.
-//
-// Parameters:
-//   - ctx: Context for cancellation and request-scoped values
-//   - subtreeHash: The hash identifier of the subtree to check
-//
-// Returns:
-//   - bool: Always false in the current implementation
-//   - error: Always nil in the current implementation
-//
-// TODO: Implement actual local storage lookup for subtree existence.
-func (u *Server) GetSubtreeExists(_ context.Context, _ *chainhash.Hash) (bool, error) {
-	return false, nil
+func (u *Server) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	if u.subtreeStore == nil {
+		return false, nil
+	}
+
+	return u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
 }
 
 // txMetaCacheOps defines the interface for transaction metadata cache operations.
@@ -136,6 +125,23 @@ type txMetaCacheOps interface {
 	// This method allows direct storage of pre-serialized metadata for performance optimization.
 	// Returns an error if the cache operation fails.
 	SetCacheFromBytes(key, txMetaBytes []byte) error
+
+	// SetCacheMulti stores multiple cache entries in a single call.
+	// Implementations are expected to fan out across the cache's bucket-shard locks so that
+	// a single Kafka message containing many entries acquires each touched bucket lock once
+	// instead of once per entry. Critical for txmetaHandler throughput under heavy load.
+	SetCacheMulti(keys [][]byte, values [][]byte) error
+
+	// SetCacheMultiSequential is the partition-aware twin of SetCacheMulti: writes
+	// all keys on the caller's goroutine without errgroup fan-out. The txmeta
+	// handler uses this because it already has parallelism via per-partition
+	// Kafka consumer goroutines, so the inner cache fan-out is pure overhead.
+	SetCacheMultiSequential(keys [][]byte, values [][]byte) error
+
+	// SetCacheMultiSequentialWithHashes is SetCacheMultiSequential with caller-
+	// supplied xxhash values, so the receiver can pass the on-wire v2 hash
+	// straight through without recomputing. hashes[i] MUST equal xxhash.Sum64(keys[i]).
+	SetCacheMultiSequentialWithHashes(keys [][]byte, values [][]byte, hashes []uint64) error
 }
 
 // SetTxMetaCacheFromBytes stores raw transaction metadata bytes in the cache.
@@ -160,6 +166,47 @@ func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []b
 		return cache.SetCacheFromBytes(key, txMetaBytes)
 	}
 
+	return nil
+}
+
+// SetTxMetaCacheMulti stores multiple transaction metadata entries in the cache in a single
+// call. The txmeta Kafka handler invokes this once per shard-batch, so the underlying cache
+// acquires each touched per-bucket lock once per shard-batch instead of once per entry.
+// Returns nil if the underlying store does not implement txMetaCacheOps.
+func (u *Server) SetTxMetaCacheMulti(_ context.Context, keys [][]byte, values [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
+		return cache.SetCacheMulti(keys, values)
+	}
+	return nil
+}
+
+// SetTxMetaCacheMultiSequential stores multiple txmeta entries via the cache's
+// sequential write path (no errgroup fan-out). Used by the Kafka txmeta
+// handler, which is itself running on a per-partition goroutine — pushing
+// parallelism inside the cache call would just thrash the scheduler.
+func (u *Server) SetTxMetaCacheMultiSequential(_ context.Context, keys [][]byte, values [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
+		return cache.SetCacheMultiSequential(keys, values)
+	}
+	return nil
+}
+
+// SetTxMetaCacheMultiSequentialWithHashes stores entries using caller-supplied
+// xxhash values. Used by the v2 txmeta handler to skip re-hashing on receive.
+// Returns nil if the underlying store does not implement txMetaCacheOps.
+func (u *Server) SetTxMetaCacheMultiSequentialWithHashes(_ context.Context, keys [][]byte, values [][]byte, hashes []uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
+		return cache.SetCacheMultiSequentialWithHashes(keys, values, hashes)
+	}
 	return nil
 }
 
@@ -285,6 +332,13 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 
 // readTxFromReader reads and validates a single transaction from an io.ReadCloser.
 // It includes panic recovery for handling potential runtime errors from the go-bt library.
+//
+// Stays on the standard tx.ReadFrom path (no arena). The returned *bt.Tx is
+// consumed by the caller after this function returns, so script bytes must be
+// heap-owned — an arena allocated here would have to be Put before return, at
+// which point the script slices would alias soon-to-be-reused arena memory.
+// The arena variant is reserved for the bulk subtree-stream decode where the
+// entire batch of txs is consumed before the arena is returned to the pool.
 //
 // Parameters:
 //   - body: ReadCloser containing the transaction data
@@ -545,6 +599,15 @@ type metaSliceItem struct {
 //
 // This method is typically called by higher-level API handlers after performing
 // necessary authorization and parameter validation.
+//
+// In-block-parent height resolution is governed entirely by the validator
+// options the caller supplies: block-validation callers (CheckBlockSubtrees,
+// the legacy branch of checkSubtreeFromBlock) pass
+// WithUnconfirmedParentsAtCandidateHeight(true) so same-block parents resolve
+// at the candidate height; peer-announced subtree validation does NOT set it
+// and remains fail-closed (unconfirmed parents reject with
+// bad-txns-unconfirmed-input-in-block), with the block-validation path as the
+// authoritative backstop.
 func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (subtree *subtreepkg.Subtree, err error) {
 	stat := gocore.NewStat("ValidateSubtreeInternal")
@@ -617,7 +680,9 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	txMetaSlice := make([]metaSliceItem, len(txHashes))
 
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
-		prometheusSubtreeValidationValidateSubtreeRetry.Inc()
+		if attempt > 1 {
+			prometheusSubtreeValidationValidateSubtreeRetry.Inc()
+		}
 
 		var logMsg string
 
@@ -641,16 +706,8 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if err != nil {
 			if errors.Is(err, errors.ErrThresholdExceeded) {
 				u.logger.Warnf("[ValidateSubtreeInternal][%s] [attempt #%d] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
-				select {
-				case <-ctx.Done():
-					break
-				case <-time.After(retrySleepDuration):
-					break
-				case <-time.After(10 * time.Millisecond):
-					if u.isPrioritySubtreeCheckActive(v.SubtreeHash.String()) {
-						// break early - this is now a priority request. what the hell are we doing waiting around?
-						break
-					}
+				if waitErr := u.waitForRetryOrPriority(ctx, v.SubtreeHash.String(), retrySleepDuration); waitErr != nil {
+					return nil, waitErr
 				}
 
 				continue
@@ -790,6 +847,31 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	return subtree, nil
 }
 
+func (u *Server) waitForRetryOrPriority(ctx context.Context, subtreeHash string, retrySleepDuration time.Duration) error {
+	if retrySleepDuration <= 0 || u.isPrioritySubtreeCheckActive(subtreeHash) {
+		return nil
+	}
+
+	timer := time.NewTimer(retrySleepDuration)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.NewContextCanceledError("[ValidateSubtreeInternal][%s] context canceled while waiting to retry: %v", subtreeHash, ctx.Err())
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+			if u.isPrioritySubtreeCheckActive(subtreeHash) {
+				return nil
+			}
+		}
+	}
+}
+
 func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "storeSubtreeFiles",
 		tracing.WithParentStat(stat),
@@ -884,14 +966,26 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 	txHashes := make([]chainhash.Hash, 0, u.settings.BlockAssembly.InitialMerkleItemsPerSubtree)
 
-	// check whether we have a subtreeToCheck file and use that instead of doing a network request
-	subtreeToCheckBytes, err := u.subtreeStore.Get(spanCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-	if err == nil && subtreeToCheckBytes != nil {
-		u.logger.Debugf("[getSubtreeTxHashes][%s] found subtreeToCheck file in store, using it instead of network request", subtreeHash.String())
+	// Use the local subtree file (under either FileTypeSubtreeToCheck or
+	// FileTypeSubtree) instead of a network request — see findLocalSubtreeFile.
+	localFileType, localExists, err := u.findLocalSubtreeFile(spanCtx, *subtreeHash)
+	if err != nil {
+		return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to check local subtree store", subtreeHash.String(), err)
+	}
+	if localExists {
+		localBytes, getErr := u.subtreeStore.Get(spanCtx, subtreeHash[:], localFileType)
+		if getErr != nil {
+			return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to read local subtree (%s)", subtreeHash.String(), localFileType.String(), getErr)
+		}
+		if localBytes == nil {
+			return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] local subtree (%s) returned nil bytes despite Exists=true", subtreeHash.String(), localFileType.String())
+		}
 
-		subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeToCheckBytes)
+		u.logger.Debugf("[getSubtreeTxHashes][%s] found local subtree file in store (%s), using it instead of network request", subtreeHash.String(), localFileType.String())
+
+		subtree, err := subtreepkg.NewSubtreeFromBytes(localBytes)
 		if err != nil {
-			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] failed to create subtree from subtreeToCheck bytes", subtreeHash.String(), err)
+			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] failed to create subtree from local bytes", subtreeHash.String(), err)
 		}
 
 		// return the transaction hashes from the subtree
@@ -906,9 +1000,15 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	url := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
 	u.logger.Debugf("[getSubtreeTxHashes][%s] getting subtree from %s", subtreeHash.String(), url)
 
+	// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes). A peer that
+	// streams more than this is malicious — fail fast rather than ReadAll into memory.
+	// This must be independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which
+	// only controls what *this node* assembles; peers may legitimately produce larger subtrees.
+	maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
 	// TODO add the metric for how long this takes
 	// body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
-	subtreeBytes, err := util.DoHTTPRequest(spanCtx, url)
+	subtreeBytes, err := util.DoHTTPRequestBounded(spanCtx, url, maxSubtreeBytes)
 	if err != nil {
 		// check whether this is a 404 error
 		if errors.Is(err, errors.ErrNotFound) {
@@ -1006,6 +1106,15 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 //
 // Returns:
 //   - error: Any error encountered during retrieval or validation
+//
+// processMissingTransactions validates each missing tx in dependency-level
+// order. In-block-parent height resolution is governed by the caller's
+// validator options: block-validation callers set
+// WithUnconfirmedParentsAtCandidateHeight(true) so same-block parents resolve
+// at the candidate height; the peer-announced path does not set it and
+// unconfirmed parents surface as bad-txns-unconfirmed-input-in-block. That
+// path is best-effort by design — the block-validation path in
+// CheckBlockSubtrees is the authoritative backstop.
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree,
 	missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string, txMetaSlice []metaSliceItem, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
@@ -1017,11 +1126,6 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	defer func() {
 		deferFn(err)
 	}()
-
-	isRunning, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
-	if err != nil {
-		return errors.NewProcessingError("[validateSubtree][%s] failed to check if blockchain is running: %v", subtreeHash.String(), err)
-	}
 
 	missingTxs, err := u.getSubtreeMissingTxs(ctx, subtreeHash, subtree, missingTxHashes, allTxs, baseURL)
 	if err != nil {
@@ -1050,10 +1154,9 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	processedValidatorOptions := validator.ProcessOptions(validationOptions...)
 
 	var (
-		errorsFound      = atomic.Uint64{}
-		addedToOrphanage = atomic.Uint64{}
-		firstError       error
-		firstErrorOnce   sync.Once
+		errorsFound    = atomic.Uint64{}
+		firstError     error
+		firstErrorOnce sync.Once
 	)
 
 	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
@@ -1064,7 +1167,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(g, u.settings.SubtreeValidation.SpendBatcherSize*2)
+		util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.SpendBatcherSize*2)
 
 		u.logger.Debugf("[processMissingTransactions][%s] processing level %d/%d with %d transactions", subtreeHash.String(), level+1, maxLevel+1, len(txsPerLevel[level]))
 
@@ -1090,16 +1193,11 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 					// Check if this is a truly invalid transaction (not just policy error)
 					if errors.Is(err, errors.ErrTxMissingParent) {
-						// check whether we are in a running state, otherwise we can just ignore the missing parent transactions
-						if isRunning {
-							// add tx to the orphanage
-							u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent, adding to orphanage", subtreeHash.String(), tx.TxIDChainHash().String())
-							if u.orphanage.Set(*tx.TxIDChainHash(), tx) {
-								addedToOrphanage.Add(1)
-							} else {
-								u.logger.Warnf("[validateSubtree][%s] Failed to add transaction %s to orphanage - orphanage is full", subtreeHash.String(), tx.TxIDChainHash().String())
-							}
-						}
+						// Missing parent in the peer-announced subtree path. The subtree validation
+						// still fails (errorsFound was incremented above); the block path is the
+						// backstop — when the block arrives, Phase-3 sequential revalidation in
+						// CheckBlockSubtrees resolves cross-subtree parents in block order.
+						u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent", subtreeHash.String(), tx.TxIDChainHash().String())
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Report invalid subtree - contains truly invalid transaction
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, "contains_invalid_transaction")
@@ -1154,7 +1252,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 	if errorsFound.Load() > 0 {
 		// If there are errors found, we return here, so that the caller can handle it
-		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree, added %d to orphanage", subtreeHash.String(), errorsFound.Load(), addedToOrphanage.Load(), firstError)
+		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree", subtreeHash.String(), errorsFound.Load(), firstError)
 	}
 
 	if missingCount.Load() > 0 {
@@ -1214,7 +1312,9 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 			// get the whole subtree from the other peer
 			url := fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String())
 
-			body, subtreeDataErr := util.DoHTTPRequestBodyReader(ctx, url)
+			// Retry on 503 — peer's asset service may be admission-rejecting under load
+			// (asset_concurrency_subtree_data_create cap). Other errors fail through immediately.
+			body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 			if subtreeDataErr != nil {
 				// Peer cannot provide subtree data - report as invalid subtree
 				u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, "peer_cannot_provide_subtree_data")
@@ -1246,8 +1346,16 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 						// load the subtree data, making sure to validate it against the subtree txs
 						// this is less efficient than reading straight to disk with SetFromReader, but we need to validate the
 						// data before storing it on disk
-						// Use buffered reader to reduce syscalls - each tx.ReadFrom() makes many small reads
-						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, bufio.NewReaderSize(body, 1024*1024))
+						// Use pooled buffered reader to reduce syscalls and avoid per-call 1MB buffer allocation.
+						// defer the pool return so a panic / future early return still releases the reader,
+						// matching the pattern used at check_block_subtrees.go:201 and the second callsite below.
+						bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+						bufferedReader.Reset(body)
+						defer func() {
+							bufferedReader.Reset(nil) // clear reference before returning to pool
+							bufioReaderPool.Put(bufferedReader)
+						}()
+						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, bufferedReader)
 						_ = body.Close()
 						if err != nil {
 							u.logger.Errorf("[validateSubtree][%s] failed to create subtree data from reader: %v", subtreeHash.String(), err)
@@ -1304,11 +1412,41 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 	}
 
 	if !subtreeDataExists || err != nil {
-		u.logger.Debugf("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
+		// Check the policy-rejected tx cache before requesting from peer over HTTP.
+		// Transactions here were consensus-valid but rejected by our local policy.
+		remainingHashes := missingTxHashes
 
-		missingTxs, err = u.getMissingTransactionsFromPeer(ctx, subtreeHash, missingTxHashes, baseURL)
-		if err != nil {
-			return nil, errors.NewProcessingError("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String(), err)
+		if u.policyRejectedTxCache != nil {
+			toCheck := make([]missingTxHash, len(missingTxHashes))
+			for i, h := range missingTxHashes {
+				toCheck[i] = missingTxHash{hash: h.Hash, idx: h.Idx}
+			}
+
+			cached, stillMissing := u.lookupPolicyRejectedTxs(toCheck)
+			if len(cached) > 0 {
+				u.logger.Debugf("[validateSubtree][%s] resolved %d missing txs from policy-rejected cache", subtreeHash.String(), len(cached))
+				missingTxs = append(missingTxs, cached...)
+			}
+
+			if len(stillMissing) > 0 {
+				remainingHashes = make([]utxo.UnresolvedMetaData, len(stillMissing))
+				for i, sm := range stillMissing {
+					remainingHashes[i] = utxo.UnresolvedMetaData{Hash: sm.hash, Idx: sm.idx}
+				}
+			} else {
+				remainingHashes = nil
+			}
+		}
+
+		if len(remainingHashes) > 0 {
+			u.logger.Debugf("[validateSubtree][%s] fetching %d missing txs from peer", subtreeHash.String(), len(remainingHashes))
+
+			peerTxs, peerErr := u.getMissingTransactionsFromPeer(ctx, subtreeHash, remainingHashes, baseURL)
+			if peerErr != nil {
+				return nil, errors.NewProcessingError("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String(), peerErr)
+			}
+
+			missingTxs = append(missingTxs, peerTxs...)
 		}
 	}
 
@@ -1705,8 +1843,14 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	}
 	defer subtreeDataReader.Close()
 
-	// Use buffered reader to reduce syscalls - each tx.ReadFrom() makes many small reads
-	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufio.NewReaderSize(subtreeDataReader, 1024*1024))
+	// Use pooled buffered reader to reduce syscalls and avoid per-call 1MB buffer allocation.
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	bufferedReader.Reset(subtreeDataReader)
+	defer func() {
+		bufferedReader.Reset(nil) // clear reference before returning to pool
+		bufioReaderPool.Put(bufferedReader)
+	}()
+	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)
 	if err != nil {
 		return nil, err
 	}
@@ -1756,7 +1900,7 @@ func (u *Server) getMissingTransactionsFromPeer(ctx context.Context, subtreeHash
 	getMissingTransactionsConcurrency := u.settings.SubtreeValidation.GetMissingTransactions
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, getMissingTransactionsConcurrency) // keep 32 cores free for other tasks
+	util.SafeSetLimit(u.logger, g, getMissingTransactionsConcurrency) // keep 32 cores free for other tasks
 
 	// get the transactions in batches of 500
 	batchSize := u.settings.SubtreeValidation.MissingTransactionsBatchSize

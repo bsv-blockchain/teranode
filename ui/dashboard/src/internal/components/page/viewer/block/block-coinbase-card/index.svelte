@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { formatSatoshi } from '$lib/utils/format'
   import { getDetailsUrl, DetailType } from '$internal/utils/urls'
@@ -11,37 +13,38 @@
   const baseKey = 'page.viewer-block.coinbase'
   const fieldKey = `${baseKey}.fields`
 
-  $: t = $i18n.t
-  $: collapse = $mediaSize < MediaSize.sm
+  const t = $derived($i18n.t)
+  const collapse = $derived($mediaSize < MediaSize.sm)
 
-  export let data: any = {}
+  let { data = {} }: { data?: any } = $props()
 
-  $: coinbaseTx = data?.coinbase_tx
-  $: blockHeight = data?.expandedHeader?.height
-  $: hasOutputs = coinbaseTx?.outputs?.length > 0
+  const coinbaseTx = $derived(data?.coinbase_tx)
 
   // Calculate total block reward from coinbase outputs
-  $: totalReward =
-    coinbaseTx?.outputs?.reduce((sum, output) => sum + (output.satoshis || 0), 0) || 0
+  const totalReward = $derived(
+    coinbaseTx?.outputs?.reduce((sum, output) => sum + (output.satoshis || 0), 0) || 0,
+  )
 
   // Calculate transaction size from hex
-  $: txSize = coinbaseTx?.hex ? coinbaseTx.hex.length / 2 : 0
+  const txSize = $derived(coinbaseTx?.hex ? coinbaseTx.hex.length / 2 : 0)
 </script>
 
 {#if coinbaseTx}
   <Card title={t(`${baseKey}.title`)} headerPadding="20px 24px 16px 24px">
-    <div class="copy-link" slot="subtitle">
-      <a href={getDetailsUrl(DetailType.tx, coinbaseTx.txid)} class="hash-link">{coinbaseTx.txid}</a
-      >
-      <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
-        <ActionStatusIcon
-          icon="icon-duplicate-line"
-          action={copyTextToClipboardVanilla}
-          actionData={coinbaseTx.txid}
-          size={15}
-        />
+    {#snippet subtitle()}
+      <div class="copy-link">
+        <a href={getDetailsUrl(DetailType.tx, coinbaseTx.txid)} class="hash-link">{coinbaseTx.txid}</a
+        >
+        <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
+          <ActionStatusIcon
+            icon="icon-duplicate-line"
+            action={copyTextToClipboardVanilla}
+            actionData={coinbaseTx.txid}
+            size={15}
+          />
+        </div>
       </div>
-    </div>
+    {/snippet}
     <div class="content">
       <div class="fields" class:collapse>
         <div>
@@ -101,7 +104,7 @@
   }
 
   .label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;
@@ -113,7 +116,7 @@
   .value {
     word-break: break-all;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;

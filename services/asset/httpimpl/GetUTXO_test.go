@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -24,13 +23,7 @@ func TestGetUTXO(t *testing.T) {
 	t.Run("Valid UTXO JSON response", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		// Create a mock transaction with outputs
-		tx := bt.NewTx()
-		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000)
-		require.NoError(t, err)
-
 		// set mock responses
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(tx.Bytes(), nil)
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status:       1,
 			SpendingData: spendpkg.NewSpendingData(&chainhash.Hash{}, 0),
@@ -46,7 +39,7 @@ func TestGetUTXO(t *testing.T) {
 		echoContext.Request().URL.RawQuery = q.Encode()
 
 		// Call GetUTXO handler
-		err = httpServer.GetUTXO(JSON)(echoContext)
+		err := httpServer.GetUTXO(JSON)(echoContext)
 		require.NoError(t, err)
 
 		// Check response status code
@@ -73,13 +66,7 @@ func TestGetUTXO(t *testing.T) {
 	t.Run("Valid UTXO BINARY response", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		// Create a mock transaction with outputs
-		tx := bt.NewTx()
-		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000)
-		require.NoError(t, err)
-
 		// set mock responses
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(tx.Bytes(), nil)
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status:       1,
 			SpendingData: spendpkg.NewSpendingData(&chainhash.Hash{}, 0),
@@ -95,7 +82,7 @@ func TestGetUTXO(t *testing.T) {
 		echoContext.Request().URL.RawQuery = q.Encode()
 
 		// Call GetUTXO handler
-		err = httpServer.GetUTXO(BINARY_STREAM)(echoContext)
+		err := httpServer.GetUTXO(BINARY_STREAM)(echoContext)
 		require.NoError(t, err)
 
 		// Check response status code
@@ -115,13 +102,7 @@ func TestGetUTXO(t *testing.T) {
 	t.Run("Valid UTXO HEX response", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		// Create a mock transaction with outputs
-		tx := bt.NewTx()
-		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000)
-		require.NoError(t, err)
-
 		// set mock responses
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(tx.Bytes(), nil)
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status:       1,
 			SpendingData: spendpkg.NewSpendingData(&chainhash.Hash{}, 0),
@@ -137,7 +118,7 @@ func TestGetUTXO(t *testing.T) {
 		echoContext.Request().URL.RawQuery = q.Encode()
 
 		// Call GetUTXO handler
-		err = httpServer.GetUTXO(HEX)(echoContext)
+		err := httpServer.GetUTXO(HEX)(echoContext)
 		require.NoError(t, err)
 
 		// Check response status code
@@ -201,13 +182,7 @@ func TestGetUTXO(t *testing.T) {
 	t.Run("UTXO not found", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		// Create a mock transaction with outputs
-		tx := bt.NewTx()
-		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000)
-		require.NoError(t, err)
-
 		// set mock responses
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(tx.Bytes(), nil)
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("UTXO not found"))
 
 		// set echo context with vout query parameter
@@ -219,7 +194,7 @@ func TestGetUTXO(t *testing.T) {
 		echoContext.Request().URL.RawQuery = q.Encode()
 
 		// Call GetUTXO handler
-		err = httpServer.GetUTXO(JSON)(echoContext)
+		err := httpServer.GetUTXO(JSON)(echoContext)
 		echoErr := &echo.HTTPError{}
 		require.True(t, errors.As(err, &echoErr))
 
@@ -233,13 +208,7 @@ func TestGetUTXO(t *testing.T) {
 	t.Run("UTXO not found status", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		// Create a mock transaction with outputs
-		tx := bt.NewTx()
-		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000)
-		require.NoError(t, err)
-
 		// set mock responses
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(tx.Bytes(), nil)
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status: int(utxo.Status_NOT_FOUND),
 		}, nil)
@@ -253,7 +222,7 @@ func TestGetUTXO(t *testing.T) {
 		echoContext.Request().URL.RawQuery = q.Encode()
 
 		// Call GetUTXO handler
-		err = httpServer.GetUTXO(JSON)(echoContext)
+		err := httpServer.GetUTXO(JSON)(echoContext)
 		echoErr := &echo.HTTPError{}
 		require.True(t, errors.As(err, &echoErr))
 
@@ -267,13 +236,7 @@ func TestGetUTXO(t *testing.T) {
 	t.Run("Repository error", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		// Create a mock transaction with outputs
-		tx := bt.NewTx()
-		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000)
-		require.NoError(t, err)
-
 		// set mock responses
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(tx.Bytes(), nil)
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(nil, errors.NewProcessingError("repository error"))
 
 		// set echo context with vout query parameter
@@ -285,7 +248,7 @@ func TestGetUTXO(t *testing.T) {
 		echoContext.Request().URL.RawQuery = q.Encode()
 
 		// Call GetUTXO handler
-		err = httpServer.GetUTXO(JSON)(echoContext)
+		err := httpServer.GetUTXO(JSON)(echoContext)
 		echoErr := &echo.HTTPError{}
 		require.True(t, errors.As(err, &echoErr))
 
@@ -299,13 +262,7 @@ func TestGetUTXO(t *testing.T) {
 	t.Run("Invalid read mode", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		// Create a mock transaction with outputs
-		tx := bt.NewTx()
-		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000)
-		require.NoError(t, err)
-
 		// set mock responses
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(tx.Bytes(), nil)
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status:       1,
 			SpendingData: spendpkg.NewSpendingData(&chainhash.Hash{}, 0),
@@ -325,7 +282,7 @@ func TestGetUTXO(t *testing.T) {
 		)
 
 		// Call GetUTXO handler
-		err = httpServer.GetUTXO(invalidReadMode)(echoContext)
+		err := httpServer.GetUTXO(invalidReadMode)(echoContext)
 		echoErr := &echo.HTTPError{}
 		require.True(t, errors.As(err, &echoErr))
 
@@ -379,13 +336,16 @@ func TestGetUTXO(t *testing.T) {
 		assert.Contains(t, echoErr.Message.(string), "invalid vout format")
 	})
 
+	// Transaction-not-found and vout-out-of-range both manifest as a store-level
+	// Status_NOT_FOUND now that the handler no longer fetches the full
+	// transaction up front. They are reported uniformly as 404 "UTXO not found".
 	t.Run("Transaction not found", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		// set mock to return transaction not found
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("transaction not found"))
+		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
+			Status: int(utxo.Status_NOT_FOUND),
+		}, nil)
 
-		// set echo context with vout query parameter
 		q := make(url.Values)
 		q.Set("vout", "0")
 		echoContext.SetPath("/utxo/:hash")
@@ -393,30 +353,21 @@ func TestGetUTXO(t *testing.T) {
 		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
 		echoContext.Request().URL.RawQuery = q.Encode()
 
-		// Call GetUTXO handler
 		err := httpServer.GetUTXO(JSON)(echoContext)
 		echoErr := &echo.HTTPError{}
 		require.True(t, errors.As(err, &echoErr))
 
-		// Check response status code
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
-
-		// Check response body
-		assert.Equal(t, "NOT_FOUND (3): transaction not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): UTXO not found", echoErr.Message)
 	})
 
 	t.Run("Vout out of range", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		// Create a mock transaction with only 1 output
-		tx := bt.NewTx()
-		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000)
-		require.NoError(t, err)
+		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
+			Status: int(utxo.Status_NOT_FOUND),
+		}, nil)
 
-		// set mock to return transaction
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(tx.Bytes(), nil)
-
-		// set echo context requesting vout=5 (but tx only has 1 output at index 0)
 		q := make(url.Values)
 		q.Set("vout", "5")
 		echoContext.SetPath("/utxo/:hash")
@@ -424,15 +375,35 @@ func TestGetUTXO(t *testing.T) {
 		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
 		echoContext.Request().URL.RawQuery = q.Encode()
 
-		// Call GetUTXO handler
-		err = httpServer.GetUTXO(JSON)(echoContext)
+		err := httpServer.GetUTXO(JSON)(echoContext)
 		echoErr := &echo.HTTPError{}
 		require.True(t, errors.As(err, &echoErr))
 
-		// Check response status code
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
+		assert.Equal(t, "NOT_FOUND (3): UTXO not found", echoErr.Message)
+	})
 
-		// Check response body
-		assert.Equal(t, "NOT_FOUND (3): UTXO not found: output index out of range", echoErr.Message)
+	// New: GetUTXO must not call repository.GetTransaction. This guards against
+	// regressing the fast-path: the slowness in the old endpoint came from
+	// fetching+parsing the full raw tx just to recompute the UTXO hash.
+	t.Run("Does not call GetTransaction", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+
+		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
+			Status:   int(utxo.Status_OK),
+			LockTime: 42,
+		}, nil)
+
+		q := make(url.Values)
+		q.Set("vout", "0")
+		echoContext.SetPath("/utxo/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+		echoContext.Request().URL.RawQuery = q.Encode()
+
+		err := httpServer.GetUTXO(JSON)(echoContext)
+		require.NoError(t, err)
+
+		mockRepo.AssertNotCalled(t, "GetTransaction", mock.Anything, mock.Anything)
 	})
 }

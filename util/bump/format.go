@@ -80,48 +80,32 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 		Path:        make([]Level, 0),
 	}
 
-	// Convert subtree proof levels
-	txIndex := proof.TxIndexInSubtree
+	// A BUMP is a single flat merkle tree over the block's transactions; offsets at every level live
+	// in one continuous space. Teranode splits the proof into a subtree-level path and a block-level
+	// path, but together they form that one tree: the subtree contributes the low `subtreeLevels` bits
+	// of the transaction's global leaf offset, and the subtree index contributes the high bits. (The
+	// previous code numbered the two segments independently, which produced wrong offsets — and thus
+	// unverifiable BUMPs — for any block with more than one subtree.)
+	subtreeLevels := len(proof.SubtreeProof)
+	globalOffset := (uint32(proof.SubtreeIndex) << uint(subtreeLevels)) | uint32(proof.TxIndexInSubtree) //nolint:gosec
 
-	for levelIdx, siblingHash := range proof.SubtreeProof {
-		level := make(Level, 0, 2)
+	appendLevel := func(levelIdx int, siblingHash chainhash.Hash) {
+		// Sibling offset at this level: the working hash sits at globalOffset>>levelIdx; its sibling is
+		// the adjacent node (low bit flipped).
+		siblingOffset := (globalOffset >> uint(levelIdx)) ^ 1
 
-		// Calculate the offset at this level
-		// At each level up the tree, the index is divided by 2
-		offset := uint32(txIndex >> levelIdx)
-
-		// Determine sibling offset (adjacent node)
-		siblingOffset := offset ^ 1 // Flip the last bit to get sibling
-
-		// Add the sibling node with its hash in display order (BRC-74 convention)
-		level = append(level, Node{
+		bump.Path = append(bump.Path, Level{Node{
 			Offset: siblingOffset,
 			Hash:   hashToDisplayHex(siblingHash),
-		})
-
-		bump.Path = append(bump.Path, level)
+		}})
 	}
 
-	// Convert block proof levels if present
-	// Block proofs represent the path from subtree root to block merkle root
-	subtreeIndex := proof.SubtreeIndex
+	for levelIdx, siblingHash := range proof.SubtreeProof {
+		appendLevel(levelIdx, siblingHash)
+	}
 
-	for levelIdx, siblingHash := range proof.BlockProof {
-		level := make(Level, 0, 2)
-
-		// Calculate the offset at this block level
-		blockLevelOffset := uint32(subtreeIndex >> levelIdx)
-
-		// Determine sibling offset
-		siblingOffset := blockLevelOffset ^ 1
-
-		// Add the sibling node with its hash in display order (BRC-74 convention)
-		level = append(level, Node{
-			Offset: siblingOffset,
-			Hash:   hashToDisplayHex(siblingHash),
-		})
-
-		bump.Path = append(bump.Path, level)
+	for i, siblingHash := range proof.BlockProof {
+		appendLevel(subtreeLevels+i, siblingHash)
 	}
 
 	// BRC-74 requires level 0 to include the target txid (flag 0x02) alongside its sibling.
@@ -129,17 +113,17 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 	var zeroHash chainhash.Hash
 	if proof.TxID != zeroHash && len(bump.Path) > 0 {
 		txidNode := Node{
-			Offset: uint32(proof.TxIndexInSubtree),
+			Offset: globalOffset,
 			Hash:   hashToDisplayHex(proof.TxID),
 			TxID:   true,
 		}
 
 		level0 := bump.Path[0]
-		if uint32(proof.TxIndexInSubtree)%2 == 0 {
-			// Even index: txid is on the left, prepend
+		if globalOffset%2 == 0 {
+			// Even offset: txid is on the left, prepend
 			bump.Path[0] = append(Level{txidNode}, level0...)
 		} else {
-			// Odd index: txid is on the right, append
+			// Odd offset: txid is on the right, append
 			bump.Path[0] = append(level0, txidNode)
 		}
 	}

@@ -1,47 +1,47 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { Icon, Typo } from '$lib/components'
   import { ToastStatus } from './types'
   import type { ToastStatusType } from './types'
 
-  export let testId: string | undefined | null = null
+  let {
+    testId = null,
+    status = ToastStatus.success,
+    title = '',
+    message = '',
+  }: {
+    testId?: string | undefined | null
+    status?: ToastStatusType
+    title?: string
+    message?: string
+  } = $props()
 
-  export let status: ToastStatusType = ToastStatus.success
-  export let title = ''
-  export let message = ''
-
-  let icon = ''
-
-  $: {
+  const icon = $derived.by(() => {
     switch (status) {
       case ToastStatus.success:
-        icon = 'check-circle'
-        break
+        return 'check-circle'
       case ToastStatus.failure:
-        icon = 'exclamation-circle'
-        break
+        return 'exclamation-circle'
       case ToastStatus.warn:
-        icon = 'exclamation'
-        break
+        return 'exclamation'
       case ToastStatus.info:
-        icon = 'information-circle'
-        break
+        return 'information-circle'
     }
-  }
+    return ''
+  })
 
-  $: toastVarStr = `--toast`
+  const toastVarStr = `--toast`
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
-      `--width:var(${toastVarStr}-width)`,
-      `--padding:var(${toastVarStr}-padding)`,
-      `--border-radius:var(${toastVarStr}-border-radius)`,
-      `--border-width:var(${toastVarStr}-border-width)`,
-      `--border-style:var(${toastVarStr}-border-style)`,
-      `--bg-color:var(${toastVarStr}-${status}-bg-color)`,
-      `--border-color:var(${toastVarStr}-${status}-border-color)`,
-    ]
-  }
+  const cssVars = $derived([
+    `--width:var(${toastVarStr}-width)`,
+    `--padding:var(${toastVarStr}-padding)`,
+    `--border-radius:var(${toastVarStr}-border-radius)`,
+    `--border-width:var(${toastVarStr}-border-width)`,
+    `--border-style:var(${toastVarStr}-border-style)`,
+    `--bg-color:var(${toastVarStr}-${status}-bg-color)`,
+    `--border-color:var(${toastVarStr}-${status}-border-color)`,
+  ])
 </script>
 
 <div class="tui-toast" data-test-id={testId} style={`${cssVars.join(';')}`}>

@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { tippy } from '$lib/stores/media'
 
@@ -5,39 +7,47 @@
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
   import { getLinkPrefix } from '$lib/utils/url'
 
-  export let href = ''
-  export let text: string | null = null
-  export let className = ''
-  export let external = true
+  let {
+    href = '',
+    text = null,
+    className = '',
+    external = true,
+    iconValue = null,
+    icon = 'icon-duplicate-line',
+    iconSize = 15,
+    iconPadding = '2px 0 0 0',
+    tooltip = '',
+  }: {
+    href?: string
+    text?: string | null
+    className?: string
+    external?: boolean
+    iconValue?: any
+    icon?: string
+    iconSize?: number
+    iconPadding?: string
+    tooltip?: string
+  } = $props()
 
-  export let iconValue: any = null
-  export let icon = 'icon-duplicate-line'
-  export let iconSize = 15
-  export let iconPadding = '2px 0 0 0'
-  export let tooltip = ''
-
-  let props: any = {}
-  let hrefWithPrefix = ''
-  let value = ''
-
-  $: {
-    props = external ? { target: '_blank', rel: 'noopener noreferrer' } : {}
+  const linkProps = $derived.by(() => {
+    const p: any = external ? { target: '_blank', rel: 'noopener noreferrer' } : {}
 
     if (className) {
-      props.class = className
+      p.class = className
     }
 
-    const prefix = getLinkPrefix(href, external)
-    hrefWithPrefix = prefix + href
+    return p
+  })
 
-    value = text || href
-  }
+  const hrefWithPrefix = $derived(getLinkPrefix(href, external) + href)
+
+  const value = $derived(text || href)
 </script>
 
 {#if value}
   {#if icon && iconValue}
     <div class="link" style:--icon-padding={iconPadding}>
-      <a href={hrefWithPrefix} {...props}>{value}</a>
+      <a href={hrefWithPrefix} {...linkProps}>{value}</a>
       <div class="icon" use:$tippy={{ content: tooltip }}>
         <ActionStatusIcon
           {icon}
@@ -48,7 +58,7 @@
       </div>
     </div>
   {:else}
-    <a href={hrefWithPrefix} {...props}>{value}</a>
+    <a href={hrefWithPrefix} {...linkProps}>{value}</a>
   {/if}
 {:else}
   ''

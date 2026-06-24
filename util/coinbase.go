@@ -25,19 +25,28 @@ const (
 // ExtractCoinbaseHeight extracts the block height from a coinbase transaction's input script.
 // The height is encoded at the beginning of the coinbase script according to BIP 34.
 func ExtractCoinbaseHeight(coinbaseTx *bt.Tx) (uint32, error) {
-	height, _, err := extractCoinbaseHeightAndText(*coinbaseTx.Inputs[0].UnlockingScript)
+	height, _, err := extractCoinbaseHeightAndText(*coinbaseTx.Inputs[0].UnlockingScript, false)
 	return height, err
 }
 
 // ExtractCoinbaseMiner extracts the miner identification string from a coinbase transaction.
 // This parses the arbitrary text portion of the coinbase script, cleaning and formatting it.
+// By default, non-printable characters are filtered and the text is sanitized.
 func ExtractCoinbaseMiner(coinbaseTx *bt.Tx) (string, error) {
+	return ExtractCoinbaseMinerRaw(coinbaseTx, false)
+}
+
+// ExtractCoinbaseMinerRaw extracts the miner identification string from a coinbase transaction.
+// When raw is true, the arbitrary text is returned without any sanitization or filtering.
+// When raw is false, non-printable UTF-8 characters are filtered, whitespace is trimmed,
+// and the text is truncated after the second slash.
+func ExtractCoinbaseMinerRaw(coinbaseTx *bt.Tx, raw bool) (string, error) {
 	if len(coinbaseTx.Inputs) == 0 {
 		return "", errors.NewBlockCoinbaseMissingHeightError("coinbase transaction has no inputs")
 	}
 
 	// Extract both height and miner text from the first input of the coinbase transaction
-	_, miner, err := extractCoinbaseHeightAndText(*coinbaseTx.Inputs[0].UnlockingScript)
+	_, miner, err := extractCoinbaseHeightAndText(*coinbaseTx.Inputs[0].UnlockingScript, raw)
 	if err != nil && errors.Is(err, errors.ErrBlockCoinbaseMissingHeight) {
 		err = nil
 	}
@@ -45,7 +54,7 @@ func ExtractCoinbaseMiner(coinbaseTx *bt.Tx) (string, error) {
 	return miner, err
 }
 
-func extractCoinbaseHeightAndText(sigScript bscript.Script) (uint32, string, error) {
+func extractCoinbaseHeightAndText(sigScript bscript.Script, raw bool) (uint32, string, error) {
 	if len(sigScript) < 1 {
 		return 0, "", errors.NewBlockCoinbaseMissingHeightError("the coinbase signature script must start with the length of the serialized block height")
 	}
@@ -67,6 +76,10 @@ func extractCoinbaseHeightAndText(sigScript bscript.Script) (uint32, string, err
 
 	arbitraryTextBytes := sigScript[serializedLen+1:]
 	arbitraryText := string(arbitraryTextBytes)
+
+	if raw {
+		return uint32(serializedHeight), arbitraryText, nil
+	}
 
 	return uint32(serializedHeight), extractMiner(arbitraryText), nil
 }

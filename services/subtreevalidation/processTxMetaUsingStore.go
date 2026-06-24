@@ -83,7 +83,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 	missingTxThreshold := u.settings.BlockValidation.ProcessTxMetaUsingStoreMissingTxThreshold
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, validateSubtreeInternalConcurrency)
+	util.SafeSetLimit(u.logger, g, validateSubtreeInternalConcurrency)
 
 	var missed atomic.Int32
 

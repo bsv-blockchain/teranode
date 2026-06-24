@@ -54,9 +54,12 @@ type Interface interface {
 	GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error)
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeNodeHashesReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeNodesPage(ctx context.Context, hash *chainhash.Hash, offset, limit int) ([]subtree.Node, int, error)
 	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error)
+	GetSubtreePage(ctx context.Context, hash *chainhash.Hash, offset, limit int) (*subtree.Subtree, int, int, error)
 	GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error)
 	GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
@@ -94,6 +97,7 @@ type Repository struct {
 	semGetTransactionMeta     *semaphore.Weighted
 	semGetSubtreeData         *semaphore.Weighted
 	semGetSubtreeDataReader   *semaphore.Weighted
+	semSubtreeDataCreate      *semaphore.Weighted
 	semGetSubtreeTransactions *semaphore.Weighted
 	semGetSubtreeExists       *semaphore.Weighted
 	semGetSubtreeHead         *semaphore.Weighted
@@ -152,6 +156,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 	repo.semGetTransactionMeta = initSemaphore(tSettings.Asset.ConcurrencyGetTransactionMeta, "GetTransactionMeta")
 	repo.semGetSubtreeData = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeData, "GetSubtreeData")
 	repo.semGetSubtreeDataReader = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeDataReader, "GetSubtreeDataReader")
+	repo.semSubtreeDataCreate = initSemaphore(tSettings.Asset.ConcurrencySubtreeDataCreate, "SubtreeDataCreate")
 	repo.semGetSubtreeTransactions = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeTransactions, "GetSubtreeTransactions")
 	repo.semGetSubtreeExists = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeExists, "GetSubtreeExists")
 	repo.semGetSubtreeHead = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeHead, "GetSubtreeHead")
@@ -197,6 +202,17 @@ func releaseSemaphorePermit(sem *semaphore.Weighted) {
 	if sem != nil {
 		sem.Release(1)
 	}
+}
+
+// tryAcquireSemaphorePermit acquires a permit without blocking.
+// If sem is nil (unlimited concurrency), returns true.
+// Returns false if the semaphore is at capacity — callers should treat this as a
+// "service unavailable" condition and surface it to clients (HTTP 503), not retry locally.
+func tryAcquireSemaphorePermit(sem *semaphore.Weighted) bool {
+	if sem == nil {
+		return true
+	}
+	return sem.TryAcquire(1)
 }
 
 // Health performs health checks on the repository and its dependencies.
@@ -680,7 +696,7 @@ func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Conte
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtree",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
 	)
 
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
@@ -725,7 +741,7 @@ func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash
 // This is used internally to avoid nested semaphore acquisition.
 func (repo *Repository) getSubtreeDataInternal(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeData",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
 	)
 
 	st, err := repo.GetSubtree(ctx, hash)
@@ -760,7 +776,7 @@ func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainh
 	defer releaseSemaphorePermit(repo.semGetSubtreeTransactions)
 
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeTransactions",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeTransactions: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtreeTransactions: %s", hash.String()),
 	)
 
 	// Call internal method to avoid nested semaphore acquisition
@@ -898,7 +914,10 @@ func (repo *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.S
 	}
 	defer releaseSemaphorePermit(repo.semGetUtxo)
 
-	repo.logger.Debugf("[Repository] GetUtxo: %s", spend.UTXOHash.String())
+	// spend.UTXOHash may be nil — callers that locate the record by primary
+	// key (txid, vout) intentionally skip recomputing the hash. Log identifiers
+	// that are always present instead of dereferencing UTXOHash.
+	repo.logger.Debugf("[Repository] GetUtxo: %s:%d", spend.TxID, spend.Vout)
 
 	resp, err := repo.UtxoStore.GetSpend(ctx, spend)
 	if err != nil {

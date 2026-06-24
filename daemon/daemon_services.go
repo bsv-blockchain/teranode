@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -159,6 +160,20 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 	if profilerAddr != "" && !pprofRegistered.Load() {
 		pprofRegistered.Store(true)
 
+		// Enable block / mutex profiling when configured. Both are disabled by
+		// default (rate/fraction == 0) and incur negligible overhead at the
+		// recommended on-cluster sampling values. Required to capture
+		// wait-time data that CPU profiles cannot expose.
+		if rate := appSettings.BlockProfileRate; rate > 0 {
+			runtime.SetBlockProfileRate(rate)
+			logger.Infof("runtime.SetBlockProfileRate(%d) enabled — /debug/pprof/block now collecting", rate)
+		}
+
+		if frac := appSettings.MutexProfileFraction; frac > 0 {
+			runtime.SetMutexProfileFraction(frac)
+			logger.Infof("runtime.SetMutexProfileFraction(%d) enabled — /debug/pprof/mutex now collecting", frac)
+		}
+
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
@@ -277,6 +292,12 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 	if err != nil {
 		return err
 	}
+	peerRegistryClient, err := d.daemonStores.GetPeerRegistryClient(
+		ctx, createLogger(loggerBlockchainClient), appSettings, serviceNameP2P,
+	)
+	if err != nil {
+		return err
+	}
 	blockAssemblyClient, err := blockassembly.NewClient(ctx, createLogger(loggerBlockAssembly), appSettings)
 	if err != nil {
 		return err
@@ -329,7 +350,7 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 	var p2pService *p2p.Server
 
 	p2pService, err = p2p.NewServer(
-		ctx, p2pLogger, appSettings, blockchainClient,
+		ctx, p2pLogger, appSettings, blockchainClient, peerRegistryClient,
 		blockAssemblyClient,
 		rejectedTxKafkaConsumerClient,
 		invalidBlocksKafkaConsumerClient,
@@ -786,6 +807,17 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		var policyRejectedTxConsumerClient *kafka.KafkaConsumerGroup
+
+		policyRejectedTxConsumerClient, err = getKafkaTxPolicyRejectedConsumerGroup(
+			createLogger("kafka-consumer-policy-rejected-tx"),
+			appSettings,
+			serviceSubtreeValidation+"."+appSettings.ClientName,
+		)
+		if err != nil {
+			return err
+		}
+
 		// Create the P2P client for the SubtreeValidation service
 		var p2pClient p2p.ClientI
 
@@ -808,6 +840,7 @@ func (d *Daemon) startValidationService(
 			blockchainClient,
 			subtreeConsumerClient,
 			txMetaConsumerClient,
+			policyRejectedTxConsumerClient,
 			p2pClient,
 		)
 		if err != nil {
@@ -934,6 +967,15 @@ func (d *Daemon) startValidatorService(
 		return err
 	}
 
+	var policyRejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
+
+	policyRejectedTxKafkaProducerClient, err = getKafkaTxPolicyRejectedAsyncProducer(
+		ctx, createLogger("kafka-producer-policy-rejected-tx"), appSettings,
+	)
+	if err != nil {
+		return err
+	}
+
 	// Create the BlockAssembly client for the Validator service
 	var blockAssemblyClient *blockassembly.Client
 
@@ -953,6 +995,7 @@ func (d *Daemon) startValidatorService(
 		consumerClient,
 		txMetaKafkaProducerClient,
 		rejectedTxKafkaProducerClient,
+		policyRejectedTxKafkaProducerClient,
 		blockAssemblyClient,
 	))
 }

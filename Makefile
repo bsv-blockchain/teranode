@@ -219,6 +219,13 @@ sequentialtest-aerospike:
 	@mkdir -p /tmp/teranode-test-results
 	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO test/scripts/run_tests_sequentially.sh --db aerospike 2>&1 | tee /tmp/teranode-test-results/sequentialtest-aerospike-results.txt
 
+.PHONY: sequentialtest-shard
+sequentialtest-shard:
+	@mkdir -p /tmp/teranode-test-results
+	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO \
+		test/scripts/run_tests_sequentially.sh --shard $(SHARD) --total $(TOTAL) 2>&1 \
+		| tee /tmp/teranode-test-results/sequentialtest-shard-$(SHARD)-results.txt
+
 .PHONY: testall
 testall: test longtest sequentialtest
 
@@ -233,12 +240,16 @@ testall: test longtest sequentialtest
 smoketest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	@if [ "$(TEST_RETRY_COUNT)" != "1" ]; then \
+	@RUN_ARG='.'; \
+	if [ -n "$(TOTAL)" ]; then \
+		RUN_ARG="$$(test/scripts/list_test_shard.sh test/e2e/daemon/ready $(SHARD) $(TOTAL) 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx|TestLegacyTxBroadcast942_TeranodeRPCToSVMempool')"; \
+	fi; \
+	if [ "$(TEST_RETRY_COUNT)" != "1" ]; then \
 		echo "Running smoketest with retry support (TEST_RETRY_COUNT=$(TEST_RETRY_COUNT))"; \
-		cd test/e2e/daemon/ready && TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) ../../../../test/scripts/gotestsum_with_retry.sh --format pkgname -- -v -count=1 -race -timeout=20m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
+		cd test/e2e/daemon/ready && TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) ../../../../test/scripts/gotestsum_with_retry.sh --format pkgname -- -v -count=1 -race -timeout=20m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx|TestLegacyTxBroadcast942_TeranodeRPCToSVMempool' -run "$$RUN_ARG" 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
 	else \
 		echo "Running smoketest without retry (TEST_RETRY_COUNT=1)"; \
-		cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
+		cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx|TestLegacyTxBroadcast942_TeranodeRPCToSVMempool' -run "$$RUN_ARG" 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
 	fi
 
 # run pruner e2e tests - heavyweight tests that mine blocks and verify pruning behavior
@@ -254,7 +265,7 @@ prunertest:
 legacy-sync:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestBIP68' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestBIP68|TestLegacyTxBroadcast942_TeranodeRPCToSVMempool' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
 
 # run chain integrity tests - multi-node tests with deep chain verification
 # This test mines blocks across multiple nodes and verifies chain consistency
@@ -270,6 +281,17 @@ network-chaos-test:
 	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
 	@mkdir -p /tmp/teranode-test-results
 	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=30m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-results.txt
+
+# Split-per-service variant of the network-chaos suite. Brings up its own
+# -allinone=0 stack (~32 containers) so per-service chaos verbs are available.
+# Kept separate from network-chaos-test because the two stacks cannot coexist
+# and the split topology takes materially longer to start.
+.PHONY: network-chaos-test-split
+network-chaos-test-split:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/multinode_split && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=40m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-split-results.txt
 
 .PHONY: nightly-tests
 nightly-tests:

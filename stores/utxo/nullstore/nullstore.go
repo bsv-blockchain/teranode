@@ -72,8 +72,19 @@ func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string
 	return http.StatusOK, "NullStore Store available", nil
 }
 
+// Close is a no-op for the null store: it owns no batchers or connections.
+func (m *NullStore) Close(_ context.Context) error {
+	return nil
+}
+
 func (m *NullStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
-	return &meta.Data{}, nil
+	// BlockHeights is non-empty so callers reading it (notably the validator's
+	// parent-tx height lookup) treat the parent as confirmed at a real height
+	// rather than triggering the unconfirmedParentHeight fallback. NullStore's
+	// purpose is "everything succeeds with default data"; an empty BlockHeights
+	// would force the consensus-mode rejection (bad-txns-unconfirmed-input-in-block)
+	// on any test that uses NullStore as a parent-tx source.
+	return &meta.Data{BlockHeights: []uint32{1}}, nil
 }
 
 func (m *NullStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
@@ -173,6 +184,18 @@ func (m *NullStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo
 	return nil, nil
 }
 
+func (m *NullStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *NullStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+
+func (m *NullStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
+}
+
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
@@ -203,6 +226,18 @@ func (m *NullStore) SetConflicting(ctx context.Context, txHashes []chainhash.Has
 
 func (m *NullStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
+}
+
+func (m *NullStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	return nil
+}
+
+func (m *NullStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return nil
+}
+
+func (m *NullStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	return nil, nil
 }
 
 func (m *NullStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {

@@ -2,13 +2,15 @@ package uaerospike
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
-	"github.com/aerospike/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/ordishs/gocore"
 )
 
@@ -23,6 +25,18 @@ const (
 
 	// minSemaphoreTimeout is the minimum timeout for semaphore acquisition
 	minSemaphoreTimeout = 100 * time.Millisecond
+
+	// defaultSemaphoreMultiplier preserves the original semaphore sizing
+	// (one slot per ConnectionQueueSize-derived permit) when no option is
+	// supplied by the caller.
+	defaultSemaphoreMultiplier = 1.0
+
+	// maxSemaphoreCapacity bounds the buffer of the connection-semaphore
+	// channel to keep a misconfigured multiplier (typo, NaN/Inf, runaway
+	// value from external config) from allocating a multi-GB channel.
+	// 1 << 20 (≈1M slots) is far above any legitimate connection-queue
+	// size while keeping worst-case channel-buffer overhead bounded.
+	maxSemaphoreCapacity = 1 << 20
 )
 
 // getConnectionQueueSize returns the connection queue size from the given policy
@@ -34,11 +48,112 @@ func getConnectionQueueSize(policy *aerospike.ClientPolicy) int {
 	return DefaultConnectionQueueSize
 }
 
+// clientConfig holds optional construction-time settings for Client. Populated
+// by applying ClientOption values; obtain a defaults-applied instance via
+// newClientConfig.
+type clientConfig struct {
+	// semaphoreMultiplier scales the connection-queue-derived semaphore
+	// capacity. A value of 0 (or negative) disables the semaphore entirely
+	// — every acquirePermit becomes a no-op and the underlying aerospike
+	// client governs concurrency on its own. Default: 1.0.
+	semaphoreMultiplier float64
+
+	// overloadRetry bounds the wrapper-level retry performed when the
+	// server reports overload. See WithOverloadRetry.
+	overloadRetry overloadRetryConfig
+
+	// logger reports overload retries when set. See WithLogger.
+	logger ulogger.Logger
+}
+
+// ClientOption configures a Client at construction time.
+type ClientOption func(*clientConfig)
+
+// WithSemaphoreMultiplier scales the connection-queue-derived semaphore
+// capacity for the constructed Client.
+//
+//	multiplier <= 0  disables the semaphore entirely. All permit acquires
+//	                 become no-ops; only the underlying aerospike client's
+//	                 own connection pool governs concurrency.
+//	multiplier  NaN  treated as garbage input and disables the semaphore.
+//	multiplier  > 0  scales the queue size derived from the policy (or
+//	                 DefaultConnectionQueueSize):
+//	                     scaledQueue = max(1, round(queueSize * multiplier))
+//	                 clamped to maxSemaphoreCapacity (1<<20) to bound the
+//	                 worst-case channel allocation. e.g. 2.0 doubles
+//	                 capacity, 0.5 halves it.
+//
+// Typical uses:
+//   - 0 to opt out of the in-process throttle when the workload is already
+//     bounded upstream and the parking overhead is undesirable.
+//   - <1 to over-restrict (sharing the aerospike server with other clients).
+//   - >1 when the deployment has been verified to handle more concurrent
+//     operations than the default queue size implies.
+func WithSemaphoreMultiplier(multiplier float64) ClientOption {
+	return func(c *clientConfig) {
+		c.semaphoreMultiplier = multiplier
+	}
+}
+
+func newClientConfig(opts []ClientOption) *clientConfig {
+	cfg := &clientConfig{
+		semaphoreMultiplier: defaultSemaphoreMultiplier,
+		overloadRetry: overloadRetryConfig{
+			maxElapsed:  defaultOverloadRetryMaxElapsed,
+			baseBackoff: defaultOverloadRetryBaseBackoff,
+			maxBackoff:  defaultOverloadRetryMaxBackoff,
+		},
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+
+	return cfg
+}
+
+// buildConnSemaphore returns the buffered channel used as the connection
+// semaphore, or nil when the multiplier disables it. nil is the documented
+// signal to acquirePermit / releasePermit that the throttle is off.
+//
+// NaN and non-positive multipliers disable the semaphore (NaN is treated as
+// garbage input, not a "default"). Positive +Inf and any scaled value above
+// maxSemaphoreCapacity are clamped to maxSemaphoreCapacity so a misconfig
+// can't trigger a runaway channel allocation.
+func buildConnSemaphore(queueSize int, multiplier float64) chan struct{} {
+	if math.IsNaN(multiplier) || multiplier <= 0 {
+		return nil
+	}
+
+	var scaled int
+
+	scaledF := float64(queueSize) * multiplier
+	switch {
+	case math.IsInf(scaledF, 1) || scaledF >= float64(maxSemaphoreCapacity):
+		scaled = maxSemaphoreCapacity
+	default:
+		scaled = int(math.Round(scaledF))
+	}
+
+	if scaled < 1 {
+		scaled = 1
+	}
+
+	if scaled > maxSemaphoreCapacity {
+		scaled = maxSemaphoreCapacity
+	}
+
+	return make(chan struct{}, scaled)
+}
+
 // ClientStats holds the statistics for Aerospike operations
 type ClientStats struct {
-	stat             *gocore.Stat
-	operateStat      *gocore.Stat
-	batchOperateStat *gocore.Stat
+	stat              *gocore.Stat
+	operateStat       *gocore.Stat
+	batchOperateStat  *gocore.Stat
+	overloadRetryStat *gocore.Stat
 }
 
 // NewClientStats creates a new ClientStats instance
@@ -48,22 +163,40 @@ func NewClientStats() *ClientStats {
 		stat:             stat,
 		operateStat:      stat.NewStat("Operate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000),
 		batchOperateStat: stat.NewStat("BatchOperate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000),
+		// overloadRetryStat isolates time spent in the overload backoff loop.
+		// The base op stats above are taken at method entry, so during overload
+		// they span the retries too and read above raw server latency; read
+		// this stat to separate retry time from server latency.
+		overloadRetryStat: stat.NewStat("OverloadRetry"),
 	}
 }
 
 // Client is a wrapper around aerospike.Client that provides a semaphore to limit concurrent connections.
 type Client struct {
 	*aerospike.Client
-	connSemaphore chan struct{} // Simple channel-based semaphore
-	stats         *ClientStats  // Always initialized, never nil
+	connSemaphore chan struct{} // Simple channel-based semaphore; nil when disabled.
+	// connQueueSize is the underlying aerospike client's connection-queue
+	// size (post-policy resolution). GetConnectionQueueSize reports this
+	// when connSemaphore is nil so external heuristics still see a non-zero
+	// pool capacity.
+	connQueueSize int
+	stats         *ClientStats // Always initialized, never nil
+	// overloadRetry bounds the retry loop applied when the server reports
+	// overload (DEVICE_OVERLOAD / MAX_ERROR_RATE). See WithOverloadRetry.
+	overloadRetry overloadRetryConfig
+	// logger reports overload retries; nil means silent.
+	logger ulogger.Logger
 }
 
 // NewClient creates a new Aerospike client with the specified hostname and port.
-func NewClient(hostname string, port int) (*Client, error) {
+// Optional ClientOptions (e.g. WithSemaphoreMultiplier) tune behaviour.
+func NewClient(hostname string, port int, opts ...ClientOption) (*Client, error) {
 	client, err := aerospike.NewClient(hostname, port)
 	if err != nil {
 		return nil, err
 	}
+
+	cfg := newClientConfig(opts)
 
 	// Get queue size from default policy
 	policy := aerospike.NewClientPolicy()
@@ -71,13 +204,25 @@ func NewClient(hostname string, port int) (*Client, error) {
 
 	return &Client{
 		Client:        client,
-		connSemaphore: make(chan struct{}, queueSize),
+		connSemaphore: buildConnSemaphore(queueSize, cfg.semaphoreMultiplier),
+		connQueueSize: queueSize,
 		stats:         NewClientStats(),
+		overloadRetry: cfg.overloadRetry,
+		logger:        cfg.logger,
 	}, nil
 }
 
 // NewClientWithPolicyAndHost creates a new Aerospike client with the specified policy and hosts.
+// Optional ClientOptions (e.g. WithSemaphoreMultiplier) tune behaviour and must be supplied via
+// NewClientWithPolicyAndHostOpts to keep the existing variadic-host signature intact.
 func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerospike.Host) (*Client, aerospike.Error) {
+	return NewClientWithPolicyAndHostOpts(policy, hosts, nil)
+}
+
+// NewClientWithPolicyAndHostOpts is the option-aware variant of
+// NewClientWithPolicyAndHost. hosts and opts are accepted as explicit slices
+// (rather than variadic) so the two slice arguments don't collide.
+func NewClientWithPolicyAndHostOpts(policy *aerospike.ClientPolicy, hosts []*aerospike.Host, opts []ClientOption) (*Client, aerospike.Error) {
 	var (
 		client *aerospike.Client
 		err    aerospike.Error
@@ -126,12 +271,16 @@ func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerosp
 		return nil, err
 	}
 
+	cfg := newClientConfig(opts)
 	queueSize := getConnectionQueueSize(policy)
 
 	return &Client{
 		Client:        client,
-		connSemaphore: make(chan struct{}, queueSize),
+		connSemaphore: buildConnSemaphore(queueSize, cfg.semaphoreMultiplier),
+		connQueueSize: queueSize,
 		stats:         NewClientStats(),
+		overloadRetry: cfg.overloadRetry,
+		logger:        cfg.logger,
 	}, nil
 }
 
@@ -175,7 +324,9 @@ func (c *Client) Put(policy *aerospike.WritePolicy, key *aerospike.Key, binMap a
 		c.stats.stat.NewStat(sb.String()).AddTime(start)
 	}()
 
-	return c.Client.Put(policy, key, binMap)
+	return c.retryOnOverload(func() aerospike.Error {
+		return c.Client.Put(policy, key, binMap)
+	})
 }
 
 // PutBins is a wrapper around aerospike.Client.PutBins that uses semaphore to limit concurrent connections.
@@ -211,7 +362,9 @@ func (c *Client) PutBins(policy *aerospike.WritePolicy, key *aerospike.Key, bins
 		c.stats.stat.NewStat(sb.String()).AddTime(start)
 	}()
 
-	return c.Client.PutBins(policy, key, bins...)
+	return c.retryOnOverload(func() aerospike.Error {
+		return c.Client.PutBins(policy, key, bins...)
+	})
 }
 
 // Delete is a wrapper around aerospike.Client.Delete that uses semaphore to limit concurrent connections.
@@ -227,7 +380,15 @@ func (c *Client) Delete(policy *aerospike.WritePolicy, key *aerospike.Key) (bool
 		c.stats.stat.NewStat("Delete").AddTime(start)
 	}()
 
-	return c.Client.Delete(policy, key)
+	var existed bool
+
+	err := c.retryOnOverload(func() aerospike.Error {
+		var aerr aerospike.Error
+		existed, aerr = c.Client.Delete(policy, key)
+		return aerr
+	})
+
+	return existed, err
 }
 
 // Get is a wrapper around aerospike.Client.Get that uses semaphore to limit concurrent connections.
@@ -257,7 +418,15 @@ func (c *Client) Get(policy *aerospike.BasePolicy, key *aerospike.Key, binNames 
 		c.stats.stat.NewStat(sb.String()).AddTime(start)
 	}()
 
-	return c.Client.Get(policy, key, binNames...)
+	var record *aerospike.Record
+
+	err := c.retryOnOverload(func() aerospike.Error {
+		var aerr aerospike.Error
+		record, aerr = c.Client.Get(policy, key, binNames...)
+		return aerr
+	})
+
+	return record, err
 }
 
 // Operate is a wrapper around aerospike.Client.Operate that uses semaphore to limit concurrent connections.
@@ -272,7 +441,15 @@ func (c *Client) Operate(policy *aerospike.WritePolicy, key *aerospike.Key, oper
 		c.stats.operateStat.AddTimeForRange(start, len(operations))
 	}()
 
-	return c.Client.Operate(policy, key, operations...)
+	var record *aerospike.Record
+
+	err := c.retryOnOverload(func() aerospike.Error {
+		var aerr aerospike.Error
+		record, aerr = c.Client.Operate(policy, key, operations...)
+		return aerr
+	})
+
+	return record, err
 }
 
 // BatchOperate is a wrapper around aerospike.Client.BatchOperate that uses semaphore to limit concurrent connections.
@@ -287,12 +464,22 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 		c.stats.batchOperateStat.AddTimeForRange(start, len(records))
 	}()
 
-	return c.Client.BatchOperate(policy, records)
+	return c.retryBatchOnOverload(records, func(recs []aerospike.BatchRecordIfc) aerospike.Error {
+		return c.Client.BatchOperate(policy, recs)
+	})
 }
 
-// GetConnectionQueueSize returns the size of the connection semaphore.
-// This represents the maximum number of concurrent Aerospike operations allowed.
+// GetConnectionQueueSize returns the size of the connection semaphore. When
+// the semaphore is disabled (multiplier <= 0) the in-process throttle is gone
+// and concurrency is governed only by the underlying aerospike-client-go
+// connection pool — in that case it returns the resolved underlying
+// connection-queue size so callers using this as a pool-capacity hint
+// (e.g. pruner heuristics) keep seeing a meaningful value instead of 0.
 func (c *Client) GetConnectionQueueSize() int {
+	if c.connSemaphore == nil {
+		return c.connQueueSize
+	}
+
 	return cap(c.connSemaphore)
 }
 
@@ -304,7 +491,15 @@ func (c *Client) GetConnectionQueueSize() int {
 //
 // Accepts any Aerospike policy type (BasePolicy, WritePolicy, BatchPolicy) as they all
 // embed BasePolicy which contains TotalTimeout.
+//
+// When the client was constructed with WithSemaphoreMultiplier(0) (or any
+// non-positive multiplier) the semaphore is disabled and acquirePermit is
+// an unconditional no-op — releasePermit mirrors that and skips the receive.
 func (c *Client) acquirePermit(policy any) aerospike.Error {
+	if c.connSemaphore == nil {
+		return nil
+	}
+
 	totalTimeout := time.Duration(0)
 
 	// Extract timeout from policy if available
@@ -349,9 +544,28 @@ func (c *Client) acquirePermit(policy any) aerospike.Error {
 	}
 }
 
-// releasePermit releases a permit back to the connection semaphore.
+// releasePermit releases a permit back to the connection semaphore. No-op
+// when the semaphore was disabled at construction time (multiplier <= 0).
 func (c *Client) releasePermit() {
+	if c.connSemaphore == nil {
+		return
+	}
+
 	<-c.connSemaphore
+}
+
+// reacquirePermit blocks until a connection-semaphore permit is available.
+// Used to re-take the permit after an overload backoff sleep released it
+// (see retryOnOverload). Unlike acquirePermit it never times out: the wait
+// happens while the device is recovering, so surfacing it as ErrTimeout would
+// just convert overload into a timeout storm. No-op when the semaphore is
+// disabled.
+func (c *Client) reacquirePermit() {
+	if c.connSemaphore == nil {
+		return
+	}
+
+	c.connSemaphore <- struct{}{}
 }
 
 // CalculateKeySource generates a key source based on the transaction hash, vout, and batch size.

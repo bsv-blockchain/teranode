@@ -102,7 +102,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		u.logger.Infof("[persistBlock][%s] Phase 1: Creating %d subtreeData files", block.String(), len(block.Subtrees))
 
 		g1, gCtx1 := errgroup.WithContext(ctx)
-		util.SafeSetLimit(g1, concurrency)
+		util.SafeSetLimit(u.logger, g1, concurrency)
 
 		for i, subtreeHash := range block.Subtrees {
 			subtreeHash := subtreeHash

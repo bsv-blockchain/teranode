@@ -283,7 +283,7 @@ func Start(args []string, version, commit string) {
 			return nil
 		}
 	case "setfsmstate":
-		targetFsmState := cmd.FlagSet.String("fsmstate", "", "target fsm state (accepted values: running, idle, catchingblocks, legacysyncing)")
+		targetFsmState := cmd.FlagSet.String("fsmstate", "", "target fsm state (accepted values: running, idle, catchingblocks)")
 
 		cmd.Execute = func(args []string) error {
 			if *targetFsmState == "" {

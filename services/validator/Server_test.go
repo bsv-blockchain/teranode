@@ -27,6 +27,23 @@ var (
 	sampleTx, _ = hex.DecodeString("01000000016ec78dc364a3a911b38b32e58e5c228030f172da7d550e699939f6f3771f7f63010000006b483045022100dc6378291c4f8e06a54b0b60701cff7719c985db20537cd16d0350abe2f749660220694d67764dd8501e32190e6209a48103e3c7b202bb8c7682fc4c86e890c58409412103c3e59e22c5a32e54183a43993e8f584f709785f440fbf6f960551cb32041c5a9ffffffff03d0070000000000001976a9149e10b4a781c5be9f67367c3994fb3419aafd358e88ac2a240c00000000001976a914c52f8797b57f0b0cfc5856a5dd4a6f491a41822c88ac00000000000000000a006a075354554b2e434f00000000")
 )
 
+// singleParentInpoints builds a TxInpoints with one parent hash and one vout.
+// Replaces the pre-packed-layout `subtree.TxInpoints{ParentTxHashes:
+// []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}}` struct-literal pattern.
+func singleParentInpoints(parent *chainhash.Hash, vout uint32) subtree.TxInpoints {
+	in := &bt.Input{PreviousTxOutIndex: vout}
+	if err := in.PreviousTxIDAdd(parent); err != nil {
+		panic(err)
+	}
+
+	ti, err := subtree.NewTxInpointsFromInputs([]*bt.Input{in})
+	if err != nil {
+		panic(err)
+	}
+
+	return ti
+}
+
 func TestHTTPServer_Endpoints(t *testing.T) {
 	// Create test context
 	ctx := context.Background()
@@ -42,7 +59,7 @@ func TestHTTPServer_Endpoints(t *testing.T) {
 	blockchainClient := &blockchain.Mock{}
 
 	// Create server instance
-	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil)
+	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil, nil)
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
@@ -56,7 +73,7 @@ func TestHTTPServer_Endpoints(t *testing.T) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
-				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+				TxInpoints:  singleParentInpoints(txid, 0),
 			}, nil
 		},
 	}
@@ -185,7 +202,7 @@ func TestValidatorHTTP_Endpoints(t *testing.T) {
 	blockchainClient := &blockchain.Mock{}
 
 	// Create server instance
-	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil)
+	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil, nil)
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
@@ -194,7 +211,7 @@ func TestValidatorHTTP_Endpoints(t *testing.T) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
-				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+				TxInpoints:  singleParentInpoints(txid, 0),
 			}, nil
 		},
 	}
@@ -294,7 +311,7 @@ func TestHTTPServerIntegration(t *testing.T) {
 	blockchainClient := &blockchain.Mock{}
 
 	// Create server instance
-	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil)
+	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil, nil, nil)
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
@@ -303,7 +320,7 @@ func TestHTTPServerIntegration(t *testing.T) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
-				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+				TxInpoints:  singleParentInpoints(txid, 0),
 			}, nil
 		},
 	}
@@ -346,7 +363,7 @@ func TestHTTPServerHandlers(t *testing.T) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
-				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+				TxInpoints:  singleParentInpoints(txid, 0),
 			}, nil
 		},
 	}
@@ -485,7 +502,7 @@ func TestServer_Start_FSMContextCancellation(t *testing.T) {
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
 
-	server := NewServer(logger, tSettings, utxoStore, mockBlockchainClient, nil, nil, nil, nil)
+	server := NewServer(logger, tSettings, utxoStore, mockBlockchainClient, nil, nil, nil, nil, nil)
 
 	readyCh := make(chan struct{})
 	err := server.Start(ctx, readyCh)

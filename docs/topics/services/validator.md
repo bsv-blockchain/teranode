@@ -202,65 +202,13 @@ The validation process includes several stages:
     - Ensure inputs are unspent (prevent double-spending)
     - Validate input script format
 
-Transactions are validated by the `ValidateTransaction()` function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (`github.com/bsv-blockchain/go-bt`). The implementation uses the GoBDK script interpreter for script verification. GoBT and GoSDK implementations exist in the codebase for historical reasons but are not active.
+Transactions are validated through one `TxValidator.ValidateTransaction()` call plus the special BIP68 block-context check. `ValidateTransaction()` keeps Teranode-owned checks that need local node context, such as coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, minimum-fee policy, and the local consolidation-fee exemption, then calls BDK `ValidateTransaction` for BDK-side transaction structure, value, standardness, sigops, and script validation.
 
-We can see the exact steps being executed as part of the validation process below:
+The current shape is:
 
 ```go
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
- //
- // Each node will verify every transaction against a long checklist of criteria:
- //
- txSize := tx.Size()
-
- // 1) Neither lists of inputs nor outputs are empty
- if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
-  return errors.NewTxInvalidError("transaction has no inputs or outputs")
- }
-
- // 2) The transaction size in bytes is less than maxtxsizepolicy.
- if !validationOptions.SkipPolicyChecks {
-  if err := tv.checkTxSize(txSize); err != nil {
-   return err
-  }
- }
-
- // 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
- // 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
- if err := tv.checkInputs(tx, blockHeight); err != nil {
-  return err
- }
-
- // 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
- //    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
- if err := tv.checkOutputs(tx, blockHeight, validationOptions); err != nil {
-  return err
- }
-
- // The transaction size in bytes is greater than or equal to 100 (BCH only check, not applicable to BSV)
-
- // The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
- // Note: This may be disabled for unlimited operation counts
-
- // The unlocking script (scriptSig) can only push numbers on the stack
- if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
-  if err := tv.pushDataCheck(tx); err != nil {
-   return err
-  }
- }
-
- // 10) Reject if the sum of input values is less than sum of output values
- // 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
- if !validationOptions.SkipPolicyChecks {
-  if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
-   return err
-  }
- }
-
- // 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
- // (Script verification is handled separately with multiple interpreter options)
-
- return nil
+ // Teranode-owned checks, then BDK ValidateTransaction.
 }
 ```
 
@@ -443,33 +391,17 @@ This automatic extension mechanism provides several advantages:
 
 For more details on transaction format handling across the system, see the [Transaction Data Model documentation](../datamodel/transaction_data_model.md).
 
-### 2.4. Script Verification
+### 2.4. BDK Transaction Validation
 
-The Validator supports multiple script verification implementations through a flexible interpreter architecture. Three different script interpreters exist in the codebase:
+The Validator uses GoBDK directly through a private adapter in the validator package. GoBT and GoSDK script-verifier variants are no longer part of this package's validation design.
 
-1. **GoBT Interpreter** (`TxInterpreterGoBT`):
-
-    - Based on the Go-BT library
-
-2. **GoSDK Interpreter** (`TxInterpreterGoSDK`):
-
-    - Based on the Go-SDK library
-
-3. **GoBDK Interpreter** (`TxInterpreterGoBDK`):
-
-    - Based on the Go-BDK library
-    - Optimized for performance in high-throughput scenarios
-    - Includes specialized Bitcoin script validation features
-
-> **Note:** The script interpreter is hardcoded to GoBDK (`TxInterpreterGoBDK`). There is no `validator_scriptVerificationLibrary` setting; the interpreter cannot be changed via configuration. GoBT and GoSDK exist in the codebase for historical reasons only.
-
-The script verification process:
+The BDK validation process:
 
 1. Each transaction input's unlocking script is validated against its corresponding output's locking script
 
-2. The interpreter evaluates if the combined script executes successfully and leaves 'true' on the stack
+2. BDK validates transaction structure, values, standardness, sigops, and scripts
 
-3. The script verification is context-aware, considering current block height and network parameters
+3. Validation is context-aware, considering current block height, network parameters, and policy/consensus mode
 
 ### 2.5. Error Handling and Transaction Rejection
 
@@ -665,9 +597,7 @@ The code snippets you have been provided utilize a variety of technologies and l
 ./services/validator
 ├── Client.go                    # Contains client-side logic for interacting with the Validator
 ├── Interface.go                 # Defines interfaces for the Validator
-├── ScriptVerifierGoBDK.go       # Implements script verification using a Go Bitcoin Development Kit
-├── ScriptVerifierGoBT.go        # Implements script verification using Go Bitcoin Tools
-├── ScriptVerifierGoSDK.go       # Implements script verification using a Go Software Development Kit
+├── ScriptVerifierGoBDK.go       # Adapts Teranode validation data to GoBDK
 ├── Server.go                    # Implements the server-side logic of the Validator
 ├── TxValidator.go               # Contains specific logic for validating transactions
 ├── Validator.go                 # Contains the main logic for validator functionalities

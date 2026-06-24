@@ -4702,6 +4702,97 @@ func TestClient_IsFSMCurrentState(t *testing.T) {
 	})
 }
 
+// Test WaitForFSMtoTransitionToGivenState
+func TestClient_WaitForFSMtoTransitionToGivenState(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	t.Run("returns immediately when already in target state", func(t *testing.T) {
+		ctx := context.Background()
+		mockClient := &mockBlockClient{
+			responseGetFSMCurrentState: &blockchain_api.GetFSMStateResponse{
+				State: blockchain_api.FSMStateType_RUNNING,
+			},
+		}
+		client := &Client{
+			client:   mockClient,
+			logger:   logger,
+			settings: tSettings,
+		}
+
+		err := client.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		require.NoError(t, err)
+	})
+
+	t.Run("returns once the target state is reached after polling", func(t *testing.T) {
+		ctx := context.Background()
+		calls := 0
+		mockClient := &mockBlockClient{
+			fnGetFSMCurrentState: func() (*blockchain_api.GetFSMStateResponse, error) {
+				calls++
+				// Report IDLE on the first poll, RUNNING afterwards.
+				if calls == 1 {
+					return &blockchain_api.GetFSMStateResponse{State: blockchain_api.FSMStateType_IDLE}, nil
+				}
+				return &blockchain_api.GetFSMStateResponse{State: blockchain_api.FSMStateType_RUNNING}, nil
+			},
+		}
+		client := &Client{
+			client:   mockClient,
+			logger:   logger,
+			settings: tSettings,
+		}
+
+		err := client.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, calls, 2, "expected the loop to re-poll after observing a non-target state")
+	})
+
+	t.Run("times out when target state is never reached", func(t *testing.T) {
+		mockClient := &mockBlockClient{
+			responseGetFSMCurrentState: &blockchain_api.GetFSMStateResponse{
+				State: blockchain_api.FSMStateType_IDLE,
+			},
+		}
+		client := &Client{
+			client:   mockClient,
+			logger:   logger,
+			settings: tSettings,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		err := client.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "context deadline exceeded")
+	})
+
+	t.Run("keeps polling through a transient error then succeeds", func(t *testing.T) {
+		ctx := context.Background()
+		calls := 0
+		mockClient := &mockBlockClient{
+			fnGetFSMCurrentState: func() (*blockchain_api.GetFSMStateResponse, error) {
+				calls++
+				// Fail the first read, then report the target state.
+				if calls == 1 {
+					return nil, errors.NewProcessingError("transient gRPC error")
+				}
+				return &blockchain_api.GetFSMStateResponse{State: blockchain_api.FSMStateType_RUNNING}, nil
+			},
+		}
+		client := &Client{
+			client:   mockClient,
+			logger:   logger,
+			settings: tSettings,
+		}
+
+		err := client.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		require.NoError(t, err, "a transient state-read error must not abort the wait")
+		assert.GreaterOrEqual(t, calls, 2, "expected the loop to retry after a transient error")
+	})
+}
+
 // Test SendFSMEvent
 func TestClient_SendFSMEvent(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
@@ -4741,24 +4832,6 @@ func TestClient_SendFSMEvent(t *testing.T) {
 		err := client.SendFSMEvent(ctx, blockchain_api.FSMEventType_STOP)
 		require.NoError(t, err)
 		assert.Equal(t, blockchain_api.FSMEventType_STOP, mockClient.lastSendFSMEventReq.Event)
-	})
-
-	t.Run("success with LEGACYSYNC event", func(t *testing.T) {
-		ctx := context.Background()
-		mockClient := &mockBlockClient{
-			responseSendFSMEvent: &blockchain_api.GetFSMStateResponse{
-				State: blockchain_api.FSMStateType_LEGACYSYNCING,
-			},
-		}
-		client := &Client{
-			client:   mockClient,
-			logger:   logger,
-			settings: tSettings,
-		}
-
-		err := client.SendFSMEvent(ctx, blockchain_api.FSMEventType_LEGACYSYNC)
-		require.NoError(t, err)
-		assert.Equal(t, blockchain_api.FSMEventType_LEGACYSYNC, mockClient.lastSendFSMEventReq.Event)
 	})
 
 	t.Run("success with CATCHUPBLOCKS event", func(t *testing.T) {
@@ -4905,62 +4978,6 @@ func TestClient_CatchUpBlocks(t *testing.T) {
 		err := client.CatchUpBlocks(ctx)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "CatchUpBlocks failed")
-	})
-}
-
-// Test LegacySync function
-func TestClient_LegacySync(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
-
-	t.Run("success when already in LEGACYSYNCING state", func(t *testing.T) {
-		ctx := context.Background()
-		mockClient := &mockBlockClient{
-			responseGetFSMCurrentState: &blockchain_api.GetFSMStateResponse{
-				State: blockchain_api.FSMStateType_LEGACYSYNCING,
-			},
-		}
-		client := &Client{
-			client:   mockClient,
-			logger:   logger,
-			settings: tSettings,
-		}
-
-		err := client.LegacySync(ctx)
-		require.NoError(t, err)
-	})
-
-	t.Run("success when transitioning from IDLE state", func(t *testing.T) {
-		ctx := context.Background()
-		mockClient := &mockBlockClient{
-			responseGetFSMCurrentState: &blockchain_api.GetFSMStateResponse{
-				State: blockchain_api.FSMStateType_IDLE,
-			},
-		}
-		client := &Client{
-			client:   mockClient,
-			logger:   logger,
-			settings: tSettings,
-		}
-
-		err := client.LegacySync(ctx)
-		require.NoError(t, err)
-	})
-
-	t.Run("gRPC error on LegacySync call", func(t *testing.T) {
-		ctx := context.Background()
-		mockClient := &mockBlockClient{
-			err: errors.NewProcessingError("LegacySync failed"),
-		}
-		client := &Client{
-			client:   mockClient,
-			logger:   logger,
-			settings: tSettings,
-		}
-
-		err := client.LegacySync(ctx)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "LegacySync failed")
 	})
 }
 
@@ -5437,5 +5454,36 @@ func TestHeartbeatStaleSetsFSMToIdle(t *testing.T) {
 		currentState := c.fmsState.Load()
 		require.NotNil(t, currentState)
 		require.Equal(t, FSMStateRUNNING, *currentState, "FSM state should remain RUNNING with fresh heartbeat")
+	})
+}
+
+// mockAssignBlockIDClient is a minimal gRPC client stub for AssignBlockID. It
+// embeds the generated interface so only the method under test is implemented.
+type mockAssignBlockIDClient struct {
+	blockchain_api.BlockchainAPIClient
+	resp *blockchain_api.AssignBlockIDResponse
+	err  error
+}
+
+func (m *mockAssignBlockIDClient) AssignBlockID(_ context.Context, _ *blockchain_api.AssignBlockIDRequest, _ ...grpc.CallOption) (*blockchain_api.AssignBlockIDResponse, error) {
+	return m.resp, m.err
+}
+
+// TestClientAssignBlockID covers the gRPC client wrapper: it returns the id from
+// a successful response and surfaces (unwrapped) a transport error.
+func TestClientAssignBlockID(t *testing.T) {
+	h := chainhash.HashH([]byte("assign-block-id-client"))
+
+	t.Run("success", func(t *testing.T) {
+		c := &Client{client: &mockAssignBlockIDClient{resp: &blockchain_api.AssignBlockIDResponse{BlockId: 42}}}
+		id, err := c.AssignBlockID(context.Background(), &h)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(42), id)
+	})
+
+	t.Run("grpc error", func(t *testing.T) {
+		c := &Client{client: &mockAssignBlockIDClient{err: errors.NewProcessingError("grpc failure")}}
+		_, err := c.AssignBlockID(context.Background(), &h)
+		require.Error(t, err)
 	})
 }

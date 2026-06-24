@@ -1,8 +1,11 @@
 package util
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -142,7 +145,7 @@ func TestExtractCoinbaseHeightAndTextScripts(t *testing.T) {
 			script, err := bscript.NewFromHexString(tc.script)
 			require.NoError(t, err)
 
-			height, miner, err := extractCoinbaseHeightAndText(*script)
+			height, miner, err := extractCoinbaseHeightAndText(*script, false)
 			if tc.expectError {
 				require.Error(t, err)
 			} else {
@@ -310,4 +313,152 @@ func TestExtractCoinbaseMinerErrorHandling(t *testing.T) {
 	miner, err := ExtractCoinbaseMiner(tx)
 	require.NoError(t, err)    // Error is suppressed for missing height
 	assert.Equal(t, "", miner) // Should return empty string
+}
+
+// TestExtractCoinbaseMinerRaw tests the raw mode extraction that returns unsanitized miner text
+func TestExtractCoinbaseMinerRaw(t *testing.T) {
+	testCases := []struct {
+		name              string
+		tx                string
+		expectedSanitized string
+		expectedRaw       string
+	}{
+		{
+			name: "block 514587 with binary miner data",
+			// This block has binary data that gets sanitized differently
+			tx:                "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff14031bda07074125205a6ad8648d3b00009de70700ffffffff017777954a000000001976a9144770c259bc03c8dc36b853ed19fbb3514190be2e88ac00000000",
+			expectedSanitized: "A% Zjd;",
+			expectedRaw:       "\aA% Zj\xd8d\x8d;\x00\x00\x9d\xe7\a\x00", // Raw arbitrary text including non-printable chars
+		},
+		{
+			name:              "clean miner tag - both modes should be similar",
+			tx:                "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff18030910002f6d352d6363312fdcce95f3c057431c486ae662ffffffff0a0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00000000",
+			expectedSanitized: "/m5-cc1/",
+			expectedRaw:       "/m5-cc1/\xdc\xce\x95\xf3\xc0WC\x1cHj\xe6b", // Raw includes trailing binary data
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tx, err := bt.NewTxFromString(tc.tx)
+			require.NoError(t, err)
+
+			// Test sanitized mode (default)
+			sanitized, err := ExtractCoinbaseMinerRaw(tx, false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectedSanitized, sanitized)
+
+			// Test raw mode
+			raw, err := ExtractCoinbaseMinerRaw(tx, true)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectedRaw, raw)
+
+			// Verify ExtractCoinbaseMiner (no param) matches sanitized behavior
+			defaultMiner, err := ExtractCoinbaseMiner(tx)
+			require.NoError(t, err)
+			assert.Equal(t, sanitized, defaultMiner)
+		})
+	}
+}
+
+// TestExtractCoinbaseMinerRawPreservesAllBytes verifies raw mode preserves all arbitrary text bytes
+// while sanitized mode strips them. Each case appends a different set of trailing bytes after a
+// clean "/miner/" tag so we exercise null bytes, high bytes, and control characters distinctly.
+func TestExtractCoinbaseMinerRawPreservesAllBytes(t *testing.T) {
+	// heightPrefix encodes a 3-byte block height (0x010203): the leading 0x03 is the length.
+	const heightPrefix = "03010203"
+	// minerTagHex is the hex for "/miner/".
+	const minerTagHex = "2f6d696e65722f"
+
+	testCases := []struct {
+		name        string
+		trailingHex string // bytes appended after "/miner/"
+	}{
+		{
+			name:        "script with null bytes",
+			trailingHex: "000000",
+		},
+		{
+			name:        "script with high bytes",
+			trailingHex: "fffefd",
+		},
+		{
+			name:        "script with control characters",
+			trailingHex: "01020304",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			script, err := bscript.NewFromHexString(heightPrefix + minerTagHex + tc.trailingHex)
+			require.NoError(t, err)
+
+			trailingBytes, err := hex.DecodeString(tc.trailingHex)
+			require.NoError(t, err)
+
+			// Create a minimal transaction with this script
+			tx := &bt.Tx{
+				Inputs: []*bt.Input{
+					{
+						UnlockingScript: script,
+					},
+				},
+			}
+
+			// Raw mode must preserve every byte after the height, including the trailing bytes.
+			raw, err := ExtractCoinbaseMinerRaw(tx, true)
+			require.NoError(t, err)
+			assert.Equal(t, "/miner/"+string(trailingBytes), raw)
+
+			// Sanitized mode strips the non-printable trailing bytes, leaving the clean tag.
+			sanitized, err := ExtractCoinbaseMinerRaw(tx, false)
+			require.NoError(t, err)
+			assert.Equal(t, "/miner/", sanitized)
+		})
+	}
+}
+
+// TestExtractCoinbaseMinerRawJSONRoundTrip documents what API/WebSocket clients actually receive.
+//
+// Raw mode returns the exact coinbase bytes in a Go string, but the asset service serialises the
+// miner field to JSON. Go's encoding/json replaces invalid UTF-8 bytes with the Unicode replacement
+// character (U+FFFD) and escapes control characters. So a JSON client does NOT get byte-exact data;
+// it gets a representation that mirrors how explorers such as WhatsOnChain render the same bytes
+// (replacement characters for the invalid sequences). This test locks that behaviour in so a future
+// change to the encoding path is caught.
+func TestExtractCoinbaseMinerRawJSONRoundTrip(t *testing.T) {
+	// Block 514587 coinbase: the arbitrary text contains invalid UTF-8 and control bytes.
+	const txHex = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff14031bda07074125205a6ad8648d3b00009de70700ffffffff017777954a000000001976a9144770c259bc03c8dc36b853ed19fbb3514190be2e88ac00000000"
+
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	raw, err := ExtractCoinbaseMinerRaw(tx, true)
+	require.NoError(t, err)
+
+	// The Go string preserves every byte, including invalid UTF-8 and control bytes.
+	require.Equal(t, "\aA% Zj\xd8d\x8d;\x00\x00\x9d\xe7\a\x00", raw)
+	require.False(t, utf8.ValidString(raw), "fixture should contain invalid UTF-8")
+
+	// Marshalling to JSON and reading it back is LOSSY: the invalid bytes do not survive, so a
+	// JSON client cannot reconstruct the original coinbase bytes from this field. The replacement
+	// character it gets instead is the same thing explorers like WhatsOnChain display.
+	out, err := json.Marshal(map[string]string{"miner": raw})
+	require.NoError(t, err)
+
+	var decoded map[string]string
+	require.NoError(t, json.Unmarshal(out, &decoded))
+
+	require.NotEqual(t, raw, decoded["miner"], "invalid bytes must not survive a JSON round-trip")
+	require.True(t, utf8.ValidString(decoded["miner"]), "JSON output is always valid UTF-8")
+	require.Contains(t, decoded["miner"], string(utf8.RuneError), "invalid bytes become the replacement character")
+
+	// A sanitized (clean ASCII) tag round-trips through JSON unchanged.
+	sanitized, err := ExtractCoinbaseMinerRaw(tx, false)
+	require.NoError(t, err)
+
+	out, err = json.Marshal(map[string]string{"miner": sanitized})
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(out, &decoded))
+	require.Equal(t, sanitized, decoded["miner"], "clean tags survive a JSON round-trip intact")
 }

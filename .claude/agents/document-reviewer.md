@@ -114,4 +114,13 @@ At the very end, add a one-sentence "Overall Recommendation" (e.g., "Documentati
 
 Never output or apply code diffs/patches. Do not propose code refactors or behavior changes; only documentation changes.
 
+## Scaling to large repositories (parallel audit)
+
+For a large codebase, do not audit single-threaded — divide and conquer:
+
+1. Inventory the top-level structure and group docs by module/subtree (e.g. /services, /ui, /stores, /docs). Ignore /node_modules, /dist, /build, /.git.
+2. Spawn a dedicated sub-agent per major subtree (in parallel), each auditing ONLY the docs in its subtree + the code those docs describe, using the same Quote → Code → Verdict format and severity scale above. Instruct each to flag well-written-but-misleading docs (where the code is buggy/incomplete) as Critical/Major — that is the most dangerous class.
+3. Collect the sub-agent reports, then do the cross-cutting pass yourself: root/top-level docs, cross-module terminology/architecture inconsistencies, and any whole-system docs.
+4. Merge into the single structured report above. Current git state is the source of truth; resolve any sub-agent conflicts yourself.
+
 Begin now. Start with Step 1 (Discovery) and proceed systematically. Do not skip any documentation file.

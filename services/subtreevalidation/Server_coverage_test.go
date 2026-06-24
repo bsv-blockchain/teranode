@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -143,6 +143,13 @@ func (m *mockKafkaAsyncProducer) Publish(msg *kafka.Message) {
 	}
 }
 
+func (m *mockKafkaAsyncProducer) TryPublish(msg *kafka.Message) bool {
+	if m.publishFunc != nil {
+		m.publishFunc(msg)
+	}
+	return true
+}
+
 func (m *mockKafkaAsyncProducer) Start(ctx context.Context, ch chan *kafka.Message) {
 	if m.startFunc != nil {
 		m.startFunc(ctx, ch)
@@ -178,7 +185,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := &mockKafkaConsumer{}
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.Error(t, err)
 		require.Nil(t, server)
@@ -205,7 +212,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -239,7 +246,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-cache")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -267,7 +274,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-invalid")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -522,32 +529,6 @@ func TestCheckSubtreeFromBlock(t *testing.T) {
 	})
 }
 
-// TestServerProcessOrphans tests the processOrphans method
-func TestServerProcessOrphans(t *testing.T) {
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	orphanage, err := NewOrphanage(time.Minute, 100, &logger)
-	require.NoError(t, err)
-	server := &Server{
-		logger:          logger,
-		settings:        tSettings,
-		orphanage:       orphanage,
-		validatorClient: &mockValidator{},
-		stats:           gocore.NewStat("test"),
-	}
-
-	// Add some orphan transactions
-	tx1, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08044c86041b020602ffffffff0100f2052a010000004341041b0e8c2567c12536aa13357b79a073dc4444acb83c4ec7a0e2f99dd7457516c5817242da796924ca4e99947d087fedf9ce467cb9f7c6287078f801df276fdf84ac00000000")
-	server.orphanage.Set(*tx1.TxIDChainHash(), tx1)
-
-	blockHash, _ := chainhash.NewHashFromStr("000000000002d01c1fccc21636b607dfd930d31d01c3a62104612a1719011250")
-	blockIds := map[uint32]bool{100: true, 99: true}
-
-	// This should process orphans without error
-	server.processOrphans(context.Background(), *blockHash, 100, blockIds)
-}
-
 // TestInitialiseInvalidSubtreeKafkaProducer tests the initialiseInvalidSubtreeKafkaProducer function
 func TestInitialiseInvalidSubtreeKafkaProducer(t *testing.T) {
 	t.Run("successful initialization", func(t *testing.T) {
@@ -737,4 +718,30 @@ func TestCheckSubtreeFromBlockInternal(t *testing.T) {
 		require.False(t, ok)
 		require.Contains(t, err.Error(), "Failed to parse previous block hash")
 	})
+}
+
+func TestResolveTxMetaCacheBucketType(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	tests := []struct {
+		input string
+		want  txmetacache.BucketType
+	}{
+		{"unallocated", txmetacache.Unallocated},
+		{"UNALLOCATED", txmetacache.Unallocated},
+		{"  unallocated  ", txmetacache.Unallocated},
+		{"", txmetacache.Unallocated}, // unset → default
+		{"preallocated", txmetacache.Preallocated},
+		{"trimmed", txmetacache.Trimmed},
+		{"native", txmetacache.Native},
+		{"Native", txmetacache.Native},
+		{"gibberish", txmetacache.Unallocated}, // unknown → fallback
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got := resolveTxMetaCacheBucketType(logger, tc.input)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }

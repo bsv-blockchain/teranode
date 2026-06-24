@@ -1,5 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
+  import type { Snippet } from 'svelte'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { addNumCommas, dataSize } from '$lib/utils/format'
@@ -12,24 +14,31 @@
   import i18n from '$internal/i18n'
   import { getItemApiUrl, ItemType } from '$internal/api'
 
-  const dispatch = createEventDispatcher()
-
   const baseKey = 'page.viewer-tx.details'
   const fieldKey = `${baseKey}.fields`
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  $: collapse = $mediaSize < MediaSize.sm
+  const collapse = $derived($mediaSize < MediaSize.sm)
 
-  export let data: any = {}
-  export let display: DetailTab = DetailTab.overview
+  let {
+    data = {},
+    display = DetailTab.overview,
+    ondisplay,
+    merkleProof,
+  }: {
+    data?: any
+    display?: DetailTab
+    ondisplay?: (detail: { value: string }) => void
+    merkleProof?: Snippet
+  } = $props()
 
-  $: isOverview = display === DetailTab.overview
-  $: isJson = display === DetailTab.json
-  $: isMerkleProof = display === DetailTab.merkleproof
+  const isOverview = $derived(display === DetailTab.overview)
+  const isJson = $derived(display === DetailTab.json)
+  const isMerkleProof = $derived(display === DetailTab.merkleproof)
 
   function onDisplay(value) {
-    dispatch('display', { value })
+    ondisplay?.({ value })
   }
 
   function onReverseHash(hash) {
@@ -38,7 +47,8 @@
 </script>
 
 <Card title={t(`${baseKey}.title`, { height: data?.height })}>
-  <div class="copy-link" slot="subtitle">
+  {#snippet subtitle()}
+  <div class="copy-link">
     <div class="hash">{data?.txid}</div>
     <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
@@ -58,13 +68,14 @@
     </div>
     <button
       class="icon"
-      on:click={() => onReverseHash(data?.txid)}
+      onclick={() => onReverseHash(data?.txid)}
       use:$tippy={{ content: t('tooltip.reverse-hash') }}
       type="button"
     >
       <Icon name="icon-reeverse-line" size={15} />
     </button>
   </div>
+  {/snippet}
   <div class="content">
     <div class="tabs">
       <Button
@@ -72,14 +83,14 @@
         hasFocusRect={false}
         selected={isOverview}
         variant={isOverview ? 'tertiary' : 'primary'}
-        on:click={() => onDisplay('overview')}>{t(`${baseKey}.tab.overview`)}</Button
+        onclick={() => onDisplay('overview')}>{t(`${baseKey}.tab.overview`)}</Button
       >
       <Button
         size="medium"
         hasFocusRect={false}
         selected={isJson}
         variant={isJson ? 'tertiary' : 'primary'}
-        on:click={() => onDisplay('json')}>{t(`${baseKey}.tab.json`)}</Button
+        onclick={() => onDisplay('json')}>{t(`${baseKey}.tab.json`)}</Button
       >
       {#if (data?.blockHashes && data?.blockHashes.length > 0) || (data?.blockIDs && data?.blockIDs.length > 0)}
         <Button
@@ -87,7 +98,7 @@
           hasFocusRect={false}
           selected={isMerkleProof}
           variant={isMerkleProof ? 'tertiary' : 'primary'}
-          on:click={() => onDisplay('merkleproof')}>Merkle Proof</Button
+          onclick={() => onDisplay('merkleproof')}>Merkle Proof</Button
         >
       {/if}
     </div>
@@ -216,7 +227,7 @@
       </div>
     {:else if isMerkleProof}
       <div class="merkle-proof">
-        <slot name="merkle-proof" />
+        {@render merkleProof?.()}
       </div>
     {/if}
   </div>
@@ -235,7 +246,7 @@
     width: 100%;
 
     padding-bottom: 32px;
-    border-bottom: 1px solid #0a1018;
+    border-bottom: 1px solid var(--app-bg-color);
   }
 
   .json {
@@ -285,7 +296,7 @@
   }
 
   .label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;
@@ -297,7 +308,7 @@
   .value {
     word-break: break-all;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;
@@ -365,13 +376,13 @@
   }
 
   .in-block {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-size: 14px;
   }
 
   .not-in-block,
   .not-in-subtree {
-    color: rgba(255, 255, 255, 0.4);
+    color: var(--comp-label-disabled-color);
     font-style: italic;
   }
 </style>

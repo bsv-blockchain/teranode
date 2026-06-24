@@ -826,10 +826,13 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 			Nonce:          2,
 		}
 
-		// Block3 will be moved forward (added to chain)
+		// Block3 will be moved forward (added to chain). After moving back
+		// block2 the current header becomes the moved-back parent the
+		// blockchain mock returns (prevBlockHeader), so block3 must build on
+		// prevBlockHeader for moveForward to accept it.
 		block3Header := &model.BlockHeader{
 			Version:        1,
-			HashPrevBlock:  block1Header.Hash(),
+			HashPrevBlock:  prevBlockHeader.Hash(),
 			HashMerkleRoot: &chainhash.Hash{},
 			Timestamp:      1234567893,
 			Bits:           model.NBit{},
@@ -853,6 +856,8 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		// Store necessary UTXOs
 		_, err = utxoStore.Create(context.Background(), coinbaseTx2, 2)
 		require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), coinbaseTx3, 2)
+		require.NoError(t, err)
 
 		// Set initial processor state to block2 (before reorg)
 		stp.InitCurrentBlockHeader(block2Header)
@@ -873,20 +878,13 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		// Perform reorg: remove block2, add block3
 		err = stp.Reorg([]*model.Block{blockToMoveBack}, []*model.Block{blockToMoveForward})
 
-		// Verify the reorg actually changed the chain tip
+		require.NoError(t, err, "reorg must succeed")
+
+		// Verify the reorg actually changed the chain tip: we should now be at
+		// block3, not block2.
 		finalHeader := stp.GetCurrentBlockHeader()
-
-		if err == nil {
-			// After reorg, we should be at block3, not block2
-			assert.NotEqual(t, block2Header.Hash(), finalHeader.Hash(), "Chain should have reorg'd away from block2")
-			assert.Equal(t, block3Header.Hash(), finalHeader.Hash(), "Chain should have reorg'd to block3")
-
-			// Verify the processor is now on the new chain branch
-			t.Logf("Reorg successful: Initial tip=%s, Final tip=%s",
-				initialHeader.Hash().String()[:8], finalHeader.Hash().String()[:8])
-		} else {
-			t.Logf("Reorg failed with error: %v", err)
-		}
+		require.NotEqual(t, block2Header.Hash(), finalHeader.Hash(), "chain should have reorg'd away from block2")
+		require.Equal(t, block3Header.Hash(), finalHeader.Hash(), "chain should have reorg'd to block3")
 	})
 
 	t.Run("reorg with transaction verification - move back 2 blocks forward 1 block", func(t *testing.T) {
@@ -960,9 +958,13 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 			Nonce:          3,
 		}
 
+		// blockNew is the competing block applied by the reorg. After moving
+		// back block3 and block2, the current header becomes the moved-back
+		// parent the blockchain mock returns (prevBlockHeader), so blockNew
+		// must build on prevBlockHeader for moveForward to accept it.
 		blockNewHeader := &model.BlockHeader{
 			Version:        1,
-			HashPrevBlock:  block1Header.Hash(),
+			HashPrevBlock:  prevBlockHeader.Hash(),
 			HashMerkleRoot: &chainhash.Hash{},
 			Timestamp:      1000000004,
 			Bits:           model.NBit{},
@@ -1064,6 +1066,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		moveForwardBlocks := []*model.Block{blockNew}
 
 		err = stp.Reorg(moveBackBlocks, moveForwardBlocks)
+		require.NoError(t, err, "reorg must succeed")
 
 		// Verify the reorg processed transactions correctly
 		finalTxCount := stp.TxCount()
@@ -1071,51 +1074,22 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		finalHeader := stp.GetCurrentBlockHeader()
 		finalTxMap := stp.GetCurrentTxMap()
 
-		if err == nil {
-			// Verify chain tip changed to blockNew
-			assert.Equal(t, blockNewHeader.Hash(), finalHeader.Hash(), "Chain should have reorg'd to blockNew")
+		// Verify chain tip changed to blockNew.
+		require.Equal(t, blockNewHeader.Hash(), finalHeader.Hash(), "chain should have reorg'd to blockNew")
 
-			// Check which transactions remain after reorg
-			hasTx1 := finalTxMap.Exists(*tx1Hash)
-			hasTx2 := finalTxMap.Exists(*tx2Hash)
-			hasTx3 := finalTxMap.Exists(*tx3Hash)
-			hasTx4 := finalTxMap.Exists(*tx4Hash)
-			hasTx5 := finalTxMap.Exists(*tx5Hash)
+		// The transactions that were in block assembly before the reorg
+		// (tx1–tx4) are not mined by the empty-subtree moved-forward block, so
+		// they must all remain available in block assembly afterwards. tx5 was
+		// never added, so it must be absent.
+		require.True(t, finalTxMap.Exists(*tx1Hash), "tx1 must remain in block assembly after reorg")
+		require.True(t, finalTxMap.Exists(*tx2Hash), "tx2 must remain in block assembly after reorg")
+		require.True(t, finalTxMap.Exists(*tx3Hash), "tx3 must remain in block assembly after reorg")
+		require.True(t, finalTxMap.Exists(*tx4Hash), "tx4 must remain in block assembly after reorg")
+		require.False(t, finalTxMap.Exists(*tx5Hash), "tx5 was never added and must be absent after reorg")
 
-			t.Logf("After reorg - transactions in processor:")
-			t.Logf("  tx1: %v (should be true - from moved-back blocks)", hasTx1)
-			t.Logf("  tx2: %v (should be true - from moved-back blocks)", hasTx2)
-			t.Logf("  tx3: %v (should be true - from moved-back blocks)", hasTx3)
-			t.Logf("  tx4: %v (should be true - from moved-back blocks)", hasTx4)
-			t.Logf("  tx5: %v (should be false - not added to processor)", hasTx5)
+		require.NotNil(t, finalCurrentSubtree, "current subtree must exist after reorg")
 
-			// The key verification: transactions from moved-back blocks should be in the processor
-			// This demonstrates that the reorg correctly moved transactions back for processing
-			if hasTx1 || hasTx2 || hasTx3 || hasTx4 {
-				t.Logf("✅ REORG VERIFICATION PASSED: Transactions from moved-back blocks are present in processor")
-			} else {
-				t.Logf("❌ REORG VERIFICATION FAILED: No transactions from moved-back blocks found in processor")
-			}
-
-			// Additional verification: check current subtree
-			if finalCurrentSubtree != nil {
-				subtreeNodes := finalCurrentSubtree.Nodes
-				t.Logf("Current subtree contains %d nodes after reorg", len(subtreeNodes))
-
-				if len(subtreeNodes) > 0 {
-					t.Logf("✅ Current subtree has nodes, indicating transactions are ready for processing")
-				}
-			}
-
-			t.Logf("Transaction count - Initial: %d, Final: %d", initialTxCount, finalTxCount)
-		} else {
-			t.Logf("Reorg failed with error: %v", err)
-			// Even if reorg fails, we can still verify the test setup was correct
-			assert.True(t, initialTxMap.Exists(*tx1Hash), "tx1 should have been added to processor initially")
-			assert.True(t, initialTxMap.Exists(*tx2Hash), "tx2 should have been added to processor initially")
-			assert.True(t, initialTxMap.Exists(*tx3Hash), "tx3 should have been added to processor initially")
-			assert.True(t, initialTxMap.Exists(*tx4Hash), "tx4 should have been added to processor initially")
-		}
+		t.Logf("Transaction count - Initial: %d, Final: %d", initialTxCount, finalTxCount)
 	})
 
 	t.Run("reorg with duplicate transaction handling verification", func(t *testing.T) {
@@ -1165,9 +1139,13 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 			Nonce:          101,
 		}
 
+		// newBlock is applied by the reorg. After moving back oldBlock the
+		// current header becomes the moved-back parent the blockchain mock
+		// returns (prevBlockHeader), so newBlock must build on prevBlockHeader
+		// for moveForward to accept it.
 		newBlockHeader := &model.BlockHeader{
 			Version:        1,
-			HashPrevBlock:  baseHeader.Hash(),
+			HashPrevBlock:  prevBlockHeader.Hash(),
 			HashMerkleRoot: &chainhash.Hash{},
 			Timestamp:      2000000002,
 			Bits:           model.NBit{},
@@ -1257,19 +1235,16 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		t.Logf("  Transaction count: %d", finalTxCount)
 		t.Logf("  Chain tip: %s", finalHeader.Hash().String()[:8])
 
-		if err == nil {
-			// Verify chain changed
-			assert.Equal(t, newBlockHeader.Hash(), finalHeader.Hash(), "Chain should have reorg'd to new block")
+		require.NoError(t, err, "reorg must succeed")
 
-			// The key insight: both transactions should still be present because
-			// the reorg process adds them back to the processor for future block processing
-			assert.True(t, finalTxMap.Exists(*uniqueTxHash), "Unique transaction should be available for processing")
-			assert.True(t, finalTxMap.Exists(*duplicateTxHash), "Duplicate transaction should be available for processing")
+		// Verify chain changed.
+		require.Equal(t, newBlockHeader.Hash(), finalHeader.Hash(), "chain should have reorg'd to new block")
 
-			t.Logf("✅ REORG TEST PASSED: Transactions from moved-back blocks are properly handled")
-		} else {
-			t.Logf("Reorg failed with error: %v", err)
-		}
+		// Both transactions must still be present because the reorg adds the
+		// moved-back block's transactions back to block assembly for future
+		// processing, and the empty moved-forward block mines neither.
+		require.True(t, finalTxMap.Exists(*uniqueTxHash), "unique transaction must be available for processing after reorg")
+		require.True(t, finalTxMap.Exists(*duplicateTxHash), "duplicate transaction must be available for processing after reorg")
 	})
 }
 
@@ -1365,4 +1340,223 @@ func TestResetMarksAssemblyTxsAsNotOnLongestChainBeforeClearing(t *testing.T) {
 	require.NotEqual(t, uint32(0), metaAfter.UnminedSince,
 		"after reset, an assembly tx that had unmined_since=NULL must be marked as NOT on longest chain "+
 			"so loadUnminedTransactions can recover it; without the fix this tx is silently lost from block assembly")
+}
+
+// storeReorgSubtree builds a real subtree (coinbase placeholder + the given
+// txs), serializes it together with a valid SubtreeMeta, and stores both under
+// key in the blob store — exactly what the reorg moveBack path expects to read
+// back. Returns nothing; fails the test on any error.
+func storeReorgSubtree(t *testing.T, ctx context.Context, blobStore *blob_memory.Memory, key *chainhash.Hash, txs []subtree.Node) {
+	t.Helper()
+
+	st, err := subtree.NewTreeByLeafCount(64)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+
+	for _, n := range txs {
+		require.NoError(t, st.AddSubtreeNode(n))
+	}
+
+	stBytes, err := st.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, blobStore.Set(ctx, key[:], fileformat.FileTypeSubtree, stBytes))
+
+	meta := subtree.NewSubtreeMeta(st)
+	for i := range st.Nodes {
+		require.NoError(t, meta.SetTxInpoints(i, subtree.NewTxInpoints()))
+	}
+
+	metaBytes, err := meta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, blobStore.Set(ctx, key[:], fileformat.FileTypeSubtreeMeta, metaBytes))
+}
+
+// TestSubtreeProcessor_ReorgThroughRealSubtrees exercises the bulk reorg path
+// (reorgBlocks -> moveBackBlock -> moveBackBlockBulkBuild -> bulkBuildSubtrees)
+// against blocks carrying REAL serialized subtrees, rather than the empty
+// Subtrees lists used by the other Reorg tests. Without real subtrees the
+// deserialization + bulk-build path is never executed by a correctness test,
+// so a wrong bulkBuildSubtrees tx set would go unnoticed.
+func TestSubtreeProcessor_ReorgThroughRealSubtrees(t *testing.T) {
+	t.Run("reorg recovers moved-back transactions from real serialized subtree", func(t *testing.T) {
+		ctx := context.Background()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
+		require.NoError(t, err)
+
+		blobStore := blob_memory.New()
+		settings := test.CreateBaseTestSettings(t)
+		newSubtreeChan := make(chan NewSubtreeRequest, 10)
+
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(prevBlockHeader, &model.BlockHeaderMeta{}, nil)
+		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
+
+		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
+		require.NoError(t, err)
+		stp.Start(ctx)
+
+		// Transactions that live inside the moved-back block's real subtree.
+		tx1Hash, err := chainhash.NewHashFromStr("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
+		require.NoError(t, err)
+		tx2Hash, err := chainhash.NewHashFromStr("b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")
+		require.NoError(t, err)
+
+		// Unique subtree storage key (distinct from any tx hash).
+		moveBackSubtreeHash, err := chainhash.NewHashFromStr("c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3")
+		require.NoError(t, err)
+
+		storeReorgSubtree(t, ctx, blobStore, moveBackSubtreeHash, []subtree.Node{
+			{Hash: *tx1Hash, Fee: 100, SizeInBytes: 250},
+			{Hash: *tx2Hash, Fee: 200, SizeInBytes: 300},
+		})
+
+		// Chain: prevBlockHeader -> block2(tip). Reorg undoes block2 and applies
+		// blockNew, a competing sibling also built on prevBlockHeader. The
+		// blockchain mock returns prevBlockHeader for the moved-back block's
+		// parent lookup, so the current header after moveBack is prevBlockHeader
+		// — which blockNew must build on for moveForward to accept it.
+		block2Header := &model.BlockHeader{Version: 1, HashPrevBlock: prevBlockHeader.Hash(), HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1800000002, Bits: model.NBit{}, Nonce: 702}
+		blockNewHeader := &model.BlockHeader{Version: 1, HashPrevBlock: prevBlockHeader.Hash(), HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1800000003, Bits: model.NBit{}, Nonce: 703}
+
+		blockToMoveBack := &model.Block{
+			Height:     2,
+			CoinbaseTx: coinbaseTx2,
+			Subtrees:   []*chainhash.Hash{moveBackSubtreeHash}, // KEY: real subtree, not empty
+			Header:     block2Header,
+		}
+		blockToMoveForward := &model.Block{
+			Height:     2,
+			CoinbaseTx: coinbaseTx3,
+			Subtrees:   []*chainhash.Hash{}, // forward block adds no mempool txs
+			Header:     blockNewHeader,
+		}
+
+		_, err = utxoStore.Create(ctx, coinbaseTx2, 2)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(ctx, coinbaseTx3, 2)
+		require.NoError(t, err)
+
+		stp.InitCurrentBlockHeader(block2Header)
+
+		// Drain subtree announcements.
+		go func() {
+			for req := range newSubtreeChan {
+				if req.ErrChan != nil {
+					req.ErrChan <- nil
+				}
+			}
+		}()
+
+		err = stp.Reorg([]*model.Block{blockToMoveBack}, []*model.Block{blockToMoveForward})
+		require.NoError(t, err, "reorg through a real subtree must succeed")
+
+		finalHeader := stp.GetCurrentBlockHeader()
+		require.Equal(t, blockNewHeader.Hash(), finalHeader.Hash(), "chain tip must advance to the moved-forward block")
+
+		// The deserialized subtree's transactions must be recovered into block
+		// assembly so they can be re-mined on the new chain.
+		finalTxMap := stp.GetCurrentTxMap()
+		require.True(t, finalTxMap.Exists(*tx1Hash), "tx1 from the deserialized moved-back subtree must be recovered into block assembly")
+		require.True(t, finalTxMap.Exists(*tx2Hash), "tx2 from the deserialized moved-back subtree must be recovered into block assembly")
+	})
+
+	t.Run("competing spend across reorg switch is not left pending", func(t *testing.T) {
+		ctx := context.Background()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
+		require.NoError(t, err)
+
+		blobStore := blob_memory.New()
+		settings := test.CreateBaseTestSettings(t)
+		newSubtreeChan := make(chan NewSubtreeRequest, 10)
+
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(prevBlockHeader, &model.BlockHeaderMeta{}, nil)
+		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
+
+		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
+		require.NoError(t, err)
+		stp.Start(ctx)
+
+		// doubleSpendTx appears in BOTH the moved-back and moved-forward blocks
+		// (a competing spend across the reorg fork). backOnly only appears in
+		// the moved-back block; forwardOnly only in the moved-forward block.
+		doubleSpendTx, err := chainhash.NewHashFromStr("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
+		require.NoError(t, err)
+		backOnlyTx, err := chainhash.NewHashFromStr("e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5")
+		require.NoError(t, err)
+		forwardOnlyTx, err := chainhash.NewHashFromStr("f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6")
+		require.NoError(t, err)
+
+		backSubtreeHash, err := chainhash.NewHashFromStr("1717171717171717171717171717171717171717171717171717171717171717")
+		require.NoError(t, err)
+		forwardSubtreeHash, err := chainhash.NewHashFromStr("2828282828282828282828282828282828282828282828282828282828282828")
+		require.NoError(t, err)
+
+		storeReorgSubtree(t, ctx, blobStore, backSubtreeHash, []subtree.Node{
+			{Hash: *doubleSpendTx, Fee: 100, SizeInBytes: 250},
+			{Hash: *backOnlyTx, Fee: 150, SizeInBytes: 300},
+		})
+		storeReorgSubtree(t, ctx, blobStore, forwardSubtreeHash, []subtree.Node{
+			{Hash: *doubleSpendTx, Fee: 100, SizeInBytes: 250},
+			{Hash: *forwardOnlyTx, Fee: 200, SizeInBytes: 400},
+		})
+
+		// Both the moved-back tip and the competing block build on
+		// prevBlockHeader (returned by the mock as the moved-back parent).
+		block2Header := &model.BlockHeader{Version: 1, HashPrevBlock: prevBlockHeader.Hash(), HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1900000002, Bits: model.NBit{}, Nonce: 802}
+		blockNewHeader := &model.BlockHeader{Version: 1, HashPrevBlock: prevBlockHeader.Hash(), HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1900000003, Bits: model.NBit{}, Nonce: 803}
+
+		blockToMoveBack := &model.Block{
+			Height:     2,
+			CoinbaseTx: coinbaseTx2,
+			Subtrees:   []*chainhash.Hash{backSubtreeHash},
+			Header:     block2Header,
+		}
+		blockToMoveForward := &model.Block{
+			Height:     2,
+			CoinbaseTx: coinbaseTx3,
+			Subtrees:   []*chainhash.Hash{forwardSubtreeHash},
+			Header:     blockNewHeader,
+		}
+
+		_, err = utxoStore.Create(ctx, coinbaseTx2, 2)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(ctx, coinbaseTx3, 2)
+		require.NoError(t, err)
+
+		stp.InitCurrentBlockHeader(block2Header)
+
+		go func() {
+			for req := range newSubtreeChan {
+				if req.ErrChan != nil {
+					req.ErrChan <- nil
+				}
+			}
+		}()
+
+		err = stp.Reorg([]*model.Block{blockToMoveBack}, []*model.Block{blockToMoveForward})
+		require.NoError(t, err, "reorg with a competing spend across the switch must succeed")
+
+		finalHeader := stp.GetCurrentBlockHeader()
+		require.Equal(t, blockNewHeader.Hash(), finalHeader.Hash(), "chain tip must advance to the moved-forward block")
+
+		finalTxMap := stp.GetCurrentTxMap()
+		// backOnly only existed in the undone block, so it returns to block assembly.
+		require.True(t, finalTxMap.Exists(*backOnlyTx), "a tx unique to the moved-back block must be recovered into block assembly")
+		// doubleSpend is now mined in the moved-forward block (on the longest
+		// chain), so it must NOT be left pending in block assembly.
+		require.False(t, finalTxMap.Exists(*doubleSpendTx), "a tx mined in the moved-forward block must not be left pending in block assembly")
+	})
 }

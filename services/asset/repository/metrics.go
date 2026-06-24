@@ -45,7 +45,8 @@ func _initPrometheusMetrics() {
 			//   Error cases:
 			//     - creation_failed: FileStorer creation failed
 			//     - storer_creation_failed: FileStorer creation failed (with quorum)
-			//     - write_failed: Write operation failed
+			//     - write_failed: Write operation failed (genuine server-side fault)
+			//     - client_gone: HTTP client/proxy disconnected mid-stream (io.ErrClosedPipe or context cancellation) — not a server fault
 			//     - close_failed: File close operation failed
 			//     - quorum_lock_failed: Quorum lock acquisition failed, fell back to no-lock
 		},

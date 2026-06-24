@@ -73,16 +73,19 @@ type FSMStateType = blockchain_api.FSMStateType
 // FSMEventType is an alias for blockchain_api.FSMEventType
 type FSMEventType = blockchain_api.FSMEventType
 
+// notificationSendTimeout bounds how long a fan-out goroutine will wait for
+// a subscriber's channel to accept a block notification. See the two
+// SafeSend call sites in this file for the rationale.
+const notificationSendTimeout = 30 * time.Second
+
 const (
 	FSMStateIDLE           = blockchain_api.FSMStateType_IDLE
 	FSMStateRUNNING        = blockchain_api.FSMStateType_RUNNING
 	FSMStateCATCHINGBLOCKS = blockchain_api.FSMStateType_CATCHINGBLOCKS
-	FSMStateLEGACYSYNCING  = blockchain_api.FSMStateType_LEGACYSYNCING
 
 	FSMEventIDLE          = blockchain_api.FSMEventType_STOP
 	FSMEventRUN           = blockchain_api.FSMEventType_RUN
 	FSMEventCATCHUPBLOCKS = blockchain_api.FSMEventType_CATCHUPBLOCKS
-	FSMEventLEGACYSYNC    = blockchain_api.FSMEventType_LEGACYSYNC
 )
 
 // NewClient creates a new blockchain client with default address settings.
@@ -99,6 +102,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 // NewClientWithAddress creates a new blockchain client with a specified address.
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string, source string) (ClientI, error) {
+	initPrometheusMetrics()
 	var err error
 
 	var baConn *grpc.ClientConn
@@ -198,9 +202,25 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 					}
 
 					for _, s := range c.subscribers {
-						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification) {
-							util.SafeSend(ch, notification)
-						}(s.ch, notification)
+						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification, subscriberSource string) {
+							// Bounded timeout so a slow / unresponsive subscriber
+							// cannot park this fan-out goroutine indefinitely.
+							// Each notification spawns one goroutine per subscriber;
+							// without a timeout, a subscriber whose channel never
+							// drains accumulates one parked goroutine per
+							// notification for the lifetime of the process.
+							// 30s is long relative to block cadence (~10 min) but
+							// short relative to "forever" — slow subscribers lose
+							// the notification, which is preferable to a leak.
+							//
+							// SafeSend returns false on timeout. We surface that
+							// at Warn so a wedged subscriber is visible in logs
+							// during diagnosis without flooding the log on every
+							// notification (notifications are infrequent).
+							if !util.SafeSend(ch, notification, notificationSendTimeout) {
+								c.logger.Warnf("[Blockchain] dropping notification for subscriber %s: channel full for %s", subscriberSource, notificationSendTimeout)
+							}
+						}(s.ch, notification, s.source)
 					}
 					c.subscribersMu.Unlock()
 				}
@@ -375,6 +395,15 @@ func (c *Client) GetNextBlockID(ctx context.Context) (uint64, error) {
 	}
 
 	return resp.NextBlockId, nil
+}
+
+// AssignBlockID returns a stable block ID for the given block hash (idempotent per hash).
+func (c *Client) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	resp, err := c.client.AssignBlockID(ctx, &blockchain_api.AssignBlockIDRequest{BlockHash: blockHash[:]})
+	if err != nil {
+		return 0, errors.UnwrapGRPC(err)
+	}
+	return resp.BlockId, nil
 }
 
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
@@ -1158,8 +1187,20 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 	if c.lastBlockNotification != nil {
 		lastNotification := c.lastBlockNotification
 		go func() {
-			util.SafeSend(ch, lastNotification)
-			c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
+			// Same bounded-timeout rationale as the fan-out send in
+			// NewClientWithAddress's notification consumer goroutine: if the
+			// new subscriber's channel is never drained, this goroutine
+			// would otherwise park forever holding a reference to the
+			// notification.
+			//
+			// Only log success when the send actually completed — on
+			// timeout the notification was dropped, which is unexpected
+			// for a brand-new subscriber (its channel should be empty).
+			if util.SafeSend(ch, lastNotification, notificationSendTimeout) {
+				c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
+			} else {
+				c.logger.Warnf("[Blockchain] dropping initial block notification for new subscriber %s: channel full for %s", source, notificationSendTimeout)
+			}
 		}()
 	}
 	c.subscribersMu.Unlock()
@@ -1269,13 +1310,26 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 			close(done)
 		}()
 
+		// zombieTimeout is 2× the heartbeat interval. If no Recv returns within
+		// this window the watchdog cancels the stream context, forcing Recv to
+		// error and the reconnect path to fire. The watchdog ticks at a quarter
+		// of the timeout so worst-case detection latency is ~1.25× zombieTimeout
+		// (zombieTimeout + one tick at zombieTimeout/4).
+		zombieTimeout := 2 * c.settings.BlockChain.HeartbeatInterval
+
 		for c.running.Load() {
 			c.logger.Infof("[Blockchain] Subscribing to blockchain service: %s", source)
 
-			stream, err := c.client.Subscribe(ctx, &blockchain_api.SubscribeRequest{
+			// Per-stream cancellable context. The zombie watchdog cancels it when
+			// no Recv returns for zombieTimeout. Recv then returns context.Canceled
+			// and the outer reconnect loop handles it.
+			streamCtx, cancelStream := context.WithCancel(ctx)
+
+			stream, err := c.client.Subscribe(streamCtx, &blockchain_api.SubscribeRequest{
 				Source: source,
 			})
 			if err != nil {
+				cancelStream()
 				if !c.running.Load() {
 					return
 				}
@@ -1305,9 +1359,48 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 			// This ensures staleness detection works correctly: if connection breaks before
 			// first PING, lastHB will be 0 and we'll properly set FSM to IDLE.
 
+			// lastRecvAt tracks when Recv last returned. Initialised to now so a
+			// stream that never delivers anything is given the full zombieTimeout
+			// grace period before the watchdog fires.
+			var lastRecvAt atomic.Int64
+			lastRecvAt.Store(time.Now().UnixNano())
+
+			// Zombie watchdog: fires cancelStream if no Recv returns within
+			// zombieTimeout. Exits when the stream context is done (normal error
+			// path, normal shutdown, or the watchdog itself cancelling).
+			watchdogDone := make(chan struct{})
+			go func() {
+				defer close(watchdogDone)
+				ticker := time.NewTicker(zombieTimeout / 4)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-streamCtx.Done():
+						return
+					case <-ticker.C:
+						age := time.Since(time.Unix(0, lastRecvAt.Load()))
+						if age > zombieTimeout {
+							c.logger.Warnf("[Blockchain][SubscribeToServer] watchdog: no Recv for %s on source %s — forcing stream close", age, source)
+							prometheusBlockchainWatchdogFires.WithLabelValues(source).Inc()
+							cancelStream()
+							return
+						}
+					}
+				}
+			}()
+
+			// shutdown tears down the per-stream watchdog before returning.
+			// Must be called on every exit from the inner recv loop.
+			shutdown := func() {
+				cancelStream()
+				<-watchdogDone
+			}
+
+			reconnect := false
 			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
+					shutdown()
 					if !c.running.Load() || ctx.Err() != nil {
 						// Context cancelled or client stopped, exit gracefully
 						return
@@ -1335,8 +1428,11 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 
 					c.logger.Infof("[Blockchain] retrying subscription in 1 second")
 					time.Sleep(1 * time.Second)
+					reconnect = true
 					break
 				}
+
+				lastRecvAt.Store(time.Now().UnixNano())
 
 				if resp.Type == model.NotificationType_PING {
 					// Update heartbeat immediately on receipt to avoid staleness races.
@@ -1356,6 +1452,7 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 					case <-time.After(5 * time.Second):
 						c.logger.Warnf("[Blockchain] timeout sending notification for %s, channel may be blocked", source)
 					case <-ctx.Done():
+						shutdown()
 						return
 					}
 
@@ -1382,8 +1479,14 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 				case <-time.After(5 * time.Second):
 					c.logger.Warnf("[Blockchain] timeout sending notification for %s, channel may be blocked", source)
 				case <-ctx.Done():
+					shutdown()
 					return
 				}
+			}
+			if !reconnect {
+				// Inner loop exited because c.running became false. Tear down the
+				// watchdog before the outer loop re-evaluates c.running.Load().
+				shutdown()
 			}
 		}
 	}()
@@ -1691,15 +1794,35 @@ func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (boo
 	return *currentState == state, nil
 }
 
-// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
+// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state by
+// polling the current state until it matches the target or the context is cancelled.
 func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState FSMStateType) error {
-	if _, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
-		State: targetState,
-	}); err != nil {
-		return errors.UnwrapGRPC(err)
-	}
+	ticker := time.NewTicker(1 * time.Second) // Re-check the state on each tick.
+	defer ticker.Stop()
 
-	return nil
+	for {
+		currentState, err := c.GetFSMCurrentState(ctx)
+		if err == nil && *currentState == targetState {
+			return nil
+		}
+
+		if err != nil {
+			// Keep polling through transient errors rather than aborting the wait. A
+			// state read can fail during the pre-warm window (e.g. a gRPC blip before
+			// the FSMState subscription has populated the cache), which on a fresh node
+			// spans the whole initial block download. Callers treat a returned error as
+			// "stay pessimistic" with no retry, so bailing on a one-off blip would
+			// disable the optimization for the process lifetime. Only ctx cancellation
+			// below ends the wait.
+			c.logger.Debugf("[WaitForFSMtoTransitionToGivenState] state read failed, retrying: %v", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.
@@ -1909,63 +2032,6 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 	}
 
 	_, err := c.client.ReportPeerFailure(ctx, req)
-	if err != nil {
-		return errors.UnwrapGRPC(err)
-	}
-
-	return nil
-}
-
-// LegacySync sends a legacy sync FSM event to the blockchain service.
-// This method initiates a legacy synchronization process by transitioning the
-// blockchain service's finite state machine to the LEGACY_SYNCING state, which
-// triggers compatibility mode synchronization with older BSV Blockchain network
-// protocols and legacy blockchain implementations.
-//
-// The legacy sync mode is essential for:
-// - Maintaining compatibility with older BSV Blockchain network nodes
-// - Synchronizing with legacy blockchain implementations
-// - Supporting migration scenarios from older Teranode versions
-// - Ensuring interoperability across diverse network topologies
-// - Handling edge cases in blockchain synchronization protocols
-//
-// The method first checks if the FSM is already in the LEGACY_SYNCING state
-// to avoid unnecessary state transitions. If not already in legacy sync mode,
-// it sends the appropriate FSM event to trigger the legacy synchronization
-// process.
-//
-// Legacy synchronization differs from standard sync by:
-// - Using older protocol versions for network communication
-// - Implementing backward-compatible block validation rules
-// - Supporting legacy transaction formats and structures
-// - Maintaining compatibility with pre-upgrade network nodes
-//
-// This operation is typically used during:
-// - Network upgrades and migration periods
-// - Integration with legacy BSV Blockchain infrastructure
-// - Debugging synchronization issues with older nodes
-// - Ensuring network-wide compatibility during protocol transitions
-//
-// The method communicates with the blockchain service via gRPC to send the
-// FSM event that initiates the legacy synchronization process.
-//
-// Parameters:
-//   - ctx: Context for the operation with timeout and cancellation support
-//
-// Returns:
-//   - error: Any error encountered during the FSM event transmission
-func (c *Client) LegacySync(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateLEGACYSYNCING {
-			return nil
-		}
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending Legacy Sync event")
-
-	_, err := c.client.LegacySync(ctx, &emptypb.Empty{})
 	if err != nil {
 		return errors.UnwrapGRPC(err)
 	}

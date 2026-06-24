@@ -98,10 +98,15 @@ func TestHTTPEndpoints(t *testing.T) {
 		utxoMock.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: 1625097600})
 		utxoMock.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
-		// Add expectation for the Get method which may be called regardless of skipUtxoCreation
+		// Add expectation for the Get method which may be called regardless of skipUtxoCreation.
+		// BlockHeights must be non-empty so the validator does not take the fallback path
+		// (which stamps the unconfirmedParentHeight sentinel — BDK then rejects with
+		// bad-txns-unconfirmed-input-in-block in consensus mode); this mock represents
+		// a parent that is already confirmed in a real block.
 		metaData := &meta.Data{
-			Fee:         32279815860,
-			SizeInBytes: 245,
+			Fee:          32279815860,
+			SizeInBytes:  245,
+			BlockHeights: []uint32{999},
 		}
 		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
 
@@ -109,7 +114,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		utxoMock.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
 
 		// Create a new server
-		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil)
+		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil, nil)
 
 		// Initialize the server without starting the gRPC/HTTP servers
 		err := server.Init(context.Background())
@@ -119,7 +124,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		e := echo.New()
 
 		// Build URL with parameters to bypass validation issues
-		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false"
+		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false&candidateParentMedianTime=1625097600"
 		req := httptest.NewRequest(http.MethodPost, "/tx?"+queryParams, bytes.NewReader(txBytes))
 		rec := httptest.NewRecorder()
 
@@ -148,10 +153,15 @@ func TestHTTPEndpoints(t *testing.T) {
 		utxoMock.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: 1625097600})
 		utxoMock.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
-		// Add expectation for the Get method
+		// Add expectation for the Get method. BlockHeights must be non-empty so the
+		// validator does not take the fallback path (which stamps the
+		// unconfirmedParentHeight sentinel — BDK then rejects with
+		// bad-txns-unconfirmed-input-in-block in consensus mode); this mock represents
+		// a parent that is already confirmed in a real block.
 		metaData := &meta.Data{
-			Fee:         32279815860,
-			SizeInBytes: 245,
+			Fee:          32279815860,
+			SizeInBytes:  245,
+			BlockHeights: []uint32{999},
 		}
 		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
 
@@ -159,7 +169,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		utxoMock.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
 
 		// Create a new server
-		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil)
+		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil, nil)
 
 		// Initialize the server
 		err := server.Init(context.Background())
@@ -175,7 +185,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		buf.Write(txBytes)
 
 		// Build URL with parameters to bypass validation issues
-		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false"
+		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false&candidateParentMedianTime=1625097600"
 		req := httptest.NewRequest(http.MethodPost, "/txs?"+queryParams, &buf)
 		rec := httptest.NewRecorder()
 

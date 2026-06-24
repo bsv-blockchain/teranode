@@ -68,8 +68,12 @@ type BlockAssemblyAPIClient interface {
 	// GetMiningCandidate retrieves a block template ready for mining.
 	// Includes all necessary components for miners to begin work.
 	GetMiningCandidate(ctx context.Context, in *GetMiningCandidateRequest, opts ...grpc.CallOption) (*model.MiningCandidate, error)
-	// GetCurrentDifficulty retrieves the current network mining difficulty.
-	// Used by miners to understand the current mining requirements.
+	// GetCurrentDifficulty retrieves the difficulty required for the NEXT block,
+	// not the current tip's difficulty. Computed against the current chain tip
+	// and the current wall-clock time, so the value reflects any retargeting that
+	// would apply to a block produced now. The returned BlockHash is the current
+	// tip's hash, provided as context. Despite the name, this is effectively
+	// "GetNextRequiredDifficulty"; the original name is retained for compatibility.
 	GetCurrentDifficulty(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetCurrentDifficultyResponse, error)
 	// SubmitMiningSolution submits a solved block to the network.
 	// Includes the proof-of-work solution and block details.
@@ -329,8 +333,12 @@ type BlockAssemblyAPIServer interface {
 	// GetMiningCandidate retrieves a block template ready for mining.
 	// Includes all necessary components for miners to begin work.
 	GetMiningCandidate(context.Context, *GetMiningCandidateRequest) (*model.MiningCandidate, error)
-	// GetCurrentDifficulty retrieves the current network mining difficulty.
-	// Used by miners to understand the current mining requirements.
+	// GetCurrentDifficulty retrieves the difficulty required for the NEXT block,
+	// not the current tip's difficulty. Computed against the current chain tip
+	// and the current wall-clock time, so the value reflects any retargeting that
+	// would apply to a block produced now. The returned BlockHash is the current
+	// tip's hash, provided as context. Despite the name, this is effectively
+	// "GetNextRequiredDifficulty"; the original name is retained for compatibility.
 	GetCurrentDifficulty(context.Context, *EmptyMessage) (*GetCurrentDifficultyResponse, error)
 	// SubmitMiningSolution submits a solved block to the network.
 	// Includes the proof-of-work solution and block details.

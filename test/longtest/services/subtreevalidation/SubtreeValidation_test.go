@@ -128,7 +128,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	// Activate httpmock for HTTP mocking
 	httpmock.ActivateNonDefault(util.HTTPClient())
 
-	subtreeValidation, err := stv.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, testStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
+	subtreeValidation, err := stv.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, testStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	// Use cached UTXO store for better performance

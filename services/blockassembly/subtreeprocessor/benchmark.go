@@ -298,6 +298,10 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 			return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to put hash in transaction map: %w", err)
 		}
 	}
+
+	// Production freezes the map after CreateTransactionMap; match it so the
+	// benchmark exercises the lock-free Exists path.
+	transactionMap.Freeze()
 	fmt.Printf("[%s] Transaction map created with %d entries.\n", time.Since(benchStartTime), transactionMap.Length())
 
 	// Create current tx map for parent lookups

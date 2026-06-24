@@ -56,18 +56,18 @@ This is the standard synchronization method where Teranode downloads the complet
 
 ### Step 1: Initialize Sync Process
 
-Upon startup, Teranode begins in IDLE state. You must explicitly set the state to `legacysyncing` to begin synchronization.
+Upon startup, Teranode begins in IDLE state. You must explicitly set the state to `running` to begin synchronization.
 
 ```bash
-# Set FSM state to begin legacy syncing
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate legacysyncing
+# Set FSM state to begin syncing
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
 ```
 
 ### Step 2: Peer Discovery and Block Download
 
 - **Peer Connection**: Teranode automatically discovers and connects to BSV network peers
 - **Block Requests**: Downloads blocks sequentially from genesis, starting with the first available peer
-- **Legacy Mode**: In `legacysyncing` state, connects to traditional BSV nodes for compatibility
+- **Peer Connection**: Connects to BSV network peers for block download
 
 ### Step 3: Validation and Storage
 
@@ -552,7 +552,7 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 
 ```bash
 # Reset FSM state and restart sync
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate legacysyncing
+kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
 
 # Monitor progress closely
 kubectl logs -n teranode-operator -l app=blockchain -f
@@ -582,7 +582,7 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getpeerin
 kubectl delete pod -n teranode-operator -l app=peer
 
 # Reset FSM state
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate legacysyncing
+kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
 ```
 
 #### Issue: Database Connection Errors

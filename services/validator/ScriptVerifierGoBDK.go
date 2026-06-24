@@ -1,13 +1,12 @@
 /*
 Package validator implements BSV Blockchain transaction validation functionality.
 
-This file implements the Go-BDK script verification functionality, providing
-script validation using the Bitcoin Development Kit (BDK) implementation.
-This verifier is only built when the 'bdk' build tag is specified.
+This file implements the GoBDK transaction validation adapter.
 */
 package validator
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -22,14 +21,75 @@ import (
 )
 
 const (
-	errMsgInvalidTx = "ScriptVerifierGoBDK fail to VerifyScript"
-	errMsgPolicy    = "ScriptVerifierGoBDK fail to VerifyScript by policy settings"
+	errMsgInvalidTx = "GoBDK fail to ValidateTransaction"
+	errMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
+
+	// mempoolHeight is the BDK / svnode sentinel for "this UTXO is not yet
+	// confirmed" — sourced from bitcoin-sv/src/protocol_era.h:14
+	// (MEMPOOL_HEIGHT = 0x7FFFFFFF) and exercised by BDK at
+	// bdk/core/txvalidator.cpp:779 (consensus rejection) and
+	// txvalidator.hpp:178-192 (caller contract).
+	//
+	// This constant lives in the BDK-adapter file because MEMPOOL_HEIGHT is a
+	// BDK / svnode concept; the rest of the validator works with
+	// unconfirmedParentHeight (defined in Validator.go) and only this adapter
+	// translates outward at the BDK call boundary.
+	mempoolHeight uint32 = 0x7FFFFFFF
 )
 
-// init registers the Go-BDK script verifier with the verification factory
-// This is called automatically when the package is imported with the 'bdk' build tag
-func init() {
-	TxScriptInterpreterFactory[TxInterpreterGoBDK] = newScriptVerifierGoBDK
+// substituteUnconfirmedHeights translates the teranode-internal
+// unconfirmedParentHeight sentinel into the value BDK expects at the call
+// boundary. The helper allocates a new slice only when the input contains at
+// least one sentinel; in the common path (no unconfirmed parents) the input
+// is returned unchanged.
+//
+// Translation rules:
+//   - consensus == true  → mempoolHeight (0x7FFFFFFF). BDK rejects with
+//     UnconfirmedInputInBlock → bad-txns-unconfirmed-input-in-block
+//     (bdk/core/txvalidator.cpp:779).
+//   - consensus == false → blockHeight (the candidate height the caller is
+//     validating against; in policy mode that is tip+1, matching svnode's
+//     GetInputScriptBlockHeight conversion of chainActive.Height()+1 at
+//     bitcoin-sv/src/validation.cpp:2668-2675).
+func substituteUnconfirmedHeights(utxoHeights []uint32, blockHeight uint32, consensus bool) []uint32 {
+	hasSentinel := false
+	for _, h := range utxoHeights {
+		if h == unconfirmedParentHeight {
+			hasSentinel = true
+			break
+		}
+	}
+	if !hasSentinel {
+		return utxoHeights
+	}
+
+	var substitute uint32
+	if consensus {
+		substitute = mempoolHeight
+	} else {
+		substitute = blockHeight
+	}
+
+	out := make([]uint32, len(utxoHeights))
+	for i, h := range utxoHeights {
+		if h == unconfirmedParentHeight {
+			out[i] = substitute
+		} else {
+			out[i] = h
+		}
+	}
+	return out
+}
+
+// resolveUnconfirmedParentsAtCandidateHeight rewrites every
+// unconfirmedParentHeight sentinel in utxoHeights to the candidate block
+// height. Purpose-named wrapper for the Options.UnconfirmedParentsAtCandidateHeight
+// path so the consensus-context call site does not read as a policy-mode
+// translation: it reuses substituteUnconfirmedHeights with consensus=false
+// because that branch performs exactly the blockHeight substitution wanted
+// here — NOT because the caller is in policy mode.
+func resolveUnconfirmedParentsAtCandidateHeight(utxoHeights []uint32, blockHeight uint32) []uint32 {
+	return substituteUnconfirmedHeights(utxoHeights, blockHeight, false)
 }
 
 // uint2int safely converts uint32 slice to int32 slice, checking for overflow.
@@ -76,22 +136,22 @@ func getBDKChainNameFromParams(l ulogger.Logger, pa *chaincfg.Params) string {
 	return chainNameMap[pa.Name]
 }
 
-// newScriptVerifierGoBDK creates a new Go-BDK script verifier instance
+// newScriptVerifierGoBDK creates a new GoBDK transaction validator adapter.
 // Parameters:
 //   - l: Logger instance for verification operations
 //   - po: Policy settings for validation rules
 //   - pa: Network parameters
 //
 // Returns:
-//   - TxScriptInterpreter: The created script interpreter
-func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
-	l.Infof("Use Script Verifier with GoBDK, version : %v", gobdk.BDK_VERSION_STRING())
+//   - bdkValidator: The created GoBDK validation adapter
+func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) bdkValidator {
+	l.Infof("Use GoBDK transaction validator, version : %v", gobdk.BDK_VERSION_STRING())
 
 	network := getBDKChainNameFromParams(l, pa)
-	se := bdkscript.NewScriptEngine(network)
+	se := bdkscript.NewTxValidator(network)
 
 	if se == nil {
-		l.Fatalf("unable to create script engine for network %v", network)
+		l.Fatalf("unable to create tx validator for network %v", network)
 	}
 
 	// #nosec G115 -- blockHeight won't overflow
@@ -105,6 +165,14 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 	}
 
 	if err := se.SetMaxOpsPerScriptPolicy(po.MaxOpsPerScriptPolicy); err != nil {
+		panic(err)
+	}
+
+	if err := se.SetMaxTxSizePolicy(int64(po.MaxTxSizePolicy)); err != nil {
+		panic(err)
+	}
+
+	if err := se.SetMaxSigOpsPostGenesisPolicy(po.GetMaxTxSigopsCountsPolicy()); err != nil {
 		panic(err)
 	}
 
@@ -124,8 +192,47 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		panic(err)
 	}
 
+	dataCarrierSize, err := safeconversion.Int64ToUint64(po.DataCarrierSize)
+	if err != nil {
+		panic(err)
+	}
+
+	se.SetDataCarrier(po.DataCarrier)
+	se.SetDataCarrierSize(dataCarrierSize)
 	se.SetAcceptNonStandardOutput(po.AcceptNonStdOutputs)
 	se.SetRequireStandard(po.RequireStandard)
+	se.SetPermitBareMultisig(po.PermitBareMultisig)
+
+	// Convert MinMiningTxFee from float BSV/kB to integer satoshis/kB.
+	// math.Round (not truncation) because IEEE-754 decimal representations can
+	// drop one satoshi otherwise — e.g. 0.00000250 stores as 0.0000024999…,
+	// truncating yields 249 instead of 250.
+	//
+	// panic() not l.Fatalf() so the stop guarantee doesn't depend on the logger
+	// implementation — TestLogger.Fatalf only logs, leaving an invalid policy
+	// silently in effect under unit tests.
+	if po.MinMiningTxFee < 0 {
+		panic(errors.NewConfigurationError("invalid minminingtxfee=%f: must not be negative", po.MinMiningTxFee))
+	}
+
+	satoshisPerKB := int64(math.Round(po.MinMiningTxFee * 1e8))
+	if err := se.SetMinMiningTxFee(satoshisPerKB); err != nil {
+		panic(errors.NewConfigurationError("invalid minminingtxfee=%f (=%d sat/kB)", po.MinMiningTxFee, satoshisPerKB, err))
+	}
+
+	if err := se.SetMinConsolidationFactor(int64(po.MinConsolidationFactor)); err != nil {
+		panic(errors.NewConfigurationError("invalid minconsolidationfactor=%d", po.MinConsolidationFactor, err))
+	}
+
+	if err := se.SetMaxConsolidationInputScriptSize(int64(po.MaxConsolidationInputScriptSize)); err != nil {
+		panic(errors.NewConfigurationError("invalid maxconsolidationinputscriptsize=%d", po.MaxConsolidationInputScriptSize, err))
+	}
+
+	if err := se.SetMinConfConsolidationInput(int64(po.MinConfConsolidationInput)); err != nil {
+		panic(errors.NewConfigurationError("invalid minconfconsolidationinput=%d", po.MinConfConsolidationInput, err))
+	}
+
+	se.SetAcceptNonStdConsolidationInput(po.AcceptNonStdConsolidationInput)
 
 	return &scriptVerifierGoBDK{
 		logger: l,
@@ -135,33 +242,46 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 	}
 }
 
-// scriptVerifierGoBDK implements the TxScriptInterpreter interface using Go-BDK
+type bdkValidator interface {
+	ValidateTransaction(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
+}
+
+type bdkNativeTxValidator interface {
+	ValidateTransaction(extendedTX []byte, utxoHeights []int32, blockHeight int32, consensus bool) error
+}
+
+// scriptVerifierGoBDK adapts Teranode validation data to GoBDK.
 type scriptVerifierGoBDK struct {
 	logger ulogger.Logger
 	policy *settings.PolicySettings
 	params *chaincfg.Params
-	se     *bdkscript.ScriptEngine
+	se     bdkNativeTxValidator
 }
 
-// VerifyScript implements script verification using the Go-BDK library
-// This method verifies all inputs of a transaction against their corresponding
-// locking scripts using the BDK script verification engine.
-//
-// The verification process:
-// 1. Iterates through all transaction inputs
-// 2. Calculates appropriate script flags based on block height
-// 3. Performs script verification using BDK's native implementation
-// 4. Provides detailed error information for debugging
-//
-// Parameters:
-//   - tx: The transaction containing scripts to verify
-//   - blockHeight: Current block height for validation context
-//
-// Returns:
-//   - error: Any script verification errors encountered
-//
-// Note: Empty scripts and special cases are handled with appropriate logging
-func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error {
+func bdkBlockHeight(blockHeight uint32, consensus bool) (int32, error) {
+	if consensus {
+		return safeconversion.Uint32ToInt32(blockHeight)
+	}
+
+	if blockHeight == 0 {
+		return 0, errors.NewInvalidArgumentError("policy validation block height cannot be zero")
+	}
+
+	return safeconversion.Uint32ToInt32(blockHeight - 1)
+}
+
+// ValidateTransaction runs BDK-side validation for tx.
+func (v *scriptVerifierGoBDK) ValidateTransaction(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error {
+	if tx.IsCoinbase() {
+		return errors.NewTxInvalidError("coinbase transactions are not supported")
+	}
+
+	// Translate the teranode-internal unconfirmedParentHeight sentinel into
+	// BDK's MEMPOOL_HEIGHT (consensus) or the candidate next-block height
+	// (policy). Other slots pass through untouched. See
+	// substituteUnconfirmedHeights for the full contract.
+	utxoHeights = substituteUnconfirmedHeights(utxoHeights, blockHeight, consensus)
+
 	eTxBytes := tx.ExtendedBytes()
 	intUtxoHeights, errConv := uint2int(utxoHeights)
 
@@ -169,13 +289,12 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		return errors.NewInvalidArgumentError("failed conversion for utxo heights", errConv)
 	}
 
-	intBlockHeight, errConv := safeconversion.Uint32ToInt32(blockHeight)
+	intBlockHeight, errConv := bdkBlockHeight(blockHeight, consensus)
 	if errConv != nil {
-		return errors.NewInvalidArgumentError("failed conversion for block height heights", errConv)
+		return errors.NewInvalidArgumentError("failed conversion for block height", errConv)
 	}
 
-	// #nosec G115 -- blockHeight won't overflow
-	errVerify := v.se.VerifyScript(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
+	errVerify := v.se.ValidateTransaction(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
 	if errVerify != nil {
 		// Get the information of all utxo heights
 		var utxoHeighstStr []string
@@ -187,32 +306,53 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 
 		v.logger.Warnf("%s txID=%s blockHeight=%d utxoHeights=%s error=%v", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
 
-		errCode := errVerify.Code()
-		policyRelatedError := (errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
-			errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW ||
-			errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE ||
-			errCode == bdkscript.SCRIPT_ERR_SCRIPT_SIZE ||
-			errCode == bdkscript.SCRIPT_ERR_PUBKEY_COUNT ||
-			errCode == bdkscript.SCRIPT_ERR_STACK_SIZE)
-
-		if !consensus && policyRelatedError {
-			// See https://github.com/bsv-blockchain/teranode/issues/2016
-			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
-			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
-		}
-
-		// The special case of policy with consensus == true for MaxStackMemoryUsageConsensus
-		if consensus && errCode == bdkscript.SCRIPT_ERR_STACK_SIZE {
-			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
-			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
-		}
-
-		return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+		return v.mapBDKValidationError(errVerify, consensus)
 	}
 
 	return nil
 }
 
-func (v *scriptVerifierGoBDK) Interpreter() TxInterpreter {
-	return TxInterpreterGoBDK
+func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus bool) error {
+	var dosErr bdkscript.DoSError
+	if errors.As(errVerify, &dosErr) {
+		switch dosErr.Code() {
+		case bdkscript.DOS_ERR_NOT_STANDARD, bdkscript.DOS_ERR_SIGOPS_POLICY, bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION:
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+		case bdkscript.DOS_ERR_INSUFFICIENT_FEE:
+			policyErr := errors.NewTxPolicyError("transaction fee is too low", errVerify)
+			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+		default:
+			if dosErr.Code() <= bdkscript.DOS_ERR_OK || dosErr.Code() >= bdkscript.DOS_ERR_COUNT {
+				v.logger.Warnf("unknown BDK DoS error code=%d error=%v", dosErr.Code(), errVerify)
+			}
+
+			return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+		}
+	}
+
+	var scriptErr bdkscript.ScriptError
+	if errors.As(errVerify, &scriptErr) {
+		errCode := scriptErr.Code()
+		if errCode == bdkscript.SCRIPT_ERR_CGO_EXCEPTION {
+			return errors.NewProcessingError(errMsgInvalidTx, errVerify)
+		}
+
+		if (!consensus && bdkPolicyRelatedScriptError(errCode)) ||
+			(consensus && errCode == bdkscript.SCRIPT_ERR_STACK_SIZE) {
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+		}
+	}
+
+	return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+}
+
+func bdkPolicyRelatedScriptError(errCode bdkscript.ScriptErrorCode) bool {
+	return errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
+		errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW ||
+		errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE ||
+		errCode == bdkscript.SCRIPT_ERR_SCRIPT_SIZE ||
+		errCode == bdkscript.SCRIPT_ERR_PUBKEY_COUNT ||
+		errCode == bdkscript.SCRIPT_ERR_STACK_SIZE
 }

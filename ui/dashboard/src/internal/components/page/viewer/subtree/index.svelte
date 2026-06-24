@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import SubtreeDetailsCard from './subtree-details-card/index.svelte'
   import SubtreeTxsCard from './subtree-txs-card/index.svelte'
@@ -12,43 +13,47 @@
   import { failure } from '$lib/utils/notifications'
   import * as api from '$internal/api'
 
-  let ready = false
-  beforeUpdate(() => {
+  let ready = $state(false)
+  $effect(() => {
     ready = true
   })
 
   const type = DetailType.subtree
 
-  export let hash = ''
+  let { hash = '' }: { hash?: string } = $props()
 
-  $: blockHash = ready ? $page.url.searchParams.get('blockHash') ?? '' : ''
+  const blockHash = $derived(ready ? $page.url.searchParams.get('blockHash') ?? '' : '')
 
-  let display: DetailTab
+  let display: DetailTab = $state(DetailTab.overview)
 
-  $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
-  $: display = tab === DetailTab.json ? DetailTab.json :
+  const tab = $derived(ready ? $page.url.searchParams.get('tab') ?? '' : '')
+  $effect(() => {
+    display = tab === DetailTab.json ? DetailTab.json :
               tab === DetailTab.merkleproof ? DetailTab.merkleproof :
               DetailTab.overview
+  })
 
-  let result: any = null
+  let result: any = $state(null)
 
   // Track previous values to prevent unnecessary fetches
   let lastFetchParams = { assetHTTPAddress: '', hash: '', blockHash: '' }
 
-  $: if ($assetHTTPAddress && type && hash && hash.length === 64) {
-    // Only fetch if parameters actually changed
-    if (
-      lastFetchParams.assetHTTPAddress !== $assetHTTPAddress ||
-      lastFetchParams.hash !== hash ||
-      lastFetchParams.blockHash !== blockHash
-    ) {
-      lastFetchParams = { assetHTTPAddress: $assetHTTPAddress, hash, blockHash }
-      fetchData()
+  $effect(() => {
+    if ($assetHTTPAddress && type && hash && hash.length === 64) {
+      // Only fetch if parameters actually changed
+      if (
+        lastFetchParams.assetHTTPAddress !== $assetHTTPAddress ||
+        lastFetchParams.hash !== hash ||
+        lastFetchParams.blockHash !== blockHash
+      ) {
+        lastFetchParams = { assetHTTPAddress: $assetHTTPAddress, hash, blockHash }
+        fetchData()
+      }
     }
-  }
+  })
 
   function onDisplay(e) {
-    display = e.detail.value
+    display = e.value
     setQueryParam('tab', display)
   }
 
@@ -109,12 +114,12 @@
 </script>
 
 {#if result}
-  <SubtreeDetailsCard data={result} {display} {blockHash} on:display={onDisplay} />
+  <SubtreeDetailsCard data={result} {display} {blockHash} ondisplay={onDisplay} />
   {#if display === DetailTab.overview}
-    <div style="height: 20px" />
+    <div style="height: 20px"></div>
     <SubtreeTxsCard subtree={result} {blockHash} />
   {:else if display === DetailTab.merkleproof}
-    <div style="height: 20px" />
+    <div style="height: 20px"></div>
     <SubtreeMerkleVisualizer subtreeHash={hash} {blockHash} />
   {/if}
 {:else if $spinCount === 0}

@@ -193,7 +193,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 			return nil, nil, errors.NewStorageError("failed to convert coinbaseTx", err)
 		}
 
-		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+		miner, err := util.ExtractCoinbaseMinerRaw(coinbaseTx, s.rawMinerTag)
 		if err != nil {
 			s.logger.Debugf("failed to extract miner in GetBestBlockHeader (block may be invalid): %v", err)
 		} else {

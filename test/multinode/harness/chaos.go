@@ -64,3 +64,50 @@ func (s *Stack) Unslow(t *testing.T, node int) {
 	t.Helper()
 	s.MustRun(t, "chaos", "unslow", fmt.Sprintf("%d", node))
 }
+
+// KillService stops a single split-mode service container on node via
+// docker compose stop. Only valid on a stack provisioned with ProvisionSplit;
+// fails the test otherwise. svc must be one of the known split services
+// (blockchain, blockassembly, blockvalidation, subtreevalidation, validator,
+// propagation, p2p, asset, core) — multinode.sh chaos kill rejects typos at
+// the shell layer.
+func (s *Stack) KillService(t *testing.T, node int, svc string) {
+	t.Helper()
+	s.requireSplit(t, "KillService")
+	s.MustRun(t, "chaos", "kill", fmt.Sprintf("%d", node), svc)
+}
+
+// StartService brings a single split-mode service container on node back up.
+// Idempotent for an already-running container, and works for a service that
+// was passed to up --skip N:svc (the underlying script uses `compose up -d`
+// so the container is created if missing).
+func (s *Stack) StartService(t *testing.T, node int, svc string) {
+	t.Helper()
+	s.requireSplit(t, "StartService")
+	s.MustRun(t, "chaos", "start", fmt.Sprintf("%d", node), svc)
+}
+
+// PauseService freezes a single split-mode service container via docker pause.
+// The process is SIGSTOP-ed; gRPC connections from siblings hang rather than
+// fail, which is what most "node temporarily unresponsive" scenarios want.
+func (s *Stack) PauseService(t *testing.T, node int, svc string) {
+	t.Helper()
+	s.requireSplit(t, "PauseService")
+	s.MustRun(t, "chaos", "pause", fmt.Sprintf("%d", node), svc)
+}
+
+// UnpauseService resumes a paused split-mode service container.
+func (s *Stack) UnpauseService(t *testing.T, node int, svc string) {
+	t.Helper()
+	s.requireSplit(t, "UnpauseService")
+	s.MustRun(t, "chaos", "unpause", fmt.Sprintf("%d", node), svc)
+}
+
+// requireSplit fails the test if the stack wasn't provisioned in split mode.
+// Centralised so the per-service chaos methods give the same error.
+func (s *Stack) requireSplit(t *testing.T, method string) {
+	t.Helper()
+	if !s.splitMode {
+		t.Fatalf("%s requires a stack provisioned with ProvisionSplit (per-service chaos has no meaning in all-in-one mode)", method)
+	}
+}

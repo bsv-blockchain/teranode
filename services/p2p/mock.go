@@ -29,8 +29,9 @@ import (
 //	mockNode.On("Start", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 //	// Use mockNode in place of real P2PNodeI implementation
 type MockServerP2PClient struct {
-	mock.Mock         // Embedded mock for method call recording and expectations
-	peerID    peer.ID // Configurable peer ID for testing scenarios
+	mock.Mock                          // Embedded mock for method call recording and expectations
+	peerID    peer.ID                  // Configurable peer ID for testing scenarios
+	peers     []p2pMessageBus.PeerInfo // If non-nil, returned by GetPeers() instead of the default
 }
 
 func (m *MockServerP2PClient) Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error {
@@ -68,6 +69,10 @@ func (m *MockServerP2PClient) Connect(ctx context.Context, peerMultiaddr string)
 }
 
 func (m *MockServerP2PClient) GetPeers() []p2pMessageBus.PeerInfo {
+	if m.peers != nil {
+		return m.peers
+	}
+
 	peers := []p2pMessageBus.PeerInfo{}
 	peers = append(peers, p2pMessageBus.PeerInfo{})
 
@@ -156,6 +161,11 @@ type MockKafkaProducer struct {
 
 func (m *MockKafkaProducer) Publish(msg *kafka.Message) {
 	m.Called(msg)
+}
+
+func (m *MockKafkaProducer) TryPublish(msg *kafka.Message) bool {
+	args := m.Called(msg)
+	return args.Bool(0)
 }
 
 func (m *MockKafkaProducer) Close() error {

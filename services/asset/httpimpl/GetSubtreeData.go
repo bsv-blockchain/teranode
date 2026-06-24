@@ -46,7 +46,7 @@ func (h *HTTP) GetSubtreeData() func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetSubtreeData_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetSubtreeData for %s: %s", c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetSubtreeData for %s: %s", c.RealIP(), hashStr),
 		)
 
 		defer deferFn()
@@ -62,10 +62,16 @@ func (h *HTTP) GetSubtreeData() func(c echo.Context) error {
 
 		r, err := h.repository.GetSubtreeDataReader(ctx, hash)
 		if err != nil {
-			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			switch {
+			case errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found"):
 				prometheusAssetHTTPGetSubtreeData.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
+			case errors.Is(err, errors.ErrServiceUnavailable):
+				// Create-path admission control rejected this request — tell the client to retry.
+				prometheusAssetHTTPGetSubtreeData.WithLabelValues("ERROR", http.StatusText(http.StatusServiceUnavailable)).Inc()
+				c.Response().Header().Set("Retry-After", "1")
+				return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
+			default:
 				prometheusAssetHTTPGetSubtreeData.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}

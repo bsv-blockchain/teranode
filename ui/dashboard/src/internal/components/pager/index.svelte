@@ -1,59 +1,71 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { Tab, Dropdown, TextInput } from '$lib/components'
   import Typo from '../typo/index.svelte'
   import { getBtnData, getPageSizeOptions } from './utils'
   import type { I18n } from '$lib/types'
 
-  const dispatch = createEventDispatcher()
-
-  export let testId: string | undefined | null = null
-
   let type = 'page'
 
-  export let name = ''
-  export let value
-  export let totalItems = 0
-  export let siblingCount = 0
-  export let boundaryCount = 1
-  export let hasBoundaryRight = true
-  export let dataSize = 5
-  export let i18n: I18n | null | undefined
-  export let expandUp = false
-  export let stretch = true
-  export let showPageSize = true
-  export let showQuickNav = true
-  export let showNav = true
+  let {
+    testId = null,
+    name = '',
+    value = $bindable(),
+    totalItems = 0,
+    siblingCount = 0,
+    boundaryCount = 1,
+    hasBoundaryRight = true,
+    dataSize = 5,
+    i18n,
+    expandUp = false,
+    stretch = true,
+    showPageSize = true,
+    showQuickNav = true,
+    showNav = true,
+    onchange,
+  }: {
+    testId?: string | undefined | null
+    name?: string
+    value?: { page?: number; pageSize?: number }
+    totalItems?: number
+    siblingCount?: number
+    boundaryCount?: number
+    hasBoundaryRight?: boolean
+    dataSize?: number
+    i18n?: I18n | null | undefined
+    expandUp?: boolean
+    stretch?: boolean
+    showPageSize?: boolean
+    showQuickNav?: boolean
+    showNav?: boolean
+    onchange?: (e: { name: string; type: string; value: any }) => void
+  } = $props()
 
-  $: i18nLocal = {
+  const i18nLocal = $derived({
     t: i18n?.t,
     baseKey: i18n?.baseKey || 'comp.pager',
-  }
-  $: t = i18nLocal?.t || function () {}
-  $: baseKey = i18nLocal?.baseKey
-  $: pageSizeOptions = getPageSizeOptions(i18nLocal)
+  })
+  const t = $derived(i18nLocal?.t || function () {})
+  const baseKey = $derived(i18nLocal?.baseKey)
+  const pageSizeOptions = $derived(getPageSizeOptions(i18nLocal))
 
-  $: page = value?.page || 1
-  $: pageSize = value?.pageSize || 10
-  $: pageInput = `${page}`
+  const page = $derived(value?.page || 1)
+  const pageSize = $derived(value?.pageSize || 10)
 
-  let totalPages = 1
-  let isLastPage = false
-  let btnData: { type: 'page' | 'range'; page?: number; range?: number[] }[] = []
+  // pageInput is derived from `page` but also reassigned imperatively by the
+  // input-change handler, so it cannot be a plain $derived. Keep it as $state
+  // and re-sync it whenever `page` changes.
+  let pageInput = $state(`${value?.page || 1}`)
+  $effect(() => {
+    pageInput = `${page}`
+  })
 
-  $: {
-    totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
-    isLastPage = dataSize < pageSize
-
-    btnData = getBtnData(
-      totalPages,
-      page,
-      isLastPage,
-      hasBoundaryRight,
-      boundaryCount,
-      siblingCount,
-    )
-  }
+  const totalPages = $derived(Math.max(1, Math.ceil(totalItems / pageSize)))
+  const isLastPage = $derived(dataSize < pageSize)
+  const btnData: { type: 'page' | 'range'; page?: number; range?: number[] }[] = $derived(
+    getBtnData(totalPages, page, isLastPage, hasBoundaryRight, boundaryCount, siblingCount),
+  )
 
   function isSelected(btn) {
     return btn.type === 'page' && btn.page === page
@@ -61,7 +73,7 @@
 
   function callChange(page, pageSize) {
     value = { page, pageSize }
-    dispatch('change', { name, type, value })
+    onchange?.({ name, type, value })
   }
 
   function onSelect(btn) {
@@ -89,8 +101,8 @@
   }
 
   const onInputChange = (e) => {
-    const name = e.detail.name
-    const val = parseInt(e.detail.value)
+    const name = e.name
+    const val = parseInt(e.value)
 
     switch (name) {
       case 'page':
@@ -108,20 +120,16 @@
     }
   }
 
-  let quickNavDisabled = false
-  let onCurrentPage = false
-
-  $: {
+  const quickNavDisabled = $derived.by(() => {
     const pageNum = parseInt(pageInput)
-
-    quickNavDisabled =
+    return (
       !pageInput || isNaN(pageNum) || pageNum === page || pageNum < 1 || pageNum > totalPages
-
-    onCurrentPage = pageNum === page
-  }
+    )
+  })
+  const onCurrentPage = $derived(parseInt(pageInput) === page)
 
   function onQuickNavKeyDown(e) {
-    const keyCode = e.detail.code || e.detail.key
+    const keyCode = e.code || e.key
     if (!quickNavDisabled && keyCode === 'Enter') {
       onNav('nav', parseInt(pageInput))
       return false
@@ -139,7 +147,7 @@
         items={pageSizeOptions}
         size="small"
         {expandUp}
-        on:change={onInputChange}
+        onchange={onInputChange}
       />
     </div>
   {/if}
@@ -156,8 +164,8 @@
           stretch={true}
           value={pageInput}
           valid={!quickNavDisabled || onCurrentPage}
-          on:change={onInputChange}
-          on:keydown={onQuickNavKeyDown}
+          onchange={onInputChange}
+          onkeydown={onQuickNavKeyDown}
         />
       </div>
       <Typo
@@ -176,14 +184,14 @@
         icon="icon-chevron-left-line"
         size="small"
         disabled={page === 1}
-        on:click={() => onNav('prev')}
+        onclick={() => onNav('prev')}
       />
       {#each btnData as btn}
         <Tab
           variant="primary"
           size="small"
           selected={isSelected(btn)}
-          on:click={() => onSelect(btn)}
+          onclick={() => onSelect(btn)}
         >
           {btn.type === 'page' ? btn.page : '...'}
         </Tab>
@@ -193,7 +201,7 @@
         iconAfter="icon-chevron-right-line"
         size="small"
         disabled={page === totalPages}
-        on:click={() => onNav('next')}
+        onclick={() => onNav('next')}
       />
     </div>
   {/if}

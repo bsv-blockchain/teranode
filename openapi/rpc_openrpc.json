@@ -1,0 +1,723 @@
+{
+  "openrpc": "1.2.6",
+  "info": {
+    "title": "Teranode JSON-RPC API",
+    "description": "Bitcoin-compatible JSON-RPC interface for Teranode. Implements standard Bitcoin Core RPC methods plus BSV-specific extensions for mining, alert management, and enhanced block retrieval. All methods are called via POST to the RPC endpoint with JSON-RPC 2.0 envelope.",
+    "version": "1.0.0",
+    "license": {
+      "name": "Open BSV License",
+      "url": "https://github.com/bsv-blockchain/teranode/blob/main/LICENSE"
+    }
+  },
+  "servers": [
+    {
+      "name": "Local RPC",
+      "url": "http://localhost:8332"
+    }
+  ],
+  "methods": [
+    {
+      "name": "getinfo",
+      "summary": "Get general information about the node.",
+      "description": "Returns an object containing various state info including version, block count, connections, difficulty, and policy settings.",
+      "params": [],
+      "result": {
+        "name": "info",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "version": { "type": "integer", "description": "Server version" },
+            "protocolversion": { "type": "integer", "description": "Protocol version" },
+            "blocks": { "type": "integer", "description": "Current block count" },
+            "connections": { "type": "integer", "description": "Number of peer connections" },
+            "difficulty": { "type": "number", "description": "Current mining difficulty" },
+            "testnet": { "type": "boolean", "description": "Whether running on testnet" },
+            "stn": { "type": "boolean", "description": "Whether running on STN" },
+            "policy": { "type": "object", "description": "Node policy settings" }
+          }
+        }
+      }
+    },
+    {
+      "name": "getbestblockhash",
+      "summary": "Get the hash of the best (tip) block.",
+      "params": [],
+      "result": {
+        "name": "hash",
+        "schema": { "type": "string", "description": "Block hash in hexadecimal" }
+      }
+    },
+    {
+      "name": "getblock",
+      "summary": "Get block data by hash.",
+      "description": "Returns block data. With verbosity 0, returns hex-encoded block. With verbosity 1 (default), returns a JSON object with block info. With verbosity 2, includes full transaction details.",
+      "params": [
+        {
+          "name": "hash",
+          "required": true,
+          "schema": { "type": "string", "description": "Block hash in hexadecimal" }
+        },
+        {
+          "name": "verbosity",
+          "schema": { "type": "integer", "default": 1, "description": "0=hex, 1=JSON, 2=JSON with tx details" }
+        }
+      ],
+      "result": {
+        "name": "block",
+        "schema": {
+          "oneOf": [
+            { "type": "string", "description": "Hex-encoded block data (verbosity 0)" },
+            {
+              "type": "object",
+              "description": "Block info (verbosity 1 or 2)",
+              "properties": {
+                "hash": { "type": "string" },
+                "confirmations": { "type": "integer" },
+                "size": { "type": "integer" },
+                "height": { "type": "integer" },
+                "version": { "type": "integer" },
+                "versionHex": { "type": "string" },
+                "merkleroot": { "type": "string" },
+                "tx": { "type": "array", "items": { "type": "string" } },
+                "time": { "type": "integer" },
+                "nonce": { "type": "integer" },
+                "bits": { "type": "string" },
+                "difficulty": { "type": "number" },
+                "previousblockhash": { "type": "string" },
+                "nextblockhash": { "type": "string" },
+                "num_tx": { "type": "integer" },
+                "mediantime": { "type": "integer" },
+                "chainwork": { "type": "string" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "getblockbyheight",
+      "summary": "Get block data by height.",
+      "description": "BSV extension. Returns block data for the block at the given height. Verbosity works the same as getblock.",
+      "params": [
+        {
+          "name": "height",
+          "required": true,
+          "schema": { "type": "integer", "description": "Block height" }
+        },
+        {
+          "name": "verbosity",
+          "schema": { "type": "integer", "default": 1 }
+        }
+      ],
+      "result": {
+        "name": "block",
+        "schema": { "type": "object", "description": "Same structure as getblock result" }
+      }
+    },
+    {
+      "name": "getblockhash",
+      "summary": "Get the block hash at a given height.",
+      "params": [
+        {
+          "name": "index",
+          "required": true,
+          "schema": { "type": "integer", "description": "Block height" }
+        }
+      ],
+      "result": {
+        "name": "hash",
+        "schema": { "type": "string", "description": "Block hash in hexadecimal" }
+      }
+    },
+    {
+      "name": "getblockheader",
+      "summary": "Get a block header by hash.",
+      "description": "With verbose=false, returns hex-encoded header. With verbose=true (default), returns a JSON object.",
+      "params": [
+        {
+          "name": "hash",
+          "required": true,
+          "schema": { "type": "string", "description": "Block hash in hexadecimal" }
+        },
+        {
+          "name": "verbose",
+          "schema": { "type": "boolean", "default": true }
+        }
+      ],
+      "result": {
+        "name": "header",
+        "schema": {
+          "oneOf": [
+            { "type": "string", "description": "Hex-encoded header (verbose=false)" },
+            {
+              "type": "object",
+              "description": "Block header info (verbose=true)",
+              "properties": {
+                "hash": { "type": "string" },
+                "confirmations": { "type": "integer" },
+                "height": { "type": "integer" },
+                "version": { "type": "integer" },
+                "versionHex": { "type": "string" },
+                "merkleroot": { "type": "string" },
+                "time": { "type": "integer" },
+                "nonce": { "type": "integer" },
+                "bits": { "type": "string" },
+                "difficulty": { "type": "number" },
+                "previousblockhash": { "type": "string" },
+                "nextblockhash": { "type": "string" },
+                "size": { "type": "integer" },
+                "num_tx": { "type": "integer" },
+                "mediantime": { "type": "integer" },
+                "chainwork": { "type": "string" },
+                "status": { "type": "string" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "getblockchaininfo",
+      "summary": "Get current blockchain state information.",
+      "params": [],
+      "result": {
+        "name": "info",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "chain": { "type": "string" },
+            "blocks": { "type": "integer" },
+            "bestblockhash": { "type": "string" },
+            "difficulty": { "type": "number" },
+            "mediantime": { "type": "integer" },
+            "chainwork": { "type": "string" }
+          }
+        }
+      }
+    },
+    {
+      "name": "getchaintips",
+      "summary": "Get information about all known chain tips.",
+      "params": [],
+      "result": {
+        "name": "tips",
+        "schema": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "height": { "type": "integer" },
+              "hash": { "type": "string" },
+              "branchlen": { "type": "integer" },
+              "status": { "type": "string", "description": "active, valid-fork, valid-headers, headers-only, or invalid" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "getdifficulty",
+      "summary": "Get the current proof-of-work difficulty.",
+      "params": [],
+      "result": {
+        "name": "difficulty",
+        "schema": { "type": "number" }
+      }
+    },
+    {
+      "name": "getrawtransaction",
+      "summary": "Get a raw transaction by txid.",
+      "description": "With verbose=0 (default), returns hex-encoded tx. With verbose=1, returns a JSON object with decoded transaction data.",
+      "params": [
+        {
+          "name": "txid",
+          "required": true,
+          "schema": { "type": "string", "description": "Transaction ID in hexadecimal" }
+        },
+        {
+          "name": "verbose",
+          "schema": { "type": "integer", "default": 0, "description": "0=hex string, 1=JSON object" }
+        }
+      ],
+      "result": {
+        "name": "transaction",
+        "schema": {
+          "oneOf": [
+            { "type": "string", "description": "Hex-encoded raw transaction (verbose=0)" },
+            {
+              "type": "object",
+              "description": "Decoded transaction (verbose=1)",
+              "properties": {
+                "hex": { "type": "string" },
+                "txid": { "type": "string" },
+                "hash": { "type": "string" },
+                "size": { "type": "integer" },
+                "version": { "type": "integer" },
+                "locktime": { "type": "integer" },
+                "vin": { "type": "array", "items": { "type": "object" } },
+                "vout": { "type": "array", "items": { "type": "object" } },
+                "blockhash": { "type": "string" },
+                "confirmations": { "type": "integer" },
+                "time": { "type": "integer" },
+                "blocktime": { "type": "integer" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "sendrawtransaction",
+      "summary": "Submit a raw transaction for broadcast.",
+      "params": [
+        {
+          "name": "hexstring",
+          "required": true,
+          "schema": { "type": "string", "description": "Hex-encoded raw transaction" }
+        },
+        {
+          "name": "allowhighfees",
+          "schema": { "type": "boolean", "default": false }
+        }
+      ],
+      "result": {
+        "name": "txid",
+        "schema": { "type": "string", "description": "Transaction ID of the submitted transaction" }
+      }
+    },
+    {
+      "name": "createrawtransaction",
+      "summary": "Create a raw transaction.",
+      "params": [
+        {
+          "name": "inputs",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "txid": { "type": "string" },
+                "vout": { "type": "integer" }
+              }
+            }
+          }
+        },
+        {
+          "name": "outputs",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "description": "Address-to-amount mapping",
+            "additionalProperties": { "type": "number" }
+          }
+        },
+        {
+          "name": "locktime",
+          "schema": { "type": "integer" }
+        }
+      ],
+      "result": {
+        "name": "hex",
+        "schema": { "type": "string", "description": "Hex-encoded unsigned raw transaction" }
+      }
+    },
+    {
+      "name": "getrawmempool",
+      "summary": "Get all transaction IDs in the mempool.",
+      "params": [
+        {
+          "name": "verbose",
+          "schema": { "type": "boolean", "default": false }
+        }
+      ],
+      "result": {
+        "name": "mempool",
+        "schema": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" }, "description": "Transaction IDs (verbose=false)" },
+            { "type": "object", "description": "Mempool summary (verbose=true)" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "getmininginfo",
+      "summary": "Get mining-related information.",
+      "params": [],
+      "result": {
+        "name": "mininginfo",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "blocks": { "type": "integer" },
+            "currentblocksize": { "type": "integer" },
+            "currentblocktx": { "type": "integer" },
+            "difficulty": { "type": "number" },
+            "errors": { "type": "string" },
+            "generate": { "type": "boolean" },
+            "genproclimit": { "type": "integer" },
+            "hashespersec": { "type": "integer" },
+            "networkhashps": { "type": "number" },
+            "pooledtx": { "type": "integer" },
+            "testnet": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    {
+      "name": "getminingcandidate",
+      "summary": "Get a mining candidate for block construction.",
+      "description": "BSV extension. Returns a candidate block template for miners.",
+      "params": [
+        {
+          "name": "provideCoinbaseTx",
+          "schema": { "type": "boolean" }
+        },
+        {
+          "name": "verbosity",
+          "schema": { "type": "integer" }
+        }
+      ],
+      "result": {
+        "name": "candidate",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "prevhash": { "type": "string" },
+            "coinbaseValue": { "type": "integer" },
+            "version": { "type": "integer" },
+            "nBits": { "type": "string" },
+            "time": { "type": "integer" },
+            "height": { "type": "integer" },
+            "num_tx": { "type": "integer" },
+            "sizeWithoutCoinbase": { "type": "integer" },
+            "merkleProof": { "type": "array", "items": { "type": "string" } },
+            "difficulty": { "type": "number" },
+            "coinbase": { "type": "string" },
+            "subtreeHashes": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    {
+      "name": "submitminingsolution",
+      "summary": "Submit a mining solution.",
+      "description": "BSV extension. Submits a solved block to the network.",
+      "params": [
+        {
+          "name": "solution",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "Mining candidate ID" },
+              "coinbase": { "type": "string", "description": "Hex-encoded coinbase transaction" },
+              "time": { "type": "integer" },
+              "nonce": { "type": "integer" },
+              "version": { "type": "integer" }
+            },
+            "required": ["id", "nonce"]
+          }
+        }
+      ],
+      "result": {
+        "name": "success",
+        "schema": { "type": "boolean" }
+      }
+    },
+    {
+      "name": "generate",
+      "summary": "Mine blocks immediately (regtest/simnet only).",
+      "params": [
+        {
+          "name": "numblocks",
+          "required": true,
+          "schema": { "type": "integer", "description": "Number of blocks to generate" }
+        }
+      ],
+      "result": {
+        "name": "hashes",
+        "schema": { "type": "array", "items": { "type": "string" }, "description": "Hashes of generated blocks" }
+      }
+    },
+    {
+      "name": "generatetoaddress",
+      "summary": "Mine blocks to a specific address (regtest/simnet only).",
+      "params": [
+        {
+          "name": "numblocks",
+          "required": true,
+          "schema": { "type": "integer" }
+        },
+        {
+          "name": "address",
+          "required": true,
+          "schema": { "type": "string", "description": "Address to send coinbase rewards to" }
+        },
+        {
+          "name": "maxtries",
+          "schema": { "type": "integer" }
+        }
+      ],
+      "result": {
+        "name": "hashes",
+        "schema": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    {
+      "name": "getpeerinfo",
+      "summary": "Get information about connected peers.",
+      "params": [],
+      "result": {
+        "name": "peers",
+        "schema": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "integer" },
+              "addr": { "type": "string" },
+              "addrlocal": { "type": "string" },
+              "services": { "type": "string" },
+              "relaytxes": { "type": "boolean" },
+              "lastsend": { "type": "integer" },
+              "lastrecv": { "type": "integer" },
+              "bytessent": { "type": "integer" },
+              "bytesrecv": { "type": "integer" },
+              "conntime": { "type": "integer" },
+              "version": { "type": "integer" },
+              "subver": { "type": "string" },
+              "inbound": { "type": "boolean" },
+              "startingheight": { "type": "integer" },
+              "currentheight": { "type": "integer" },
+              "banscore": { "type": "integer" },
+              "synced_headers": { "type": "integer" },
+              "synced_blocks": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "invalidateblock",
+      "summary": "Mark a block as invalid.",
+      "params": [
+        {
+          "name": "blockhash",
+          "required": true,
+          "schema": { "type": "string", "description": "Block hash in hexadecimal" }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": { "type": "null" }
+      }
+    },
+    {
+      "name": "reconsiderblock",
+      "summary": "Reconsider a previously invalidated block.",
+      "params": [
+        {
+          "name": "blockhash",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": { "type": "null" }
+      }
+    },
+    {
+      "name": "setban",
+      "summary": "Add or remove an IP/subnet from the ban list.",
+      "params": [
+        {
+          "name": "subnet",
+          "required": true,
+          "schema": { "type": "string", "description": "IP address or subnet (e.g. 192.168.0.0/24)" }
+        },
+        {
+          "name": "command",
+          "required": true,
+          "schema": { "type": "string", "description": "add or remove" }
+        },
+        {
+          "name": "bantime",
+          "schema": { "type": "integer", "description": "Ban duration in seconds (0 = permanent)" }
+        },
+        {
+          "name": "absolute",
+          "schema": { "type": "boolean", "description": "If true, bantime is an absolute UNIX timestamp" }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": { "type": "null" }
+      }
+    },
+    {
+      "name": "isbanned",
+      "summary": "Check if an IP/subnet is banned.",
+      "params": [
+        {
+          "name": "subnet",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "banned",
+        "schema": { "type": "boolean" }
+      }
+    },
+    {
+      "name": "listbanned",
+      "summary": "List all banned IPs/subnets.",
+      "params": [],
+      "result": {
+        "name": "banned",
+        "schema": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    {
+      "name": "clearbanned",
+      "summary": "Clear all banned IPs/subnets.",
+      "params": [],
+      "result": {
+        "name": "success",
+        "schema": { "type": "boolean" }
+      }
+    },
+    {
+      "name": "freeze",
+      "summary": "Freeze a UTXO (BSV alert system).",
+      "description": "BSV extension. Prevents a specific UTXO from being spent.",
+      "params": [
+        {
+          "name": "txid",
+          "required": true,
+          "schema": { "type": "string", "description": "Transaction ID containing the output" }
+        },
+        {
+          "name": "vout",
+          "required": true,
+          "schema": { "type": "integer", "description": "Output index" }
+        },
+        {
+          "name": "utxohash",
+          "required": true,
+          "schema": { "type": "string", "description": "UTXO hash" }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": { "type": "null" }
+      }
+    },
+    {
+      "name": "unfreeze",
+      "summary": "Unfreeze a previously frozen UTXO.",
+      "description": "BSV extension. Allows a frozen UTXO to be spent again.",
+      "params": [
+        {
+          "name": "txid",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "vout",
+          "required": true,
+          "schema": { "type": "integer" }
+        },
+        {
+          "name": "utxohash",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": { "type": "null" }
+      }
+    },
+    {
+      "name": "reassign",
+      "summary": "Reassign a frozen UTXO to a new output.",
+      "description": "BSV extension. Moves a frozen UTXO designation to a different output.",
+      "params": [
+        {
+          "name": "oldtxid",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "oldvout",
+          "required": true,
+          "schema": { "type": "integer" }
+        },
+        {
+          "name": "oldutxohash",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "newutxohash",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": { "type": "null" }
+      }
+    },
+    {
+      "name": "help",
+      "summary": "List all commands or get help for a specific command.",
+      "params": [
+        {
+          "name": "command",
+          "schema": { "type": "string", "description": "Command name to get help for" }
+        }
+      ],
+      "result": {
+        "name": "help",
+        "schema": { "type": "string" }
+      }
+    },
+    {
+      "name": "stop",
+      "summary": "Shut down the node.",
+      "params": [],
+      "result": {
+        "name": "message",
+        "schema": { "type": "string" }
+      }
+    },
+    {
+      "name": "version",
+      "summary": "Get the JSON-RPC API version.",
+      "params": [],
+      "result": {
+        "name": "versions",
+        "schema": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "versionstring": { "type": "string" },
+              "major": { "type": "integer" },
+              "minor": { "type": "integer" },
+              "patch": { "type": "integer" },
+              "prerelease": { "type": "string" },
+              "buildmetadata": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

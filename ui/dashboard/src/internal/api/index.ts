@@ -365,9 +365,6 @@ export function getFSMEvents(): Promise<ApiResponse<FSMEvent[]>> {
             case 'CATCHUPBLOCKS':
               value = 3
               break
-            case 'LEGACYSYNC':
-              value = 4
-              break
             default:
               // Try to extract a numeric ID from the event name if it exists
               const match = eventName.match(/[_-]?(\d+)$/)
@@ -565,21 +562,6 @@ export function catchupFSM(): Promise<ApiResponse<FSMState>> {
     .catch((error) => handleApiError<FSMState>(error, '/fsm/catchup'))
 }
 
-// Convenience function to start legacy sync mode
-export function legacySyncFSM(): Promise<ApiResponse<FSMState>> {
-  return callApi<FSMState>(`${baseUrl}/fsm/legacysync`, {
-    method: 'POST',
-    credentials: 'include',
-  })
-    .then((response) => {
-      if (response.ok) {
-        return { ok: true, data: response.data } as ApiResponse<FSMState>
-      }
-      return handleApiError<FSMState>(response.error, '/fsm/legacysync')
-    })
-    .catch((error) => handleApiError<FSMState>(error, '/fsm/legacysync'))
-}
-
 // BUMP (BSV Unified Merkle Path) format interfaces
 // Based on BRC-74: https://github.com/bitcoin-sv/BRCs/blob/master/transactions/0074.md
 export interface BUMPNode {
@@ -594,6 +576,12 @@ export type BUMPLevel = BUMPNode[]
 export interface MerkleProofData {
   blockHeight: number
   path: BUMPLevel[]
+  // Legacy/extended fields populated for subtree-level merkle proofs.
+  // Optional because BUMP (tx-level) responses omit them.
+  subtreeIndex?: number
+  subtreeRoot?: string
+  merkleRoot?: string
+  blockProof?: string[]
 }
 
 // Legacy interface kept for backward compatibility

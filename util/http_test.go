@@ -4,15 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestMain disables SSRF protection for the entire package during tests because
+// httptest.NewServer binds to 127.0.0.1, which the dial-level guard would otherwise
+// block. Tests that specifically exercise SSRF protection re-enable it locally.
+func TestMain(m *testing.M) {
+	SetSSRFProtection(false)
+	os.Exit(m.Run())
+}
 
 func TestDoHTTPRequestGET(t *testing.T) {
 	// Create a test server that returns JSON
@@ -37,7 +50,7 @@ func TestDoHTTPRequestPOST(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -231,7 +244,7 @@ func TestDoHTTPRequestBodyReaderPOST(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -389,7 +402,7 @@ func TestDoHTTPRequestEmptyRequestBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Empty slice still triggers POST because len(requestBody) > 0
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		assert.Equal(t, []byte{}, body)
@@ -426,7 +439,7 @@ func TestDoHTTPRequestNilRequestBody(t *testing.T) {
 func TestDoHTTPRequestMultipleRequestBodies(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -505,6 +518,139 @@ func TestDoHTTPRequestJSONResponse(t *testing.T) {
 	assert.Equal(t, float64(123), parsed["id"]) // JSON numbers become float64
 	assert.Equal(t, "test", parsed["name"])
 	assert.Equal(t, true, parsed["active"])
+}
+
+func TestDoHTTPRequestBounded_HappyPath(t *testing.T) {
+	responseData := []byte(`{"message": "success"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+
+	require.NoError(t, err)
+	assert.Equal(t, responseData, response)
+}
+
+func TestDoHTTPRequestBounded_POST(t *testing.T) {
+	requestBody := []byte(`{"data": "test"}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.Equal(t, requestBody, body)
+
+		w.WriteHeader(http.StatusOK)
+		_, err = w.Write([]byte(`{"processed": true}`))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, 1024, requestBody)
+
+	require.NoError(t, err)
+	assert.Equal(t, `{"processed": true}`, string(response))
+}
+
+func TestDoHTTPRequestBounded_BodyEqualToLimit(t *testing.T) {
+	// Boundary case: server returns exactly maxBytes — must succeed.
+	const limit = 32
+	responseData := []byte(strings.Repeat("a", limit))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.NoError(t, err)
+	assert.Equal(t, responseData, response)
+	assert.Len(t, response, limit)
+}
+
+func TestDoHTTPRequestBounded_BodyExceedsLimit(t *testing.T) {
+	// Server returns more than maxBytes — must return a typed error and not allocate the whole body.
+	const limit = 16
+	responseData := []byte(strings.Repeat("x", limit*4))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+	assert.Contains(t, err.Error(), "exceeds")
+}
+
+func TestDoHTTPRequestBounded_BodyOneByteOverLimit(t *testing.T) {
+	// Off-by-one boundary: maxBytes+1 bytes must fail.
+	const limit = 32
+	responseData := []byte(strings.Repeat("b", limit+1))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.True(t, errors.Is(err, errors.ErrExternal))
+}
+
+func TestDoHTTPRequestBounded_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, err := w.Write([]byte("not found"))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "404")
+}
+
+func TestDoHTTPRequestBounded_Timeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("slow response"))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+	require.Error(t, err)
 }
 
 // Benchmark tests
@@ -640,6 +786,8 @@ func TestDoHTTPRequest_ErrorResponseNilBody(t *testing.T) {
 }
 
 func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
 	// Test with malformed URL that will fail validation/request creation
 	ctx := context.Background()
 	_, err := DoHTTPRequest(ctx, "ht\ttp://invalid-url-with-control-char")
@@ -649,6 +797,8 @@ func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
 }
 
 func TestValidateURL(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
 
 	tests := []struct {
 		name    string
@@ -735,9 +885,351 @@ func TestValidateURL(t *testing.T) {
 
 func TestValidateURL_Disabled(t *testing.T) {
 	// Verify that disabling SSRF protection allows all URLs
-	ssrfProtectionEnabled = false
-	defer func() { ssrfProtectionEnabled = true }()
+	SetSSRFProtection(false)
+	defer SetSSRFProtection(false) // restore the package default set by TestMain
 
 	err := ValidateURL("http://127.0.0.1:8080/path")
 	require.NoError(t, err)
+}
+
+// TestValidateURL_NonHTTPSentinelsPassThrough guards the "legacy" baseURL default (and the
+// empty string) used by block/subtree validation: they have no http/https scheme, so
+// ValidateURL must return nil and never reject them. Regression test for the early
+// ValidateURL guards added to the peer-supplied baseURL entry points.
+func TestValidateURL_NonHTTPSentinelsPassThrough(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	for _, s := range []string{"legacy", ""} {
+		require.NoError(t, ValidateURL(s), "ValidateURL(%q) must pass through", s)
+	}
+}
+
+func TestValidateURL_RejectsUserinfo(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"username only", "http://user@example.com/path"},
+		{"username and password", "http://user:pass@example.com/path"},
+		{"empty username with colon", "http://:secret@example.com/path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateURL(tt.url)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "userinfo")
+		})
+	}
+}
+
+func TestIsBlockedDialIP(t *testing.T) {
+	// isBlockedDialIP is a pure function; no SSRF toggle needed.
+	// Only link-local (incl. the metadata endpoint), loopback and unspecified are blocked.
+	blocked := []string{
+		"127.0.0.1",
+		"::1",
+		"169.254.1.1",
+		"169.254.169.254", // cloud metadata endpoint
+		"fe80::1",
+		"0.0.0.0",
+		"::",
+	}
+	for _, ipStr := range blocked {
+		t.Run("blocked_"+ipStr, func(t *testing.T) {
+			ip := net.ParseIP(ipStr)
+			require.NotNil(t, ip)
+			assert.True(t, isBlockedDialIP(ip), "expected %s to be blocked", ipStr)
+		})
+	}
+
+	// RFC1918 / ULA ranges are intentionally allowed: teranode peers, k8s pods and
+	// private miner interconnects all live on private networks.
+	allowed := []string{
+		"8.8.8.8",
+		"1.1.1.1",
+		"203.0.113.1",
+		"2001:db8::1",
+		"10.0.0.1",
+		"10.255.255.255",
+		"172.16.0.1",
+		"172.31.255.255",
+		"192.168.0.1",
+		"192.168.255.255",
+		"fc00::1",
+	}
+	for _, ipStr := range allowed {
+		t.Run("allowed_"+ipStr, func(t *testing.T) {
+			ip := net.ParseIP(ipStr)
+			require.NotNil(t, ip)
+			assert.False(t, isBlockedDialIP(ip), "expected %s to be allowed", ipStr)
+		})
+	}
+}
+
+func TestSSRFDialContext_RejectsPrivateHostname(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+	// ssrfDialContext resolves hostnames; loopback should be blocked.
+	// We use "localhost" which always resolves to 127.0.0.1 / ::1.
+	ctx := context.Background()
+	_, err := ssrfDialContext(ctx, "tcp", "localhost:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked IP")
+}
+
+func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
+	SetSSRFProtection(false)
+	defer SetSSRFProtection(false) // restore the package default set by TestMain
+
+	// With protection disabled the dialer should attempt the connection normally.
+	// Use a closed port so we get a connection-refused rather than hanging.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := ssrfDialContext(ctx, "tcp", "127.0.0.1:1")
+	// Any error here is a real network error (connection refused), NOT our SSRF guard.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "blocked IP")
+	}
+}
+
+// TestSSRFDialContext_RejectsDNSRebinding reproduces the DNS-rebinding TOCTOU attack and
+// proves the dial guard blocks it. A peer-controlled name "looks" public but resolves to a
+// private/loopback address; the guard must reject the dial rather than connect to the
+// internal target. We inject the resolver because the real attack relies on a hostile
+// authoritative server we cannot stand up in a unit test.
+func TestSSRFDialContext_RejectsDNSRebinding(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	// Resolver returns a loopback address for a "public-looking" hostname.
+	ssrfLookupHost = func(_ context.Context, host string) ([]string, error) {
+		require.Equal(t, "evil.example.com", host)
+		return []string{"127.0.0.1"}, nil
+	}
+
+	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked IP")
+}
+
+// TestSSRFDialContext_RejectsMixedPublicBlocked ensures a resolver answer mixing a public
+// and a blocked (link-local metadata) address is rejected outright, so failover cannot
+// smuggle in the internal IP.
+func TestSSRFDialContext_RejectsMixedPublicBlocked(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	ssrfLookupHost = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"8.8.8.8", "169.254.169.254"}, nil
+	}
+
+	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked IP")
+}
+
+func TestHTTPClient_RejectsRedirectToLinkLocal(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+	linkLocalURL := "http://169.254.169.254/latest/meta-data/"
+	req := &http.Request{URL: func() *url.URL { u, _ := url.Parse(linkLocalURL); return u }()}
+	err := httpClient.CheckRedirect(req, []*http.Request{{}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SSRF redirect check")
+}
+
+func TestHTTPClient_RedirectLimitEnforced(t *testing.T) {
+	// Verify that CheckRedirect rejects chains longer than 10 hops.
+	req := &http.Request{URL: func() *url.URL { u, _ := url.Parse("http://example.com/"); return u }()}
+	via := make([]*http.Request, 10)
+	err := httpClient.CheckRedirect(req, via)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "10 redirects")
+}
+
+// testRetryConfig is a fast retry config for tests: short delays, low attempt count.
+var testRetryConfig = retryConfig{
+	maxAttempts:  4,
+	initialDelay: 10 * time.Millisecond,
+	maxDelay:     50 * time.Millisecond,
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_SuccessOnFirstTry(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("body"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.NoError(t, err)
+	defer body.Close()
+
+	got, err := io.ReadAll(body)
+	require.NoError(t, err)
+	assert.Equal(t, "body", string(got))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&attempts), "should not retry on success")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_RetriesOn503ThenSucceeds(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			// First two attempts: 503
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("busy"))
+			return
+		}
+		// Third attempt: success
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok-after-retry"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.NoError(t, err)
+	defer body.Close()
+
+	got, err := io.ReadAll(body)
+	require.NoError(t, err)
+	assert.Equal(t, "ok-after-retry", string(got), "should return body from successful retry, not earlier 503 body")
+	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts), "exactly two retries before success")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ExhaustsAttemptsOnPersistent503(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.Error(t, err)
+	assert.Nil(t, body)
+	assert.True(t, errors.Is(err, errors.ErrServiceUnavailable),
+		"final error must be ErrServiceUnavailable so callers can branch on it; got %T: %v", err, err)
+	assert.Equal(t, int32(testRetryConfig.maxAttempts), atomic.LoadInt32(&attempts),
+		"should have exactly maxAttempts attempts")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_HonorsRetryAfter(t *testing.T) {
+	var attempts int32
+	const retryAfterSeconds = 1
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "1") // 1 second per RFC 7231 delta-seconds
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	// Tight initialDelay (10ms) so the only thing that can produce a >=1s wait is honoring Retry-After.
+	cfg := retryConfig{maxAttempts: 4, initialDelay: 10 * time.Millisecond, maxDelay: 5 * time.Second}
+
+	start := time.Now()
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, cfg)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	defer body.Close()
+	assert.GreaterOrEqual(t, elapsed, time.Duration(retryAfterSeconds)*time.Second-100*time.Millisecond,
+		"server's Retry-After=1 must be honored over the much smaller initialDelay")
+	assert.Less(t, elapsed, 3*time.Second, "should not wait significantly longer than Retry-After")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_NoRetryOnNon503(t *testing.T) {
+	cases := []struct {
+		name string
+		code int
+	}{
+		{"500_internal_server_error", http.StatusInternalServerError},
+		{"502_bad_gateway", http.StatusBadGateway},
+		{"504_gateway_timeout", http.StatusGatewayTimeout},
+		{"404_not_found", http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&attempts, 1)
+				w.WriteHeader(tc.code)
+			}))
+			defer server.Close()
+
+			_, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+			require.Error(t, err)
+			assert.Equal(t, int32(1), atomic.LoadInt32(&attempts),
+				"non-503 status %d must fail immediately, not retry", tc.code)
+		})
+	}
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ContextCancelAbortsRetries(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	// Generous per-attempt delay so the cancel must be the thing that ends the loop.
+	cfg := retryConfig{maxAttempts: 6, initialDelay: 200 * time.Millisecond, maxDelay: time.Second}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := doHTTPRequestBodyReaderWithRetry(ctx, server.URL, cfg)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Less(t, elapsed, 500*time.Millisecond,
+		"ctx cancel should short-circuit the retry loop well before exhausting attempts")
+	// At least one attempt happened; we don't assert exactly because timing is racy.
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&attempts), int32(1))
+	assert.LessOrEqual(t, atomic.LoadInt32(&attempts), int32(2),
+		"should not fire all 6 attempts if cancelled at 50ms with 200ms+ backoffs")
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Duration
+	}{
+		{"", 0},
+		{"0", 0},
+		{"-1", 0},
+		{"1", time.Second},
+		{"30", 30 * time.Second},
+		{"not-a-number", 0},
+		// HTTP-date format must be treated as "no retry hint", not silently
+		// reinterpreted. Same for any non-integer the server might emit.
+		{"Wed, 21 Oct 2015 07:28:00 GMT", 0},
+		{"1.5", 0}, // time.ParseDuration would have accepted "1.5s"
+		{"1m", 0},  // and "1ms", "1h" etc — none are valid delta-seconds
+		{" 5", 0},  // surrounding whitespace
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			assert.Equal(t, c.want, parseRetryAfter(c.in))
+		})
+	}
 }

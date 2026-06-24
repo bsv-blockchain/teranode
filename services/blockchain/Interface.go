@@ -93,6 +93,9 @@ type ClientI interface {
 	// - Error if the retrieval fails
 	GetNextBlockID(ctx context.Context) (uint64, error)
 
+	// AssignBlockID returns a stable block ID for a given block hash (idempotent per hash).
+	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
 	// SendNotification broadcasts a notification to subscribers.
 	//
 	// This method publishes a notification message to all active subscribers of the
@@ -908,18 +911,6 @@ type ClientI interface {
 	// Returns:
 	// - Error if the notification fails
 	ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error
-
-	// LegacySync performs a legacy synchronization process.
-	//
-	// This method initiates a blockchain synchronization using the legacy synchronization
-	// protocol, which may be needed for compatibility with older network nodes.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	//
-	// Returns:
-	// - Error if the legacy synchronization process fails
-	LegacySync(ctx context.Context) error
 
 	// Idle transitions the blockchain service to an idle state.
 	//

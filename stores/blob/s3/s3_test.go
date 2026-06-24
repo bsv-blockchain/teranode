@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -359,4 +360,104 @@ func TestS3_GetCacheMiss(t *testing.T) {
 	cached, ok := cache.Get(objectKey)
 	assert.True(t, ok, "Value should be cached after Get")
 	assert.Equal(t, value, cached)
+}
+
+// trackingReadCloser wraps a Reader and records Close invocations so tests
+// can assert that consumers release the underlying HTTP response body.
+type trackingReadCloser struct {
+	io.Reader
+	closeCount int
+}
+
+func (t *trackingReadCloser) Close() error { t.closeCount++; return nil }
+
+// trackingS3Client is a mock S3 client that returns a caller-supplied Body
+// from GetObject and panics on any other method (we only test the
+// GetIoReader path here). The Body is a trackingReadCloser so the test can
+// assert Close on the header-validation error paths.
+type trackingS3Client struct {
+	body *trackingReadCloser
+}
+
+func (t *trackingS3Client) PutObject(context.Context, *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
+	panic("trackingS3Client.PutObject not implemented")
+}
+
+func (t *trackingS3Client) GetObject(context.Context, *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
+	return &s3.GetObjectOutput{Body: t.body, ContentLength: aws.Int64(int64(64))}, nil
+}
+
+func (t *trackingS3Client) HeadObject(context.Context, *s3.HeadObjectInput) (*s3.HeadObjectOutput, error) {
+	panic("trackingS3Client.HeadObject not implemented")
+}
+
+func (t *trackingS3Client) DeleteObject(context.Context, *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error) {
+	panic("trackingS3Client.DeleteObject not implemented")
+}
+
+func (t *trackingS3Client) CreateMultipartUpload(context.Context, *s3.CreateMultipartUploadInput) (*s3.CreateMultipartUploadOutput, error) {
+	panic("trackingS3Client.CreateMultipartUpload not implemented")
+}
+
+func (t *trackingS3Client) UploadPart(context.Context, *s3.UploadPartInput) (*s3.UploadPartOutput, error) {
+	panic("trackingS3Client.UploadPart not implemented")
+}
+
+func (t *trackingS3Client) CompleteMultipartUpload(context.Context, *s3.CompleteMultipartUploadInput) (*s3.CompleteMultipartUploadOutput, error) {
+	panic("trackingS3Client.CompleteMultipartUpload not implemented")
+}
+
+func (t *trackingS3Client) AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput) (*s3.AbortMultipartUploadOutput, error) {
+	panic("trackingS3Client.AbortMultipartUpload not implemented")
+}
+
+func (t *trackingS3Client) Download(context.Context, *s3.GetObjectInput) ([]byte, error) {
+	panic("trackingS3Client.Download not implemented")
+}
+
+func (t *trackingS3Client) Upload(context.Context, *s3.PutObjectInput) error {
+	panic("trackingS3Client.Upload not implemented")
+}
+
+// TestS3_GetIoReader_ClosesBodyOnHeaderReadError pins the close contract on
+// S3.GetIoReader. result.Body is the AWS SDK's HTTP response body and holds
+// a network connection until Close - if the fileformat header read fails
+// (corrupted blob, truncated download) the function must Close before
+// returning, otherwise the connection is held for the lifetime of the
+// process. Mirrors the file store's pattern at file.go:996-1002.
+func TestS3_GetIoReader_ClosesBodyOnHeaderReadError(t *testing.T) {
+	// 0-byte body: header.Read will EOF on the first attempt to consume
+	// the 8-byte magic, which is the corrupted-header failure mode.
+	body := &trackingReadCloser{Reader: bytes.NewReader(nil)}
+	s3Store := &S3{
+		client:  &trackingS3Client{body: body},
+		bucket:  "test-bucket",
+		logger:  ulogger.TestLogger{},
+		options: options.NewStoreOptions(),
+	}
+
+	_, err := s3Store.GetIoReader(context.Background(), []byte("k"), fileformat.FileTypeTesting)
+	require.Error(t, err, "header read on empty body must fail")
+	require.Equal(t, 1, body.closeCount, "result.Body must be Closed exactly once when header read fails - otherwise the S3 HTTP connection leaks")
+}
+
+// TestS3_GetIoReader_ClosesBodyOnFileTypeMismatch pins the same contract on
+// the header file-type mismatch branch (a corrupted-or-wrong-typed blob in
+// S3 that opens fine but identifies as a different fileformat).
+func TestS3_GetIoReader_ClosesBodyOnFileTypeMismatch(t *testing.T) {
+	// Build a body whose magic header is valid but for a DIFFERENT file
+	// type than the caller will ask for, so header.Read succeeds but
+	// header.FileType() != requested type.
+	wrongMagic := fileformat.FileTypeBlock.ToMagicBytes()
+	body := &trackingReadCloser{Reader: bytes.NewReader(wrongMagic[:])}
+	s3Store := &S3{
+		client:  &trackingS3Client{body: body},
+		bucket:  "test-bucket",
+		logger:  ulogger.TestLogger{},
+		options: options.NewStoreOptions(),
+	}
+
+	_, err := s3Store.GetIoReader(context.Background(), []byte("k"), fileformat.FileTypeTesting)
+	require.Error(t, err, "file-type mismatch must surface as an error")
+	require.Equal(t, 1, body.closeCount, "result.Body must be Closed exactly once when file-type mismatches - otherwise the S3 HTTP connection leaks")
 }

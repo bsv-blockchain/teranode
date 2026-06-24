@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { beforeUpdate } from 'svelte'
   // import { page } from '$app/stores'
   import UtxoDetailsCard from './utxo-details-card/index.svelte'
 
@@ -8,22 +9,17 @@
   import { spinCount } from '$internal/stores/nav'
   import { assetHTTPAddress } from '$internal/stores/nodeStore'
 
-  let ready = false
-  beforeUpdate(() => {
-    ready = true
-  })
-
   const type = DetailType.utxo
 
-  export let hash = ''
+  let { hash = '' }: { hash?: string } = $props()
 
-  let result: any = null
+  let result: any = $state(null)
 
-  $: {
+  $effect(() => {
     if ($assetHTTPAddress && type && hash && hash.length === 64) {
       fetchData()
     }
-  }
+  })
 
   async function fetchData() {
     result = { hash }

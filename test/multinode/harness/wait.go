@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -183,16 +185,39 @@ func waitForMesh(l progressLogger, clients []*RPCClient, _ int, timeout time.Dur
 	}
 }
 
+// dumpNodeLogs tails docker logs for every container belonging to node n —
+// the single teranodeN-multinode in all-in-one mode, or all nine
+// teranodeN-<svc>-multinode siblings in split mode. Resolved at call time
+// so it works under either topology without the caller plumbing a Stack
+// reference through.
 func dumpNodeLogs(l progressLogger, node int) {
 	l.Helper()
-	ctr := fmt.Sprintf("teranode%d-multinode", node)
-	cmd := exec.Command("docker", "logs", "--tail", "40", ctr)
-	out, err := cmd.CombinedOutput()
+	pattern := fmt.Sprintf("^teranode%d(-[a-z0-9]+)?-multinode$", node)
+	psOut, err := exec.Command("docker", "ps", "-a", "--format", "{{.Names}}").Output()
 	if err != nil {
-		l.Logf("docker logs %s failed: %v", ctr, err)
+		l.Logf("docker ps failed while collecting teranode%d logs: %v", node, err)
 		return
 	}
-	l.Logf("--- docker logs %s (tail 40) ---\n%s", ctr, out)
+	re := regexp.MustCompile(pattern)
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(psOut)), "\n") {
+		if re.MatchString(line) {
+			names = append(names, line)
+		}
+	}
+	if len(names) == 0 {
+		l.Logf("no containers found matching %s", pattern)
+		return
+	}
+	for _, ctr := range names {
+		cmd := exec.Command("docker", "logs", "--tail", "40", ctr)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			l.Logf("docker logs %s failed: %v", ctr, err)
+			continue
+		}
+		l.Logf("--- docker logs %s (tail 40) ---\n%s", ctr, out)
+	}
 }
 
 // WaitForMesh is the exported form of waitForMesh, usable from scenarios.

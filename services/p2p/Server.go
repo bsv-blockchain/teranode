@@ -118,29 +118,33 @@ type Server struct {
 	blocksKafkaProducerClient         kafka.KafkaAsyncProducerI // Kafka producer for blocks
 	banList                           BanListI                  // List of banned peers
 	banChan                           chan BanEvent             // Channel for ban events
-	banManager                        PeerBanManagerI           // Manager for peer banning
 	gCtx                              context.Context
 	blockTopicName                    string
 	subtreeTopicName                  string
 	rejectedTxTopicName               string
-	invalidBlocksTopicName            string           // Kafka topic for invalid blocks
-	invalidSubtreeTopicName           string           // Kafka topic for invalid subtrees
-	nodeStatusTopicName               string           // pubsub topic for node status messages
-	topicPrefix                       string           // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map         // Map to track which peer sent each block (hash -> peerMapEntry)
-	subtreePeerMap                    sync.Map         // Map to track which peer sent each subtree (hash -> peerMapEntry)
-	startTime                         time.Time        // Server start time for uptime calculation
-	peerRegistry                      *PeerRegistry    // Central registry for all peer information
-	peerSelector                      *PeerSelector    // Stateless peer selection logic
-	syncCoordinator                   *SyncCoordinator // Orchestrates sync operations
-	syncConnectionTimes               sync.Map         // Map to track when we first connected to each sync peer (peerID -> timestamp)
+	invalidBlocksTopicName            string                         // Kafka topic for invalid blocks
+	invalidSubtreeTopicName           string                         // Kafka topic for invalid subtrees
+	nodeStatusTopicName               string                         // pubsub topic for node status messages
+	topicPrefix                       string                         // Chain identifier prefix for topic validation
+	blockPeerMap                      sync.Map                       // Map to track which peer sent each block (hash -> peerMapEntry)
+	subtreePeerMap                    sync.Map                       // Map to track which peer sent each subtree (hash -> peerMapEntry)
+	startTime                         time.Time                      // Server start time for uptime calculation
+	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
+	peerSelector                      *PeerSelector                  // Stateless peer selection logic
+	syncCoordinator                   *SyncCoordinator               // Orchestrates sync operations
+	syncConnectionTimes               sync.Map                       // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
 	// Cleanup configuration
-	peerMapCleanupTicker     *time.Ticker  // Ticker for periodic cleanup of peer maps
-	peerMapMaxSize           int           // Maximum number of entries in peer maps
-	peerMapTTL               time.Duration // Time-to-live for peer map entries
-	registryCacheSaveTicker  *time.Ticker  // Ticker for periodic saving of peer registry cache
-	peerRegistryCleanupTimer *time.Ticker  // Ticker for periodic eviction of stale peer registry entries
+	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
+	peerMapMaxSize       int           // Maximum number of entries in peer maps
+	peerMapTTL           time.Duration // Time-to-live for peer map entries
+
+	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
+
+	// reputationCache is a short-lived cache of peer reputation scores used by
+	// shouldSkipUnhealthyPeer to avoid a gRPC round-trip per pubsub message.
+	// Entries expire after reputationCacheTTL; misses fall back to the registry.
+	reputationCache sync.Map // peerID string -> reputationCacheEntry
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -161,18 +165,16 @@ type Server struct {
 // Returns a configured Server instance ready to be initialized and started, or an error if configuration
 // validation fails or any dependencies cannot be properly initialized.
 
-// getPeerCacheFilePath constructs the full path to the teranode_peers.json file based on the configured directory.
-// If no directory is specified, it defaults to the current working directory.
-// The filename is always "teranode_peers.json" for consistency.
-func getPeerCacheFilePath(configuredDir string) string {
-	var dir string
-	if configuredDir != "" {
-		dir = configuredDir
-	} else {
-		// Default to current working directory
+// p2pCacheFilePath returns the path for the libp2p peer-cache file. This is
+// separate from the Teranode peer registry (now owned by the blockchain
+// service); the libp2p library uses this file for its own peer-address cache
+// to speed up reconnects after restarts.
+func p2pCacheFilePath(configuredDir string) string {
+	dir := configuredDir
+	if dir == "" {
 		dir = "."
 	}
-	return filepath.Join(dir, "teranode_peers.json")
+	return filepath.Join(dir, "p2p_peers.json")
 }
 
 func NewServer(
@@ -180,6 +182,7 @@ func NewServer(
 	logger ulogger.Logger,
 	tSettings *settings.Settings,
 	blockchainClient blockchain.ClientI,
+	peerRegistryClient blockchain.PeerRegistryClientI,
 	blockAssemblyClient blockassembly.ClientI,
 	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
 	invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI,
@@ -242,10 +245,8 @@ func NewServer(
 	// 2. Read from p2p.key file
 	// 3. Generate new key and save to p2p.key file
 	if privateKey == "" {
-		// Construct the key file path (same directory as teranode_peers.json)
-		keyFilePath := getPeerCacheFilePath(tSettings.P2P.PeerCacheDir)
-		// Replace the filename from teranode_peers.json to p2p.key
-		keyFilePath = filepath.Join(filepath.Dir(keyFilePath), "p2p.key")
+		// Derive the key file path from the same directory as the p2p cache.
+		keyFilePath := filepath.Join(filepath.Dir(p2pCacheFilePath(tSettings.P2P.PeerCacheDir)), "p2p.key")
 
 		if keyData, err := os.ReadFile(keyFilePath); err == nil {
 			// File exists, use its content
@@ -333,6 +334,11 @@ func NewServer(
 	if err != nil {
 		return nil, errors.NewServiceError("failed to unmarshal key", err)
 	}
+
+	// Set the HTTP request signer so all outgoing peer HTTP requests (block/subtree fetches)
+	// include authentication headers for rate limit exemption on the receiving asset service.
+	util.SetHTTPRequestSigner(util.NewEd25519RequestSigner(privKey))
+
 	// In silent mode, DHT is disabled entirely so the node is not discoverable via DHT.
 	dhtMode := tSettings.P2P.DHTMode
 	if listenMode == settings.ListenModeSilent {
@@ -344,7 +350,7 @@ func NewServer(
 		PrivateKey:         privKey,
 		Name:               tSettings.ClientName,
 		Logger:             logger,
-		PeerCacheFile:      getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
+		PeerCacheFile:      p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
 		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
 		StaticPeers:        tSettings.P2P.StaticPeers,
 		ProtocolVersion:    bitcoinProtocolVersion,
@@ -409,27 +415,17 @@ func NewServer(
 		p2pServer.peerMapTTL = tSettings.P2P.PeerMapTTL
 	}
 
-	// Initialize new clean architecture components
-	// Note: peer registry must be created first so it can be passed to ban manager
-	p2pServer.peerRegistry = NewPeerRegistry()
+	// Use the centralized peer registry hosted by the blockchain service.
+	// Loading, persistence, ban scoring, and TTL/LRU eviction all live there now.
+	p2pServer.peerRegistry = peerRegistryClient
 	p2pServer.peerSelector = NewPeerSelector(logger, tSettings)
 
-	// Load cached peer registry data if available
-	if err := p2pServer.peerRegistry.LoadPeerRegistryCache(tSettings.P2P.PeerCacheDir); err != nil {
-		// Log error but continue - cache loading is not critical
-		logger.Warnf("Failed to load peer registry cache: %v", err)
-	} else {
-		logger.Infof("Loaded peer registry cache with %d peers", p2pServer.peerRegistry.PeerCount())
-	}
-
-	// Initialize the ban manager with peer registry so it can sync ban statuses
-	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings, p2pServer.peerRegistry)
 	p2pServer.syncCoordinator = NewSyncCoordinator(
+		ctx,
 		logger,
 		tSettings,
 		p2pServer.peerRegistry,
 		p2pServer.peerSelector,
-		p2pServer.banManager,
 		blockchainClient,
 		p2pServer.blocksKafkaProducerClient,
 	)
@@ -653,11 +649,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Start periodic cleanup of peer maps
 	s.startPeerMapCleanup(ctx)
 
-	// Start periodic save of peer registry cache
-	s.startPeerRegistryCacheSave(ctx)
-
-	// Start periodic eviction of stale peer registry entries
-	s.startPeerRegistryCleanup(ctx)
+	// Peer registry cache save and TTL/LRU eviction now live in the centralized
+	// blockchain peer registry service. The periodic cleanup driver itself is a
+	// follow-up; in PR1 we just stop running it here.
 
 	// Start sync coordinator (it handles all sync logic internally)
 	if s.syncCoordinator != nil {
@@ -885,7 +879,9 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 	}
 
 	s.addConnectedPeer(senderID, "", 0, nil, "")
-	s.peerRegistry.UpdateLastMessageTime(senderID)
+	if err := s.peerRegistry.UpdateLastMessageTime(s.gCtx, senderID.String()); err != nil {
+		s.logger.Warnf("[updatePeerLastMessageTime] sender %s: %v", senderID, err)
+	}
 
 	// Also update for the originator if different (gossiped message)
 	// The originator is not directly connected to us
@@ -897,7 +893,9 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 			}
 			// Add as gossiped peer (not connected) before updating last message time
 			s.addPeer(peerID, "", 0, nil, "")
-			s.peerRegistry.UpdateLastMessageTime(peerID)
+			if err := s.peerRegistry.UpdateLastMessageTime(s.gCtx, peerID.String()); err != nil {
+				s.logger.Warnf("[updatePeerLastMessageTime] originator %s: %v", peerID, err)
+			}
 		}
 	}
 }
@@ -915,17 +913,17 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 		s.logger.Errorf("failed to decode sender peer ID %s: %v", from, err)
 		return
 	}
-	if info, exists := s.peerRegistry.Get(senderID); exists {
-		newTotal := info.BytesReceived + messageSize
-		s.peerRegistry.UpdateNetworkStats(senderID, newTotal)
+	// Atomic delta increment via UpdatePeerMetrics — fixes the read-modify-write
+	// race the previous code had under concurrent gossip ingestion.
+	if err := s.peerRegistry.UpdatePeerMetrics(s.gCtx, senderID.String(), 0, 0, messageSize, false, false, false, 0); err != nil {
+		s.logger.Warnf("[updateBytesReceived] sender %s: %v", senderID, err)
 	}
 
 	// Also update for the originator if different (gossiped message)
 	if originatorPeerID != "" {
 		if peerID, err := peer.Decode(originatorPeerID); err == nil && peerID != senderID {
-			if info, exists := s.peerRegistry.Get(peerID); exists {
-				newTotal := info.BytesReceived + messageSize
-				s.peerRegistry.UpdateNetworkStats(peerID, newTotal)
+			if err := s.peerRegistry.UpdatePeerMetrics(s.gCtx, peerID.String(), 0, 0, messageSize, false, false, false, 0); err != nil {
+				s.logger.Warnf("[updateBytesReceived] originator %s: %v", peerID, err)
 			}
 		}
 	}
@@ -951,9 +949,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
-		if s.banManager != nil {
-			s.banManager.AddScore(peerID, ReasonProtocolViolation)
-		}
+		s.applyBanScore(peerID, ReasonProtocolViolation)
 		return
 	}
 
@@ -961,9 +957,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	if nodeStatusMessage.BaseURL != "" {
 		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
-			if s.banManager != nil {
-				s.banManager.AddScore(peerID, ReasonProtocolViolation)
-			}
+			s.applyBanScore(peerID, ReasonProtocolViolation)
 			return
 		}
 	}
@@ -1014,6 +1008,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 		SyncPeerBlockHash:   nodeStatusMessage.SyncPeerBlockHash,
 		SyncConnectedAt:     nodeStatusMessage.SyncConnectedAt,
 		MinMiningTxFee:      nodeStatusMessage.MinMiningTxFee,
+		FeePolicy:           nodeStatusMessage.FeePolicy,
 		ConnectedPeersCount: nodeStatusMessage.ConnectedPeersCount,
 		Storage:             nodeStatusMessage.Storage,
 	}:
@@ -1274,10 +1269,23 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Get minimum mining transaction fee from settings
 	// Use a pointer to distinguish between nil (unknown) and 0 (no fee)
 	var minMiningTxFee *float64
+	var feePolicy *FeePolicy
 	if s.settings != nil && s.settings.Policy != nil {
-		fee := s.settings.Policy.GetMinMiningTxFee()
-		minMiningTxFee = &fee
-		s.logger.Debugf("[getNodeStatusMessage] MinMiningTxFee from settings: %f", fee)
+		feePolicy = policyFromSettings(s.settings.Policy)
+		if feePolicy != nil {
+			// Keep legacy and new fields consistent: only advertise the
+			// scalar fee when the full policy is valid.
+			fee := s.settings.Policy.GetMinMiningTxFee()
+			minMiningTxFee = &fee
+			s.logger.Debugf("[getNodeStatusMessage] MinMiningTxFee from settings: %f", fee)
+		} else {
+			// Warn once per process — this is published every status tick (~10s),
+			// so without the gate a bad config would spam the logs.
+			s.invalidPolicyWarnOnce.Do(func() {
+				s.logger.Warnf("[getNodeStatusMessage] policy settings invalid (NaN/Inf, negative, or out of uint64 range); omitting fee fields from node_status until config is corrected")
+			})
+			s.logger.Debugf("[getNodeStatusMessage] policy still invalid; fee fields remain omitted")
+		}
 	} else {
 		// For our own node, we always know the fee (even if it's 0)
 		// Only leave nil for messages from other peers
@@ -1289,8 +1297,12 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Get connected peers count from the registry
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
-		allPeers := s.peerRegistry.GetAll()
-		connectedPeersCount = len(allPeers)
+		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+		if err != nil {
+			s.logger.Warnf("[getNodeStatusMessage] ListPeers failed: %v", err)
+		} else {
+			connectedPeersCount = len(allPeers)
+		}
 	}
 
 	// Get block assembly state (tx count and subtree count)
@@ -1353,6 +1365,7 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		SyncPeerBlockHash:   syncPeerBlockHash,
 		SyncConnectedAt:     syncConnectedAt,
 		MinMiningTxFee:      minMiningTxFee,
+		FeePolicy:           feePolicy,
 		ConnectedPeersCount: connectedPeersCount,
 		Storage:             storage,
 	}
@@ -1389,6 +1402,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		SyncPeerBlockHash:   msg.SyncPeerBlockHash,
 		SyncConnectedAt:     msg.SyncConnectedAt,
 		MinMiningTxFee:      msg.MinMiningTxFee,
+		FeePolicy:           msg.FeePolicy,
 		ConnectedPeersCount: msg.ConnectedPeersCount,
 		Storage:             msg.Storage,
 	}
@@ -1656,11 +1670,8 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
 	}
 
-	// Stop the peer registry cleanup ticker
-	if s.peerRegistryCleanupTimer != nil {
-		s.peerRegistryCleanupTimer.Stop()
-		s.logger.Infof("[Stop] stopped peer registry cleanup ticker")
-	}
+	// Peer registry cleanup ticker is gone — the centralized blockchain registry
+	// drives its own TTL/LRU eviction (deferred to PR2 in any case).
 
 	// Clear the peer maps to free memory
 	s.blockPeerMap.Range(func(key, value interface{}) bool {
@@ -1686,19 +1697,24 @@ func (s *Server) Stop(ctx context.Context) error {
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeersResponse, error) {
 	s.logger.Debugf("GetPeers called")
 
-	// If peer registry is available, use it as it has richer data
+	// If the centralized peer registry is available, use it as it has richer data.
 	if s.peerRegistry != nil {
-		// Get connected peers from the registry with full metadata
-		connectedPeers := s.peerRegistry.GetConnectedPeers()
+		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+		if err != nil {
+			return nil, errors.WrapGRPCPublic(errors.NewServiceError("list peers", err))
+		}
 
 		resp := &p2p_api.GetPeersResponse{}
-		for _, peer := range connectedPeers {
-			// Get address from libp2p if available
+		for _, p := range allPeers {
+			if !p.IsConnected {
+				continue
+			}
+			// Get address from libp2p if available.
 			addr := ""
 			if s.P2PClient != nil {
 				libp2pPeers := s.P2PClient.GetPeers()
 				for _, sp := range libp2pPeers {
-					if sp.ID == peer.ID.String() && len(sp.Addrs) > 0 {
+					if sp.ID == p.ID && len(sp.Addrs) > 0 {
 						addr = sp.Addrs[0]
 						break
 					}
@@ -1706,16 +1722,17 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			}
 
 			resp.Peers = append(resp.Peers, &p2p_api.Peer{
-				Id:       peer.ID.String(),
+				Id:       p.ID,
 				Addr:     addr,
-				Banscore: int32(peer.BanScore), //nolint:gosec
+				Banscore: p.BanScore,
 			})
 		}
 
 		return resp, nil
 	}
 
-	// Fallback to libp2p client data if registry not available
+	// Fallback to libp2p client data if the registry is unavailable. Ban scores
+	// cannot be reported in this path because the local BanManager is gone.
 	if s.P2PClient == nil {
 		return nil, errors.WrapGRPCPublic(errors.NewError("[GetPeers] P2PClient is not initialised"))
 	}
@@ -1735,23 +1752,16 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			continue
 		}
 
-		banScore, _, _ := s.banManager.GetBanScore(sp.ID)
-
 		var addr string
 
 		if len(sp.Addrs) > 0 {
-			// For GetPeers API, we always return connected peers regardless of address type
-			// The SharePrivateAddresses setting only controls what we advertise to other peers,
-			// not what we report in our own peer list
 			addr = sp.Addrs[0]
 		}
 
-		// Include all connected peers
 		if addr != "" {
 			resp.Peers = append(resp.Peers, &p2p_api.Peer{
-				Id:       sp.ID,
-				Addr:     addr,
-				Banscore: int32(banScore), //nolint:gosec
+				Id:   sp.ID,
+				Addr: addr,
 			})
 		}
 	}
@@ -1777,11 +1787,20 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) 
 	return &p2p_api.UnbanPeerResponse{Ok: true}, nil
 }
 
-func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
-	// Check both IP-based bans (banList) and PeerID-based bans (banManager)
-	return &p2p_api.IsBannedResponse{
-		IsBanned: s.banList.IsBanned(peer.IpOrSubnet) || s.banManager.IsBanned(peer.IpOrSubnet),
-	}, nil
+func (s *Server) IsBanned(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
+	// IP-based ban (banList) takes precedence; if not, check the centralized
+	// peer registry's score-based ban as well.
+	if s.banList.IsBanned(req.IpOrSubnet) {
+		return &p2p_api.IsBannedResponse{IsBanned: true}, nil
+	}
+	if s.peerRegistry == nil {
+		return &p2p_api.IsBannedResponse{IsBanned: false}, nil
+	}
+	banned, err := s.peerRegistry.IsPeerBanned(ctx, req.IpOrSubnet)
+	if err != nil {
+		return nil, errors.WrapGRPCPublic(errors.NewServiceError("is peer banned", err))
+	}
+	return &p2p_api.IsBannedResponse{IsBanned: banned}, nil
 }
 
 func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
@@ -1794,33 +1813,85 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 }
 
 func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
-	// Map the reason string to a BanReason enum
-	reason := ReasonUnknown
-
-	switch req.Reason {
-	case "invalid_subtree":
-		reason = ReasonInvalidSubtree
-	case "protocol_violation":
-		reason = ReasonProtocolViolation
-	case "spam":
-		reason = ReasonSpam
-	case "invalid_block":
-		reason = ReasonInvalidBlock
+	reason := req.Reason
+	switch reason {
+	case "invalid_subtree", "protocol_violation", "spam", "invalid_block":
+		// known reason; pass through to the registry which has matching weights
 	default:
-		s.logger.Warnf("[AddBanScore] Unknown ban reason: %s", req.Reason)
-	}
-
-	score, banned := s.banManager.AddScore(req.PeerId, reason)
-	s.logger.Infof("[AddBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t", req.PeerId, req.Reason, score, banned)
-
-	// Update the sync coordinator's peer registry with the new ban status
-	if s.syncCoordinator != nil {
-		if peerID, err := peer.Decode(req.PeerId); err == nil {
-			s.syncCoordinator.UpdateBanStatus(peerID)
+		if reason == "" {
+			reason = ReasonUnknown
+		} else {
+			s.logger.Warnf("[AddBanScore] Unknown ban reason: %s", reason)
 		}
 	}
 
+	score, banned, err := s.peerRegistry.AddBanScore(ctx, req.PeerId, reason, 0)
+	if err != nil {
+		return nil, errors.WrapGRPCPublic(errors.NewServiceError("add ban score", err))
+	}
+	s.logger.Infof("[AddBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t", req.PeerId, reason, score, banned)
+
+	if banned {
+		s.onPeerBanned(req.PeerId, reason)
+	}
+
 	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
+}
+
+// applyBanScore is a fire-and-forget helper used from internal codepaths that
+// can't usefully propagate an error (libp2p notifiees, gossip handlers).
+func (s *Server) applyBanScore(peerID, reason string) {
+	if s.peerRegistry == nil {
+		return
+	}
+	_, banned, err := s.peerRegistry.AddBanScore(s.gCtx, peerID, reason, 0)
+	if err != nil {
+		s.logger.Warnf("[applyBanScore] AddBanScore %s/%s failed: %v", peerID, reason, err)
+		return
+	}
+	if banned {
+		s.onPeerBanned(peerID, reason)
+	}
+}
+
+// onPeerBanned reacts to a NEW ban transition (score crossed threshold this
+// call) by adding the peer's IP to the local banList and disconnecting it.
+// Replaces the old BanEventHandler indirection.
+func (s *Server) onPeerBanned(peerID, reason string) {
+	// Honor the configured ban duration so the address-level ban list and the
+	// centralized peer registry agree on how long the ban lasts. Fall back to
+	// 24h if the setting is unset/zero.
+	banDuration := 24 * time.Hour
+	if s.settings != nil && s.settings.P2P.BanDuration > 0 {
+		banDuration = s.settings.P2P.BanDuration
+	}
+	until := time.Now().Add(banDuration)
+	s.logger.Infof("[onPeerBanned] Peer %s banned until %s for reason: %s", peerID, until.Format(time.RFC3339), reason)
+
+	pid, err := peer.Decode(peerID)
+	if err != nil {
+		s.logger.Errorf("[onPeerBanned] failed to decode peer ID %s: %v", peerID, err)
+		return
+	}
+
+	if s.P2PClient != nil {
+		var ids []string
+		for _, p := range s.P2PClient.GetPeers() {
+			if p.ID == pid.String() {
+				ids = append(ids, p.Addrs...)
+				break
+			}
+		}
+		for _, id := range ids {
+			if s.banList != nil {
+				if err := s.banList.Add(context.Background(), id, until); err != nil {
+					s.logger.Errorf("[onPeerBanned] failed to add %s to ban list: %v", id, err)
+				}
+			}
+		}
+	}
+
+	s.removePeer(pid)
 }
 
 // RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
@@ -1832,34 +1903,26 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 //
 // Returns a response indicating success or an error if the peer cannot be found.
 func (s *Server) RecordBytesDownloaded(ctx context.Context, req *p2p_api.RecordBytesDownloadedRequest) (*p2p_api.RecordBytesDownloadedResponse, error) {
-	// Decode the peer ID string
-	peerID, err := peer.Decode(req.PeerId)
-	if err != nil {
+	if _, err := peer.Decode(req.PeerId); err != nil {
 		s.logger.Errorf("[RecordBytesDownloaded] failed to decode peer ID %s: %v", req.PeerId, err)
 		return &p2p_api.RecordBytesDownloadedResponse{Ok: false}, errors.WrapGRPCPublic(errors.NewServiceError("failed to decode peer ID", err))
 	}
 
-	// Get current peer info from registry
-	peerInfo, exists := s.peerRegistry.Get(peerID)
-	if !exists {
-		s.logger.Warnf("[RecordBytesDownloaded] peer %s not found in registry", req.PeerId)
-		// Still return success - peer might not be in registry yet
-		return &p2p_api.RecordBytesDownloadedResponse{Ok: true}, nil
+	// Atomic delta increment via UpdatePeerMetrics; the registry is the source of truth.
+	if err := s.peerRegistry.UpdatePeerMetrics(ctx, req.PeerId, 0, 0, req.BytesDownloaded, false, false, false, 0); err != nil {
+		s.logger.Warnf("[RecordBytesDownloaded] UpdatePeerMetrics %s failed: %v", req.PeerId, err)
+		// Still return success - the registry call is best-effort metrics tracking.
 	}
 
-	// Calculate new total bytes received
-	newTotal := peerInfo.BytesReceived + req.BytesDownloaded
-
-	// Update the peer registry with the new total
-	s.peerRegistry.UpdateNetworkStats(peerID, newTotal)
-
-	s.logger.Debugf("[RecordBytesDownloaded] Updated peer %s: added %d bytes, new total: %d bytes", req.PeerId, req.BytesDownloaded, newTotal)
-
+	s.logger.Debugf("[RecordBytesDownloaded] Updated peer %s: +%d bytes", req.PeerId, req.BytesDownloaded)
 	return &p2p_api.RecordBytesDownloadedResponse{Ok: true}, nil
 }
 
 func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputationRequest) (*p2p_api.ResetReputationResponse, error) {
-	peersReset := s.peerRegistry.ResetReputation(req.PeerId)
+	peersReset, err := s.peerRegistry.ResetReputation(ctx, req.PeerId)
+	if err != nil {
+		return nil, errors.WrapGRPCPublic(errors.NewServiceError("reset reputation", err))
+	}
 
 	if req.PeerId == "" {
 		s.logger.Infof("[ResetReputation] Reset reputation for all peers. Count: %d", peersReset)
@@ -1869,7 +1932,7 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 
 	return &p2p_api.ResetReputationResponse{
 		Ok:         true,
-		PeersReset: int32(peersReset),
+		PeersReset: peersReset,
 	}, nil
 }
 
@@ -1892,7 +1955,9 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 	s.logger.Infof("[ReportInvalidBlock] adding ban score to peer %s for invalid block %s: %s", peerID, blockHash, reason)
 
 	// Record as malicious interaction for reputation tracking
-	s.peerRegistry.RecordMaliciousInteraction(peer.ID(peerID))
+	if err := s.peerRegistry.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, false, false, true, 0); err != nil {
+		s.logger.Warnf("[ReportInvalidBlock] UpdatePeerMetrics %s failed: %v", peerID, err)
+	}
 
 	// Create the request to add ban score
 	req := &p2p_api.AddBanScoreRequest{
@@ -1943,11 +2008,12 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 	// Record as a failed interaction for reputation tracking
 	// This will not be too harsh on failures of transient behavior
 	// but also track if we are having trouble fetching data from peers
-	decodedPeerID, err := peer.Decode(peerID)
-	if err != nil {
-		s.logger.Warnf("[ReportInvalidSubtree] failed to decode peer ID %s: %v", peerID, err)
+	if _, derr := peer.Decode(peerID); derr != nil {
+		s.logger.Warnf("[ReportInvalidSubtree] failed to decode peer ID %s: %v", peerID, derr)
 	} else {
-		s.peerRegistry.RecordInteractionFailure(decodedPeerID)
+		if err := s.peerRegistry.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, false, true, false, 0); err != nil {
+			s.logger.Warnf("[ReportInvalidSubtree] UpdatePeerMetrics %s failed: %v", peerID, err)
+		}
 	}
 
 	// Remove the subtree from the map to avoid memory leaks
@@ -1995,8 +2061,53 @@ func (h *myBanEventHandler) OnPeerBanned(peerID string, until time.Time, reason 
 	h.server.removePeer(pid)
 }
 
+// peerInfoToP2PProto converts a centralized blockchain.PeerInfo into the
+// existing p2p_api.PeerRegistryInfo wire format expected by external consumers
+// (RPC's getpeerinfo, asset dashboard, monitor). Preserved as the boundary
+// translation layer; PR2 will retire p2p_api.PeerRegistryInfo entirely.
+func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
+	timeToUnix := func(t time.Time) int64 {
+		if t.IsZero() {
+			return 0
+		}
+		return t.Unix()
+	}
+
+	blockHashStr := ""
+	if p.BlockHash != nil {
+		blockHashStr = p.BlockHash.String()
+	}
+
+	return &p2p_api.PeerRegistryInfo{
+		Id:                     p.ID,
+		Height:                 p.Height,
+		BlockHash:              blockHashStr,
+		DataHubUrl:             p.DataHubURL,
+		BanScore:               p.BanScore,
+		IsBanned:               p.IsBanned,
+		IsConnected:            p.IsConnected,
+		ConnectedAt:            timeToUnix(p.ConnectedAt),
+		BytesReceived:          p.BytesReceived,
+		LastBlockTime:          timeToUnix(p.LastBlockTime),
+		LastMessageTime:        timeToUnix(p.LastMessageTime),
+		InteractionAttempts:    p.InteractionAttempts,
+		InteractionSuccesses:   p.InteractionSuccesses,
+		InteractionFailures:    p.InteractionFailures,
+		LastInteractionAttempt: timeToUnix(p.LastInteractionAttempt),
+		LastInteractionSuccess: timeToUnix(p.LastInteractionSuccess),
+		LastInteractionFailure: timeToUnix(p.LastInteractionFailure),
+		ReputationScore:        p.ReputationScore,
+		MaliciousCount:         p.MaliciousCount,
+		AvgResponseTimeMs:      p.AvgResponseTimeMs,
+		Storage:                p.Storage,
+		ClientName:             p.ClientName,
+		LastCatchupError:       p.LastCatchupError,
+		LastCatchupErrorTime:   timeToUnix(p.LastCatchupErrorTime),
+	}
+}
+
 // GetPeerRegistry returns comprehensive peer registry data with all metadata
-func (s *Server) GetPeerRegistry(_ context.Context, _ *emptypb.Empty) (*p2p_api.GetPeerRegistryResponse, error) {
+func (s *Server) GetPeerRegistry(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeerRegistryResponse, error) {
 	s.logger.Debugf("[GetPeerRegistry] called")
 
 	if s.peerRegistry == nil {
@@ -2005,54 +2116,14 @@ func (s *Server) GetPeerRegistry(_ context.Context, _ *emptypb.Empty) (*p2p_api.
 		}, nil
 	}
 
-	// Get all peers from the registry
-	allPeers := s.peerRegistry.GetAll()
-
-	// Helper function to convert time to Unix timestamp, returning 0 for zero times
-	timeToUnix := func(t time.Time) int64 {
-		if t.IsZero() {
-			return 0
-		}
-
-		return t.Unix()
+	allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("list peers", err))
 	}
 
-	// Convert to protobuf format
 	peers := make([]*p2p_api.PeerRegistryInfo, 0, len(allPeers))
 	for _, p := range allPeers {
-		blockHashStr := ""
-		if p.BlockHash != nil {
-			blockHashStr = p.BlockHash.String()
-		}
-
-		peers = append(peers, &p2p_api.PeerRegistryInfo{
-			Id:              p.ID.String(),
-			Height:          p.Height,
-			BlockHash:       blockHashStr,
-			DataHubUrl:      p.DataHubURL,
-			BanScore:        int32(p.BanScore),
-			IsBanned:        p.IsBanned,
-			IsConnected:     p.IsConnected,
-			ConnectedAt:     timeToUnix(p.ConnectedAt),
-			BytesReceived:   p.BytesReceived,
-			LastBlockTime:   timeToUnix(p.LastBlockTime),
-			LastMessageTime: timeToUnix(p.LastMessageTime),
-
-			// Interaction/catchup metrics
-			InteractionAttempts:    p.InteractionAttempts,
-			InteractionSuccesses:   p.InteractionSuccesses,
-			InteractionFailures:    p.InteractionFailures,
-			LastInteractionAttempt: timeToUnix(p.LastInteractionAttempt),
-			LastInteractionSuccess: timeToUnix(p.LastInteractionSuccess),
-			LastInteractionFailure: timeToUnix(p.LastInteractionFailure),
-			ReputationScore:        p.ReputationScore,
-			MaliciousCount:         p.MaliciousCount,
-			AvgResponseTimeMs:      p.AvgResponseTime.Milliseconds(),
-			Storage:                p.Storage,
-			ClientName:             p.ClientName,
-			LastCatchupError:       p.LastCatchupError,
-			LastCatchupErrorTime:   timeToUnix(p.LastCatchupErrorTime),
-		})
+		peers = append(peers, peerInfoToP2PProto(p))
 	}
 
 	return &p2p_api.GetPeerRegistryResponse{
@@ -2061,78 +2132,29 @@ func (s *Server) GetPeerRegistry(_ context.Context, _ *emptypb.Empty) (*p2p_api.
 }
 
 // GetPeer returns information about a specific peer by peer ID
-func (s *Server) GetPeer(_ context.Context, req *p2p_api.GetPeerRequest) (*p2p_api.GetPeerResponse, error) {
+func (s *Server) GetPeer(ctx context.Context, req *p2p_api.GetPeerRequest) (*p2p_api.GetPeerResponse, error) {
 	s.logger.Debugf("[GetPeer] called for peer %s", req.PeerId)
 
 	if s.peerRegistry == nil {
-		return &p2p_api.GetPeerResponse{
-			Found: false,
-		}, nil
+		return &p2p_api.GetPeerResponse{Found: false}, nil
 	}
 
-	// Decode peer ID
-	peerID, err := peer.Decode(req.PeerId)
-	if err != nil {
+	if _, err := peer.Decode(req.PeerId); err != nil {
 		s.logger.Warnf("[GetPeer] invalid peer ID %s: %v", req.PeerId, err)
-		return &p2p_api.GetPeerResponse{
-			Found: false,
-		}, nil
+		return &p2p_api.GetPeerResponse{Found: false}, nil
 	}
 
-	// Get peer from registry
-	peerInfo, found := s.peerRegistry.Get(peerID)
+	peerInfo, found, err := s.peerRegistry.GetPeer(ctx, req.PeerId)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("get peer", err))
+	}
 	if !found {
 		s.logger.Debugf("[GetPeer] peer %s not found in registry", req.PeerId)
-		return &p2p_api.GetPeerResponse{
-			Found: false,
-		}, nil
-	}
-
-	// Helper function to convert time to Unix timestamp, returning 0 for zero times
-	timeToUnix := func(t time.Time) int64 {
-		if t.IsZero() {
-			return 0
-		}
-		return t.Unix()
-	}
-
-	// Convert to protobuf format
-	blockHashStr := ""
-	if peerInfo.BlockHash != nil {
-		blockHashStr = peerInfo.BlockHash.String()
-	}
-
-	peerRegistryInfo := &p2p_api.PeerRegistryInfo{
-		Id:              peerInfo.ID.String(),
-		Height:          peerInfo.Height,
-		BlockHash:       blockHashStr,
-		DataHubUrl:      peerInfo.DataHubURL,
-		BanScore:        int32(peerInfo.BanScore),
-		IsBanned:        peerInfo.IsBanned,
-		IsConnected:     peerInfo.IsConnected,
-		ConnectedAt:     timeToUnix(peerInfo.ConnectedAt),
-		BytesReceived:   peerInfo.BytesReceived,
-		LastBlockTime:   timeToUnix(peerInfo.LastBlockTime),
-		LastMessageTime: timeToUnix(peerInfo.LastMessageTime),
-
-		// Interaction/catchup metrics
-		InteractionAttempts:    peerInfo.InteractionAttempts,
-		InteractionSuccesses:   peerInfo.InteractionSuccesses,
-		InteractionFailures:    peerInfo.InteractionFailures,
-		LastInteractionAttempt: timeToUnix(peerInfo.LastInteractionAttempt),
-		LastInteractionSuccess: timeToUnix(peerInfo.LastInteractionSuccess),
-		LastInteractionFailure: timeToUnix(peerInfo.LastInteractionFailure),
-		ReputationScore:        peerInfo.ReputationScore,
-		MaliciousCount:         peerInfo.MaliciousCount,
-		AvgResponseTimeMs:      peerInfo.AvgResponseTime.Milliseconds(),
-		Storage:                peerInfo.Storage,
-		ClientName:             peerInfo.ClientName,
-		LastCatchupError:       peerInfo.LastCatchupError,
-		LastCatchupErrorTime:   timeToUnix(peerInfo.LastCatchupErrorTime),
+		return &p2p_api.GetPeerResponse{Found: false}, nil
 	}
 
 	return &p2p_api.GetPeerResponse{
-		Peer:  peerRegistryInfo,
+		Peer:  peerInfoToP2PProto(peerInfo),
 		Found: true,
 	}, nil
 }

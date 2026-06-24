@@ -1,46 +1,52 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import { theme as themeStore } from '$lib/stores/media'
   import deepmerge from 'deepmerge'
 
-  import { defaults, light } from './themes'
+  import { defaults } from './themes'
+  import { dark as darkTheme } from '$internal/styles/themes/dark'
+  import { light as lightTheme } from '$internal/styles/themes/light'
   import { setCSSVariables } from './utils/css'
 
   // web fonts
   import './css/inter.css'
 
-  export let theme
-  export let themeNs
-  export let customThemeProps: any = {}
+  let {
+    theme,
+    themeNs,
+    customThemeProps = {},
+    children,
+  }: {
+    theme: any
+    themeNs: any
+    customThemeProps?: any
+    children?: Snippet
+  } = $props()
 
   const themes = {
-    light: light,
+    dark: darkTheme,
+    light: lightTheme,
   }
 
-  let themeProps = {}
-
-  $: {
-    themeProps = {}
+  $effect(() => {
+    let themeProps = themes[theme] ?? lightTheme
 
     if (theme !== null) {
-      if (themes[theme]) {
-        switch (theme) {
-          case 'light':
-            themeProps = light
-            break
-        }
-      }
       themeProps = deepmerge(themeProps, customThemeProps)
-
       $themeStore = theme
-    } else {
-      themeProps = light
     }
 
     setCSSVariables(deepmerge(defaults, themeProps), themeNs)
-  }
+
+    if (typeof document !== 'undefined' && (theme === 'light' || theme === 'dark')) {
+      document.documentElement.setAttribute('data-theme', theme)
+    }
+  })
 </script>
 
-<slot />
+{@render children?.()}
 
 <style>
   :global(:root) {
@@ -85,6 +91,10 @@
     --toastWidth: var(--toast-width);
     --toastBarHeight: 3px;
     --toastBarBackground: var(--toast-bar-bg-color, rgba(0, 0, 0, 0.1));
+    /* Override svelte-toast library defaults (white text, dark bg) so the
+       toast uses the app's colour scheme instead. */
+    --toastColor: var(--app-color);
+    --toastBackground: var(--comp-bg-color, var(--app-bg-color));
 
     /* Message box border colors */
     --msgbox-default-border-color: #3e4451;
@@ -119,7 +129,10 @@
     right: 9px;
   }
   :global(._toastItem) {
-    background: var(--app-bg-color);
+    /* Use component background (white in light, dark in dark) so the toast
+       stands out from the page background (#F0F2F5 in light mode). */
+    background: var(--comp-bg-color, var(--app-bg-color));
     color: var(--app-color);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
   }
 </style>

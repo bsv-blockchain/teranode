@@ -154,6 +154,16 @@ func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 
 	td.WaitForBlock(t, block3, blockWait)
 
+	// After InvalidateBlock, the block assembly resets and reloads unmined transactions.
+	// However, for SQL/Postgres stores, BlockValidation's async BlockMinedUnset processing
+	// may not have set tx1.unmined_since before the first loadUnminedTransactions ran.
+	// Force a second reset so a fresh loadUnminedTransactions can pick up tx1 (which by now
+	// has unmined_since set by the completed BlockMinedUnset processing).
+	require.NoError(t, td.BlockAssemblyClient.ResetBlockAssembly(td.Ctx),
+		"second reset must succeed to pick up tx1 after BlockMinedUnset processing completes")
+
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx1, blockWait),
+		"tx1 must return to block assembly after block4a is invalidated")
 	td.VerifyInBlockAssembly(t, tx1) // re-added to block assembly
 	td.VerifyNotOnLongestChainInUtxoStore(t, tx1)
 }

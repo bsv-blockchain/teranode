@@ -92,6 +92,12 @@ type Store interface {
 	// Returns: next block ID and any error encountered
 	GetNextBlockID(ctx context.Context) (uint64, error)
 
+	// AssignBlockID returns a stable block ID for the given block hash: repeated
+	// calls for the same hash (and concurrent callers) return the same id, and a
+	// committed block returns its authoritative id. Used by ingestion paths so a
+	// block's UTXO mined-info and its committed row share one id.
+	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
 	// GetBlockInChainByHeightHash retrieves a block at a specific height in a chain determined by the start hash. This is useful for getting the block at a given height in a chain that may have a different tip.
 	// Parameters:
 	//   - ctx: Context for the operation
@@ -99,6 +105,21 @@ type Store interface {
 	//   - startHash: Hash determining the chain
 	// Returns: Block, boolean indicating success, and any error encountered
 	GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, bool, error)
+
+	// MainChainBlockHashesByHeights returns the hash of the main-chain block at
+	// each requested height, but only when startHash is itself on the main
+	// chain. The height ceiling is derived from startHash's own height (results
+	// are constrained to ancestors-of-or-equal-to startHash), so the result
+	// matches a recursive walk anchored at startHash. Returns ok=false (nil
+	// error) when startHash is a fork tip, the store is mid-rebuild, unknown, or
+	// any requested height is missing, so the caller can fall back to a
+	// per-height chain walk.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - startHash: Hash identifying the chain (must be on the main chain for the fast path)
+	//   - heights: Heights to fetch (must be <= startHash's height)
+	// Returns: map of height to block hash, ok flag, and any error encountered
+	MainChainBlockHashesByHeights(ctx context.Context, startHash *chainhash.Hash, heights []uint32) (map[uint32]*chainhash.Hash, bool, error)
 
 	// GetBlockStats retrieves statistical information about blocks.
 	// Parameters:
@@ -269,6 +290,45 @@ type Store interface {
 	//   - blockHash: Hash of the block to revalidate
 	// Returns: Any error encountered
 	RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
+
+	// DeleteBlock physically removes a single block row from the store.
+	// The caller is responsible for ordering deletes so that no surviving row's
+	// parent_id references a deleted block (i.e. delete children before parents,
+	// typically by iterating in descending height order). This method does NOT
+	// cascade to descendants and does NOT reset on_main_chain or rebuild caches;
+	// callers performing a rewind must handle cache invalidation and flag rebuild
+	// after all deletions are complete.
+	//
+	// Returns no error if the block does not exist (idempotent).
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockHash: Hash of the block to delete
+	// Returns: Any error encountered
+	DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error
+
+	// HasBlockBelowHeightContainingSubtree returns true if any block with height
+	// less than or equal to maxHeight references the given subtree hash, regardless
+	// of whether that block is valid or on the main chain. Used by rewind tooling
+	// to decide whether a subtree blob is still referenced by a surviving block
+	// before deleting it.
+	//
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - subtreeHash: Hash of the subtree to look for
+	//   - maxHeight: Only consider blocks with height <= maxHeight
+	// Returns: true if at least one matching block exists, and any error encountered
+	HasBlockBelowHeightContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxHeight uint32) (bool, error)
+
+	// ListBlockRefsAboveHeight enumerates every block row with height > minHeight,
+	// across all branches (main chain and any losing forks), ordered by
+	// (height DESC, id DESC). Used by rewind tooling to safely delete blocks
+	// in an order that satisfies the self-referencing parent_id FK.
+	//
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - minHeight: Only consider blocks with height > minHeight
+	// Returns: slice of model.BlockRef sorted by (height DESC, id DESC), and any error
+	ListBlockRefsAboveHeight(ctx context.Context, minHeight uint32) ([]model.BlockRef, error)
 
 	// GetBlockHeaderIDs retrieves block header IDs starting from a specific hash.
 	// Parameters:

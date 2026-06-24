@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { Chart, ChartContainer } from '$lib/components/chart'
@@ -6,17 +8,23 @@
   import i18n from '$internal/i18n'
   import { getGraphObj } from './graph'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
   const baseKey = 'page.home.txs'
 
-  export let data: any = []
-  export let period
-  export let onChangePeriod
+  let {
+    data = [],
+    period,
+    onChangePeriod,
+  }: {
+    data?: any
+    period?: string
+    onChangePeriod?: (value: string) => void
+  } = $props()
 
-  let renderKey = ''
-  let graphObj
-  let tmpGraphObj
+  let renderKey = $state('')
+  let graphObj = $state<any>(null)
+  let tmpGraphObj: any
   let delayId
 
   function doDelay() {
@@ -28,11 +36,13 @@
     }, 20)
   }
 
-  $: if (data) {
-    tmpGraphObj = getGraphObj(t, data, period)
-    graphObj = null
-    doDelay()
-  }
+  $effect(() => {
+    if (data) {
+      tmpGraphObj = getGraphObj(t, data, period)
+      graphObj = null
+      doDelay()
+    }
+  })
 
   onDestroy(() => {
     if (delayId) {
@@ -47,9 +57,9 @@
   headerPadding="20px 24px 10px 24px"
   wrapHeader={true}
 >
-  <svelte:fragment slot="header-tools">
-    <RangeToggle value={period} on:change={(e) => onChangePeriod(e.detail.value)} />
-  </svelte:fragment>
+  {#snippet headerTools()}
+    <RangeToggle value={period} onchange={(e) => onChangePeriod?.(e.value)} />
+  {/snippet}
 
   <ChartContainer bind:renderKey height="530px">
     {#if graphObj?.graphOptions}

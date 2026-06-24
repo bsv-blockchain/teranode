@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "data": {
+    "first_block_time": 1699000000,
+    "last_block_time": 1700000000,
+    "tx_count": 1000,
+    "block_count": 1000,
+    "max_height": 800000,
+    "avg_block_size": 1024,
+    "avg_tx_count_per_block": 10,
+    "chain_work": "0x1000000"
+  }
+}

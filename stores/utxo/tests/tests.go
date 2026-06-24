@@ -146,13 +146,55 @@ func Restore(t *testing.T, db utxostore.Store) {
 	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
 	require.NoError(t, err)
 
+	// Build the unspend record with the SpendingData GetSpends populated inside Spend(spendTx).
+	restoreSpends := []*utxostore.Spend{{
+		TxID:         TXHash,
+		Vout:         0,
+		UTXOHash:     utxoHash0,
+		SpendingData: spend.NewSpendingData(spendTx.TxIDChainHash(), 0),
+	}}
+
 	// try to reset the utxo
-	err = db.Unspend(ctx, spends, false)
+	err = db.Unspend(ctx, restoreSpends, false)
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, testSpend0.TxID)
 	require.NoError(t, err)
 	require.Equal(t, testSpend0.TxID.String(), resp.Tx.TxID())
+}
+
+// UnspendIdempotent proves Unspend is safe to re-apply to an already-unspent
+// output — the load-bearing assumption for WAL replay (#861): a crash between
+// the Unspend step and a later step means replay re-runs Unspend on an output
+// it already unspent. Mirrors SpendIdempotent for the reverse primitive.
+func UnspendIdempotent(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	_, err := db.Create(ctx, Tx, 1000)
+	require.NoError(t, err)
+	defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
+
+	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
+	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
+	require.NoError(t, err)
+
+	restoreSpends := []*utxostore.Spend{{
+		TxID:         TXHash,
+		Vout:         0,
+		UTXOHash:     utxoHash0,
+		SpendingData: spend.NewSpendingData(spendTx.TxIDChainHash(), 0),
+	}}
+
+	// First unspend restores the output.
+	require.NoError(t, db.Unspend(ctx, restoreSpends, false))
+
+	// Second unspend of the already-unspent output must be a no-op, not an error.
+	require.NoError(t, db.Unspend(ctx, restoreSpends, false), "re-unspending an already-unspent output must be idempotent")
+
+	// The output is unspent and the tx is intact.
+	resp, err := db.Get(ctx, TXHash)
+	require.NoError(t, err)
+	require.Equal(t, TXHash.String(), resp.Tx.TxID())
 }
 
 func Freeze(t *testing.T, db utxostore.Store) {
@@ -348,6 +390,318 @@ func Conflicting(t *testing.T, db utxostore.Store) {
 	assert.False(t, txMeta.Conflicting)
 	require.Len(t, txMeta.ConflictingChildren, 1)
 	require.Equal(t, Tx.TxIDChainHash().String(), txMeta.ConflictingChildren[0].String())
+}
+
+// ConflictWAL exercises the conflict-resolution write-ahead log (crash safety
+// for ProcessConflicting / ReverseProcessConflicting — see #861): a begun
+// intent is durable and surfaces in PendingConflictIntents; Begin is idempotent
+// on the deterministic intent id; Complete removes it; completing an absent
+// intent is a no-op.
+func ConflictWAL(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	h1 := chainhash.HashH([]byte("wal-tx-1"))
+	h2 := chainhash.HashH([]byte("wal-tx-2"))
+
+	forward := utxostore.ConflictIntent{
+		Kind:        utxostore.ConflictIntentForward,
+		BlockHeight: 4242,
+		TxHashes:    []chainhash.Hash{h1, h2},
+		StartedAt:   1_700_000_000_000_000_000,
+	}
+
+	// No pending intents on a clean store.
+	pending, err := db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pending, "store should start with no pending intents")
+
+	// Begin → the intent becomes pending and round-trips its fields.
+	require.NoError(t, db.BeginConflictIntent(ctx, forward))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+
+	got := pending[0]
+	require.Equal(t, utxostore.ConflictIntentForward, got.Kind)
+	require.Equal(t, uint32(4242), got.BlockHeight)
+	require.Equal(t, int64(1_700_000_000_000_000_000), got.StartedAt)
+	require.ElementsMatch(t, []chainhash.Hash{h1, h2}, got.TxHashes)
+	require.Equal(t, forward.IntentID(), got.IntentID(), "round-tripped intent must hash to the same id")
+
+	// Begin is idempotent on the deterministic id — re-begin (even with the
+	// hashes in a different order) does not create a duplicate.
+	reordered := forward
+	reordered.TxHashes = []chainhash.Hash{h2, h1}
+	require.NoError(t, db.BeginConflictIntent(ctx, reordered))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "re-begin of the same intent must not duplicate")
+
+	// A second, distinct intent (reverse, different hashes) coexists.
+	reverse := utxostore.ConflictIntent{
+		Kind:        utxostore.ConflictIntentReverse,
+		BlockHeight: 99,
+		TxHashes:    []chainhash.Hash{chainhash.HashH([]byte("wal-tx-3"))},
+		StartedAt:   1_700_000_000_000_000_001,
+	}
+	require.NoError(t, db.BeginConflictIntent(ctx, reverse))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+
+	// Complete the forward intent → only the reverse remains.
+	require.NoError(t, db.CompleteConflictIntent(ctx, forward.IntentID()))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, reverse.IntentID(), pending[0].IntentID())
+
+	// Completing an already-absent intent is a no-op.
+	require.NoError(t, db.CompleteConflictIntent(ctx, forward.IntentID()))
+
+	// Complete the reverse intent → store is clean again.
+	require.NoError(t, db.CompleteConflictIntent(ctx, reverse.IntentID()))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+}
+
+// crashParentTx builds a standalone parent tx with one spendable output. The
+// seed makes the txid unique across crash-recovery sub-cases that share one db.
+func crashParentTx(seed byte) *bt.Tx {
+	parent := bt.NewTx()
+	// PreviousTxScript must be set so the tx is "extended" — the Aerospike
+	// backend's Create computes fees/utxo hashes from it and rejects non-extended txs.
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		PreviousTxSatoshis: 200000,
+		PreviousTxScript:   bscript.NewFromBytes([]byte{0x51}),
+		SequenceNumber:     0xFFFFFFFF,
+		UnlockingScript:    dummyUnlockingScript,
+	}
+	_ = in.PreviousTxIDAdd(&chainhash.Hash{seed, seed, seed, 0xCC})
+	parent.Inputs = []*bt.Input{in}
+	parent.Outputs = []*bt.Output{{Satoshis: 100000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+
+	return parent
+}
+
+// crashSpendTx builds a tx spending parent[0]; outSats makes its txid unique.
+func crashSpendTx(t *testing.T, parent *bt.Tx, outSats uint64) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+	require.NoError(t, tx.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	tx.Inputs[0].UnlockingScript = dummyUnlockingScript
+	tx.Outputs = []*bt.Output{{Satoshis: outSats, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+
+	return tx
+}
+
+func crashConflicting(t *testing.T, ctx context.Context, db utxostore.Store, h *chainhash.Hash) bool {
+	t.Helper()
+	m, err := db.Get(ctx, h, fields.Conflicting)
+	require.NoError(t, err)
+
+	return m.Conflicting
+}
+
+func crashLocked(t *testing.T, ctx context.Context, db utxostore.Store, h *chainhash.Hash) bool {
+	t.Helper()
+	m, err := db.Get(ctx, h, fields.Locked)
+	require.NoError(t, err)
+
+	return m.Locked
+}
+
+func crashSpender(t *testing.T, ctx context.Context, db utxostore.Store, parent *bt.Tx) *chainhash.Hash {
+	t.Helper()
+	m, err := db.Get(ctx, parent.TxIDChainHash(), fields.Utxos)
+	require.NoError(t, err)
+	require.NotEmpty(t, m.SpendingDatas)
+
+	if m.SpendingDatas[0] == nil {
+		return nil
+	}
+
+	return m.SpendingDatas[0].TxID
+}
+
+// ConflictWALCrashRecovery is the per-step-boundary crash-restart harness for
+// the conflict-resolution WAL (#861). For each step boundary of the forward
+// (ProcessConflicting) and reverse (ReverseProcessConflicting) operations it
+// reconstructs the on-disk partial state a SIGKILL would leave — the in-process
+// rollback never runs on a kill — and then performs the startup replay (re-run
+// the operation; forward seeds the processed-hashes map exactly as
+// BlockAssembler.replayConflictIntent does). It asserts the UTXO state converges
+// to the correct end-state with no operator action and the WAL is cleared.
+//
+// Runs against a bare store (no BlockAssembler), so it covers SQLite, Postgres
+// and Aerospike via the shared backend test suites.
+func ConflictWALCrashRecovery(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+	require.NoError(t, db.SetBlockHeight(20))
+
+	ignoreFlags := utxostore.IgnoreFlags{IgnoreConflicting: true, IgnoreLocked: true}
+
+	// --- Forward: ProcessConflicting end-state is winner=non-conflicting,
+	// loser=conflicting, parent[0] spent by winner, parent unlocked. ---
+	forwardCases := []struct {
+		name  string
+		seed  byte
+		build func(t *testing.T, parent, txW, txL *bt.Tx)
+	}{
+		{
+			name: "forward_after_step1_mark", seed: 0x31,
+			// losers marked, parent[0] still -> L, unlocked.
+			build: func(t *testing.T, parent, txW, txL *bt.Tx) {
+				_, err := db.Spend(ctx, txL, db.GetBlockHeight()+1)
+				require.NoError(t, err)
+				_, _, err = db.SetConflicting(ctx, []chainhash.Hash{*txW.TxIDChainHash(), *txL.TxIDChainHash()}, true)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "forward_after_step2_unspend_lock", seed: 0x32,
+			// parent[0] -> nil, parent locked.
+			build: func(t *testing.T, parent, txW, txL *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txW.TxIDChainHash(), *txL.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+			},
+		},
+		{
+			name: "forward_after_step3_spend", seed: 0x33,
+			// parent[0] -> W, parent locked.
+			build: func(t *testing.T, parent, txW, txL *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txW.TxIDChainHash(), *txL.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				_, err = db.Spend(ctx, txW, db.GetBlockHeight()+1, ignoreFlags)
+				require.NoError(t, err)
+				require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+			},
+		},
+		{
+			name: "forward_after_step4_unmark", seed: 0x34,
+			// winner unmarked, parent[0] -> W, parent locked.
+			build: func(t *testing.T, parent, txW, txL *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txL.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				_, err = db.Spend(ctx, txW, db.GetBlockHeight()+1, ignoreFlags)
+				require.NoError(t, err)
+				require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+			},
+		},
+	}
+
+	for _, tc := range forwardCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := crashParentTx(tc.seed)
+			_, err := db.Create(ctx, parent, 1)
+			require.NoError(t, err)
+			require.NoError(t, db.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+			txL := crashSpendTx(t, parent, 90000)
+			_, err = db.Create(ctx, txL, db.GetBlockHeight())
+			require.NoError(t, err)
+
+			txW := crashSpendTx(t, parent, 80000)
+			_, err = db.Create(ctx, txW, db.GetBlockHeight(), utxostore.WithConflicting(true))
+			require.NoError(t, err)
+
+			tc.build(t, parent, txW, txL)
+
+			// Crash left the forward intent behind.
+			intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentForward, BlockHeight: 20, TxHashes: []chainhash.Hash{*txW.TxIDChainHash()}, StartedAt: 1}
+			require.NoError(t, db.BeginConflictIntent(ctx, intent))
+
+			// Replay: seed the processed-hashes map exactly as BlockAssembler does.
+			seeded := map[chainhash.Hash]struct{}{*txW.TxIDChainHash(): {}}
+			_, _, err = utxostore.ProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txW.TxIDChainHash()}, seeded)
+			require.NoError(t, err)
+			require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
+
+			require.False(t, crashConflicting(t, ctx, db, txW.TxIDChainHash()), "winner must not be conflicting after replay")
+			require.True(t, crashConflicting(t, ctx, db, txL.TxIDChainHash()), "loser must remain conflicting after replay")
+			require.NotNil(t, crashSpender(t, ctx, db, parent))
+			require.Equal(t, txW.TxIDChainHash().String(), crashSpender(t, ctx, db, parent).String(), "parent[0] must be spent by the winner")
+			require.False(t, crashLocked(t, ctx, db, parent.TxIDChainHash()), "parent must be unlocked after replay")
+		})
+	}
+
+	// --- Reverse: ReverseProcessConflicting end-state is demoted=conflicting,
+	// parent[0] spent by the restored counter, counter=non-conflicting. ---
+	reverseCases := []struct {
+		name  string
+		seed  byte
+		build func(t *testing.T, parent, txD, txC *bt.Tx)
+	}{
+		{
+			name: "reverse_after_mark_D", seed: 0x41,
+			// D conflicting, parent[0] -> D (Unspend not yet run), C conflicting.
+			build: func(t *testing.T, parent, txD, txC *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txD.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				_, err = db.Spend(ctx, txD, db.GetBlockHeight()+1, ignoreFlags)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "reverse_after_unspend_D", seed: 0x42,
+			// D conflicting, parent[0] -> nil, C conflicting.
+			build: func(t *testing.T, parent, txD, txC *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txD.TxIDChainHash()}, true)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "reverse_after_spend_C", seed: 0x43,
+			// D conflicting, parent[0] -> C, C STILL conflicting (Unmark not yet run).
+			build: func(t *testing.T, parent, txD, txC *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txD.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				_, err = db.Spend(ctx, txC, db.GetBlockHeight()+1, ignoreFlags)
+				require.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tc := range reverseCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := crashParentTx(tc.seed)
+			_, err := db.Create(ctx, parent, 1)
+			require.NoError(t, err)
+			require.NoError(t, db.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+			// C: counter / original spender — conflicting + in parent.ConflictingChildren.
+			txC := crashSpendTx(t, parent, 80000)
+			_, err = db.Create(ctx, txC, db.GetBlockHeight(), utxostore.WithConflicting(true))
+			require.NoError(t, err)
+
+			// D: the demoted winner.
+			txD := crashSpendTx(t, parent, 90000)
+			_, err = db.Create(ctx, txD, db.GetBlockHeight())
+			require.NoError(t, err)
+
+			tc.build(t, parent, txD, txC)
+
+			intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentReverse, BlockHeight: 20, TxHashes: []chainhash.Hash{*txD.TxIDChainHash()}, StartedAt: 1}
+			require.NoError(t, db.BeginConflictIntent(ctx, intent))
+
+			_, _, err = utxostore.ReverseProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txD.TxIDChainHash()})
+			require.NoError(t, err)
+			require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
+
+			require.True(t, crashConflicting(t, ctx, db, txD.TxIDChainHash()), "demoted tx must be conflicting after reverse replay")
+			require.NotNil(t, crashSpender(t, ctx, db, parent))
+			require.Equal(t, txC.TxIDChainHash().String(), crashSpender(t, ctx, db, parent).String(), "parent[0] must be spent by the restored counter")
+			require.False(t, crashConflicting(t, ctx, db, txC.TxIDChainHash()), "restored counter must not be conflicting after reverse replay")
+		})
+	}
 }
 
 func Sanity(t *testing.T, db utxostore.Store) {

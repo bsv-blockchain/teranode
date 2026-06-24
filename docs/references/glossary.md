@@ -38,7 +38,7 @@
 
 **Extended Transaction Format (BIP-239)**: A transaction format that includes additional metadata (previous output satoshis and locking scripts) in each input to facilitate faster validation. Teranode accepts transactions in both standard Bitcoin format and Extended Format. When standard format transactions are received, Teranode automatically extends them during validation by retrieving input data from the UTXO store. All transactions are stored in non-extended format for storage efficiency, with extension performed in-memory on-demand during validation. This dual-format support ensures backward compatibility with existing Bitcoin wallets while enabling optimized validation when extended format is provided.
 
-**FSM (Finite State Machine)**: A model that manages the Blockchain Service states and transitions. The FSM controls node behavior through states (Idle, LegacySyncing, Running, CatchingBlocks) and events (LegacySync, Run, CatchupBlocks, Stop), determining which operations are permitted at each stage.
+**FSM (Finite State Machine)**: A model that manages the Blockchain Service states and transitions. The FSM controls node behavior through states (Idle, Running, CatchingBlocks) and events (Run, CatchupBlocks, Stop), determining which operations are permitted at each stage.
 
 **gRPC**: A high-performance, open-source universal RPC framework.
 

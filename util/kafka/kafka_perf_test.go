@@ -1,3 +1,5 @@
+//go:build perf
+
 package kafka
 
 import (
@@ -17,10 +19,12 @@ import (
 )
 
 // Performance tests that exercise the real Kafka (Redpanda) path via testcontainers.
-// Run with:  go test -v -run TestPerf -timeout 5m ./util/kafka/
+// Run with:  go test -tags perf -v -run TestPerf -timeout 15m ./util/kafka/
 //
 // These are NOT unit tests — they spin up a Docker container and measure real
 // throughput, latency, and resource behaviour of the producer/consumer stack.
+// Excluded from `make test` via the `perf` build tag because of Docker pull
+// overhead and per-runner CPU variance under -race.
 
 func TestPerfSyncProducerThroughput(t *testing.T) {
 	if testing.Short() {

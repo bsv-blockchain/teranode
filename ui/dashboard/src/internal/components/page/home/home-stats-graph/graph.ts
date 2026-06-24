@@ -91,6 +91,7 @@ export const getGraphObj = (t, data, period, smooth = false) => {
   ]
 
   let startDate = new Date().getTime()
+  let endDate = new Date().getTime()
   switch (period) {
     case '2h':
       startDate -= 2 * 60 * 60 * 1000
@@ -112,6 +113,20 @@ export const getGraphObj = (t, data, period, smooth = false) => {
       break
     case '3m':
       startDate -= 90 * 24 * 60 * 60 * 1000
+      break
+    case 'all':
+      // Pin both ends of the x-axis to the actual data range so historical
+      // chains (e.g. syncing from 2009) don't produce a huge empty right side.
+      if (graphData.length > 0) {
+        startDate = graphData.reduce(
+          (min, point) => (point[0] < min ? point[0] : min),
+          graphData[0][0],
+        )
+        endDate = graphData.reduce(
+          (max, point) => (point[0] > max ? point[0] : max),
+          graphData[0][0],
+        )
+      }
       break
   }
 
@@ -136,7 +151,7 @@ export const getGraphObj = (t, data, period, smooth = false) => {
           },
           alignTicks: true,
           min: startDate,
-          max: new Date().getTime(),
+          max: endDate,
         },
       ],
       yAxis: [

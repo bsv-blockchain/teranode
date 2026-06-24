@@ -33,7 +33,7 @@ func TestSQL_RevalidateBlock(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		err = s.insertGenesisTransaction(ulogger.TestLogger{})
+		err = s.insertGenesisTransaction(ulogger.TestLogger{}, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "", options.WithMinedSet(true))

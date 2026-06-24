@@ -370,7 +370,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
         if spendableIn then
             local spendableHeight = spendableIn[offset]
-            if spendableHeight and spendableHeight >= currentBlockHeight then
+            if spendableHeight and spendableHeight > currentBlockHeight then
                 local error = map()
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN_UNTIL
@@ -466,8 +466,14 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 end
 
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
--- blockID number - the block ID
+-- offset number - the offset in the utxos list (vout % utxoBatchSize)
+-- utxoHash []byte - 32 byte little-endian hash of the UTXO
+-- expectedSpendingData []byte - 36 byte spending data the caller expects to be currently stored.
+--                               This is mandatory — the Go caller guards nil before invoking
+--                               the UDF — and is checked against the stored value to prove the
+--                               caller owns the spend it's clearing.
 -- currentBlockHeight number - the current block height
+-- blockHeightRetention number - the retention period for the UTXO record
 --           ____                       _
 --  _   _ _ __ / ___| _ __   ___ _ __   __| |
 -- | | | | '_ \\___ \| '_ \ / _ \ '_ \ / _` |
@@ -475,7 +481,7 @@ end
 --  \__,_|_| |_|____/| .__/ \___|_| |_|\__,_|
 --                   |_|
 --
-function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention)
+function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight, blockHeightRetention)
     local response = map()
 
     if not aerospike:exists(rec) then
@@ -504,8 +510,17 @@ function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention
         return response
     end
 
-    -- Only unspend if the UTXO is spent and not frozen
-    if bytes.size(utxo) == FULL_UTXO_SIZE then
+    -- Ownership check: only clear spending_data when the caller owns the current spend.
+    -- Idempotent semantics: the safety guarantee is "never wipe a spend we don't own",
+    -- not "error on every no-op". Callers like ProcessConflicting build affectedParentSpends
+    -- from the loser's inputs, but the parent's stored spending_data may be nil (loser
+    -- never actually spent) or belong to the winner (in which case we MUST NOT clear).
+    -- In either no-op case we still fall through to setDeleteAtHeight + update so any
+    -- DAH housekeeping stays consistent with the actual record state.
+    local callerOwnsSpend = existingSpendingData ~= nil
+        and bytes_equal(existingSpendingData, expectedSpendingData)
+
+    if callerOwnsSpend then
         if isFrozen(existingSpendingData) then
             response[FIELD_STATUS] = STATUS_ERROR
             response[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN
@@ -649,6 +664,32 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
         response[FIELD_SIGNAL] = signal
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
+        end
+    end
+
+    -- #1037: On a mine, always surface the pagination/extra-record count so the
+    -- client can clear the `locked` flag on the pagination records too. This UDF
+    -- runs on (and can only mutate) the master record, so the lock-clear above
+    -- only affects the master. For an external/paginated tx, any pagination
+    -- record left locked (e.g. created WithLocked(true) by quick-validate or the
+    -- validator 2PC, whose unlock then never ran) would stay locked forever, and
+    -- a child spending an output that lives on a pagination record (vout >=
+    -- utxoBatchSize) would fail permanently with TX_LOCKED. The client clears the
+    -- pagination records using this count.
+    --
+    -- INVARIANT: this is the SAME value the DAH-signal branch above may already
+    -- have written to FIELD_CHILD_COUNT. setDeleteAtHeight returns its childCount
+    -- as exactly rec[BIN_TOTAL_EXTRA_RECS] (and only for external records, which
+    -- are the ones that have pagination records), so the two are always equal and
+    -- this unconditional overwrite is consistent. We overwrite unconditionally
+    -- because the DAH signal only fires on a DAH transition, whereas the lock-clear
+    -- must happen on every mine. If setDeleteAtHeight's childCount ever stops
+    -- meaning totalExtraRecs, THIS overwrite is the source of truth for the
+    -- lock-clear and must keep using totalExtraRecs.
+    if not unsetMined then
+        local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS]
+        if totalExtraRecs and totalExtraRecs > 0 then
+            response[FIELD_CHILD_COUNT] = totalExtraRecs
         end
     end
 

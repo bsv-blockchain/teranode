@@ -81,6 +81,53 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 	return nil
 }
 
+// DropTopic removes the topic entirely from the broker. Use at end-of-test
+// teardown to release the historical-messages buffer the broker pins
+// indefinitely.
+func (b *InMemoryBroker) DropTopic(topic string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.topics, topic)
+}
+
+// HasConsumer reports whether at least one consumer has registered for the
+// given topic. Tests use this to wait for consumer-group registration to
+// complete before publishing; the broker silently drops messages produced to
+// a topic with zero consumers, which otherwise manifests as flaky timeouts.
+func (b *InMemoryBroker) HasConsumer(topic string) bool {
+	b.mu.RLock()
+	t, ok := b.topics[topic]
+	b.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.consumers) > 0
+}
+
+// TruncateTopic drops the broker's retained-messages buffer for a topic. The
+// in-memory broker otherwise keeps every produced message forever, which is
+// fine for short tests but pins gigabytes in long benchmark runs. Callers
+// that have confirmed all consumers have already drained past a given point
+// (e.g. via their own processed-counter watermark) can use this to release
+// the broker-side retention without affecting in-flight delivery — only the
+// historical buffer is cleared, not the per-consumer channels.
+func (b *InMemoryBroker) TruncateTopic(topic string) {
+	b.mu.RLock()
+	t, ok := b.topics[topic]
+	b.mu.RUnlock()
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	// Drop the backing array entirely (t.messages = t.messages[:0] would
+	// keep cap()-many message pointers alive and defeat the purpose for
+	// long bench runs).
+	t.messages = nil
+	t.mu.Unlock()
+}
+
 // Topics returns a list of topic names managed by the broker.
 func (b *InMemoryBroker) Topics() []string {
 	b.mu.Lock()

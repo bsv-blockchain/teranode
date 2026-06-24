@@ -3,8 +3,9 @@ Package validator implements BSV Blockchain transaction validation functionality
 
 This package provides a comprehensive transaction validation framework that implements
 the Bitcoin consensus and policy rules. It serves as a critical component in the
-Teranode architecture, ensuring that only valid transactions are accepted into the
-mempool and blocks.
+Teranode architecture, ensuring that only valid transactions are passed to block
+assembly for inclusion in subtrees and, ultimately, blocks. Teranode has no separate
+mempool service.
 
 This file defines the core interfaces for the validator service, providing the contract
 that all validator implementations must fulfill. The Interface type establishes the

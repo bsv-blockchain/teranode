@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { formatSatoshi } from '$lib/utils/format'
@@ -11,16 +13,16 @@
 
   const baseKey = 'page.viewer-tx.txs'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  $: collapse = $mediaSize < MediaSize.sm
+  const collapse = $derived($mediaSize < MediaSize.sm)
 
-  export let data: any = []
+  let { data = [] }: { data?: any } = $props()
 
-  let sliceCount = 10
-  let outputViewModes: { [key: number]: 'default' | 'asm' | 'hex' } = {}
-  let inputViewModes: { [key: number]: 'default' | 'hex' } = {}
-  let outputAddresses: { [key: number]: string | null } = {}
+  let sliceCount = $state(10)
+  let outputViewModes: { [key: number]: 'default' | 'asm' | 'hex' } = $state({})
+  let inputViewModes: { [key: number]: 'default' | 'hex' } = $state({})
+  let outputAddresses: { [key: number]: string | null } = $state({})
 
   let legacyPubKeyHashAddrID = 0x00
   let legacyScriptHashAddrID = 0x05
@@ -43,20 +45,20 @@
     inputViewModes = { ...inputViewModes } // Trigger reactivity
   }
 
-  $: inputSlice = data.inputs.slice(0, sliceCount)
-  $: outputSlice = data.outputs.slice(0, sliceCount)
+  const inputSlice = $derived(data.inputs.slice(0, sliceCount))
+  const outputSlice = $derived(data.outputs.slice(0, sliceCount))
 
   // Track which outputs we've already processed to avoid re-processing
   let processedOutputsHash = ''
 
   // Extract addresses for outputs when data changes
-  $: {
+  $effect(() => {
     const currentHash = data.outputs ? JSON.stringify(data.outputs.map(o => o.lockingScript)) : ''
     if (currentHash && currentHash !== processedOutputsHash) {
       processedOutputsHash = currentHash
       extractOutputAddresses()
     }
-  }
+  })
 
   onMount(async () => {
     const resp: any = await api.getChainParams()
@@ -131,9 +133,9 @@
               >{`${input.previousTxSatoshis ? formatSatoshi(input.previousTxSatoshis) : '-'} BSV`}</span
             >
             {#if input.unlockingScript}
-              <button 
+              <button
                 class="view-toggle"
-                on:click={() => toggleInputView(i)}
+                onclick={() => toggleInputView(i)}
                 type="button"
               >
                 {inputViewModes[i] === 'hex' ? 'Show Default' : 'Show Hex'}
@@ -147,7 +149,7 @@
       {/each}
     </div>
     {#if data.inputs.length > inputSlice.length}
-      <button class="load-more" on:click={increaseSlize} type="button"
+      <button class="load-more" onclick={increaseSlize} type="button"
         >{t(`${baseKey}.load-more`)}</button
       >
     {/if}
@@ -182,9 +184,9 @@
             {/if}
             <span class="amount">{`${formatSatoshi(output.satoshis)} BSV`}</span>
             
-            <button 
+            <button
               class="view-toggle"
-              on:click={() => toggleOutputView(i)}
+              onclick={() => toggleOutputView(i)}
               type="button"
             >
               {viewMode === 'default' ? 'Show Script' : viewMode === 'asm' ? 'Show Hex' : 'Show Default'}
@@ -207,7 +209,7 @@
       {/each}
     </div>
     {#if data.outputs.length > outputSlice.length}
-      <button class="load-more" on:click={increaseSlize} type="button"
+      <button class="load-more" onclick={increaseSlize} type="button"
         >{t(`${baseKey}.load-more`)}</button
       >
     {/if}
@@ -228,19 +230,19 @@
     row-gap: 10px;
 
     /* border-top: 1px solid rgba(255, 255, 255, 0.08); */
-    /* border-bottom: 1px solid rgba(255, 255, 255, 0.08); */
+    /* border-bottom: 1px solid rgba(0, 0, 0, 0.08); */
   }
   .io.collapse {
     grid-template-columns: 1fr;
   }
   .col:first-child {
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid var(--app-border-color);
     padding-right: 10px;
   }
   .io.collapse .col:first-child {
     border-right: none;
     padding: 0 0 20px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--app-border-color);
   }
 
   .col {
@@ -254,7 +256,7 @@
     align-items: center;
     justify-content: space-between;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     font-family: Satoshi;
     font-size: 17px;
@@ -267,7 +269,7 @@
   }
 
   .title .total {
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     text-align: right;
     font-family: Satoshi;
@@ -289,7 +291,7 @@
     align-items: flex-start;
     padding: 0 24px;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     font-family: Satoshi;
     font-size: 15px;
@@ -340,7 +342,7 @@
     font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--app-overlay-color);
   }
 
   .type-badge.p2pkh {
@@ -370,7 +372,7 @@
 
   .type-desc {
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   .amount {
@@ -380,8 +382,8 @@
 
   .view-toggle {
     background: none;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.66);
+    border: 1px solid var(--app-border-color);
+    color: var(--comp-label-color);
     padding: 4px 12px;
     border-radius: 4px;
     font-size: 12px;
@@ -391,20 +393,20 @@
   }
 
   .view-toggle:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.88);
+    background: var(--app-overlay-color);
+    color: var(--app-color);
   }
 
   .script-asm,
   .script-hex {
     font-family: 'Courier New', monospace;
     font-size: 12px;
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--app-bg-color);
     padding: 8px;
     border-radius: 4px;
     word-break: break-all;
     margin-top: 8px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
   }
 
   .op-return-data {
@@ -421,7 +423,7 @@
   }
 
   .output-ref {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     margin-left: 2px;
   }
 
@@ -443,7 +445,7 @@
   }
 
   .address-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-weight: 500;
   }
 

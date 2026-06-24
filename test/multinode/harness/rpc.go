@@ -46,9 +46,14 @@ type BlockchainInfo struct {
 }
 
 func newRPCClient(node int) *RPCClient {
+	// 127.0.0.1, not localhost: docker's per-port proxy only listens on
+	// IPv4 by default, so a localhost dial that Happy-Eyeballs to ::1
+	// first occasionally surfaces ECONNREFUSED in WaitFor* polling loops
+	// even when the IPv4 listener is fine. Pinning to 127.0.0.1
+	// side-steps the dual-stack race entirely.
 	return &RPCClient{
 		NodeIndex: node,
-		BaseURL:   fmt.Sprintf("http://localhost:%d", RPCPort(node)),
+		BaseURL:   fmt.Sprintf("http://127.0.0.1:%d", RPCPort(node)),
 		http:      &http.Client{Timeout: 10 * time.Second},
 		user:      "bitcoin",
 		pass:      "bitcoin",

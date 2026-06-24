@@ -170,3 +170,29 @@ func TestWithCreateConflicting(t *testing.T) {
 		})
 	}
 }
+
+func TestWithSkipScriptValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		skip     bool
+		expected bool
+	}{
+		{"Skip script validation", true, true},
+		{"Don't skip script validation", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ProcessOptions(WithSkipScriptValidation(tt.skip))
+			if opts.SkipScriptValidation != tt.expected {
+				t.Errorf("SkipScriptValidation = %v, want %v", opts.SkipScriptValidation, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSkipScriptValidationDefault(t *testing.T) {
+	if NewDefaultOptions().SkipScriptValidation {
+		t.Error("Default SkipScriptValidation should be false")
+	}
+}

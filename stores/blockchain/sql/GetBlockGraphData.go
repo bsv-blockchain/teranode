@@ -83,6 +83,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 		)
 		SELECT block_time, tx_count FROM ChainBlocks
 		WHERE block_time >= $1
+		ORDER BY block_time ASC
 	`
 	} else {
 		// Mirror the original CTE exactly. The CTE's anchor is `id IN (0, best)`
@@ -97,6 +98,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 		WHERE on_main_chain = true
 		  AND (id = 0 OR parent_id != 0)
 		  AND block_time >= $1
+		ORDER BY block_time ASC
 	`
 	}
 

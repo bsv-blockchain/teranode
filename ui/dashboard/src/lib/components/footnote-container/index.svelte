@@ -1,56 +1,63 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import { Typo } from '$lib/components'
   import { LabelAlignment } from '$lib/styles/types'
   import type { LabelAlignmentType } from '$lib/styles/types'
 
-  export let testId: string | undefined | null = null
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    disabled = false,
+    size = -1,
+    footnote = '',
+    error = '',
+    stretch = true,
+    html = false,
+    footnoteAlignment = LabelAlignment.start,
+    children,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    disabled?: boolean
+    size?: number
+    footnote?: any
+    error?: any
+    stretch?: boolean
+    html?: boolean
+    footnoteAlignment?: LabelAlignmentType
+    children?: Snippet
+  } = $props()
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
+  const direction = 'column'
+  const justify = 'flex-start'
 
-  export let style = ''
-
-  export let disabled = false
-  export let size = -1
-  export let footnote: any = ''
-  export let error: any = ''
-  export let stretch = true
-  export let html = false
-
-  export let footnoteAlignment: LabelAlignmentType = LabelAlignment.start
-
-  let direction = 'column'
-  let justify = 'flex-start'
-
-  let footnoteAlign = 'center'
-
-  $: {
+  const footnoteAlign = $derived.by(() => {
     switch (footnoteAlignment) {
       case 'start':
-        footnoteAlign = 'flex-start'
-        break
+        return 'flex-start'
       case 'center':
-        footnoteAlign = 'center'
-        break
+        return 'center'
       case 'end':
-        footnoteAlign = 'flex-end'
-        break
+        return 'flex-end'
+      default:
+        return 'center'
     }
-  }
+  })
 
-  $: bodyTextSize = size !== -1 ? size : 4
+  const bodyTextSize = $derived(size !== -1 ? size : 4)
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
-      `--direction:${direction}`,
-      `--justify:${justify}`,
-      `--footnote-align:${footnoteAlign}`,
-      `--gap:var(--comp-footnote-gap, 8px)`,
-      `--flex:${stretch ? 1 : 0}`,
-      `--content-with:${stretch ? '100%' : 'auto'}`,
-    ]
-  }
+  const cssVars = $derived([
+    `--direction:${direction}`,
+    `--justify:${justify}`,
+    `--footnote-align:${footnoteAlign}`,
+    `--gap:var(--comp-footnote-gap, 8px)`,
+    `--flex:${stretch ? 1 : 0}`,
+    `--content-with:${stretch ? '100%' : 'auto'}`,
+  ])
 </script>
 
 <div
@@ -60,7 +67,7 @@
   tabindex="-1"
 >
   <div class="content">
-    <slot />
+    {@render children?.()}
   </div>
   {#if footnote}
     <Typo

@@ -28,11 +28,15 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobstoreoptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	blobstoretypes "github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	blockchain_sql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
@@ -61,10 +65,21 @@ import (
 //
 // This struct enables the publish-subscribe pattern where multiple services can
 // receive real-time updates about blockchain state changes without polling.
+// subscriberBufferSize is the cap of each subscriber's pending-notification
+// channel. When this fills, the subscriber is too slow to keep up and is
+// evicted via deadSubscriptions to prevent backpressure on the broadcast loop.
+//
+// At normal block cadence (~1 notification per block) plus ~6 heartbeats/min,
+// 64 messages is roughly 9 minutes of buffer before eviction — short enough
+// that operators see the disconnect promptly, long enough to tolerate brief
+// consumer lag during reorgs.
+const subscriberBufferSize = 64
+
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer // The gRPC subscription server
 	source       string                                       // Source identifier of the subscription
 	done         chan struct{}                                // Channel to signal when subscription is done
+	pending      chan *blockchain_api.Notification            // Per-subscriber delivery buffer (issue #872)
 }
 
 // Blockchain represents the main blockchain service structure.
@@ -84,8 +99,10 @@ type subscriber struct {
 // enabling safe parallel processing of blockchain operations while maintaining data integrity.
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
+	blockchain_api.UnimplementedPeerRegistryServiceServer
 	addBlockChan                  chan *blockchain_api.AddBlockRequest // Channel for adding blocks
 	store                         blockchain_store.Store               // Storage interface for blockchain data
+	peerRegistryStore             blob.Store                           // Blob store for peer-registry persistence (nil = disabled)
 	logger                        ulogger.Logger                       // Logger instance
 	settings                      *settings.Settings                   // Configuration settings
 	newSubscriptions              chan subscriber                      // Channel for new subscriptions
@@ -104,9 +121,18 @@ type Blockchain struct {
 	localTestStartState           string                               // Initial state for testing
 	subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
 
+	// Peer registry for tracking peers across all transport types
+	peerRegistry *CentralizedPeerRegistry
+
 	// Blob deletion batch token management
 	batchTokens   map[string]*blobDeletionBatchToken // Active batch tokens
 	batchTokensMu sync.RWMutex                       // Mutex for batch tokens map
+
+	// In-process Median Time Past cache. Avoids re-fetching MTP values from the
+	// store on every block validation and validator MTP refresh — the store-level
+	// responseCache is wiped per StoreBlock, so committed-block MTPs there have
+	// near-zero hit rate during sync.
+	mtpCache *mtpCache
 }
 
 // blobDeletionBatchToken represents an acquired batch of deletions with a lock.
@@ -149,12 +175,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	b := &Blockchain{
-		store:                         store,
-		logger:                        logger,
-		settings:                      tSettings,
-		addBlockChan:                  make(chan *blockchain_api.AddBlockRequest, 10),
-		newSubscriptions:              make(chan subscriber, 10),
-		deadSubscriptions:             make(chan subscriber, 10),
+		store:            store,
+		logger:           logger,
+		settings:         tSettings,
+		addBlockChan:     make(chan *blockchain_api.AddBlockRequest, 10),
+		newSubscriptions: make(chan subscriber, 10),
+		// deadSubscriptions buffered large enough to absorb a connection-pool
+		// burst where many subscribers fail Send simultaneously. The original
+		// cap (10) made the dead-push from drain goroutines a potential
+		// bottleneck during the kind of 18-EOF burst observed in issue #872.
+		deadSubscriptions:             make(chan subscriber, 1000),
 		subscribers:                   make(map[subscriber]bool),
 		notifications:                 make(chan *blockchain_api.Notification, 100),
 		newBlock:                      make(chan struct{}, 10),
@@ -162,8 +192,24 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		stats:                         gocore.NewStat("blockchain"),
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
-		batchTokens:                   make(map[string]*blobDeletionBatchToken),
+		peerRegistry: NewCentralizedPeerRegistry(BanConfig{
+			Threshold: int32(tSettings.P2P.BanThreshold),
+			Duration:  tSettings.P2P.BanDuration,
+			// DecayInterval and DecayAmount intentionally use the defaults (1min / 1pt)
+			// rather than operator settings. The old BanManager used the same fixed
+			// values and no deployment has needed to tune them; exposing them as
+			// settings is deferred until there is an operator use-case.
+			DecayInterval: DefaultBanConfig().DecayInterval,
+			DecayAmount:   DefaultBanConfig().DecayAmount,
+			ReasonPoints:  DefaultBanConfig().ReasonPoints,
+		}),
+		batchTokens: make(map[string]*blobDeletionBatchToken),
+		mtpCache:    newMTPCache(),
 	}
+
+	// Wire the registry's diagnostic logger so corruption events surface via
+	// structured logs instead of stderr.
+	b.peerRegistry.SetLogger(logger)
 
 	// Initialize subscription manager as not ready
 	b.subscriptionManagerReady.Store(false)
@@ -373,6 +419,19 @@ func (b *Blockchain) Init(ctx context.Context) error {
 			b.logger.Errorf("[Blockchain][Init] Error setting FSM state in blockchain store if the state is empty: %v", err)
 		}
 	} else { // if there is a state stored, set the FSM to that state
+		// Migration: the LEGACYSYNCING state was removed. A node persisted in it
+		// would otherwise restore into an orphan state with no outgoing transitions
+		// and be unable to RUN. Map it to CATCHINGBLOCKS (same RUN->RUNNING exit) and
+		// re-persist so the migration is durable.
+		if stateStr == "LEGACYSYNCING" {
+			b.logger.Infof("[Blockchain][Init] migrating persisted FSM state LEGACYSYNCING -> CATCHINGBLOCKS")
+			stateStr = blockchain_api.FSMStateType_CATCHINGBLOCKS.String()
+
+			if setErr := b.store.SetFSMState(ctx, stateStr); setErr != nil {
+				b.logger.Errorf("[Blockchain][Init] error persisting migrated FSM state: %v", setErr)
+			}
+		}
+
 		b.logger.Infof("[Blockchain][Init] Blockchain db has previous FSM state: %v, setting FSM's current state to it.", stateStr)
 		b.finiteStateMachine.SetState(stateStr)
 	}
@@ -406,6 +465,49 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	b.startKafka()
 
+	// Settings here still live under tSettings.P2P.* — the centralized
+	// registry inherits the existing operator-facing knobs unchanged. Moving
+	// them under tSettings.BlockChain.* is a follow-up rename.
+	registryTTL := b.settings.P2P.PeerRegistryTTL
+	if registryTTL <= 0 {
+		registryTTL = 24 * time.Hour
+	}
+	cleanupInterval := b.settings.P2P.PeerRegistryCleanupInterval
+	maxSize := b.settings.P2P.PeerRegistryMaxSize
+
+	if storeURL := b.settings.BlockChain.PeerRegistryStore; storeURL != nil {
+		store, err := blob.NewStore(b.logger, storeURL,
+			blobstoreoptions.WithStoreType(blobstoretypes.PEERREGISTRYSTORE))
+		if err != nil {
+			b.logger.Warnf("[Blockchain] failed to construct peer registry blob store %s: %v", storeURL.Redacted(), err)
+		} else {
+			b.peerRegistryStore = store
+			// Use the configured TTL on Load so persisted reputation history
+			// survives exactly as long as operators have asked for, instead of
+			// a hardcoded value that ignored their config.
+			if err := b.peerRegistry.Load(ctx, store, registryTTL); err != nil {
+				b.logger.Warnf("[Blockchain] failed to load peer registry from %s: %v", storeURL.Redacted(), err)
+			} else {
+				b.logger.Infof("[Blockchain] loaded %d peers from %s", b.peerRegistry.Count(), storeURL.Redacted())
+			}
+			if interval := b.settings.BlockChain.PeerRegistrySaveInterval; interval > 0 {
+				// Tracked on the registry's WaitGroup so Close() drains it on Stop()
+				// alongside ban-decay and TTL cleanup.
+				b.peerRegistry.StartPeriodicSave(ctx, interval, store)
+			} else {
+				b.logger.Warnf("[Blockchain] PeerRegistrySaveInterval not configured, periodic saves disabled")
+			}
+		}
+	}
+
+	// Start ban score decay goroutine for the centralized peer registry.
+	b.peerRegistry.StartBanDecay(ctx)
+
+	// Start TTL+LRU cleanup so the registry can't grow unboundedly under
+	// peer churn. The driver loop is owned by the registry; we just feed it
+	// the operator-configured cadence and bounds. A zero interval disables.
+	b.peerRegistry.StartCleanup(ctx, cleanupInterval, registryTTL, maxSize)
+
 	go b.startSubscriptions()
 
 	// Start heartbeat sender for subscription health monitoring
@@ -421,6 +523,7 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, b.settings, "blockchain", b.settings.BlockChain.GRPCListenAddress, func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
+		blockchain_api.RegisterPeerRegistryServiceServer(server, b)
 		closeOnce.Do(func() { close(readyCh) })
 	}, nil); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain][Start] can't start GRPC server", err))
@@ -673,15 +776,17 @@ func (b *Blockchain) startSubscriptions() {
 				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
 				b.subscribersMu.RLock()
-				// Collect dead subscribers to remove after releasing the read lock
+				// Non-blocking fan-out: push to each subscriber's pending buffer.
+				// One slow subscriber can no longer block delivery to the others
+				// (issue #872). Subscribers whose buffers are full are evicted as
+				// dead — that bounds how long a stuck consumer applies backpressure.
 				var dead []subscriber
 				for sub := range b.subscribers {
-					b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s: %s", sub.source, notification.Stringify())
-
-					// Send synchronously — NOT in a goroutine. Concurrent Send() calls
-					// on the same gRPC ServerStream corrupt the stream, causing the
-					// subscriber to be silently dropped and never receive notifications.
-					if err := sub.subscription.Send(notification); err != nil {
+					select {
+					case sub.pending <- notification:
+					default:
+						b.logger.Warnf("[Blockchain][startSubscriptions] Subscriber %s pending buffer full (cap=%d), marking dead", sub.source, subscriberBufferSize)
+						prometheusBlockchainSubscriberPendingFull.WithLabelValues(sub.source).Inc()
 						dead = append(dead, sub)
 					}
 				}
@@ -689,33 +794,133 @@ func (b *Blockchain) startSubscriptions() {
 
 				// Queue dead subscribers for removal
 				for _, s := range dead {
-					b.deadSubscriptions <- s
+					select {
+					case b.deadSubscriptions <- s:
+					case <-b.AppCtx.Done():
+						return
+					}
 				}
 			}()
 			b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
 
 		case s := <-b.newSubscriptions:
-			// Send initial notification BEFORE adding to the subscribers map.
-			// This prevents concurrent Send() between sendInitialNotification
-			// and the notification delivery loop above.
-			b.sendInitialNotification(s)
-
+			// Add to map and start drain goroutine first so the subscriber is
+			// ready to receive before we enqueue the initial notification. This
+			// keeps the newSubscriptions case non-blocking: sendInitialNotification
+			// now enqueues into s.pending (non-blocking) rather than calling
+			// sub.subscription.Send directly, so a slow stream cannot stall here.
 			b.subscribersMu.Lock()
 			b.subscribers[s] = true
 			b.subscribersMu.Unlock()
 
+			// One drain goroutine per subscriber owns Send on that stream.
+			// Concurrent Send() on a single gRPC ServerStream is unsafe; the
+			// per-subscriber goroutine preserves the no-concurrent-Send invariant
+			// while letting a slow Send block only its own stream.
+			go b.runSubscriberDrain(s)
+
+			// Enqueue the initial chain-tip notification so it arrives ahead of
+			// any subsequent broadcast. Goes through pending so the broadcast loop
+			// is never blocked on initial delivery.
+			b.sendInitialNotification(s)
+
 		case s := <-b.deadSubscriptions:
 			b.subscribersMu.Lock()
-			delete(b.subscribers, s)
+			_, existed := b.subscribers[s]
+			if existed {
+				delete(b.subscribers, s)
+			}
 			remaining := len(b.subscribers)
 			b.subscribersMu.Unlock()
+			if existed && s.pending != nil {
+				// Close pending only on the first dead notice for this subscriber.
+				// A second dead push (e.g. the drain goroutine reporting a Send
+				// error after the broadcast loop has already marked the sub dead
+				// via buffer-full) would panic on a double-close. The map check
+				// above guards that.
+				close(s.pending)
+			}
 			safeClose(s.done)
 			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", remaining)
 		}
 	}
 }
 
-// sendInitialNotification sends the current chain tip (or genesis) to a new subscriber.
+// sendDeadline is the maximum time a single Send call is allowed before the
+// subscriber is evicted. gRPC ServerStream.Send has no context parameter, so
+// the deadline is enforced by racing the Send against a timer in a helper
+// goroutine. When the deadline fires, the drain goroutine exits immediately;
+// the helper goroutine continues until Send eventually returns, then discards
+// the result — this residual goroutine is bounded to one per stuck stream.
+const sendDeadline = 5 * time.Second
+
+// runSubscriberDrain pulls notifications from the subscriber's pending buffer
+// and calls Send on its gRPC stream. One goroutine per subscriber preserves
+// the gRPC no-concurrent-Send invariant on each stream while isolating slow
+// consumers — Send blocking here parks only this goroutine, not the broadcast
+// loop in startSubscriptions.
+//
+// Exits when:
+//   - pending is closed (cleanup path in startSubscriptions)
+//   - Send returns an error (stream broken or context cancelled)
+//   - Send exceeds sendDeadline (subscriber evicted to bound goroutine lifetime)
+//   - AppCtx is cancelled (service shutdown)
+//
+// On Send error or deadline the goroutine pushes itself onto deadSubscriptions
+// so cleanup is triggered. A second dead-push for the same subscriber (when
+// the broadcast loop already evicted it via buffer-full) is benign — the
+// cleanup path's map check makes the second handler a no-op.
+func (b *Blockchain) runSubscriberDrain(s subscriber) {
+	for {
+		select {
+		case <-b.AppCtx.Done():
+			return
+		case <-s.done:
+			return
+		case n, ok := <-s.pending:
+			if !ok {
+				return
+			}
+			// Race Send against a deadline. gRPC ServerStream.Send does not
+			// accept a context, so we use a helper goroutine. If the deadline
+			// fires first, we evict the subscriber and return. The helper
+			// goroutine is a residual leak bounded to one per stuck stream; it
+			// exits once Send eventually returns (error or success).
+			sendErr := make(chan error, 1)
+			go func() { sendErr <- s.subscription.Send(n) }()
+
+			select {
+			case err := <-sendErr:
+				if err != nil {
+					b.logger.Warnf("[Blockchain][runSubscriberDrain] Send to %s failed: %v", s.source, err)
+					prometheusBlockchainSubscriberSendErrors.WithLabelValues(s.source).Inc()
+					select {
+					case b.deadSubscriptions <- s:
+					case <-b.AppCtx.Done():
+					}
+					return
+				}
+			case <-time.After(sendDeadline):
+				b.logger.Warnf("[Blockchain][runSubscriberDrain] Send to %s exceeded %s deadline, evicting", s.source, sendDeadline)
+				prometheusBlockchainSubscriberSendErrors.WithLabelValues(s.source).Inc()
+				select {
+				case b.deadSubscriptions <- s:
+				case <-b.AppCtx.Done():
+				}
+				return
+			case <-b.AppCtx.Done():
+				return
+			case <-s.done:
+				return
+			}
+		}
+	}
+}
+
+// sendInitialNotification enqueues the current chain tip (or genesis) into the
+// subscriber's pending buffer. The drain goroutine delivers it via Send.
+// Non-blocking: if the buffer is full the subscriber is already overloaded and
+// will be evicted shortly; dropping the initial notification is acceptable.
 func (b *Blockchain) sendInitialNotification(sub subscriber) {
 	chainTip, _, err := b.store.GetBestBlockHeader(context.Background())
 	var initialNotification *blockchain_api.Notification
@@ -733,9 +938,10 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 	}
 
 	b.logger.Infof("[Blockchain][startSubscriptions] Sending initial notification to %s", sub.source)
-	if err := sub.subscription.Send(initialNotification); err != nil {
-		b.logger.Errorf("[Blockchain][startSubscriptions] Failed to send initial notification to %s: %v", sub.source, err)
-		b.deadSubscriptions <- sub
+	select {
+	case sub.pending <- initialNotification:
+	default:
+		b.logger.Warnf("[Blockchain][startSubscriptions] Pending buffer full on initial notification for %s, dropping", sub.source)
 	}
 }
 
@@ -756,7 +962,25 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 //
 // Returns:
 // - Error if shutdown encounters issues, nil on successful shutdown
-func (b *Blockchain) Stop(_ context.Context) error {
+func (b *Blockchain) Stop(ctx context.Context) error {
+	// Drain background goroutines (ban decay loop, cleanup loop) before saving
+	// so we can't race a write against the final Save snapshot. Close is
+	// idempotent and safe to call even if StartBanDecay never ran.
+	b.peerRegistry.Close()
+
+	if b.peerRegistryStore != nil {
+		if err := b.peerRegistry.Save(ctx, b.peerRegistryStore); err != nil {
+			// A failed save on shutdown means peer state since the last
+			// periodic write is gone — banned peers may reconnect after
+			// restart. Log at error level and surface to the caller so the
+			// service-manager exit code reflects the partial shutdown.
+			b.logger.Errorf("[Blockchain] failed to save peer registry on shutdown: %v", err)
+			return errors.NewProcessingError("[Blockchain][Stop] save peer registry", err)
+		}
+		if err := b.peerRegistryStore.Close(ctx); err != nil {
+			b.logger.Warnf("[Blockchain] failed to close peer registry blob store: %v", err)
+		}
+	}
 	return nil
 }
 
@@ -846,6 +1070,11 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	// Clear difficulty cache when chain state changes to prevent stale cached values
 	// from causing incorrect difficulty calculations during rapid block processing
 	b.difficulty.ResetCache()
+
+	// Drop any speculative MTP cache entries at or above the new block's height
+	// so the next GetMedianTimePastRange/ForHeights call repopulates them from the
+	// store. Heights below the new block remain valid.
+	b.mtpCache.truncate(height)
 
 	b.logger.Infof("[AddBlock] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
 
@@ -1091,6 +1320,27 @@ func (b *Blockchain) GetNextBlockID(ctx context.Context, _ *emptypb.Empty) (*blo
 	return &blockchain_api.GetNextBlockIDResponse{
 		NextBlockId: nextID,
 	}, nil
+}
+
+// AssignBlockID returns a stable block ID for the given block hash (idempotent per hash).
+func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.AssignBlockIDRequest) (*blockchain_api.AssignBlockIDResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "AssignBlockID",
+		tracing.WithParentStat(b.stats),
+		tracing.WithLogMessage(b.logger, "[AssignBlockID] called"),
+	)
+	defer deferFn()
+
+	hash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[AssignBlockID] invalid block hash", err))
+	}
+
+	id, err := b.store.AssignBlockID(ctx, hash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.AssignBlockIDResponse{BlockId: id}, nil
 }
 
 // GetBlockStats retrieves statistical information about the blockchain.
@@ -1776,14 +2026,15 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	defer deferFn()
 
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
-	ch := make(chan struct{})
+	s := subscriber{
+		subscription: sub,
+		done:         make(chan struct{}),
+		source:       req.Source,
+		pending:      make(chan *blockchain_api.Notification, subscriberBufferSize),
+	}
 
 	b.logger.Infof("[Blockchain] Sending new subscription to handler for source: %s", req.Source)
-	b.newSubscriptions <- subscriber{
-		subscription: sub,
-		done:         ch,
-		source:       req.Source,
-	}
+	b.newSubscriptions <- s
 
 	b.subscribersMu.RLock()
 	noOfSubscribers := len(b.subscribers)
@@ -1793,20 +2044,18 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	for {
 		select {
 		case <-ctx.Done():
-			// Client disconnected - clean up subscriber from map
+			// Client disconnected - clean up subscriber from map.
+			// Must pass the same subscriber value (including pending) so the map
+			// key matches the entry added in the newSubscriptions case.
 			b.logger.Infof("[Blockchain] GRPC client disconnected: %s", req.Source)
 			select {
-			case b.deadSubscriptions <- subscriber{
-				subscription: sub,
-				done:         ch,
-				source:       req.Source,
-			}:
+			case b.deadSubscriptions <- s:
 			case <-b.AppCtx.Done():
 				// Server is shutting down, startSubscriptions already cleaned up
 			}
 			return nil
-		case <-ch:
-			// Subscription ended.
+		case <-s.done:
+			// Subscription ended (drained and cleaned up by startSubscriptions).
 			return nil
 		}
 	}
@@ -2067,6 +2316,17 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
 
+	// Reorg-style invalidation: MTP for heights at and above the invalidated block
+	// is no longer authoritative. Truncate from that height so ancestors below it
+	// remain cached. Fall back to a full reset if the header lookup fails — that
+	// is the safe behaviour and should not happen under normal operation.
+	if _, invalidateMeta, lookupErr := b.store.GetBlockHeader(ctx, blockHash); lookupErr == nil {
+		b.mtpCache.truncate(invalidateMeta.Height)
+	} else {
+		b.logger.Debugf("[InvalidateBlock] could not look up height for %s to truncate MTP cache, resetting: %v", blockHash, lookupErr)
+		b.mtpCache.reset()
+	}
+
 	// send notification about the block being invalidated, this will trigger all listeners to reconsider best block
 	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
@@ -2169,6 +2429,16 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
+
+	// Revalidation can change which block is considered canonical at heights from
+	// the revalidated block forward. Truncate from that height so ancestors below
+	// it remain cached. Fall back to a full reset if the header lookup fails.
+	if _, revalidateMeta, lookupErr := b.store.GetBlockHeader(ctx, blockHash); lookupErr == nil {
+		b.mtpCache.truncate(revalidateMeta.Height)
+	} else {
+		b.logger.Debugf("[RevalidateBlock] could not look up height for %s to truncate MTP cache, resetting: %v", blockHash, lookupErr)
+		b.mtpCache.reset()
+	}
 
 	return &emptypb.Empty{}, nil
 }
@@ -2411,7 +2681,6 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 // - RUNNING: Service is actively processing blocks and transactions
 // - SYNCING: Service is synchronizing with the network
 // - CATCHING_BLOCKS: Service is catching up on missing blocks
-// - LEGACY_SYNCING: Service is using legacy synchronization protocols
 // - STOPPING: Service is gracefully shutting down
 // - ERROR: Service has encountered an error condition
 //
@@ -2473,22 +2742,6 @@ func (b *Blockchain) GetFSMCurrentState(_ context.Context, _ *emptypb.Empty) (*b
 	return &blockchain_api.GetFSMStateResponse{
 		State: blockchain_api.FSMStateType(enumState),
 	}, nil
-}
-
-// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
-func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error {
-	for b.finiteStateMachine.Current() != targetState.String() {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
-		time.Sleep(1 * time.Second) // Wait and check again in 1 second
-	}
-
-	return nil
 }
 
 // WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.
@@ -2556,6 +2809,28 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 		}
 	}
 
+	// Refuse to transition to RUNNING while the local chain tip is still below
+	// the network's highest hard-coded checkpoint. Pre-checkpoint heights are
+	// guaranteed to be deep history (mainnet's highest is block 938000), so a
+	// node sitting below them is mid-IBD even if a catchup worker thinks it
+	// has finished its current chunk. Going to RUNNING in that state lets the
+	// mempool/validator operate under pre-Genesis output rules and the legacy
+	// service relay tx invs that post-Genesis peers ban on sight
+	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
+	//
+	// The gate only applies when the prior state already implies a "caught
+	// up" claim (CATCHINGBLOCKS → RUNNING). IDLE → RUNNING
+	// is the boot path: a fresh node has no tip yet, must reach RUNNING for
+	// downstream services (legacy, p2p) to start syncing, and tx relay is
+	// suppressed while FSM != RUNNING so allowing the transition is safe.
+	if eventReq.Event == blockchain_api.FSMEventType_RUN &&
+		priorState != blockchain_api.FSMStateType_IDLE.String() {
+		if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {
+			b.logger.Warnf("[Blockchain Server] RUN rejected: %s", err.Error())
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {
 		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
@@ -2596,6 +2871,57 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	b.stateChangeTimestamp = time.Now()
 
 	return resp, nil
+}
+
+// guardRunBelowHighestCheckpoint blocks the RUN transition when the local
+// chain tip has not yet reached the highest hard-coded checkpoint for the
+// active network. Returns nil when the chain has reached the checkpoint, the
+// network defines no checkpoints (regtest, brand-new networks), or the store
+// has no chain tip yet (returns a state error so the caller retries later).
+func (b *Blockchain) guardRunBelowHighestCheckpoint(ctx context.Context) error {
+	if b.settings == nil || b.settings.ChainCfgParams == nil {
+		return nil
+	}
+
+	highest := HighestCheckpointHeight(b.settings.ChainCfgParams.Checkpoints)
+	if highest == 0 {
+		return nil
+	}
+
+	_, meta, err := b.store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewStateError("cannot read best block header to evaluate RUN gate", err)
+	}
+	if meta == nil {
+		return errors.NewStateError("best block header meta unavailable; refusing RUN")
+	}
+
+	if meta.Height < highest {
+		return errors.NewStateError(
+			"refusing RUN: chain tip height %d is below highest checkpoint %d for %s",
+			meta.Height, highest, b.settings.ChainCfgParams.Name,
+		)
+	}
+
+	return nil
+}
+
+// HighestCheckpointHeight returns the largest Height in the supplied
+// checkpoint list, or 0 if the list is empty. Exported so callers in
+// other packages (e.g. blockvalidation) can share the same definition
+// rather than maintaining a parallel copy.
+func HighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
+	var highest uint32
+	for _, cp := range checkpoints {
+		if cp.Height < 0 {
+			continue
+		}
+		h := uint32(cp.Height)
+		if h > highest {
+			highest = h
+		}
+	}
+	return highest
 }
 
 // Run transitions the blockchain service to the running state.
@@ -2657,26 +2983,6 @@ func (b *Blockchain) ReportPeerFailure(ctx context.Context, req *blockchain_api.
 
 	if _, err := b.SendNotification(ctx, notification); err != nil {
 		b.logger.Errorf("[ReportPeerFailure] Failed to send notification: %v", err)
-		return nil, err
-	}
-
-	return &emptypb.Empty{}, nil
-}
-
-// LegacySync transitions the service to legacy sync mode.
-func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	// check whether the FSM is already in the LEGACYSYNC state
-	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_LEGACYSYNCING.String()) {
-		return &emptypb.Empty{}, nil
-	}
-
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_LEGACYSYNC,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
 		return nil, err
 	}
 
@@ -2821,39 +3127,53 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 		return []*chainhash.Hash{genesisBlock.Header.Hash()}, nil
 	}
 
-	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
-	// Calculate the max number of entries that will ultimately be in the
-	// block locator. See the description of the algorithm for how these
-	// numbers are derived.
-	var maxEntries uint8
+	heights := computeLocatorHeights(blockHeaderHeight)
 
-	if blockHeaderHeight <= 12 {
-		blockHeaderHeightUint8, err := safeconversion.Uint32ToUint8(blockHeaderHeight)
-		if err != nil {
-			return nil, errors.WrapGRPC(err)
-		}
-
-		maxEntries = blockHeaderHeightUint8 + 1
-	} else {
-		// Requested hash itself + previous 10 entries + genesis block.
-		// Then floor(log2(height-10)) entries for the skip portion.
-		adjustedHeight := blockHeaderHeight - 10
-		maxEntries = 12 + fastLog2Floor(adjustedHeight)
+	// Fast path: when blockHeaderHash is on the main chain, fetch every locator
+	// height in a single indexed query instead of one recursive-CTE walk per
+	// entry. ok=false means the store could not safely satisfy the fast path
+	// (fork tip, mid-rebuild, or a missing height) — fall back to the walk.
+	hashesByHeight, ok, err := store.MainChainBlockHashesByHeights(ctx, blockHeaderHash, heights)
+	if err != nil {
+		return nil, err
 	}
 
-	locator := make([]*chainhash.Hash, 0, maxEntries)
-	step := uint32(1)
-	height := blockHeaderHeight
-	hash := blockHeaderHash
-
-	for {
-		block, _, err := store.GetBlockInChainByHeightHash(ctx, height, hash)
-		if err != nil {
-			return nil, err
+	if ok {
+		locator := make([]*chainhash.Hash, 0, len(heights))
+		for _, h := range heights {
+			// The store guarantees a complete result set when ok is true.
+			locator = append(locator, hashesByHeight[h])
 		}
 
-		hash = block.Header.Hash()
-		locator = append(locator, hash)
+		return locator, nil
+	}
+
+	return getBlockLocatorByWalk(ctx, store, blockHeaderHash, heights)
+}
+
+// computeLocatorHeights returns the descending list of heights that make up a
+// block locator anchored at blockHeaderHeight: the height itself, the previous
+// 10, then heights at exponentially doubling gaps, ending at genesis (0). The
+// progression is pure arithmetic and does not depend on any stored block, so
+// the full set is known before any database access.
+func computeLocatorHeights(blockHeaderHeight uint32) []uint32 {
+	// Pre-allocate: at most 1 (the height itself) + 10 + floor(log2(height-10))
+	// for the doubling-skip portion + 1 (genesis) entries.
+	var maxEntries uint8
+	if blockHeaderHeight <= 12 {
+		maxEntries = uint8(blockHeaderHeight) + 1
+	} else {
+		// Requested height + previous 10 + genesis, then floor(log2(height-10))
+		// entries for the doubling-skip portion.
+		maxEntries = 12 + fastLog2Floor(blockHeaderHeight-10)
+	}
+
+	heights := make([]uint32, 0, maxEntries)
+	step := uint32(1)
+	height := blockHeaderHeight
+
+	for {
+		heights = append(heights, height)
 
 		if height == 0 {
 			break
@@ -2865,9 +3185,31 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 
 		height -= step
 
-		if len(locator) > 10 {
+		if len(heights) > 10 {
 			step *= 2
 		}
+	}
+
+	return heights
+}
+
+// getBlockLocatorByWalk builds a locator by walking the chain identified by
+// startHash, fetching the block at each height with a recursive-CTE lookup.
+// Each call uses the hash returned by the previous call as its new start, so
+// the walk hops forward through the height schedule. This is the original
+// behavior, retained as the fallback for fork tips.
+func getBlockLocatorByWalk(ctx context.Context, store blockchain_store.Store, startHash *chainhash.Hash, heights []uint32) ([]*chainhash.Hash, error) {
+	locator := make([]*chainhash.Hash, 0, len(heights))
+	hash := startHash
+
+	for _, h := range heights {
+		block, _, err := store.GetBlockInChainByHeightHash(ctx, h, hash)
+		if err != nil {
+			return nil, err
+		}
+
+		hash = block.Header.Hash()
+		locator = append(locator, hash)
 	}
 
 	return locator, nil
