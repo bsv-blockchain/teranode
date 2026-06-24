@@ -19,9 +19,25 @@ TERASLAB_WORKDIR="$(cd "$workdir" && pwd)"
 TERASLAB_BLOBDIR="$(cd "$blobdir" && pwd)"
 export TERASLAB_WORKDIR TERASLAB_BLOBDIR
 
+# Admin dashboard token. node.toml enables the admin endpoints (/admin/*, /ws/top)
+# the web UI needs, which require a bearer token (>=16 bytes since the server
+# binds non-loopback). Generate one on first run and persist it under the
+# gitignored working dir — never commit it. Override by exporting
+# TERASLAB_ADMIN_TOKEN before running.
+token_file="${TERASLAB_WORKDIR}/.admin_token"
+if [ -z "${TERASLAB_ADMIN_TOKEN:-}" ]; then
+    if [ ! -s "$token_file" ]; then
+        (openssl rand -hex 32 2>/dev/null || LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64) > "$token_file"
+        chmod 600 "$token_file"
+    fi
+    TERASLAB_ADMIN_TOKEN="$(cat "$token_file")"
+fi
+export TERASLAB_ADMIN_TOKEN
+
 # Run docker compose with the teraslab compose file and service-specific info
 docker_service_run "${1:-up}" "deploy/docker/teraslab" "TeraSlab UTXO store (single-node)" "docker-compose.yml" \
     "Working dir (device): ${TERASLAB_WORKDIR}" \
     "Blob store:           ${TERASLAB_BLOBDIR}" \
     "Health:               http://localhost:9100/health/live" \
+    "Admin web UI:         http://localhost:9100/ui  (token: ${TERASLAB_ADMIN_TOKEN})" \
     "Connect with:         teraslab://localhost:3300"

@@ -6,9 +6,17 @@ services:
     restart: unless-stopped
     # Give the server time to flush its checkpoint on shutdown.
     stop_grace_period: 60s
+    environment:
+      # Bearer token gating the admin dashboard (/admin/*, /ws/top) that the web
+      # UI's live data needs — required because node.toml sets
+      # enable_admin_endpoints = true. Supplied (and generated on first run) by
+      # scripts/teraslab.sh and persisted under the gitignored data dir; never
+      # hard-code a token here. `:?` fails fast with a clear message if you run
+      # compose directly without it — use scripts/teraslab.sh.
+      - TERASLAB_ADMIN_TOKEN=${TERASLAB_ADMIN_TOKEN:?set TERASLAB_ADMIN_TOKEN or start via scripts/teraslab.sh}
     ports:
       - "127.0.0.1:3300:3300" # wire protocol (utxostore = teraslab://localhost:3300)
-      - "127.0.0.1:9100:9100" # HTTP health/observability (/health/live)
+      - "127.0.0.1:9100:9100" # HTTP health/observability + web UI (/health/live, /ui)
     volumes:
       - ./node.toml:/etc/teraslab/node.toml:ro
       # Working dir: slab device + redo/tombstone WAL — kept on local/internal

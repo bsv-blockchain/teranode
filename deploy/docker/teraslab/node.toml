@@ -14,6 +14,14 @@ listen_addr        = "0.0.0.0:3300"
 http_listen_addr   = "0.0.0.0:9100"
 enable_remote_bind = true
 
+# Admin dashboard. The web UI (http://localhost:9100/ui) needs the /admin/* and
+# /ws/top routes, which are gated behind enable_admin_endpoints + a bearer token.
+# The token is supplied via the TERASLAB_ADMIN_TOKEN env (generated + injected by
+# scripts/teraslab.sh, persisted under the gitignored data dir) so it is never
+# committed — the env value overrides any admin_token set here. enable_remote_bind
+# is on, so the token must be at least 16 bytes.
+enable_admin_endpoints = true
+
 # Slab device. The file is sparse, so device_size is only a capacity ceiling —
 # it costs nothing on disk until records are actually written. 64 GiB is ample
 # headroom for the TeraTestNet UTXO set; raise it if you expect to exceed that.
