@@ -782,9 +782,19 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	if u.mmapDir != "" {
 		subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
 		if err != nil {
-			// Fallback to heap on mmap failure — reset reader and retry
+			// Fallback to heap on mmap failure. The mmap attempt has already consumed
+			// bytes from subtreeReader, which is not seekable, so resetting the buffered
+			// reader onto it would read from mid-stream and produce a corrupt subtree.
+			// Open a fresh reader from the store so the heap path reads from the start.
 			u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
-			bufferedReader.Reset(subtreeReader)
+
+			fallbackReader, ferr := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
+			if ferr != nil {
+				return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to re-open subtree %s for heap fallback", block.Hash().String(), subtreeHash.String(), ferr)}
+			}
+			defer fallbackReader.Close()
+
+			bufferedReader.Reset(fallbackReader)
 			subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
 		}
 	} else {
