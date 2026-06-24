@@ -1318,7 +1318,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			return
 		}
 
-		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External}
+		// BlockHeights is read so external parents can be reconstructed with the
+		// era-aware unspendable rule keyed to their creation height.
+		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External, fields.BlockHeights}
 		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
@@ -1360,7 +1362,14 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		external, ok := bins[fields.External.String()].(bool)
 		if ok && external {
-			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash); err != nil {
+			// Resolve the parent's creation-height era so the reconstruction
+			// applies the same unspendable rule create used. A missing/empty
+			// BlockHeights (unmined parent) yields the Genesis activation height
+			// (post-Genesis), which only ever over-retains — never over-excludes.
+			blockHeights, _ := processBlockHeights(bins)
+			creationHeight := creationHeightFromBlockHeights(blockHeights, s.settings.ChainCfgParams.GenesisActivationHeight)
+
+			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash, creationHeight); err != nil {
 				txErrors[previousTxHash] = err
 
 				continue
@@ -1409,14 +1418,34 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
 }
 
-func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+// GetOutpointsFromExternalStore reconstructs an externally-stored parent tx's
+// spendable outputs for outpoint resolution. creationHeight is the parent's
+// mining height, used to apply the era-aware unspendable rule (see
+// getExternalOutpoints).
+//
+// The reconstruction is cached by txid (externalTxCache). That is correct
+// because the era-filtered output set is fixed per tx once the parent is mined,
+// and an unmined parent is necessarily post-Genesis on production networks
+// (mainnet/testnet/teratestnet activation heights sit far below any live tip),
+// so the unmined fallback and a real mining at that height resolve to the same
+// era.
+//
+// Known, accepted seam on low-activation networks only (regtest=10000, stn=100):
+// there a node can be at a genuinely pre-Genesis height with an unmined external
+// parent. The fallback then classifies it post-Genesis and caches that set; if
+// the parent later mines at a pre-Genesis height, nothing re-derives the era or
+// evicts the entry, so the stale post-Genesis (over-retaining) reconstruction
+// persists. This only ever over-retains a provably-unspendable output, never
+// over-excludes a spendable one, so it cannot orphan a valid spend; it is
+// unreachable on production networks.
+func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash, creationHeight uint32) (*bt.Tx, error) {
 	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetOutpointsFromExternalStore",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
 
 	if s.externalTxCache != nil {
 		return s.externalTxCache.GetOrSet(previousTxHash, func() (*bt.Tx, bool, error) {
-			tx, numberOfActiveOutputs, err := s.getExternalOutpoints(ctx, previousTxHash)
+			tx, numberOfActiveOutputs, err := s.getExternalOutpoints(ctx, previousTxHash, creationHeight)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1433,7 +1462,7 @@ func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHas
 		})
 	}
 
-	tx, _, err := s.getExternalOutpoints(ctx, previousTxHash)
+	tx, _, err := s.getExternalOutpoints(ctx, previousTxHash, creationHeight)
 	if err != nil {
 		return nil, err
 	}
@@ -1441,7 +1470,33 @@ func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHas
 	return tx, nil
 }
 
-func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, int, error) {
+// creationHeightFromBlockHeights returns the era height used to reconstruct an
+// externally-stored parent's spendable outputs: the earliest block the tx was
+// mined in. An unmined parent (no recorded block heights) falls back to the
+// Genesis activation height (post-Genesis). On production networks this is exact
+// — a live unmined parent is always post-Genesis. On low-activation networks
+// (regtest=10000, stn=100) the fallback can misclassify a genuinely pre-Genesis
+// unmined parent as post-Genesis; this only over-retains a provably-unspendable
+// output (never over-excludes a spendable one), so it is safe and accepted. See
+// GetOutpointsFromExternalStore for the matching cache-coherence note.
+func creationHeightFromBlockHeights(blockHeights []uint32, genesisActivationHeight uint32) uint32 {
+	minHeight := uint32(0)
+	found := false
+
+	for _, h := range blockHeights {
+		if !found || h < minHeight {
+			minHeight, found = h, true
+		}
+	}
+
+	if !found {
+		return genesisActivationHeight
+	}
+
+	return minHeight
+}
+
+func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainhash.Hash, creationHeight uint32) (*bt.Tx, int, error) {
 	// get the full transaction from the external store
 	tx, err := s.getExternalTransaction(ctx, previousTxHash)
 	if err != nil {
@@ -1453,16 +1508,18 @@ func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainha
 
 	numberOfActiveOutputs := 0
 
-	// remove all non-spendable (OP_RETURN) outputs
+	// Drop the provably-unspendable outputs that were never stored as UTXOs,
+	// using the same era-aware, value-agnostic rule as create
+	// (ShouldStoreOutputAsUTXO) keyed to the parent's creation height. This
+	// keeps the reconstructed outpoint set identical to what create stored —
+	// in particular it retains post-Genesis bare OP_RETURN outputs, which are
+	// spendable and must resolve when later spent.
 	for i, output := range tx.Outputs {
 		if output != nil && output.LockingScript != nil {
-			script := *output.LockingScript
-
-			// check whether this output is an OP_RETURN with 0 sat value
-			if len(script) > 0 && (script[0] == 0x00 || script[0] == 0x6a) && output.Satoshis == 0 {
-				tx.Outputs[i] = nil
-			} else {
+			if utxo.ShouldStoreOutputAsUTXO(output, creationHeight, s.settings.ChainCfgParams.GenesisActivationHeight) {
 				numberOfActiveOutputs++
+			} else {
+				tx.Outputs[i] = nil
 			}
 		}
 	}

@@ -479,7 +479,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 	// setMined, so it would otherwise never be assigned a delete_at_height and
 	// would be retained forever. Expire it after the retention window. NULL for
 	// any other transaction.
-	deleteAtHeight := s.unspendableMinedTxDAH(tx, blockHeight, options, isCoinbase)
+	deleteAtHeight := s.unspendableMinedTxDAH(tx, blockHeight, options)
 
 	// Insert the transaction row...
 	q := `
@@ -601,7 +601,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 // be expired at creation: unmined, conflicting (handled separately), retention
 // disabled, or having at least one spendable output (those are expired via the
 // spend path once their spendable outputs are gone).
-func (s *Store) unspendableMinedTxDAH(tx *bt.Tx, blockHeight uint32, options *utxo.CreateOptions, isCoinbase bool) interface{} {
+func (s *Store) unspendableMinedTxDAH(tx *bt.Tx, blockHeight uint32, options *utxo.CreateOptions) interface{} {
 	if options.Conflicting || len(options.MinedBlockInfos) == 0 {
 		return nil
 	}
@@ -612,7 +612,7 @@ func (s *Store) unspendableMinedTxDAH(tx *bt.Tx, blockHeight uint32, options *ut
 	}
 
 	for _, output := range tx.Outputs {
-		if output != nil && utxo.ShouldStoreOutputAsUTXO(isCoinbase, output, blockHeight) {
+		if output != nil && utxo.ShouldStoreOutputAsUTXO(output, blockHeight, s.settings.ChainCfgParams.GenesisActivationHeight) {
 			return nil
 		}
 	}
@@ -815,7 +815,7 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 			// $23-$25: block_id arrays
 			blkArrs.blockID, blkArrs.blockHeight, blkArrs.subtreeIdx,
 			// $26: delete_at_height for a mined tx with no spendable outputs
-			s.unspendableMinedTxDAH(btTx, blockHeight, options, isCoinbase),
+			s.unspendableMinedTxDAH(btTx, blockHeight, options),
 		)
 		if execErr != nil {
 			return execErr
@@ -1117,7 +1117,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 				p.blkArrs.blockID, p.blkArrs.blockHeight,
 				p.blkArrs.subtreeIdx,
 				// $26: delete_at_height for a mined tx with no spendable outputs
-				s.unspendableMinedTxDAH(item.tx, item.blockHeight, item.options, p.isCoinbase),
+				s.unspendableMinedTxDAH(item.tx, item.blockHeight, item.options),
 			)
 		}
 

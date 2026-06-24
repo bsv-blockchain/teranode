@@ -153,20 +153,63 @@ func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, err
 	return utxoHashes, nil
 }
 
+// maxScriptSizeBeforeGenesis is the consensus locking-script size cap that
+// applied before the Genesis upgrade: a locking script longer than this was
+// provably unspendable pre-Genesis. Mirrors bitcoin-sv
+// src/consensus/consensus.h MAX_SCRIPT_SIZE_BEFORE_GENESIS (10000 bytes).
+// Genesis removed the cap, so this gates UTXO-set membership pre-Genesis only.
+const maxScriptSizeBeforeGenesis = 10000
+
 // ShouldStoreOutputAsUTXO determines if a transaction output should be stored as a UTXO.
-// Returns true if the output has a non-zero value or is not an OP_RETURN output.
-func ShouldStoreOutputAsUTXO(isCoinbase bool, output *bt.Output, blockHeight uint32) bool {
-	if output.Satoshis > 0 {
-		// if the output has a non-zero satoshis value, it should be stored as a UTXO
+//
+// It mirrors SV Node's era-aware CScript::IsUnspendable (bitcoin-sv
+// src/script/script.h): an output is kept unless it is provably unspendable.
+// The era is keyed to the output's creation (mining) height, blockHeight,
+// compared against the network-specific genesisActivationHeight — matching SV
+// Node's add-time UTXO-set gate (coins.cpp AddCoin, which evaluates
+// IsUnspendable(coin.GetHeight() >= genesisActivationHeight) once at insertion;
+// there is no spend-time re-check). Callers pass
+// settings.ChainCfgParams.GenesisActivationHeight, the same per-network source
+// TxValidator uses; do NOT use the chaincfg package global, which is hardcoded
+// to mainnet and never synced for other networks.
+//
+//   - post-Genesis (blockHeight >= genesisActivationHeight): only OP_FALSE
+//     OP_RETURN is provably unspendable. Genesis restored OP_RETURN (it no
+//     longer unconditionally fails execution), so a bare OP_RETURN output can be
+//     spendable and MUST be retained — dropping it would orphan a later spend.
+//   - pre-Genesis: bare OP_RETURN, OP_FALSE OP_RETURN, and locking scripts
+//     longer than maxScriptSizeBeforeGenesis are all provably unspendable.
+//
+// The rule is value-agnostic, exactly like SV Node's IsUnspendable: the output's
+// satoshi value plays no role. A value-bearing but provably-unspendable output
+// (e.g. an OP_FALSE OP_RETURN carrying satoshis) is burned — those satoshis can
+// never be spent — and is excluded from the set, so Teranode's UTXO set matches
+// SV Node's on every network.
+func ShouldStoreOutputAsUTXO(output *bt.Output, blockHeight uint32, genesisActivationHeight uint32) bool {
+	var b []byte
+	if output.LockingScript != nil {
+		b = *output.LockingScript
+	}
+	// a nil/empty locking script matches no unspendable form, so it is stored
+
+	// OP_FALSE OP_RETURN is provably unspendable in every era.
+	opFalseOpReturn := len(b) > 1 && b[0] == bscript.OpFALSE && b[1] == bscript.OpRETURN
+	if opFalseOpReturn {
+		return false
+	}
+
+	if blockHeight >= genesisActivationHeight {
+		// post-Genesis: bare OP_RETURN is no longer provably unspendable, and
+		// there is no oversized-script unspendability — store everything else.
 		return true
 	}
 
-	// we only store outputs with a zero satoshis value if they are not an OP_RETURN or OP_FALSE OP_RETURN
-	b := []byte(*output.LockingScript)
+	// pre-Genesis: bare OP_RETURN and oversized locking scripts are also
+	// provably unspendable.
 	opReturn := len(b) > 0 && b[0] == bscript.OpRETURN
-	opFalseOpReturn := len(b) > 1 && b[0] == bscript.OpFALSE && b[1] == bscript.OpRETURN
+	oversized := len(b) > maxScriptSizeBeforeGenesis
 
-	return !(opReturn || opFalseOpReturn)
+	return !(opReturn || oversized)
 }
 
 // GetSpends creates Spend objects for all inputs of a transaction.

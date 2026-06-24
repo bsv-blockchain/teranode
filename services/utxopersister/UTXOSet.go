@@ -306,7 +306,7 @@ func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 	}
 
 	for i, output := range tx.Outputs {
-		if utxo.ShouldStoreOutputAsUTXO(tx.IsCoinbase(), output, us.blockHeight) {
+		if utxo.ShouldStoreOutputAsUTXO(output, us.blockHeight, us.settings.ChainCfgParams.GenesisActivationHeight) {
 			iUint32, err := safeconversion.IntToUint32(i)
 			if err != nil {
 				return err

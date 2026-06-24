@@ -369,7 +369,13 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	err = os.RemoveAll("./data/external")
 	require.NoError(t, err)
 
-	_, err = store.Create(context.Background(), tx, 1)
+	// tx.Outputs[0] carries a ~40KB locking script. Pre-Genesis that exceeds
+	// MAX_SCRIPT_SIZE_BEFORE_GENESIS and is provably unspendable (so it would
+	// not be stored as a UTXO and could not be spent below); mine post-Genesis,
+	// where the script-size cap no longer applies, so both outputs are spendable.
+	postGenesisHeight := tSettings.ChainCfgParams.GenesisActivationHeight + 1
+
+	_, err = store.Create(context.Background(), tx, postGenesisHeight)
 	require.NoError(t, err)
 
 	// check that the tx is stored externally
@@ -393,7 +399,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now let's spend the outputs
-	_, err = store.Spend(context.Background(), spendTx, 1)
+	_, err = store.Spend(context.Background(), spendTx, postGenesisHeight)
 	require.NoError(t, err)
 
 	// Verify DAH file does not exist (external store has DisableDAH=true)

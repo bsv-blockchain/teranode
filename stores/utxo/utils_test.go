@@ -107,11 +107,124 @@ func TestShouldStoreNonZeroUTXO(t *testing.T) {
 	require.Equal(t, txID, tx.TxIDChainHash().String())
 
 	t.Run("should return true for non-zero UTXO", func(t *testing.T) {
-		// TODO this should go when we remove the genesis activation height global variable
-		chaincfg.GenesisActivationHeight = uint32(620538)
-		assert.True(t, ShouldStoreOutputAsUTXO(tx.IsCoinbase(), tx.Outputs[0], chaincfg.GenesisActivationHeight-1))
-		assert.True(t, ShouldStoreOutputAsUTXO(tx.IsCoinbase(), tx.Outputs[0], chaincfg.GenesisActivationHeight+1))
+		const genesisActivation = uint32(620538)
+		assert.True(t, ShouldStoreOutputAsUTXO(tx.Outputs[0], genesisActivation-1, genesisActivation))
+		assert.True(t, ShouldStoreOutputAsUTXO(tx.Outputs[0], genesisActivation+1, genesisActivation))
 	})
+}
+
+// TestShouldStoreOutputAsUTXO_EraAware pins the era-aware UTXO-set membership
+// rule against SV Node's CScript::IsUnspendable(era) (bitcoin-sv
+// src/script/script.h:265-281). The era is keyed to the output's CREATION
+// (mining) height, compared against the network-specific Genesis activation
+// height, matching SV Node's AddCoin gate (coins.cpp:51, IsUnspendable(
+// coin.GetHeight() >= genesisActivationHeight)). The rule is value-agnostic,
+// like SV Node: a value-bearing but provably-unspendable output (e.g. an
+// OP_FALSE OP_RETURN carrying satoshis) is burned and excluded from the set.
+//
+// The activation height is driven per-case as a parameter (NOT the mainnet
+// chaincfg global) so non-mainnet networks — whose real activation is below
+// 620538 — are exercised: a 0-value bare OP_RETURN created at a height >=
+// activation but < 620538 must be STORED. That is the over-exclusion the global
+// would silently reintroduce on teratestnet/tstn/stn/regtest.
+func TestShouldStoreOutputAsUTXO_EraAware(t *testing.T) {
+	const (
+		mainnetGenesis = uint32(620538)
+		ttnGenesis     = uint32(1)   // teratestnet / tstn
+		stnGenesis     = uint32(100) // stn
+		regtestGenesis = uint32(10000)
+	)
+
+	mkScript := func(b []byte) *bscript.Script {
+		s := bscript.Script(b)
+		return &s
+	}
+
+	bareOpReturn := []byte{bscript.OpRETURN, 0x04, 0xde, 0xad, 0xbe, 0xef}
+	opFalseOpReturn := []byte{bscript.OpFALSE, bscript.OpRETURN, 0x04, 0xde, 0xad, 0xbe, 0xef}
+	p2pkh := []byte{0x76, 0xa9, 0x14, 0x89, 0xab, 0xcd, 0xef, 0xab, 0xba, 0xab, 0xba, 0xab, 0xba, 0xab, 0xba, 0xab, 0xba, 0xab, 0xba, 0xab, 0xba, 0xab, 0xba, 0x88, 0xac}
+
+	oversized := make([]byte, 10001) // > maxScriptSizeBeforeGenesis (10000)
+	oversized[0] = 0x76              // OP_DUP — not OP_RETURN / OP_FALSE OP_RETURN
+
+	exactly10000 := make([]byte, 10000) // boundary: == limit, NOT oversized
+	exactly10000[0] = 0x76
+
+	tests := []struct {
+		name              string
+		satoshis          uint64
+		script            []byte
+		blockHeight       uint32
+		genesisActivation uint32
+		want              bool
+	}{
+		// --- mainnet activation (620538) ---
+		{"p2pkh_value_pregenesis", 1000, p2pkh, mainnetGenesis - 1, mainnetGenesis, true},
+		{"p2pkh_value_postgenesis", 1000, p2pkh, mainnetGenesis + 1, mainnetGenesis, true},
+		{"p2pkh_zero_pregenesis", 0, p2pkh, mainnetGenesis - 1, mainnetGenesis, true},
+		{"p2pkh_zero_postgenesis", 0, p2pkh, mainnetGenesis + 1, mainnetGenesis, true},
+		{"bare_opreturn_zero_pregenesis", 0, bareOpReturn, mainnetGenesis - 1, mainnetGenesis, false},
+		// THE dangerous over-exclusion case: post-Genesis bare OP_RETURN is
+		// spendable; SV Node keeps it. Must be stored.
+		{"bare_opreturn_zero_postgenesis_DANGEROUS", 0, bareOpReturn, mainnetGenesis + 1, mainnetGenesis, true},
+		{"bare_opreturn_zero_at_genesis_boundary", 0, bareOpReturn, mainnetGenesis, mainnetGenesis, true},
+		// value-agnostic: a value-bearing bare OP_RETURN is still spendable
+		// post-Genesis, so it is kept.
+		{"bare_opreturn_value_postgenesis", 1000, bareOpReturn, mainnetGenesis + 1, mainnetGenesis, true},
+		// value-agnostic: value-bearing provably-unspendable outputs are BURNED
+		// and excluded, matching SV Node IsUnspendable (value plays no role).
+		{"opfalse_opreturn_value_postgenesis_BURNED", 1000, opFalseOpReturn, mainnetGenesis + 1, mainnetGenesis, false},
+		{"opfalse_opreturn_value_pregenesis_BURNED", 1000, opFalseOpReturn, mainnetGenesis - 1, mainnetGenesis, false},
+		{"bare_opreturn_value_pregenesis_BURNED", 1000, bareOpReturn, mainnetGenesis - 1, mainnetGenesis, false},
+		{"oversized_value_pregenesis_BURNED", 1000, oversized, mainnetGenesis - 1, mainnetGenesis, false},
+		{"opfalse_opreturn_zero_pregenesis", 0, opFalseOpReturn, mainnetGenesis - 1, mainnetGenesis, false},
+		{"opfalse_opreturn_zero_postgenesis", 0, opFalseOpReturn, mainnetGenesis + 1, mainnetGenesis, false},
+		{"opfalse_opreturn_zero_at_genesis_boundary", 0, opFalseOpReturn, mainnetGenesis, mainnetGenesis, false},
+		{"oversized_non_opreturn_zero_pregenesis", 0, oversized, mainnetGenesis - 1, mainnetGenesis, false},
+		{"oversized_non_opreturn_zero_postgenesis", 0, oversized, mainnetGenesis + 1, mainnetGenesis, true},
+		{"oversized_exactly_10000_pregenesis", 0, exactly10000, mainnetGenesis - 1, mainnetGenesis, true},
+		{"empty_script_zero_pregenesis", 0, []byte{}, mainnetGenesis - 1, mainnetGenesis, true},
+		{"empty_script_zero_postgenesis", 0, []byte{}, mainnetGenesis + 1, mainnetGenesis, true},
+
+		// --- non-mainnet activation: the regression the mainnet global hid ---
+		// teratestnet activation=1: height 50 is post-Genesis, so a 0-value bare
+		// OP_RETURN must be STORED (the mainnet global would treat 50 as
+		// pre-Genesis and wrongly drop it).
+		{"ttn_bare_opreturn_zero_postgenesis_STORED", 0, bareOpReturn, 50, ttnGenesis, true},
+		{"ttn_bare_opreturn_at_activation_boundary", 0, bareOpReturn, ttnGenesis, ttnGenesis, true},
+		{"ttn_opfalse_opreturn_zero_postgenesis", 0, opFalseOpReturn, 50, ttnGenesis, false},
+		// stn activation=100: height 50 is genuinely pre-Genesis => dropped.
+		{"stn_bare_opreturn_zero_pregenesis", 0, bareOpReturn, 50, stnGenesis, false},
+		{"stn_bare_opreturn_zero_postgenesis_STORED", 0, bareOpReturn, 150, stnGenesis, true},
+		// regtest activation=10000: height 15000 is post-Genesis => stored.
+		{"regtest_bare_opreturn_zero_postgenesis_STORED", 0, bareOpReturn, 15000, regtestGenesis, true},
+		{"regtest_oversized_zero_pregenesis", 0, oversized, 5000, regtestGenesis, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := &bt.Output{Satoshis: tt.satoshis, LockingScript: mkScript(tt.script)}
+			got := ShouldStoreOutputAsUTXO(output, tt.blockHeight, tt.genesisActivation)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestShouldStoreOutputAsUTXO_NilLockingScript guards the deref of
+// *output.LockingScript: a nil locking script must be treated as an empty
+// (non-OP_RETURN, non-oversized) script and stored, never panic. Realistic
+// outputs always carry a non-nil script, but not every caller guards it.
+func TestShouldStoreOutputAsUTXO_NilLockingScript(t *testing.T) {
+	const genesisActivation = uint32(620538)
+
+	for _, sats := range []uint64{0, 1000} {
+		for _, h := range []uint32{genesisActivation - 1, genesisActivation + 1} {
+			output := &bt.Output{Satoshis: sats, LockingScript: nil}
+			require.NotPanics(t, func() {
+				require.True(t, ShouldStoreOutputAsUTXO(output, h, genesisActivation))
+			})
+		}
+	}
 }
 
 func buildExtendedTx(t *testing.T, nOutputs int) *bt.Tx {

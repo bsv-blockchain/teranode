@@ -229,7 +229,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		tx.Outputs = []*bt.Output{}
 		require.NoError(t, tx.AddOpReturnOutput([]byte("teranode op_return data carrier")))
-		require.False(t, utxo.ShouldStoreOutputAsUTXO(false, tx.Outputs[0], minedHeight),
+		require.False(t, utxo.ShouldStoreOutputAsUTXO(tx.Outputs[0], minedHeight, tSettings.ChainCfgParams.GenesisActivationHeight),
 			"sanity: the op_return output must be unspendable")
 
 		return tx

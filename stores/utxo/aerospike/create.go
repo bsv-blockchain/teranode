@@ -828,8 +828,8 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 		if output != nil {
 			outputs[i] = appendOutputInto(arena, output)
 
-			// store all coinbases, non-zero utxos and exceptions from pre-genesis
-			if utxo.ShouldStoreOutputAsUTXO(isCoinbase, output, blockHeight) {
+			// store only spendable outputs (era-aware, value-agnostic; matches SV Node IsUnspendable)
+			if utxo.ShouldStoreOutputAsUTXO(output, blockHeight, s.settings.ChainCfgParams.GenesisActivationHeight) {
 				utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
 			}
 		}

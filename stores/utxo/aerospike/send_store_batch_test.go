@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -25,6 +26,10 @@ func newTestStoreForSendStoreBatch(t *testing.T) *Store {
 	tSettings := &settings.Settings{}
 	tSettings.Aerospike.UseDefaultPolicies = true
 	tSettings.UtxoStore.UtxoBatchSize = 20_000
+	// GetBinsToStore -> ShouldStoreOutputAsUTXO reads the Genesis activation
+	// height; a realistic Store always has ChainCfgParams populated.
+	chainParams := chaincfg.RegressionNetParams
+	tSettings.ChainCfgParams = &chainParams
 
 	return &Store{
 		ctx:           context.Background(),
