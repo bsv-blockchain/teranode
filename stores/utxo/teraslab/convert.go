@@ -374,7 +374,7 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, opts
 		Locktime:       tx.LockTime,
 		Fee:            fee,
 		SizeInBytes:    uint64(len(tx.Bytes())),
-		ExtendedSize:   uint64(tx.Size()),
+		ExtendedSize:   uint64(len(tx.ExtendedBytes())),
 		IsCoinbase:     isCoinbase,
 		SpendingHeight: spendingHeight,
 		CreatedAt:      uint64(time.Now().UnixMilli()),

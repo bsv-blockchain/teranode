@@ -27,7 +27,14 @@ export TERASLAB_WORKDIR TERASLAB_BLOBDIR
 token_file="${TERASLAB_WORKDIR}/.admin_token"
 if [ -z "${TERASLAB_ADMIN_TOKEN:-}" ]; then
     if [ ! -s "$token_file" ]; then
-        (openssl rand -hex 32 2>/dev/null || LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64) > "$token_file"
+        # 32 random bytes -> 64 hex chars. Prefer openssl; fall back to od (reads
+        # exactly 32 bytes and exits cleanly, so no `head`-induced SIGPIPE aborts
+        # the pipeline under `set -o pipefail`).
+        if command -v openssl >/dev/null 2>&1; then
+            openssl rand -hex 32 > "$token_file"
+        else
+            od -An -tx1 -N 32 /dev/urandom | tr -d ' \n' > "$token_file"
+        fi
         chmod 600 "$token_file"
     fi
     TERASLAB_ADMIN_TOKEN="$(cat "$token_file")"
