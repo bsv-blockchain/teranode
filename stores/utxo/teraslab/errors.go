@@ -57,13 +57,13 @@ func mapErrorCode(code uint16) error {
 	case teraslab.ErrCodeFrozenUntil:
 		return errors.ErrFrozen
 	case teraslab.ErrCodeInternal:
-		return errors.NewStorageError("teraslab internal error", nil)
+		return errors.NewStorageError("teraslab internal error")
 	case teraslab.ErrCodeRedirect:
 		// Redirects are resolved client-side; surfacing one here means the
 		// client failed to follow it, which is an internal/storage-class fault.
-		return errors.NewStorageError("teraslab unexpected redirect", nil)
+		return errors.NewStorageError("teraslab unexpected redirect")
 
-	// Cluster / replication / migration codes (15-37). The client v0.5.1 does
+	// Cluster / replication / migration codes (15-37). The client v0.6.1 does
 	// not expose named constants for these, so they are matched by their wire
 	// values from src/protocol/opcodes.rs.
 	//
@@ -126,6 +126,6 @@ func mapErrorCode(code uint16) error {
 		return errors.NewStorageError("teraslab migration target not ready")
 
 	default:
-		return errors.NewStorageError("teraslab unknown error code", nil)
+		return errors.NewStorageError("teraslab unknown error code")
 	}
 }

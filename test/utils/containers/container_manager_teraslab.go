@@ -81,13 +81,17 @@ func (cm *ContainerManager) initializeTeraslab(ctx context.Context) (*url.URL, e
 		return container.Terminate(cleanupCtx)
 	}
 
+	// The container is started, so every error path below must terminate it via
+	// cleanupFunc before returning, or a failing test run leaks the container.
 	host, err := container.Host(ctx)
 	if err != nil {
+		_ = cm.cleanupFunc()
 		return nil, errors.NewExternalError("failed to get TeraSlab host: %v", err)
 	}
 
 	mappedPort, err := container.MappedPort(ctx, teraslabWirePort)
 	if err != nil {
+		_ = cm.cleanupFunc()
 		return nil, errors.NewExternalError("failed to get TeraSlab wire port: %v", err)
 	}
 
@@ -95,6 +99,7 @@ func (cm *ContainerManager) initializeTeraslab(ctx context.Context) (*url.URL, e
 
 	parsedURL, err := url.Parse(cm.containerURL)
 	if err != nil {
+		_ = cm.cleanupFunc()
 		return nil, errors.NewExternalError("failed to parse TeraSlab URL: %v", err)
 	}
 

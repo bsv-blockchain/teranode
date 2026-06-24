@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	teraslabstore "github.com/bsv-blockchain/teranode/stores/utxo/teraslab"
@@ -43,7 +44,12 @@ func TestNewClusterModeUnreachable(t *testing.T) {
 	u, err := url.Parse("teraslab://127.0.0.1:3300?cluster=127.0.0.1:3301,127.0.0.1:3302&pool_size=4")
 	require.NoError(t, err)
 
-	store, err := teraslabstore.New(context.Background(), logger, tSettings, u)
+	// Bound the call so the test fails fast and deterministically even if the
+	// client falls back to OS-level dial timeouts for an unreachable seed.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := teraslabstore.New(ctx, logger, tSettings, u)
 	require.Error(t, err)
 	assert.Nil(t, store)
 	assert.Contains(t, err.Error(), "client init")
