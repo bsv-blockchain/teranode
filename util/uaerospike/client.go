@@ -452,6 +452,36 @@ func (c *Client) Operate(policy *aerospike.WritePolicy, key *aerospike.Key, oper
 	return record, err
 }
 
+// Execute is a wrapper around aerospike.Client.Execute that uses the semaphore
+// to limit concurrent connections and retries server-overload rejections.
+//
+// Without this wrapper a call to client.Execute would resolve to the embedded
+// *aerospike.Client method, bypassing both the connection semaphore and the
+// overload-retry layer. The store's single UDF write path (un_spend.go's
+// "unspend") goes through here, so it now participates in the same backpressure
+// and DEVICE_OVERLOAD / MAX_ERROR_RATE retry as the other write methods.
+func (c *Client) Execute(policy *aerospike.WritePolicy, key *aerospike.Key, packageName string, functionName string, args ...aerospike.Value) (any, aerospike.Error) {
+	if err := c.acquirePermit(policy); err != nil {
+		return nil, err
+	}
+	defer c.releasePermit()
+
+	start := gocore.CurrentTime()
+	defer func() {
+		c.stats.stat.NewStat("Execute: " + functionName).AddTime(start)
+	}()
+
+	var ret any
+
+	err := c.retryOnOverload(func() aerospike.Error {
+		var aerr aerospike.Error
+		ret, aerr = c.Client.Execute(policy, key, packageName, functionName, args...)
+		return aerr
+	})
+
+	return ret, err
+}
+
 // BatchOperate is a wrapper around aerospike.Client.BatchOperate that uses semaphore to limit concurrent connections.
 func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 	if err := c.acquirePermit(policy); err != nil {
