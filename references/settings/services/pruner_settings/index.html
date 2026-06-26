@@ -6262,6 +6262,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pruner_skipprocessexpiredpreservations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_skipProcessExpiredPreservations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pruner_skipdeletions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7563,6 +7574,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pruner_skipprocessexpiredpreservations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_skipProcessExpiredPreservations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pruner_skipdeletions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8313,6 +8335,12 @@
 <p><strong>Environment Variable</strong>: <code>pruner_skipPreserveParents</code></p>
 <p><strong>Description</strong>: Skip Phase 1 - preserve parents of unmined transactions</p>
 <p>When enabled, parent transactions will not be protected from deletion even if they have unmined children.</p>
+<h3 id="pruner_skipprocessexpiredpreservations">pruner_skipProcessExpiredPreservations<a class="headerlink" href="#pruner_skipprocessexpiredpreservations" title="Permanent link">&para;</a></h3>
+<p><strong>Type</strong>: Boolean</p>
+<p><strong>Default</strong>: <code>false</code></p>
+<p><strong>Environment Variable</strong>: <code>pruner_skipProcessExpiredPreservations</code></p>
+<p><strong>Description</strong>: Skip Phase 1b - expire old parent preservations</p>
+<p>When disabled (default), each pruner cycle clears expired PreserveUntil markers and re-stamps DeleteAtHeight on preserved parents that have become safe to prune (mined, on the longest chain, and fully spent, or conflicting). When enabled, preserved parents keep PreserveUntil set and DeleteAtHeight cleared indefinitely and are never pruned. Intended as an emergency kill-switch only.</p>
 <h3 id="pruner_skipdeletions">pruner_skipDeletions<a class="headerlink" href="#pruner_skipdeletions" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
