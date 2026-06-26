@@ -47,7 +47,7 @@ func RunDaemon(progname, version, commit string) {
 	writeLimit := tSettings.Block.FileStoreWriteConcurrency
 
 	if tSettings.Block.FileStoreUseSystemLimits {
-		out, err := exec.Command("bash", "-c", "ulimit -u").Output()
+		out, err := exec.Command("/bin/sh", "-c", "ulimit -u").Output()
 		if err != nil {
 			fmt.Printf("Warning: Failed to get ulimit: %v, using configured limits\n", err)
 		} else {

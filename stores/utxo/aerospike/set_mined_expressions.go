@@ -147,7 +147,7 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 //   - ExpUnknown: When no change is needed (with ExpWriteFlagEvalNoFail this is a no-op)
 //
 // Logic implemented:
-//  1. If preserveUntil is set → no change
+//  1. If preserveUntil is set → no change (unless ignorePreserveUntil is true)
 //  2. If conflicting AND no existing DAH → set DAH
 //  3. If master record (totalExtraRecs not nil) AND allSpent AND hasBlocks AND isOnLongestChain → set DAH
 //  4. If master record AND NOT (allSpent AND hasBlocks AND isOnLongestChain) AND has existing DAH → clear DAH
@@ -155,7 +155,14 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 //
 // Note: Pagination records (totalExtraRecs is nil) only update lastSpentState, not DAH.
 // The lastSpentState logic is handled separately via ExpWriteOp for that bin.
-func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) *aerospike.Expression {
+//
+// ignorePreserveUntil drops the preserveUntil guard (step 1). It is set only by the
+// expired-preservation path (ProcessExpiredPreservations), which clears preserveUntil in the
+// same operate call — but expressions read the pre-operate record, so the guard would otherwise
+// still see the (about-to-be-cleared) bin and short-circuit. Dropping the guard there lets the
+// eligibility check (steps 2-4) decide the DAH, restoring the "DAH set ⟹ safe to delete"
+// invariant for expiring preservations.
+func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool, ignorePreserveUntil bool) *aerospike.Expression {
 	newDeleteHeight := int64(currentBlockHeight + blockHeightRetention)
 
 	// Helper expressions for readability
@@ -166,8 +173,12 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 	recordUtxosBin := aerospike.ExpIntBin(fields.RecordUtxos.String())
 	blockIDsBin := aerospike.ExpListBin(fields.BlockIDs.String())
 
-	// Condition: preserveUntil is NOT set (bin doesn't exist)
+	// Condition: preserveUntil is NOT set (bin doesn't exist). When ignorePreserveUntil is
+	// true we treat preservation as already gone so the guard branch below never triggers.
 	preserveUntilNotSet := aerospike.ExpNot(aerospike.ExpBinExists(fields.PreserveUntil.String()))
+	if ignorePreserveUntil {
+		preserveUntilNotSet = aerospike.ExpBoolVal(true)
+	}
 
 	// Condition: conflicting is true
 	isConflicting := aerospike.ExpEq(conflictingBin, aerospike.ExpBoolVal(true))
@@ -289,7 +300,7 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	// Add deleteAtHeight expression if retention is enabled
 	blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(thisBlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain)
+		dahExp := s.buildDeleteAtHeightExpression(thisBlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain, false)
 		ops = append(ops, aerospike.ExpWriteOp(
 			fields.DeleteAtHeight.String(),
 			dahExp,

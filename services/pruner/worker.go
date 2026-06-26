@@ -222,6 +222,26 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				s.logger.Infof("[pruner][%s:%d] phase 1: skipped (pruner_skipPreserveParents=true)", blockHashStr, blockHeight)
 			}
 
+			// Phase 1b: Expire old parent preservations
+			// Clears PreserveUntil on preserved parents that have reached their expiry height and
+			// re-stamps DeleteAtHeight ONLY when the parent is genuinely safe to prune (the eligibility
+			// check lives in the store). Without this, preserved parents keep PreserveUntil set and
+			// DeleteAtHeight cleared forever and are never pruned. Runs before Phase 2; any DAH it
+			// re-stamps is in the future (currentHeight+retention), so nothing it touches is deleted
+			// this cycle.
+			if s.utxoStore != nil && !s.settings.Pruner.SkipProcessExpiredPreservations {
+				s.logger.Debugf("[pruner][%s:%d] phase 1b: expiring old preservations", blockHashStr, blockHeight)
+				startTime := time.Now()
+				if err := s.utxoStore.ProcessExpiredPreservations(ctx, blockHeight); err != nil {
+					s.logger.Warnf("[pruner][%s:%d] phase 1b: failed to expire preservations: %v", blockHashStr, blockHeight, err)
+					prunerErrors.WithLabelValues("expire_preservations").Inc()
+				} else {
+					prunerDuration.WithLabelValues("expire_preservations").Observe(time.Since(startTime).Seconds())
+				}
+			} else if s.settings.Pruner.SkipProcessExpiredPreservations {
+				s.logger.Infof("[pruner][%s:%d] phase 1b: skipped (pruner_skipProcessExpiredPreservations=true)", blockHashStr, blockHeight)
+			}
+
 			// Phase 2: DAH pruning (deletion)
 			// Deletes transactions marked for deletion at or before the current height
 			if s.prunerService != nil {

@@ -14,11 +14,22 @@ import (
 // PreserveTransactionsWithExpressions marks transactions to be preserved from deletion
 // using Aerospike batch write operations instead of Lua UDFs.
 // Missing records are treated as no-ops (not errors).
+//
+// Prune-eligibility gate: the FilterExpression restricts the write to records that already carry
+// a deleteAtHeight stamp (eligible now) or are already being preserved (preserveUntil set, so
+// renewal still works). A record with neither is not fully spent, so it is not at risk of pruning
+// and needs no protection; gating server-side avoids pointless writes and keeps not-fully-spent
+// txs out of the preservation/expiry path. Filtered records return FILTERED_OUT, which is treated
+// as a benign skip below (mirrors the Lua path's no-op).
 func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	batchWritePolicy.FilterExpression = aerospike.ExpOr(
+		aerospike.ExpBinExists(fields.DeleteAtHeight.String()),
+		aerospike.ExpBinExists(fields.PreserveUntil.String()),
+	)
 
 	ops := []*aerospike.Operation{
 		aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), int(preserveUntilHeight))),
@@ -61,7 +72,10 @@ func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []c
 	for j, record := range batchRecords {
 		batchRec := record.BatchRec()
 		if batchRec.Err != nil {
-			if errors.As(batchRec.Err, &aErr) && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
+			// KEY_NOT_FOUND: missing record. FILTERED_OUT: no deleteAtHeight stamp, so not
+			// prune-eligible — a deliberate skip by the eligibility gate, not an error.
+			if errors.As(batchRec.Err, &aErr) &&
+				(aErr.ResultCode == types.KEY_NOT_FOUND_ERROR || aErr.ResultCode == types.FILTERED_OUT) {
 				continue
 			}
 

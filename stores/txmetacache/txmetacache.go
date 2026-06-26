@@ -528,6 +528,19 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 			continue
 		}
 
+		// Never cache a partial meta. A cached entry must be complete enough to
+		// serialize for subtree validation, which requires TxInpoints (the parent
+		// tx hashes). A reduced-field BatchDecorate — e.g. the {BlockIDs,
+		// BlockHeights} parent prefetch in subtree validation — leaves TxInpoints
+		// empty, so caching it would poison the cache: a later subtree-meta
+		// serialize rejects the inpoints-less node and the block wedges forever.
+		// Every non-coinbase tx has at least one parent, so empty ParentTxHashes
+		// here means the field was not populated; skip caching it and let the
+		// store (which can reconstruct inpoints from its inputs) serve the read.
+		if !data.Data.IsCoinbase && len(data.Data.TxInpoints.ParentTxHashes) == 0 {
+			continue
+		}
+
 		if len(data.Data.TxInpoints.ParentTxHashes) > 48 {
 			t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
 		}
