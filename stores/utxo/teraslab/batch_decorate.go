@@ -11,41 +11,32 @@ import (
 )
 
 // BatchDecorate efficiently fetches metadata for multiple transactions.
+//
+// Concurrent BatchDecorate() calls are coalesced into ONE GetRecordBatch RPC
+// over the union of their txids (under the OR of their field masks) via
+// decorateBatcher; each call then fills its OWN unresolved slice from its slice
+// of the shared response (see sendDecorateBatch). The per-item .Data/.Err
+// population and the method's nil-on-success return contract are preserved
+// exactly, and a single sequential caller still works (a batch of one).
 func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, requestedFields ...fields.FieldName) error {
 	if len(unresolvedMetaDataSlice) == 0 {
 		return nil
 	}
 
-	txids := make([]teraslab.TxID, len(unresolvedMetaDataSlice))
-	for i, umd := range unresolvedMetaDataSlice {
-		txids[i] = hashToTxID(&umd.Hash)
-	}
+	done := make(chan error, 1)
+	s.decorateBatcher.Put(&batchDecorateCall{
+		ctx:        ctx,
+		fieldMask:  buildFieldMask(requestedFields),
+		unresolved: unresolvedMetaDataSlice,
+		done:       done,
+	})
 
-	records, err := s.client.GetRecordBatch(ctx, buildFieldMask(requestedFields), txids)
-	if err != nil {
+	select {
+	case err := <-done:
 		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-
-	for i, umd := range unresolvedMetaDataSlice {
-		if i >= len(records) || !records[i].Found {
-			// Mark not-found items so callers can distinguish "not found" from
-			// "not processed" — mirrors the Aerospike backend, which sets a
-			// TxNotFound error on the item when the key is missing.
-			umd.Data = nil
-			umd.Err = errors.NewTxNotFoundError("%s not found", umd.Hash.String())
-			continue
-		}
-
-		data, err := recordToMetaData(records[i])
-		if err != nil {
-			umd.Err = err
-			continue
-		}
-
-		umd.Data = data
-	}
-
-	return nil
 }
 
 // BatchPreviousOutputsDecorate fetches previous output information for inputs across

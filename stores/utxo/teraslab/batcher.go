@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	teraslab "github.com/icellan/teraslab/client/go"
 )
@@ -20,6 +22,33 @@ type batchStoreItem struct {
 type batchStoreResult struct {
 	data *meta.Data
 	err  error
+}
+
+// batchSetLockedCall is one Store.SetLocked() invocation awaiting coalesced
+// dispatch. Concurrent SetLocked() calls that share the same `value` bool are
+// merged into a single wire SetLockedBatch RPC (the wire op carries one `value`
+// per RPC), then per-item errors are mapped back to each call by its index span.
+// SetLocked returns only an error to its caller, so a call fails iff any of ITS
+// own items errored (conveyed via partialErrorToError, identical to the
+// unbatched path).
+type batchSetLockedCall struct {
+	ctx    context.Context
+	value  bool
+	hashes []chainhash.Hash
+	done   chan error
+}
+
+// batchDecorateCall is one Store.BatchDecorate() invocation awaiting coalesced
+// dispatch. Concurrent calls are merged into ONE GetRecordBatch RPC over the
+// union of their txids and the OR of their field masks; each call then fills its
+// OWN unresolved slice from its slice of the shared response (tracked by index
+// span, like sendSpendBatch). The caller-visible return contract (nil on
+// success; per-item .Data/.Err) is preserved exactly.
+type batchDecorateCall struct {
+	ctx        context.Context
+	fieldMask  uint32
+	unresolved []*utxo.UnresolvedMetaData
+	done       chan error
 }
 
 // batchGetItem is a single item in the get batcher.
@@ -109,6 +138,131 @@ func getItemContexts(batch []*batchGetItem) []context.Context {
 		out[i] = b.ctx
 	}
 	return out
+}
+
+// sendSetLockedBatch coalesces concurrent SetLocked() calls into wire
+// SetLockedBatch RPCs.
+//
+// The wire op carries ONE `value` bool per RPC, so calls are grouped by `value`;
+// each distinct-value group is one RPC. Within a group, every call's hashes are
+// concatenated and each call's [offset, offset+len) span is recorded. A global
+// (non-partial) error fans out to every call in the group. On a *PartialError,
+// only the per-item errors falling inside a call's span are attributed to it —
+// a call's result is partialErrorToError over just its own errors (so a caller
+// whose hashes all succeeded still gets nil even if a sibling call failed),
+// matching the unbatched Store.SetLocked path exactly.
+func (s *Store) sendSetLockedBatch(batch []*batchSetLockedCall) {
+	groups := make(map[bool][]int)
+	for i, c := range batch {
+		groups[c.value] = append(groups[c.value], i)
+	}
+
+	for value, idxs := range groups {
+		var combined []teraslab.TxID
+		offsets := make([]int, len(idxs))
+		ctxs := make([]context.Context, len(idxs))
+		for gi, ci := range idxs {
+			offsets[gi] = len(combined)
+			ctxs[gi] = batch[ci].ctx
+			for hi := range batch[ci].hashes {
+				combined = append(combined, hashToTxID(&batch[ci].hashes[hi]))
+			}
+		}
+
+		ctx, cancel := mergeBatchContexts(ctxs)
+		_, err := s.setLockedFn(ctx, value, combined)
+		cancel()
+
+		// Non-partial (global) error fans out to every call in the group.
+		pe, isPartial := err.(*teraslab.PartialError)
+		if err != nil && !isPartial {
+			for _, ci := range idxs {
+				batch[ci].done <- err
+			}
+			continue
+		}
+
+		// Success or partial: attribute per-item errors to each call by span.
+		for gi, ci := range idxs {
+			if !isPartial {
+				batch[ci].done <- nil
+				continue
+			}
+
+			lo := offsets[gi]
+			hi := lo + len(batch[ci].hashes)
+			var local *teraslab.PartialError
+			for _, ie := range pe.Errors {
+				if int(ie.ItemIndex) >= lo && int(ie.ItemIndex) < hi {
+					if local == nil {
+						local = &teraslab.PartialError{}
+					}
+					ie.ItemIndex -= uint32(lo) //nolint:gosec
+					local.Errors = append(local.Errors, ie)
+				}
+			}
+			batch[ci].done <- partialErrorToError("SetLocked", local)
+		}
+	}
+}
+
+// sendDecorateBatch coalesces concurrent BatchDecorate() calls into one
+// GetRecordBatch RPC.
+//
+// The union of every call's txids is sent under the OR of every call's field
+// mask (so each caller receives at least the fields it asked for). The response
+// is positionally aligned with the sent txids; each call's [offset, offset+len)
+// span is sliced back and the call fills its OWN unresolved entries — .Data on
+// found, .Err on miss/decode error — exactly as the unbatched BatchDecorate did.
+// A global RPC error is returned to every call; per-item handling never errors
+// the call as a whole (BatchDecorate returns nil and reports per-item via .Err).
+func (s *Store) sendDecorateBatch(batch []*batchDecorateCall) {
+	var combined []teraslab.TxID
+	var mask uint32
+	offsets := make([]int, len(batch))
+	ctxs := make([]context.Context, len(batch))
+	for i, c := range batch {
+		offsets[i] = len(combined)
+		ctxs[i] = c.ctx
+		mask |= c.fieldMask
+		for j := range c.unresolved {
+			combined = append(combined, hashToTxID(&c.unresolved[j].Hash))
+		}
+	}
+
+	ctx, cancel := mergeBatchContexts(ctxs)
+	records, err := s.getRecordFn(ctx, mask, combined)
+	cancel()
+
+	if err != nil {
+		for _, c := range batch {
+			c.done <- err
+		}
+		return
+	}
+
+	for i, c := range batch {
+		lo := offsets[i]
+		for j, umd := range c.unresolved {
+			ri := lo + j
+			if ri >= len(records) || !records[ri].Found {
+				// Mark not-found items so callers can distinguish "not found"
+				// from "not processed".
+				umd.Data = nil
+				umd.Err = errors.NewTxNotFoundError("%s not found", umd.Hash.String())
+				continue
+			}
+
+			data, derr := recordToMetaData(records[ri])
+			if derr != nil {
+				umd.Err = derr
+				continue
+			}
+
+			umd.Data = data
+		}
+		c.done <- nil
+	}
 }
 
 // sendStoreBatch flushes a batch of store items to the TeraSlab server.

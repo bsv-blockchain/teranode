@@ -38,11 +38,17 @@ func (s *Store) Close(ctx context.Context) error {
 	go func() {
 		defer close(done)
 
-		// Read-only batcher first.
+		// Read-only batchers first.
 		if s.getBatcher != nil {
 			s.getBatcher.Close()
 		}
+		if s.decorateBatcher != nil {
+			s.decorateBatcher.Close()
+		}
 		// State-mutating writers last so they drain closest to the deadline.
+		if s.setLockedBatcher != nil {
+			s.setLockedBatcher.Close()
+		}
 		if s.storeBatcher != nil {
 			s.storeBatcher.Close()
 		}

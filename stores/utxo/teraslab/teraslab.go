@@ -45,9 +45,18 @@ type Store struct {
 	settings        *settings.Settings
 	utxoBatchSize   int
 
-	storeBatcher batcherIfc[batchStoreItem]
-	getBatcher   batcherIfc[batchGetItem]
-	spendBatcher batcherIfc[batchSpendItem]
+	storeBatcher     batcherIfc[batchStoreItem]
+	getBatcher       batcherIfc[batchGetItem]
+	spendBatcher     batcherIfc[batchSpendItem]
+	setLockedBatcher batcherIfc[batchSetLockedCall]
+	decorateBatcher  batcherIfc[batchDecorateCall]
+
+	// setLockedFn and getRecordFn are seams over the two client RPCs that the
+	// coalescing SetLocked / BatchDecorate batchers issue. They default to the
+	// real client methods in New(); tests substitute fakes to count wire calls
+	// without a live server. All other ops call s.client directly.
+	setLockedFn func(ctx context.Context, value bool, txids []teraslab.TxID) (*teraslab.BatchResult, error)
+	getRecordFn func(ctx context.Context, fieldMask uint32, txids []teraslab.TxID) ([]teraslab.TxRecord, error)
 
 	// walDB / walEngine back the conflict-resolution WAL (#861). The TeraSlab
 	// server cannot hold arbitrary intent records, so the WAL reuses the shared
@@ -136,6 +145,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		walEngine:     walURL.Scheme,
 	}
 
+	// Default the RPC seams to the real client. Tests override these.
+	s.setLockedFn = client.SetLockedBatch
+	s.getRecordFn = client.GetRecordBatch
+
 	// Initialize batchers. background (async batch callbacks) and drain mode
 	// (flush immediately vs accumulate to size/timeout) are orthogonal go-batcher
 	// knobs: wire background from the dedicated BatcherBackground setting (matching
@@ -156,10 +169,22 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchDuration := time.Duration(tSettings.UtxoStore.SpendBatcherDurationMillis) * time.Millisecond
 	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatch, tSettings.BatcherBackground)
 
+	// SetLocked batcher: coalesce concurrent SetLocked() calls sharing the same
+	// `value` bool into one wire SetLockedBatch RPC (grouped by value inside
+	// sendSetLockedBatch). Reuses the get batcher window since SetLocked, like
+	// Get, fans out across many concurrent single-hash callers.
+	s.setLockedBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendSetLockedBatch, tSettings.BatcherBackground)
+
+	// BatchDecorate batcher: merge concurrent BatchDecorate() calls into one
+	// GetRecordBatch RPC over the union of their txids/field masks.
+	s.decorateBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendDecorateBatch, tSettings.BatcherBackground)
+
 	if tSettings.BatcherDrainMode {
 		s.getBatcher.SetDrainMode(true)
 		s.storeBatcher.SetDrainMode(true)
 		s.spendBatcher.SetDrainMode(true)
+		s.setLockedBatcher.SetDrainMode(true)
+		s.decorateBatcher.SetDrainMode(true)
 	}
 
 	logger.Infof("[TeraSlab] store initialised with address: %s", addr)
