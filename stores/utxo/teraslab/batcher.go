@@ -84,21 +84,46 @@ func mergeBatchContexts(ctxs []context.Context) (context.Context, context.Cancel
 		return merged, cancel
 	}
 
+	// Only contexts that can actually be canceled are worth watching. A nil
+	// context, or one whose Done() channel is nil (e.g. context.Background /
+	// context.TODO), can NEVER fire, so a watcher goroutine for it would block
+	// forever doing nothing but cost a goroutine + scheduler/GC churn. At high
+	// throughput the per-item watcher spawn/teardown (one goroutine per batched
+	// item per flush — hundreds per batch, tens of thousands/sec) dominated the
+	// client CPU (profiled: mergeBatchContexts.func1 + selectgo + GC storm).
+	//
+	// Semantics preserved: the merged context auto-cancels (aborting the in-flight
+	// RPC) only when EVERY caller has gone away. A non-cancellable caller never
+	// goes away, so if ANY item context is non-cancellable the batch must run to
+	// completion regardless — watch nothing and rely on explicit cancel (flush
+	// completion) / the RPC's own deadline. When ALL item contexts are cancellable
+	// we watch exactly those and cancel once all have fired.
+	cancellable := make([]context.Context, 0, len(ctxs))
+	allCancellable := true
+	for _, c := range ctxs {
+		if c == nil || c.Done() == nil {
+			allCancellable = false
+			continue
+		}
+		cancellable = append(cancellable, c)
+	}
+
+	if !allCancellable || len(cancellable) == 0 {
+		// At least one caller never goes away → never auto-cancel. No watcher
+		// goroutines (release() still cancels `merged`, preserving the contract).
+		return merged, cancel
+	}
+
 	var wg sync.WaitGroup
-	wg.Add(len(ctxs))
+	wg.Add(len(cancellable))
 
 	// done is closed to release watcher goroutines once the flush completes.
 	done := make(chan struct{})
 
-	for _, c := range ctxs {
+	for _, c := range cancellable {
 		c := c
 		go func() {
 			defer wg.Done()
-			if c == nil {
-				// nil context counts as never canceled — wait until flush completes.
-				<-done
-				return
-			}
 			select {
 			case <-c.Done():
 			case <-done:
