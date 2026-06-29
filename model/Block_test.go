@@ -1554,6 +1554,76 @@ func TestNewBlockFromMsgBlock(t *testing.T) {
 	})
 }
 
+func TestNewBlockFromMsgBlock_MultiTransactionSubtree(t *testing.T) {
+	// A coinbase plus one ordinary transaction. Two leaves is a power of two, so the
+	// single subtree the constructor builds is full and its root equals the canonical
+	// Bitcoin merkle root DSHA(coinbaseHash || txHash) with no padding involved.
+	coinbaseTx := &wire.MsgTx{
+		Version: 1,
+		TxIn: []*wire.TxIn{{
+			PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: 0xffffffff},
+			SignatureScript:  []byte{0x03, 0x01, 0x02, 0x03},
+			Sequence:         0xffffffff,
+		}},
+		TxOut: []*wire.TxOut{{Value: 5000000000, PkScript: []byte{0x51}}},
+	}
+
+	spendTx := &wire.MsgTx{
+		Version: 2,
+		TxIn: []*wire.TxIn{{
+			PreviousOutPoint: wire.OutPoint{Hash: chainhash.DoubleHashH([]byte{0x01}), Index: 0},
+			SignatureScript:  []byte{0x47, 0x30, 0x44},
+			Sequence:         0xfffffffe,
+		}},
+		TxOut: []*wire.TxOut{{Value: 4999990000, PkScript: []byte{0x76, 0xa9, 0x14}}},
+	}
+
+	coinbaseHash := coinbaseTx.TxHash()
+	spendHash := spendTx.TxHash()
+
+	// Canonical merkle root for two leaves, computed independently of the subtree package.
+	buf := make([]byte, 0, 2*chainhash.HashSize)
+	buf = append(buf, coinbaseHash[:]...)
+	buf = append(buf, spendHash[:]...)
+	merkleRoot := chainhash.DoubleHashH(buf)
+
+	msgBlock := &wire.MsgBlock{
+		Header: wire.BlockHeader{
+			Version:    2,
+			PrevBlock:  chainhash.Hash{},
+			MerkleRoot: merkleRoot,
+			Timestamp:  time.Unix(1640995200, 0),
+			Bits:       0x1d00ffff,
+			Nonce:      42,
+		},
+		Transactions: []*wire.MsgTx{coinbaseTx, spendTx},
+	}
+
+	block, err := NewBlockFromMsgBlock(msgBlock, nil)
+	require.NoError(t, err)
+	require.NotNil(t, block)
+
+	// transaction count includes the coinbase
+	require.Equal(t, uint64(2), block.TransactionCount)
+
+	// exactly one subtree root is recorded and the in-memory slice is populated
+	require.Len(t, block.Subtrees, 1)
+	require.Len(t, block.SubtreeSlices, 1)
+	require.NotNil(t, block.SubtreeSlices[0])
+
+	// node 0 is the coinbase placeholder, node 1 is the non-coinbase tx hash in block order
+	subtree := block.SubtreeSlices[0]
+	require.Equal(t, 2, len(subtree.Nodes))
+	require.True(t, subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue))
+	require.Equal(t, spendHash, subtree.Nodes[1].Hash)
+
+	// the recorded root matches the subtree's own root
+	require.Equal(t, *subtree.RootHash(), *block.Subtrees[0])
+
+	// the single-subtree representation reconciles to the header merkle root
+	require.NoError(t, block.CheckMerkleRoot(context.Background()))
+}
+
 func TestNewBlockFromMsgBlockAndModelBlock(t *testing.T) {
 	blockHeaderBytes, err := hex.DecodeString(block1Header)
 	require.NoError(t, err)
