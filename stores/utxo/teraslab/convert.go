@@ -293,6 +293,28 @@ func deserializeOutputs(data []byte) ([]*bt.Output, error) {
 	return outputs, nil
 }
 
+// extendedTxSize returns the length of the extended (prev-output-carrying)
+// serialization of tx without allocating it — equivalent to
+// len(tx.ExtendedBytes()) but allocation-free, mirroring the Aerospike backend
+// (aerospike/create.go). Avoids a second full serialization on the create hot
+// path (tx.Size() already gives the standard length for SizeInBytes).
+func extendedTxSize(tx *bt.Tx) int {
+	size := tx.Size() + 6
+	for _, in := range tx.Inputs {
+		if in.PreviousTxIDChainHash() == nil {
+			size -= 32
+		}
+		size += 8
+		if in.PreviousTxScript == nil {
+			size++
+		} else {
+			l := len(*in.PreviousTxScript)
+			size += bt.VarInt(uint64(l)).Length() + l
+		}
+	}
+	return size
+}
+
 // ---------------------------------------------------------------------------
 // txToCreateItem: bt.Tx → teraslab.CreateItem
 // ---------------------------------------------------------------------------
@@ -385,8 +407,8 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, gene
 		TxVersion:      tx.Version,
 		Locktime:       tx.LockTime,
 		Fee:            fee,
-		SizeInBytes:    uint64(len(tx.Bytes())),
-		ExtendedSize:   uint64(len(tx.ExtendedBytes())),
+		SizeInBytes:    uint64(tx.Size()),
+		ExtendedSize:   uint64(extendedTxSize(tx)),
 		IsCoinbase:     isCoinbase,
 		SpendingHeight: spendingHeight,
 		CreatedAt:      uint64(time.Now().UnixMilli()),
@@ -433,7 +455,19 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, gene
 // recordToMetaData: teraslab.TxRecord → meta.Data
 // ---------------------------------------------------------------------------
 
+// recordToMetaData converts a TeraSlab record into meta.Data, fully
+// reconstructing the transaction body (inputs/outputs). This is what most
+// callers need; the metadata-only GetMeta path uses recordToMetaDataMasked with
+// includeTx=false to skip the input/output decode it would immediately discard.
 func recordToMetaData(rec teraslab.TxRecord) (*meta.Data, error) {
+	return recordToMetaDataMasked(rec, true)
+}
+
+// recordToMetaDataMasked converts a TeraSlab record into meta.Data. When
+// includeTx is false the stored inputs/outputs are NOT decoded into data.Tx;
+// only the cheap fields (metadata, slots, inpoints, block entries) are filled.
+// TxInpoints — which GetMeta needs — is always decoded regardless of includeTx.
+func recordToMetaDataMasked(rec teraslab.TxRecord, includeTx bool) (*meta.Data, error) {
 	if !rec.Found {
 		return nil, nil
 	}
@@ -479,14 +513,14 @@ func recordToMetaData(rec teraslab.TxRecord) (*meta.Data, error) {
 			tx.Version = rec.Metadata.TxVersion
 			tx.LockTime = rec.Metadata.Locktime
 		}
-		if len(rec.TxData.Inputs) > 0 {
+		if includeTx && len(rec.TxData.Inputs) > 0 {
 			inputs, err := deserializeInputs(rec.TxData.Inputs)
 			if err != nil {
 				return nil, errors.NewTxInvalidError("teraslab: could not read stored inputs", err)
 			}
 			tx.Inputs = inputs
 		}
-		if len(rec.TxData.Outputs) > 0 {
+		if includeTx && len(rec.TxData.Outputs) > 0 {
 			outputs, err := deserializeOutputs(rec.TxData.Outputs)
 			if err != nil {
 				return nil, errors.NewTxInvalidError("teraslab: could not read stored outputs", err)

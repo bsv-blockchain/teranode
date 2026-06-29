@@ -408,6 +408,23 @@ func TestTxToCreateItem_NonExtendedRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "not extended")
 }
 
+// TestTxToCreateItem_SizesMatchSerialization pins the invariant that the
+// zero-alloc tx.Size() / extendedTxSize() used for SizeInBytes / ExtendedSize
+// equal the serialization-based lengths they replace (len(tx.Bytes()) /
+// len(tx.ExtendedBytes())). Guards the perf refactor from changing the stored
+// sizes.
+func TestTxToCreateItem_SizesMatchSerialization(t *testing.T) {
+	for _, hexStr := range []string{internalTestTxHex, internalCoinbaseHex} {
+		tx := mustTx(t, hexStr)
+		item, err := txToCreateItem(tx, 10, 100, 0, utxo.CreateOptions{})
+		require.NoError(t, err)
+		require.Equal(t, uint64(len(tx.Bytes())), item.SizeInBytes,
+			"SizeInBytes must equal the standard serialized length")
+		require.Equal(t, uint64(len(tx.ExtendedBytes())), item.ExtendedSize,
+			"ExtendedSize must equal the extended serialized length")
+	}
+}
+
 func TestRecordToMetaData(t *testing.T) {
 	t.Run("not found yields nil", func(t *testing.T) {
 		data, err := recordToMetaData(teraslab.TxRecord{Found: false})
@@ -492,6 +509,36 @@ func TestRecordToMetaData(t *testing.T) {
 		require.Equal(t, src.Version, data.Tx.Version)
 		require.Len(t, data.Tx.Inputs, len(src.Inputs))
 		require.Len(t, data.Tx.Outputs, len(src.Outputs))
+	})
+
+	t.Run("includeTx=false skips input/output decode but still decodes inpoints", func(t *testing.T) {
+		src := mustTx(t, internalTestTxHex)
+		inpoints, err := subtree.NewTxInpointsFromTx(src)
+		require.NoError(t, err)
+		inpointsBlob, err := inpoints.Serialize()
+		require.NoError(t, err)
+
+		rec := teraslab.TxRecord{
+			Found:    true,
+			Metadata: &teraslab.TxMetadata{TxVersion: src.Version, Locktime: src.LockTime},
+			TxData: &teraslab.TxData{
+				Inputs:   serializeInputs(src.Inputs),
+				Outputs:  serializeOutputs(src.Outputs),
+				Inpoints: inpointsBlob,
+			},
+		}
+
+		full, err := recordToMetaDataMasked(rec, true)
+		require.NoError(t, err)
+		meta, err := recordToMetaDataMasked(rec, false)
+		require.NoError(t, err)
+
+		// The body decode is skipped...
+		require.Empty(t, meta.Tx.Inputs, "inputs must not be decoded when the tx body is not requested")
+		require.Empty(t, meta.Tx.Outputs, "outputs must not be decoded when the tx body is not requested")
+		require.Len(t, full.Tx.Inputs, len(src.Inputs), "the full path still decodes the body")
+		// ...but TxInpoints (which GetMeta needs) is decoded on both paths.
+		require.Equal(t, full.TxInpoints, meta.TxInpoints, "TxInpoints must be decoded even when the body is skipped")
 	})
 
 	t.Run("corrupt cold data propagates an error instead of a partial tx", func(t *testing.T) {

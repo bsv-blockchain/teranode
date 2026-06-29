@@ -27,6 +27,10 @@ type batchGetItem struct {
 	ctx       context.Context
 	hash      chainhash.Hash
 	fieldMask uint32
+	// includeTx controls whether the stored inputs/outputs are decoded into
+	// data.Tx. Get sets it true; GetMeta sets it false to skip a body decode it
+	// would immediately discard.
+	includeTx bool
 	done      chan batchGetResult
 }
 
@@ -186,7 +190,7 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 			continue
 		}
 
-		data, err := recordToMetaData(records[i])
+		data, err := recordToMetaDataMasked(records[i], b.includeTx)
 		if err != nil {
 			b.done <- batchGetResult{err: err}
 			continue

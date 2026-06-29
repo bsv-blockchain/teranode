@@ -21,6 +21,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, requestedFields .
 		ctx:       ctx,
 		hash:      *hash,
 		fieldMask: buildFieldMask(requestedFields),
+		includeTx: true,
 		done:      done,
 	})
 
@@ -45,6 +46,7 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Da
 		ctx:       ctx,
 		hash:      *hash,
 		fieldMask: defaultGetMetaMask,
+		includeTx: false,
 		done:      done,
 	})
 
