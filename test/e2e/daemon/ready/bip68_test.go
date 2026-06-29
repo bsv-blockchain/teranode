@@ -227,7 +227,12 @@ func TestBIP68_HeightBased_Reject(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Setup: CSV active at height 10, start with 110 initial blocks
+	// Setup: CSV active at height 10, start with 110 initial blocks.
+	// This test only proves enforcement while the block height sits in the window
+	// CSVHeight <= height < GenesisActivationHeight; past Genesis, relative-locktime
+	// enforcement is dropped and this check becomes a no-op. If a future regtest config
+	// lowers GenesisActivationHeight below the heights here, this test would silently
+	// stop proving anything — keep the window in mind when changing those heights.
 	td, sv, txCreator := setupBIP68Test(t, 10, 110)
 	defer func() {
 		td.Stop(t)
@@ -392,7 +397,12 @@ func TestBIP68_TimeBased_Reject(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Setup: CSV active at height 10, start with 110 initial blocks
+	// Setup: CSV active at height 10, start with 110 initial blocks.
+	// This test only proves enforcement while the block height sits in the window
+	// CSVHeight <= height < GenesisActivationHeight; past Genesis, relative-locktime
+	// enforcement is dropped and this check becomes a no-op. If a future regtest config
+	// lowers GenesisActivationHeight below the heights here, this test would silently
+	// stop proving anything — keep the window in mind when changing those heights.
 	td, sv, txCreator := setupBIP68Test(t, 10, 110)
 	defer func() {
 		td.Stop(t)

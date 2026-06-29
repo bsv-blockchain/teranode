@@ -218,7 +218,7 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 
 		txSize, sizeErr := safeconversion.IntToUint64(tx.Size())
 		if sizeErr != nil {
-			return nil, sizeErr
+			return nil, errors.NewProcessingError("failed to compute size for transaction %d", i, sizeErr)
 		}
 
 		if addErr := subtree.AddNode(*tx.TxIDChainHash(), 0, txSize); addErr != nil {
