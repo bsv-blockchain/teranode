@@ -206,7 +206,7 @@ func TestSerializeDeserializeOutputs(t *testing.T) {
 func TestTxToCreateItem(t *testing.T) {
 	t.Run("standard tx computes fee and utxo hashes", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
-		item, err := txToCreateItem(tx, 10, 100, utxo.CreateOptions{})
+		item, err := txToCreateItem(tx, 10, 100, 0, utxo.CreateOptions{})
 		require.NoError(t, err)
 		assert.Equal(t, uint64(215), item.Fee)
 		assert.False(t, item.IsCoinbase)
@@ -219,7 +219,7 @@ func TestTxToCreateItem(t *testing.T) {
 
 	t.Run("coinbase zeroes fee and sets maturity spending height", func(t *testing.T) {
 		tx := mustTx(t, internalCoinbaseHex)
-		item, err := txToCreateItem(tx, 42, 100, utxo.CreateOptions{})
+		item, err := txToCreateItem(tx, 42, 100, 0, utxo.CreateOptions{})
 		require.NoError(t, err)
 		assert.True(t, item.IsCoinbase)
 		assert.Equal(t, uint64(0), item.Fee)
@@ -231,7 +231,7 @@ func TestTxToCreateItem(t *testing.T) {
 
 	t.Run("conflicting populates deduped parent txids", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
-		item, err := txToCreateItem(tx, 0, 100, utxo.CreateOptions{Conflicting: true})
+		item, err := txToCreateItem(tx, 0, 100, 0, utxo.CreateOptions{Conflicting: true})
 		require.NoError(t, err)
 		require.Len(t, item.ParentTxIDs, 1)
 		assert.Equal(t, hashToTxID(tx.Inputs[0].PreviousTxIDChainHash()), item.ParentTxIDs[0])
@@ -240,7 +240,7 @@ func TestTxToCreateItem(t *testing.T) {
 
 	t.Run("flags reflect locked and frozen options", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
-		item, err := txToCreateItem(tx, 0, 100, utxo.CreateOptions{Locked: true, Frozen: true})
+		item, err := txToCreateItem(tx, 0, 100, 0, utxo.CreateOptions{Locked: true, Frozen: true})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(0x01|0x04), item.Flags)
 	})
@@ -255,7 +255,7 @@ func TestTxToCreateItem(t *testing.T) {
 			{Satoshis: 1000, LockingScript: tx0LockingScript(t)},
 			{Satoshis: 0, LockingScript: dataScript},
 		}
-		item, err := txToCreateItem(tx, 0, 100, utxo.CreateOptions{})
+		item, err := txToCreateItem(tx, 0, 100, 0, utxo.CreateOptions{})
 		require.NoError(t, err)
 		require.Len(t, item.UtxoHashes, 2)
 		assert.NotEqual(t, teraslab.UtxoHash{}, item.UtxoHashes[0])
@@ -267,7 +267,7 @@ func TestTxToCreateItem(t *testing.T) {
 		override := &chainhash.Hash{}
 		override[0] = 0x99
 		cb := true
-		item, err := txToCreateItem(tx, 7, 100, utxo.CreateOptions{TxID: override, IsCoinbase: &cb})
+		item, err := txToCreateItem(tx, 7, 100, 0, utxo.CreateOptions{TxID: override, IsCoinbase: &cb})
 		require.NoError(t, err)
 		assert.Equal(t, hashToTxID(override), item.TxID)
 		assert.True(t, item.IsCoinbase)
@@ -276,7 +276,7 @@ func TestTxToCreateItem(t *testing.T) {
 
 	t.Run("mined block info populates pointers", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
-		item, err := txToCreateItem(tx, 0, 100, utxo.CreateOptions{
+		item, err := txToCreateItem(tx, 0, 100, 0, utxo.CreateOptions{
 			MinedBlockInfos: []utxo.MinedBlockInfo{{BlockID: 5, BlockHeight: 6, SubtreeIdx: 7}},
 		})
 		require.NoError(t, err)
@@ -291,6 +291,122 @@ func TestTxToCreateItem(t *testing.T) {
 func tx0LockingScript(t *testing.T) *bscript.Script {
 	t.Helper()
 	return mustTx(t, internalTestTxHex).Outputs[0].LockingScript
+}
+
+// bareOpReturnScript builds a bare OP_RETURN (no leading OP_FALSE) data output.
+// It is spendable post-Genesis (Genesis restored OP_RETURN) and provably
+// unspendable pre-Genesis.
+func bareOpReturnScript(t *testing.T) *bscript.Script {
+	t.Helper()
+	s := &bscript.Script{}
+	require.NoError(t, s.AppendOpcodes(bscript.OpRETURN))
+	require.NoError(t, s.AppendPushData([]byte("teraslab")))
+	return s
+}
+
+// oversizedScript builds a non-OP_RETURN locking script larger than the
+// pre-Genesis consensus script-size cap (10000 bytes). Such a script is
+// provably unspendable pre-Genesis but ordinary post-Genesis. bt.Script.IsData()
+// is blind to size, so it would wrongly keep this pre-Genesis.
+func oversizedScript() *bscript.Script {
+	b := make([]byte, 10001)
+	for i := range b {
+		b[i] = 0x51 // OP_1 — a non-OP_RETURN opcode
+	}
+	s := bscript.Script(b)
+	return &s
+}
+
+// TestTxToCreateItem_Storability pins UTXO-set membership to the era-aware
+// utxo.ShouldStoreOutputAsUTXO rule that the Aerospike (create.go) and SQL
+// (sql.go) backends use. A TeraSlab node MUST keep the same set or it forks the
+// chain against nodes on the other backends. A non-zero UtxoHash means the
+// output is stored as a spendable UTXO; a zero UtxoHash{} means it was dropped.
+func TestTxToCreateItem_Storability(t *testing.T) {
+	const genesisHeight uint32 = 50
+
+	t.Run("post-Genesis bare OP_RETURN is retained as spendable", func(t *testing.T) {
+		tx := bt.NewTx()
+		tx.Outputs = []*bt.Output{
+			{Satoshis: 1000, LockingScript: tx0LockingScript(t)},
+			{Satoshis: 0, LockingScript: bareOpReturnScript(t)},
+		}
+		item, err := txToCreateItem(tx, genesisHeight+5, 100, genesisHeight, utxo.CreateOptions{})
+		require.NoError(t, err)
+		require.Len(t, item.UtxoHashes, 2)
+		require.NotEqual(t, teraslab.UtxoHash{}, item.UtxoHashes[0])
+		require.NotEqual(t, teraslab.UtxoHash{}, item.UtxoHashes[1],
+			"post-Genesis bare OP_RETURN is spendable and must be stored")
+	})
+
+	t.Run("pre-Genesis bare OP_RETURN is dropped", func(t *testing.T) {
+		tx := bt.NewTx()
+		tx.Outputs = []*bt.Output{
+			{Satoshis: 1000, LockingScript: tx0LockingScript(t)},
+			{Satoshis: 0, LockingScript: bareOpReturnScript(t)},
+		}
+		item, err := txToCreateItem(tx, genesisHeight-5, 100, genesisHeight, utxo.CreateOptions{})
+		require.NoError(t, err)
+		require.Len(t, item.UtxoHashes, 2)
+		require.NotEqual(t, teraslab.UtxoHash{}, item.UtxoHashes[0])
+		require.Equal(t, teraslab.UtxoHash{}, item.UtxoHashes[1],
+			"pre-Genesis bare OP_RETURN is provably unspendable and must be dropped")
+	})
+
+	t.Run("pre-Genesis oversized non-data script is dropped", func(t *testing.T) {
+		tx := bt.NewTx()
+		tx.Outputs = []*bt.Output{{Satoshis: 1000, LockingScript: oversizedScript()}}
+		item, err := txToCreateItem(tx, genesisHeight-5, 100, genesisHeight, utxo.CreateOptions{})
+		require.NoError(t, err)
+		require.Len(t, item.UtxoHashes, 1)
+		require.Equal(t, teraslab.UtxoHash{}, item.UtxoHashes[0],
+			"pre-Genesis oversized script is provably unspendable and must be dropped")
+	})
+
+	t.Run("post-Genesis oversized non-data script is retained", func(t *testing.T) {
+		tx := bt.NewTx()
+		tx.Outputs = []*bt.Output{{Satoshis: 1000, LockingScript: oversizedScript()}}
+		item, err := txToCreateItem(tx, genesisHeight+5, 100, genesisHeight, utxo.CreateOptions{})
+		require.NoError(t, err)
+		require.Len(t, item.UtxoHashes, 1)
+		require.NotEqual(t, teraslab.UtxoHash{}, item.UtxoHashes[0],
+			"post-Genesis removed the oversized-script unspendability rule")
+	})
+
+	t.Run("OP_FALSE OP_RETURN is dropped in every era", func(t *testing.T) {
+		dataScript := &bscript.Script{}
+		require.NoError(t, dataScript.AppendOpcodes(bscript.OpFALSE, bscript.OpRETURN))
+		require.NoError(t, dataScript.AppendPushData([]byte("teraslab")))
+		tx := bt.NewTx()
+		tx.Outputs = []*bt.Output{
+			{Satoshis: 1000, LockingScript: tx0LockingScript(t)},
+			{Satoshis: 0, LockingScript: dataScript},
+		}
+		for _, bh := range []uint32{genesisHeight - 5, genesisHeight + 5} {
+			item, err := txToCreateItem(tx, bh, 100, genesisHeight, utxo.CreateOptions{})
+			require.NoError(t, err)
+			require.Equal(t, teraslab.UtxoHash{}, item.UtxoHashes[1],
+				"OP_FALSE OP_RETURN is provably unspendable in every era")
+		}
+	})
+}
+
+// TestTxToCreateItem_NonExtendedRejected asserts that a non-extended
+// (undecorated) non-coinbase tx is rejected exactly like utxo.GetFeesAndUtxoHashes
+// does, instead of silently recording fee 0 — a wrong-but-silent zero fee
+// corrupts block-assembly fee ordering and the mining-candidate total.
+func TestTxToCreateItem_NonExtendedRejected(t *testing.T) {
+	ext := mustTx(t, internalTestTxHex)
+	// Standard (non-extended) serialization drops the extended prev-output data,
+	// so the re-parsed tx has inputs without PreviousTxSatoshis/Script.
+	std, err := bt.NewTxFromBytes(ext.Bytes())
+	require.NoError(t, err)
+	require.False(t, std.IsExtended())
+	require.False(t, std.IsCoinbase())
+
+	_, err = txToCreateItem(std, 10, 100, 0, utxo.CreateOptions{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not extended")
 }
 
 func TestRecordToMetaData(t *testing.T) {

@@ -1,9 +1,11 @@
 package teraslab
 
 import (
+	"context"
 	"encoding/binary"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -12,6 +14,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestSpendRejectsZeroBlockHeight pins the blockHeight==0 guard that both
+// reference backends enforce (sql.go:1814, aerospike/spend.go:302). A height of
+// 0 is a programming error; the store must fail loud rather than forward
+// CurrentBlockHeight=0 to the server and run maturity/retention math against it.
+// The guard must precede any client/batcher use, so a zero-value Store suffices.
+func TestSpendRejectsZeroBlockHeight(t *testing.T) {
+	s := &Store{}
+	tx := bt.NewTx()
+
+	_, err := s.Spend(context.Background(), tx, 0)
+	require.Error(t, err, "blockHeight 0 must be rejected, matching the SQL/Aerospike backends")
+	require.Contains(t, err.Error(), "blockHeight must be greater than zero")
+
+	// A non-zero height with no inputs is the existing no-op success path, so the
+	// guard is specific to height 0 rather than rejecting every call.
+	_, err = s.Spend(context.Background(), tx, 1)
+	require.NoError(t, err)
+}
 
 // TestFinalizeSpendResults covers the per-transaction mapping the spend batcher
 // applies after a (possibly multi-tx) SpendBatch response: success block IDs and

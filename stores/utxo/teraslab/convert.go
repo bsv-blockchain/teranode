@@ -2,6 +2,7 @@ package teraslab
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
-	"github.com/bsv-blockchain/teranode/util"
 	teraslab "github.com/icellan/teraslab/client/go"
 )
 
@@ -297,7 +297,7 @@ func deserializeOutputs(data []byte) ([]*bt.Output, error) {
 // txToCreateItem: bt.Tx → teraslab.CreateItem
 // ---------------------------------------------------------------------------
 
-func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, opts utxo.CreateOptions) (teraslab.CreateItem, error) {
+func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, genesisActivationHeight uint32, opts utxo.CreateOptions) (teraslab.CreateItem, error) {
 	txHash := tx.TxIDChainHash()
 
 	var txid teraslab.TxID
@@ -312,26 +312,38 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, opts
 		isCoinbase = *opts.IsCoinbase
 	}
 
-	// Compute UTXO hashes for each non-OP_RETURN output
-	utxoHashes := make([]teraslab.UtxoHash, 0, len(tx.Outputs))
-	for i, output := range tx.Outputs {
-		if output.LockingScript.IsData() {
-			utxoHashes = append(utxoHashes, teraslab.UtxoHash{})
-			continue
-		}
-		hash, err := util.UTXOHashFromOutput(txHash, output, uint32(i)) //nolint:gosec
-		if err != nil {
-			return teraslab.CreateItem{}, err
-		}
-		utxoHashes = append(utxoHashes, hashToUtxoHash(hash))
+	// Compute the fee and per-output UTXO hashes through the shared utxo helpers
+	// so the rules stay identical to the Aerospike/SQL backends — parity is the
+	// whole contract for this store. GetFeesAndUtxoHashes hard-errors on a
+	// non-extended (undecorated) non-coinbase tx instead of silently recording a
+	// zero fee (which would corrupt block-assembly fee ordering / mining totals);
+	// the inputless branch mirrors aerospike create.go (fee 0, hashes only).
+	var (
+		fee          uint64
+		utxoHashPtrs []*chainhash.Hash
+		err          error
+	)
+	if len(tx.Inputs) == 0 {
+		utxoHashPtrs, err = utxo.GetUtxoHashes(tx, txHash)
+	} else {
+		fee, utxoHashPtrs, err = utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
+	}
+	if err != nil {
+		return teraslab.CreateItem{}, err
 	}
 
-	// Calculate fee
-	fee := tx.TotalOutputSatoshis()
-	if !isCoinbase && tx.TotalInputSatoshis() > fee {
-		fee = tx.TotalInputSatoshis() - tx.TotalOutputSatoshis()
-	} else {
-		fee = 0
+	// Store a real UTXO hash only for outputs that should join the UTXO set
+	// (era-aware, value-agnostic; matches utxo.ShouldStoreOutputAsUTXO used by
+	// Aerospike create.go and SQL sql.go). Provably-unspendable outputs keep a
+	// zero UtxoHash{}, which the server treats as "not a spendable UTXO". Using
+	// bt.Script.IsData() here would fork the UTXO set: it is era-agnostic, so it
+	// drops post-Genesis bare OP_RETURN (which must be retained) and keeps
+	// pre-Genesis oversized scripts (which must be dropped).
+	utxoHashes := make([]teraslab.UtxoHash, len(tx.Outputs))
+	for i, output := range tx.Outputs {
+		if output != nil && utxo.ShouldStoreOutputAsUTXO(output, blockHeight, genesisActivationHeight) {
+			utxoHashes[i] = hashToUtxoHash(utxoHashPtrs[i])
+		}
 	}
 
 	// Build flags for the CreateBatch wire protocol.

@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
@@ -14,6 +15,13 @@ import (
 
 // Spend marks UTXOs as spent based on the transaction's inputs.
 func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	// blockHeight 0 is a programming error: both reference backends reject it
+	// (sql.go:1814, aerospike/spend.go:302). Fail loud rather than forward
+	// CurrentBlockHeight=0 to the server and run maturity/retention math on it.
+	if blockHeight == 0 {
+		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
+	}
+
 	var flags utxo.IgnoreFlags
 	if len(ignoreFlags) > 0 {
 		flags = ignoreFlags[0]

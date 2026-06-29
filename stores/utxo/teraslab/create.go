@@ -17,7 +17,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		opt(&options)
 	}
 
-	item, err := txToCreateItem(tx, blockHeight, uint32(s.settings.ChainCfgParams.CoinbaseMaturity), options) //nolint:gosec
+	item, err := txToCreateItem(tx, blockHeight, uint32(s.settings.ChainCfgParams.CoinbaseMaturity), s.settings.ChainCfgParams.GenesisActivationHeight, options) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}
