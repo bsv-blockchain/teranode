@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,7 +61,7 @@ func TestSetConflictingWithDataOutput(t *testing.T) {
 
 	resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Conflicting)
 	require.NoError(t, err)
-	assert.True(t, resp.Conflicting)
+	require.True(t, resp.Conflicting)
 }
 
 // TestGetSpendDataOutputNotFound verifies that GetSpend on a data (OP_RETURN)
@@ -87,7 +86,7 @@ func TestGetSpendDataOutputNotFound(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.Equal(t, int(utxo.Status_NOT_FOUND), resp.Status)
+	require.Equal(t, int(utxo.Status_NOT_FOUND), resp.Status)
 
 	// A normal output of the same tx still reports OK, confirming only the
 	// zero-hash data slot is treated as absent.
@@ -100,7 +99,7 @@ func TestGetSpendDataOutputNotFound(t *testing.T) {
 		UTXOHash: utxoHash0,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int(utxo.Status_OK), okResp.Status)
+	require.Equal(t, int(utxo.Status_OK), okResp.Status)
 }
 
 // TestGetSpendImmatureAfterReassign verifies GetSpend's IMMATURE detection
@@ -152,7 +151,7 @@ func TestGetSpendImmatureAfterReassign(t *testing.T) {
 
 		resp, err := store.GetSpend(ctx, reassigned)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_IMMATURE), resp.Status)
+		require.Equal(t, int(utxo.Status_IMMATURE), resp.Status)
 	})
 
 	t.Run("mature at cooldown height", func(t *testing.T) {
@@ -160,7 +159,7 @@ func TestGetSpendImmatureAfterReassign(t *testing.T) {
 
 		resp, err := store.GetSpend(ctx, reassigned)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_OK), resp.Status)
+		require.Equal(t, int(utxo.Status_OK), resp.Status)
 	})
 
 	// Reassigning a slot that was never frozen is rejected server-side, so the
@@ -181,6 +180,6 @@ func TestGetSpendImmatureAfterReassign(t *testing.T) {
 			&utxo.Spend{TxID: tx.TxIDChainHash(), Vout: 1, UTXOHash: oldHash},
 			tSettings)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "ReAssignUTXO")
+		require.Contains(t, err.Error(), "ReAssignUTXO")
 	})
 }

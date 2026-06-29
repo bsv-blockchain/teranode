@@ -12,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,7 +48,7 @@ func TestCloseContextCancelled(t *testing.T) {
 	// the race and returns nil. Both are valid — assert it does not panic and,
 	// if it errors, that it is the cancellation.
 	if err := store.Close(cctx); err != nil {
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	}
 }
 
@@ -90,7 +89,7 @@ func TestRemoveBlockIDs(t *testing.T) {
 		// Block membership unchanged.
 		resp, err := store.Get(ctx, txHash, fields.BlockIDs)
 		require.NoError(t, err)
-		assert.ElementsMatch(t, []uint32{700, 701}, resp.BlockIDs)
+		require.ElementsMatch(t, []uint32{700, 701}, resp.BlockIDs)
 	})
 
 	t.Run("removing a non-existent txid is tolerated", func(t *testing.T) {
@@ -109,7 +108,7 @@ func TestRemoveBlockIDs(t *testing.T) {
 
 		resp, err := store.Get(ctx, txHash, fields.BlockIDs)
 		require.NoError(t, err)
-		assert.Equal(t, []uint32{701}, resp.BlockIDs)
+		require.Equal(t, []uint32{701}, resp.BlockIDs)
 	})
 }
 
@@ -140,13 +139,13 @@ func TestRemoveFromConflictingChildren(t *testing.T) {
 	t.Run("nil hashes are rejected", func(t *testing.T) {
 		err := store.RemoveFromConflictingChildren(ctx, []utxo.ConflictingChildRemoval{{}})
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, errors.ErrInvalidArgument) || err != nil)
+		require.True(t, errors.Is(err, errors.ErrInvalidArgument) || err != nil)
 	})
 
 	t.Run("child is linked before removal", func(t *testing.T) {
 		resp, err := store.Get(ctx, parentHash, fields.ConflictingChildren)
 		require.NoError(t, err)
-		assert.Contains(t, resp.ConflictingChildren, *childHash)
+		require.Contains(t, resp.ConflictingChildren, *childHash)
 	})
 
 	t.Run("removes the parent->child link", func(t *testing.T) {
@@ -157,7 +156,7 @@ func TestRemoveFromConflictingChildren(t *testing.T) {
 
 		resp, err := store.Get(ctx, parentHash, fields.ConflictingChildren)
 		require.NoError(t, err)
-		assert.NotContains(t, resp.ConflictingChildren, *childHash)
+		require.NotContains(t, resp.ConflictingChildren, *childHash)
 	})
 
 	t.Run("removing an absent pair is tolerated", func(t *testing.T) {
@@ -200,13 +199,13 @@ func TestGetConflictingTxIterator(t *testing.T) {
 
 	batch, err := iter.Next(ctx)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(batch), 1, "conflicting tx should be iterated")
-	assert.NoError(t, iter.Err())
+	require.GreaterOrEqual(t, len(batch), 1, "conflicting tx should be iterated")
+	require.NoError(t, iter.Err())
 
 	require.NoError(t, iter.Close())
 	after, err := iter.Next(ctx)
 	require.NoError(t, err)
-	assert.Nil(t, after, "iterator returns nil after Close")
+	require.Nil(t, after, "iterator returns nil after Close")
 }
 
 // ---------------------------------------------------------------------------
@@ -230,9 +229,9 @@ func TestScanInconsistentUnminedTxs(t *testing.T) {
 
 	records, err := iter.Next(ctx)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(records), 1)
-	assert.GreaterOrEqual(t, iter.TotalScanned(), int64(1))
-	assert.NoError(t, iter.Err())
+	require.GreaterOrEqual(t, len(records), 1)
+	require.GreaterOrEqual(t, iter.TotalScanned(), int64(1))
+	require.NoError(t, iter.Err())
 
 	// Drain to exhaustion.
 	for {
@@ -246,7 +245,7 @@ func TestScanInconsistentUnminedTxs(t *testing.T) {
 	require.NoError(t, iter.Close())
 	after, err := iter.Next(ctx)
 	require.NoError(t, err)
-	assert.Nil(t, after)
+	require.Nil(t, after)
 }
 
 // ---------------------------------------------------------------------------
@@ -274,9 +273,9 @@ func TestBatchPreviousOutputsDecorate(t *testing.T) {
 		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{spend0, spend1}))
 
 		require.NotNil(t, spend0.Inputs[0].PreviousTxScript)
-		assert.Equal(t, parent.Outputs[0].Satoshis, spend0.Inputs[0].PreviousTxSatoshis)
+		require.Equal(t, parent.Outputs[0].Satoshis, spend0.Inputs[0].PreviousTxSatoshis)
 		require.NotNil(t, spend1.Inputs[0].PreviousTxScript)
-		assert.Equal(t, parent.Outputs[1].Satoshis, spend1.Inputs[0].PreviousTxSatoshis)
+		require.Equal(t, parent.Outputs[1].Satoshis, spend1.Inputs[0].PreviousTxSatoshis)
 	})
 
 	t.Run("missing parent returns TxNotFound", func(t *testing.T) {
@@ -321,7 +320,7 @@ func TestGetMetaErrorPaths(t *testing.T) {
 		var data meta.Data
 		err := store.GetMeta(cctx, missing, &data)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	})
 }
 
@@ -415,7 +414,7 @@ func TestSpendAndGetSpendErrorPaths(t *testing.T) {
 		stx := &bt.Tx{Version: 1, Inputs: []*bt.Input{{PreviousTxOutIndex: 0}}}
 		spends, err := store.Spend(ctx, stx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
-		assert.Empty(t, spends)
+		require.Empty(t, spends)
 	})
 
 	t.Run("GetSpend on missing tx returns NOT_FOUND status with nil error", func(t *testing.T) {
@@ -426,7 +425,7 @@ func TestSpendAndGetSpendErrorPaths(t *testing.T) {
 		resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: missing, Vout: 0})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Equal(t, int(utxo.Status_NOT_FOUND), resp.Status)
+		require.Equal(t, int(utxo.Status_NOT_FOUND), resp.Status)
 	})
 
 	t.Run("GetSpend with vout out of range errors", func(t *testing.T) {

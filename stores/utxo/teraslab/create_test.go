@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,18 +26,18 @@ func TestCreateAndGet(t *testing.T) {
 
 		resp, err := store.Get(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
-		assert.Equal(t, tx.TxIDChainHash().String(), resp.Tx.TxID())
-		assert.Equal(t, uint64(215), resp.Fee)
-		assert.Equal(t, uint64(328), resp.SizeInBytes)
-		assert.False(t, resp.IsCoinbase)
-		assert.False(t, resp.Conflicting)
-		assert.False(t, resp.Locked)
+		require.Equal(t, tx.TxIDChainHash().String(), resp.Tx.TxID())
+		require.Equal(t, uint64(215), resp.Fee)
+		require.Equal(t, uint64(328), resp.SizeInBytes)
+		require.False(t, resp.IsCoinbase)
+		require.False(t, resp.Conflicting)
+		require.False(t, resp.Locked)
 	})
 
 	t.Run("create duplicate fails with ErrTxExists", func(t *testing.T) {
 		_, err := store.Create(ctx, tx, 0)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, errors.ErrTxExists))
+		require.True(t, errors.Is(err, errors.ErrTxExists))
 	})
 
 	t.Run("get non-existent tx fails", func(t *testing.T) {
@@ -46,7 +45,7 @@ func TestCreateAndGet(t *testing.T) {
 		fakeHash[0] ^= 0xFF
 		_, err := store.Get(ctx, fakeHash)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, errors.ErrTxNotFound))
+		require.True(t, errors.Is(err, errors.ErrTxNotFound))
 	})
 }
 
@@ -61,7 +60,7 @@ func TestCreateCoinbase(t *testing.T) {
 
 	resp, err := store.Get(ctx, coinbaseTx.TxIDChainHash())
 	require.NoError(t, err)
-	assert.True(t, resp.IsCoinbase)
+	require.True(t, resp.IsCoinbase)
 }
 
 func TestCreateConflicting(t *testing.T) {
@@ -75,7 +74,7 @@ func TestCreateConflicting(t *testing.T) {
 
 	resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Conflicting)
 	require.NoError(t, err)
-	assert.True(t, resp.Conflicting)
+	require.True(t, resp.Conflicting)
 }
 
 func TestCreateWithMinedBlockInfo(t *testing.T) {
@@ -98,9 +97,9 @@ func TestCreateWithMinedBlockInfo(t *testing.T) {
 	resp, err := store.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 	require.Len(t, resp.BlockIDs, 1)
-	assert.Equal(t, uint32(42), resp.BlockIDs[0])
-	assert.Equal(t, uint32(100), resp.BlockHeights[0])
-	assert.Equal(t, 3, resp.SubtreeIdxs[0])
+	require.Equal(t, uint32(42), resp.BlockIDs[0])
+	require.Equal(t, uint32(100), resp.BlockHeights[0])
+	require.Equal(t, 3, resp.SubtreeIdxs[0])
 }
 
 func TestDelete(t *testing.T) {
@@ -117,7 +116,7 @@ func TestDelete(t *testing.T) {
 
 	_, err = store.Get(ctx, tx.TxIDChainHash())
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
+	require.True(t, errors.Is(err, errors.ErrTxNotFound))
 }
 
 func TestCreateAfterSpendReturnsErrTxExists(t *testing.T) {
@@ -149,5 +148,5 @@ func TestCreateAfterSpendReturnsErrTxExists(t *testing.T) {
 	// catch-up with "error processing coinbase utxos -> UTXO_SPENT".
 	_, err = store.Create(ctx, tx, 0)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errors.ErrTxExists))
+	require.True(t, errors.Is(err, errors.ErrTxExists))
 }

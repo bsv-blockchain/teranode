@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +26,7 @@ func TestSmallBranchCoverage(t *testing.T) {
 	t.Run("SetMinedMulti with empty hashes is a no-op", func(t *testing.T) {
 		res, err := store.SetMinedMulti(ctx, nil, utxo.MinedBlockInfo{})
 		require.NoError(t, err)
-		assert.Nil(t, res)
+		require.Nil(t, res)
 	})
 
 	t.Run("Unspend with empty list is a no-op", func(t *testing.T) {
@@ -39,7 +38,7 @@ func TestSmallBranchCoverage(t *testing.T) {
 		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1,
 			utxo.IgnoreFlags{IgnoreConflicting: true, IgnoreLocked: true})
 		require.NoError(t, err)
-		assert.Len(t, spends, 1)
+		require.Len(t, spends, 1)
 	})
 
 	t.Run("Unspend skips nil-TxID entries and unspends the rest", func(t *testing.T) {
@@ -127,7 +126,7 @@ func TestPreviousOutputsDecorateMixedInputs(t *testing.T) {
 	require.NoError(t, store.PreviousOutputsDecorate(ctx, spendTx))
 
 	// Pre-decorated input untouched; the other now filled from parent output 1.
-	assert.Equal(t, preScript, spendTx.Inputs[0].PreviousTxScript)
+	require.Equal(t, preScript, spendTx.Inputs[0].PreviousTxScript)
 	require.NotNil(t, spendTx.Inputs[1].PreviousTxScript)
-	assert.Equal(t, parent.Outputs[1].Satoshis, spendTx.Inputs[1].PreviousTxSatoshis)
+	require.Equal(t, parent.Outputs[1].Satoshis, spendTx.Inputs[1].PreviousTxSatoshis)
 }

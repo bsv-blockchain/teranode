@@ -14,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,9 +56,9 @@ func TestFreezeAndUnfreeze(t *testing.T) {
 	t.Run("GetSpend returns FROZEN status", func(t *testing.T) {
 		resp, err := store.GetSpend(ctx, testSpend)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_FROZEN), resp.Status)
+		require.Equal(t, int(utxo.Status_FROZEN), resp.Status)
 		require.NotNil(t, resp.SpendingData)
-		assert.Equal(t, subtree.FrozenBytesTxHash, *resp.SpendingData.TxID)
+		require.Equal(t, subtree.FrozenBytesTxHash, *resp.SpendingData.TxID)
 	})
 
 	t.Run("unfreeze allows spending", func(t *testing.T) {
@@ -68,7 +67,7 @@ func TestFreezeAndUnfreeze(t *testing.T) {
 
 		resp, err := store.GetSpend(ctx, testSpend)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_OK), resp.Status)
+		require.Equal(t, int(utxo.Status_OK), resp.Status)
 
 		spendTx := &bt.Tx{Version: 1, Inputs: []*bt.Input{{
 			PreviousTxOutIndex: 0,

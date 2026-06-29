@@ -7,7 +7,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teraslabstore "github.com/bsv-blockchain/teranode/stores/utxo/teraslab"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,7 +15,7 @@ func TestBlockHeight(t *testing.T) {
 	defer deferFn()
 
 	t.Run("initial block height is 1 (set by initTeraSlab)", func(t *testing.T) {
-		assert.Equal(t, uint32(1), store.GetBlockHeight())
+		require.Equal(t, uint32(1), store.GetBlockHeight())
 	})
 
 	t.Run("SetBlockHeight zero returns error", func(t *testing.T) {
@@ -27,7 +26,7 @@ func TestBlockHeight(t *testing.T) {
 	t.Run("SetBlockHeight stores value", func(t *testing.T) {
 		err := store.SetBlockHeight(12345)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(12345), store.GetBlockHeight())
+		require.Equal(t, uint32(12345), store.GetBlockHeight())
 	})
 }
 
@@ -36,13 +35,13 @@ func TestMedianBlockTime(t *testing.T) {
 	defer deferFn()
 
 	t.Run("initial median time is 0", func(t *testing.T) {
-		assert.Equal(t, uint32(0), store.GetMedianBlockTime())
+		require.Equal(t, uint32(0), store.GetMedianBlockTime())
 	})
 
 	t.Run("SetMedianBlockTime stores value", func(t *testing.T) {
 		err := store.SetMedianBlockTime(1640995200)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(1640995200), store.GetMedianBlockTime())
+		require.Equal(t, uint32(1640995200), store.GetMedianBlockTime())
 	})
 }
 
@@ -56,8 +55,8 @@ func TestGetBlockState(t *testing.T) {
 	require.NoError(t, err)
 
 	state := store.GetBlockState()
-	assert.Equal(t, uint32(500), state.Height)
-	assert.Equal(t, uint32(1640995200), state.MedianTime)
+	require.Equal(t, uint32(500), state.Height)
+	require.Equal(t, uint32(1640995200), state.MedianTime)
 }
 
 func TestHealth(t *testing.T) {
@@ -67,14 +66,14 @@ func TestHealth(t *testing.T) {
 	// Shallow check: server Health only, no liveness Ping.
 	status, details, err := store.Health(ctx, false)
 	require.NoError(t, err)
-	assert.Equal(t, 200, status)
-	assert.Contains(t, details, "TeraSlab")
+	require.Equal(t, 200, status)
+	require.Contains(t, details, "TeraSlab")
 
 	// Liveness check: server Health plus a Ping round trip.
 	status, details, err = store.Health(ctx, true)
 	require.NoError(t, err)
-	assert.Equal(t, 200, status)
-	assert.Contains(t, details, "TeraSlab")
+	require.Equal(t, 200, status)
+	require.Contains(t, details, "TeraSlab")
 }
 
 func TestInterfaceCompliance(t *testing.T) {

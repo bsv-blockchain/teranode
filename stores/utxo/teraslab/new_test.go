@@ -10,7 +10,6 @@ import (
 	teraslabstore "github.com/bsv-blockchain/teranode/stores/utxo/teraslab"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,10 +24,10 @@ func TestNewInvalidPoolSize(t *testing.T) {
 
 	store, err := teraslabstore.New(context.Background(), logger, tSettings, u)
 	require.Error(t, err)
-	assert.Nil(t, store)
-	assert.Contains(t, err.Error(), "pool_size")
+	require.Nil(t, store)
+	require.Contains(t, err.Error(), "pool_size")
 	// Typed so callers can classify the failure, matching the other backends.
-	assert.ErrorIs(t, err, errors.ErrInvalidArgument)
+	require.ErrorIs(t, err, errors.ErrInvalidArgument)
 }
 
 // TestNewClusterModeUnreachable verifies two things at once, without a server:
@@ -51,8 +50,8 @@ func TestNewClusterModeUnreachable(t *testing.T) {
 
 	store, err := teraslabstore.New(ctx, logger, tSettings, u)
 	require.Error(t, err)
-	assert.Nil(t, store)
-	assert.Contains(t, err.Error(), "client init")
+	require.Nil(t, store)
+	require.Contains(t, err.Error(), "client init")
 	// Client-init failure is a typed storage-class error, not a bare fmt.Errorf.
-	assert.ErrorIs(t, err, errors.ErrStorageError)
+	require.ErrorIs(t, err, errors.ErrStorageError)
 }

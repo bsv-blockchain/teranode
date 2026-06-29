@@ -12,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,36 +28,36 @@ func TestGetMetadata(t *testing.T) {
 	t.Run("Get returns correct fee and size", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
-		assert.Equal(t, uint64(215), resp.Fee)
-		assert.Equal(t, uint64(328), resp.SizeInBytes)
+		require.Equal(t, uint64(215), resp.Fee)
+		require.Equal(t, uint64(328), resp.SizeInBytes)
 	})
 
 	t.Run("Get returns tx with correct TxID", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
 		require.NotNil(t, resp.Tx)
-		assert.Equal(t, tx.TxIDChainHash().String(), resp.Tx.TxID())
+		require.Equal(t, tx.TxIDChainHash().String(), resp.Tx.TxID())
 	})
 
 	t.Run("Get returns inputs and outputs", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
 		require.NotNil(t, resp.Tx)
-		assert.Len(t, resp.Tx.Inputs, len(tx.Inputs))
-		assert.Len(t, resp.Tx.Outputs, len(tx.Outputs))
+		require.Len(t, resp.Tx.Inputs, len(tx.Inputs))
+		require.Len(t, resp.Tx.Outputs, len(tx.Outputs))
 	})
 
 	t.Run("Get returns UTXO slots when requested", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Utxos)
 		require.NoError(t, err)
-		assert.NotNil(t, resp.SpendingDatas)
-		assert.Len(t, resp.SpendingDatas, len(tx.Outputs))
+		require.NotNil(t, resp.SpendingDatas)
+		require.Len(t, resp.SpendingDatas, len(tx.Outputs))
 	})
 
 	t.Run("Get returns empty blockIDs for unmined tx", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
-		assert.Len(t, resp.BlockIDs, 0)
+		require.Len(t, resp.BlockIDs, 0)
 	})
 }
 
@@ -85,8 +84,8 @@ func TestGetSpendStatuses(t *testing.T) {
 	t.Run("unspent UTXO returns Status_OK", func(t *testing.T) {
 		resp, err := store.GetSpend(ctx, testSpend0)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_OK), resp.Status)
-		assert.Nil(t, resp.SpendingData)
+		require.Equal(t, int(utxo.Status_OK), resp.Status)
+		require.Nil(t, resp.SpendingData)
 	})
 
 	t.Run("spent UTXO returns Status_SPENT", func(t *testing.T) {
@@ -102,7 +101,7 @@ func TestGetSpendStatuses(t *testing.T) {
 
 		resp, err := store.GetSpend(ctx, testSpend0)
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_SPENT), resp.Status)
+		require.Equal(t, int(utxo.Status_SPENT), resp.Status)
 		require.NotNil(t, resp.SpendingData)
 	})
 
@@ -113,7 +112,7 @@ func TestGetSpendStatuses(t *testing.T) {
 			UTXOHash: utxoHash1,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_OK), resp.Status)
+		require.Equal(t, int(utxo.Status_OK), resp.Status)
 	})
 
 	t.Run("GetSpend with wrong hash returns error", func(t *testing.T) {

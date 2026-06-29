@@ -5,7 +5,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	teraslab "github.com/icellan/teraslab/client/go"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,7 +14,7 @@ import (
 // equivalent condition.
 func TestMapErrorCode(t *testing.T) {
 	t.Run("OK maps to nil", func(t *testing.T) {
-		assert.NoError(t, mapErrorCode(teraslab.ErrCodeOK))
+		require.NoError(t, mapErrorCode(teraslab.ErrCodeOK))
 	})
 
 	// Sentinel-error codes: callers branch on errors.Is, so identity matters.
@@ -39,7 +38,7 @@ func TestMapErrorCode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := mapErrorCode(tc.code)
 			require.Error(t, err)
-			assert.ErrorIs(t, err, tc.want)
+			require.ErrorIs(t, err, tc.want)
 		})
 	}
 
@@ -57,7 +56,7 @@ func TestMapErrorCode(t *testing.T) {
 	}
 	for _, tc := range categories {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Error(t, mapErrorCode(tc.code))
+			require.Error(t, mapErrorCode(tc.code))
 		})
 	}
 
@@ -79,7 +78,7 @@ func TestMapErrorCode(t *testing.T) {
 		t.Run(tc.name+" is retryable", func(t *testing.T) {
 			err := mapErrorCode(tc.code)
 			require.Error(t, err)
-			assert.True(t, errors.IsRetryableError(err), "expected code %d to map to a retryable error", tc.code)
+			require.True(t, errors.IsRetryableError(err), "expected code %d to map to a retryable error", tc.code)
 		})
 	}
 
@@ -88,9 +87,9 @@ func TestMapErrorCode(t *testing.T) {
 		require.Error(t, err)
 		var tErr *errors.Error
 		require.True(t, errors.As(err, &tErr))
-		assert.Equal(t, errors.ERR_STORAGE_ERROR, tErr.Code())
+		require.Equal(t, errors.ERR_STORAGE_ERROR, tErr.Code())
 		// Distinct message so startup gating can identify a not-ready cluster.
-		assert.Contains(t, tErr.Message(), "cluster not ready")
+		require.Contains(t, tErr.Message(), "cluster not ready")
 	})
 
 	t.Run("PayloadMalformed is a processing error", func(t *testing.T) {
@@ -98,8 +97,8 @@ func TestMapErrorCode(t *testing.T) {
 		require.Error(t, err)
 		var tErr *errors.Error
 		require.True(t, errors.As(err, &tErr))
-		assert.Equal(t, errors.ERR_PROCESSING, tErr.Code())
-		assert.Contains(t, tErr.Message(), "payload malformed")
+		require.Equal(t, errors.ERR_PROCESSING, tErr.Code())
+		require.Contains(t, tErr.Message(), "payload malformed")
 	})
 }
 
@@ -107,11 +106,11 @@ func TestMapErrorCode(t *testing.T) {
 // mutation paths (mining, alert, locked) so partial failures are never dropped.
 func TestPartialErrorToError(t *testing.T) {
 	t.Run("nil PartialError returns nil", func(t *testing.T) {
-		assert.NoError(t, partialErrorToError("op", nil))
+		require.NoError(t, partialErrorToError("op", nil))
 	})
 
 	t.Run("empty Errors returns nil", func(t *testing.T) {
-		assert.NoError(t, partialErrorToError("op", &teraslab.PartialError{}))
+		require.NoError(t, partialErrorToError("op", &teraslab.PartialError{}))
 	})
 
 	t.Run("single item failure surfaces mapped error", func(t *testing.T) {
@@ -120,7 +119,7 @@ func TestPartialErrorToError(t *testing.T) {
 		}}
 		err := partialErrorToError("SetMinedMulti", pe)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, errors.ErrTxNotFound)
+		require.ErrorIs(t, err, errors.ErrTxNotFound)
 	})
 
 	t.Run("multiple item failures are joined", func(t *testing.T) {
@@ -131,7 +130,7 @@ func TestPartialErrorToError(t *testing.T) {
 		err := partialErrorToError("MarkTransactionsOnLongestChain", pe)
 		require.Error(t, err)
 		// errors.Join keeps both branches reachable via errors.Is.
-		assert.ErrorIs(t, err, errors.ErrTxNotFound)
-		assert.ErrorIs(t, err, errors.ErrTxConflicting)
+		require.ErrorIs(t, err, errors.ErrTxNotFound)
+		require.ErrorIs(t, err, errors.ErrTxConflicting)
 	})
 }

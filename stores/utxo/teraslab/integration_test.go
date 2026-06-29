@@ -15,7 +15,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,11 +58,11 @@ func TestGetMeta(t *testing.T) {
 	var data meta.Data
 	err = store.GetMeta(ctx, tx.TxIDChainHash(), &data)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(215), data.Fee)
-	assert.Equal(t, uint64(328), data.SizeInBytes)
-	assert.False(t, data.IsCoinbase)
+	require.Equal(t, uint64(215), data.Fee)
+	require.Equal(t, uint64(328), data.SizeInBytes)
+	require.False(t, data.IsCoinbase)
 	// GetMeta returns metadata only — it must not reconstruct the full tx body.
-	assert.Nil(t, data.Tx, "GetMeta must not populate data.Tx")
+	require.Nil(t, data.Tx, "GetMeta must not populate data.Tx")
 }
 
 // ---------------------------------------------------------------------------
@@ -82,33 +81,33 @@ func TestGetWithSpecificFields(t *testing.T) {
 	t.Run("only fee", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Fee)
 		require.NoError(t, err)
-		assert.Equal(t, uint64(215), resp.Fee)
+		require.Equal(t, uint64(215), resp.Fee)
 	})
 
 	t.Run("only IsCoinbase via Flags", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.IsCoinbase)
 		require.NoError(t, err)
-		assert.False(t, resp.IsCoinbase)
+		require.False(t, resp.IsCoinbase)
 	})
 
 	t.Run("only Conflicting", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Conflicting)
 		require.NoError(t, err)
-		assert.False(t, resp.Conflicting)
+		require.False(t, resp.Conflicting)
 	})
 
 	t.Run("only LockTime", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.LockTime)
 		require.NoError(t, err)
-		assert.Equal(t, tx.LockTime, resp.LockTime)
+		require.Equal(t, tx.LockTime, resp.LockTime)
 	})
 
 	t.Run("multiple fields", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Fee, fields.SizeInBytes, fields.IsCoinbase)
 		require.NoError(t, err)
-		assert.Equal(t, uint64(215), resp.Fee)
-		assert.Equal(t, uint64(328), resp.SizeInBytes)
-		assert.False(t, resp.IsCoinbase)
+		require.Equal(t, uint64(215), resp.Fee)
+		require.Equal(t, uint64(328), resp.SizeInBytes)
+		require.False(t, resp.IsCoinbase)
 	})
 }
 
@@ -131,7 +130,7 @@ func TestSetConflictingDirect(t *testing.T) {
 
 		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Conflicting)
 		require.NoError(t, err)
-		assert.True(t, resp.Conflicting)
+		require.True(t, resp.Conflicting)
 	})
 
 	t.Run("SetConflicting clears conflicting", func(t *testing.T) {
@@ -140,7 +139,7 @@ func TestSetConflictingDirect(t *testing.T) {
 
 		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Conflicting)
 		require.NoError(t, err)
-		assert.False(t, resp.Conflicting)
+		require.False(t, resp.Conflicting)
 	})
 
 	t.Run("SetConflicting empty list", func(t *testing.T) {
@@ -166,7 +165,7 @@ func TestGetConflictingChildren(t *testing.T) {
 		children, err := store.GetConflictingChildren(ctx, *childTx.Inputs[0].PreviousTxIDChainHash())
 		require.NoError(t, err)
 		require.Len(t, children, 1)
-		assert.Equal(t, *childTx.TxIDChainHash(), children[0])
+		require.Equal(t, *childTx.TxIDChainHash(), children[0])
 	})
 
 	t.Run("GetCounterConflicting returns spenders of a shared parent UTXO", func(t *testing.T) {
@@ -192,13 +191,13 @@ func TestGetConflictingChildren(t *testing.T) {
 
 		counter, err := store.GetCounterConflicting(ctx, *spenderTx.TxIDChainHash())
 		require.NoError(t, err)
-		assert.Contains(t, counter, *spenderTx.TxIDChainHash())
+		require.Contains(t, counter, *spenderTx.TxIDChainHash())
 	})
 
 	t.Run("GetConflictingChildren on non-parent returns empty", func(t *testing.T) {
 		children, err := store.GetConflictingChildren(ctx, *childTx.TxIDChainHash())
 		require.NoError(t, err)
-		assert.Len(t, children, 0)
+		require.Len(t, children, 0)
 	})
 }
 
@@ -262,7 +261,7 @@ func TestUnspendWithFlagAsLocked(t *testing.T) {
 	// The tx should be locked after unspend
 	resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Locked)
 	require.NoError(t, err)
-	assert.True(t, resp.Locked)
+	require.True(t, resp.Locked)
 }
 
 // ---------------------------------------------------------------------------
@@ -290,17 +289,17 @@ func TestGetUnminedTxIterator(t *testing.T) {
 		require.NoError(t, err)
 		// Should return at least our unmined tx
 		require.GreaterOrEqual(t, len(batch), 1)
-		assert.Nil(t, iter.Err())
+		require.Nil(t, iter.Err())
 
 		// The embedded *subtree.Node must be populated — block assembly reads the
 		// promoted Hash (and Fee/SizeInBytes) and nil-panics otherwise.
 		ut := batch[0]
 		require.NotNil(t, ut.Node, "UnminedTransaction.Node must be set")
-		assert.Equal(t, tx.TxIDChainHash().String(), ut.Hash.String())
+		require.Equal(t, tx.TxIDChainHash().String(), ut.Hash.String())
 		// TxInpoints must be non-nil and carry the tx's parents — the pruner uses
 		// ParentTxHashes to preserve parents of unmined txs.
 		require.NotNil(t, ut.TxInpoints, "UnminedTransaction.TxInpoints must be set")
-		assert.NotEmpty(t, ut.TxInpoints.ParentTxHashes, "TxInpoints must carry parent hashes")
+		require.NotEmpty(t, ut.TxInpoints.ParentTxHashes, "TxInpoints must carry parent hashes")
 	})
 
 	t.Run("prunable iterator with matching cutoff", func(t *testing.T) {
@@ -311,7 +310,7 @@ func TestGetUnminedTxIterator(t *testing.T) {
 
 		batch, err := iter.Next(context.Background())
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(batch), 1)
+		require.GreaterOrEqual(t, len(batch), 1)
 	})
 
 	t.Run("prunable iterator with low cutoff returns empty", func(t *testing.T) {
@@ -322,7 +321,7 @@ func TestGetUnminedTxIterator(t *testing.T) {
 
 		batch, err := iter.Next(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, batch, 0)
+		require.Len(t, batch, 0)
 	})
 
 	t.Run("iterator exhaustion returns nil", func(t *testing.T) {
@@ -333,12 +332,12 @@ func TestGetUnminedTxIterator(t *testing.T) {
 		// First call returns empty (no matching txs)
 		batch, err := iter.Next(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, batch, 0)
+		require.Len(t, batch, 0)
 
 		// Second call should also return nil (exhausted)
 		batch, err = iter.Next(context.Background())
 		require.NoError(t, err)
-		assert.Nil(t, batch)
+		require.Nil(t, batch)
 	})
 
 	t.Run("close then next returns nil", func(t *testing.T) {
@@ -350,7 +349,7 @@ func TestGetUnminedTxIterator(t *testing.T) {
 
 		batch, err := iter.Next(context.Background())
 		require.NoError(t, err)
-		assert.Nil(t, batch)
+		require.Nil(t, batch)
 	})
 }
 
@@ -376,7 +375,7 @@ func TestPreserveTransactionsWithData(t *testing.T) {
 	// Verify the tx still exists after preservation
 	resp, err := store.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
-	assert.NotNil(t, resp)
+	require.NotNil(t, resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +412,7 @@ func TestSpendMultipleOutputs(t *testing.T) {
 
 	spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
-	assert.Len(t, spends, 2)
+	require.Len(t, spends, 2)
 
 	// Verify both are spent
 	utxoHash0, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -421,11 +420,11 @@ func TestSpendMultipleOutputs(t *testing.T) {
 
 	resp0, err := store.GetSpend(ctx, &utxo.Spend{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash0})
 	require.NoError(t, err)
-	assert.Equal(t, int(utxo.Status_SPENT), resp0.Status)
+	require.Equal(t, int(utxo.Status_SPENT), resp0.Status)
 
 	resp1, err := store.GetSpend(ctx, &utxo.Spend{TxID: tx.TxIDChainHash(), Vout: 1, UTXOHash: utxoHash1})
 	require.NoError(t, err)
-	assert.Equal(t, int(utxo.Status_SPENT), resp1.Status)
+	require.Equal(t, int(utxo.Status_SPENT), resp1.Status)
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +465,7 @@ func TestBatchCreateAndGet(t *testing.T) {
 
 	for i, item := range items {
 		require.NotNil(t, item.Data, "item %d should have data", i)
-		assert.Greater(t, item.Data.Fee, uint64(0), "item %d should have non-zero fee", i)
+		require.Greater(t, item.Data.Fee, uint64(0), "item %d should have non-zero fee", i)
 	}
 }
 
@@ -529,7 +528,7 @@ func TestCreateWithLocked(t *testing.T) {
 
 	resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Locked)
 	require.NoError(t, err)
-	assert.True(t, resp.Locked)
+	require.True(t, resp.Locked)
 
 	// Spending locked tx should fail
 	spendTx := makeSpendTx(t, tx, 0)
@@ -561,5 +560,5 @@ func TestSetMinedThenGetBlockEntries(t *testing.T) {
 	resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
 	require.NoError(t, err)
 	require.Len(t, resp.BlockIDs, 1)
-	assert.Equal(t, uint32(999), resp.BlockIDs[0])
+	require.Equal(t, uint32(999), resp.BlockIDs[0])
 }

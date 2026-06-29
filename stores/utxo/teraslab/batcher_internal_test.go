@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,5 +99,5 @@ func TestMergeBatchContextsNilContextTreatedAsNeverCancels(t *testing.T) {
 		t.Fatal("merged ctx did not cancel after release()")
 	}
 
-	assert.Error(t, merged.Err())
+	require.Error(t, merged.Err())
 }

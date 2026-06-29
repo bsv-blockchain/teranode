@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	teraslab "github.com/icellan/teraslab/client/go"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,10 +53,10 @@ func TestFinalizeSpendResults(t *testing.T) {
 		res := mkResults(2)
 		hasErr, rollback := finalizeSpendResults(res,
 			map[int][]uint32{0: {7}, 1: {7}}, nil)
-		assert.False(t, hasErr)
-		assert.False(t, rollback)
-		assert.Equal(t, []uint32{7}, res[0].BlockIDs)
-		assert.Equal(t, []uint32{7}, res[1].BlockIDs)
+		require.False(t, hasErr)
+		require.False(t, rollback)
+		require.Equal(t, []uint32{7}, res[0].BlockIDs)
+		require.Equal(t, []uint32{7}, res[1].BlockIDs)
 	})
 
 	t.Run("double-spend on one input → ErrSpent + conflicting txid, needs rollback", func(t *testing.T) {
@@ -74,16 +73,16 @@ func TestFinalizeSpendResults(t *testing.T) {
 		}
 		hasErr, rollback := finalizeSpendResults(res, map[int][]uint32{0: {7}}, errs)
 
-		assert.True(t, hasErr)
-		assert.True(t, rollback, "AlreadySpent must trigger rollback of the sibling input")
+		require.True(t, hasErr)
+		require.True(t, rollback, "AlreadySpent must trigger rollback of the sibling input")
 		// sibling input 0 succeeded
-		assert.Equal(t, []uint32{7}, res[0].BlockIDs)
-		assert.Nil(t, res[0].Err)
+		require.Equal(t, []uint32{7}, res[0].BlockIDs)
+		require.Nil(t, res[0].Err)
 		// input 1 failed with ErrSpent + conflicting txid
 		require.Error(t, res[1].Err)
-		assert.ErrorIs(t, res[1].Err, errors.ErrSpent)
+		require.ErrorIs(t, res[1].Err, errors.ErrSpent)
 		require.NotNil(t, res[1].ConflictingTxID)
-		assert.Equal(t, conflictTxID.String(), res[1].ConflictingTxID.String())
+		require.Equal(t, conflictTxID.String(), res[1].ConflictingTxID.String())
 	})
 
 	t.Run("transient/internal error → hasError but no rollback", func(t *testing.T) {
@@ -92,8 +91,8 @@ func TestFinalizeSpendResults(t *testing.T) {
 			0: {ItemIndex: 0, Code: teraslab.ErrCodeInternal},
 		}
 		hasErr, rollback := finalizeSpendResults(res, nil, errs)
-		assert.True(t, hasErr)
-		assert.False(t, rollback, "internal/transient errors must not roll back (idempotent retry)")
+		require.True(t, hasErr)
+		require.False(t, rollback, "internal/transient errors must not roll back (idempotent retry)")
 	})
 
 	_ = spend.NewSpendingData

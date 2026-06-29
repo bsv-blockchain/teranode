@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +33,7 @@ func TestMarkTransactionsOnLongestChain(t *testing.T) {
 	t.Run("initial UnminedSince is set to block height", func(t *testing.T) {
 		resp, err := store.Get(ctx, tx1.TxIDChainHash(), fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(100), resp.UnminedSince)
+		require.Equal(t, uint32(100), resp.UnminedSince)
 	})
 
 	t.Run("mark on longest chain clears UnminedSince", func(t *testing.T) {
@@ -44,11 +43,11 @@ func TestMarkTransactionsOnLongestChain(t *testing.T) {
 
 		resp, err := store.Get(ctx, tx1.TxIDChainHash(), fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(0), resp.UnminedSince)
+		require.Equal(t, uint32(0), resp.UnminedSince)
 
 		resp, err = store.Get(ctx, tx2.TxIDChainHash(), fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(0), resp.UnminedSince)
+		require.Equal(t, uint32(0), resp.UnminedSince)
 	})
 
 	t.Run("mark off longest chain sets UnminedSince to current height", func(t *testing.T) {
@@ -61,7 +60,7 @@ func TestMarkTransactionsOnLongestChain(t *testing.T) {
 
 		resp, err := store.Get(ctx, tx1.TxIDChainHash(), fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(101), resp.UnminedSince)
+		require.Equal(t, uint32(101), resp.UnminedSince)
 	})
 
 	t.Run("mark back on longest chain clears UnminedSince again", func(t *testing.T) {
@@ -71,7 +70,7 @@ func TestMarkTransactionsOnLongestChain(t *testing.T) {
 
 		resp, err := store.Get(ctx, tx1.TxIDChainHash(), fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(0), resp.UnminedSince)
+		require.Equal(t, uint32(0), resp.UnminedSince)
 	})
 
 	t.Run("empty hash list is no-op", func(t *testing.T) {
@@ -100,13 +99,13 @@ func TestSetMinedMulti(t *testing.T) {
 			utxo.MinedBlockInfo{BlockID: 123, BlockHeight: 100, SubtreeIdx: 2, OnLongestChain: true})
 		require.NoError(t, err)
 		require.Len(t, blockIDsMap, 1)
-		assert.Equal(t, []uint32{123}, blockIDsMap[*txHash])
+		require.Equal(t, []uint32{123}, blockIDsMap[*txHash])
 
 		resp, err := store.Get(ctx, txHash, fields.BlockIDs)
 		require.NoError(t, err)
-		assert.Equal(t, []uint32{123}, resp.BlockIDs)
-		assert.Equal(t, []uint32{100}, resp.BlockHeights)
-		assert.Equal(t, []int{2}, resp.SubtreeIdxs)
+		require.Equal(t, []uint32{123}, resp.BlockIDs)
+		require.Equal(t, []uint32{100}, resp.BlockHeights)
+		require.Equal(t, []int{2}, resp.SubtreeIdxs)
 	})
 
 	t.Run("set mined second block", func(t *testing.T) {
@@ -114,13 +113,13 @@ func TestSetMinedMulti(t *testing.T) {
 			utxo.MinedBlockInfo{BlockID: 124, BlockHeight: 101, SubtreeIdx: 1, OnLongestChain: true})
 		require.NoError(t, err)
 		require.Len(t, blockIDsMap, 1)
-		assert.Equal(t, []uint32{123, 124}, blockIDsMap[*txHash])
+		require.Equal(t, []uint32{123, 124}, blockIDsMap[*txHash])
 
 		resp, err := store.Get(ctx, txHash, fields.BlockIDs)
 		require.NoError(t, err)
-		assert.Equal(t, []uint32{123, 124}, resp.BlockIDs)
-		assert.Equal(t, []uint32{100, 101}, resp.BlockHeights)
-		assert.Equal(t, []int{2, 1}, resp.SubtreeIdxs)
+		require.Equal(t, []uint32{123, 124}, resp.BlockIDs)
+		require.Equal(t, []uint32{100, 101}, resp.BlockHeights)
+		require.Equal(t, []int{2, 1}, resp.SubtreeIdxs)
 	})
 
 	t.Run("unset mined for one block", func(t *testing.T) {
@@ -131,8 +130,8 @@ func TestSetMinedMulti(t *testing.T) {
 
 		resp, err := store.Get(ctx, txHash, fields.BlockIDs)
 		require.NoError(t, err)
-		assert.Equal(t, []uint32{124}, resp.BlockIDs)
-		assert.Equal(t, []uint32{101}, resp.BlockHeights)
-		assert.Equal(t, []int{1}, resp.SubtreeIdxs)
+		require.Equal(t, []uint32{124}, resp.BlockIDs)
+		require.Equal(t, []uint32{101}, resp.BlockHeights)
+		require.Equal(t, []int{1}, resp.SubtreeIdxs)
 	})
 }

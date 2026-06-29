@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teraslabstore "github.com/bsv-blockchain/teranode/stores/utxo/teraslab"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,8 +42,8 @@ func TestBatchPreviousOutputsDecorateNoFetch(t *testing.T) {
 		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{nil, tx}))
 
 		// The pre-existing decoration must be left untouched.
-		assert.Equal(t, uint64(1000), tx.Inputs[0].PreviousTxSatoshis)
-		assert.Equal(t, script, tx.Inputs[0].PreviousTxScript)
+		require.Equal(t, uint64(1000), tx.Inputs[0].PreviousTxSatoshis)
+		require.Equal(t, script, tx.Inputs[0].PreviousTxScript)
 	})
 }
 
@@ -72,10 +71,10 @@ func TestBatchDecorate(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NotNil(t, items[0].Data)
-		assert.Equal(t, uint64(215), items[0].Data.Fee)
+		require.Equal(t, uint64(215), items[0].Data.Fee)
 
 		require.NotNil(t, items[1].Data)
-		assert.True(t, items[1].Data.IsCoinbase)
+		require.True(t, items[1].Data.IsCoinbase)
 	})
 
 	t.Run("handles missing transactions gracefully", func(t *testing.T) {
@@ -90,7 +89,7 @@ func TestBatchDecorate(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NotNil(t, items[0].Data)
-		assert.Nil(t, items[1].Data) // not found
+		require.Nil(t, items[1].Data) // not found
 	})
 
 	t.Run("empty slice is no-op", func(t *testing.T) {

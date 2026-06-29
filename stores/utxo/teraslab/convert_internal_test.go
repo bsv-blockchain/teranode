@@ -12,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	teraslab "github.com/icellan/teraslab/client/go"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,35 +30,35 @@ func mustTx(t *testing.T, hexStr string) *bt.Tx {
 
 func TestHashConversions(t *testing.T) {
 	t.Run("hashToTxID nil yields zero value", func(t *testing.T) {
-		assert.Equal(t, teraslab.TxID{}, hashToTxID(nil))
+		require.Equal(t, teraslab.TxID{}, hashToTxID(nil))
 	})
 	t.Run("hashToUtxoHash nil yields zero value", func(t *testing.T) {
-		assert.Equal(t, teraslab.UtxoHash{}, hashToUtxoHash(nil))
+		require.Equal(t, teraslab.UtxoHash{}, hashToUtxoHash(nil))
 	})
 	t.Run("hashToTxID copies bytes", func(t *testing.T) {
 		h := &chainhash.Hash{}
 		h[0], h[31] = 0xAB, 0xCD
 		got := hashToTxID(h)
-		assert.Equal(t, byte(0xAB), got[0])
-		assert.Equal(t, byte(0xCD), got[31])
+		require.Equal(t, byte(0xAB), got[0])
+		require.Equal(t, byte(0xCD), got[31])
 	})
 	t.Run("hashToUtxoHash copies bytes", func(t *testing.T) {
 		h := &chainhash.Hash{}
 		h[5] = 0x77
 		got := hashToUtxoHash(h)
-		assert.Equal(t, byte(0x77), got[5])
+		require.Equal(t, byte(0x77), got[5])
 	})
 }
 
 func TestSpendingDataWireConversions(t *testing.T) {
 	t.Run("spendingDataToWire nil yields zero wire", func(t *testing.T) {
-		assert.Equal(t, teraslab.SpendingData{}, spendingDataToWire(nil))
+		require.Equal(t, teraslab.SpendingData{}, spendingDataToWire(nil))
 	})
 	t.Run("spendingDataToWire nil TxID yields zero wire", func(t *testing.T) {
-		assert.Equal(t, teraslab.SpendingData{}, spendingDataToWire(&spend.SpendingData{}))
+		require.Equal(t, teraslab.SpendingData{}, spendingDataToWire(&spend.SpendingData{}))
 	})
 	t.Run("wireToSpendingData zero yields nil", func(t *testing.T) {
-		assert.Nil(t, wireToSpendingData(teraslab.SpendingData{}))
+		require.Nil(t, wireToSpendingData(teraslab.SpendingData{}))
 	})
 	t.Run("round trip preserves txid and vin", func(t *testing.T) {
 		txid := &chainhash.Hash{}
@@ -67,34 +66,34 @@ func TestSpendingDataWireConversions(t *testing.T) {
 		sd := spend.NewSpendingData(txid, 7)
 
 		wire := spendingDataToWire(sd)
-		assert.Equal(t, uint32(7), binary.LittleEndian.Uint32(wire[32:36]))
+		require.Equal(t, uint32(7), binary.LittleEndian.Uint32(wire[32:36]))
 
 		back := wireToSpendingData(wire)
 		require.NotNil(t, back)
-		assert.Equal(t, txid.String(), back.TxID.String())
-		assert.Equal(t, 7, back.Vin)
+		require.Equal(t, txid.String(), back.TxID.String())
+		require.Equal(t, 7, back.Vin)
 	})
 }
 
 func TestBuildFieldMask(t *testing.T) {
 	t.Run("empty request uses default Get mask", func(t *testing.T) {
-		assert.Equal(t, defaultGetMask, buildFieldMask(nil))
+		require.Equal(t, defaultGetMask, buildFieldMask(nil))
 	})
 	t.Run("known field maps to its bits", func(t *testing.T) {
-		assert.Equal(t, teraslab.FieldFee, buildFieldMask([]fields.FieldName{fields.Fee}))
+		require.Equal(t, teraslab.FieldFee, buildFieldMask([]fields.FieldName{fields.Fee}))
 	})
 	t.Run("multiple known fields OR their bits", func(t *testing.T) {
 		got := buildFieldMask([]fields.FieldName{fields.Fee, fields.SizeInBytes})
-		assert.Equal(t, teraslab.FieldFee|teraslab.FieldSizeInBytes, got)
+		require.Equal(t, teraslab.FieldFee|teraslab.FieldSizeInBytes, got)
 	})
 	t.Run("field that maps to zero falls back to FieldAll", func(t *testing.T) {
 		// fields.TxID maps to 0 (always available), so a mask of only TxID is 0
 		// and must fall back to FieldAll rather than fetching nothing.
-		assert.Equal(t, teraslab.FieldAll, buildFieldMask([]fields.FieldName{fields.TxID}))
+		require.Equal(t, teraslab.FieldAll, buildFieldMask([]fields.FieldName{fields.TxID}))
 	})
 	t.Run("unknown field is ignored, falling back to FieldAll", func(t *testing.T) {
 		// A FieldName not present in the lookup table contributes no bits.
-		assert.Equal(t, teraslab.FieldAll, buildFieldMask([]fields.FieldName{fields.FieldName("not-a-real-field")}))
+		require.Equal(t, teraslab.FieldAll, buildFieldMask([]fields.FieldName{fields.FieldName("not-a-real-field")}))
 	})
 }
 
@@ -106,14 +105,14 @@ func TestSerializeDeserializeInputs(t *testing.T) {
 		got, err := deserializeInputs(blob)
 		require.NoError(t, err)
 		require.Len(t, got, len(tx.Inputs))
-		assert.Equal(t, tx.Inputs[0].PreviousTxOutIndex, got[0].PreviousTxOutIndex)
-		assert.Equal(t, tx.Inputs[0].PreviousTxSatoshis, got[0].PreviousTxSatoshis)
+		require.Equal(t, tx.Inputs[0].PreviousTxOutIndex, got[0].PreviousTxOutIndex)
+		require.Equal(t, tx.Inputs[0].PreviousTxSatoshis, got[0].PreviousTxSatoshis)
 	})
 
 	t.Run("zero-length data yields nil (no stored inputs)", func(t *testing.T) {
 		got, err := deserializeInputs(nil)
 		require.NoError(t, err)
-		assert.Nil(t, got)
+		require.Nil(t, got)
 	})
 
 	t.Run("truncated count header is an error", func(t *testing.T) {
@@ -159,7 +158,7 @@ func TestSerializeDeserializeOutputs(t *testing.T) {
 		got, err := deserializeOutputs(blob)
 		require.NoError(t, err)
 		require.Len(t, got, len(tx.Outputs))
-		assert.Equal(t, tx.Outputs[0].Satoshis, got[0].Satoshis)
+		require.Equal(t, tx.Outputs[0].Satoshis, got[0].Satoshis)
 	})
 
 	t.Run("nil output round-trips as nil", func(t *testing.T) {
@@ -168,15 +167,15 @@ func TestSerializeDeserializeOutputs(t *testing.T) {
 		got, err := deserializeOutputs(blob)
 		require.NoError(t, err)
 		require.Len(t, got, 3)
-		assert.NotNil(t, got[0])
-		assert.Nil(t, got[1])
-		assert.NotNil(t, got[2])
+		require.NotNil(t, got[0])
+		require.Nil(t, got[1])
+		require.NotNil(t, got[2])
 	})
 
 	t.Run("zero-length data yields nil (no stored outputs)", func(t *testing.T) {
 		got, err := deserializeOutputs(nil)
 		require.NoError(t, err)
-		assert.Nil(t, got)
+		require.Nil(t, got)
 	})
 
 	t.Run("truncated count header is an error", func(t *testing.T) {
@@ -208,25 +207,25 @@ func TestTxToCreateItem(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
 		item, err := txToCreateItem(tx, 10, 100, 0, utxo.CreateOptions{})
 		require.NoError(t, err)
-		assert.Equal(t, uint64(215), item.Fee)
-		assert.False(t, item.IsCoinbase)
-		assert.Equal(t, uint32(0), item.SpendingHeight, "non-coinbase has no spending height")
-		assert.Len(t, item.UtxoHashes, len(tx.Outputs))
-		assert.Equal(t, hashToTxID(tx.TxIDChainHash()), item.TxID)
-		assert.NotEmpty(t, item.TxData.Inputs)
-		assert.NotEmpty(t, item.TxData.Outputs)
+		require.Equal(t, uint64(215), item.Fee)
+		require.False(t, item.IsCoinbase)
+		require.Equal(t, uint32(0), item.SpendingHeight, "non-coinbase has no spending height")
+		require.Len(t, item.UtxoHashes, len(tx.Outputs))
+		require.Equal(t, hashToTxID(tx.TxIDChainHash()), item.TxID)
+		require.NotEmpty(t, item.TxData.Inputs)
+		require.NotEmpty(t, item.TxData.Outputs)
 	})
 
 	t.Run("coinbase zeroes fee and sets maturity spending height", func(t *testing.T) {
 		tx := mustTx(t, internalCoinbaseHex)
 		item, err := txToCreateItem(tx, 42, 100, 0, utxo.CreateOptions{})
 		require.NoError(t, err)
-		assert.True(t, item.IsCoinbase)
-		assert.Equal(t, uint64(0), item.Fee)
+		require.True(t, item.IsCoinbase)
+		require.Equal(t, uint64(0), item.Fee)
 		// Coinbase outputs mature at blockHeight + CoinbaseMaturity, matching the
 		// Aerospike backend (create.go: blockHeight + CoinbaseMaturity). Storing
 		// just blockHeight would make the coinbase spendable at its creation height.
-		assert.Equal(t, uint32(142), item.SpendingHeight)
+		require.Equal(t, uint32(142), item.SpendingHeight)
 	})
 
 	t.Run("conflicting populates deduped parent txids", func(t *testing.T) {
@@ -234,15 +233,15 @@ func TestTxToCreateItem(t *testing.T) {
 		item, err := txToCreateItem(tx, 0, 100, 0, utxo.CreateOptions{Conflicting: true})
 		require.NoError(t, err)
 		require.Len(t, item.ParentTxIDs, 1)
-		assert.Equal(t, hashToTxID(tx.Inputs[0].PreviousTxIDChainHash()), item.ParentTxIDs[0])
-		assert.Equal(t, uint8(0x02), item.Flags) // conflicting bit
+		require.Equal(t, hashToTxID(tx.Inputs[0].PreviousTxIDChainHash()), item.ParentTxIDs[0])
+		require.Equal(t, uint8(0x02), item.Flags) // conflicting bit
 	})
 
 	t.Run("flags reflect locked and frozen options", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
 		item, err := txToCreateItem(tx, 0, 100, 0, utxo.CreateOptions{Locked: true, Frozen: true})
 		require.NoError(t, err)
-		assert.Equal(t, uint8(0x01|0x04), item.Flags)
+		require.Equal(t, uint8(0x01|0x04), item.Flags)
 	})
 
 	t.Run("OP_RETURN output gets zero utxo hash", func(t *testing.T) {
@@ -258,8 +257,8 @@ func TestTxToCreateItem(t *testing.T) {
 		item, err := txToCreateItem(tx, 0, 100, 0, utxo.CreateOptions{})
 		require.NoError(t, err)
 		require.Len(t, item.UtxoHashes, 2)
-		assert.NotEqual(t, teraslab.UtxoHash{}, item.UtxoHashes[0])
-		assert.Equal(t, teraslab.UtxoHash{}, item.UtxoHashes[1], "data output must hash to zero")
+		require.NotEqual(t, teraslab.UtxoHash{}, item.UtxoHashes[0])
+		require.Equal(t, teraslab.UtxoHash{}, item.UtxoHashes[1], "data output must hash to zero")
 	})
 
 	t.Run("explicit TxID and IsCoinbase overrides are honored", func(t *testing.T) {
@@ -269,9 +268,9 @@ func TestTxToCreateItem(t *testing.T) {
 		cb := true
 		item, err := txToCreateItem(tx, 7, 100, 0, utxo.CreateOptions{TxID: override, IsCoinbase: &cb})
 		require.NoError(t, err)
-		assert.Equal(t, hashToTxID(override), item.TxID)
-		assert.True(t, item.IsCoinbase)
-		assert.Equal(t, uint32(107), item.SpendingHeight, "coinbase spending height = blockHeight + maturity")
+		require.Equal(t, hashToTxID(override), item.TxID)
+		require.True(t, item.IsCoinbase)
+		require.Equal(t, uint32(107), item.SpendingHeight, "coinbase spending height = blockHeight + maturity")
 	})
 
 	t.Run("mined block info populates pointers", func(t *testing.T) {
@@ -281,9 +280,9 @@ func TestTxToCreateItem(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, item.MinedBlockID)
-		assert.Equal(t, uint32(5), *item.MinedBlockID)
-		assert.Equal(t, uint32(6), *item.MinedBlockHeight)
-		assert.Equal(t, uint32(7), *item.MinedSubtreeIdx)
+		require.Equal(t, uint32(5), *item.MinedBlockID)
+		require.Equal(t, uint32(6), *item.MinedBlockHeight)
+		require.Equal(t, uint32(7), *item.MinedSubtreeIdx)
 	})
 }
 
@@ -413,7 +412,7 @@ func TestRecordToMetaData(t *testing.T) {
 	t.Run("not found yields nil", func(t *testing.T) {
 		data, err := recordToMetaData(teraslab.TxRecord{Found: false})
 		require.NoError(t, err)
-		assert.Nil(t, data)
+		require.Nil(t, data)
 	})
 
 	t.Run("found-but-empty yields default tx", func(t *testing.T) {
@@ -435,13 +434,13 @@ func TestRecordToMetaData(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, uint64(99), data.Fee)
-		assert.Equal(t, uint64(123), data.SizeInBytes)
-		assert.Equal(t, uint32(5), data.LockTime)
-		assert.Equal(t, uint32(1000), data.UnminedSince)
-		assert.True(t, data.IsCoinbase)
-		assert.True(t, data.Conflicting)
-		assert.True(t, data.Locked)
+		require.Equal(t, uint64(99), data.Fee)
+		require.Equal(t, uint64(123), data.SizeInBytes)
+		require.Equal(t, uint32(5), data.LockTime)
+		require.Equal(t, uint32(1000), data.UnminedSince)
+		require.True(t, data.IsCoinbase)
+		require.True(t, data.Conflicting)
+		require.True(t, data.Locked)
 	})
 
 	t.Run("slots decode spent spending data and frozen flag", func(t *testing.T) {
@@ -462,13 +461,13 @@ func TestRecordToMetaData(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, data.SpendingDatas, 3)
 		require.NotNil(t, data.SpendingDatas[0])
-		assert.Equal(t, spendTxid.String(), data.SpendingDatas[0].TxID.String())
+		require.Equal(t, spendTxid.String(), data.SpendingDatas[0].TxID.String())
 		// A frozen slot surfaces the FrozenBytesTxHash sentinel as its spending
 		// data so the conflict-resolution helpers detect frozen UTXOs.
 		require.NotNil(t, data.SpendingDatas[1])
-		assert.Equal(t, subtree.FrozenBytesTxHash, *data.SpendingDatas[1].TxID)
-		assert.True(t, data.Frozen)
-		assert.Nil(t, data.SpendingDatas[2])
+		require.Equal(t, subtree.FrozenBytesTxHash, *data.SpendingDatas[1].TxID)
+		require.True(t, data.Frozen)
+		require.Nil(t, data.SpendingDatas[2])
 	})
 
 	t.Run("cold data reconstructs tx inputs/outputs/inpoints", func(t *testing.T) {
@@ -490,9 +489,9 @@ func TestRecordToMetaData(t *testing.T) {
 		data, err := recordToMetaData(rec)
 		require.NoError(t, err)
 		require.NotNil(t, data.Tx)
-		assert.Equal(t, src.Version, data.Tx.Version)
-		assert.Len(t, data.Tx.Inputs, len(src.Inputs))
-		assert.Len(t, data.Tx.Outputs, len(src.Outputs))
+		require.Equal(t, src.Version, data.Tx.Version)
+		require.Len(t, data.Tx.Inputs, len(src.Inputs))
+		require.Len(t, data.Tx.Outputs, len(src.Outputs))
 	})
 
 	t.Run("corrupt cold data propagates an error instead of a partial tx", func(t *testing.T) {
@@ -550,10 +549,10 @@ func TestRecordToMetaData(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Len(t, data.BlockIDs, 1)
-		assert.Equal(t, uint32(1), data.BlockIDs[0])
-		assert.Equal(t, uint32(2), data.BlockHeights[0])
-		assert.Equal(t, 3, data.SubtreeIdxs[0])
+		require.Equal(t, uint32(1), data.BlockIDs[0])
+		require.Equal(t, uint32(2), data.BlockHeights[0])
+		require.Equal(t, 3, data.SubtreeIdxs[0])
 		require.Len(t, data.ConflictingChildren, 1)
-		assert.Equal(t, chainhash.Hash(child), data.ConflictingChildren[0])
+		require.Equal(t, chainhash.Hash(child), data.ConflictingChildren[0])
 	})
 }

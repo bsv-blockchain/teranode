@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,9 +33,9 @@ func TestCreateRespectsCallerContext(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Error(t, err)
-		assert.True(t, teranodeerrors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
+		require.True(t, teranodeerrors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
 		// Returning before the batcher's flush window proves we did not block on the channel.
-		assert.Less(t, elapsed, 250*time.Millisecond, "Create should return promptly on a cancelled context")
+		require.Less(t, elapsed, 250*time.Millisecond, "Create should return promptly on a cancelled context")
 	})
 
 	t.Run("deadline-exceeded context returns ctx.Err", func(t *testing.T) {
@@ -51,7 +50,7 @@ func TestCreateRespectsCallerContext(t *testing.T) {
 
 		_, err := store.Create(ctx, tx2, 0)
 		require.Error(t, err)
-		assert.True(t,
+		require.True(t,
 			teranodeerrors.Is(err, context.DeadlineExceeded) || teranodeerrors.Is(err, context.Canceled),
 			"expected DeadlineExceeded or Canceled, got %v", err)
 	})
@@ -72,8 +71,8 @@ func TestGetRespectsCallerContext(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
-	assert.True(t, teranodeerrors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
-	assert.Less(t, elapsed, 250*time.Millisecond, "Get should return promptly on a cancelled context")
+	require.True(t, teranodeerrors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
+	require.Less(t, elapsed, 250*time.Millisecond, "Get should return promptly on a cancelled context")
 }
 
 // TestUnspendSurfacesPartialError verifies gap #14a: a PartialError from
@@ -106,7 +105,7 @@ func TestUnspendSurfacesPartialError(t *testing.T) {
 	require.Error(t, err, "Unspend must return the partial error instead of nil")
 	// The mapped Teranode error must remain matchable via errors.Is so callers'
 	// sentinel checks work; the missing tx yields a per-item TxNotFound.
-	assert.ErrorIs(t, err, teranodeerrors.ErrTxNotFound)
+	require.ErrorIs(t, err, teranodeerrors.ErrTxNotFound)
 }
 
 // TestPreserveTransactionsSurfacesPartialError verifies gap #14b: PartialError

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +27,7 @@ func TestQueryOldUnminedTransactions(t *testing.T) {
 	t.Run("query with cutoff above creation height returns tx", func(t *testing.T) {
 		hashes, err := store.QueryOldUnminedTransactions(ctx, 200)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(hashes), 1)
+		require.GreaterOrEqual(t, len(hashes), 1)
 
 		found := false
 		for _, h := range hashes {
@@ -37,7 +36,7 @@ func TestQueryOldUnminedTransactions(t *testing.T) {
 				break
 			}
 		}
-		assert.True(t, found, "expected tx1 in unmined results")
+		require.True(t, found, "expected tx1 in unmined results")
 	})
 
 	t.Run("query with cutoff below creation height returns nothing", func(t *testing.T) {
@@ -45,7 +44,7 @@ func TestQueryOldUnminedTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, h := range hashes {
-			assert.False(t, h.IsEqual(tx1.TxIDChainHash()), "tx1 should not be in results")
+			require.False(t, h.IsEqual(tx1.TxIDChainHash()), "tx1 should not be in results")
 		}
 	})
 }

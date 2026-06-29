@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,8 +35,8 @@ func TestSpendAndGetSpend(t *testing.T) {
 			UTXOHash: utxoHash0,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_OK), resp.Status)
-		assert.Nil(t, resp.SpendingData)
+		require.Equal(t, int(utxo.Status_OK), resp.Status)
+		require.Nil(t, resp.SpendingData)
 	})
 
 	spendTx := &bt.Tx{Version: 1, Inputs: []*bt.Input{{
@@ -51,7 +50,7 @@ func TestSpendAndGetSpend(t *testing.T) {
 		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
-		assert.Nil(t, spends[0].Err)
+		require.Nil(t, spends[0].Err)
 	})
 
 	t.Run("GetSpend after spend returns SPENT with correct spending data", func(t *testing.T) {
@@ -61,9 +60,9 @@ func TestSpendAndGetSpend(t *testing.T) {
 			UTXOHash: utxoHash0,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_SPENT), resp.Status)
+		require.Equal(t, int(utxo.Status_SPENT), resp.Status)
 		require.NotNil(t, resp.SpendingData)
-		assert.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+		require.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 	})
 }
 
@@ -104,7 +103,7 @@ func TestDoubleSpendReturnsConflictingTxID(t *testing.T) {
 	require.Len(t, spends, 1)
 	require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
 	require.NotNil(t, spends[0].ConflictingTxID)
-	assert.Equal(t, spendTx1.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
+	require.Equal(t, spendTx1.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
 }
 
 func TestUnspend(t *testing.T) {
@@ -146,7 +145,7 @@ func TestUnspend(t *testing.T) {
 		UTXOHash: utxoHash0,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int(utxo.Status_OK), resp.Status)
+	require.Equal(t, int(utxo.Status_OK), resp.Status)
 }
 
 func TestSpendConflictingTxFails(t *testing.T) {
@@ -230,15 +229,15 @@ func TestSpendConcurrentBatched(t *testing.T) {
 	for i := 0; i < n; i++ {
 		require.NoError(t, validRes[i].err, "valid spend vout %d", i)
 		require.Len(t, validRes[i].spends, 1)
-		assert.Nil(t, validRes[i].spends[0].Err, "valid spend vout %d result err", i)
-		assert.Equal(t, uint32(i), validRes[i].spends[0].Vout, "result must reference its own vout")
+		require.Nil(t, validRes[i].spends[0].Err, "valid spend vout %d result err", i)
+		require.Equal(t, uint32(i), validRes[i].spends[0].Vout, "result must reference its own vout")
 	}
 
 	// The invalid spend fails in isolation (non-existent parent) — no sibling contamination.
 	require.Error(t, invalidRes.err)
 	require.ErrorIs(t, invalidRes.err, errors.ErrUtxoError)
 	require.Len(t, invalidRes.spends, 1)
-	assert.ErrorIs(t, invalidRes.spends[0].Err, errors.ErrTxNotFound)
+	require.ErrorIs(t, invalidRes.spends[0].Err, errors.ErrTxNotFound)
 
 	// Confirm each parent output is now SPENT by ITS spending tx (no swap).
 	for i := 0; i < n; i++ {
@@ -246,9 +245,9 @@ func TestSpendConcurrentBatched(t *testing.T) {
 		require.NoError(t, err)
 		resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: uint32(i), UTXOHash: utxoHash})
 		require.NoError(t, err)
-		assert.Equal(t, int(utxo.Status_SPENT), resp.Status, "vout %d should be spent", i)
+		require.Equal(t, int(utxo.Status_SPENT), resp.Status, "vout %d should be spent", i)
 		require.NotNil(t, resp.SpendingData)
-		assert.Equal(t, validTxs[i].TxIDChainHash().String(), resp.SpendingData.TxID.String(),
+		require.Equal(t, validTxs[i].TxIDChainHash().String(), resp.SpendingData.TxID.String(),
 			"vout %d must be spent by its own tx", i)
 	}
 }
