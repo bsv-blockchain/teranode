@@ -1634,35 +1634,32 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	var errs []error
 
-	// Stop the underlying P2P node
-	if s.P2PClient != nil {
-		if err := s.P2PClient.Close(); err != nil {
-			s.logger.Errorf("[Stop] failed to stop P2P node: %v", err)
+	// collect logs a component-shutdown error under a consistent prefix and records
+	// it, so Stop can attempt every component and still report a failure afterwards.
+	collect := func(action string, err error) {
+		if err != nil {
+			s.logger.Errorf("[Stop] failed to %s: %v", action, err)
 			errs = append(errs, err)
 		}
+	}
+
+	// Stop the underlying P2P node
+	if s.P2PClient != nil {
+		collect("stop P2P node", s.P2PClient.Close())
 	}
 
 	// close the kafka consumers gracefully
 	if s.rejectedTxKafkaConsumerClient != nil {
-		if err := s.rejectedTxKafkaConsumerClient.Close(); err != nil {
-			s.logger.Errorf("[Stop] failed to close rejected tx kafka consumer gracefully: %v", err)
-			errs = append(errs, err)
-		}
+		collect("close rejected tx kafka consumer gracefully", s.rejectedTxKafkaConsumerClient.Close())
 	}
 
 	if s.invalidBlocksKafkaConsumerClient != nil {
-		if err := s.invalidBlocksKafkaConsumerClient.Close(); err != nil {
-			s.logger.Errorf("[Stop] failed to close invalid blocks kafka consumer gracefully: %v", err)
-			errs = append(errs, err)
-		}
+		collect("close invalid blocks kafka consumer gracefully", s.invalidBlocksKafkaConsumerClient.Close())
 	}
 
 	// DC12: close the invalid-subtree consumer too, matching its two siblings above.
 	if s.invalidSubtreeKafkaConsumerClient != nil {
-		if err := s.invalidSubtreeKafkaConsumerClient.Close(); err != nil {
-			s.logger.Errorf("[Stop] failed to close invalid subtree kafka consumer gracefully: %v", err)
-			errs = append(errs, err)
-		}
+		collect("close invalid subtree kafka consumer gracefully", s.invalidSubtreeKafkaConsumerClient.Close())
 	}
 
 	// DC11: stop the async producers so their final flush runs during shutdown
@@ -1674,10 +1671,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	kafka.StopProducerCtx(ctx, s.logger, "p2p blocks", s.blocksKafkaProducerClient)
 
 	if s.e != nil {
-		if err := s.e.Shutdown(ctx); err != nil {
-			s.logger.Errorf("[Stop] failed to shutdown Echo server: %v", err)
-			errs = append(errs, err)
-		}
+		collect("shutdown Echo server", s.e.Shutdown(ctx))
 	}
 
 	// Stop the peer map cleanup ticker
