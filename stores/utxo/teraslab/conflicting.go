@@ -57,12 +57,14 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, v
 	affectedParentSpends := make([]*utxo.Spend, 0)
 	spendingTxHashes := make([]chainhash.Hash, 0)
 
-	// Fetch every tx's record in a single batched read instead of one Get per
-	// tx (the previous N+1 fan-out). The records are index-aligned with txids
-	// (same contract BatchDecorate relies on). A missing record is a hard error
-	// here exactly as the per-tx Get path was: Get returns ErrTxNotFound for an
-	// absent record, which aborted the whole call.
-	records, err := s.client.GetRecordBatch(ctx, buildFieldMask([]fields.FieldName{fields.Tx}), txids)
+	// Fetch every tx's record in a single batched read instead of one Get per tx
+	// (the previous N+1 fan-out). FieldUtxoSlots is included so each output's
+	// spend state — the spending children — comes from this same batch read
+	// instead of a GetSpend RPC per output (the previous N*M fan-out). The records
+	// are index-aligned with txids (same contract BatchDecorate relies on). A
+	// missing record is a hard error here exactly as the per-tx Get path was.
+	mask := buildFieldMask([]fields.FieldName{fields.Tx}) | teraslab.FieldUtxoSlots
+	records, err := s.client.GetRecordBatch(ctx, mask, txids)
 	if err != nil {
 		if _, ok := err.(*teraslab.NotFoundError); ok {
 			return nil, nil, errors.ErrTxNotFound
@@ -99,35 +101,16 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, v
 			})
 		}
 
-		// Any tx spending this tx's outputs is a counter/spending child.
-		for vout, output := range tx.Outputs {
-			// Data outputs (OP_RETURN) are stored with a zero UTXO hash and are
-			// never spendable, so they have no spending child. Skip them, mirroring
-			// Create (txToCreateItem). Recomputing a hash here would mismatch the
-			// stored zero hash and make GetSpend return ErrTxNotFound, aborting
-			// SetConflicting for any tx with a data output.
-			if output.LockingScript.IsData() {
-				continue
-			}
-
-			vout32 := uint32(vout) //nolint:gosec // output count is bounded well below u32
-
-			utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, vout32)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			resp, err := s.GetSpend(ctx, &utxo.Spend{
-				TxID:     tx.TxIDChainHash(),
-				Vout:     vout32,
-				UTXOHash: utxoHash,
-			})
-			if err != nil {
-				return nil, nil, err
-			}
-
-			if resp != nil && resp.SpendingData != nil && resp.SpendingData.TxID != nil {
-				spendingTxHashes = append(spendingTxHashes, *resp.SpendingData.TxID)
+		// Any tx spending this tx's outputs is a counter/spending child. The
+		// spending data was read from the record's slots into data.SpendingDatas
+		// (FieldUtxoSlots above) — one batched read for all outputs, not a GetSpend
+		// RPC per output. A non-spendable data output (zero stored hash) is never
+		// spent, so its slot carries no spending data and is naturally skipped — no
+		// era-dependent IsData() guess, which would disagree with Create's
+		// ShouldStoreOutputAsUTXO storability rule.
+		for _, sd := range data.SpendingDatas {
+			if sd != nil && sd.TxID != nil {
+				spendingTxHashes = append(spendingTxHashes, *sd.TxID)
 			}
 		}
 	}
