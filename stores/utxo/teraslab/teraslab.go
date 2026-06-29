@@ -136,14 +136,17 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		walEngine:     walURL.Scheme,
 	}
 
-	// Initialize batchers
+	// Initialize batchers. background (async batch callbacks) and drain mode
+	// (flush immediately vs accumulate to size/timeout) are orthogonal go-batcher
+	// knobs: wire background from the dedicated BatcherBackground setting (matching
+	// aerospike.go and block assembly), and apply drain mode separately below.
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
 	storeBatchDuration := time.Duration(tSettings.UtxoStore.StoreBatcherDurationMillis) * time.Millisecond
-	s.storeBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendStoreBatch, !tSettings.BatcherDrainMode)
+	s.storeBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendStoreBatch, tSettings.BatcherBackground)
 
 	getBatchSize := tSettings.UtxoStore.GetBatcherSize
 	getBatchDuration := time.Duration(tSettings.UtxoStore.GetBatcherDurationMillis) * time.Millisecond
-	s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, !tSettings.BatcherDrainMode)
+	s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, tSettings.BatcherBackground)
 
 	// Spend batcher: coalesces per-transaction spends into shared SpendBatch RPCs
 	// (grouped by params in sendSpendBatch) so the server amortizes its per-RPC
@@ -151,7 +154,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// incurs its own fsync, which caps catchup throughput on fsync-bound storage.
 	spendBatchSize := tSettings.UtxoStore.SpendBatcherSize
 	spendBatchDuration := time.Duration(tSettings.UtxoStore.SpendBatcherDurationMillis) * time.Millisecond
-	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatch, !tSettings.BatcherDrainMode)
+	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatch, tSettings.BatcherBackground)
 
 	if tSettings.BatcherDrainMode {
 		s.getBatcher.SetDrainMode(true)
