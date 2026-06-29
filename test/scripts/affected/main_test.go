@@ -34,7 +34,7 @@ func TestCompute(t *testing.T) {
 	const m = modulePath
 
 	t.Run("global input forces full", func(t *testing.T) {
-		for _, f := range []string{"go.mod", "go.sum", "Makefile", ".github/workflows/x.yaml", "settings/dev.conf", "settings.conf", ".golangci.yml", "test/scripts/run_tests_sequentially.sh", "test/scripts/affected/main.go"} {
+		for _, f := range []string{"go.mod", "go.sum", "Makefile", ".github/workflows/x.yaml", "settings/dev.conf", "settings.conf", ".golangci.yml", ".golangci.json", "test/scripts/run_tests_sequentially.sh", "test/scripts/affected/main.go", "Dockerfile", "test/utils/explorer/Dockerfile", "compose/docker-compose-chainintegrity.yml", "test/docker-compose.e2etest.yml"} {
 			res := compute([]string{f}, fixtureGraph())
 			require.True(t, res.Full, "expected full for %s", f)
 		}
@@ -131,11 +131,12 @@ func TestCompute(t *testing.T) {
 }
 
 func TestIsGlobalInput(t *testing.T) {
-	yes := []string{"go.mod", "go.sum", "Makefile", ".github/workflows/ci.yaml", ".github/actions/x/action.yml", "settings/dev.conf", "settings.conf", "settings_local.conf", ".golangci.yml", ".golangci.yaml", "test/scripts/run_tests_sequentially.sh", "test/scripts/affected/main.go"}
+	yes := []string{"go.mod", "go.sum", "Makefile", ".github/workflows/ci.yaml", ".github/actions/x/action.yml", "settings/dev.conf", "settings.conf", "settings_local.conf", ".golangci.yml", ".golangci.yaml", ".golangci.json", ".golangci.toml", "test/scripts/run_tests_sequentially.sh", "test/scripts/affected/main.go",
+		"Dockerfile", "test/utils/cmd/tstore/Dockerfile", "compose/docker-compose-blasters.yml", "compose/docker-compose-chainintegrity.yml", "test/docker-compose-host.yml", "test/docker-compose.e2etest.yml"}
 	for _, f := range yes {
 		require.True(t, isGlobalInput(f), f)
 	}
-	no := []string{"services/blockchain/server.go", "docs/x.md", "README.md", "test/sequentialtest/x_test.go"}
+	no := []string{"services/blockchain/server.go", "docs/x.md", "README.md", "test/sequentialtest/x_test.go", "services/blockchain/config.json", "test/e2e/daemon/ready/ready_test.go"}
 	for _, f := range no {
 		require.False(t, isGlobalInput(f), f)
 	}

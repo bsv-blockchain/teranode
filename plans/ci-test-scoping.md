@@ -34,9 +34,10 @@ sequentialtest suites — without ever letting a real break reach `main` undetec
 **Tier 0 — Global inputs → run FULL suite (unit + smoke + sequential)**
 Import graph can't capture the blast radius of these:
 `go.mod`, `go.sum`, `Makefile`, `.github/workflows/**`, `.github/actions/**`,
-`settings/` + `settings*.conf`, `.golangci.yml`, test-relevant Dockerfiles,
-the scoping tool/scripts themselves. Also forced by the `ci-full` label and by
-push to `main`/`staging`/`release`.
+`settings/` + `settings*.conf`, `.golangci.{yml,yaml,json,toml}`, any `Dockerfile*`
+(root image + `test/utils` helper images), the `test/docker-compose*` and
+`compose/docker-compose*` stacks, the scoping tool/scripts themselves. Also forced
+by the `ci-full` label and by push to `main`/`staging`/`release`.
 
 **Tier 1 — No Go and no test-relevant files changed → run NOTHING.**
 Docs, markdown, unrelated assets.

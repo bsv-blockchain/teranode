@@ -93,11 +93,23 @@ func isGlobalInput(f string) bool {
 		strings.HasPrefix(f, "settings/"),
 		strings.HasPrefix(f, "test/scripts/affected/"),
 		f == "test/scripts/run_tests_sequentially.sh",
+		// Test/CI build & runtime infra the import graph cannot see: the compose
+		// stacks that wire e2e/smoke/chainintegrity nodes together, and the lint
+		// config (any encoding) that gates the linter jobs.
+		strings.HasPrefix(f, "test/docker-compose"),
+		strings.HasPrefix(f, "compose/docker-compose"),
 		strings.HasSuffix(f, ".golangci.yml"),
-		strings.HasSuffix(f, ".golangci.yaml"):
+		strings.HasSuffix(f, ".golangci.yaml"),
+		strings.HasSuffix(f, ".golangci.json"),
+		strings.HasSuffix(f, ".golangci.toml"):
 		return true
 	}
 	base := filepath.Base(f)
+	// Any Dockerfile (root image + test/utils helper images) builds something the
+	// e2e/smoke suites run against; a change there can break tests no Go edge links.
+	if strings.HasPrefix(base, "Dockerfile") {
+		return true
+	}
 	return strings.HasPrefix(base, "settings") && strings.HasSuffix(base, ".conf")
 }
 
@@ -274,7 +286,10 @@ func goList(root string) ([]Pkg, error) {
 	return pkgs, nil
 }
 
-func readChangedFiles(r *bufio.Scanner) []string {
+// readChangedFiles reads the newline-separated changed-file list from r. A read
+// error (anything other than clean EOF) is returned rather than swallowed: a
+// truncated list would silently under-select the test set.
+func readChangedFiles(r *bufio.Scanner) ([]string, error) {
 	var files []string
 	for r.Scan() {
 		line := strings.TrimSpace(r.Text())
@@ -282,25 +297,36 @@ func readChangedFiles(r *bufio.Scanner) []string {
 			files = append(files, line)
 		}
 	}
-	return files
+	if err := r.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
-func emit(res Result, asJSON bool, w *os.File) {
+// emit writes the result. The whole key=value block is buffered and written
+// once so a short write surfaces as an error the caller fails on, rather than a
+// truncated output set that would silently skip CI jobs.
+func emit(res Result, asJSON bool, w *os.File) error {
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(res)
-		return
+		return enc.Encode(res)
 	}
-	fmt.Fprintf(w, "full=%t\n", res.Full)
-	fmt.Fprintf(w, "any_go=%t\n", res.AnyGo)
-	fmt.Fprintf(w, "reason=%s\n", res.Reason)
-	fmt.Fprintf(w, "run_unit=%t\n", res.RunUnit)
-	fmt.Fprintf(w, "unit_pkgs=%s\n", strings.Join(res.UnitPkgs, " "))
-	fmt.Fprintf(w, "run_smoke=%t\n", res.RunSmoke)
-	fmt.Fprintf(w, "run_chainintegrity=%t\n", res.RunChainIntegrity)
-	fmt.Fprintf(w, "run_seq=%t\n", res.RunSeq)
-	fmt.Fprintf(w, "seq_pkgs=%s\n", strings.Join(res.SeqPkgs, " "))
+	// reason is free-form and can echo an attacker-influenced filename; strip
+	// CR/LF so it can never inject extra key=value lines into $GITHUB_OUTPUT.
+	reason := strings.NewReplacer("\r", " ", "\n", " ").Replace(res.Reason)
+	var b strings.Builder
+	fmt.Fprintf(&b, "full=%t\n", res.Full)
+	fmt.Fprintf(&b, "any_go=%t\n", res.AnyGo)
+	fmt.Fprintf(&b, "reason=%s\n", reason)
+	fmt.Fprintf(&b, "run_unit=%t\n", res.RunUnit)
+	fmt.Fprintf(&b, "unit_pkgs=%s\n", strings.Join(res.UnitPkgs, " "))
+	fmt.Fprintf(&b, "run_smoke=%t\n", res.RunSmoke)
+	fmt.Fprintf(&b, "run_chainintegrity=%t\n", res.RunChainIntegrity)
+	fmt.Fprintf(&b, "run_seq=%t\n", res.RunSeq)
+	fmt.Fprintf(&b, "seq_pkgs=%s\n", strings.Join(res.SeqPkgs, " "))
+	_, err := w.WriteString(b.String())
+	return err
 }
 
 func main() {
@@ -308,13 +334,20 @@ func main() {
 	asJSON := flag.Bool("json", false, "emit JSON instead of key=value lines")
 	flag.Parse()
 
-	changed := readChangedFiles(bufio.NewScanner(os.Stdin))
+	changed, err := readChangedFiles(bufio.NewScanner(os.Stdin))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "affected: read stdin:", err)
+		os.Exit(1)
+	}
 
 	// Fast path: a global input change is full regardless of the graph, so skip
 	// the (relatively expensive) `go list` entirely.
 	for _, f := range changed {
 		if isGlobalInput(f) {
-			emit(Result{Full: true, AnyGo: true, Reason: "global input changed: " + f}, *asJSON, os.Stdout)
+			if err := emit(Result{Full: true, AnyGo: true, Reason: "global input changed: " + f}, *asJSON, os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "affected: emit:", err)
+				os.Exit(1)
+			}
 			return
 		}
 	}
@@ -324,5 +357,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "affected:", err)
 		os.Exit(1)
 	}
-	emit(compute(changed, pkgs), *asJSON, os.Stdout)
+	if err := emit(compute(changed, pkgs), *asJSON, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "affected: emit:", err)
+		os.Exit(1)
+	}
 }

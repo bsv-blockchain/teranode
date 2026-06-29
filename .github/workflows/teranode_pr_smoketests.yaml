@@ -238,10 +238,13 @@ jobs:
 
       - name: Run sequential shard
         # On full runs SEQ_PKGS is empty → all sequential packages. On scoped runs
-        # it restricts the shard to the affected packages.
-        run: make sequentialtest-shard SHARD=${{ matrix.shard }} TOTAL=7 SEQ_PKGS="${{ needs.scope.outputs.seq_pkgs }}"
+        # it restricts the shard to the affected packages. SEQ_PKGS comes in via
+        # env (not ${{ }} interpolated into the run-line) so the tool-produced
+        # package list can never be parsed as shell.
+        run: make sequentialtest-shard SHARD=${{ matrix.shard }} TOTAL=7 SEQ_PKGS="$SEQ_PKGS"
         env:
           settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+          SEQ_PKGS: ${{ needs.scope.outputs.seq_pkgs }}
 
       - name: Upload sequential shard results
         if: always()

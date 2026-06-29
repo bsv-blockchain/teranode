@@ -19,7 +19,7 @@ outputs:
     description: Run the complete suite; ignore the scoped lists.
     value: ${{ steps.scope.outputs.full }}
   any_go:
-    description: Any .go file changed → run linters.
+    description: Any .go file changed -> run linters.
     value: ${{ steps.scope.outputs.any_go }}
   run_unit:
     description: Run scoped unit tests.
@@ -42,7 +42,7 @@ outputs:
 
 runs:
   using: 'composite'
-  # NOTE: the calling job MUST run actions/checkout before invoking this action —
+  # NOTE: the calling job MUST run actions/checkout before invoking this action -
   # GitHub resolves local `./.github/actions/...` references from the checked-out
   # workspace, and `go run`/`go list` need the source tree present.
   steps:
@@ -51,7 +51,7 @@ runs:
         go-version: ${{ inputs.go-version }}
         cache: false
 
-    # Module cache only — we just `go run`/`go list`, no -race build.
+    # Module cache only - we just `go run`/`go list`, no -race build.
     - name: Restore Go caches
       uses: ./.github/actions/go-cache
       with:
@@ -65,23 +65,47 @@ runs:
         FORCE_FULL: ${{ inputs.force-full }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
-        set -euo pipefail
-        if [ "$FORCE_FULL" = "true" ]; then
+        set -uo pipefail
+
+        # Scoping is an OPTIMIZATION, never a gate: any failure here must fall
+        # back to the full suite (fail-open), not skip every test job. A scope
+        # job that exits non-zero - or emits a partial/empty output set - would
+        # leave every downstream `if: needs.scope.outputs.* == 'true'` false, so
+        # all test/lint/smoke/sequential jobs would be SKIPPED, producing a green
+        # PR with zero tests run. So on any error we write a complete full=true
+        # output set and exit 0.
+        emit_full() {
           {
             echo "full=true"; echo "any_go=true"
-            echo "reason=ci-full label set — forcing full suite"
+            echo "reason=$1"
             echo "run_unit=false"; echo "unit_pkgs="
             echo "run_smoke=false"; echo "run_chainintegrity=false"
             echo "run_seq=false"; echo "seq_pkgs="
           } >> "$GITHUB_OUTPUT"
-          echo "ci-full label set — forcing full suite"
+          echo "$1"
+        }
+
+        if [ "$FORCE_FULL" = "true" ]; then
+          emit_full "ci-full label set - forcing full suite"
           exit 0
         fi
 
         # Changed-file list via the API (no deep git history needed).
-        gh pr diff "$PR_NUMBER" --name-only > /tmp/changed-files.txt
+        if ! gh pr diff "$PR_NUMBER" --name-only > /tmp/changed-files.txt; then
+          echo "::warning::scope: gh pr diff failed - running full suite"
+          emit_full "scope error (gh pr diff failed) - running full suite"
+          exit 0
+        fi
         echo "::group::Changed files"; cat /tmp/changed-files.txt; echo "::endgroup::"
 
-        # Human-readable decision in the log, machine-readable into GITHUB_OUTPUT.
-        go run ./test/scripts/affected -json < /tmp/changed-files.txt
-        go run ./test/scripts/affected < /tmp/changed-files.txt >> "$GITHUB_OUTPUT"
+        # Human-readable decision in the log (non-fatal - log only).
+        go run ./test/scripts/affected -json < /tmp/changed-files.txt || true
+
+        # Machine-readable set: stage to a temp file so a tool failure or short
+        # write falls back to full, never appends a partial set to $GITHUB_OUTPUT.
+        if go run ./test/scripts/affected < /tmp/changed-files.txt > /tmp/scope-output.txt; then
+          cat /tmp/scope-output.txt >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::scope: affected tool failed - running full suite"
+          emit_full "scope error (affected tool failed) - running full suite"
+        fi

@@ -146,14 +146,19 @@ jobs:
             echo "::endgroup::"
           }
           trap summary EXIT
-          if [ "${{ needs.scope.outputs.full }}" != "true" ]; then
+          if [ "$SCOPE_FULL" != "true" ]; then
             # Scoped run: only test the affected packages, no coverage instrumentation.
             # This avoids compiling all packages under -coverpkg=./... which is the
             # primary driver of the ~110GB peak on full runs.
-            make test TEST_PKGS="${{ needs.scope.outputs.unit_pkgs }}"
+            make test TEST_PKGS="$UNIT_PKGS"
           else
             make test
           fi
+        # Pass scope outputs via env (not ${{ }} interpolated into the run-line) so
+        # the tool-produced package list can never be parsed as shell.
+        env:
+          SCOPE_FULL: ${{ needs.scope.outputs.full }}
+          UNIT_PKGS: ${{ needs.scope.outputs.unit_pkgs }}
         continue-on-error: false
 
       - name: Upload coverage report
