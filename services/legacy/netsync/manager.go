@@ -2393,13 +2393,16 @@ func (sm *SyncManager) Stop() error {
 	// tearing down transports.
 	sm.closeTxAnnounceBatcher()
 
-	// DC11: synchronously stop the legacy INV async producer so its final flush
-	// completes inside the bounded Stop() window. Safe here — handlerDone above
-	// guarantees no more sends to legacyKafkaInvCh, which producer.Stop() closes.
+	// DC11: stop the legacy INV async producer so its final flush runs during
+	// shutdown. Safe here — handlerDone above guarantees no more sends to
+	// legacyKafkaInvCh, which producer.Stop() closes. Stop() has no caller ctx to
+	// honour (Stop() takes none), so it is raced against an internal timeout: a
+	// wedged broker flush can't block shutdown, and the outstanding Stop() finishes
+	// the flush later if it can.
 	if sm.legacyKafkaInvProducer != nil {
-		if err := sm.legacyKafkaInvProducer.Stop(); err != nil {
-			sm.logger.Errorf("[Legacy Manager] failed to stop legacy INV kafka producer gracefully: %v", err)
-		}
+		stopCtx, cancel := context.WithTimeout(context.Background(), util.DefaultBatcherDrainTimeout)
+		kafka.StopProducerCtx(stopCtx, sm.logger, "legacy INV", sm.legacyKafkaInvProducer)
+		cancel()
 	}
 
 	return nil

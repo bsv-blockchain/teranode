@@ -1665,21 +1665,13 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
-	// DC11: synchronously stop the async producers so their final flush completes
-	// inside the bounded Stop() window instead of racing process exit.
-	if s.subtreeKafkaProducerClient != nil {
-		if err := s.subtreeKafkaProducerClient.Stop(); err != nil {
-			s.logger.Errorf("[Stop] failed to stop subtree kafka producer gracefully: %v", err)
-			errs = append(errs, err)
-		}
-	}
-
-	if s.blocksKafkaProducerClient != nil {
-		if err := s.blocksKafkaProducerClient.Stop(); err != nil {
-			s.logger.Errorf("[Stop] failed to stop blocks kafka producer gracefully: %v", err)
-			errs = append(errs, err)
-		}
-	}
+	// DC11: stop the async producers so their final flush runs during shutdown
+	// instead of racing process exit. Each Stop() is raced against ctx so a wedged
+	// broker flush can't block past the bounded Stop() window — the outstanding
+	// Stop() finishes the flush later if it can. Errors are logged (the timeout
+	// path leaves Stop() still running, so it can't be aggregated synchronously).
+	kafka.StopProducerCtx(ctx, s.logger, "p2p subtree", s.subtreeKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, s.logger, "p2p blocks", s.blocksKafkaProducerClient)
 
 	if s.e != nil {
 		if err := s.e.Shutdown(ctx); err != nil {

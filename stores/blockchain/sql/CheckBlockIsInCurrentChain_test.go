@@ -223,7 +223,7 @@ func TestCheckBlockIsInCurrentChain_InMemory_PhantomBelowMaxID(t *testing.T) {
 // than reject. Pre-fix this returned false; post-fix it returns true.
 func TestCheckBlockIsInCurrentChain_InMemory_UninitialisedMaxBlockID(t *testing.T) {
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	_, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)

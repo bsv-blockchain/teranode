@@ -1086,10 +1086,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // It ensures clean termination of all service resources and connections.
 //
 // Parameters:
-//   - ctx: Context for shutdown operations (currently unused)
+//   - ctx: Context bounding the shutdown; the BlockValidation.Close() (which stops the invalid-block producer) is raced against it so a wedged broker can't stall shutdown
 //
 // Returns an error if shutdown encounters issues, though typically returns nil
-func (u *Server) Stop(_ context.Context) error {
+func (u *Server) Stop(ctx context.Context) error {
 	u.processBlockNotify.Stop()
 	u.catchupAlternatives.Stop()
 	// nil-guarded: this cache is newer than some Server-literal test fixtures that
@@ -1103,10 +1103,24 @@ func (u *Server) Stop(_ context.Context) error {
 		u.blockValidation.Wait()
 		u.blockValidation.StopCaches()
 
-		// DC11: drain the BlockValidation-owned invalid-block kafka producer
-		// synchronously within this bounded Stop() window.
-		if err := u.blockValidation.Close(); err != nil {
-			u.logger.Errorf("[BlockValidation] failed to close block validation cleanly: %v", err)
+		// DC11: drain the BlockValidation-owned invalid-block kafka producer via
+		// Close(). Close() ends in a producer Stop() whose final flush does not
+		// honour a deadline, so it is raced against ctx here: a wedged broker flush
+		// can't block past the bounded Stop() window, and the outstanding Close()
+		// (its inner producer Stop()) finishes the flush later if it can. Guarded
+		// and non-fatal.
+		closeDone := make(chan struct{})
+		go func() {
+			defer close(closeDone)
+			if err := u.blockValidation.Close(); err != nil {
+				u.logger.Errorf("[BlockValidation] failed to close block validation cleanly: %v", err)
+			}
+		}()
+
+		select {
+		case <-closeDone:
+		case <-ctx.Done():
+			u.logger.Errorf("[BlockValidation] block validation close exceeded stop budget; relying on outstanding close: %v", ctx.Err())
 		}
 	}
 

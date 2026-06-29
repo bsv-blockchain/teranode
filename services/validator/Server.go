@@ -404,12 +404,12 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // shutdown orchestration.
 //
 // Parameters:
-//   - ctx: Context for shutdown operation (currently unused but maintained for interface consistency)
+//   - ctx: Context bounding the shutdown; producer stops are raced against it so a wedged broker can't stall shutdown
 //
 // Returns:
 //   - error: Any shutdown errors encountered during the cleanup process
 //     Returns nil if shutdown is successful or if no cleanup was necessary
-func (v *Server) Stop(_ context.Context) error {
+func (v *Server) Stop(ctx context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
 	}
@@ -430,26 +430,14 @@ func (v *Server) Stop(_ context.Context) error {
 		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, val.txmetaKafkaBatcher.Close)
 	}
 
-	// DC11: synchronously stop the async producers so their final flush completes
-	// inside the bounded Stop() window instead of racing process exit. Guard each
-	// and continue past failures.
-	if v.txMetaKafkaProducerClient != nil {
-		if err := v.txMetaKafkaProducerClient.Stop(); err != nil {
-			v.logger.Errorf("[Validator] failed to stop txmeta kafka producer gracefully: %v", err)
-		}
-	}
-
-	if v.rejectedTxKafkaProducerClient != nil {
-		if err := v.rejectedTxKafkaProducerClient.Stop(); err != nil {
-			v.logger.Errorf("[Validator] failed to stop rejectedTx kafka producer gracefully: %v", err)
-		}
-	}
-
-	if v.policyRejectedTxKafkaProducerClient != nil {
-		if err := v.policyRejectedTxKafkaProducerClient.Stop(); err != nil {
-			v.logger.Errorf("[Validator] failed to stop policy-rejected tx kafka producer gracefully: %v", err)
-		}
-	}
+	// DC11: stop the async producers so their final flush runs during shutdown
+	// instead of racing process exit. Each Stop() is raced against ctx so a wedged
+	// broker flush can't block past the bounded Stop() window — the outstanding
+	// Stop() finishes the flush later if it can. Each is nil-guarded and
+	// non-fatal; failures are logged and shutdown continues.
+	kafka.StopProducerCtx(ctx, v.logger, "validator txmeta", v.txMetaKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, v.logger, "validator rejectedTx", v.rejectedTxKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, v.logger, "validator policy-rejected tx", v.policyRejectedTxKafkaProducerClient)
 
 	return nil
 }

@@ -2463,9 +2463,11 @@ func (u *BlockValidation) StopCaches() {
 	u.subtreeExistsCache.Stop()
 }
 
-// Close releases the resources owned by BlockValidation. DC11: it synchronously
-// stops the async invalid-block Kafka producer so its final flush completes
-// inside the owning Server's bounded Stop() window. Guarded and idempotent
+// Close releases the resources owned by BlockValidation. DC11: it stops the async
+// invalid-block Kafka producer so its final flush runs during shutdown. The
+// producer's Stop() flush does not honour a deadline, so the owning Server races
+// this Close() against its stop ctx — a wedged broker can't stall shutdown, and
+// the outstanding Stop() finishes the flush later if it can. Guarded and idempotent
 // (producer.Stop() is a no-op once already stopped).
 func (u *BlockValidation) Close() error {
 	if u.invalidBlockKafkaProducer != nil {

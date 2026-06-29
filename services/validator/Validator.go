@@ -264,6 +264,38 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	return v, nil
 }
 
+// Close releases the resources the Validator owns: the tx-meta batcher and the
+// three async Kafka producers (txmeta / rejectedTx / policyRejectedTx). It
+// mirrors validator.Server.Stop()'s ordering — drain the tx-meta batcher FIRST
+// so queued tx-meta flushes INTO the producer, THEN stop the producers so their
+// final flush runs during shutdown.
+//
+// This is the teardown for the local-validator path (UseLocalValidator=true),
+// where the daemon owns the *Validator directly and closes it during shutdown;
+// the Server-wrapped path drives the same drain+stop from Server.Stop().
+//
+// Idempotent and nil-guarded: the batcher Close (go-batcher v2.0.4) and each
+// producer Stop are safe to call more than once, so a repeated Close — or an
+// overlap with Server.Stop() — does no harm. The drain is bounded by
+// DefaultBatcherDrainTimeout so a wedged flush cannot stall shutdown. Close()
+// takes no ctx, so each producer Stop() is raced against an internal timeout of
+// the same bound: a wedged broker flush can't block shutdown, and the outstanding
+// Stop() finishes the flush later if it can.
+func (v *Validator) Close() error {
+	if v.txmetaKafkaBatcher != nil {
+		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, v.txmetaKafkaBatcher.Close)
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), util.DefaultBatcherDrainTimeout)
+	defer cancel()
+
+	kafka.StopProducerCtx(stopCtx, v.logger, "validator txmeta", v.txmetaKafkaProducerClient)
+	kafka.StopProducerCtx(stopCtx, v.logger, "validator rejectedTx", v.rejectedTxKafkaProducerClient)
+	kafka.StopProducerCtx(stopCtx, v.logger, "validator policy-rejected tx", v.policyRejectedTxKafkaProducerClient)
+
+	return nil
+}
+
 // Health performs health checks on the validator and its dependencies.
 // When checkLiveness is true, only checks service liveness.
 // When false, performs full readiness check including dependencies.

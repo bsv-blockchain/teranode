@@ -223,6 +223,50 @@ func (d *Stores) GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logg
 // GetValidatorClient returns the main validator client instance. If the client hasn't been
 // initialized yet, it creates either a local validator or a remote client based on configuration.
 // For local validators, it sets up necessary dependencies including UTXO store and Kafka producers.
+// Compile-time guard: the local-validator path retains a *validator.Validator and
+// relies on the daemon's clientCloser contract (Close() error) to drain+stop it on
+// shutdown. If Validator.Close's signature ever drifts, retainClient would silently
+// skip it (it type-asserts at runtime); this assertion turns that drift into a build
+// failure instead.
+var _ clientCloser = (*validator.Validator)(nil)
+
+// localValidatorKafkaProducers builds the three async Kafka producers owned by a
+// local validator (txmeta, rejectedTx, policyRejected). It is a package var so
+// tests can substitute recording producers to exercise the construction-error
+// cleanup path in GetValidatorClient.
+//
+// On a creation failure it returns the producers created so far (a true-nil
+// interface for the rest) plus the error, so the caller's deferred cleanup can
+// Stop the orphans. policyRejected may legitimately be nil when no topic is
+// configured; it is normalised to a true-nil interface so caller nil-checks work.
+var localValidatorKafkaProducers = func(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (
+	kafka.KafkaAsyncProducerI, kafka.KafkaAsyncProducerI, kafka.KafkaAsyncProducerI, error,
+) {
+	txmeta, err := getKafkaTxmetaAsyncProducer(ctx, logger, appSettings)
+	if err != nil {
+		return nil, nil, nil, errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
+	}
+
+	rejectedTx, err := getKafkaRejectedTxAsyncProducer(ctx, logger, appSettings)
+	if err != nil {
+		// txmeta is already created — hand it back so the caller's cleanup Stops it.
+		return txmeta, nil, nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
+	}
+
+	policyRejected, err := getKafkaTxPolicyRejectedAsyncProducer(ctx, logger, appSettings)
+	if err != nil {
+		return txmeta, rejectedTx, nil, errors.NewServiceError("could not create policy-rejected tx kafka producer for local validator", err)
+	}
+
+	if policyRejected == nil {
+		// No policy-rejected topic configured: return a true-nil interface so the
+		// caller's nil-checks (cleanup loop, validator.New) behave correctly.
+		return txmeta, rejectedTx, nil, nil
+	}
+
+	return txmeta, rejectedTx, policyRejected, nil
+}
+
 func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 	appSettings *settings.Settings) (validator.Interface, error) {
 	if d.mainValidatorClient != nil {
@@ -243,25 +287,43 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 			return nil, errors.NewServiceError("could not create local validator client", err)
 		}
 
-		var txMetaKafkaProducerClient *kafka.KafkaAsyncProducer
+		// The async Kafka producers are created before the *Validator that will
+		// own them exists. Declare the holders and register the cleanup BEFORE
+		// creating any of them, so a failure partway through producer creation —
+		// or in any dependent-client / validator.New step below — Stops whichever
+		// producers were already created instead of leaking them. (Registering the
+		// defer only after all three are created would miss a failure at the 2nd
+		// or 3rd producer.) The cleanup is a no-op once ownership transfers to the
+		// retained *Validator, whose Close drives the real drain+stop on shutdown;
+		// producer Stop is idempotent.
+		var (
+			txMetaKafkaProducerClient           kafka.KafkaAsyncProducerI
+			rejectedTxKafkaProducerClient       kafka.KafkaAsyncProducerI
+			policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+		)
 
-		txMetaKafkaProducerClient, err = getKafkaTxmetaAsyncProducer(ctx, logger, appSettings)
+		ownershipTransferred := false
+
+		defer func() {
+			if ownershipTransferred {
+				return
+			}
+
+			for _, p := range []kafka.KafkaAsyncProducerI{
+				txMetaKafkaProducerClient,
+				rejectedTxKafkaProducerClient,
+				policyRejectedTxKafkaProducerClient,
+			} {
+				if p != nil {
+					_ = p.Stop()
+				}
+			}
+		}()
+
+		txMetaKafkaProducerClient, rejectedTxKafkaProducerClient, policyRejectedTxKafkaProducerClient, err =
+			localValidatorKafkaProducers(ctx, logger, appSettings)
 		if err != nil {
-			return nil, errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
-		}
-
-		var rejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
-
-		rejectedTxKafkaProducerClient, err = getKafkaRejectedTxAsyncProducer(ctx, logger, appSettings)
-		if err != nil {
-			return nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
-		}
-
-		var policyRejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
-
-		policyRejectedTxKafkaProducerClient, err = getKafkaTxPolicyRejectedAsyncProducer(ctx, logger, appSettings)
-		if err != nil {
-			return nil, errors.NewServiceError("could not create policy-rejected tx kafka producer for local validator", err)
+			return nil, err
 		}
 
 		var blockAssemblyClient blockassembly.ClientI
@@ -294,7 +356,16 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 			return nil, errors.NewServiceError("could not create local validator", err)
 		}
 
-		return validatorClient, nil
+		// Memoize and retain the local validator, matching the gRPC branch below:
+		// the daemon owns this *Validator instance and closes it (Validator.Close,
+		// via the clientCloser contract) during closeClients. Without retaining it,
+		// closeClients could not reach it and its producers/batcher would only
+		// self-close on ctx-cancel — outside the bounded shutdown window.
+		d.mainValidatorClient = validatorClient
+		d.retainClient(d.mainValidatorClient)
+		ownershipTransferred = true
+
+		return d.mainValidatorClient, nil
 	} else {
 		d.mainValidatorClient, err = validator.NewClient(ctx, logger, appSettings)
 		if err != nil {

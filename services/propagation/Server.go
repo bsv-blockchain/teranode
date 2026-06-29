@@ -577,21 +577,29 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 // Stop gracefully stops the PropagationServer, closing UDP listeners.
 //
 // Parameters:
-//   - ctx: context for stop operation (unused)
+//   - ctx: bounds the shutdown. The wait for UDP/tx workers and the validator
+//     producer stop are each raced against ctx so a wedged worker or broker
+//     cannot block Stop past the service-manager's per-service budget.
 //
 // Returns:
-//   - error: always returns nil in current implementation
+//   - error: ctx.Err() — nil on a clean stop, the ctx error if the budget was hit
+//     (cleanup is still attempted on a best-effort, bounded basis before returning).
 func (ps *PropagationServer) Stop(ctx context.Context) error {
-	// DC11 ordering: the validator Kafka producer must be stopped LAST, after every
+	// Ordering: the validator Kafka producer is stopped LAST, after every
 	// transaction-ingress path that can call ProcessTransaction (which publishes to
-	// the producer) is fully quiesced — otherwise an in-flight publish would hit a
-	// closed channel and panic. So: close UDP conns + join their workers, drain the
-	// HTTP server, THEN stop the producer. (gRPC ingress is already drained before
-	// Stop() runs: StartGRPCServer GracefulStops on ctx-cancel and Start() — hence
-	// the service-manager's Wait() — returns only after that.)
+	// the producer) is quiesced. A late publish during the producer stop drops
+	// safely — Publish guards under channelMu and util.SafeSend recovers — so
+	// stopping last is not about avoiding a panic; it simply maximises the final
+	// flush by letting the workers finish first. So: close UDP conns + join their
+	// workers, drain the HTTP server, THEN stop the producer. (gRPC ingress is
+	// already drained before Stop() runs: StartGRPCServer GracefulStops on
+	// ctx-cancel and Start() — hence the service-manager's Wait() — returns only
+	// after that.)
 
 	// 1. Close UDP listeners so the reader goroutines exit, then wait for them and
-	//    any in-flight per-transaction worker goroutines to finish.
+	//    any in-flight per-transaction worker goroutines to finish — bounded by ctx
+	//    so a wedged ProcessTransaction (e.g. a publish blocked on a dead broker)
+	//    cannot stall the whole shutdown.
 	ps.udpConnsMu.Lock()
 	for _, conn := range ps.udpConns {
 		if err := conn.Close(); err != nil {
@@ -601,25 +609,51 @@ func (ps *PropagationServer) Stop(ctx context.Context) error {
 	ps.udpConns = nil
 	ps.udpConnsMu.Unlock()
 
-	ps.udpWg.Wait()
+	udpDone := make(chan struct{})
+	go func() {
+		ps.udpWg.Wait()
+		close(udpDone)
+	}()
 
-	// 2. Drain the HTTP server so in-flight /tx and /txs handlers finish.
+	select {
+	case <-udpDone:
+	case <-ctx.Done():
+		ps.logger.Errorf("[Propagation] timed out waiting for UDP workers, proceeding with shutdown: %v", ctx.Err())
+	}
+
+	// 2. Drain the HTTP server so in-flight /tx and /txs handlers finish. Already
+	//    ctx-bounded; safe regardless of worker state.
 	if ps.httpServer != nil {
 		if err := ps.httpServer.Shutdown(ctx); err != nil {
 			ps.logger.Errorf("[Propagation] error shutting down http server: %v", err)
 		}
 	}
 
-	// 3. Now that no further ProcessTransaction can run, synchronously stop the
-	//    async validator producer so its final flush completes inside the bounded
-	//    Stop() window. Guarded and non-fatal.
+	// 3. Stop the async validator producer so its final flush completes inside the
+	//    bounded Stop() window. Bounded against the remaining ctx so a wedged broker
+	//    Flush can't re-hang shutdown: when the budget is already spent (the timeout
+	//    path above) we stop WAITING here and return, leaving the outstanding Stop()
+	//    (and/or the producer's own ctx-cancel self-close) to complete the flush
+	//    later if it can — it is not guaranteed to finish, but shutdown no longer
+	//    blocks on it. A worker still publishing here drops safely (channelMu +
+	//    SafeSend). Guarded and non-fatal.
 	if ps.validatorKafkaProducerClient != nil {
-		if err := ps.validatorKafkaProducerClient.Stop(); err != nil {
-			ps.logger.Errorf("[Propagation] failed to stop validator kafka producer gracefully: %v", err)
+		stopDone := make(chan struct{})
+		go func() {
+			defer close(stopDone)
+			if err := ps.validatorKafkaProducerClient.Stop(); err != nil {
+				ps.logger.Errorf("[Propagation] failed to stop validator kafka producer gracefully: %v", err)
+			}
+		}()
+
+		select {
+		case <-stopDone:
+		case <-ctx.Done():
+			ps.logger.Errorf("[Propagation] validator producer stop exceeded stop budget; relying on async self-close")
 		}
 	}
 
-	return nil
+	return ctx.Err()
 }
 
 // handleSingleTx handles a single transaction request on the /tx endpoint.
