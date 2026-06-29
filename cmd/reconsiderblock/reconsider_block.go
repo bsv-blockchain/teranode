@@ -38,6 +38,7 @@ func ReconsiderBlock(logger ulogger.Logger, settings *settings.Settings, blockHa
 	if err != nil {
 		return errors.NewProcessingError("failed to create block validation client: %v", err)
 	}
+	defer func() { _ = blockValidationClient.Close() }()
 
 	logger.Infof("[reconsiderblock] Reconsidering block %s", blockHash.String())
 

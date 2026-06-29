@@ -290,6 +290,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 	sm := d.ServiceManager
 
+	// Configure the per-service graceful Stop() timeout from settings so Kafka
+	// flushes and batcher drains are not cut off at the old 5s. Falls back to
+	// servicemanager.DefaultStopTimeout when unset.
+	if appSettings.ServiceManagerStopTimeout > 0 {
+		sm.StopTimeout = appSettings.ServiceManagerStopTimeout
+	}
+
 	var readyChInternal chan struct{}
 	if len(readyChannel) > 0 {
 		readyChInternal = readyChannel[0]
@@ -392,6 +399,12 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	// missing-parent errors.
 	defer d.closeStores(logger)
 
+	// closeClients must run AFTER all services have stopped (so borrowed
+	// clients are no longer in use) and BEFORE closeStores (clients sit in
+	// front of the stores in the dependency graph). Deferred AFTER the
+	// closeStores defer above so LIFO ordering runs clients first, then stores.
+	defer d.closeClients(logger)
+
 	// Wait for either services to complete or doneCh to be closed
 	select {
 	case err = <-waitErr:
@@ -420,6 +433,37 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	d.closeStopOnce.Do(func() { close(d.stopCh) })
 }
 
+// clientCloser is the optional close contract the daemon uses to tear down the
+// gRPC clients it constructs. Production clients gain a Close() error method
+// (Fix group A); the daemon's closeClients step (added later) type-asserts each
+// retained client to this interface and closes it, so the client interfaces
+// themselves do not need to declare Close. Mirrors the existing optional-stopper
+// pattern in services/pruner/server.go.
+type clientCloser interface {
+	Close() error
+}
+
+// closeClients closes every gRPC client the daemon constructed, exactly once.
+//
+// The daemon is the sole owner of the clients it builds (both the daemonStores
+// singletons and the fresh-per-construction clients retained via retainClient);
+// receiving services borrow them and must not close them. This runs after
+// ServiceManager.Wait() — so all service Stop()s have completed — and before
+// closeStores, because clients sit in front of the stores in the dependency
+// graph. Each client is closed via the Stage-E clientCloser contract.
+func (d *Daemon) closeClients(logger ulogger.Logger) {
+	d.daemonStores.constructedClientsMu.Lock()
+	clients := d.daemonStores.constructedClients
+	d.daemonStores.constructedClients = nil
+	d.daemonStores.constructedClientsMu.Unlock()
+
+	for _, client := range clients {
+		if err := client.Close(); err != nil {
+			logger.Errorf("error closing client: %v", err)
+		}
+	}
+}
+
 // closeStores safely closes the main stores used by the Daemon.
 //
 // Uses a fresh context with a 30 s deadline rather than the daemon's
@@ -437,7 +481,22 @@ func (d *Daemon) closeStores(logger ulogger.Logger) {
 	subtreeStoreToClose := d.daemonStores.mainSubtreeStore
 	tempStoreToClose := d.daemonStores.mainTempStore
 	utxoStoreToClose := d.daemonStores.mainUtxoStore
+	blockStoreToClose := d.daemonStores.mainBlockStore
+	blockPersisterStoreToClose := d.daemonStores.mainBlockPersisterStore
+	blockchainStoreToClose := d.daemonStores.mainBlockchainStore
+	peerRegistryClientToClose := d.daemonStores.mainPeerRegistryClient
 	globalStoreMutex.RUnlock()
+
+	// Close the daemon-owned peer-registry client first (DC16). It is a gRPC
+	// client to the blockchain service, not a store, and owns its conn
+	// (ownsConn=true); Close() is a no-op for non-owned conns.
+	if peerRegistryClientToClose != nil {
+		logger.Debugf("closing peer registry client")
+
+		if err := peerRegistryClientToClose.Close(); err != nil {
+			logger.Errorf("error closing peer registry client: %v", err)
+		}
+	}
 
 	// Drain the UTXO store first so any background-batched writes commit
 	// before we tear down adjacent blob stores. UTXO writes can reference
@@ -468,6 +527,31 @@ func (d *Daemon) closeStores(logger ulogger.Logger) {
 		logger.Debugf("closing temp store")
 
 		_ = tempStoreToClose.Close(ctx)
+	}
+
+	// Block and block-persister blob stores (DC10) — alongside the other blob
+	// stores; both have valid Close methods.
+	if blockStoreToClose != nil {
+		logger.Debugf("closing block store")
+
+		_ = blockStoreToClose.Close(ctx)
+	}
+
+	if blockPersisterStoreToClose != nil {
+		logger.Debugf("closing block persister store")
+
+		_ = blockPersisterStoreToClose.Close(ctx)
+	}
+
+	// Close the blockchain state store last (DC9): it is the core chain-state
+	// DB and its Close stops background goroutines and closes the DB handle
+	// (orderly WAL checkpoint / connection drain on SQL/SQLite backends).
+	if blockchainStoreToClose != nil {
+		logger.Debugf("closing blockchain store")
+
+		if err := blockchainStoreToClose.Close(ctx); err != nil {
+			logger.Errorf("error closing blockchain store: %v", err)
+		}
 	}
 }
 

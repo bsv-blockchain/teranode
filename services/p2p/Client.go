@@ -12,12 +12,14 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // Client implements the ClientI interface and provides P2P client functionality.
 type Client struct {
 	client p2p_api.PeerServiceClient // gRPC client for peer service communication
+	conn   *grpc.ClientConn          // gRPC connection owned by this client; closed by Close()
 	logger ulogger.Logger            // Logger instance for the client
 }
 
@@ -71,10 +73,20 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 
 	c := &Client{
 		client: p2p_api.NewPeerServiceClient(baConn),
+		conn:   baConn,
 		logger: logger,
 	}
 
 	return c, nil
+}
+
+// Close releases the gRPC connection owned by this client.
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+
+	return nil
 }
 
 // GetPeers implements the ClientI interface method to retrieve connected peers.

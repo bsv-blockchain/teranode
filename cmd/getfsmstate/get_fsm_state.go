@@ -42,6 +42,10 @@ func FetchFSMState(logger ulogger.Logger, settings *settings.Settings) {
 		logger.Fatalf("failed to create blockchain client: %v", err)
 		os.Exit(1)
 	}
+	// ClientI does not declare Close; the concrete client gained it in DC7.
+	if c, ok := blockchainClient.(interface{ Close() error }); ok {
+		defer func() { _ = c.Close() }()
+	}
 
 	// get the current state
 	var currentState *blockchain.FSMStateType

@@ -20,7 +20,7 @@ import (
 
 // newOnMainChainTestStore creates a *SQL backed by an sqlitememory DB, waits
 // for the background startup rebuild to complete, and returns the store ready
-// for use. The caller is responsible for s.Close() (via t.Cleanup).
+// for use. The caller is responsible for s.Close(context.Background()) (via t.Cleanup).
 func newOnMainChainTestStore(t *testing.T) *SQL {
 	t.Helper()
 	return newOnMainChainTestStoreWith(t, nil)
@@ -40,7 +40,7 @@ func newOnMainChainTestStoreWith(t *testing.T, mutate func(*settings.Settings)) 
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	waitForStartupRebuild(t, s)
 	return s
 }

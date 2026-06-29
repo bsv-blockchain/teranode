@@ -406,7 +406,7 @@ func (s *SQL) GetDBEngine() util.SQLEngine {
 	return s.engine
 }
 
-func (s *SQL) Close() error {
+func (s *SQL) Close(_ context.Context) error {
 	// Signal the background refresh goroutine to stop.
 	if s.backgroundDone != nil {
 		select {

@@ -2649,9 +2649,19 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 
 		// we found the transaction in a subtree
 		if foundSubtreeIndex == -1 {
-			// it was found in the current tree, remove it from there
-			// further processing is not needed, as the subtrees in the chainedSubtrees are older than the current subtree
-			return stp.currentSubtree.Load().RemoveNodeAtIndex(foundIndex)
+			// it was found in the current tree. Duplicate before mutating (mirroring the
+			// chained-subtree branch below) so any precomputed mining-data snapshot holding
+			// the original stays safe for concurrent reads. Further processing is not needed,
+			// as the subtrees in chainedSubtrees are older than the current subtree.
+			currentSubtree := stp.currentSubtree.Load().Duplicate()
+
+			if err := currentSubtree.RemoveNodeAtIndex(foundIndex); err != nil {
+				return errors.NewProcessingError("[SubtreeProcessor][removeTxFromSubtrees][%s] error removing node from current subtree", hash.String(), err)
+			}
+
+			stp.currentSubtree.Store(currentSubtree)
+
+			return nil
 		}
 
 		// it was found in a chained subtree, remove it from there and chain the subtrees again from the point it was removed
@@ -2696,6 +2706,8 @@ func (stp *SubtreeProcessor) removeTxsFromSubtrees(ctx context.Context, hashes [
 
 	defer deferFn()
 
+	removedAny := false
+
 	for _, hash := range hashes {
 		// find the transaction in the current and all chained subtrees
 		foundIndex := stp.currentSubtree.Load().NodeIndex(hash)
@@ -2713,6 +2725,8 @@ func (stp *SubtreeProcessor) removeTxsFromSubtrees(ctx context.Context, hashes [
 		}
 
 		if foundIndex >= 0 {
+			removedAny = true
+
 			// Save to deleted backup map before removing (for Server fallback during async storage)
 			if txInpoints, found := stp.currentTxMap.Get(hash); found {
 				stp.deletedTxs.Set(hash, *txInpoints)
@@ -2721,9 +2735,23 @@ func (stp *SubtreeProcessor) removeTxsFromSubtrees(ctx context.Context, hashes [
 
 			// we found the transaction in a subtree
 			if foundSubtreeIndex == -1 {
-				// it was found in the current tree, remove it from there
-				// further processing is not needed, as the subtrees in the chainedSubtrees are older than the current subtree
-				return stp.currentSubtree.Load().RemoveNodeAtIndex(foundIndex)
+				// it was found in the current subtree. Duplicate before mutating (mirroring
+				// the chained-subtree branch) so any precomputed mining-data snapshot holding
+				// the original stays safe for concurrent reads, and so the duplicate's node
+				// index is rebuilt fresh on the next lookup: RemoveNodeAtIndex leaves the index
+				// map stale for nodes after the removed one, which would otherwise corrupt the
+				// index used to remove a subsequent hash from the same subtree.
+				currentSubtree := stp.currentSubtree.Load().Duplicate()
+
+				if err := currentSubtree.RemoveNodeAtIndex(foundIndex); err != nil {
+					return errors.NewProcessingError("[SubtreeProcessor][removeTxsFromSubtrees][%s] error removing node from current subtree", hash.String(), err)
+				}
+
+				stp.currentSubtree.Store(currentSubtree)
+
+				// the trailing reChainSubtrees(0) compacts every subtree, including the
+				// current one, after the loop completes
+				continue
 			}
 
 			// it was found in a chained subtree, remove it from there and chain the subtrees again from the point it was removed
@@ -2738,6 +2766,12 @@ func (stp *SubtreeProcessor) removeTxsFromSubtrees(ctx context.Context, hashes [
 				return errors.NewProcessingError("[SubtreeProcessor][removeTxsFromSubtrees][%s] error removing node from subtree", hash.String(), err)
 			}
 		}
+	}
+
+	// Nothing matched, so there is no hole to fill: skip the O(N) rebuild (which would
+	// also needlessly replace every subtree pointer and invalidate mining snapshots).
+	if !removedAny {
+		return nil
 	}
 
 	// all the chained subtrees should be complete, as we now have a hole in the one we just removed from
@@ -2791,8 +2825,13 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	}
 	stp.currentSubtree.Store(newSubtree)
 
-	if len(originalSubtrees) == 0 {
-		// we must add the coinbase tx if we have no original subtrees
+	if fromIndex == 0 {
+		// Rebuilding from index 0 means the block's first subtree (which carries the
+		// coinbase placeholder at Nodes[0]) is part of the rebuild. The re-add loop below
+		// skips placeholder nodes, so re-assert the placeholder on the fresh first subtree;
+		// otherwise the first real transaction would slide into Nodes[0] and corrupt the
+		// coinbase commitment. For fromIndex > 0 the preserved chainedSubtrees[:fromIndex]
+		// still hold the placeholder, so the rebuilt tail must not add another one.
 		if err = stp.currentSubtree.Load().AddCoinbaseNode(); err != nil {
 			return errors.NewProcessingError("error adding coinbase node to new current subtree", err)
 		}
@@ -3853,16 +3892,20 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 		deferFn()
 	}()
 
-	lastIncompleteSubtree := stp.currentSubtree.Load()
-	chainedSubtrees := stp.chainedSubtrees
-
-	// process coinbase utxos
+	// process coinbase utxos. This may remove this block's coinbase child-spends from
+	// the assembly, which rebuilds and Closes the chained/current subtrees via
+	// reChainSubtrees. Capture the previous subtree state AFTER this call so the bulk
+	// build folds live, post-removal subtrees back in — capturing beforehand would read
+	// Closed (mmap-unmapped) subtrees and re-add the just-removed spends.
 	if err = stp.removeCoinbaseUtxos(ctx, block); err != nil {
 		// no need to error out if the key doesn't exist anyway
 		if !errors.Is(err, errors.ErrTxNotFound) {
 			return nil, nil, errors.NewProcessingError("[moveBackBlock][%s] error removing coinbase utxo", block.String(), err)
 		}
 	}
+
+	lastIncompleteSubtree := stp.currentSubtree.Load()
+	chainedSubtrees := stp.chainedSubtrees
 
 	// Bulk build: get block subtrees, collect all nodes, then build subtrees in parallel
 	if subtreesNodes, conflictingHashes, err = stp.moveBackBlockBulkBuild(ctx, block, createProperlySizedSubtrees, chainedSubtrees, lastIncompleteSubtree); err != nil {

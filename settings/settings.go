@@ -87,6 +87,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 		GlobalBlockHeightRetention: globalBlockHeightRetention,
 		BatcherDrainMode:           getBool("batcher_drainMode", false, alternativeContext...),
 		BatcherBackground:          getBool("batcher_background", true, alternativeContext...),
+		// Keep this default in sync with servicemanager.DefaultStopTimeout (30s).
+		// It cannot reference that constant directly: util/servicemanager
+		// transitively imports settings, so importing it here would create an
+		// import cycle. The struct-tag default ("30s") mirrors this for docs.
+		ServiceManagerStopTimeout: getDuration("service_manager_stopTimeout", 30*time.Second, alternativeContext...),
 
 		ChainCfgParams: params,
 		Policy: &PolicySettings{

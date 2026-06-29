@@ -68,6 +68,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	asl "github.com/bsv-blockchain/aerospike-client-go/v8/logger"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -288,6 +289,23 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 					err := s.CreateIndexIfNotExists(ctx, unminedSinceIndexName, fields.UnminedSince.String(), aerospike.NUMERIC)
 					if err != nil {
 						s.logger.Errorf("Failed to create unminedSinceIndex: %v", err)
+					}
+				}
+
+				// Required by ProcessExpiredPreservations' range query over PreserveUntil (pruner Phase 1b).
+				preserveUntilIndexName := "preserveUntilIndex"
+
+				exists, err = s.indexExists(preserveUntilIndexName)
+				if err != nil {
+					s.logger.Errorf("Failed to check preserveUntilIndex existence: %v", err)
+					return
+				}
+
+				if !exists {
+					// Only one process should try to create the index
+					err := s.CreateIndexIfNotExists(ctx, preserveUntilIndexName, fields.PreserveUntil.String(), aerospike.NUMERIC)
+					if err != nil {
+						s.logger.Errorf("Failed to create preserveUntilIndex: %v", err)
 					}
 				}
 			}
@@ -908,6 +926,19 @@ func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeig
 // This clears any existing DeleteAtHeight and sets PreserveUntil to the specified height.
 // Used to protect parent transactions when cleaning up unmined transactions.
 //
+// PRUNE-ELIGIBILITY GATE: only transactions that already carry a deleteAtHeight stamp (eligible
+// now) or are already being preserved (so renewal still works) are preserved. A record with
+// neither is not fully spent, so it is not at risk of pruning and needs no protection; preserving
+// it would be pointless work and would feed a not-fully-spent tx into the expiry path. The gate is
+// enforced via a server-side FilterExpression in both the UDF path and the expression path (the
+// Lua UDF itself is unchanged). ProcessExpiredPreservations remains the setter-side safety net for
+// an eligible tx that is later un-spent by a reorg.
+//
+// The gate assumes preservation re-runs each pruner cycle for still-needed parents: a parent that
+// has no DAH when a cycle runs is skipped, but if it later becomes fully spent it gains a DAH via
+// the normal setDAH path and a subsequent cycle re-admits and re-protects it — well within the
+// retention window before the pruner would act.
+//
 // IDEMPOTENCY: This operation is safely re-runnable:
 // - Missing transactions (LuaErrorCodeTxNotFound) are logged as debug, not errors
 // - Multiple preservation attempts with same preserveUntil are idempotent
@@ -925,6 +956,17 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	// Use batch operations for efficiency
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
+
+	// Prune-eligibility gate (see method doc): only run the preserveUntil UDF on records that
+	// already carry a deleteAtHeight stamp (eligible now) or are already being preserved
+	// (preserveUntil set, so renewal still works). Records with neither are not fully spent,
+	// not at risk of pruning, and return FILTERED_OUT — treated as a benign skip below. Done as
+	// a server-side filter (not a Lua change) so it applies without re-registering the UDF
+	// module, which is keyed by name and would otherwise need a version bump to update.
+	batchUDFPolicy.FilterExpression = aerospike.ExpOr(
+		aerospike.ExpBinExists(fields.DeleteAtHeight.String()),
+		aerospike.ExpBinExists(fields.PreserveUntil.String()),
+	)
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(txIDs))
 
@@ -959,9 +1001,19 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	preservedCount := 0
 	var parseErrors, luaErrors, noResponseErrors int
 
+	var skippedCount int
+
 	for i, record := range batchRecords {
 		batchRecord := record.BatchRec()
 		if batchRecord.Err != nil {
+			// FILTERED_OUT: not prune-eligible (no deleteAtHeight and not already preserved) —
+			// a deliberate skip by the eligibility gate, not an error.
+			var aErr *aerospike.AerospikeError
+			if errors.As(batchRecord.Err, &aErr) && aErr.ResultCode == types.FILTERED_OUT {
+				skippedCount++
+				continue
+			}
+
 			s.logger.Warnf("[PreserveTransactions] Failed to preserve tx %s: %v", txIDs[i].String(), batchRecord.Err)
 			continue
 		}
@@ -991,14 +1043,19 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		s.logger.Errorf("[PreserveTransactions] Errors processing %d transactions: %d parse failures, %d lua errors, %d missing responses", len(txIDs), parseErrors, luaErrors, noResponseErrors)
 	}
 
-	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions", preservedCount, len(txIDs))
+	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions (%d skipped: not prune-eligible)", preservedCount, len(txIDs), skippedCount)
 
 	return nil
 }
 
 // ProcessExpiredPreservations handles transactions whose preservation period has expired.
 // For each transaction with PreserveUntil <= currentHeight, it sets an appropriate DeleteAtHeight
-// and clears the PreserveUntil field.
+// and clears the PreserveUntil field. It is called from the live pruner cycle (worker.go, Phase 1b).
+//
+// The range query below relies on a NUMERIC secondary index over the PreserveUntil bin. New()
+// creates it at startup in the indexOnce block, alongside the DeleteAtHeight and UnminedSince
+// indexes — but only when pruner.IndexName != "" (the same guard that gates the other two). If that
+// guard is empty the index is absent and this query degrades to a full set scan.
 func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	// Create a query to find records with expired PreserveUntil
 	stmt := aerospike.NewStatement(s.namespace, s.setName)
@@ -1059,15 +1116,38 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 			continue
 		}
 
-		// Calculate DeleteAtHeight based on retention policy
-		deleteAtHeight := currentHeight + s.settings.GetUtxoStoreBlockHeightRetention()
-
 		batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
-		batchWritePolicy.RecordExistsAction = aerospike.UPDATE
+		// UPDATE_ONLY, not UPDATE: a record deleted between the secondary-index query and this write
+		// must not be recreated as an empty phantom. Matches PreserveTransactionsWithExpressions.
+		batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
-		batch = append(batch, aerospike.NewBatchWrite(batchWritePolicy, key,
-			aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), int(deleteAtHeight))),
-			aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), nil))))
+		// Clear the preservation, then re-evaluate deleteAtHeight against the SAME
+		// eligibility rule as the canonical setDeleteAtHeight (mined + on the longest
+		// chain + fully spent, or conflicting). Writing the DAH bin directly here —
+		// as the previous implementation did — would stamp a transaction that still
+		// has live outputs (e.g. a parent whose now-resolved mempool child spent only
+		// some of its outputs), and the DAH pruner deletes purely on that stamp, so a
+		// live UTXO would be lost. The expression leaves the bin NULL for ineligible
+		// transactions; the store's normal DAH mechanism re-stamps them if and when
+		// they actually become eligible. This restores "DAH set ⟹ safe to delete".
+		ops := []*aerospike.Operation{
+			aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), nil)),
+			// Reset to NULL first; the expression below sets it only when eligible.
+			aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)),
+		}
+
+		if blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention(); blockHeightRetention > 0 {
+			// ignorePreserveUntil=true: preserveUntil is cleared in this same operate, but the
+			// expression reads the pre-operate record, so the guard must be bypassed here.
+			dahExp := s.buildDeleteAtHeightExpression(currentHeight, blockHeightRetention, false, true)
+			ops = append(ops, aerospike.ExpWriteOp(
+				fields.DeleteAtHeight.String(),
+				dahExp,
+				aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
+			))
+		}
+
+		batch = append(batch, aerospike.NewBatchWrite(batchWritePolicy, key, ops...))
 
 		txIDs = append(txIDs, txHash)
 
@@ -1093,11 +1173,13 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 		}
 	}
 
-	if readErrors > 0 || keyErrors > 0 || batchErrors > 0 {
-		s.logger.Errorf("[ProcessExpiredPreservations] Errors at height %d: %d read failures, %d key failures, %d batch failures", currentHeight, readErrors, keyErrors, batchErrors)
-	}
-
 	s.logger.Infof("[ProcessExpiredPreservations] Processed %d expired preservations at height %d", processedCount, currentHeight)
+
+	// Surface partial failures to the caller so the pruner's error metric fires and the duration
+	// metric is not recorded as a clean success. processedCount still reflects what did succeed.
+	if readErrors > 0 || keyErrors > 0 || batchErrors > 0 {
+		return errors.NewStorageError("[ProcessExpiredPreservations] completed with errors at height %d: %d read failures, %d key failures, %d batch failures", currentHeight, readErrors, keyErrors, batchErrors)
+	}
 
 	return nil
 }

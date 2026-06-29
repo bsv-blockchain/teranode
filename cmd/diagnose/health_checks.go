@@ -33,11 +33,23 @@ type serviceClients struct {
 	p2p             p2p.ClientI
 }
 
+// close releases the gRPC connections owned by these clients. The fields are
+// interface types that do not declare Close, so each is closed via the optional
+// Close() error gained by the concrete clients in Fix group A.
+func (c *serviceClients) close() {
+	for _, client := range []any{c.blockchain, c.blockValidation, c.blockAssembly, c.p2p} {
+		if cc, ok := client.(interface{ Close() error }); ok {
+			_ = cc.Close()
+		}
+	}
+}
+
 func runHealthChecks(ctx context.Context, logger ulogger.Logger, s *settings.Settings) []HealthResult {
 	var results []HealthResult
 
 	// Create reusable clients
 	clients := createClients(ctx, logger, s)
+	defer clients.close()
 
 	// gRPC services
 	results = append(results, checkGRPCServices(ctx, logger, s, clients)...)
@@ -120,6 +132,7 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 				check:   func() (int, string, error) { return http.StatusServiceUnavailable, "", err },
 			})
 		} else {
+			defer func() { _ = client.Close() }()
 			services = append(services, grpcService{
 				name:    "Validator gRPC",
 				address: s.Validator.GRPCAddress,
@@ -184,6 +197,9 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 				check:   func() (int, string, error) { return http.StatusServiceUnavailable, "", err },
 			})
 		} else {
+			if cc, ok := client.(interface{ Close() error }); ok {
+				defer func() { _ = cc.Close() }()
+			}
 			services = append(services, grpcService{
 				name:    "Subtree Validation gRPC",
 				address: s.SubtreeValidation.GRPCAddress,

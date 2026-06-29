@@ -20,7 +20,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		customID := uint64(42)
 
@@ -44,7 +44,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store block1 without custom ID (should use auto-increment)
 		// Note: Genesis block is auto-inserted during initialization with ID=0,
@@ -68,7 +68,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store first block with custom ID 100
 		customID1 := uint64(100)
@@ -109,7 +109,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		customID := uint64(42)
 
@@ -130,7 +130,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store block with WithID(0) should behave like no WithID option
 		// Genesis block is auto-inserted with ID=0, so first user block gets ID=1
@@ -151,7 +151,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		customID := uint64(999)
 
@@ -177,7 +177,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Since the genesis block is automatically inserted when the table is created,
 		// we need to retrieve it from the database to get the exact same block

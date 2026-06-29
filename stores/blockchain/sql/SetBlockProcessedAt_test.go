@@ -22,7 +22,7 @@ func TestSetBlockProcessedAt(t *testing.T) {
 
 	store, err := New(logger, dbURL, settings.NewSettings())
 	require.NoError(t, err)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	// Create a block directly in the database to bypass validation
 	blockHash := chainhash.Hash{}

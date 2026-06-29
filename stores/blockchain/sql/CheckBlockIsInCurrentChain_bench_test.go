@@ -26,7 +26,7 @@ func BenchmarkCheckBlockIsInCurrentChainSQL(b *testing.B) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(b, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Wait for the startup rebuild goroutine to release its guard so the fast
 	// path (mainChainRebuilding == 0) is actually exercised.

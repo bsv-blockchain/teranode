@@ -241,7 +241,7 @@ func (s *Store) buildSpendOperations(
 
 	// Add deleteAtHeight expression if retention is enabled
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(currentBlockHeight, blockHeightRetention, false)
+		dahExp := s.buildDeleteAtHeightExpression(currentBlockHeight, blockHeightRetention, false, false)
 		ops = append(ops, aerospike.ExpWriteOp(
 			fields.DeleteAtHeight.String(),
 			dahExp,

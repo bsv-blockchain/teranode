@@ -24,7 +24,7 @@ func TestGetBlockIsMined(t *testing.T) {
 
 	store, err := New(logger, dbURL, settings.NewSettings())
 	require.NoError(t, err)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	// Get genesis block to use as previous block
 	genesisBlock, err := store.GetBlockByID(context.Background(), 0)
@@ -107,7 +107,7 @@ func TestGetBlockIsMined(t *testing.T) {
 
 			subStore, err := New(logger, dbURL, settings.NewSettings())
 			require.NoError(t, err)
-			defer subStore.Close()
+			defer subStore.Close(context.Background())
 
 			err = tc.setup(subStore)
 			require.NoError(t, err)

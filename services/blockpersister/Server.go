@@ -445,6 +445,9 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //
 // Returns an error if shutdown fails, or nil on successful shutdown.
 func (u *Server) Stop(_ context.Context) error {
-	// Currently, the Server doesn't need to perform any action on shutdown
+	// DC14: intentional no-op. This server owns only context-bound resources
+	// (its goroutines exit on the service-manager ctx cancel); it holds no
+	// flushing store, Kafka producer, or batcher that would need draining here.
+	// If one is ever added, drain it in this method (see DC11/DC15).
 	return nil
 }

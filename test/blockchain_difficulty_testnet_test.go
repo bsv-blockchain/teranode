@@ -284,7 +284,7 @@ func TestGetNextWorkRequiredTestnet(t *testing.T) {
 
 	store, err := sqlstore.New(logger, dbURL, tSettings)
 	require.NoError(t, err)
-	defer store.Close()
+	defer func() { _ = store.Close(context.Background()) }()
 
 	// Start blockchain service
 	t.Log("Starting blockchain service...")
