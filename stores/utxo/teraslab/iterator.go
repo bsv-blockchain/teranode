@@ -128,6 +128,12 @@ func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransacti
 	txns := make([]*utxo.UnminedTransaction, 0, len(pageTxids))
 	for i := range pageTxids {
 		if i >= len(records) || !records[i].Found {
+			// A txid listed by QueryOldUnmined but absent from this batch fetch was
+			// deleted/pruned/mined between the two calls — or it is a transient batch
+			// miss. Dropping it is correct for a genuine removal, but log it so a
+			// transient miss (a still-unmined tx silently vanishing from
+			// block-assembly reload) is diagnosable rather than invisible.
+			it.store.logger.Warnf("[TeraSlab] unmined iterator: listed tx %s not found on page fetch; dropped", pageTxids[i].String())
 			continue
 		}
 
