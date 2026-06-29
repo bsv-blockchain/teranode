@@ -51,6 +51,6 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 // ProcessExpiredPreservations handles transactions whose preservation period has expired.
 func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
-	_, err := s.client.ProcessExpiredPreservations(ctx, currentHeight)
+	_, err := s.client.ProcessExpiredPreservations(ctx, currentHeight, s.settings.GetUtxoStoreBlockHeightRetention())
 	return err
 }

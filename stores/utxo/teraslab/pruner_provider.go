@@ -38,7 +38,7 @@ func (p *prunerService) Start(_ context.Context) {}
 // records the server deleted. A store error aborts and propagates — pruning is
 // a money-path operation and must not silently skip.
 func (p *prunerService) Prune(ctx context.Context, height uint32, _ string) (int64, error) {
-	result, err := p.store.client.ProcessExpiredPreservations(ctx, height)
+	result, err := p.store.client.ProcessExpiredPreservations(ctx, height, p.store.settings.GetUtxoStoreBlockHeightRetention())
 	if err != nil {
 		return 0, err
 	}
