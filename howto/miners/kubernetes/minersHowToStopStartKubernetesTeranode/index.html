@@ -1633,6 +1633,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="1. Graceful Shutdown">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#grace-period-must-exceed-the-service-stop-timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grace period must exceed the service stop timeout
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -6852,6 +6869,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="1. Graceful Shutdown">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#grace-period-must-exceed-the-service-stop-timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grace period must exceed the service stop timeout
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -7054,6 +7088,30 @@
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Remove the configmap</span>
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>kubernetes/teranode/teranode-configmap.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
 </span></code></pre></div>
+<h4 id="grace-period-must-exceed-the-service-stop-timeout">Grace period must exceed the service stop timeout<a class="headerlink" href="#grace-period-must-exceed-the-service-stop-timeout" title="Permanent link">&para;</a></h4>
+<p>On shutdown, each Teranode service is stopped under a bounded per-service
+timeout, <code>service_manager_stopTimeout</code> (default <code>30s</code>). Within that window a
+service flushes its Kafka producers and drains its in-memory batchers before its
+transport closes; cutting it short drops queued work (e.g. tx-meta and
+notifications).</p>
+<p>The orchestrator's termination grace period must therefore be <strong>strictly greater
+than</strong> the configured <code>service_manager_stopTimeout</code>, otherwise the orchestrator
+sends <code>SIGKILL</code> mid-flush and defeats the bounded drain:</p>
+<ul>
+<li><strong>Kubernetes:</strong> Kubernetes defaults <code>terminationGracePeriodSeconds</code> to <strong>30
+  seconds</strong>, which exactly equals Teranode's default <code>service_manager_stopTimeout</code>
+  of 30s and therefore leaves <strong>no</strong> shutdown margin — a service that uses its
+  full stop budget can be <code>SIGKILL</code>ed before it finishes flushing. Set the pod
+  <code>terminationGracePeriodSeconds</code> above <code>service_manager_stopTimeout</code> (recommended
+  <strong>≥ 45s</strong> for the default 30s timeout, to leave margin for the kubelet's own
+  SIGTERM→SIGKILL accounting).</li>
+<li><strong>Docker Compose:</strong> set <code>stop_grace_period</code> above the timeout. The base
+  Compose definition (<code>deploy/docker/base/docker-teranode.yml</code>) ships <code>60s</code> for
+  every Teranode app service; Compose's unset default is only <code>10s</code>, which is
+  below the 30s budget.</li>
+</ul>
+<p>If you raise <code>service_manager_stopTimeout</code> (for deployments with large in-flight
+batches), raise the grace period above the new value at the same time.</p>
 <h3 id="2-verify-resource-removal">2. Verify Resource Removal<a class="headerlink" href="#2-verify-resource-removal" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Check pod termination status</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
