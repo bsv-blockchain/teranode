@@ -9,12 +9,11 @@ import (
 
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teraslab "github.com/icellan/teraslab/client/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
 // hashN returns a deterministic distinct chainhash for index n.
