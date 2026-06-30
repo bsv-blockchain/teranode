@@ -907,6 +907,26 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	sp.server.syncManager.QueueTx(tx, sp.Peer, nil)
 }
 
+// shouldDisconnectOnBlockError reports whether a block-processing error is a
+// peer fault worth disconnecting for (to trigger sync-peer rotation), versus a
+// transient local condition that should only be retried. Local conditions —
+// service errors, storage errors, and the per-block backoff throttle
+// (ErrServiceUnavailable, #1187) — must NOT disconnect the delivering peer: a
+// backed-off block is re-delivered repeatedly while it waits out its window, and
+// disconnecting on each re-delivery would churn through sync peers for no reason.
+//
+// Note: errors.IsRetryableError is deliberately NOT reused here — it does not
+// include ErrServiceError, which this guard must continue to suppress.
+func shouldDisconnectOnBlockError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return !errors.Is(err, errors.ErrServiceError) &&
+		!errors.Is(err, errors.ErrStorageError) &&
+		!errors.Is(err, errors.ErrServiceUnavailable)
+}
+
 // OnBlock is invoked when a peer receives a block bitcoin message. It
 // blocks until the bitcoin block has been fully processed.
 func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
@@ -986,7 +1006,7 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 			// Only disconnect on block validation failures, not on local
 			// infrastructure issues (database, Kafka, etc.) which would
 			// just cause unnecessary sync peer rotation.
-			if !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrStorageError) {
+			if shouldDisconnectOnBlockError(err) {
 				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
 				return
 			}

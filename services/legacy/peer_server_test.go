@@ -19,6 +19,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestShouldDisconnectOnBlockError pins which block-processing errors trigger a
+// sync-peer disconnect in OnBlock. Transient local conditions — service errors,
+// storage errors, and the per-block backoff throttle (ErrServiceUnavailable,
+// #1187) — must NOT disconnect the delivering peer; only genuine peer/validation
+// faults should. Guards the regression where the #1187 backoff-skip returned
+// ErrServiceUnavailable, a code the old guard did not recognise, so it
+// disconnected the delivering peer on every in-window re-delivery.
+func TestShouldDisconnectOnBlockError(t *testing.T) {
+	tests := []struct {
+		name           string
+		err            error
+		wantDisconnect bool
+	}{
+		{name: "nil never disconnects", err: nil, wantDisconnect: false},
+		{name: "service error is local", err: errors.NewServiceError("svc"), wantDisconnect: false},
+		{name: "storage error is local", err: errors.NewStorageError("store"), wantDisconnect: false},
+		{name: "backoff throttle (service unavailable) is local", err: errors.NewServiceUnavailableError("in backoff"), wantDisconnect: false},
+		{name: "processing error wrapping a storage error is local", err: errors.NewProcessingError("wrap", errors.NewStorageError("inner")), wantDisconnect: false},
+		{name: "invalid block is a peer fault", err: errors.NewBlockInvalidError("bad block"), wantDisconnect: true},
+		{name: "bare processing error disconnects", err: errors.NewProcessingError("boom"), wantDisconnect: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.wantDisconnect, shouldDisconnectOnBlockError(tt.err))
+		})
+	}
+}
+
 // TestAddKnownAddresses tests that the addKnownAddresses function properly adds
 // addresses to the knownAddresses map and triggers cleanup when the map reaches
 // the maximum size.

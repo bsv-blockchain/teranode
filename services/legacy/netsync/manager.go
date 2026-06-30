@@ -67,6 +67,13 @@ const (
 	// hashes to store in memory.
 	maxRejectedTxns = 10_000
 
+	// blockFailureBackoffMaxTracked bounds the per-block transient-failure
+	// backoff map (#1187). Legacy sync only has a handful of failing block
+	// hashes in flight, but capping the map guarantees a pathological stream of
+	// distinct failing hashes can never grow it without bound (mirrors the
+	// WithMaxSize bound on orphanTxs).
+	blockFailureBackoffMaxTracked = 1024
+
 	// maxRequestedBlocks is the maximum number of requested block
 	// hashes to store in memory.
 	maxRequestedBlocks = wire.MaxInvPerMsg
@@ -369,6 +376,14 @@ func (bst *blockSizeTracker) calculateMaxInFlightBlocks() int {
 	}
 }
 
+// blockFailureState tracks per-block transient-failure backoff. attempts is the
+// consecutive failure count for a block hash; nextRetry is the earliest time the
+// block may be re-processed. See SyncManager.blockFailureBackoff (#1187).
+type blockFailureState struct {
+	attempts  int
+	nextRetry time.Time
+}
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -415,10 +430,16 @@ type SyncManager struct {
 	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	syncPeerMu      sync.RWMutex // protects syncPeer and syncPeerState
-	syncPeer        *peerpkg.Peer
-	syncPeerState   *syncPeerState
-	peerStates      *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
+	// blockFailureBackoff throttles re-processing of a block that just failed
+	// with a transient storage/service error, so a re-delivered block does not
+	// immediately re-run the full multi-million-record decorate at full
+	// concurrency against an already-struggling UTXO store (#1187). Keyed by
+	// block hash; entries self-evict after Legacy.BlockFailureBackoffMaxDuration.
+	blockFailureBackoff *expiringmap.ExpiringMap[chainhash.Hash, *blockFailureState]
+	syncPeerMu          sync.RWMutex // protects syncPeer and syncPeerState
+	syncPeer            *peerpkg.Peer
+	syncPeerState       *syncPeerState
+	peerStates          *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
 
 	// blockBacklog counts blocks sitting in the local processing pipeline:
 	// queued in blockHandler's blockQueue plus the one inside handleBlockMsg.
@@ -1264,6 +1285,28 @@ func (sm *SyncManager) current() bool {
 	return true
 }
 
+// recordBlockFailureBackoff records or extends the transient-failure backoff for
+// a block hash (#1187). The failure count increases by one per consecutive
+// failure (resetting once the map TTL forgets the hash) and the next-retry window
+// grows linearly (count * base), capped at Legacy.BlockFailureBackoffMaxDuration.
+// Callers must ensure sm.blockFailureBackoff is non-nil.
+func (sm *SyncManager) recordBlockFailureBackoff(blockHash chainhash.Hash) {
+	attempts := 1
+	if fs, ok := sm.blockFailureBackoff.Get(blockHash); ok {
+		attempts = fs.attempts + 1
+	}
+
+	backoff := time.Duration(attempts) * sm.settings.Legacy.BlockFailureBackoffBase
+	if maxBackoff := sm.settings.Legacy.BlockFailureBackoffMaxDuration; backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+
+	sm.blockFailureBackoff.Set(blockHash, &blockFailureState{
+		attempts:  attempts,
+		nextRetry: time.Now().Add(backoff),
+	})
+}
+
 // handleBlockMsg handles block messages from all peers.
 func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	sm.logger.Debugf("[handleBlockMsg][%s] received block height %d from %s", bmsg.blockHash, bmsg.blockHeight, bmsg.peer)
@@ -1362,6 +1405,20 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			bmsg.blockHash, blockSize, avgSize, dynamicMax)
 	}
 
+	// Per-block transient-failure backoff (#1187): if this block recently failed
+	// with a storage/service error, skip the expensive HandleBlockDirect path
+	// until the backoff window elapses instead of re-running the full decorate at
+	// full concurrency. Returning a retryable error (not sleeping) keeps the
+	// single block-processing goroutine free; the block is re-delivered later by
+	// the normal sync re-request path. Nil-guarded: tests build SyncManager as a
+	// struct literal that bypasses New().
+	if sm.blockFailureBackoff != nil {
+		if fs, ok := sm.blockFailureBackoff.Get(bmsg.blockHash); ok && time.Now().Before(fs.nextRetry) {
+			sm.logger.Warnf("[handleBlockMsg][%s] in backoff after %d transient failure(s), skipping until %s", bmsg.blockHash, fs.attempts, fs.nextRetry)
+			return errors.NewServiceUnavailableError("[handleBlockMsg][%s] block in backoff after %d transient failure(s)", bmsg.blockHash, fs.attempts)
+		}
+	}
+
 	sm.logger.Debugf("[handleBlockMsg][%s] calling HandleBlockDirect", bmsg.blockHash)
 
 	// Hand sole ownership of the decoded block to HandleBlockDirect. The
@@ -1423,9 +1480,25 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				return nil
 			}
 
-			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
+			// Transient local-infrastructure failures (not peer faults): service
+			// errors, storage errors, and ErrServiceUnavailable — which the UTXO
+			// store returns when a batch (notably the outpoint/decorate batch, the
+			// #1187 wedge) does not complete in time (stores/utxo/aerospike/get.go).
+			// These must neither reject the block to the peer nor (below) skip the
+			// backoff; the set mirrors shouldDisconnectOnBlockError in peer_server.go.
+			serviceError := errors.Is(err, errors.ErrServiceError) ||
+				errors.Is(err, errors.ErrStorageError) ||
+				errors.Is(err, errors.ErrServiceUnavailable)
 			if !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
+			}
+
+			// Record a transient-failure backoff so the next re-delivery of this
+			// block is throttled rather than immediately re-running the full
+			// decorate (#1187). Linear growth capped at the configured max; the
+			// failure count persists across re-deliveries within the map TTL.
+			if serviceError && sm.blockFailureBackoff != nil {
+				sm.recordBlockFailureBackoff(bmsg.blockHash)
 			}
 
 			sm.logger.Errorf("Failed to process new block in service blockQueueMsg %v: %v", bmsg.blockHash, err)
@@ -1433,6 +1506,12 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			// Never panic in sync processing goroutines; bubble error to caller.
 			return err
 		}
+	}
+
+	// Block processed successfully — clear any transient-failure backoff so a
+	// future failure starts a fresh count rather than inheriting a stale one (#1187).
+	if sm.blockFailureBackoff != nil {
+		sm.blockFailureBackoff.Delete(bmsg.blockHash)
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -2389,6 +2468,10 @@ func (sm *SyncManager) Stop() error {
 	sm.requestedTxns.Stop()
 	sm.requestedBlocks.Stop()
 
+	if sm.blockFailureBackoff != nil {
+		sm.blockFailureBackoff.Stop()
+	}
+
 	// DC15 / review C1: quiesce Put then drain the tx-announce batcher before
 	// tearing down transports.
 	sm.closeTxAnnounceBatcher()
@@ -2473,17 +2556,30 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
+	// Per-block transient-failure backoff (#1187). Enabled only when both knobs
+	// are positive; left nil (a clean no-op via the nil-guards in handleBlockMsg)
+	// when either is <= 0. Leaving it nil when disabled also avoids constructing
+	// an expiringmap with a zero TTL — which spawns no cleanup goroutine and never
+	// evicts, leaking entries. WithMaxSize bounds the map absolutely when enabled;
+	// the TTL (= max backoff window) forgets a failed hash that is not re-delivered
+	// within the window, resetting its failure count.
+	var blockFailureBackoff *expiringmap.ExpiringMap[chainhash.Hash, *blockFailureState]
+	if base, window := tSettings.Legacy.BlockFailureBackoffBase, tSettings.Legacy.BlockFailureBackoffMaxDuration; base > 0 && window > 0 {
+		blockFailureBackoff = expiringmap.New[chainhash.Hash, *blockFailureState](window).WithMaxSize(blockFailureBackoffMaxTracked)
+	}
+
 	sm := SyncManager{
 		ctx:          ctx,
 		settings:     tSettings,
 		peerNotifier: config.PeerNotifier,
 		// txMemPool:     config.TxMemPool,
-		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
-		chainParams:     config.ChainParams,
-		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
-		peerStates:      txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+		orphanTxs:           expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
+		chainParams:         config.ChainParams,
+		rejectedTxns:        txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
+		requestedTxns:       expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
+		requestedBlocks:     expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
+		blockFailureBackoff: blockFailureBackoff,
+		peerStates:          txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
 		msgChan:          make(chan interface{}, maxMsgQueueSize),
 		headerList:       list.New(),

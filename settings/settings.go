@@ -477,6 +477,13 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DisableDAHCleaner:                       getBool("utxostore_disableDAHCleaner", false, alternativeContext...),
 			ReAssignedUtxoSpendableAfterBlocks:      getUint32("utxostore_reassignedUtxoSpendableAfterBlocks", 1000, alternativeContext...),
 			BatcherMaxConcurrent:                    getInt("utxostore_batcherMaxConcurrent", 64, alternativeContext...),
+			StoreBatcherMaxConcurrent:               getInt("utxostore_storeBatcherMaxConcurrent", 0, alternativeContext...),
+			GetBatcherMaxConcurrent:                 getInt("utxostore_getBatcherMaxConcurrent", 0, alternativeContext...),
+			SpendBatcherMaxConcurrent:               getInt("utxostore_spendBatcherMaxConcurrent", 0, alternativeContext...),
+			OutpointBatcherMaxConcurrent:            getInt("utxostore_outpointBatcherMaxConcurrent", 0, alternativeContext...),
+			IncrementBatcherMaxConcurrent:           getInt("utxostore_incrementBatcherMaxConcurrent", 0, alternativeContext...),
+			SetDAHBatcherMaxConcurrent:              getInt("utxostore_setDAHBatcherMaxConcurrent", 0, alternativeContext...),
+			LockedBatcherMaxConcurrent:              getInt("utxostore_lockedBatcherMaxConcurrent", 0, alternativeContext...),
 			QueryIdleTimeoutSeconds:                 getInt("utxostore_queryIdleTimeoutSeconds", 60, alternativeContext...),
 			StoreBatcherTickerIntervalMillis:        getInt("utxostore_storeBatcherTickerIntervalMillis", 0, alternativeContext...),
 			GetBatcherTickerIntervalMillis:          getInt("utxostore_getBatcherTickerIntervalMillis", 0, alternativeContext...),
@@ -643,6 +650,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
 			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...),     // ping/pong interval is 2 mins, so we set this to 125s to be sure
 			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
+			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
+			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 5*time.Minute, alternativeContext...),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:         getString("ipv6_addresses", "", alternativeContext...),

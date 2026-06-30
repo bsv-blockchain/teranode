@@ -172,6 +172,19 @@ func (s *Store) batchOperate(policy *aerospike.BatchPolicy, records []aerospike.
 	return s.client.BatchOperate(policy, records)
 }
 
+// resolveBatcherMaxConcurrent returns the effective per-batcher concurrency cap.
+// A per-batcher override > 0 takes precedence; otherwise the shared
+// BatcherMaxConcurrent is used. A non-positive perBatcher value is treated as
+// "unset" so the shared knob still governs (and the caller's `> 0` guard keeps
+// the "both 0 = leave uncapped" path byte-identical to the pre-split behaviour).
+func resolveBatcherMaxConcurrent(perBatcher, shared int) int {
+	if perBatcher > 0 {
+		return perBatcher
+	}
+
+	return shared
+}
+
 // New creates a new Aerospike-based UTXO store.
 // The URL format is: aerospike://host:port/namespace?set=setname&
 // URL parameters:
@@ -328,8 +341,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	storeBatcherInst := batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendStoreBatch, batcherBackground, batcherOpts("aerospike_store")...)
-	if batcherMaxConcurrent > 0 {
-		storeBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.StoreBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		storeBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.storeBatcher = storeBatcherInst
 
@@ -337,8 +350,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchDurationStr := s.settings.UtxoStore.GetBatcherDurationMillis
 	getBatchDuration := time.Duration(getBatchDurationStr) * time.Millisecond
 	getBatcherInst := batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, batcherBackground, batcherOpts("aerospike_get")...)
-	if batcherMaxConcurrent > 0 {
-		getBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.GetBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		getBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.getBatcher = getBatcherInst
 
@@ -367,8 +380,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
 	spendBatcherInst := batcher.NewWithPool(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, batcherBackground, batcherOpts("aerospike_spend")...)
-	if batcherMaxConcurrent > 0 {
-		spendBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.SpendBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		spendBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.spendBatcher = spendBatcherInst
 
@@ -384,8 +397,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
 	outpointBatcherInst := batcher.NewWithPool(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, batcherBackground, batcherOpts("aerospike_outpoint")...)
-	if batcherMaxConcurrent > 0 {
-		outpointBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.OutpointBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		outpointBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.outpointBatcher = outpointBatcherInst
 
@@ -393,8 +406,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	incrementBatchDurationStr := tSettings.UtxoStore.IncrementBatcherDurationMillis
 	incrementBatchDuration := time.Duration(incrementBatchDurationStr) * time.Millisecond
 	incrementBatcherInst := batcher.NewWithPool(incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, batcherBackground, batcherOpts("aerospike_increment")...)
-	if batcherMaxConcurrent > 0 {
-		incrementBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.IncrementBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		incrementBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.incrementBatcher = incrementBatcherInst
 
@@ -402,8 +415,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	setDAHBatchDurationStr := tSettings.UtxoStore.SetDAHBatcherDurationMillis
 	setDAHBatchDuration := time.Duration(setDAHBatchDurationStr) * time.Millisecond
 	setDAHBatcherInst := batcher.NewWithPool(setDAHBatchSize, setDAHBatchDuration, s.sendSetDAHBatch, batcherBackground, batcherOpts("aerospike_set_dah")...)
-	if batcherMaxConcurrent > 0 {
-		setDAHBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.SetDAHBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		setDAHBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.setDAHBatcher = setDAHBatcherInst
 
@@ -411,8 +424,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	lockedBatchDurationStr := tSettings.UtxoStore.LockedBatcherDurationMillis
 	lockedBatchDuration := time.Duration(lockedBatchDurationStr) * time.Millisecond
 	lockedBatcherInst := batcher.NewWithPool(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, batcherBackground, batcherOpts("aerospike_locked")...)
-	if batcherMaxConcurrent > 0 {
-		lockedBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.LockedBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		lockedBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.lockedBatcher = lockedBatcherInst
 
