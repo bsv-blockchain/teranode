@@ -3,6 +3,7 @@ package tracing
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -981,6 +982,43 @@ func TestStart_DisabledDoubleEndIsSafe(t *testing.T) {
 	// repeated hand-back guard).
 	_, _, endNext := tracer.Start(ctx, "next")
 	require.NotPanics(t, func() { endNext() })
+}
+
+// TestStart_ConcurrentEndFinalisesOnce verifies the end function is safe to call
+// from multiple goroutines at once (the guarantee the released atomic.Bool makes):
+// finalisation runs exactly once — the counter is incremented once, not once per
+// goroutine — and the pooled object is handed back exactly once. Run under -race,
+// this also catches any read of the pooled options before the once-guard.
+func TestStart_ConcurrentEndFinalisesOnce(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_concurrent_end_counter",
+		Help: "bench",
+	})
+
+	tracer := Tracer("svc")
+	_, _, endFn := tracer.Start(context.Background(), "op", WithCounter(counter))
+
+	const goroutines = 16
+
+	var wg sync.WaitGroup
+
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			endFn()
+		}()
+	}
+
+	wg.Wait()
+
+	require.Equal(t, float64(1), counterValue(t, counter), "concurrent end calls must finalise exactly once")
 }
 
 // counterValue reads the current value of a prometheus counter.

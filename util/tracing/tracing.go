@@ -438,6 +438,10 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 
 	// Process options into a pooled TraceOptions to avoid a per-span heap
 	// allocation; recycled in the no-op fast path below or when the span ends.
+	// If an option closure or the OTel SDK panics before either Put, the object is
+	// simply dropped (GC reclaims it) — sync.Pool does not require balanced
+	// Get/Put, so this is a benign reuse miss, not a leak. We deliberately avoid a
+	// defer-Put here to keep the hot path allocation- and defer-free.
 	options := traceOptionsPool.Get().(*TraceOptions)
 	options.reset()
 
