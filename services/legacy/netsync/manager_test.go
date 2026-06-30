@@ -1030,6 +1030,19 @@ func newBackoffTestManager(t *testing.T, blockchainClient *blockchain2.Mock, blo
 	return sm, p
 }
 
+// TestNewBlockFailureBackoffMap verifies the per-block backoff map is built only
+// when both knobs are positive, and is nil (disabled, no zero-TTL leak) otherwise.
+func TestNewBlockFailureBackoffMap(t *testing.T) {
+	require.Nil(t, newBlockFailureBackoffMap(0, time.Minute), "base 0 must disable")
+	require.Nil(t, newBlockFailureBackoffMap(5*time.Second, 0), "window 0 must disable")
+	require.Nil(t, newBlockFailureBackoffMap(-1, time.Minute), "negative base must disable")
+	require.Nil(t, newBlockFailureBackoffMap(5*time.Second, -1), "negative window must disable")
+
+	m := newBlockFailureBackoffMap(5*time.Second, 5*time.Minute)
+	require.NotNil(t, m, "both knobs positive must enable")
+	m.Stop()
+}
+
 // TestRecordBlockFailureBackoff verifies the per-block backoff grows linearly
 // with the consecutive failure count and is capped at the configured maximum.
 func TestRecordBlockFailureBackoff(t *testing.T) {

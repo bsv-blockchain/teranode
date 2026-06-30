@@ -36,6 +36,7 @@ func TestShouldDisconnectOnBlockError(t *testing.T) {
 		{name: "service error is local", err: errors.NewServiceError("svc"), wantDisconnect: false},
 		{name: "storage error is local", err: errors.NewStorageError("store"), wantDisconnect: false},
 		{name: "backoff throttle (service unavailable) is local", err: errors.NewServiceUnavailableError("in backoff"), wantDisconnect: false},
+		{name: "storage unavailable (no aerospike nodes) is local", err: errors.NewStorageUnavailableError("no aerospike nodes available"), wantDisconnect: false},
 		{name: "processing error wrapping a storage error is local", err: errors.NewProcessingError("wrap", errors.NewStorageError("inner")), wantDisconnect: false},
 		{name: "invalid block is a peer fault", err: errors.NewBlockInvalidError("bad block"), wantDisconnect: true},
 		{name: "bare processing error disconnects", err: errors.NewProcessingError("boom"), wantDisconnect: true},

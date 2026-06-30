@@ -1285,6 +1285,21 @@ func (sm *SyncManager) current() bool {
 	return true
 }
 
+// newBlockFailureBackoffMap builds the per-block transient-failure backoff map
+// (#1187), or returns nil when the backoff is disabled (either knob <= 0). A nil
+// map is a clean no-op via the nil-guards in handleBlockMsg; returning nil when
+// disabled also avoids constructing an expiringmap with a zero TTL, which spawns
+// no cleanup goroutine and would leak entries. WithMaxSize bounds the map when
+// enabled; the TTL (= max backoff window) forgets a failed hash not re-delivered
+// within the window, resetting its failure count.
+func newBlockFailureBackoffMap(base, window time.Duration) *expiringmap.ExpiringMap[chainhash.Hash, *blockFailureState] {
+	if base <= 0 || window <= 0 {
+		return nil
+	}
+
+	return expiringmap.New[chainhash.Hash, *blockFailureState](window).WithMaxSize(blockFailureBackoffMaxTracked)
+}
+
 // recordBlockFailureBackoff records or extends the transient-failure backoff for
 // a block hash (#1187). The failure count increases by one per consecutive
 // failure (resetting once the map TTL forgets the hash) and the next-retry window
@@ -1409,8 +1424,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// with a storage/service error, skip the expensive HandleBlockDirect path
 	// until the backoff window elapses instead of re-running the full decorate at
 	// full concurrency. Returning a retryable error (not sleeping) keeps the
-	// single block-processing goroutine free; the block is re-delivered later by
-	// the normal sync re-request path. Nil-guarded: tests build SyncManager as a
+	// single block-processing goroutine free. The block was already removed from
+	// requestedBlocks above, so re-delivery is driven by the existing recovery
+	// plumbing — the next block arrives as an orphan of this un-stored one and
+	// triggers a getblocks, and/or the stall detector rotates the sync peer — not
+	// by a proactive re-request here. Nil-guarded: tests build SyncManager as a
 	// struct literal that bypasses New().
 	if sm.blockFailureBackoff != nil {
 		if fs, ok := sm.blockFailureBackoff.Get(bmsg.blockHash); ok && time.Now().Before(fs.nextRetry) {
@@ -1481,14 +1499,18 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 
 			// Transient local-infrastructure failures (not peer faults): service
-			// errors, storage errors, and ErrServiceUnavailable — which the UTXO
-			// store returns when a batch (notably the outpoint/decorate batch, the
-			// #1187 wedge) does not complete in time (stores/utxo/aerospike/get.go).
-			// These must neither reject the block to the peer nor (below) skip the
-			// backoff; the set mirrors shouldDisconnectOnBlockError in peer_server.go.
+			// errors, storage errors, ErrServiceUnavailable — which the UTXO store
+			// returns when a batch (notably the outpoint/decorate batch, the #1187
+			// wedge) does not complete in time (stores/utxo/aerospike/get.go) — and
+			// ErrStorageUnavailable ("no aerospike nodes available"). These must
+			// neither reject the block to the peer nor (below) skip the backoff. The
+			// set mirrors shouldDisconnectOnBlockError in peer_server.go and the
+			// transient codes of errors.IsRetryableError (minus ErrServiceError,
+			// which that helper omits but this path must keep suppressing).
 			serviceError := errors.Is(err, errors.ErrServiceError) ||
 				errors.Is(err, errors.ErrStorageError) ||
-				errors.Is(err, errors.ErrServiceUnavailable)
+				errors.Is(err, errors.ErrServiceUnavailable) ||
+				errors.Is(err, errors.ErrStorageUnavailable)
 			if !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
 			}
@@ -2556,17 +2578,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
-	// Per-block transient-failure backoff (#1187). Enabled only when both knobs
-	// are positive; left nil (a clean no-op via the nil-guards in handleBlockMsg)
-	// when either is <= 0. Leaving it nil when disabled also avoids constructing
-	// an expiringmap with a zero TTL — which spawns no cleanup goroutine and never
-	// evicts, leaking entries. WithMaxSize bounds the map absolutely when enabled;
-	// the TTL (= max backoff window) forgets a failed hash that is not re-delivered
-	// within the window, resetting its failure count.
-	var blockFailureBackoff *expiringmap.ExpiringMap[chainhash.Hash, *blockFailureState]
-	if base, window := tSettings.Legacy.BlockFailureBackoffBase, tSettings.Legacy.BlockFailureBackoffMaxDuration; base > 0 && window > 0 {
-		blockFailureBackoff = expiringmap.New[chainhash.Hash, *blockFailureState](window).WithMaxSize(blockFailureBackoffMaxTracked)
-	}
+	blockFailureBackoff := newBlockFailureBackoffMap(tSettings.Legacy.BlockFailureBackoffBase, tSettings.Legacy.BlockFailureBackoffMaxDuration)
 
 	sm := SyncManager{
 		ctx:          ctx,

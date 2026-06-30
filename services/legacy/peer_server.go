@@ -910,10 +910,12 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 // shouldDisconnectOnBlockError reports whether a block-processing error is a
 // peer fault worth disconnecting for (to trigger sync-peer rotation), versus a
 // transient local condition that should only be retried. Local conditions —
-// service errors, storage errors, and the per-block backoff throttle
-// (ErrServiceUnavailable, #1187) — must NOT disconnect the delivering peer: a
-// backed-off block is re-delivered repeatedly while it waits out its window, and
-// disconnecting on each re-delivery would churn through sync peers for no reason.
+// service errors, storage errors, the per-block backoff throttle
+// (ErrServiceUnavailable, #1187), and ErrStorageUnavailable ("no aerospike nodes
+// available") — must NOT disconnect the delivering peer: a backed-off block is
+// re-delivered repeatedly while it waits out its window, and disconnecting on
+// each re-delivery would churn through sync peers for no reason. The set mirrors
+// the serviceError predicate in netsync/manager.go.
 //
 // Note: errors.IsRetryableError is deliberately NOT reused here — it does not
 // include ErrServiceError, which this guard must continue to suppress.
@@ -924,7 +926,8 @@ func shouldDisconnectOnBlockError(err error) bool {
 
 	return !errors.Is(err, errors.ErrServiceError) &&
 		!errors.Is(err, errors.ErrStorageError) &&
-		!errors.Is(err, errors.ErrServiceUnavailable)
+		!errors.Is(err, errors.ErrServiceUnavailable) &&
+		!errors.Is(err, errors.ErrStorageUnavailable)
 }
 
 // OnBlock is invoked when a peer receives a block bitcoin message. It
