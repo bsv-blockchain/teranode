@@ -456,6 +456,135 @@ func Test_queueLarge(t *testing.T) {
 	assert.Equal(t, 10_000_000, batches)
 }
 
+// Test_queueDoesNotHoldChildBeforeParent documents and verifies the post-Genesis
+// any-order assumption (issue TN-019): the queue performs no parent-presence
+// reordering. When a child batch is enqueued ahead of its parent's batch — as can
+// happen when concurrent validator goroutines race on tail.Swap — the consumer
+// dequeues the child first. The queue never holds a child back to wait for its
+// parent. This is intentional and valid post-Genesis (TTOR removed), so long as
+// the parent is present in the same block and there is no double-spend.
+func Test_queueDoesNotHoldChildBeforeParent(t *testing.T) {
+	q := NewLockFreeQueue()
+
+	parentHash := chainhash.Hash{0x01}
+	childHash := chainhash.Hash{0x02}
+
+	// Child is enqueued FIRST, parent SECOND — the adverse ordering the queue
+	// does not correct. The child references the parent via its inpoints.
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: childHash}},
+		[]*subtree.TxInpoints{{ParentTxHashes: []chainhash.Hash{parentHash}}},
+	)
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: parentHash}},
+		[]*subtree.TxInpoints{{}},
+	)
+
+	// DoubleSpendWindow disabled (validFromMillis == 0): no batches are held back.
+	first, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Len(t, first.nodes, 1)
+	require.Equal(t, childHash, first.nodes[0].Hash,
+		"child must dequeue first; the queue must not hold it back for its parent")
+
+	second, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Len(t, second.nodes, 1)
+	require.Equal(t, parentHash, second.nodes[0].Hash)
+
+	_, found = q.dequeueBatch(0)
+	require.False(t, found)
+	require.True(t, q.IsEmpty())
+}
+
+// Test_queueParentChildConcurrentLossless enqueues a parent and its child from two
+// separate goroutines, repeatedly, exactly as concurrent validator Store() calls
+// do. The producers race on tail.Swap, so neither parent-before-child nor
+// child-before-parent ordering is guaranteed. The invariant that MUST hold is that
+// every enqueued transaction survives to the consumer — no batch is dropped,
+// duplicated, or corrupted under contention.
+func Test_queueParentChildConcurrentLossless(t *testing.T) {
+	const rounds = 5_000
+
+	q := NewLockFreeQueue()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Producer A: parents. Producer B: children. Hashes are unique per round and
+	// disjoint between producers so we can detect any loss or duplication.
+	go func() {
+		defer wg.Done()
+
+		for i := 0; i < rounds; i++ {
+			h := chainhash.Hash{}
+			h[0] = 0xAA
+			binaryPut(h[1:], uint64(i))
+			q.enqueueBatch(
+				[]subtree.Node{{Hash: h}},
+				[]*subtree.TxInpoints{{}},
+			)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		for i := 0; i < rounds; i++ {
+			parent := chainhash.Hash{}
+			parent[0] = 0xAA
+			binaryPut(parent[1:], uint64(i))
+
+			h := chainhash.Hash{}
+			h[0] = 0xBB
+			binaryPut(h[1:], uint64(i))
+			q.enqueueBatch(
+				[]subtree.Node{{Hash: h}},
+				[]*subtree.TxInpoints{{ParentTxHashes: []chainhash.Hash{parent}}},
+			)
+		}
+	}()
+
+	wg.Wait()
+
+	seen := make(map[chainhash.Hash]int, rounds*2)
+
+	for {
+		batch, found := q.dequeueBatch(0)
+		if !found {
+			break
+		}
+
+		for _, node := range batch.nodes {
+			seen[node.Hash]++
+		}
+	}
+
+	require.Len(t, seen, rounds*2, "every parent and child must survive exactly once")
+
+	for i := 0; i < rounds; i++ {
+		parent := chainhash.Hash{}
+		parent[0] = 0xAA
+		binaryPut(parent[1:], uint64(i))
+
+		child := chainhash.Hash{}
+		child[0] = 0xBB
+		binaryPut(child[1:], uint64(i))
+
+		require.Equal(t, 1, seen[parent], "parent %d lost or duplicated", i)
+		require.Equal(t, 1, seen[child], "child %d lost or duplicated", i)
+	}
+
+	require.True(t, q.IsEmpty())
+}
+
+// binaryPut writes v into b in little-endian order (b must be at least 8 bytes).
+func binaryPut(b []byte, v uint64) {
+	for i := 0; i < 8; i++ {
+		b[i] = byte(v >> (8 * i))
+	}
+}
+
 // enqueueBatches adds test batches to a queue for testing.
 // Each batch contains a single transaction for testing simplicity.
 //

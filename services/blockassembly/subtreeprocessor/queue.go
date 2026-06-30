@@ -53,6 +53,13 @@ func (q *LockFreeQueue) length() int64 {
 // It uses atomic operations to ensure thread safety during concurrent enqueue operations.
 // The entire batch receives a single timestamp when enqueued.
 //
+// Ordering: concurrent producers linearise on tail.Swap, so the order in which
+// two batches land is whichever producer wins that swap — it is NOT guaranteed to
+// match parent-before-child causal order. A child enqueued from one validator
+// goroutine may precede its parent enqueued from another. The consumer appends in
+// dequeue order without reordering; see the post-Genesis any-order assumption
+// documented at the dequeue loop in SubtreeProcessor.go.
+//
 // Parameters:
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node

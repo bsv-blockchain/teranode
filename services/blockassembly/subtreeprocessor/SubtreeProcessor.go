@@ -1049,6 +1049,21 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 
 					// Phase 3: Bulk insert valid nodes into subtrees (single-threaded)
 					// Only nodes with non-zero Hash passed the filters
+					//
+					// Ordering note (post-Genesis any-order assumption):
+					// Nodes are appended to subtrees strictly in dequeue order; this loop
+					// never reorders a child behind its parent. Because the validator
+					// creates the parent UTXO (Validator.go CreateInUtxoStore) and enqueues
+					// to block assembly (sendToBlockAssembler) as separate steps, and
+					// concurrent validator goroutines race on the MPSC queue's tail.Swap
+					// (queue.go enqueueBatch), a child's batch can be enqueued — and so
+					// placed in an earlier subtree slot — ahead of its parent's. That is
+					// valid post-Genesis: TTOR was removed at ChainCfgParams.
+					// GenesisActivationHeight (620,538 on mainnet), so any in-block order
+					// is accepted as long as the parent is present in the same block and
+					// there is no double-spend. If strict parent-before-child ordering is
+					// ever required (e.g. for pre-Genesis history), add a parent-presence
+					// hold here or set BlockAssembly.DoubleSpendWindow > 0 to delay batches.
 					nrAddedInBatch := 0
 					for _, batch := range dequeueBatches {
 						for _, node := range batch.nodes {
