@@ -89,14 +89,16 @@ func TestAcquireBlockPrefetch_Disabled(t *testing.T) {
 	require.NotPanics(t, func() { sm.ReleaseBlockPrefetch(w) })
 }
 
-func TestAcquireBlockPrefetch_MinWeight(t *testing.T) {
-	sm := newPrefetchManager(100)
+// TestAcquireBlockPrefetch_FloorsTinyBlocks proves a block smaller than the
+// per-in-flight floor is charged the floor, not its serialized size, so a flood
+// of minimal blocks cannot admit an unbounded number of goroutines within the
+// byte budget.
+func TestAcquireBlockPrefetch_FloorsTinyBlocks(t *testing.T) {
+	sm := newPrefetchManager(4 * minInFlightBlockWeight)
 
-	// A zero/negative serialized size still reserves at least one unit so the
-	// semaphore accounting stays consistent.
-	w, err := sm.AcquireBlockPrefetch(context.Background(), 0)
+	w, err := sm.AcquireBlockPrefetch(context.Background(), 81) // minimal zero-tx block
 	require.NoError(t, err)
-	require.Equal(t, int64(1), w)
+	require.Equal(t, int64(minInFlightBlockWeight), w, "a tiny block must be charged the floor weight")
 	sm.ReleaseBlockPrefetch(w)
 }
 
@@ -105,11 +107,12 @@ func TestAcquireBlockPrefetch_MinWeight(t *testing.T) {
 // deadlocking, and that it then consumes the entire budget until released —
 // i.e. huge blocks process one at a time, preserving the original backpressure.
 func TestAcquireBlockPrefetch_OversizedAdmittedAlone(t *testing.T) {
-	sm := newPrefetchManager(100)
+	const budget = 2 * minInFlightBlockWeight
+	sm := newPrefetchManager(budget)
 
-	w, err := sm.AcquireBlockPrefetch(context.Background(), 1_000)
+	w, err := sm.AcquireBlockPrefetch(context.Background(), budget*100)
 	require.NoError(t, err)
-	require.Equal(t, int64(100), w, "oversized weight must clamp to the budget")
+	require.Equal(t, int64(budget), w, "oversized weight must clamp to the budget")
 
 	// Budget is now fully consumed: nothing else can be admitted until release.
 	require.False(t, sm.blockPrefetchBudget.TryAcquire(1))
@@ -123,15 +126,16 @@ func TestAcquireBlockPrefetch_OversizedAdmittedAlone(t *testing.T) {
 // blocked (so the stall detector can tell self-backpressure from a slow peer),
 // and unblocks on release.
 func TestAcquireBlockPrefetch_BlocksUntilReleaseAndCountsWaiter(t *testing.T) {
-	sm := newPrefetchManager(100)
+	const budget = 2 * minInFlightBlockWeight
+	sm := newPrefetchManager(budget)
 
-	first, err := sm.AcquireBlockPrefetch(context.Background(), 100) // fills the budget
+	first, err := sm.AcquireBlockPrefetch(context.Background(), budget) // fills the budget
 	require.NoError(t, err)
 
 	acquired := make(chan int64, 1)
 
 	go func() {
-		w, e := sm.AcquireBlockPrefetch(context.Background(), 30)
+		w, e := sm.AcquireBlockPrefetch(context.Background(), minInFlightBlockWeight)
 		if e == nil {
 			acquired <- w
 		}
@@ -152,7 +156,7 @@ func TestAcquireBlockPrefetch_BlocksUntilReleaseAndCountsWaiter(t *testing.T) {
 
 	select {
 	case w := <-acquired:
-		require.Equal(t, int64(30), w)
+		require.Equal(t, int64(minInFlightBlockWeight), w)
 	case <-time.After(time.Second):
 		t.Fatal("second acquire did not unblock after release")
 	}
@@ -165,16 +169,17 @@ func TestAcquireBlockPrefetch_BlocksUntilReleaseAndCountsWaiter(t *testing.T) {
 // TestAcquireBlockPrefetch_CtxCancel proves a read-loop blocked on the budget is
 // released (with nothing reserved) when its context is cancelled on shutdown.
 func TestAcquireBlockPrefetch_CtxCancel(t *testing.T) {
-	sm := newPrefetchManager(100)
+	const budget = 2 * minInFlightBlockWeight
+	sm := newPrefetchManager(budget)
 
-	_, err := sm.AcquireBlockPrefetch(context.Background(), 100) // fills the budget
+	_, err := sm.AcquireBlockPrefetch(context.Background(), budget) // fills the budget
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 
 	go func() {
-		_, e := sm.AcquireBlockPrefetch(ctx, 50)
+		_, e := sm.AcquireBlockPrefetch(ctx, minInFlightBlockWeight)
 		done <- e
 	}()
 
