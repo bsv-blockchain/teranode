@@ -907,8 +907,12 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	sp.server.syncManager.QueueTx(tx, sp.Peer, nil)
 }
 
-// OnBlock is invoked when a peer receives a block bitcoin message. It
-// blocks until the bitcoin block has been fully processed.
+// OnBlock is invoked when a peer receives a block bitcoin message. With block
+// prefetch enabled (the default) it admits the block against the prefetch budget
+// and returns, leaving validation to run in the background (see awaitBlockResult)
+// so the read-loop can download the next block while this one is processed; with
+// prefetch disabled (budget 0) it blocks until the block has been fully processed.
+// Either way blocks are handed to the sync manager in order.
 func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnBlock",
 		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
