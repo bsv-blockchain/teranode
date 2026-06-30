@@ -146,7 +146,11 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 		return nil, errors.NewStorageError("failed to get block by ID", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to get block by ID: malformed n_bits (length %d, expected 4) for block id %d", len(nBits), id, err)
+	}
+
 	block.Header.Bits = *bits
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

@@ -257,7 +257,11 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		return nil, nil, errors.NewStorageError("error in GetBlockHeader", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, nil, errors.NewStorageError("error in GetLatestBlockHeaderFromBlockLocator: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), blockHeaderMeta.Height, err)
+	}
+
 	blockHeader.Bits = *bits
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

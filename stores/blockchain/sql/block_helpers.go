@@ -68,7 +68,11 @@ func (s *SQL) scanBlockRow(rows *sql.Rows) (*model.BlockInfo, error) {
 	}
 
 	// Process nBits
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, errors.NewStorageError("scanBlockRow: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), info.Height, err)
+	}
+
 	header.Bits = *bits
 
 	// Process previous block hash
@@ -173,7 +177,11 @@ func (s *SQL) scanFullBlockRow(rows *sql.Rows) (*model.Block, error) {
 		return nil, errors.NewStorageError("failed to scan row", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, errors.NewStorageError("scanFullBlockRow: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), height, err)
+	}
+
 	block.Header.Bits = *bits
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
