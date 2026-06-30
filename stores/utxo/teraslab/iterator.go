@@ -98,7 +98,14 @@ func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 
 // Next advances the iterator and returns a batch of unmined transactions.
 func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
-	if it.closed || it.pos >= len(it.txids) {
+	// Latch a prior error: once a page fetch fails, it.pos has already advanced
+	// past that page, so resuming would silently skip its txids. Refuse to
+	// continue instead, matching consistencyScanIterator.Next and the Aerospike
+	// reference iterator.
+	if it.closed || it.err != nil {
+		return nil, it.err
+	}
+	if it.pos >= len(it.txids) {
 		return nil, nil
 	}
 
@@ -165,13 +172,15 @@ func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransacti
 			ut.TxInpoints = &subtree.TxInpoints{}
 		}
 
-		if len(records[i].BlockEntries) > 0 {
-			blockIDs := make([]uint32, len(records[i].BlockEntries))
-			for j, e := range records[i].BlockEntries {
-				blockIDs[j] = e.BlockID
-			}
-			ut.BlockIDs = blockIDs
+		// Reuse the truncation-guarded helper so the unmined scan can never hand
+		// back a silently-capped BlockIDs set (the corruption convert.go guards
+		// against); a >MaxInlineBlockEntries record fails the scan loud.
+		blockIDs, _, _, err := blockIDsFromEntries(records[i])
+		if err != nil {
+			it.err = err
+			return nil, err
 		}
+		ut.BlockIDs = blockIDs
 
 		txns = append(txns, ut)
 	}
@@ -282,13 +291,14 @@ func (it *consistencyScanIterator) Next(ctx context.Context) ([]*utxo.Inconsiste
 		if records[i].Metadata != nil {
 			rec.UnminedSince = int(records[i].Metadata.UnminedSince)
 		}
-		if len(records[i].BlockEntries) > 0 {
-			blockIDs := make([]uint32, len(records[i].BlockEntries))
-			for j, e := range records[i].BlockEntries {
-				blockIDs[j] = e.BlockID
-			}
-			rec.BlockIDs = blockIDs
+		// Same truncation guard as the unmined iterator / convert.go — never
+		// surface a capped block-membership set from the consistency scan.
+		blockIDs, _, _, err := blockIDsFromEntries(records[i])
+		if err != nil {
+			it.err = err
+			return nil, err
 		}
+		rec.BlockIDs = blockIDs
 
 		out = append(out, rec)
 	}

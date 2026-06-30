@@ -425,6 +425,43 @@ func TestTxToCreateItem_SizesMatchSerialization(t *testing.T) {
 	}
 }
 
+// TestBlockIDsFromEntries pins the shared truncation guard: a record the server
+// flagged as truncated must error (never hand back a silently-capped set), and a
+// normal record decodes into index-aligned slices.
+func TestBlockIDsFromEntries(t *testing.T) {
+	t.Run("truncated entries surface an error", func(t *testing.T) {
+		_, _, _, err := blockIDsFromEntries(teraslab.TxRecord{
+			Found:                 true,
+			BlockEntries:          []teraslab.BlockEntry{{BlockID: 1}, {BlockID: 2}, {BlockID: 3}},
+			BlockEntriesTruncated: true,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "truncated")
+	})
+
+	t.Run("empty entries yield nil slices and no error", func(t *testing.T) {
+		ids, heights, subtreeIdxs, err := blockIDsFromEntries(teraslab.TxRecord{Found: true})
+		require.NoError(t, err)
+		require.Nil(t, ids)
+		require.Nil(t, heights)
+		require.Nil(t, subtreeIdxs)
+	})
+
+	t.Run("entries decode into aligned slices", func(t *testing.T) {
+		ids, heights, subtreeIdxs, err := blockIDsFromEntries(teraslab.TxRecord{
+			Found: true,
+			BlockEntries: []teraslab.BlockEntry{
+				{BlockID: 10, BlockHeight: 100, SubtreeIdx: 1},
+				{BlockID: 20, BlockHeight: 200, SubtreeIdx: 2},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, []uint32{10, 20}, ids)
+		require.Equal(t, []uint32{100, 200}, heights)
+		require.Equal(t, []int{1, 2}, subtreeIdxs)
+	})
+}
+
 func TestRecordToMetaData(t *testing.T) {
 	t.Run("not found yields nil", func(t *testing.T) {
 		data, err := recordToMetaData(teraslab.TxRecord{Found: false})

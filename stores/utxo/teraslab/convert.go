@@ -455,6 +455,32 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, gene
 // recordToMetaData: teraslab.TxRecord → meta.Data
 // ---------------------------------------------------------------------------
 
+// blockIDsFromEntries extracts the block-membership slices (block IDs, heights,
+// subtree indexes) from a record's inline block entries. It returns an error
+// when the server flagged the entry list as truncated (more than the inline
+// cap, MaxInlineBlockEntries): a silently-capped list would corrupt
+// reorg/rewind block-membership decisions, so every reader must fail loud rather
+// than proceed with a partial set (the Aerospike backend stores the full set and
+// never truncates). recordToMetaData AND both unmined/consistency iterators go
+// through here so the truncation guard cannot be forgotten on one path.
+func blockIDsFromEntries(rec teraslab.TxRecord) (blockIDs, blockHeights []uint32, subtreeIdxs []int, err error) {
+	if rec.BlockEntriesTruncated {
+		return nil, nil, nil, errors.NewProcessingError("teraslab: block entries truncated (more than the inline cap); the full block-membership set is unavailable")
+	}
+	if len(rec.BlockEntries) == 0 {
+		return nil, nil, nil, nil
+	}
+	blockIDs = make([]uint32, len(rec.BlockEntries))
+	blockHeights = make([]uint32, len(rec.BlockEntries))
+	subtreeIdxs = make([]int, len(rec.BlockEntries))
+	for i, entry := range rec.BlockEntries {
+		blockIDs[i] = entry.BlockID
+		blockHeights[i] = entry.BlockHeight
+		subtreeIdxs[i] = int(entry.SubtreeIdx)
+	}
+	return blockIDs, blockHeights, subtreeIdxs, nil
+}
+
 // recordToMetaData converts a TeraSlab record into meta.Data, fully
 // reconstructing the transaction body (inputs/outputs). This is what most
 // callers need; the metadata-only GetMeta path uses recordToMetaDataMasked with
@@ -547,20 +573,13 @@ func recordToMetaDataMasked(rec teraslab.TxRecord, includeTx bool) (*meta.Data, 
 	// corrupt reorg/rewind block-membership decisions — which depend on the full
 	// set — so surface an error rather than hand back an incomplete list. The
 	// Aerospike backend stores the full set and never truncates.
-	if rec.BlockEntriesTruncated {
-		return nil, errors.NewProcessingError("teraslab: block entries truncated (more than the inline cap); the full block-membership set is unavailable")
+	blockIDs, blockHeights, subtreeIdxs, err := blockIDsFromEntries(rec)
+	if err != nil {
+		return nil, err
 	}
-
-	if len(rec.BlockEntries) > 0 {
-		data.BlockIDs = make([]uint32, len(rec.BlockEntries))
-		data.BlockHeights = make([]uint32, len(rec.BlockEntries))
-		data.SubtreeIdxs = make([]int, len(rec.BlockEntries))
-		for i, entry := range rec.BlockEntries {
-			data.BlockIDs[i] = entry.BlockID
-			data.BlockHeights[i] = entry.BlockHeight
-			data.SubtreeIdxs[i] = int(entry.SubtreeIdx)
-		}
-	}
+	data.BlockIDs = blockIDs
+	data.BlockHeights = blockHeights
+	data.SubtreeIdxs = subtreeIdxs
 
 	if len(rec.ConflictingChildren) > 0 {
 		data.ConflictingChildren = make([]chainhash.Hash, len(rec.ConflictingChildren))
