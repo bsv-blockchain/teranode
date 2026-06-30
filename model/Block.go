@@ -206,22 +206,16 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 	// (subsidy only). A single subtree holds the whole block, which is sufficient for
 	// the offline blocks this constructor handles.
 	for i := 1; i < len(msgBlock.Transactions); i++ {
-		var txBuf bytes.Buffer
-		if serializeErr := msgBlock.Transactions[i].Serialize(&txBuf); serializeErr != nil {
-			return nil, errors.NewProcessingError("failed to serialize transaction %d", i, serializeErr)
-		}
+		// The transaction hash is the canonical double-SHA256 of the wire
+		// serialization, identical to the value the subtree/merkle path expects.
+		hash := msgBlock.Transactions[i].TxHash()
 
-		tx, txErr := bt.NewTxFromBytes(txBuf.Bytes())
-		if txErr != nil {
-			return nil, errors.NewProcessingError("failed to create bt.Tx for transaction %d", i, txErr)
-		}
-
-		txSize, sizeErr := safeconversion.IntToUint64(tx.Size())
+		txSize, sizeErr := safeconversion.IntToUint64(msgBlock.Transactions[i].SerializeSize())
 		if sizeErr != nil {
 			return nil, errors.NewProcessingError("failed to compute size for transaction %d", i, sizeErr)
 		}
 
-		if addErr := subtree.AddNode(*tx.TxIDChainHash(), 0, txSize); addErr != nil {
+		if addErr := subtree.AddNode(hash, 0, txSize); addErr != nil {
 			return nil, errors.NewSubtreeError("failed to add transaction %d to subtree", i, addErr)
 		}
 	}
@@ -237,11 +231,9 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 		subtreeSlices = []*subtreepkg.Subtree{subtree}
 	}
 
-	// Create the new Block
-	block, err := NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	// Create the new Block. NewBlock never returns an error, so the result is
+	// used directly.
+	block, _ := NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0)
 
 	// Retain the in-memory subtree so in-process callers can validate the block
 	// without a subtree-store round trip. This field is not serialised, so it is
