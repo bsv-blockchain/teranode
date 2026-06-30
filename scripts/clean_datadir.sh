@@ -10,13 +10,13 @@ fi
 
 # Check if DATADIR is set
 if [ -z "$DATADIR" ]; then
-    echo "Error: DATADIR environment variable is not set"
+    echo "Error: DATADIR environment variable is not set" >&2
     exit 1
 fi
 
 # Check if DATADIR exists
 if [ ! -d "$DATADIR" ]; then
-    echo "Error: DATADIR '$DATADIR' does not exist"
+    echo "Error: DATADIR '$DATADIR' does not exist" >&2
     exit 1
 fi
 

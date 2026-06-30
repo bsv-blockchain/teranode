@@ -30,7 +30,7 @@ case "$ACTION" in
     up|down|restart)
         ;;
     *)
-        echo "Error: Invalid action '$ACTION'"
+        echo "Error: Invalid action '$ACTION'" >&2
         usage
         ;;
 esac
@@ -44,7 +44,7 @@ case "$ACTION" in
 
         # Check if the nginx config exists
         if [ ! -f "${NGINX_CONF}" ]; then
-            echo "Error: nginx config not found at ${NGINX_CONF}"
+            echo "Error: nginx config not found at ${NGINX_CONF}" >&2
             exit 1
         fi
 
