@@ -1712,7 +1712,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		}
 	}
 
-	if err = storeSubtreeFiles(ctx, subtreeStore, subtree, subtreeData, subtreeMeta); err != nil {
+	if err = storeSubtreeFiles(ctx, subtreeStore, subtree, subtreeData, subtreeMeta, 100); err != nil {
 		return nil, err
 	}
 
@@ -1720,7 +1720,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 }
 
 // storeSubtreeFiles serializes and stores the subtree, subtree data, and subtree meta in the provided subtree store.
-func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMeta *subtreepkg.Meta) error {
+func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMeta *subtreepkg.Meta, deleteAtHeight uint32) error {
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
 		return err
@@ -1731,7 +1731,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtree.RootHash()[:],
 		fileformat.FileTypeSubtreeToCheck, // this needs to be FileTypeSubtreeToCheck for tx processing to occur
 		subtreeBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1748,7 +1748,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtreeData.RootHash()[:],
 		fileformat.FileTypeSubtreeData,
 		subtreeDataBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1765,7 +1765,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtree.RootHash()[:],
 		fileformat.FileTypeSubtreeMeta,
 		subtreeMetaBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1809,25 +1809,11 @@ func (td *TestDaemon) StoreSubtreeForBlock(t *testing.T, txs []*bt.Tx, deleteAtH
 
 	rootHash := subtree.RootHash()
 
-	subtreeBytes, err := subtree.Serialize()
-	require.NoError(t, err)
-
-	// FileTypeSubtreeToCheck (rather than FileTypeSubtree) is required so the
+	// Delegate the persist path to storeSubtreeFiles. subtreeData.RootHash() equals
+	// subtree.RootHash() for a NewSubtreeData(subtree), so the stored keys are unchanged.
+	// FileTypeSubtreeToCheck (set by storeSubtreeFiles) is required so the
 	// subtree-validation pass treats the transactions as pending and validates them.
-	require.NoError(t, td.SubtreeStore.Set(td.Ctx, rootHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes,
-		options.WithDeleteAt(deleteAtHeight), options.WithAllowOverwrite(true)))
-
-	subtreeDataBytes, err := subtreeData.Serialize()
-	require.NoError(t, err)
-
-	require.NoError(t, td.SubtreeStore.Set(td.Ctx, rootHash[:], fileformat.FileTypeSubtreeData, subtreeDataBytes,
-		options.WithDeleteAt(deleteAtHeight), options.WithAllowOverwrite(true)))
-
-	subtreeMetaBytes, err := subtreeMeta.Serialize()
-	require.NoError(t, err)
-
-	require.NoError(t, td.SubtreeStore.Set(td.Ctx, rootHash[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes,
-		options.WithDeleteAt(deleteAtHeight), options.WithAllowOverwrite(true)))
+	require.NoError(t, storeSubtreeFiles(td.Ctx, td.SubtreeStore, subtree, subtreeData, subtreeMeta, deleteAtHeight))
 
 	return rootHash
 }
