@@ -3,8 +3,6 @@ package aerospike
 import (
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/require"
 )
 
 // TestAcquireBatchTimer_Fires verifies a freshly acquired timer fires after the
@@ -21,17 +19,14 @@ func TestAcquireBatchTimer_Fires(t *testing.T) {
 	}
 }
 
-// TestAcquireBatchTimer_Reuse verifies the pool actually recycles a timer
-// instead of allocating a fresh one each call.
-func TestAcquireBatchTimer_Reuse(t *testing.T) {
-	first := acquireBatchTimer(time.Hour)
-	releaseBatchTimer(first)
-
-	second := acquireBatchTimer(time.Hour)
-	defer releaseBatchTimer(second)
-
-	require.Same(t, first, second, "expected the released timer to be reused from the pool")
-}
+// Note on reuse coverage: there is deliberately no pointer-identity ("the freed
+// timer is the next one returned") test. sync.Pool makes no such guarantee — it
+// evicts on GC and keeps per-P local caches, so an identity assertion is flaky
+// (especially under -race). The recycle path is instead covered behaviourally by
+// TestAcquireBatchTimer_NoStaleTickAfterFire and TestAcquireBatchTimer_ResetDeadline
+// (both release a timer and re-acquire it, asserting the recycled timer behaves
+// correctly), and steady-state zero-allocation reuse is asserted by
+// BenchmarkBatchTimer_Pooled.
 
 // TestAcquireBatchTimer_NoStaleTickAfterFire is the safety-critical case: a timer
 // that already fired, was released (Stop, not drained), and re-acquired for a long
