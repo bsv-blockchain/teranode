@@ -850,3 +850,141 @@ func BenchmarkStart_Disabled(b *testing.B) {
 		endFn()
 	}
 }
+
+// BenchmarkStart_Disabled_NoOptions mirrors the hottest disabled-path span in the
+// codebase (e.g. aerospike:Create, which passes no options). With the pooled
+// TraceOptions and the shared no-op end function this should report 0 allocs/op.
+func BenchmarkStart_Disabled_NoOptions(b *testing.B) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	tracer := Tracer("bench")
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, _, endFn := tracer.Start(ctx, "op")
+		endFn()
+	}
+}
+
+// BenchmarkStart_Disabled_Histogram mirrors the validator's per-transaction spans
+// (WithHistogram), which take the slow path because the prometheus metric must be
+// observed even when tracing is disabled. The pool removes the TraceOptions
+// allocation; only the end-closure allocation remains.
+func BenchmarkStart_Disabled_Histogram(b *testing.B) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	histogram := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "bench_histogram_disabled",
+		Help: "bench",
+	})
+
+	tracer := Tracer("bench")
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, _, endFn := tracer.Start(ctx, "op", WithHistogram(histogram))
+		endFn()
+	}
+}
+
+// TestStart_PooledOptionsNoStateBleed guards the sync.Pool reset: a span that sets
+// a counter must not leave that counter set on the recycled TraceOptions, or a
+// later option-less span would spuriously increment it.
+func TestStart_PooledOptionsNoStateBleed(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_pool_bleed_counter",
+		Help: "bench",
+	})
+
+	tracer := Tracer("svc")
+	ctx := context.Background()
+
+	// Span A carries a counter (slow path) and returns its options to the pool.
+	_, _, endA := tracer.Start(ctx, "A", WithCounter(counter))
+	endA()
+
+	require.Equal(t, float64(1), counterValue(t, counter))
+
+	// Span B carries no options and (in the same goroutine) reuses A's pooled
+	// TraceOptions. If reset() failed to clear Counter, this would increment it.
+	_, _, endB := tracer.Start(ctx, "B")
+	endB()
+
+	require.Equal(t, float64(1), counterValue(t, counter), "recycled options must not retain the previous span's counter")
+}
+
+// TestStart_DisabledTimeoutStillCancels verifies WithContextTimeout is honoured on
+// the disabled path: the context carries the deadline and the span's end function
+// cancels it.
+func TestStart_DisabledTimeoutStillCancels(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	tracer := Tracer("svc")
+
+	ctx, _, endFn := tracer.Start(context.Background(), "op", WithContextTimeout(time.Minute))
+
+	_, hasDeadline := ctx.Deadline()
+	require.True(t, hasDeadline, "context timeout must be applied even when tracing is disabled")
+
+	endFn()
+	require.Error(t, ctx.Err(), "end function must cancel the timeout context")
+}
+
+// TestStart_DisabledDoubleEndIsSafe verifies calling the end function twice does
+// not panic and does not corrupt the pool (a following span still behaves
+// correctly).
+func TestStart_DisabledDoubleEndIsSafe(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_double_end_counter",
+		Help: "bench",
+	})
+
+	tracer := Tracer("svc")
+	ctx := context.Background()
+
+	_, _, endFn := tracer.Start(ctx, "op", WithCounter(counter))
+	require.NotPanics(t, func() {
+		endFn()
+		endFn()
+	})
+
+	// A subsequent span must still behave correctly (pool not corrupted by the
+	// repeated hand-back guard).
+	_, _, endNext := tracer.Start(ctx, "next")
+	require.NotPanics(t, func() { endNext() })
+}
+
+// counterValue reads the current value of a prometheus counter.
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+
+	metric := &dto.Metric{}
+	require.NoError(t, c.Write(metric))
+
+	return metric.Counter.GetValue()
+}
