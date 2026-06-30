@@ -1168,3 +1168,64 @@ func TestShouldDisconnectOnBlockErr(t *testing.T) {
 	// A genuine block validation failure rotates the peer.
 	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
 }
+
+// TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
+// path: awaitBlockResult must not block forever (leaking its goroutine and the
+// reserved budget) when a block's reply never arrives because the peer or server
+// is shutting down. sp.ctx is the long-lived Init context that Stop() does not
+// cancel, so sp.quit is the teardown signal that actually fires. A nil prefetch
+// budget makes ReleaseBlockPrefetch a no-op, so this exercises the control flow
+// without standing up a full SyncManager.
+func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
+	newPeer := func() *serverPeer {
+		return &serverPeer{
+			server: &server{syncManager: &netsync.SyncManager{}},
+			ctx:    context.Background(),
+			quit:   make(chan struct{}),
+		}
+	}
+
+	t.Run("exits on sp.quit when the reply never arrives", func(t *testing.T) {
+		sp := newPeer()
+		done := make(chan error, 1) // intentionally never written
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		// Still blocked: no reply, quit open.
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before any teardown signal")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		close(sp.quit)
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult leaked: did not exit after sp.quit closed")
+		}
+	})
+
+	t.Run("completes when the reply arrives", func(t *testing.T) {
+		sp := newPeer()
+		done := make(chan error, 1)
+		done <- nil // successful processing, no disconnect
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not return after the reply arrived")
+		}
+	})
+}
