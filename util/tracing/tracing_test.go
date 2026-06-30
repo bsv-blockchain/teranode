@@ -1021,6 +1021,47 @@ func TestStart_ConcurrentEndFinalisesOnce(t *testing.T) {
 	require.Equal(t, float64(1), counterValue(t, counter), "concurrent end calls must finalise exactly once")
 }
 
+// TestStart_EnabledConcurrentEndFinalisesOnce is the enabled-tracing companion to
+// TestStart_ConcurrentEndFinalisesOnce. The once-guard / pool hand-back hazard is
+// independent of tracingEnabled (the CAS is the first statement of endFn), so the
+// guarantee must hold on the enabled path too: concurrent end calls finalise once
+// (counter incremented once) against a real, sampled span. Run under -race.
+func TestStart_EnabledConcurrentEndFinalisesOnce(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	require.NoError(t, initTestTracer())
+
+	defer func() { _ = ShutdownTracer(context.Background()) }()
+
+	SetTracingEnabled(true)
+
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_enabled_concurrent_end_counter",
+		Help: "bench",
+	})
+
+	tracer := Tracer("test-service")
+	_, _, endFn := tracer.Start(context.Background(), "op", WithCounter(counter))
+
+	const goroutines = 16
+
+	var wg sync.WaitGroup
+
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			endFn()
+		}()
+	}
+
+	wg.Wait()
+
+	require.Equal(t, float64(1), counterValue(t, counter), "concurrent end calls must finalise exactly once (tracing enabled)")
+}
+
 // counterValue reads the current value of a prometheus counter.
 func counterValue(t *testing.T, c prometheus.Counter) float64 {
 	t.Helper()
