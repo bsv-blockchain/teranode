@@ -60,6 +60,17 @@ const (
 	// based on observed block sizes to avoid memory issues with large blocks.
 	defaultMaxInFlightBlocks = 20
 
+	// minInFlightBlockWeight is the minimum prefetch-budget weight charged for an
+	// admitted block, regardless of how small it serializes. Each in-flight block
+	// costs a fixed overhead beyond its bytes — an awaitBlockResult goroutine
+	// (stack), a reply channel, and the decoded block wrapper. Charging only the
+	// serialized size would let a flood of minimal (e.g. ~81-byte, zero-tx) blocks
+	// admit a huge number of concurrent goroutines within the byte budget; the
+	// floor bounds the in-flight block count (≈ budget/minInFlightBlockWeight) and
+	// therefore the goroutine count. It is well below any real small-block size,
+	// so it never reduces prefetch depth for legitimate traffic.
+	minInFlightBlockWeight = 64 * 1024
+
 	// maxNetworkViolations is the max number of network violations a
 	// sync peer can have before a new sync peer is found.
 	maxNetworkViolations = 3
@@ -2341,12 +2352,16 @@ func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, size int64) (in
 		return 0, nil
 	}
 
+	// Floor the weight so a flood of tiny blocks can't admit an unbounded number
+	// of in-flight goroutines within the byte budget, then clamp to the budget so
+	// an oversized block is admitted alone (and budgets smaller than the floor
+	// still process one block at a time rather than deadlocking).
 	weight := size
+	if weight < minInFlightBlockWeight {
+		weight = minInFlightBlockWeight
+	}
 	if weight > sm.blockPrefetchBudgetBytes {
 		weight = sm.blockPrefetchBudgetBytes
-	}
-	if weight < 1 {
-		weight = 1
 	}
 
 	// Fast path: budget available right now, no waiter accounting needed.
