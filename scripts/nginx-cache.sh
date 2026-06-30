@@ -43,7 +43,7 @@ case "$ACTION" in
         docker rm "$CONTAINER_NAME" 2>/dev/null || true
 
         # Check if the nginx config exists
-        if [ ! -f "${NGINX_CONF}" ]; then
+        if [[ ! -f "${NGINX_CONF}" ]]; then
             echo "Error: nginx config not found at ${NGINX_CONF}" >&2
             exit 1
         fi
