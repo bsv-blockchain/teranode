@@ -960,36 +960,120 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	blockIsKnownValid := err == nil && !meta.Invalid
 
 	if !blockIsKnownValid {
-		// Queue the block up to be handled by the block
-		// manager and intentionally block further receives
-		// until the bitcoin block is fully processed and known
-		// good or bad.  This helps prevent a malicious peer
-		// from queuing up a bunch of bad blocks before
-		// disconnecting (or being disconnected) and wasting
-		// memory.  Additionally, this behavior is depended on
-		// by at least the block acceptance test tool as the
-		// reference implementation processes blocks in the same
-		// thread and therefore blocks further messages until
-		// the bitcoin block has been fully processed.
+		// Queue the block up to be handled by the block manager. The reference
+		// implementation processes blocks on the read thread, blocking further
+		// messages until each block is fully processed; at least the block
+		// acceptance test tool depends on that ordering. We keep blocks strictly
+		// ordered (the sync manager's single block-queue goroutine is FIFO) but
+		// decouple download from processing so the next block can be fetched
+		// while this one validates.
 		//
-		// QueueBlock is the last use of `block`: the sync manager extracts the
-		// *wire.MsgBlock into its own queue message and the netsync pipeline owns
-		// it from there (releasing the arena mid-processing). Referencing only
-		// blockHash past this point lets the wrapper and the raw bytes be
-		// collected while we wait.
-		sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
+		// QueueBlock is the last use of `block` here: the sync manager extracts
+		// the *wire.MsgBlock into its own queue message and the netsync pipeline
+		// owns it from there (releasing the arena mid-processing). Referencing
+		// only blockHash past this point lets the wrapper and the raw bytes be
+		// collected once processing is done.
+		sm := sp.server.syncManager
 
-		err = <-sp.blockProcessed
-		if err != nil {
-			sp.server.logger.Errorf("block processing failed: %v", err)
+		if !sm.BlockPrefetchEnabled() {
+			// Synchronous ingestion (prefetch disabled): block the read-loop
+			// until the block is fully processed. One block in flight per peer
+			// with full TCP backpressure — the original behaviour, kept as a
+			// kill switch. This also intentionally limits how many bad blocks a
+			// malicious peer can queue before being disconnected.
+			sm.QueueBlock(block, sp.Peer, sp.blockProcessed)
 
-			// Only disconnect on block validation failures, not on local
-			// infrastructure issues (database, Kafka, etc.) which would
-			// just cause unnecessary sync peer rotation.
-			if !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrStorageError) {
-				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
-				return
+			err = <-sp.blockProcessed
+			if err != nil {
+				sp.server.logger.Errorf("block processing failed: %v", err)
+
+				if shouldDisconnectOnBlockErr(err) {
+					sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
+					return
+				}
 			}
+
+			return
+		}
+
+		// Reject unrequested blocks before they can consume prefetch budget.
+		// handleBlockMsg makes the same check after queueing and disconnects the
+		// peer, but under async prefetch a misbehaving peer could otherwise admit
+		// a flood of unrequested blocks against the shared budget before that
+		// downstream disconnect fires — starving the real sync peer's read-loop
+		// and inflating buffered-block memory. Gating here keeps a malicious peer
+		// to at most one unrequested block in flight (matching the original
+		// synchronous backpressure) and also spares fabricated blocks the
+		// SerializeSize walk below. Blocks we actually requested take the fast path.
+		if !sm.BlockRequested(sp.Peer, blockHash) {
+			sp.DisconnectWithWarning(fmt.Sprintf("Got unrequested block %s, disconnecting", blockHash))
+			return
+		}
+
+		// Bounded async prefetch. Admit the block against the global byte budget
+		// FIRST — this blocks the read-loop only when in-flight blocks already
+		// fill the budget, which is the backpressure that bounds the memory
+		// pinned by buffered blocks (a malicious peer cannot outrun it, and an
+		// oversized block is admitted alone). Admitting before QueueBlock is
+		// essential: otherwise the block would sit in the deep msgChan/blockQueue
+		// pinning its decode arena without being counted against the budget.
+		weight, err := sm.AcquireBlockPrefetch(sp.ctx, int64(msg.SerializeSize()))
+		if err != nil {
+			// ctx cancelled (shutdown): nothing reserved, drop the block.
+			return
+		}
+
+		// Per-block buffered(1) reply channel. handleBlockMsg always sends
+		// exactly one result; the buffer guarantees that send never blocks even
+		// if this peer has since disconnected and no goroutine is waiting. That
+		// is what stops a disconnected peer from wedging the single shared
+		// block-processing goroutine — and through it every other peer.
+		done := make(chan error, 1)
+		sm.QueueBlock(block, sp.Peer, done)
+
+		// Return immediately so the read-loop downloads the next block while this
+		// one is validated; the result (budget release + disconnect-on-failure)
+		// is handled off the read-loop.
+		go sp.awaitBlockResult(done, weight, blockHash)
+	}
+}
+
+// shouldDisconnectOnBlockErr reports whether a block-processing error should
+// rotate the sync peer. Block validation failures disconnect the peer; local
+// infrastructure errors (database, Kafka, etc.) must not, since they would only
+// cause unnecessary sync-peer churn.
+func shouldDisconnectOnBlockErr(err error) bool {
+	return err != nil &&
+		!errors.Is(err, errors.ErrServiceError) &&
+		!errors.Is(err, errors.ErrStorageError)
+}
+
+// awaitBlockResult releases the prefetch budget reserved for an asynchronously
+// queued block once its background processing completes, and disconnects the
+// peer on a validation failure. It runs as a short-lived goroutine per in-flight
+// prefetched block; the number of live instances is bounded by the prefetch
+// budget. It deliberately captures only blockHash (not the block or its decode
+// arena) so the block's memory can be released while processing proceeds.
+func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash *chainhash.Hash) {
+	var err error
+
+	select {
+	case err = <-done:
+	case <-sp.ctx.Done():
+		// Server shutting down: the reply may never arrive (the block handler
+		// stops draining its queue). Release the budget and exit without
+		// blocking so we never leak this goroutine on teardown.
+		sp.server.syncManager.ReleaseBlockPrefetch(weight)
+		return
+	}
+
+	sp.server.syncManager.ReleaseBlockPrefetch(weight)
+
+	if err != nil {
+		sp.server.logger.Errorf("block processing failed: %v", err)
+
+		if shouldDisconnectOnBlockErr(err) {
+			sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
 		}
 	}
 }

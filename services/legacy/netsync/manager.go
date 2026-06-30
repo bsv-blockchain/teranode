@@ -49,6 +49,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -427,6 +428,25 @@ type SyncManager struct {
 	// detector must not hold the resulting zero throughput against the sync
 	// peer. Written by the blockHandler goroutines, read by handleCheckSyncPeer.
 	blockBacklog atomic.Int64
+
+	// blockPrefetchBudget bounds, by total serialized bytes, the blocks that
+	// have been received from peers but not yet finished processing. It lets
+	// OnBlock admit a block and return (so the read-loop downloads the next
+	// block while this one validates) instead of blocking on per-block
+	// completion, while capping the memory pinned by buffered blocks across ALL
+	// peers and streams. nil when prefetch is disabled (budget <= 0), in which
+	// case OnBlock keeps its original synchronous, one-block-in-flight behaviour.
+	// A block larger than the whole budget is admitted alone (weight clamped to
+	// the budget), preserving full backpressure for huge blocks.
+	blockPrefetchBudget      *semaphore.Weighted
+	blockPrefetchBudgetBytes int64
+
+	// blockPrefetchWaiters counts read-loops currently blocked acquiring
+	// prefetch budget (i.e. local processing cannot keep up). While > 0 the node
+	// is backpressuring its own network reads, so the stall detector must not
+	// hold the resulting zero throughput against the sync peer — the prefetch
+	// analogue of the blockBacklog guard. Read by handleCheckSyncPeer.
+	blockPrefetchWaiters atomic.Int64
 
 	// The following fields are used for headers-first mode.
 	headersFirstMode atomic.Bool // accessed from multiple goroutines, must be atomic
@@ -861,15 +881,21 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	// Update network stats at the end of this tick.
 	defer sps.updateNetwork(sp)
 
-	// While blocks are queued or mid-validation locally, OnBlock deliberately
-	// stops reading from the peer (it blocks on blockProcessed), so zero
-	// throughput and a stale last-block-time measure our own validation speed,
-	// not the peer's health. Skip stall checks until the backlog drains — a
-	// genuinely stalled peer keeps failing them afterwards. The deferred
-	// updateNetwork still runs, keeping throughput samples fresh for the next
-	// tick.
-	if backlog := sm.blockBacklog.Load(); backlog > 0 {
-		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check skipped: %d blocks pending local processing", sp.String(), backlog)
+	// While the node is throttling its own network reads because local block
+	// processing cannot keep up, zero throughput and a stale last-block-time
+	// measure our own validation speed, not the peer's health. Skip stall checks
+	// until that self-backpressure clears — a genuinely stalled peer keeps
+	// failing them afterwards. The deferred updateNetwork still runs, keeping
+	// throughput samples fresh for the next tick.
+	//
+	// With prefetch enabled this is when read-loops are blocked acquiring budget;
+	// with prefetch disabled it is the original condition that any block is
+	// queued or mid-validation (OnBlock then blocks on blockProcessed). Crucially,
+	// under prefetch a non-empty backlog is the normal steady state and must NOT
+	// suppress stall detection: when budget is available we keep reading, so a
+	// slow or stalled sync peer is still detected and rotated.
+	if sm.localReadBackpressured() {
+		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check skipped: read-loop backpressured by local block processing", sp.String())
 		return
 	}
 
@@ -2257,6 +2283,112 @@ func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done
 	sm.msgChan <- &blockMsg{block: block, peer: peer, reply: done}
 }
 
+// BlockPrefetchEnabled reports whether bounded async block prefetch is active
+// (a positive budget was configured). When false, callers must keep the
+// original synchronous one-block-in-flight ingestion path.
+func (sm *SyncManager) BlockPrefetchEnabled() bool {
+	return sm.blockPrefetchBudget != nil
+}
+
+// BlockRequested reports whether blockHash is one we have an outstanding
+// getdata request for from the given peer (resolving stream peers to their
+// association primary, as handleBlockMsg does). It lets the read-loop reject
+// unrequested blocks BEFORE they consume prefetch budget, mirroring the
+// unrequested-block check in handleBlockMsg. Under async prefetch this is what
+// preserves the original backpressure: without it a misbehaving peer could
+// admit a flood of unrequested blocks against the shared budget — starving the
+// real sync peer and inflating buffered-block memory — before the downstream
+// per-block disconnect fires. On regtest it always returns true; the regression
+// harness intentionally feeds unrequested/duplicate blocks.
+func (sm *SyncManager) BlockRequested(peer *peerpkg.Peer, blockHash *chainhash.Hash) bool {
+	if sm.chainParams == &chaincfg.RegressionNetParams {
+		return true
+	}
+
+	state, exists := sm.peerStates.Get(peer)
+	if !exists {
+		if assoc := peer.AssociationRef(); assoc != nil {
+			if primary := assoc.PrimaryPeer(); primary != nil {
+				state, exists = sm.peerStates.Get(primary)
+			}
+		}
+	}
+
+	if !exists {
+		return false
+	}
+
+	_, requested := state.requestedBlocks.Get(*blockHash)
+
+	return requested
+}
+
+// AcquireBlockPrefetch reserves prefetch budget for a block of the given
+// serialized size and returns the amount actually reserved, which the caller
+// MUST later hand back to ReleaseBlockPrefetch exactly once. The weight is
+// clamped to the total budget so a block larger than the whole budget is
+// admitted alone (it waits until every other in-flight block has drained),
+// which preserves the original one-block-at-a-time backpressure for huge
+// blocks and guarantees Acquire can never deadlock on an oversized block.
+//
+// It returns an error only if ctx is cancelled while waiting (shutdown), in
+// which case nothing was reserved. When prefetch is disabled it is a no-op
+// returning (0, nil). While blocked waiting for budget it increments
+// blockPrefetchWaiters so the stall detector can tell self-backpressure apart
+// from a genuinely stalled peer.
+func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, size int64) (int64, error) {
+	if sm.blockPrefetchBudget == nil {
+		return 0, nil
+	}
+
+	weight := size
+	if weight > sm.blockPrefetchBudgetBytes {
+		weight = sm.blockPrefetchBudgetBytes
+	}
+	if weight < 1 {
+		weight = 1
+	}
+
+	// Fast path: budget available right now, no waiter accounting needed.
+	if sm.blockPrefetchBudget.TryAcquire(weight) {
+		return weight, nil
+	}
+
+	// Slow path: we must wait for in-flight blocks to drain. Flag that this
+	// read-loop is backpressured by our own processing so the stall detector
+	// does not mistake the resulting read stall for a slow peer.
+	sm.blockPrefetchWaiters.Add(1)
+	defer sm.blockPrefetchWaiters.Add(-1)
+
+	if err := sm.blockPrefetchBudget.Acquire(ctx, weight); err != nil {
+		return 0, err
+	}
+
+	return weight, nil
+}
+
+// ReleaseBlockPrefetch returns budget reserved by AcquireBlockPrefetch. A zero
+// weight (prefetch disabled, or nothing reserved) is a no-op.
+func (sm *SyncManager) ReleaseBlockPrefetch(weight int64) {
+	if sm.blockPrefetchBudget == nil || weight <= 0 {
+		return
+	}
+	sm.blockPrefetchBudget.Release(weight)
+}
+
+// localReadBackpressured reports whether the node is currently throttling its
+// own network reads because local block processing cannot keep up. The stall
+// detector skips its checks while this holds, since zero throughput then
+// reflects our validation speed, not the sync peer's health. With prefetch
+// enabled that is when read-loops are blocked acquiring budget; with prefetch
+// disabled it is the original condition of any block queued or mid-validation.
+func (sm *SyncManager) localReadBackpressured() bool {
+	if sm.blockPrefetchBudget != nil {
+		return sm.blockPrefetchWaiters.Load() > 0
+	}
+	return sm.blockBacklog.Load() > 0
+}
+
 // sendDuringShutdown delivers v on ch, recovering from the "send on closed
 // channel" panic that races teardown. Inv delivery runs on peer read-loop
 // goroutines (OnInv -> QueueInv), but the channels they target are torn down by
@@ -2501,6 +2633,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
 		blockAssembly:     blockAssembly,
+	}
+
+	// Bounded async block prefetch: with a positive budget OnBlock admits a
+	// block against this global byte-weighted semaphore and returns, so the
+	// read-loop downloads the next block while the current one is validated.
+	// The budget caps the total serialized bytes of in-flight blocks; a budget
+	// of 0 disables prefetch entirely (synchronous, one-block-in-flight).
+	if budget := tSettings.Legacy.BlockPrefetchBufferBytes; budget > 0 {
+		sm.blockPrefetchBudgetBytes = budget
+		sm.blockPrefetchBudget = semaphore.NewWeighted(budget)
 	}
 
 	// create the transaction announcement batcher
