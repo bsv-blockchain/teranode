@@ -357,8 +357,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				spendTimeout = 30 * time.Second
 			}
 
-			timer := time.NewTimer(spendTimeout)
-			defer timer.Stop()
+			timer := acquireBatchTimer(spendTimeout)
+			defer releaseBatchTimer(timer)
 
 			select {
 			case batchErr = <-errCh:
@@ -940,13 +940,13 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 
 		// Bound the wait so a wedged setDAH batcher cannot pin this caller forever.
 		if s.batcherWait > 0 {
-			timer := time.NewTimer(s.batcherWait)
+			timer := acquireBatchTimer(s.batcherWait)
 			select {
 			case errs[i] = <-errCh:
 			case <-timer.C:
 				errs[i] = errors.NewServiceUnavailableError("[setDAHForChildRecords][%s] set DAH for child record %d did not complete within %s", txID.String(), i, s.batcherWait)
 			}
-			timer.Stop()
+			releaseBatchTimer(timer)
 		} else {
 			errs[i] = <-errCh
 		}
@@ -1138,8 +1138,8 @@ func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int) (inte
 		spendTimeout = 30 * time.Second
 	}
 
-	timer := time.NewTimer(spendTimeout)
-	defer timer.Stop()
+	timer := acquireBatchTimer(spendTimeout)
+	defer releaseBatchTimer(timer)
 
 	select {
 	case response := <-res:

@@ -388,8 +388,8 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	var timeoutCh <-chan time.Time
 
 	if s.batcherWait > 0 {
-		timer := time.NewTimer(s.batcherWait)
-		defer timer.Stop()
+		timer := acquireBatchTimer(s.batcherWait)
+		defer releaseBatchTimer(timer)
 
 		timeoutCh = timer.C
 	}
@@ -1223,8 +1223,8 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 	var timeoutCh <-chan time.Time
 
 	if s.batcherWait > 0 {
-		timer := time.NewTimer(s.batcherWait)
-		defer timer.Stop()
+		timer := acquireBatchTimer(s.batcherWait)
+		defer releaseBatchTimer(timer)
 
 		timeoutCh = timer.C
 	}

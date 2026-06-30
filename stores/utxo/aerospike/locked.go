@@ -2,7 +2,6 @@ package aerospike
 
 import (
 	"context"
-	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -34,8 +33,8 @@ func (s *Store) waitForLockedResult(ctx context.Context, errCh chan error) error
 		}
 	}
 
-	timer := time.NewTimer(s.batcherWait)
-	defer timer.Stop()
+	timer := acquireBatchTimer(s.batcherWait)
+	defer releaseBatchTimer(timer)
 
 	select {
 	case err := <-errCh:

@@ -232,8 +232,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	var timeoutCh <-chan time.Time
 
 	if s.batcherWait > 0 {
-		timer := time.NewTimer(s.batcherWait)
-		defer timer.Stop()
+		timer := acquireBatchTimer(s.batcherWait)
+		defer releaseBatchTimer(timer)
 
 		timeoutCh = timer.C
 	}
