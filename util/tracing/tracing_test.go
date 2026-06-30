@@ -950,9 +950,9 @@ func TestStart_DisabledTimeoutStillCancels(t *testing.T) {
 	require.Error(t, ctx.Err(), "end function must cancel the timeout context")
 }
 
-// TestStart_DisabledDoubleEndIsSafe verifies calling the end function twice does
-// not panic and does not corrupt the pool (a following span still behaves
-// correctly).
+// TestStart_DisabledDoubleEndIsSafe verifies the end function finalises exactly
+// once: a second call does not panic, does not double-count the metric, and does
+// not corrupt the pooled object for a subsequently issued span.
 func TestStart_DisabledDoubleEndIsSafe(t *testing.T) {
 	originalState := IsTracingEnabled()
 	defer SetTracingEnabled(originalState)
@@ -972,6 +972,10 @@ func TestStart_DisabledDoubleEndIsSafe(t *testing.T) {
 		endFn()
 		endFn()
 	})
+
+	// Finalisation is once-only: the second call must be a no-op, not a second
+	// increment (and must not touch the recycled object).
+	require.Equal(t, float64(1), counterValue(t, counter), "double end must not double-count the counter")
 
 	// A subsequent span must still behave correctly (pool not corrupted by the
 	// repeated hand-back guard).

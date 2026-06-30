@@ -71,11 +71,13 @@ type TraceOptions struct {
 	SampleRate       *float64                // per-span sample rate override (nil = use default)
 	InjectStartTime  bool                    // inject the span start time into the context under StartTime
 
-	// released guards the sync.Pool hand-back so a caller that invokes the span's
-	// end function more than once cannot return the same object to the pool twice
-	// (a double-Put would let two later spans alias the same recycled object). It
-	// is atomic so the guard holds even if a caller invokes the end function from
-	// more than one goroutine, without relying on an unenforced calling convention.
+	// released makes the span's end function finalise exactly once. The first call
+	// wins the compare-and-swap and runs all finalisation (span end, metrics, logs,
+	// cancel) and returns the object to the pool; any later or concurrent call is a
+	// no-op. It is atomic so this holds even if a caller invokes the end function
+	// from more than one goroutine, without relying on an unenforced single-caller
+	// convention — and it prevents a double-Put from aliasing the recycled object
+	// (and its metrics/logs) across two unrelated spans.
 	released atomic.Bool
 }
 
@@ -563,6 +565,15 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 	}
 
 	endFn := func(optionalError ...error) {
+		// Finalise exactly once. A repeated or concurrent invocation is a no-op:
+		// after the first call the pooled options have been returned to the pool and
+		// may already have been reissued to another span, so reading them again
+		// (recordMetrics/logEndMessage) would corrupt that span and race its setup.
+		// Winning the compare-and-swap is what licenses every read below and the Put.
+		if !options.released.CompareAndSwap(false, true) {
+			return
+		}
+
 		var err error
 		if len(optionalError) > 0 {
 			err = optionalError[0]
@@ -591,12 +602,7 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 			cancelFunc()
 		}
 
-		// Recycle the options exactly once, even if a caller invokes the end
-		// function more than once (or concurrently): only the goroutine that wins
-		// the compare-and-swap returns the object to the pool.
-		if options.released.CompareAndSwap(false, true) {
-			traceOptionsPool.Put(options)
-		}
+		traceOptionsPool.Put(options)
 	}
 
 	return ctx, span, endFn
