@@ -192,7 +192,11 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
 
-		bits, _ := model.NewNBitFromSlice(nBits)
+		bits, nBitsErr := model.NewNBitFromSlice(nBits)
+		if nBitsErr != nil {
+			return nil, nil, errors.NewStorageError("error in GetBlockHeadersByHeight: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), blockHeaderMeta.Height, nBitsErr)
+		}
+
 		blockHeader.Bits = *bits
 
 		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

@@ -126,7 +126,11 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 		return nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, errors.NewStorageError("error in GetHeader: malformed n_bits (length %d, expected 4) for block %s", len(nBits), blockHash.String(), err)
+	}
+
 	blockHeader.Bits = *bits
 
 	// Cache the result in response cache

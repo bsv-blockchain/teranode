@@ -164,7 +164,11 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, 0, errors.NewStorageError("error in GetBlock", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, 0, errors.NewStorageError("error in GetBlock: malformed n_bits (length %d, expected 4) for block %s", len(nBits), blockHash.String(), err)
+	}
+
 	block.Header.Bits = *bits
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
