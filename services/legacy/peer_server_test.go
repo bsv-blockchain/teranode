@@ -1153,3 +1153,18 @@ func TestMergeCheckpointsFunc(t *testing.T) {
 	assert.Equal(t, int32(300), merged[2].Height)
 	assert.Equal(t, int32(400), merged[3].Height)
 }
+
+// TestShouldDisconnectOnBlockErr verifies the block-processing error policy that
+// both the synchronous and the async-prefetch ingestion paths in OnBlock share:
+// validation failures rotate the sync peer, local infrastructure errors do not.
+func TestShouldDisconnectOnBlockErr(t *testing.T) {
+	// No error: nothing to disconnect for.
+	require.False(t, shouldDisconnectOnBlockErr(nil))
+
+	// Local infrastructure problems must NOT churn the sync peer.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("grpc down")))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageError("db unavailable")))
+
+	// A genuine block validation failure rotates the peer.
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
+}
