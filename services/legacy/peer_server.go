@@ -1014,6 +1014,15 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 			return
 		}
 
+		// Weight the block by its serialized size. On the single-stream path buf is
+		// the raw serialized payload, so len(buf) is that size for free; the
+		// BlockPriority streaming path passes buf == nil, so fall back to
+		// SerializeSize() (which walks the tx set) only there.
+		size := int64(len(buf))
+		if size == 0 {
+			size = int64(msg.SerializeSize())
+		}
+
 		// Bounded async prefetch. Admit the block against the global byte budget
 		// FIRST — this blocks the read-loop only when in-flight blocks already
 		// fill the budget, which is the backpressure that bounds the memory
@@ -1021,9 +1030,11 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		// oversized block is admitted alone). Admitting before QueueBlock is
 		// essential: otherwise the block would sit in the deep msgChan/blockQueue
 		// pinning its decode arena without being counted against the budget.
-		weight, err := sm.AcquireBlockPrefetch(sp.ctx, int64(msg.SerializeSize()))
+		// sp.quit lets a budget-parked read-loop unblock on peer teardown, since
+		// sp.ctx (the Init context) is not cancelled by Stop() — mirrors awaitBlockResult.
+		weight, err := sm.AcquireBlockPrefetch(sp.ctx, sp.quit, size)
 		if err != nil {
-			// ctx cancelled (shutdown): nothing reserved, drop the block.
+			// ctx cancelled or peer torn down: nothing reserved, drop the block.
 			return
 		}
 

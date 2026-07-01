@@ -81,7 +81,7 @@ func TestBlockPrefetchEnabled(t *testing.T) {
 func TestAcquireBlockPrefetch_Disabled(t *testing.T) {
 	sm := newPrefetchManager(0)
 
-	w, err := sm.AcquireBlockPrefetch(context.Background(), 999)
+	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, 999)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), w)
 
@@ -96,7 +96,7 @@ func TestAcquireBlockPrefetch_Disabled(t *testing.T) {
 func TestAcquireBlockPrefetch_FloorsTinyBlocks(t *testing.T) {
 	sm := newPrefetchManager(4 * minInFlightBlockWeight)
 
-	w, err := sm.AcquireBlockPrefetch(context.Background(), 81) // minimal zero-tx block
+	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, 81) // minimal zero-tx block
 	require.NoError(t, err)
 	require.Equal(t, int64(minInFlightBlockWeight), w, "a tiny block must be charged the floor weight")
 	sm.ReleaseBlockPrefetch(w)
@@ -110,7 +110,7 @@ func TestAcquireBlockPrefetch_OversizedAdmittedAlone(t *testing.T) {
 	const budget = 2 * minInFlightBlockWeight
 	sm := newPrefetchManager(budget)
 
-	w, err := sm.AcquireBlockPrefetch(context.Background(), budget*100)
+	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, budget*100)
 	require.NoError(t, err)
 	require.Equal(t, int64(budget), w, "oversized weight must clamp to the budget")
 
@@ -129,13 +129,13 @@ func TestAcquireBlockPrefetch_BlocksUntilReleaseAndCountsWaiter(t *testing.T) {
 	const budget = 2 * minInFlightBlockWeight
 	sm := newPrefetchManager(budget)
 
-	first, err := sm.AcquireBlockPrefetch(context.Background(), budget) // fills the budget
+	first, err := sm.AcquireBlockPrefetch(context.Background(), nil, budget) // fills the budget
 	require.NoError(t, err)
 
 	acquired := make(chan int64, 1)
 
 	go func() {
-		w, e := sm.AcquireBlockPrefetch(context.Background(), minInFlightBlockWeight)
+		w, e := sm.AcquireBlockPrefetch(context.Background(), nil, minInFlightBlockWeight)
 		if e == nil {
 			acquired <- w
 		}
@@ -172,14 +172,14 @@ func TestAcquireBlockPrefetch_CtxCancel(t *testing.T) {
 	const budget = 2 * minInFlightBlockWeight
 	sm := newPrefetchManager(budget)
 
-	_, err := sm.AcquireBlockPrefetch(context.Background(), budget) // fills the budget
+	_, err := sm.AcquireBlockPrefetch(context.Background(), nil, budget) // fills the budget
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 
 	go func() {
-		_, e := sm.AcquireBlockPrefetch(ctx, minInFlightBlockWeight)
+		_, e := sm.AcquireBlockPrefetch(ctx, nil, minInFlightBlockWeight)
 		done <- e
 	}()
 
@@ -193,6 +193,42 @@ func TestAcquireBlockPrefetch_CtxCancel(t *testing.T) {
 		require.Error(t, e)
 	case <-time.After(time.Second):
 		t.Fatal("acquire did not return after context cancellation")
+	}
+
+	require.Eventually(t, func() bool { return sm.blockPrefetchWaiters.Load() == 0 },
+		time.Second, 5*time.Millisecond)
+}
+
+// TestAcquireBlockPrefetch_QuitAbort proves a budget-parked read-loop unblocks on
+// peer teardown (its quit channel closing), not only on ctx cancellation —
+// mirroring awaitBlockResult, since sp.ctx is the long-lived Init context that
+// Stop() does not cancel.
+func TestAcquireBlockPrefetch_QuitAbort(t *testing.T) {
+	const budget = 2 * minInFlightBlockWeight
+	sm := newPrefetchManager(budget)
+
+	_, err := sm.AcquireBlockPrefetch(context.Background(), nil, budget) // fills the budget
+	require.NoError(t, err)
+
+	quit := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		// Non-cancellable ctx: only quit can unblock this, proving quit is honored.
+		_, e := sm.AcquireBlockPrefetch(context.Background(), quit, minInFlightBlockWeight)
+		done <- e
+	}()
+
+	require.Eventually(t, func() bool { return sm.blockPrefetchWaiters.Load() == 1 },
+		time.Second, 5*time.Millisecond)
+
+	close(quit) // peer torn down
+
+	select {
+	case e := <-done:
+		require.Error(t, e)
+	case <-time.After(time.Second):
+		t.Fatal("acquire did not return after the peer quit channel closed")
 	}
 
 	require.Eventually(t, func() bool { return sm.blockPrefetchWaiters.Load() == 0 },
