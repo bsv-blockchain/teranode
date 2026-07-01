@@ -2347,7 +2347,7 @@ func (sm *SyncManager) BlockRequested(peer *peerpkg.Peer, blockHash *chainhash.H
 // returning (0, nil). While blocked waiting for budget it increments
 // blockPrefetchWaiters so the stall detector can tell self-backpressure apart
 // from a genuinely stalled peer.
-func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, size int64) (int64, error) {
+func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, quit <-chan struct{}, size int64) (int64, error) {
 	if sm.blockPrefetchBudget == nil {
 		return 0, nil
 	}
@@ -2374,6 +2374,27 @@ func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, size int64) (in
 	// does not mistake the resulting read stall for a slow peer.
 	sm.blockPrefetchWaiters.Add(1)
 	defer sm.blockPrefetchWaiters.Add(-1)
+
+	// Abort the wait on peer teardown too, not just whole-process ctx cancellation:
+	// the caller's ctx is the long-lived Init context that Stop() does not cancel,
+	// while quit (the peer's quit channel) closes on both individual disconnect and
+	// shutdown. This mirrors awaitBlockResult so a budget-parked read-loop never
+	// outlives its peer. The linking goroutine only exists while we are blocked
+	// (the rare backpressure case) and exits as soon as the acquire resolves.
+	if quit != nil {
+		var cancel context.CancelFunc
+
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+
+		go func() {
+			select {
+			case <-quit:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 
 	if err := sm.blockPrefetchBudget.Acquire(ctx, weight); err != nil {
 		return 0, err
