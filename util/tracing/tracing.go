@@ -70,15 +70,6 @@ type TraceOptions struct {
 	Timeout          time.Duration           // timeout for the span, if set
 	SampleRate       *float64                // per-span sample rate override (nil = use default)
 	InjectStartTime  bool                    // inject the span start time into the context under StartTime
-
-	// released makes the span's end function finalise exactly once. The first call
-	// wins the compare-and-swap and runs all finalisation (span end, metrics, logs,
-	// cancel) and returns the object to the pool; any later or concurrent call is a
-	// no-op. It is atomic so this holds even if a caller invokes the end function
-	// from more than one goroutine, without relying on an unenforced single-caller
-	// convention — and it prevents a double-Put from aliasing the recycled object
-	// (and its metrics/logs) across two unrelated spans.
-	released atomic.Bool
 }
 
 // traceOptionsPool recycles TraceOptions across spans. On the hot path (millions
@@ -106,7 +97,6 @@ func (s *TraceOptions) reset() {
 	s.Timeout = 0
 	s.SampleRate = nil
 	s.InjectStartTime = false
-	s.released.Store(false)
 }
 
 // noopEndFn is the shared, allocation-free end function returned by Start for
@@ -568,13 +558,21 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		return ctx, span, noopEndFn
 	}
 
+	// ended is a per-span guard captured by the end closure — deliberately NOT a
+	// field on the pooled TraceOptions, which reset() clears on reissue and would
+	// thus re-open the guard for a stale end call landing after the object had been
+	// recycled into another span (corrupting that span's metrics/logs and
+	// double-Putting). Declared after the fast-path return above, so the common
+	// allocation-free path is untouched; on the slow path it rides in the end
+	// closure. Atomic so a repeated or concurrent call is a safe no-op.
+	var ended atomic.Bool
+
 	endFn := func(optionalError ...error) {
-		// Finalise exactly once. A repeated or concurrent invocation is a no-op:
-		// after the first call the pooled options have been returned to the pool and
-		// may already have been reissued to another span, so reading them again
-		// (recordMetrics/logEndMessage) would corrupt that span and race its setup.
-		// Winning the compare-and-swap is what licenses every read below and the Put.
-		if !options.released.CompareAndSwap(false, true) {
+		// Finalise exactly once: only the call that wins the compare-and-swap runs
+		// finalisation and returns options to the pool. A later or concurrent call
+		// returns before touching options, which by then may have been recycled into
+		// an unrelated span. Winning the CAS is what licenses every read below.
+		if !ended.CompareAndSwap(false, true) {
 			return
 		}
 

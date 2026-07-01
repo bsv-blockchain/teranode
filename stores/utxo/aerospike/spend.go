@@ -939,17 +939,25 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 		}()
 
 		// Bound the wait so a wedged setDAH batcher cannot pin this caller forever.
-		if s.batcherWait > 0 {
-			timer := acquireBatchTimer(s.batcherWait)
-			select {
-			case errs[i] = <-errCh:
-			case <-timer.C:
-				errs[i] = errors.NewServiceUnavailableError("[setDAHForChildRecords][%s] set DAH for child record %d did not complete within %s", txID.String(), i, s.batcherWait)
+		// Wrapped in a closure so releaseBatchTimer is deferred (matches the pool's
+		// contract and the other callsites): the timer is returned to the pool even
+		// if the timeout branch panics, and the defer is scoped to this iteration
+		// rather than accumulating for the whole loop.
+		errs[i] = func() error {
+			if s.batcherWait <= 0 {
+				return <-errCh
 			}
-			releaseBatchTimer(timer)
-		} else {
-			errs[i] = <-errCh
-		}
+
+			timer := acquireBatchTimer(s.batcherWait)
+			defer releaseBatchTimer(timer)
+
+			select {
+			case err := <-errCh:
+				return err
+			case <-timer.C:
+				return errors.NewServiceUnavailableError("[setDAHForChildRecords][%s] set DAH for child record %d did not complete within %s", txID.String(), i, s.batcherWait)
+			}
+		}()
 
 		if errs[i] != nil {
 			s.logger.Errorf("[setDAHForChildRecords][%s] failed to set DAH for child record %d: %v", txID.String(), i, errs[i])

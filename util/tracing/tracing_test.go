@@ -984,11 +984,10 @@ func TestStart_DisabledDoubleEndIsSafe(t *testing.T) {
 	require.NotPanics(t, func() { endNext() })
 }
 
-// TestStart_ConcurrentEndFinalisesOnce verifies the end function is safe to call
-// from multiple goroutines at once (the guarantee the released atomic.Bool makes):
-// finalisation runs exactly once — the counter is incremented once, not once per
-// goroutine — and the pooled object is handed back exactly once. Run under -race,
-// this also catches any read of the pooled options before the once-guard.
+// TestStart_ConcurrentEndFinalisesOnce verifies the per-span atomic guard: the end
+// function may be called from multiple goroutines at once and finalisation still
+// runs exactly once (the counter is incremented once, not once per goroutine) with
+// no data race. Run under -race.
 func TestStart_ConcurrentEndFinalisesOnce(t *testing.T) {
 	originalState := IsTracingEnabled()
 	defer SetTracingEnabled(originalState)
@@ -1021,45 +1020,44 @@ func TestStart_ConcurrentEndFinalisesOnce(t *testing.T) {
 	require.Equal(t, float64(1), counterValue(t, counter), "concurrent end calls must finalise exactly once")
 }
 
-// TestStart_EnabledConcurrentEndFinalisesOnce is the enabled-tracing companion to
-// TestStart_ConcurrentEndFinalisesOnce. The once-guard / pool hand-back hazard is
-// independent of tracingEnabled (the CAS is the first statement of endFn), so the
-// guarantee must hold on the enabled path too: concurrent end calls finalise once
-// (counter incremented once) against a real, sampled span. Run under -race.
-func TestStart_EnabledConcurrentEndFinalisesOnce(t *testing.T) {
+// TestStart_StaleEndAfterRecycleDoesNotCorrupt is the regression test for the
+// pool-recycle hazard: a second (stale) call to a span's end function, landing
+// after that span's pooled TraceOptions was returned to the pool and reissued to
+// a later span, must not run finalisation against the later span's options.
+//
+// This is exactly the case a guard stored ON the pooled object could not catch
+// (reset() clears such a flag on reissue, re-opening it for the stale call). The
+// guard is a per-span closure local instead, so once S1 has ended, end1() is a
+// permanent no-op regardless of what happens to the recycled object.
+func TestStart_StaleEndAfterRecycleDoesNotCorrupt(t *testing.T) {
 	originalState := IsTracingEnabled()
 	defer SetTracingEnabled(originalState)
 
-	require.NoError(t, initTestTracer())
+	SetTracingEnabled(false)
 
-	defer func() { _ = ShutdownTracer(context.Background()) }()
+	c1 := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_stale_end_c1", Help: "bench"})
+	c2 := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_stale_end_c2", Help: "bench"})
 
-	SetTracingEnabled(true)
+	tracer := Tracer("svc")
 
-	counter := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "test_enabled_concurrent_end_counter",
-		Help: "bench",
-	})
+	// S1 ends once — its options are returned to the pool.
+	_, _, end1 := tracer.Start(context.Background(), "s1", WithCounter(c1))
+	end1()
+	require.Equal(t, float64(1), counterValue(t, c1))
 
-	tracer := Tracer("test-service")
-	_, _, endFn := tracer.Start(context.Background(), "op", WithCounter(counter))
+	// S2 starts (same goroutine → very likely reuses S1's recycled object) and is
+	// configured with a different counter.
+	_, _, end2 := tracer.Start(context.Background(), "s2", WithCounter(c2))
 
-	const goroutines = 16
+	// Stale second end of S1 must be a permanent no-op: it must neither double-count
+	// c1 nor observe c2 (which it would, had the guard lived on the recycled object).
+	end1()
 
-	var wg sync.WaitGroup
+	require.Equal(t, float64(1), counterValue(t, c1), "stale re-end must not double-count S1")
+	require.Equal(t, float64(0), counterValue(t, c2), "stale re-end of S1 must not touch the recycled span S2")
 
-	wg.Add(goroutines)
-
-	for i := 0; i < goroutines; i++ {
-		go func() {
-			defer wg.Done()
-			endFn()
-		}()
-	}
-
-	wg.Wait()
-
-	require.Equal(t, float64(1), counterValue(t, counter), "concurrent end calls must finalise exactly once (tracing enabled)")
+	end2()
+	require.Equal(t, float64(1), counterValue(t, c2))
 }
 
 // counterValue reads the current value of a prometheus counter.
