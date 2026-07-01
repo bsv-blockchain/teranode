@@ -247,7 +247,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 
 	// Ensure that RPC connection is valid
 	if !s.appConfig.DisableRPCVerification {
-		if _, err = s.appConfig.Services.Node.BestBlockHash(context.Background()); err != nil {
+		if _, err = s.appConfig.Services.Node.BestBlockHash(ctx); err != nil {
 			return errors.NewServiceError("error talking to Bitcoin node with supplied RPC credentials", err)
 		}
 	}
