@@ -946,6 +946,12 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 
+	notificationBestHeight := nodeStatusMessage.BestHeight
+	notificationBestBlockHash := nodeStatusMessage.BestBlockHash
+	sanitizedBestHeight := nodeStatusMessage.BestHeight
+	var sanitizedBestBlockHash *chainhash.Hash
+	sanitizedTipOK := false
+
 	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
@@ -959,6 +965,19 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
 			s.applyBanScore(peerID, ReasonProtocolViolation)
 			return
+		}
+	}
+
+	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
+		var ok bool
+		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight())
+		if ok {
+			sanitizedTipOK = true
+			notificationBestHeight = sanitizedBestHeight
+			notificationBestBlockHash = sanitizedBestBlockHash.String()
+		} else {
+			notificationBestHeight = 0
+			notificationBestBlockHash = ""
 		}
 	}
 
@@ -992,8 +1011,8 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 		PeerID:              nodeStatusMessage.PeerID,
 		Version:             nodeStatusMessage.Version,
 		CommitHash:          nodeStatusMessage.CommitHash,
-		BestBlockHash:       nodeStatusMessage.BestBlockHash,
-		BestHeight:          nodeStatusMessage.BestHeight,
+		BestBlockHash:       notificationBestBlockHash,
+		BestHeight:          notificationBestHeight,
 		TxCount:             nodeStatusMessage.TxCount,
 		SubtreeCount:        nodeStatusMessage.SubtreeCount,
 		FSMState:            nodeStatusMessage.FSMState,
@@ -1018,20 +1037,18 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 
 	// Update peer height if provided (but not for our own messages)
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
+		if !sanitizedTipOK {
+			return
+		}
+
 		peerID, err := peer.Decode(nodeStatusMessage.PeerID)
 		if err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] failed to decode peer ID %s: %v", nodeStatusMessage.PeerID, err)
 			return
 		}
 
-		hash, err := chainhash.NewHashFromStr(nodeStatusMessage.BestBlockHash)
-		if err != nil {
-			s.logger.Warnf("[handleNodeStatusTopic] failed to create hash from best block hash %s: %v", nodeStatusMessage.BestBlockHash, err)
-			return
-		}
-
-		s.addPeer(peerID, nodeStatusMessage.ClientName, nodeStatusMessage.BestHeight, hash, nodeStatusMessage.BaseURL)
-		s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", nodeStatusMessage.BestBlockHash, peerID)
+		s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedBestHeight, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
+		s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", notificationBestBlockHash, peerID)
 
 		// Update storage mode if provided
 		// Store whether the peer is a full node or pruned node

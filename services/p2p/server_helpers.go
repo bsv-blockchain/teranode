@@ -67,12 +67,27 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 
 	s.logger.Infof("[handleBlockTopic] received block %s fromID %s", blockMessage.Hash, blockMessage.PeerID)
 
+	isSelf := s.isOwnMessage(fromID, blockMessage.PeerID)
+	advertisedHeight := blockMessage.Height
+	if isSelf {
+		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
+		if err != nil {
+			return
+		}
+	} else {
+		var ok bool
+		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight())
+		if !ok {
+			return
+		}
+	}
+
 	select {
 	case s.notificationCh <- &notificationMsg{
 		Timestamp:  time.Now().UTC().Format(isoFormat),
 		Type:       "block",
-		Hash:       blockMessage.Hash,
-		Height:     blockMessage.Height,
+		Hash:       hash.String(),
+		Height:     advertisedHeight,
 		BaseURL:    blockMessage.DataHubURL,
 		PeerID:     blockMessage.PeerID,
 		ClientName: blockMessage.ClientName,
@@ -82,7 +97,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	}
 
 	// Ignore our own messages
-	if s.isOwnMessage(fromID, blockMessage.PeerID) {
+	if isSelf {
 		s.logger.Debugf("[handleBlockTopic] ignoring own block message for %s", blockMessage.Hash)
 		return
 	}
@@ -96,7 +111,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 
 	// Store using the originator's peer ID
 	if peerID, err := peer.Decode(blockMessage.PeerID); err == nil {
-		s.addPeer(peerID, blockMessage.ClientName, blockMessage.Height, hash, blockMessage.DataHubURL)
+		s.addPeer(peerID, blockMessage.ClientName, advertisedHeight, hash, blockMessage.DataHubURL)
 		s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for peer %s", blockMessage.Hash, peerID)
 	}
 
@@ -118,11 +133,6 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	// Block validation handles bad blocks safely, and catchup fetches blocks and
 	// their subtrees directly over HTTP (not via the gossip subtree handler), so
 	// the reputation filter retained in handleSubtreeTopic does not affect catchup.
-
-	hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
-	if err != nil {
-		return
-	}
 
 	// Always send block to kafka - let block validation service decide what to do based on sync state
 	// send block to kafka, if configured
@@ -562,6 +572,32 @@ func (s *Server) getLocalHeight() uint32 {
 	}
 
 	return bhMeta.Height
+}
+
+func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
+	hash, err := chainhash.NewHashFromStr(advertisedHash)
+	if err != nil {
+		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash %q: %v", peerID, advertisedHash, err)
+		return 0, nil, false
+	}
+
+	maxLead := uint32(0)
+	if s.settings != nil {
+		maxLead = s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead
+	}
+
+	maxAcceptedHeight := uint64(localHeight) + uint64(maxLead)
+	if maxAcceptedHeight > uint64(^uint32(0)) {
+		maxAcceptedHeight = uint64(^uint32(0))
+	}
+
+	if uint64(advertisedHeight) > maxAcceptedHeight {
+		cappedHeight := uint32(maxAcceptedHeight)
+		s.logger.Warnf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, cappedHeight, localHeight, maxLead)
+		return cappedHeight, hash, true
+	}
+
+	return advertisedHeight, hash, true
 }
 
 // registerPeer is a fire-and-forget shorthand for the centralized registry's
