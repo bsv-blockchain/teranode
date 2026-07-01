@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -81,6 +82,9 @@ type PeerRegistryClientI interface {
 	// ReconsiderBadPeers resets reputation for peers whose last failure is older than cooldown.
 	// Returns the count of peers reconsidered.
 	ReconsiderBadPeers(ctx context.Context, cooldown time.Duration) (int32, error)
+
+	// RecordValidatedPeerProgress stores locally validated peer chain progress.
+	RecordValidatedPeerProgress(ctx context.Context, peerID string, height uint32, blockHash *chainhash.Hash, chainWork []byte) error
 
 	// Close releases any resources held by the client.
 	// For clients created with NewPeerRegistryClientFromConn, Close is a no-op
@@ -328,6 +332,17 @@ func (c *PeerRegistryClient) ReconsiderBadPeers(ctx context.Context, cooldown ti
 	return resp.Reconsidered, nil
 }
 
+// RecordValidatedPeerProgress implements PeerRegistryClientI.
+func (c *PeerRegistryClient) RecordValidatedPeerProgress(ctx context.Context, peerID string, height uint32, blockHash *chainhash.Hash, chainWork []byte) error {
+	_, err := c.client.RecordValidatedPeerProgress(ctx, &blockchain_api.RecordValidatedPeerProgressRequest{
+		PeerId:    peerID,
+		Height:    height,
+		BlockHash: blockHashToBytes(blockHash),
+		ChainWork: append([]byte(nil), chainWork...),
+	})
+	return err
+}
+
 // Close releases the underlying gRPC connection if this client owns it.
 // Clients created via NewPeerRegistryClientFromConn do not own the connection
 // and Close is a no-op for them.
@@ -452,6 +467,10 @@ func (l *localPeerRegistryClient) ResetReputation(_ context.Context, peerID stri
 
 func (l *localPeerRegistryClient) ReconsiderBadPeers(_ context.Context, cooldown time.Duration) (int32, error) {
 	return int32(l.reg.ReconsiderBadPeers(cooldown)), nil
+}
+
+func (l *localPeerRegistryClient) RecordValidatedPeerProgress(_ context.Context, peerID string, height uint32, blockHash *chainhash.Hash, chainWork []byte) error {
+	return l.reg.RecordValidatedPeerProgress(peerID, height, blockHash, chainWork)
 }
 
 func (l *localPeerRegistryClient) Close() error { return nil }

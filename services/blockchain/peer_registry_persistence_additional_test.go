@@ -135,6 +135,42 @@ func TestCentralizedPeerRegistry_Persistence_MultiplePeersRoundTrip(t *testing.T
 	require.Equal(t, "aerospike", got.Storage)
 }
 
+func TestCentralizedPeerRegistry_Persistence_ValidatedProgressRoundTrip(t *testing.T) {
+	store := newTestBlobStore(t)
+	ctx := context.Background()
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	penaltyUntil := time.Now().Add(time.Hour).Truncate(time.Microsecond)
+	validatedHash := mustPeerRegistryHash("persisted-validated")
+
+	r.Register(&PeerInfo{
+		ID:                        "p",
+		Height:                    500,
+		BlockHash:                 mustPeerRegistryHash("persisted-advertised"),
+		Storage:                   "pruned",
+		FullStorageContradictions: 2,
+		FullStoragePenaltyUntil:   penaltyUntil,
+	})
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 250, validatedHash, []byte{0x01, 0x02, 0x03}))
+
+	require.NoError(t, r.Save(ctx, store))
+
+	r2 := NewCentralizedPeerRegistry(DefaultBanConfig())
+	require.NoError(t, r2.Load(ctx, store, 24*time.Hour))
+
+	got, ok := r2.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(500), got.Height)
+	require.NotNil(t, got.BlockHash)
+	require.Equal(t, uint32(250), got.ValidatedHeight)
+	require.NotNil(t, got.ValidatedBlockHash)
+	require.Equal(t, validatedHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x01, 0x02, 0x03}, got.ValidatedChainWork)
+	require.False(t, got.LastValidatedAt.IsZero())
+	require.Equal(t, int64(2), got.FullStorageContradictions)
+	require.True(t, got.FullStoragePenaltyUntil.Equal(penaltyUntil))
+}
+
 func TestCentralizedPeerRegistry_Persistence_EmptyRegistrySave(t *testing.T) {
 	store := newTestBlobStore(t)
 	ctx := context.Background()

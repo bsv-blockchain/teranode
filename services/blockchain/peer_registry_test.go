@@ -7,12 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
+
+func mustPeerRegistryHash(seed string) *chainhash.Hash {
+	hash := chainhash.HashH([]byte(seed))
+	return &hash
+}
 
 func TestCentralizedPeerRegistry_RegisterAndGet(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
@@ -371,6 +377,147 @@ func TestCentralizedPeerRegistry_RecordCatchupError(t *testing.T) {
 	got, _ := r.Get("p")
 	require.Equal(t, "block 0xdead missing", got.LastCatchupError)
 	require.False(t, got.LastCatchupErrorTime.IsZero())
+}
+
+func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_MonotonicChainWork(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "p", Height: 500, BlockHash: mustPeerRegistryHash("advertised")})
+
+	firstHash := mustPeerRegistryHash("validated-first")
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 100, firstHash, []byte{0x02}))
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+	require.Equal(t, firstHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x02}, got.ValidatedChainWork)
+	require.False(t, got.LastValidatedAt.IsZero())
+	require.Equal(t, uint32(500), got.Height, "advertised height remains separate")
+
+	equalHash := mustPeerRegistryHash("validated-equal")
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 101, equalHash, []byte{0x02}))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+	require.Equal(t, firstHash.String(), got.ValidatedBlockHash.String())
+
+	lowerHash := mustPeerRegistryHash("validated-lower")
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 99, lowerHash, []byte{0x01}))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+	require.Equal(t, firstHash.String(), got.ValidatedBlockHash.String())
+
+	require.Error(t, r.RecordValidatedPeerProgress("p", 200, mustPeerRegistryHash("invalid-empty-work"), nil))
+	require.Error(t, r.RecordValidatedPeerProgress("p", 200, nil, []byte{0x04}))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+	require.Equal(t, firstHash.String(), got.ValidatedBlockHash.String())
+
+	higherHash := mustPeerRegistryHash("validated-higher")
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 120, higherHash, []byte{0x03}))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(120), got.ValidatedHeight)
+	require.Equal(t, higherHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x03}, got.ValidatedChainWork)
+
+	staleRegisterHash := mustPeerRegistryHash("validated-stale-register")
+	r.Register(&PeerInfo{
+		ID:                 "p",
+		ValidatedHeight:    80,
+		ValidatedBlockHash: staleRegisterHash,
+		ValidatedChainWork: []byte{0x02},
+		LastValidatedAt:    time.Now().Add(time.Minute),
+	})
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(120), got.ValidatedHeight)
+	require.Equal(t, higherHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x03}, got.ValidatedChainWork)
+}
+
+func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_DeepCopiesInputs(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "p"})
+
+	blockHash := mustPeerRegistryHash("validated-copy")
+	chainWork := []byte{0x01, 0x02, 0x03}
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 10, blockHash, chainWork))
+
+	blockHash[0] ^= 0xff
+	chainWork[0] = 0xff
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.NotEqual(t, blockHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x01, 0x02, 0x03}, got.ValidatedChainWork)
+
+	got.ValidatedBlockHash[1] ^= 0xff
+	got.ValidatedChainWork[1] = 0xee
+
+	again, ok := r.Get("p")
+	require.True(t, ok)
+	require.NotEqual(t, got.ValidatedBlockHash.String(), again.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x01, 0x02, 0x03}, again.ValidatedChainWork)
+}
+
+func TestCentralizedPeerRegistry_StoragePenalty_BlocksFullRepromotion(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	penaltyUntil := time.Now().Add(time.Hour)
+
+	r.Register(&PeerInfo{
+		ID:                        "p",
+		Storage:                   "pruned",
+		FullStorageContradictions: 1,
+		FullStoragePenaltyUntil:   penaltyUntil,
+	})
+
+	r.UpdateStorage("p", "full")
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "pruned", got.Storage)
+	require.Equal(t, int64(1), got.FullStorageContradictions)
+	require.True(t, got.FullStoragePenaltyUntil.Equal(penaltyUntil))
+
+	earlierPenalty := penaltyUntil.Add(-30 * time.Minute)
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: earlierPenalty})
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.True(t, got.FullStoragePenaltyUntil.Equal(penaltyUntil), "stale re-registration must not shorten an active penalty")
+
+	laterPenalty := penaltyUntil.Add(30 * time.Minute)
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: laterPenalty})
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.True(t, got.FullStoragePenaltyUntil.Equal(laterPenalty), "re-registration may extend a penalty")
+
+	r.Register(&PeerInfo{ID: "p", Storage: "full"})
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "pruned", got.Storage)
+
+	r.Register(&PeerInfo{ID: "new-p", Storage: "full", FullStoragePenaltyUntil: penaltyUntil})
+	newPeer, ok := r.Get("new-p")
+	require.True(t, ok)
+	require.NotEqual(t, "full", newPeer.Storage)
+
+	r.mu.Lock()
+	r.peers["p"].FullStoragePenaltyUntil = time.Now().Add(-time.Hour)
+	r.mu.Unlock()
+
+	r.UpdateStorage("p", "full")
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "full", got.Storage)
 }
 
 func TestCentralizedPeerRegistry_ResetReputation(t *testing.T) {
