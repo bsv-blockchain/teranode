@@ -59,22 +59,24 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		}
 	}
 
-	// If no successes reported, do a Get to retrieve block IDs.
-	//
 	// The interface postcondition (when UnsetMined is false and a nil error is
-	// returned) is that every input hash appears in the result map. A fallback Get
-	// that fails must therefore surface the error, not be swallowed with a Warn +
-	// continue, which would return a silently-incomplete map and skip downstream
-	// double-spend detection for the missing tx.
-	if len(result) == 0 {
-		for _, h := range hashes {
-			data, err := s.Get(ctx, h)
-			if err != nil {
-				return result, errors.NewStorageError("teraslab: SetMinedMulti fallback Get failed for %s", h.String(), err)
-			}
-			if data != nil {
-				result[*h] = data.BlockIDs
-			}
+	// returned) is that EVERY input hash appears in the result map. The server may
+	// return a sparse Successes set — some hashes with no per-item error — so
+	// backfill any hash still MISSING from the map via Get, not only when the map
+	// is fully empty. A partial response would otherwise yield a silently-
+	// incomplete map, skipping downstream mined-state / double-spend bookkeeping
+	// for the omitted txs. A backfill Get that fails surfaces the error rather
+	// than being swallowed.
+	for _, h := range hashes {
+		if _, ok := result[*h]; ok {
+			continue
+		}
+		data, err := s.Get(ctx, h)
+		if err != nil {
+			return result, errors.NewStorageError("teraslab: SetMinedMulti backfill Get failed for %s", h.String(), err)
+		}
+		if data != nil {
+			result[*h] = data.BlockIDs
 		}
 	}
 
