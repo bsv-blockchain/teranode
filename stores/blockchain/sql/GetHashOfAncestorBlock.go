@@ -53,7 +53,7 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetHashOfAncestorBlock-%s-%d", hash.String(), depth)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {

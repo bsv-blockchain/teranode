@@ -4,28 +4,28 @@ set -e
 
 # Parse arguments
 FORCE=false
-if [ "$1" == "--force" ] || [ "$1" == "-f" ]; then
+if [[ "$1" == "--force" ]] || [[ "$1" == "-f" ]]; then
     FORCE=true
 fi
 
 # Check if DATADIR is set
-if [ -z "$DATADIR" ]; then
-    echo "Error: DATADIR environment variable is not set"
+if [[ -z "$DATADIR" ]]; then
+    echo "Error: DATADIR environment variable is not set" >&2
     exit 1
 fi
 
 # Check if DATADIR exists
-if [ ! -d "$DATADIR" ]; then
-    echo "Error: DATADIR '$DATADIR' does not exist"
+if [[ ! -d "$DATADIR" ]]; then
+    echo "Error: DATADIR '$DATADIR' does not exist" >&2
     exit 1
 fi
 
 echo "Cleaning folders in: $DATADIR"
 echo "This will delete all subdirectories but preserve p2p.key in the root"
 
-if [ "$FORCE" = false ]; then
+if [[ "$FORCE" = false ]]; then
     read -p "Are you sure you want to continue? (yes/no): " confirm
-    if [ "$confirm" != "yes" ]; then
+    if [[ "$confirm" != "yes" ]]; then
         echo "Operation cancelled"
         exit 0
     fi

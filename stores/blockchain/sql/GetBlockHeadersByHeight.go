@@ -60,7 +60,7 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeadersByHeight-%d-%d", startHeight, endHeight)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
