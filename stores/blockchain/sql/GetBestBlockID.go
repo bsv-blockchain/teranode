@@ -24,7 +24,7 @@ type bestBlockIDResult struct {
 // automatically invalidated by ResetResponseCache().
 func (s *SQL) getBestBlockID(ctx context.Context) (uint32, *chainhash.Hash, error) {
 	cacheID := chainhash.HashH([]byte("getBestBlockID"))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	if cached := cacheOp.Get(); cached != nil {
 		if r, ok := cached.Value().(bestBlockIDResult); ok {

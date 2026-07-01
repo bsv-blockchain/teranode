@@ -11,7 +11,7 @@ docker_service_init
 # Check if /etc/hosts entry exists
 if ! grep -q "kafka-shared" /etc/hosts 2>/dev/null; then
     echo ""
-    echo "❌ ERROR: Missing required /etc/hosts entry!"
+    echo "❌ ERROR: Missing required /etc/hosts entry!" >&2
     echo ""
     echo "IMPORTANT: Add this to /etc/hosts (required for all developers):"
     echo "127.0.0.1	kafka-shared"

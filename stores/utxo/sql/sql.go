@@ -3265,8 +3265,12 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 	if s.settings != nil {
 		retention = s.settings.GetUtxoStoreBlockHeightRetention()
 	}
-	// +1 because blockHeight lags during block processing (mirrors aerospike set_mined.go:162)
-	newDAH := int64(s.blockHeight.Load() + 1 + retention)
+	// Stamp the DAH relative to the height of the block the tx is mined into
+	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip. s.blockHeight
+	// is updated asynchronously via blockchain notifications and lags behind the
+	// block being validated during catchup/sync; using it stamped the DAH too low
+	// and let the pruner delete the record before the retention window elapsed.
+	newDAH := int64(minedBlockInfo.BlockHeight) + int64(retention)
 
 	if minedBlockInfo.OnLongestChain {
 		if retention > 0 {

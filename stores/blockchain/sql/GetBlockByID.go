@@ -74,7 +74,7 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockByID-%d", id)))
 
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 	cached := cacheOp.Get()
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*model.Block); ok && cacheData != nil {

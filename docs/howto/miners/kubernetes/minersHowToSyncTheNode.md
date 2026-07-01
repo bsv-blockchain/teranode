@@ -317,6 +317,10 @@ kubectl run teranode-seeder \
           "configMapRef": {
             "name": "teranode-operator-config"
           }
+        }, {
+          "secretRef": {
+            "name": "teranode-operator-secrets"
+          }
         }],
         "volumeMounts": [{
           "name": "shared-storage",
@@ -334,7 +338,7 @@ kubectl run teranode-seeder \
 }'
 ```
 
-> **Important:** The seeder pod must have the same configmap (teranode-operator-config) and volume mounts as the regular Teranode pods to access the correct database and storage configuration.
+> **Important:** The seeder pod must have the same configmap (teranode-operator-config), the same secret (teranode-operator-secrets, which holds `blockchain_store` and `utxostore`), and the same volume mounts as the regular Teranode pods to access the correct database and storage configuration.
 
 #### Step 4: Monitor Seeding Progress
 
@@ -441,6 +445,10 @@ kubectl run teranode-seeder \
         "envFrom": [{
           "configMapRef": {
             "name": "teranode-operator-config"
+          }
+        }, {
+          "secretRef": {
+            "name": "teranode-operator-secrets"
           }
         }],
         "volumeMounts": [{
