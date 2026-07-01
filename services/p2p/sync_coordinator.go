@@ -144,11 +144,12 @@ func chainWorkGreater(a, b []byte) bool {
 	return new(big.Int).SetBytes(a).Cmp(new(big.Int).SetBytes(b)) > 0
 }
 
-func (sc *SyncCoordinator) peerHasRecentFullBlockDelivery(p *blockchain.PeerInfo, now time.Time) bool {
+// BlocksReceived and LastBlockTime are written by ReportValidBlock through
+// RecordBlockReceived after block validation, not by block announcements.
+func peerHasRecentFullBlockDelivery(p *blockchain.PeerInfo, now time.Time, window time.Duration) bool {
 	if p == nil || p.BlocksReceived <= 0 || p.LastBlockTime.IsZero() {
 		return false
 	}
-	window := sc.fullDeliveryFreshnessWindow()
 	if window <= 0 {
 		return true
 	}
@@ -158,8 +159,16 @@ func (sc *SyncCoordinator) peerHasRecentFullBlockDelivery(p *blockchain.PeerInfo
 	return now.Sub(p.LastBlockTime) <= window
 }
 
-func (sc *SyncCoordinator) peerEligibleForAdvertisedProbe(p *blockchain.PeerInfo, localHeight uint32) bool {
+func (sc *SyncCoordinator) peerHasRecentFullBlockDelivery(p *blockchain.PeerInfo, now time.Time) bool {
+	return peerHasRecentFullBlockDelivery(p, now, sc.fullDeliveryFreshnessWindow())
+}
+
+func peerEligibleForAdvertisedProbe(p *blockchain.PeerInfo, localHeight uint32) bool {
 	return isViableSyncCandidate(p) && p.Height > localHeight && p.BlockHash != nil
+}
+
+func (sc *SyncCoordinator) peerEligibleForAdvertisedProbe(p *blockchain.PeerInfo, localHeight uint32) bool {
+	return peerEligibleForAdvertisedProbe(p, localHeight)
 }
 
 func (sc *SyncCoordinator) isUnprovenProbeCandidate(p *blockchain.PeerInfo, now time.Time) bool {
@@ -224,9 +233,13 @@ func (sc *SyncCoordinator) resetProbeBudgetIfLocalChainWorkAdvanced(chainWork []
 }
 
 func (sc *SyncCoordinator) hasUnprovenProbeBudget() bool {
+	return sc.unprovenProbeBudgetRemainingValue() > 0
+}
+
+func (sc *SyncCoordinator) unprovenProbeBudgetRemainingValue() int {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
-	return sc.unprovenProbeBudgetRemaining > 0
+	return sc.unprovenProbeBudgetRemaining
 }
 
 func (sc *SyncCoordinator) currentSyncPeerLocked() string {
@@ -381,23 +394,28 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 // selectNewSyncPeer selects a new sync peer based on current criteria.
 // The returned ID is a canonical libp2p ID string.
 func (sc *SyncCoordinator) selectNewSyncPeer() string {
-	localHeight, _, _ := sc.getLocalTipWorkSafe(sc.ctx)
+	localHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
 	previousPeer := sc.currentSyncPeerLocked()
 
 	peers := sc.listAllPeers()
-	eligiblePeers := sc.filterEligiblePeers(peers, previousPeer, localHeight)
+	eligiblePeers := sc.filterEligiblePeersWithTip(peers, previousPeer, localHeight, localChainWork, localWorkOK)
 	if sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "" {
 		eligiblePeers = peers
 	}
 
-	return sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, previousPeer)
+	return sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, previousPeer)
 }
 
-func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, previousPeer string) SelectionCriteria {
+func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork []byte, previousPeer string) SelectionCriteria {
+	unprovenProbeBudgetRemaining := sc.unprovenProbeBudgetRemainingValue()
 	criteria := SelectionCriteria{
-		LocalHeight:         int32(localHeight),
-		PreviousPeer:        previousPeer,
-		SyncAttemptCooldown: 1 * time.Minute, // Don't retry peers for at least 1 minute
+		LocalHeight:                  int32(localHeight),
+		LocalChainWork:               localChainWork,
+		AllowAdvertisedProbe:         unprovenProbeBudgetRemaining > 0,
+		UnprovenProbeBudgetRemaining: unprovenProbeBudgetRemaining,
+		FullDeliveryFreshnessWindow:  sc.fullDeliveryFreshnessWindow(),
+		PreviousPeer:                 previousPeer,
+		SyncAttemptCooldown:          1 * time.Minute, // Don't retry peers for at least 1 minute
 	}
 	// Check for forced peer
 	if sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "" {
@@ -414,8 +432,8 @@ func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, previousPeer st
 	return criteria
 }
 
-func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, previousPeer string) string {
-	criteria := sc.selectionCriteria(localHeight, previousPeer)
+func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, localChainWork []byte, previousPeer string) string {
+	criteria := sc.selectionCriteria(localHeight, localChainWork, previousPeer)
 	return sc.selector.SelectSyncPeer(peers, criteria)
 }
 
@@ -560,12 +578,16 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 		return nil
 	}
 	sc.refreshProbeBudgetFromLocalTip(sc.ctx)
+	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	if localWorkOK {
+		localHeight = tipHeight
+	}
 
 	// Get all peers
 	peers := sc.listAllPeers()
 
 	// Filter eligible peers
-	eligiblePeers := sc.filterEligiblePeers(peers, oldPeer, localHeight)
+	eligiblePeers := sc.filterEligiblePeersWithTip(peers, oldPeer, localHeight, localChainWork, localWorkOK)
 	if sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "" {
 		eligiblePeers = peers
 	}
@@ -580,7 +602,7 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 	}
 
 	// Select from eligible peers
-	newSyncPeer := sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, oldPeer)
+	newSyncPeer := sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, oldPeer)
 	if newSyncPeer == "" {
 		sc.logger.Warnf("[SyncCoordinator] No suitable new sync peer found (different from %s)", oldPeer)
 		sc.logCandidateList(eligiblePeers)
@@ -622,6 +644,10 @@ func (sc *SyncCoordinator) filterEligiblePeers(peers []*blockchain.PeerInfo, old
 	if localWorkOK {
 		localHeight = tipHeight
 	}
+	return sc.filterEligiblePeersWithTip(peers, oldPeer, localHeight, localChainWork, localWorkOK)
+}
+
+func (sc *SyncCoordinator) filterEligiblePeersWithTip(peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32, localChainWork []byte, localWorkOK bool) []*blockchain.PeerInfo {
 	validatedPeers := make([]*blockchain.PeerInfo, 0, len(peers))
 	for _, p := range peers {
 		if p.ID == oldPeer || !isViableSyncCandidate(p) {
