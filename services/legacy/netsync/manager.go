@@ -71,6 +71,12 @@ const (
 	// so it never reduces prefetch depth for legitimate traffic.
 	minInFlightBlockWeight = 64 * 1024
 
+	// maxBlockQueueSlots caps the block-queue channel capacity so a misconfigured
+	// (e.g. multi-TB) prefetch budget cannot size an enormous channel backing
+	// array. 65536 slots covers budgets up to 4 GiB at the weight floor before the
+	// clamp binds; the channel holds pointers, so this is ~512 KiB.
+	maxBlockQueueSlots = 65536
+
 	// maxNetworkViolations is the max number of network violations a
 	// sync peer can have before a new sync peer is found.
 	maxNetworkViolations = 3
@@ -2135,10 +2141,16 @@ func (sm *SyncManager) blockHandler() {
 	// deeper queue does not raise the memory ceiling: the blocks it references are
 	// still bounded in total bytes by the prefetch budget (AcquireBlockPrefetch),
 	// so at most ~budget bytes of MsgBlocks are pinned regardless of slot count.
+	// The slot count is clamped so a misconfigured multi-TB budget can't size a
+	// huge channel backing array; beyond the clamp the budget still bounds memory
+	// and the sm.quit-guarded enqueue still can't deadlock, only backpressure.
 	maxBlockQueue := 100
 	if sm.blockPrefetchBudget != nil {
 		if ceiling := int(sm.blockPrefetchBudgetBytes / minInFlightBlockWeight); ceiling > maxBlockQueue {
 			maxBlockQueue = ceiling
+		}
+		if maxBlockQueue > maxBlockQueueSlots {
+			maxBlockQueue = maxBlockQueueSlots
 		}
 	}
 
@@ -2150,13 +2162,17 @@ func (sm *SyncManager) blockHandler() {
 		for {
 			select {
 			case <-sm.quit:
-				// Drain any queued blocks with an error reply before exiting.
-				// Under prefetch each queued block has an awaitBlockResult
-				// goroutine holding budget and waiting on its reply; replying here
-				// lets them exit promptly on shutdown instead of blocking until the
-				// peer's quit/ctx eventually fires. The main loop has already
-				// stopped feeding blockQueue (it breaks on sm.quit too), so this
-				// drains a bounded, no-longer-growing buffer.
+				// Best-effort drain of already-queued blocks with an error reply
+				// before exiting. Under prefetch each queued block has an
+				// awaitBlockResult goroutine holding budget and waiting on its
+				// reply; replying here lets them exit promptly on shutdown instead
+				// of waiting for the peer's quit/ctx to fire. The feeder (the outer
+				// loop) races the same sm.quit close, so a block it enqueues after
+				// this drain returns is not caught here — that block's
+				// awaitBlockResult still exits via sp.quit/sp.ctx.Done() (the
+				// backstop), and the feeder's enqueue is itself sm.quit-guarded so
+				// it can never deadlock. This drain only makes the common case
+				// prompt; it is not relied on for correctness.
 				for {
 					select {
 					case msg := <-blockQueue:
@@ -2229,12 +2245,25 @@ out:
 
 				sm.blockBacklog.Add(1)
 
-				blockQueue <- &blockQueueMsg{
+				// Guard the enqueue with sm.quit. This is the sole feeder of
+				// blockQueue; without the guard, a full queue whose consumer has
+				// already exited on shutdown would block here forever, so the loop
+				// would never reach the sm.quit case, close(handlerDone) would never
+				// run, and Stop() (which waits on handlerDone) would hang.
+				select {
+				case blockQueue <- &blockQueueMsg{
 					block:       msg.block.MsgBlock(),
 					blockHash:   *msg.block.Hash(),
 					blockHeight: msg.block.Height(),
 					peer:        msg.peer,
 					reply:       msg.reply,
+				}:
+				case <-sm.quit:
+					sm.blockBacklog.Add(-1)
+
+					if msg.reply != nil {
+						msg.reply <- errors.NewServiceError("sync manager shutting down")
+					}
 				}
 
 			case *invMsg:

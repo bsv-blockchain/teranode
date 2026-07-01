@@ -1090,11 +1090,11 @@ func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash 
 	case <-sp.quit:
 		// Peer is being torn down — individual disconnect or server shutdown
 		// (peerDoneHandler closes sp.quit in both). On shutdown the sync manager
-		// abandons its block queue without draining, so the reply may never
-		// arrive; exit (releasing the budget via defer) rather than block forever
-		// and leak this goroutine. sp.ctx is the long-lived Init context and is
-		// NOT cancelled by Stop(), so sp.quit — not sp.ctx — is the teardown
-		// signal that actually fires here.
+		// best-effort drains its block queue, but a block enqueued after that
+		// drain returns gets no reply, so we cannot rely on <-done here; exit
+		// (releasing the budget via defer) rather than block forever and leak this
+		// goroutine. sp.ctx is the long-lived Init context and is NOT cancelled by
+		// Stop(), so sp.quit — not sp.ctx — is the teardown signal that fires here.
 		return
 	case <-sp.ctx.Done():
 		// Whole-process teardown backstop, for the case the connection is not
