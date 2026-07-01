@@ -368,9 +368,13 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, gene
 		}
 	}
 
-	// Build flags for the CreateBatch wire protocol.
-	// The dispatch handler reads: bit 0 = locked, bit 1 = conflicting, bit 2 = frozen.
-	// IsCoinbase is sent via the separate IsCoinbase bool field, not in flags.
+	// Build flags for the CreateBatch wire protocol. This is the CREATE-WIRE
+	// layout the dispatch handler reads: bit 0 = locked, bit 1 = conflicting,
+	// bit 2 = frozen (IsCoinbase travels in the separate IsCoinbase bool). The
+	// server TRANSFORMS these into a different STORED layout — bit 0 = coinbase,
+	// bit 1 = conflicting, bit 2 = locked — which recordToMetaData decodes on
+	// read. The two are NOT the same byte; do not cross-reference the bit meanings.
+	// opts.Frozen has no create-time caller today, so bit 2 here is currently unused.
 	var flags uint8
 	if opts.Locked {
 		flags |= 0x01

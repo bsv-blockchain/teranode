@@ -126,6 +126,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		}
 	}
 
+	// An in-memory backend makes the crash-safety WAL non-durable: intents for an
+	// in-flight ProcessConflicting are lost on restart, so a torn conflict
+	// operation cannot be replayed. Warn loudly rather than silently degrade.
+	if walURL.Scheme == "sqlitememory" {
+		logger.Warnf("[TeraSlab] conflict WAL backend is in-memory (%s) — intents will NOT survive a restart, defeating crash-safety replay; set utxostore_teraslab_conflictWalStore to a file-backed sqlite:// or a postgres:// URL for durability", walURL.Redacted())
+	}
+
 	walDB, err := util.InitSQLDB(logger, walURL, tSettings, tSettings.UtxoStore.PostgresPool)
 	if err != nil {
 		return nil, errors.NewStorageError("teraslab: open conflict WAL store", err)

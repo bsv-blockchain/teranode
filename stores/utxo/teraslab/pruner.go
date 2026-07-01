@@ -52,5 +52,15 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 // ProcessExpiredPreservations handles transactions whose preservation period has expired.
 func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	_, err := s.client.ProcessExpiredPreservations(ctx, currentHeight, s.settings.GetUtxoStoreBlockHeightRetention())
-	return err
+	if err != nil {
+		if pe, ok := err.(*teraslab.PartialError); ok {
+			// Map per-item failures to Teranode errors so the caller can branch on
+			// errors.Is, matching PreserveTransactions and the other mutation paths.
+			// Returning the raw client type would break the errors.Is chain.
+			s.logger.Warnf("[TeraSlab] partial error during ProcessExpiredPreservations: %v", err)
+			return partialErrorToError("ProcessExpiredPreservations", pe)
+		}
+		return err
+	}
+	return nil
 }
