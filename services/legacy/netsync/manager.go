@@ -2150,7 +2150,25 @@ func (sm *SyncManager) blockHandler() {
 		for {
 			select {
 			case <-sm.quit:
-				return
+				// Drain any queued blocks with an error reply before exiting.
+				// Under prefetch each queued block has an awaitBlockResult
+				// goroutine holding budget and waiting on its reply; replying here
+				// lets them exit promptly on shutdown instead of blocking until the
+				// peer's quit/ctx eventually fires. The main loop has already
+				// stopped feeding blockQueue (it breaks on sm.quit too), so this
+				// drains a bounded, no-longer-growing buffer.
+				for {
+					select {
+					case msg := <-blockQueue:
+						sm.blockBacklog.Add(-1)
+
+						if msg.reply != nil {
+							msg.reply <- errors.NewServiceError("sync manager shutting down")
+						}
+					default:
+						return
+					}
+				}
 			case msg := <-blockQueue:
 				sm.logger.Debugf("[blockHandler][%s] processing block queue message into handleBlockMsg", msg.blockHash)
 
