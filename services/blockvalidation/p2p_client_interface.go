@@ -44,6 +44,9 @@ type P2PClientI interface {
 	// ReportValidSubtree reports that a subtree was successfully received and validated from a peer.
 	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
 
+	// ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
+	ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error
+
 	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
 	// A peer is considered malicious if they are banned or have a very low reputation score.
 	IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error)

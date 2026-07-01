@@ -565,6 +565,37 @@ func (c *Client) ReportValidBlock(ctx context.Context, peerID string, blockHash 
 	return nil
 }
 
+// ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: Peer ID that served the validated headers
+//   - height: Height of the last validated header
+//   - blockHash: Hash of the last validated header
+//   - chainWork: Locally validated cumulative chainwork
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error {
+	req := &p2p_api.ReportValidatedChainProgressRequest{
+		PeerId:    peerID,
+		Height:    height,
+		BlockHash: blockHash,
+		ChainWork: append([]byte(nil), chainWork...),
+	}
+
+	resp, err := c.client.ReportValidatedChainProgress(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report validated chain progress: %s", resp.Message)
+	}
+
+	return nil
+}
+
 // IsPeerMalicious checks if a peer is considered malicious.
 //
 // Parameters:

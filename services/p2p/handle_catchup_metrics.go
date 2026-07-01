@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
+
+const maxReportedChainWorkBytes = 128
 
 // RecordCatchupAttempt records that a catchup attempt was made to a peer.
 // Backed by the centralized peer registry's interaction-attempt counter.
@@ -232,6 +235,83 @@ func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidB
 	return &p2p_api.ReportValidBlockResponse{
 		Success: true,
 		Message: "block validation recorded",
+	}, nil
+}
+
+// ReportValidatedChainProgress forwards locally validated header-chain progress
+// to the blockchain peer registry. Downstream registry failures are non-fatal
+// so mixed-version services keep validating and syncing.
+func (s *Server) ReportValidatedChainProgress(ctx context.Context, req *p2p_api.ReportValidatedChainProgressRequest) (*p2p_api.ReportValidatedChainProgressResponse, error) {
+	if req.PeerId == "" {
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: false,
+			Message: "peer ID is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("peer ID is required"))
+	}
+
+	if _, err := peer.Decode(req.PeerId); err != nil {
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: false,
+			Message: "invalid peer ID",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid peer ID: %v", err))
+	}
+
+	if req.Height == 0 {
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: false,
+			Message: "height is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("height is required"))
+	}
+
+	if req.BlockHash == "" {
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: false,
+			Message: "block hash is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("block hash is required"))
+	}
+
+	blockHash, err := chainhash.NewHashFromStr(req.BlockHash)
+	if err != nil {
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: false,
+			Message: "invalid block hash",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid block hash: %v", err))
+	}
+
+	if len(req.ChainWork) == 0 {
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: false,
+			Message: "chainwork is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("chainwork is required"))
+	}
+
+	if len(req.ChainWork) > maxReportedChainWorkBytes {
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: false,
+			Message: "chainwork is too large",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("chainwork is too large: %d bytes", len(req.ChainWork)))
+	}
+
+	if s.peerRegistry == nil {
+		s.logger.Warnf("[ReportValidatedChainProgress] Peer registry unavailable while recording peer %s at height %d", req.PeerId, req.Height)
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: true,
+			Message: "validated chain progress accepted",
+		}, nil
+	}
+
+	if err := s.peerRegistry.RecordValidatedPeerProgress(ctx, req.PeerId, req.Height, blockHash, req.ChainWork); err != nil {
+		s.logger.Warnf("[ReportValidatedChainProgress] Failed to record validated progress for peer %s at height %d: %v", req.PeerId, req.Height, err)
+		return &p2p_api.ReportValidatedChainProgressResponse{
+			Success: true,
+			Message: "validated chain progress accepted",
+		}, nil
+	}
+
+	s.logger.Debugf("[ReportValidatedChainProgress] Recorded validated progress for peer %s at height %d", req.PeerId, req.Height)
+	return &p2p_api.ReportValidatedChainProgressResponse{
+		Success: true,
+		Message: "validated chain progress recorded",
 	}, nil
 }
 

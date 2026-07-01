@@ -5490,6 +5490,10 @@ func (m *mockP2PClient) ReportValidBlock(ctx context.Context, peerID string, blo
 	return nil
 }
 
+func (m *mockP2PClient) ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error {
+	return nil
+}
+
 func (m *mockP2PClient) RecordBytesDownloaded(ctx context.Context, peerID string, bytesDownloaded uint64) error {
 	return nil
 }

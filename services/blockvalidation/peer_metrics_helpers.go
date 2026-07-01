@@ -96,6 +96,22 @@ func (u *Server) reportCatchupError(ctx context.Context, peerID string, errorMsg
 	}
 }
 
+// reportValidatedChainProgress reports locally validated header-chain progress
+// to P2P. Reporting is advisory and must not affect catchup or block validation.
+func (u *Server) reportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) {
+	if peerID == "" || height == 0 || blockHash == "" || len(chainWork) == 0 {
+		return
+	}
+
+	if u.p2pClient == nil {
+		return
+	}
+
+	if err := u.p2pClient.ReportValidatedChainProgress(ctx, peerID, height, blockHash, chainWork); err != nil {
+		u.logger.Warnf("[peer_metrics] Failed to report validated chain progress for peer %s at height %d: %v", peerID, height, err)
+	}
+}
+
 // reportCatchupMalicious reports malicious behavior to the P2P service.
 // Falls back to local metrics if P2P client is unavailable.
 //
