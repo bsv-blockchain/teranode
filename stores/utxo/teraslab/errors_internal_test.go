@@ -60,7 +60,7 @@ func TestMapErrorCode(t *testing.T) {
 		})
 	}
 
-	// Cluster / replication / migration codes (15-37). The client v0.5.1 has no
+	// Cluster / replication / migration codes (15-37). The client has no
 	// named constants for these, so they are pinned by their wire values from
 	// src/protocol/opcodes.rs. Transient codes must be retryable so the caller's
 	// backoff loop kicks in; the rest carry a descriptive storage/processing

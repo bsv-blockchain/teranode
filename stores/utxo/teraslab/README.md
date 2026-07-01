@@ -161,7 +161,7 @@ TeraSlab error codes are mapped to Teranode error types in `errors.go`:
 | `ErrCodeFrozen` | `errors.ErrFrozen` |
 | `ErrCodeConflicting` | `errors.ErrTxConflicting` |
 | `ErrCodeLocked` | `errors.ErrTxLocked` |
-| `ErrCodeCoinbaseImmature` | `errors.ErrNonFinal` |
+| `ErrCodeCoinbaseImmature` | `errors.ErrTxCoinbaseImmature` |
 
 ### Duplicate Create
 
@@ -175,8 +175,8 @@ The slot status is interpreted as:
 
 | Slot Status | Condition | Teranode Status |
 | ------------- | ----------- | ----------------- |
-| `SlotUnspent` | `spending_data[0:4] == 0` | `Status_OK` |
-| `SlotUnspent` | `spending_data[0:4] > 0` | `Status_IMMATURE` (reassigned, not yet spendable) |
+| `SlotUnspent` | spendable height (`spending_data[0:4]`) `<=` current block height | `Status_OK` |
+| `SlotUnspent` | spendable height (`spending_data[0:4]`) `>` current block height | `Status_IMMATURE` (coinbase/reassigned, not yet spendable) |
 | `SlotSpent` | — | `Status_SPENT` |
 | `SlotFrozen` | — | `Status_FROZEN` |
 
@@ -259,4 +259,6 @@ func init() {
 
 ## Settings
 
-The store reads batch sizes and durations from the shared `settings.UtxoStore.*` fields. No TeraSlab-specific settings are needed — the connection parameters come from the URL.
+The store reads batch sizes and durations from the shared `settings.UtxoStore.*` fields, and most connection parameters come from the URL (`pool_size`, `cluster`, `cluster_secret`).
+
+One TeraSlab-specific setting exists: `utxostore_teraslab_conflictWalStore` (`settings.UtxoStore.TeraSlabConflictWALStore`). It backs the conflict-resolution WAL — the TeraSlab server cannot hold arbitrary intent records, so `ProcessConflicting` intents are journaled in a separate SQL store. It defaults to a local SQLite file under `DataFolder`; **production deployments should set a `postgres://` URL** for a durable, shared, scalable WAL.

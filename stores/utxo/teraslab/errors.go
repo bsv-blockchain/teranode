@@ -63,8 +63,8 @@ func mapErrorCode(code uint16) error {
 		// client failed to follow it, which is an internal/storage-class fault.
 		return errors.NewStorageError("teraslab unexpected redirect")
 
-	// Cluster / replication / migration codes (15-37). The client v0.6.1 does
-	// not expose named constants for these, so they are matched by their wire
+	// Cluster / replication / migration codes (15-37). The client does not
+	// expose named constants for these, so they are matched by their wire
 	// values from src/protocol/opcodes.rs.
 	//
 	// Transient codes: the operation can succeed on retry once the cluster
