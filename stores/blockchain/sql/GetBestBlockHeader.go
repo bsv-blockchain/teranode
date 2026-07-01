@@ -93,7 +93,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	// Begin cache-safe query - captures generation to prevent stale writes
 	cacheID := chainhash.HashH([]byte("GetBestBlockHeader"))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {

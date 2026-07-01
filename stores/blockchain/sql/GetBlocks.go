@@ -52,7 +52,7 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 	// Use a derived cache key to avoid conflicts with other cached data
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlocks-%s-%d", blockHashFrom.String(), numberOfHeaders)))
 
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 	cached := cacheOp.Get()
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().([]*model.Block); ok {
