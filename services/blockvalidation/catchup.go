@@ -262,6 +262,8 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
+	u.reportValidatedHeaderProgress(ctx, catchupCtx)
+
 	// Step 10: Fetch and validate blocks
 	if err = u.fetchAndValidateBlocks(ctx, catchupCtx); err != nil {
 		return err
@@ -985,6 +987,59 @@ func (u *Server) filterExistingBlocks(ctx context.Context, headers []*model.Bloc
 	}
 
 	return newHeaders, nil
+}
+
+// reportValidatedHeaderProgress records locally verified header work for the
+// peer that served the header chain. The report is advisory and best-effort.
+func (u *Server) reportValidatedHeaderProgress(ctx context.Context, catchupCtx *CatchupContext) {
+	height, blockHash, workBytes, ok := u.computeValidatedHeaderProgress(catchupCtx)
+	if !ok {
+		return
+	}
+
+	u.reportValidatedChainProgress(ctx, catchupCtx.peerID, height, blockHash.String(), workBytes)
+}
+
+func (u *Server) computeValidatedHeaderProgress(catchupCtx *CatchupContext) (uint32, *chainhash.Hash, []byte, bool) {
+	if catchupCtx == nil || catchupCtx.commonAncestorMeta == nil {
+		return 0, nil, nil, false
+	}
+
+	if len(catchupCtx.blockHeaders) == 0 {
+		return 0, nil, nil, false
+	}
+
+	if len(catchupCtx.commonAncestorMeta.ChainWork) == 0 {
+		u.logger.Warnf("[catchup][%s] Skipping validated progress report: common ancestor chainwork is empty", catchupCtx.blockUpTo.Hash().String())
+		return 0, nil, nil, false
+	}
+
+	totalWork := new(big.Int).SetBytes(catchupCtx.commonAncestorMeta.ChainWork)
+	if totalWork.Sign() <= 0 {
+		u.logger.Warnf("[catchup][%s] Skipping validated progress report: common ancestor chainwork is malformed", catchupCtx.blockUpTo.Hash().String())
+		return 0, nil, nil, false
+	}
+
+	height := catchupCtx.commonAncestorMeta.Height
+	var lastHash *chainhash.Hash
+
+	for _, header := range catchupCtx.blockHeaders {
+		if header == nil {
+			u.logger.Warnf("[catchup][%s] Skipping validated progress report: nil header in validated range", catchupCtx.blockUpTo.Hash().String())
+			return 0, nil, nil, false
+		}
+
+		bits := binary.LittleEndian.Uint32(header.Bits.CloneBytes())
+		totalWork.Add(totalWork, work.CalcBlockWork(bits))
+		height++
+		lastHash = header.Hash()
+	}
+
+	if lastHash == nil {
+		return 0, nil, nil, false
+	}
+
+	return height, lastHash, totalWork.Bytes(), true
 }
 
 // recordMaliciousAttempt records a malicious attempt from a peer.
