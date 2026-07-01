@@ -987,7 +987,17 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 			// malicious peer can queue before being disconnected.
 			sm.QueueBlock(block, sp.Peer, sp.blockProcessed)
 
-			err = <-sp.blockProcessed
+			// Wait for processing, but also bail on teardown so a lost shutdown
+			// race on the block-queue drain can't block the read-loop forever
+			// (sp.ctx is the long-lived Init context, so watch sp.quit too).
+			select {
+			case err = <-sp.blockProcessed:
+			case <-sp.quit:
+				return
+			case <-sp.ctx.Done():
+				return
+			}
+
 			if err != nil {
 				sp.server.logger.Errorf("block processing failed: %v", err)
 

@@ -899,12 +899,11 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	// failing them afterwards. The deferred updateNetwork still runs, keeping
 	// throughput samples fresh for the next tick.
 	//
-	// With prefetch enabled this is when read-loops are blocked acquiring budget;
-	// with prefetch disabled it is the original condition that any block is
-	// queued or mid-validation (OnBlock then blocks on blockProcessed). Crucially,
-	// under prefetch a non-empty backlog is the normal steady state and must NOT
-	// suppress stall detection: when budget is available we keep reading, so a
-	// slow or stalled sync peer is still detected and rotated.
+	// Any queued/mid-validation backlog suppresses the check (see
+	// localReadBackpressured): a stale last-block-time then measures our
+	// validation speed, not the peer. A genuinely stalled peer stops feeding the
+	// queue, the backlog drains, and the check resumes — so this delays, but does
+	// not prevent, rotation of a truly stalled peer.
 	if sm.localReadBackpressured() {
 		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check skipped: read-loop backpressured by local block processing", sp.String())
 		return
@@ -2124,17 +2123,24 @@ func (sm *SyncManager) blockHandler() {
 	ticker := time.NewTicker(syncPeerTickerInterval)
 	defer ticker.Stop()
 
-	// TODO make this configurable.
+	// This buffer holds one *blockQueueMsg (a *wire.MsgBlock pointer) per slot.
+	// With prefetch disabled a small fixed depth suffices: OnBlock keeps at most
+	// one block per peer in flight, so the queue barely fills.
 	//
-	// This buffer pins one *wire.MsgBlock per slot. Each MsgBlock carries
-	// its go-wire decode arena (≥4 MiB per block today), so the previous
-	// 10_000-deep queue could pin ~40 GiB of arena memory ahead of the
-	// sequential processor. On a memory-constrained box that turns into
-	// the dominant live-heap source and starves the GC. Cap at a small
-	// value: enough to absorb processor-stall jitter, far below anything
-	// that would meaningfully pin memory. The downloader naturally
-	// back-pressures via TCP when the queue is full.
+	// With prefetch enabled the depth must be at least the byte-budget admission
+	// ceiling (budget / minInFlightBlockWeight). Otherwise a full pipeline would
+	// block blockHandler on `blockQueue <-`, and since that goroutine is the sole
+	// consumer of msgChan, disconnects, sync-peer rotation, inv, headers and tx
+	// dispatch would stall for EVERY peer — cross-peer head-of-line blocking. The
+	// deeper queue does not raise the memory ceiling: the blocks it references are
+	// still bounded in total bytes by the prefetch budget (AcquireBlockPrefetch),
+	// so at most ~budget bytes of MsgBlocks are pinned regardless of slot count.
 	maxBlockQueue := 100
+	if sm.blockPrefetchBudget != nil {
+		if ceiling := int(sm.blockPrefetchBudgetBytes / minInFlightBlockWeight); ceiling > maxBlockQueue {
+			maxBlockQueue = ceiling
+		}
+	}
 
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
@@ -2419,10 +2425,22 @@ func (sm *SyncManager) ReleaseBlockPrefetch(weight int64) {
 // enabled that is when read-loops are blocked acquiring budget; with prefetch
 // disabled it is the original condition of any block queued or mid-validation.
 func (sm *SyncManager) localReadBackpressured() bool {
-	if sm.blockPrefetchBudget != nil {
-		return sm.blockPrefetchWaiters.Load() > 0
+	// A non-empty local backlog means blocks are queued or mid-validation, so a
+	// stale last-block-time and zero throughput reflect our own validation speed,
+	// not the sync peer's health — suppress the stall check until it drains. This
+	// cannot mask a real peer stall indefinitely: a genuinely stalled peer stops
+	// feeding the queue, the backlog drains, and the check resumes. Losing this
+	// (checking only the waiter signal below) would rotate a healthy peer whenever
+	// a single block was merely slow to validate while the budget was not full.
+	if sm.blockBacklog.Load() > 0 {
+		return true
 	}
-	return sm.blockBacklog.Load() > 0
+
+	// Under prefetch also suppress while a read-loop is parked in
+	// AcquireBlockPrefetch waiting for budget. In the running system that implies
+	// a backlog too, but the explicit waiter signal keeps the accounting clear
+	// (and unit-testable in isolation).
+	return sm.blockPrefetchBudget != nil && sm.blockPrefetchWaiters.Load() > 0
 }
 
 // sendDuringShutdown delivers v on ch, recovering from the "send on closed

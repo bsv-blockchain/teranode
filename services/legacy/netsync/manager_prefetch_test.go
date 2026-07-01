@@ -11,7 +11,6 @@ import (
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
@@ -247,17 +246,20 @@ func TestLocalReadBackpressured(t *testing.T) {
 		require.False(t, sm.localReadBackpressured())
 	})
 
-	t.Run("enabled: tracks waiters and ignores the backlog", func(t *testing.T) {
+	t.Run("enabled: suppresses on backlog or on a budget waiter", func(t *testing.T) {
 		sm := newPrefetchManager(100)
 		require.False(t, sm.localReadBackpressured())
 
-		// Under prefetch a non-empty backlog is the normal steady state and must
-		// NOT count as self-backpressure — otherwise the stall detector would be
-		// suppressed on nearly every tick and never rotate a slow sync peer.
+		// A queued / mid-validation backlog is self-backpressure: a stale
+		// last-block-time then reflects our validation speed, not the peer, so the
+		// stall check must be suppressed (a genuinely stalled peer drains the
+		// backlog and the check resumes).
 		sm.blockBacklog.Add(5)
+		require.True(t, sm.localReadBackpressured())
+		sm.blockBacklog.Add(-5)
 		require.False(t, sm.localReadBackpressured())
 
-		// Only an actually-blocked read-loop (a waiter) is self-backpressure.
+		// A read-loop parked in AcquireBlockPrefetch is also self-backpressure.
 		sm.blockPrefetchWaiters.Add(1)
 		require.True(t, sm.localReadBackpressured())
 
@@ -266,11 +268,12 @@ func TestLocalReadBackpressured(t *testing.T) {
 	})
 }
 
-// TestHandleCheckSyncPeer_PrefetchBackpressure is the prefetch analogue of
-// TestHandleCheckSyncPeer_LocalBacklog: it proves the stall detector skips while
-// a read-loop is blocked acquiring budget, but — unlike the disabled path — does
-// NOT let a non-empty block backlog suppress rotation of a genuinely stalled
-// sync peer.
+// TestHandleCheckSyncPeer_PrefetchBackpressure proves the stall detector
+// suppresses rotation while the node is backpressured by its own block
+// processing — either a read-loop parked on the prefetch budget OR any queued /
+// mid-validation backlog — so a healthy peer is not rotated merely because a
+// block is slow to validate. It still rotates a genuinely idle stalled peer once
+// that self-backpressure clears.
 func TestHandleCheckSyncPeer_PrefetchBackpressure(t *testing.T) {
 	newStalledState := func() *syncPeerState {
 		return &syncPeerState{
@@ -299,21 +302,32 @@ func TestHandleCheckSyncPeer_PrefetchBackpressure(t *testing.T) {
 		sp := &peerpkg.Peer{}
 		sm := newSyncManager(sp, newStalledState())
 
-		sm.blockPrefetchWaiters.Add(1) // read-loop backpressured by our own processing
+		sm.blockPrefetchWaiters.Add(1) // read-loop parked in AcquireBlockPrefetch
 
 		require.NotPanics(t, func() { sm.handleCheckSyncPeer() })
-		assert.Equal(t, sp, sm.loadSyncPeer())
+		require.Equal(t, sp, sm.loadSyncPeer())
 	})
 
-	t.Run("still rotates a stalled peer despite a non-empty backlog (no waiters)", func(t *testing.T) {
+	t.Run("keeps sync peer while a backlog is draining (slow local validation)", func(t *testing.T) {
 		sp := &peerpkg.Peer{}
 		sm := newSyncManager(sp, newStalledState())
 
-		// A backlog is normal under prefetch; with no read-loop actually blocked
-		// the zero-throughput stalled peer must still be rotated (rotation panics
-		// in this minimal SyncManager, which proves it ran).
+		// Blocks queued / mid-validation with no read-loop parked: a stale
+		// last-block-time reflects our validation speed, not the peer. The healthy
+		// peer must be kept (rotation would panic in this minimal SyncManager).
 		sm.blockBacklog.Add(3)
 
-		assert.Panics(t, func() { sm.handleCheckSyncPeer() })
+		require.NotPanics(t, func() { sm.handleCheckSyncPeer() })
+		require.Equal(t, sp, sm.loadSyncPeer())
+	})
+
+	t.Run("rotates a genuinely idle stalled peer (no backlog, no waiters)", func(t *testing.T) {
+		sp := &peerpkg.Peer{}
+		sm := newSyncManager(sp, newStalledState())
+
+		// Nothing queued and no read-loop parked: the stale last-block-time is the
+		// peer's fault, so rotation runs (and panics in this minimal SyncManager,
+		// which proves it ran rather than being suppressed).
+		require.Panics(t, func() { sm.handleCheckSyncPeer() })
 	})
 }
