@@ -297,10 +297,15 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	// Set deleteAtHeight to nil initially (will be updated by expression if needed)
 	ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
 
-	// Add deleteAtHeight expression if retention is enabled
+	// Add deleteAtHeight expression if retention is enabled.
+	// Stamp the DAH relative to the height of the block the tx is mined into
+	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip (thisBlockHeight).
+	// The cached tip lags behind the block being validated during catchup/sync; using
+	// it stamped the DAH too low and let the pruner delete the record before the
+	// retention window elapsed.
 	blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(thisBlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain, false)
+		dahExp := s.buildDeleteAtHeightExpression(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain, false)
 		ops = append(ops, aerospike.ExpWriteOp(
 			fields.DeleteAtHeight.String(),
 			dahExp,

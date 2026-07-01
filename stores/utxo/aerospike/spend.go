@@ -107,15 +107,13 @@ type batchSpend struct {
 
 // IncrementSpentRecordsMulti performs a single BatchOperate to increment spent-extra-records for many txids.
 // This avoids enqueueing each increment through the batcher and waiting per-item.
-func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment int) error {
+func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment int, blockHeight uint32) error {
 	if len(txids) == 0 {
 		return nil
 	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
-
-	currentBlockHeight := s.blockHeight.Load()
 
 	batchRecordsPtr := getBatchRecordsSlice(len(txids))
 	batchRecords := (*batchRecordsPtr)[:0]
@@ -130,7 +128,7 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, key, LuaPackage, "incrementSpentExtraRecs",
 			aerospike.NewIntegerValue(increment),
-			aerospike.NewIntegerValue(int(currentBlockHeight)),
+			aerospike.NewIntegerValue(int(s.effectiveBlockHeight(blockHeight))),
 			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
 		))
 	}
@@ -228,9 +226,10 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 
 // batchIncrement handles record count updates for paginated transactions
 type batchIncrement struct {
-	txID      *chainhash.Hash               // Transaction hash
-	increment int                           // Count adjustment
-	res       chan incrementSpentRecordsRes // Result channel
+	txID        *chainhash.Hash               // Transaction hash
+	increment   int                           // Count adjustment
+	blockHeight uint32                        // Height of the operation, for DAH = blockHeight + retention
+	res         chan incrementSpentRecordsRes // Result channel
 }
 
 type batchDAH struct {
@@ -792,16 +791,14 @@ func (s *Store) handleParseError(batchByKey []aerospike.MapValue, batch []*batch
 func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *chainhash.Hash, childCount int, thisBlockHeight uint32) {
 	switch signal {
 	case LuaSignalAllSpent:
-		if err := s.handleExtraRecords(ctx, txID, 1); err != nil {
+		if err := s.handleExtraRecords(ctx, txID, 1, thisBlockHeight); err != nil {
 			s.logger.Errorf("Failed to handle extra records: %v", err)
 		}
 
 	case LuaSignalDAHSet:
 		// Only set DAH if BlockHeightRetention is configured (> 0)
 		// When retention is 0, it means "don't use automatic retention"
-		if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
-			dahHeight := thisBlockHeight + retention
-
+		if dahHeight, ok := s.deleteAtHeightFor(thisBlockHeight); ok {
 			if err := s.SetDAHForChildRecords(txID, childCount, dahHeight); err != nil {
 				s.logger.Errorf("Failed to set DAH for child records: %v", err)
 			}
@@ -983,8 +980,8 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 //
 // Returns:
 //   - error: Any error encountered during the record count update
-func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, increment int) error {
-	res, err := s.IncrementSpentRecords(txID, increment) // This is a batch operation
+func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, increment int, blockHeight uint32) error {
+	res, err := s.IncrementSpentRecords(txID, increment, blockHeight) // This is a batch operation
 	if err != nil {
 		return err
 	}
@@ -1002,7 +999,7 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 			case LuaSignalDAHSet:
 				// Only set DAH if BlockHeightRetention is configured (> 0)
 				// When retention is 0, it means "don't use automatic retention"
-				if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
+				if dah, ok := s.deleteAtHeightFor(blockHeight); ok {
 					// Sanity check: verify all children are actually spent before
 					// setting DAH. The spentExtraRecs counter can drift due to
 					// interrupted rollbacks, so we don't trust it blindly.
@@ -1029,9 +1026,6 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 							return nil
 						}
 					}
-
-					thisBlockHeight := s.blockHeight.Load()
-					dah := thisBlockHeight + retention
 
 					if err := s.SetDAHForChildRecords(txID, ret.ChildCount, dah); err != nil {
 						return err
@@ -1122,14 +1116,15 @@ type incrementSpentRecordsRes struct {
 
 // IncrementSpentRecords updates the record count for paginated transactions.
 // Used for cleanup management of large transactions.
-func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
+func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int, blockHeight uint32) (interface{}, error) {
 	res := make(chan incrementSpentRecordsRes, 1)
 
 	go func() {
 		s.incrementBatcher.Put(&batchIncrement{
-			txID:      txid,
-			increment: increment,
-			res:       res,
+			txID:        txid,
+			increment:   increment,
+			blockHeight: blockHeight,
+			res:         res,
 		})
 	}()
 
@@ -1170,8 +1165,6 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 	handled := make([]bool, len(batch))
 
-	currentBlockHeight := s.blockHeight.Load()
-
 	for i, item := range batch {
 		aeroKey, err := aerospike.NewKey(s.namespace, s.setName, item.txID[:])
 		if err != nil {
@@ -1185,7 +1178,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 
 		batchRecords[i] = aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementSpentExtraRecs",
 			aerospike.NewIntegerValue(item.increment),
-			aerospike.NewIntegerValue(int(currentBlockHeight)),
+			aerospike.NewIntegerValue(int(s.effectiveBlockHeight(item.blockHeight))),
 			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
 		)
 	}

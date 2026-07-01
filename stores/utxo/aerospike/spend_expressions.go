@@ -392,8 +392,10 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// (missing parent during catch-up) or FILTERED_OUT — issue #953.
 	infraErrCount := 0
 
-	// Collect follow-up actions
-	extraRecords := make([]*chainhash.Hash, 0)
+	// Collect follow-up actions. Extra-record increments are grouped by the spend's
+	// block height so each tx's delete-at-height is stamped from its own spend
+	// height (a single batch may aggregate spends from different blocks).
+	extraRecordsByHeight := make(map[uint32][]*chainhash.Hash)
 	dahSetItems := make([]struct {
 		TxID           *chainhash.Hash
 		ChildCount     int
@@ -464,7 +466,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 		if state.TotalExtraRecs == nil {
 			// Pagination record - check if all spent
 			if state.RecordUtxos > 0 && state.SpentUtxos == state.RecordUtxos {
-				extraRecords = append(extraRecords, bItem.spend.TxID)
+				extraRecordsByHeight[bItem.blockHeight] = append(extraRecordsByHeight[bItem.blockHeight], bItem.spend.TxID)
 			}
 		} else if state.TotalExtraRecs != nil {
 			// Master record - check DAH changes for external transactions
@@ -525,8 +527,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// Execute follow-up actions
 	var postErr error
 
-	if len(extraRecords) > 0 {
-		if err := s.IncrementSpentRecordsMulti(extraRecords, 1); err != nil {
+	for bh, txids := range extraRecordsByHeight {
+		if err := s.IncrementSpentRecordsMulti(txids, 1, bh); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}

@@ -70,9 +70,14 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, autoCommit, kafkaSettings)
 	if err != nil {
 		logger.Errorf("failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
+		return
 	}
 
-	// create a new context for the consumer, so we are able to stop the consumer gracefully
+	// create a new context for the consumer, so we are able to stop the consumer gracefully.
+	// kCtx is deliberately detached (rooted at Background) and outlives this function:
+	// client.Start is non-blocking, so the only thing that should cancel kCtx is the
+	// goroutine below, tied to the parent ctx. A defer kCancel() here would cancel the
+	// consumer the instant this function returns, before it processes any messages.
 	kCtx, kCancel := context.WithCancel(context.Background())
 
 	// start a go routine to close the client when the context is done

@@ -654,7 +654,13 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
         rec[BIN_CREATING] = nil
     end
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    -- Stamp the DAH relative to the height of the block this tx is mined into
+    -- (blockHeight), NOT the caller's cached chain tip (currentBlockHeight). The
+    -- cached tip lags behind the block being validated during catchup/sync; using
+    -- it stamped the DAH too low and let the pruner delete the record before the
+    -- retention window elapsed. currentBlockHeight is still used above for the
+    -- unmined_since marker, which legitimately wants the current height.
+    local signal, childCount = setDeleteAtHeight(rec, blockHeight, blockHeightRetention)
 
     -- Update the record to save changes
     aerospike:update(rec)

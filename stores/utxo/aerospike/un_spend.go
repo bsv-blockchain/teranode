@@ -193,7 +193,10 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 			// Decrement spentExtraRecs on the master record since this child
 			// record transitioned from ALLSPENT back to NOTALLSPENT.
 			// This mirrors the +1 increment done in handleSpendSignal for ALLSPENT.
-			if err := s.handleExtraRecords(ctx, spend.TxID, -1); err != nil {
+			// Pass 0 so the DAH height falls back to the current block height; a
+			// decrement clears the DAH (tx no longer all-spent) rather than setting
+			// it, so the height is not actually used here.
+			if err := s.handleExtraRecords(ctx, spend.TxID, -1, 0); err != nil {
 				return err
 			}
 		}

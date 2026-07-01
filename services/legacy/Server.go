@@ -591,7 +591,7 @@ func (s *Server) logPeerStats(ctx context.Context) {
 					p.GetAddr(), p.GetId(), p.GetServices(), p.GetInbound(), p.GetBytesSent(), p.GetBytesReceived(), p.GetPingTime(), lastSendElapsed, lastRecvElapsed, p.GetCurrentHeight(), p.GetBanscore())
 			}
 
-			state, err := s.blockchainClient.GetFSMCurrentState(context.Background())
+			state, err := s.blockchainClient.GetFSMCurrentState(ctx)
 			if err != nil {
 				ctxLogger.Debugf("Peer stats - Connected: %d, Current FSM State: unknown, error: %v", len(peers), err)
 			} else {

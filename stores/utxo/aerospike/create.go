@@ -498,8 +498,9 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		}
 
 		if bItem.conflicting {
-			dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
-			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+			if dah, ok := s.deleteAtHeightFor(bItem.blockHeight); ok {
+				putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+			}
 		}
 
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
@@ -897,8 +898,8 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 		}
 
 		if spendableUtxos == 0 {
-			if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
-				batches[0] = append(batches[0], aerospike.NewBin(fields.DeleteAtHeight.String(), aerospike.NewIntegerValue(int(blockHeight+retention))))
+			if dah, ok := s.deleteAtHeightFor(blockHeight); ok {
+				batches[0] = append(batches[0], aerospike.NewBin(fields.DeleteAtHeight.String(), aerospike.NewIntegerValue(int(dah))))
 			}
 		}
 	}
@@ -1081,8 +1082,9 @@ func (s *Store) storeExternallyWithLock(
 		}
 
 		if idx == 0 && bItem.conflicting {
-			dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
-			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+			if dah, ok := s.deleteAtHeightFor(bItem.blockHeight); ok {
+				putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+			}
 		}
 
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
