@@ -520,6 +520,27 @@ func TestCentralizedPeerRegistry_StoragePenalty_BlocksFullRepromotion(t *testing
 	require.Equal(t, "full", got.Storage)
 }
 
+func TestCentralizedPeerRegistry_UpdateStorage_FullClaimBlockedDuringPenalty(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	penaltyUntil := time.Now().Add(time.Hour)
+
+	r.Register(&PeerInfo{ID: "p", Storage: "pruned", FullStoragePenaltyUntil: penaltyUntil})
+	r.UpdateStorage("p", "full")
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "pruned", got.Storage)
+
+	r.mu.Lock()
+	r.peers["p"].FullStoragePenaltyUntil = time.Now().Add(-time.Minute)
+	r.mu.Unlock()
+
+	r.UpdateStorage("p", "full")
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "full", got.Storage)
+}
+
 func TestCentralizedPeerRegistry_ResetReputation(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
 

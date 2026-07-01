@@ -4129,13 +4129,21 @@ type validBlockReport struct {
 	blockHash string
 }
 
+type catchupFailureReport struct {
+	peerID      string
+	failureKind string
+	blockHash   string
+}
+
 type recordingValidatedProgressP2PClient struct {
 	P2PClientI
 
 	mu                 sync.Mutex
 	validatedReports   []validatedProgressReport
 	validBlockReports  []validBlockReport
+	catchupFailures    []catchupFailureReport
 	validatedReportErr error
+	maliciousReports   int
 }
 
 func (r *recordingValidatedProgressP2PClient) RecordCatchupAttempt(_ context.Context, _ string) error {
@@ -4147,6 +4155,27 @@ func (r *recordingValidatedProgressP2PClient) RecordCatchupSuccess(_ context.Con
 }
 
 func (r *recordingValidatedProgressP2PClient) RecordCatchupFailure(_ context.Context, _ string) error {
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) RecordCatchupFailureWithKind(_ context.Context, peerID, failureKind, blockHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.catchupFailures = append(r.catchupFailures, catchupFailureReport{
+		peerID:      peerID,
+		failureKind: failureKind,
+		blockHash:   blockHash,
+	})
+
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) RecordCatchupMalicious(_ context.Context, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.maliciousReports++
 	return nil
 }
 
@@ -4207,6 +4236,73 @@ func (r *recordingValidatedProgressP2PClient) snapshotValidBlockReports() []vali
 	reports := make([]validBlockReport, len(r.validBlockReports))
 	copy(reports, r.validBlockReports)
 	return reports
+}
+
+func (r *recordingValidatedProgressP2PClient) snapshotCatchupFailures() []catchupFailureReport {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	reports := make([]catchupFailureReport, len(r.catchupFailures))
+	copy(reports, r.catchupFailures)
+	return reports
+}
+
+func (r *recordingValidatedProgressP2PClient) maliciousReportCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.maliciousReports
+}
+
+func TestCatchup_IncompleteBlockRecordsTypedCatchupFailure(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{}
+	server.p2pClient = recorder
+
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+	incompleteHash := header.Hash().String()
+	catchupCtx := &CatchupContext{
+		blockUpTo:           &model.Block{Header: header, Height: 1000},
+		baseURL:             "http://peer.example",
+		peerID:              "peer-123",
+		startTime:           time.Now(),
+		incompleteBlockHash: incompleteHash,
+	}
+	require.NoError(t, server.acquireCatchupLock(catchupCtx))
+
+	relErr := error(errors.ErrBlockIncomplete)
+	server.releaseCatchupLock(catchupCtx, &relErr)
+
+	reports := recorder.snapshotCatchupFailures()
+	require.Len(t, reports, 1)
+	require.Equal(t, "peer-123", reports[0].peerID)
+	require.Equal(t, catchupFailureKindBlockIncomplete, reports[0].failureKind)
+	require.Equal(t, incompleteHash, reports[0].blockHash)
+}
+
+func TestCatchup_IncompleteBlockDoesNotReportMalicious(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{}
+	server.p2pClient = recorder
+
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+	catchupCtx := &CatchupContext{
+		blockUpTo:           &model.Block{Header: header, Height: 1000},
+		baseURL:             "http://peer.example",
+		peerID:              "peer-123",
+		startTime:           time.Now(),
+		incompleteBlockHash: header.Hash().String(),
+	}
+	require.NoError(t, server.acquireCatchupLock(catchupCtx))
+
+	relErr := error(errors.ErrBlockIncomplete)
+	server.releaseCatchupLock(catchupCtx, &relErr)
+
+	require.Zero(t, recorder.maliciousReportCount())
 }
 
 func TestCatchup_ReportsValidatedHeaderChainWorkAfterHeaderValidation(t *testing.T) {

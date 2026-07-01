@@ -50,6 +50,9 @@ func (m *maliciousAbortP2PClient) RecordCatchupSuccess(_ context.Context, _ stri
 	return nil
 }
 func (m *maliciousAbortP2PClient) RecordCatchupFailure(_ context.Context, _ string) error { return nil }
+func (m *maliciousAbortP2PClient) RecordCatchupFailureWithKind(_ context.Context, _, _, _ string) error {
+	return nil
+}
 func (m *maliciousAbortP2PClient) RecordCatchupMalicious(_ context.Context, _ string) error {
 	return nil
 }

@@ -21,6 +21,9 @@ type P2PClientI interface {
 	// RecordCatchupFailure records a failed catchup attempt from a peer.
 	RecordCatchupFailure(ctx context.Context, peerID string) error
 
+	// RecordCatchupFailureWithKind records a failed catchup attempt with optional diagnostic context.
+	RecordCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) error
+
 	// RecordCatchupMalicious records malicious behavior detected during catchup.
 	RecordCatchupMalicious(ctx context.Context, peerID string) error
 

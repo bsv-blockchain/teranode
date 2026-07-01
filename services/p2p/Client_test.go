@@ -525,6 +525,17 @@ func TestSimpleClientRecordCatchupFailure(t *testing.T) {
 		})
 		assert.NoError(t, client.RecordCatchupFailure(context.Background(), "peer1"))
 	})
+	t.Run("typed_request_mapping", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupFailureFunc: func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error) {
+				assert.Equal(t, "peer1", in.PeerId)
+				assert.Equal(t, catchupFailureKindBlockIncomplete, in.FailureKind)
+				assert.Equal(t, "hash1", in.BlockHash)
+				return &p2p_api.RecordCatchupFailureResponse{Ok: true}, nil
+			},
+		})
+		assert.NoError(t, client.RecordCatchupFailureWithKind(context.Background(), "peer1", catchupFailureKindBlockIncomplete, "hash1"))
+	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			RecordCatchupFailureFunc: func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error) {

@@ -371,8 +371,23 @@ func (c *Client) RecordCatchupSuccess(ctx context.Context, peerID string, durati
 // Returns:
 //   - error: Any error encountered during the operation
 func (c *Client) RecordCatchupFailure(ctx context.Context, peerID string) error {
+	return c.RecordCatchupFailureWithKind(ctx, peerID, catchupFailureKindGeneric, "")
+}
+
+// RecordCatchupFailureWithKind records a failed catchup attempt from a peer with optional diagnostic context.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to record the failure for
+//   - failureKind: Optional failure classification
+//   - blockHash: Optional block hash associated with the failure
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) RecordCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) error {
 	req := &p2p_api.RecordCatchupFailureRequest{
-		PeerId: peerID,
+		PeerId:      peerID,
+		FailureKind: failureKind,
+		BlockHash:   blockHash,
 	}
 
 	resp, err := c.client.RecordCatchupFailure(ctx, req)

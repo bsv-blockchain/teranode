@@ -3,6 +3,13 @@ package blockvalidation
 import (
 	"context"
 	"time"
+
+	"github.com/bsv-blockchain/teranode/errors"
+)
+
+const (
+	catchupFailureKindGeneric         = "generic"
+	catchupFailureKindBlockIncomplete = "block_incomplete"
 )
 
 // reportCatchupAttempt reports a catchup attempt to the P2P service.
@@ -64,13 +71,24 @@ func (u *Server) reportCatchupSuccess(ctx context.Context, peerID string, durati
 //   - ctx: Context for the gRPC call
 //   - peerID: Peer identifier
 func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
+	u.reportCatchupFailureWithKind(ctx, peerID, catchupFailureKindGeneric, "")
+}
+
+func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
+	if errors.Is(err, errors.ErrBlockIncomplete) {
+		return
+	}
+	u.reportCatchupFailure(ctx, peerID)
+}
+
+func (u *Server) reportCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) {
 	if peerID == "" {
 		return
 	}
 
 	// Report to P2P service if client is available
 	if u.p2pClient != nil {
-		if err := u.p2pClient.RecordCatchupFailure(ctx, peerID); err != nil {
+		if err := u.p2pClient.RecordCatchupFailureWithKind(ctx, peerID, failureKind, blockHash); err != nil {
 			u.logger.Warnf("[peer_metrics] Failed to report catchup failure to P2P service for peer %s: %v", peerID, err)
 		}
 	}

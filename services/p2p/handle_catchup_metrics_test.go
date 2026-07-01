@@ -3,10 +3,12 @@ package p2p
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -91,6 +93,75 @@ func TestRecordCatchupFailure_UpdatesInteractionMetrics(t *testing.T) {
 
 	got, _ := reg.Get(pid.String())
 	require.Equal(t, int64(1), got.InteractionFailures)
+}
+
+func TestRecordCatchupFailure_BlockIncomplete_DowngradesFullPeer(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	s.settings = &settings.Settings{
+		P2P: settings.P2PSettings{
+			FullStoragePenaltyDuration: 30 * time.Minute,
+		},
+	}
+	reg.Register(&blockchain.PeerInfo{ID: pid.String(), Storage: "full"})
+
+	blockHash := chainhash.HashH([]byte("incomplete-block"))
+	resp, err := s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{
+		PeerId:      pid.String(),
+		FailureKind: catchupFailureKindBlockIncomplete,
+		BlockHash:   blockHash.String(),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int64(1), got.InteractionFailures)
+	require.Equal(t, int64(1), got.FullStorageContradictions)
+	require.NotEqual(t, "full", got.Storage)
+	require.True(t, got.FullStoragePenaltyUntil.After(time.Now()))
+	require.Contains(t, got.LastCatchupError, blockHash.String())
+}
+
+func TestRecordCatchupFailure_BlockIncomplete_DoesNotBanPeer(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String(), Storage: "full"})
+
+	resp, err := s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{
+		PeerId:      pid.String(),
+		FailureKind: catchupFailureKindBlockIncomplete,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.False(t, got.IsBanned)
+	require.Zero(t, got.BanScore)
+	require.Zero(t, got.MaliciousCount)
+
+	banned, err := s.peerRegistry.IsPeerBanned(context.Background(), pid.String())
+	require.NoError(t, err)
+	require.False(t, banned)
+}
+
+func TestRecordCatchupFailure_UnknownFailureKind_Generic(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String(), Storage: "full"})
+
+	resp, err := s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{
+		PeerId:      pid.String(),
+		FailureKind: "not_a_known_failure",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int64(1), got.InteractionFailures)
+	require.Equal(t, "full", got.Storage)
+	require.Zero(t, got.FullStorageContradictions)
+	require.True(t, got.FullStoragePenaltyUntil.IsZero())
+	require.Empty(t, got.LastCatchupError)
 }
 
 func TestRecordCatchupMalicious_PinsReputationLow(t *testing.T) {

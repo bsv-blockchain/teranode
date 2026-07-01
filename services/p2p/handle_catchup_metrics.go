@@ -3,14 +3,23 @@ package p2p
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-const maxReportedChainWorkBytes = 128
+const (
+	maxReportedChainWorkBytes = 128
+
+	catchupFailureKindGeneric         = "generic"
+	catchupFailureKindBlockIncomplete = "block_incomplete"
+
+	defaultFullStoragePenaltyDuration = time.Hour
+)
 
 // RecordCatchupAttempt records that a catchup attempt was made to a peer.
 // Backed by the centralized peer registry's interaction-attempt counter.
@@ -63,7 +72,68 @@ func (s *Server) RecordCatchupFailure(ctx context.Context, req *p2p_api.RecordCa
 		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("update peer metrics", err))
 	}
 
+	if normalizeCatchupFailureKind(req.FailureKind) == catchupFailureKindBlockIncomplete {
+		if err := s.recordBlockIncompleteCatchupFailure(ctx, req.PeerId, req.BlockHash); err != nil {
+			return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(err)
+		}
+	}
+
 	return &p2p_api.RecordCatchupFailureResponse{Ok: true}, nil
+}
+
+func normalizeCatchupFailureKind(kind string) string {
+	switch kind {
+	case "", catchupFailureKindGeneric:
+		return catchupFailureKindGeneric
+	case catchupFailureKindBlockIncomplete:
+		return catchupFailureKindBlockIncomplete
+	default:
+		return catchupFailureKindGeneric
+	}
+}
+
+func (s *Server) recordBlockIncompleteCatchupFailure(ctx context.Context, peerID, blockHash string) error {
+	info, found, err := s.peerRegistry.GetPeer(ctx, peerID)
+	if err != nil {
+		return errors.NewServiceError("get peer for block-incomplete catchup failure", err)
+	}
+
+	if err := s.peerRegistry.RecordCatchupError(ctx, peerID, blockIncompleteCatchupError(blockHash)); err != nil {
+		return errors.NewServiceError("record block-incomplete catchup error", err)
+	}
+
+	if !found || info.Storage != "full" {
+		return nil
+	}
+
+	penaltyUntil := time.Now().Add(s.fullStoragePenaltyDuration())
+	if err := s.peerRegistry.RegisterPeer(ctx, &blockchain.PeerInfo{
+		ID:                        peerID,
+		FullStorageContradictions: info.FullStorageContradictions + 1,
+		FullStoragePenaltyUntil:   penaltyUntil,
+	}); err != nil {
+		return errors.NewServiceError("record full-storage penalty", err)
+	}
+
+	if err := s.peerRegistry.UpdateStorage(ctx, peerID, ""); err != nil {
+		return errors.NewServiceError("clear contradicted full-storage claim", err)
+	}
+
+	return nil
+}
+
+func (s *Server) fullStoragePenaltyDuration() time.Duration {
+	if s != nil && s.settings != nil && s.settings.P2P.FullStoragePenaltyDuration > 0 {
+		return s.settings.P2P.FullStoragePenaltyDuration
+	}
+	return defaultFullStoragePenaltyDuration
+}
+
+func blockIncompleteCatchupError(blockHash string) string {
+	if blockHash == "" {
+		return "block incomplete during catchup"
+	}
+	return fmt.Sprintf("block incomplete during catchup: %s", blockHash)
 }
 
 // RecordCatchupMalicious records malicious behavior detected during catchup.

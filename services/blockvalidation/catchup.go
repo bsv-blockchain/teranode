@@ -54,6 +54,7 @@ type CatchupContext struct {
 	useQuickValidation      bool   // Whether to use quick validation for checkpointed blocks
 	highestCheckpointHeight uint32 // Highest checkpoint height for validation checks
 	catchupError            error  // Any error encountered during catchup
+	incompleteBlockHash     string // Block hash reported when a peer serves an incomplete block
 
 	// Performance monitoring and dynamic peer switching
 	performanceMonitor   *CatchupPerformanceMonitor
@@ -351,10 +352,12 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	// service would block the lock indefinitely, which in turn blocks GetCatchupStatus
 	// (it RLocks the same mutex) and prevents the active catchup context from clearing.
 	var (
-		reportMalicious bool
-		reportPeerErr   bool
-		peerID          string
-		errorMsg        string
+		reportMalicious       bool
+		reportPeerErr         bool
+		reportIncompleteBlock bool
+		peerID                string
+		errorMsg              string
+		incompleteBlockHash   string
 	)
 
 	// Capture failure details for dashboard before clearing context
@@ -394,6 +397,8 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// Incomplete blocks (e.g. seeded peers without full block data) are not peer errors
 			errorType = "block_incomplete"
 			isPeerError = false
+			reportIncompleteBlock = true
+			incompleteBlockHash = ctx.incompleteBlockHash
 		}
 
 		u.previousCatchupAttempt = &PreviousAttempt{
@@ -408,12 +413,12 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			BlocksValidated:   u.blocksValidated.Load(),
 		}
 
-		// Only store the error in the peer registry if it's a peer-related error
-		// Local system errors (like block assembly being behind) should not affect peer reputation
+		// Only store generic peer errors in the peer registry. Local system errors
+		// and non-malicious incomplete-block reports use their own handling.
 		if isPeerError {
 			reportPeerErr = true
 		} else {
-			u.logger.Infof("[catchup][%s] Skipping peer error report for local system error: %s", ctx.blockUpTo.Hash().String(), errorType)
+			u.logger.Infof("[catchup][%s] Skipping generic peer error report for catchup error type: %s", ctx.blockUpTo.Hash().String(), errorType)
 		}
 	}
 
@@ -424,7 +429,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	// Make the fire-and-forget reputation gRPC calls outside the lock with a bounded
 	// context, so a stalled P2P service can neither hold activeCatchupCtxMu nor outlive
 	// shutdown. These are best-effort; failures are logged inside the helpers.
-	if reportMalicious || reportPeerErr {
+	if reportMalicious || reportPeerErr || reportIncompleteBlock {
 		rpcCtx, cancel := context.WithTimeout(context.Background(), catchupReputationReportTimeout)
 		defer cancel()
 
@@ -434,6 +439,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		if reportPeerErr {
 			u.reportCatchupError(rpcCtx, peerID, errorMsg)
+		}
+
+		if reportIncompleteBlock {
+			u.reportCatchupFailureWithKind(rpcCtx, peerID, catchupFailureKindBlockIncomplete, incompleteBlockHash)
 		}
 	}
 
@@ -1169,8 +1178,9 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 
 					// Incomplete block (e.g. no coinbase from seeded peer) — abort catchup on this peer
 					// Block was NOT stored as invalid, so another peer can provide the full version
-					// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+					// Failure reporting is centralized in releaseCatchupLock.
 					if errors.Is(err, errors.ErrBlockIncomplete) {
+						catchupCtx.incompleteBlockHash = block.Hash().String()
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
 					} else if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
 						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
@@ -1242,8 +1252,9 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 		// Block is incomplete (e.g. seeded peer without full block data) — abort catchup for this peer
 		// Keep subtree files — they contain valid data that the next peer's validation can reuse
-		// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+		// Failure reporting is centralized in releaseCatchupLock.
 		if errors.Is(err, errors.ErrBlockIncomplete) {
+			catchupCtx.incompleteBlockHash = block.Hash().String()
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s is incomplete (no coinbase), aborting catchup",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
 

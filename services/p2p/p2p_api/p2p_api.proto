@@ -121,6 +121,8 @@ message AddBanScoreRequest {
 
   message RecordCatchupFailureRequest {
     string peer_id = 1;
+    string failure_kind = 2;
+    string block_hash = 3;
   }
 
   message RecordCatchupFailureResponse {
