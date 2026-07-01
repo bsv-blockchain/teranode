@@ -338,6 +338,10 @@ func (s *Server) handleTriggerError(ctx context.Context, err error, source strin
 // Currently, no specific cleanup operations are performed, but the method signature
 // maintains compatibility with other service interfaces.
 func (s *Server) Stop(_ context.Context) error {
+	// DC14: intentional no-op. This server owns only context-bound resources
+	// (its goroutines exit on the service-manager ctx cancel); it holds no
+	// flushing store, Kafka producer, or batcher that would need draining here.
+	// If one is ever added, drain it in this method (see DC11/DC15).
 	return nil
 }
 

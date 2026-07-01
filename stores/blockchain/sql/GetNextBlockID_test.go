@@ -24,7 +24,7 @@ func TestGetNextBlockID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Test that first call returns 1
 		id1, err := s.GetNextBlockID(context.Background())
@@ -48,7 +48,7 @@ func TestGetNextBlockID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store a block (which should use ID 1)
 		id1, _, err := s.StoreBlock(context.Background(), block1, "")
@@ -80,7 +80,7 @@ func TestGetNextBlockID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Test concurrent access
 		numGoroutines := 10
@@ -121,7 +121,7 @@ func TestGetNextBlockID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Create a context that will be cancelled
 		ctx, cancel := context.WithCancel(context.Background())
@@ -139,7 +139,7 @@ func TestGetNextBlockID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Create a context with very short timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
@@ -185,7 +185,7 @@ func TestGetNextBlockID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Ensure we're using PostgreSQL
 		assert.Equal(t, util.Postgres, s.engine)
@@ -233,7 +233,7 @@ func TestGetNextBlockID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store a block (which should use ID 1)
 		id1, _, err := s.StoreBlock(ctx, block1, "")
@@ -286,7 +286,7 @@ func TestGetNextBlockID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Test concurrent access
 		numGoroutines := 10
@@ -348,7 +348,7 @@ func TestGetNextBlockID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Create a context that will be cancelled
 		testCtx, cancel := context.WithCancel(context.Background())
@@ -368,7 +368,7 @@ func TestGetNextBlockID_DatabaseEngineDetection(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Verify SQLite engine is detected (could be Sqlite or SqliteMemory)
 		assert.True(t, s.engine == util.Sqlite || s.engine == util.SqliteMemory)

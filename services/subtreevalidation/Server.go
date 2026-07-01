@@ -609,11 +609,11 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // either for normal shutdown or in response to system signals.
 //
 // Parameters:
-//   - ctx: Context for cancellation and tracing (unused in current implementation)
+//   - ctx: Context bounding the shutdown; the invalid-subtree producer stop is raced against it so a wedged broker can't stall shutdown
 //
 // Returns:
 //   - error: Any error encountered during shutdown
-func (u *Server) Stop(_ context.Context) error {
+func (u *Server) Stop(ctx context.Context) error {
 	// close the kafka consumers gracefully
 	if u.subtreeConsumerClient != nil {
 		if err := u.subtreeConsumerClient.Close(); err != nil {
@@ -627,11 +627,10 @@ func (u *Server) Stop(_ context.Context) error {
 		}
 	}
 
-	if u.invalidSubtreeKafkaProducer != nil {
-		if err := u.invalidSubtreeKafkaProducer.Stop(); err != nil {
-			u.logger.Errorf("[BlockValidation] failed to stop invalid subtree kafka producer gracefully: %v", err)
-		}
-	}
+	// Stop the async invalid-subtree producer, raced against ctx so a wedged broker
+	// flush can't block past the bounded Stop() window — the outstanding Stop()
+	// finishes the flush later if it can.
+	kafka.StopProducerCtx(ctx, u.logger, "subtreevalidation invalid-subtree", u.invalidSubtreeKafkaProducer)
 
 	if u.policyRejectedTxConsumerClient != nil {
 		if err := u.policyRejectedTxConsumerClient.Close(); err != nil {

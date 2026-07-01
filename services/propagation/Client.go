@@ -104,9 +104,10 @@ type batchItem struct {
 type Client struct {
 	client              propagation_api.PropagationAPIClient
 	conn                *grpc.ClientConn
+	ownsConn            bool
 	batchSize           int
 	batchCh             chan []*batchItem
-	batcher             batcher.Batcher[batchItem]
+	batcher             *batcher.Batcher[batchItem]
 	logger              ulogger.Logger
 	settings            *settings.Settings
 	propagationHTTPAddr *url.URL
@@ -128,6 +129,12 @@ type Client struct {
 //   - error: Error if client creation fails
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, conn ...*grpc.ClientConn) (*Client, error) {
 	var useConn *grpc.ClientConn
+
+	// ownsConn is true only when this client dialed the connection itself; when
+	// a conn is injected by the caller the caller retains ownership and Close()
+	// must not close it.
+	var ownsConn bool
+
 	if len(conn) > 0 {
 		useConn = conn[0]
 	} else {
@@ -137,6 +144,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		}
 
 		useConn = localConn
+		ownsConn = true
 	}
 
 	client := propagation_api.NewPropagationAPIClient(useConn)
@@ -166,6 +174,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	c := &Client{
 		client:              client,
 		conn:                useConn,
+		ownsConn:            ownsConn,
 		batchSize:           batchSize,
 		batchCh:             make(chan []*batchItem),
 		logger:              logger,
@@ -178,7 +187,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			logger.Errorf("Error sending batch: %s", err)
 		}
 	}
-	c.batcher = *batcher.NewWithPool(batchSize, duration, sendBatch, true,
+	c.batcher = batcher.NewWithPool(batchSize, duration, sendBatch, true,
 		batcher.WithName("propagation_client"),
 		batcher.WithLogger(logger),
 		batcher.WithMetrics(batchermetrics.Provider()),
@@ -188,7 +197,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return c, nil
 }
 
-// Stop gracefully shuts down the client and closes the gRPC connection.
+// Close gracefully shuts down the client and closes the gRPC connection.
 // This method performs proper cleanup of resources used by the propagation client:
 //
 // 1. Verifies that both client and connection are initialized before attempting cleanup
@@ -199,13 +208,22 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 // resource leaks, particularly long-lived gRPC connections. It's commonly used
 // during service shutdown or when switching connection configurations.
 //
-// Important: After Stop is called, the client instance should not be reused.
+// Important: After Close is called, the client instance should not be reused.
 // A new client instance should be created if needed.
 
-func (c *Client) Stop() {
-	if c.client != nil && c.conn != nil {
+func (c *Client) Close() error {
+	// Drain the batcher first so queued transactions are flushed while the
+	// connection is still live. Bounded; the batcher is owned by this client
+	// regardless of who owns the conn, so drain it even for injected conns.
+	if c.batcher != nil {
+		util.DrainBatcher(c.logger, "propagation_client", util.DefaultBatcherDrainTimeout, c.batcher.Close)
+	}
+
+	if c.ownsConn && c.client != nil && c.conn != nil {
 		_ = c.conn.Close()
 	}
+
+	return nil
 }
 
 // ProcessTransaction submits a single BSV transaction for processing.

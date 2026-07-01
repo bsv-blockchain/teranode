@@ -153,7 +153,7 @@ jobs:
           build_cache: 'false'
 
       - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@latest
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260615155930-9e4b9ddef5b6
 
       - name: Download all benchmark results
         uses: actions/download-artifact@v4

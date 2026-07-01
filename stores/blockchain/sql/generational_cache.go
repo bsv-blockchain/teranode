@@ -19,7 +19,7 @@ import (
 // 5. Future reads return stale data instead of fresh data
 //
 // With generation tracking:
-// - Begin() captures the current generation in a CacheOperation object
+// - NewOp() captures the current generation in a CacheOperation object
 // - DeleteAll() increments the generation
 // - CacheOperation.Set() only writes if generation matches (query wasn't invalidated)
 // - This ensures stale results from pre-invalidation queries aren't cached
@@ -42,9 +42,9 @@ func NewGenerationalCache() *GenerationalCache {
 	return gc
 }
 
-// Begin starts a cache-safe operation by capturing the current generation.
+// NewOp starts a cache-safe operation by capturing the current generation.
 // Use this for Get→work→Set patterns to prevent stale writes after cache invalidation.
-func (gc *GenerationalCache) Begin(key chainhash.Hash) *CacheOperation {
+func (gc *GenerationalCache) NewOp(key chainhash.Hash) *CacheOperation {
 	return &CacheOperation{
 		generationalCache: gc,
 		key:               key,
@@ -72,7 +72,7 @@ func (gc *GenerationalCache) Stop() {
 //
 // Usage pattern:
 //
-//	op := cache.Begin(key)
+//	op := cache.NewOp(key)
 //	if item := op.Get(); item != nil {
 //	    return item.Value()
 //	}
@@ -81,7 +81,7 @@ func (gc *GenerationalCache) Stop() {
 type CacheOperation struct {
 	generationalCache *GenerationalCache
 	key               chainhash.Hash
-	generation        uint64 // captured at Begin time
+	generation        uint64 // captured at NewOp time
 }
 
 // Get retrieves the cached Item if present, or nil on miss.
@@ -90,7 +90,7 @@ func (co *CacheOperation) Get() *ttlcache.Item[chainhash.Hash, any] {
 	return co.generationalCache.ttlCache.Get(co.key)
 }
 
-// Set writes a value to the cache only if generation hasn't changed since Begin.
+// Set writes a value to the cache only if generation hasn't changed since NewOp.
 // Returns true if cached, false if generation changed (cache was invalidated during operation).
 func (co *CacheOperation) Set(value any, ttl time.Duration) bool {
 	// Only cache if generation matches (cache wasn't invalidated during operation)

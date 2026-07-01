@@ -133,6 +133,11 @@ type PropagationServer struct {
 	batchHandlerPool             chan struct{} // Non-blocking admission control for in-flight batch/tx handlers; nil when disabled
 	udpConns                     []*net.UDPConn
 	udpConnsMu                   sync.Mutex
+	// udpWg tracks the UDP reader goroutines and the per-transaction worker
+	// goroutines they spawn (which call ProcessTransaction). Stop() waits on it
+	// after closing the conns so no in-flight ProcessTransaction can still publish
+	// to the validator Kafka producer after that producer's channel is closed.
+	udpWg sync.WaitGroup
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -470,7 +475,11 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 		ps.udpConns = append(ps.udpConns, conn)
 		ps.udpConnsMu.Unlock()
 
+		ps.udpWg.Add(1)
+
 		go func(conn *net.UDPConn, allowedNets []*net.IPNet) {
+			defer ps.udpWg.Done()
+
 			// Loop forever reading from the socket
 			var (
 				// numBytes int
@@ -537,10 +546,16 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 						continue
 					}
 
-					// Process the received bytes using worker pool to limit concurrency
+					// Process the received bytes using worker pool to limit concurrency.
+					// Add to udpWg before spawning (while this reader still holds its
+					// own udpWg slot, so the counter is never observed at zero here)
+					// so Stop() can join in-flight ProcessTransaction calls.
 					select {
 					case ps.udpWorkerPool <- struct{}{}:
+						ps.udpWg.Add(1)
+
 						go func(txb []byte) {
+							defer ps.udpWg.Done()
 							defer func() { <-ps.udpWorkerPool }()
 							if _, err := ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 								Tx: txb,
@@ -562,20 +577,83 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 // Stop gracefully stops the PropagationServer, closing UDP listeners.
 //
 // Parameters:
-//   - ctx: context for stop operation (unused)
+//   - ctx: bounds the shutdown. The wait for UDP/tx workers and the validator
+//     producer stop are each raced against ctx so a wedged worker or broker
+//     cannot block Stop past the service-manager's per-service budget.
 //
 // Returns:
-//   - error: always returns nil in current implementation
-func (ps *PropagationServer) Stop(_ context.Context) error {
+//   - error: ctx.Err() — nil on a clean stop, the ctx error if the budget was hit
+//     (cleanup is still attempted on a best-effort, bounded basis before returning).
+func (ps *PropagationServer) Stop(ctx context.Context) error {
+	// Ordering: the validator Kafka producer is stopped LAST, after every
+	// transaction-ingress path that can call ProcessTransaction (which publishes to
+	// the producer) is quiesced. A late publish during the producer stop drops
+	// safely — Publish guards under channelMu and util.SafeSend recovers — so
+	// stopping last is not about avoiding a panic; it simply maximises the final
+	// flush by letting the workers finish first. So: close UDP conns + join their
+	// workers, drain the HTTP server, THEN stop the producer. (gRPC ingress is
+	// already drained before Stop() runs: StartGRPCServer GracefulStops on
+	// ctx-cancel and Start() — hence the service-manager's Wait() — returns only
+	// after that.)
+
+	// 1. Close UDP listeners so the reader goroutines exit, then wait for them and
+	//    any in-flight per-transaction worker goroutines to finish — bounded by ctx
+	//    so a wedged ProcessTransaction (e.g. a publish blocked on a dead broker)
+	//    cannot stall the whole shutdown.
 	ps.udpConnsMu.Lock()
-	defer ps.udpConnsMu.Unlock()
 	for _, conn := range ps.udpConns {
 		if err := conn.Close(); err != nil {
 			ps.logger.Errorf("Error closing UDP connection: %v", err)
 		}
 	}
 	ps.udpConns = nil
-	return nil
+	ps.udpConnsMu.Unlock()
+
+	udpDone := make(chan struct{})
+	go func() {
+		ps.udpWg.Wait()
+		close(udpDone)
+	}()
+
+	select {
+	case <-udpDone:
+	case <-ctx.Done():
+		ps.logger.Errorf("[Propagation] timed out waiting for UDP workers, proceeding with shutdown: %v", ctx.Err())
+	}
+
+	// 2. Drain the HTTP server so in-flight /tx and /txs handlers finish. Already
+	//    ctx-bounded; safe regardless of worker state.
+	if ps.httpServer != nil {
+		if err := ps.httpServer.Shutdown(ctx); err != nil {
+			ps.logger.Errorf("[Propagation] error shutting down http server: %v", err)
+		}
+	}
+
+	// 3. Stop the async validator producer so its final flush completes inside the
+	//    bounded Stop() window. Bounded against the remaining ctx so a wedged broker
+	//    Flush can't re-hang shutdown: when the budget is already spent (the timeout
+	//    path above) we stop WAITING here and return, leaving the outstanding Stop()
+	//    (and/or the producer's own ctx-cancel self-close) to complete the flush
+	//    later if it can — it is not guaranteed to finish, but shutdown no longer
+	//    blocks on it. A worker still publishing here drops safely (channelMu +
+	//    SafeSend). Guarded and non-fatal.
+	if ps.validatorKafkaProducerClient != nil {
+		stopDone := make(chan struct{})
+		go func() {
+			defer close(stopDone)
+			if err := ps.validatorKafkaProducerClient.Stop(); err != nil {
+				ps.logger.Errorf("[Propagation] failed to stop validator kafka producer gracefully: %v", err)
+			}
+		}()
+
+		select {
+		case <-stopDone:
+		case <-ctx.Done():
+			ps.logger.Errorf("[Propagation] validator producer stop exceeded stop budget; relying on async self-close")
+		}
+	}
+
+	return ctx.Err()
 }
 
 // handleSingleTx handles a single transaction request on the /tx endpoint.

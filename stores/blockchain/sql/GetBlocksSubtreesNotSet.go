@@ -160,7 +160,11 @@ func (s *SQL) getBlocksWithQuery(ctx context.Context, q string) ([]*model.Block,
 			return nil, err
 		}
 
-		bits, _ := model.NewNBitFromSlice(nBits)
+		bits, nBitsErr := model.NewNBitFromSlice(nBits)
+		if nBitsErr != nil {
+			return nil, errors.NewStorageError("error in GetBlocksSubtreesNotSet: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), height, nBitsErr)
+		}
+
 		block.Header.Bits = *bits
 
 		block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

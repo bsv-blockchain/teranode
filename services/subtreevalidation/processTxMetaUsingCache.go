@@ -113,7 +113,12 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 		}
 
 		txMeta, found := p.cache.GetMetaCached(p.ctx, txHash)
-		if found {
+		// Defensively reject a partial cache entry: a non-coinbase tx with no
+		// parent tx hashes is incomplete (TxInpoints was never populated) and
+		// would later fail subtree-meta serialization and wedge the block. Treat
+		// it as a miss so the store fallback — which can reconstruct inpoints from
+		// the tx inputs — resolves it and self-heals the cache.
+		if found && (txMeta.IsCoinbase || len(txMeta.TxInpoints.ParentTxHashes) > 0) {
 			p.txMetaSlice[i+j] = metaSliceItem{
 				fee:         txMeta.Fee,
 				sizeInBytes: txMeta.SizeInBytes,

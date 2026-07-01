@@ -602,7 +602,7 @@ func (s *File) Health(ctx context.Context, _ bool) (int, string, error) {
 		return http.StatusInternalServerError, "File Store: Unable to check disk space", err
 	}
 
-	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	availableBytes := uint64(stat.Bavail) * uint64(stat.Bsize)
 	totalBytes := stat.Blocks * uint64(stat.Bsize)
 
 	const minAvailableBytes = 1 << 30 // 1 GiB

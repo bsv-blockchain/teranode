@@ -18,7 +18,7 @@ func TestCheckBlockIsAncestorOfBlock_EmptyBlockIDs(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store a block to have a valid hash
 	_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -37,7 +37,7 @@ func TestCheckBlockIsAncestorOfBlock_SingleBlockIsAncestor(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store blocks in sequence to build a chain
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
@@ -62,7 +62,7 @@ func TestCheckBlockIsAncestorOfBlock_BlockIsNotAncestor(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store blocks
 	_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -84,7 +84,7 @@ func TestCheckBlockIsAncestorOfBlock_NonExistentBlockID(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store a block
 	_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -104,7 +104,7 @@ func TestCheckBlockIsAncestorOfBlock_NonExistentBlockHash(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store a block
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
@@ -123,7 +123,7 @@ func TestCheckBlockIsAncestorOfBlock_MultipleBlockIDsOneIsAncestor(t *testing.T)
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store blocks in sequence
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
@@ -149,7 +149,7 @@ func TestCheckBlockIsAncestorOfBlock_SameBlockAsTarget(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store blocks
 	_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -171,7 +171,7 @@ func TestCheckBlockIsAncestorOfBlock_ContextCancellation(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store blocks
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
@@ -203,7 +203,7 @@ func TestCheckBlockIsAncestorOfBlock_ClosedDatabase(t *testing.T) {
 	require.NoError(t, err)
 
 	// Close the database connection to simulate error
-	s.Close()
+	s.Close(context.Background())
 
 	// Test should fail when trying to access closed database
 	result, err := s.CheckBlockIsAncestorOfBlock(context.Background(), []uint32{1}, block1.Header.Hash())

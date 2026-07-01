@@ -21,6 +21,18 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	defer deferFn()
 
+	// Preservation now only applies to prune-eligible txs (those already carrying a
+	// deleteAtHeight stamp, or already preserved). Stamp a DAH so a freshly-created tx
+	// qualifies for preservation in the subtests below that assert it gets preserved.
+	stampDAH := func(t *testing.T, txHash chainhash.Hash) {
+		t.Helper()
+		txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txHash[:])
+		require.NoError(t, err)
+		wp := util.GetAerospikeWritePolicy(tSettings, 0)
+		wp.RecordExistsAction = aerospike.UPDATE
+		require.NoError(t, client.PutBins(wp, txKey, aerospike.NewBin(fields.DeleteAtHeight.String(), 200)))
+	}
+
 	t.Run("empty txIDs returns nil", func(t *testing.T) {
 		err := store.PreserveTransactions(ctx, nil, 100)
 		require.NoError(t, err)
@@ -79,6 +91,7 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 		require.NoError(t, err)
 
 		txHash := *tx.TxIDChainHash()
+		stampDAH(t, txHash)
 
 		err = store.PreserveTransactions(ctx, []chainhash.Hash{txHash}, 500)
 		require.NoError(t, err)
@@ -101,6 +114,7 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 		require.NoError(t, err)
 
 		txHash := *tx.TxIDChainHash()
+		stampDAH(t, txHash)
 		missingHash := chainhash.HashH([]byte("missing-tx"))
 
 		err = store.PreserveTransactions(ctx, []chainhash.Hash{txHash, missingHash}, 750)
@@ -121,11 +135,13 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 		require.NoError(t, err)
 
 		txHash := *tx.TxIDChainHash()
+		stampDAH(t, txHash)
 
 		err = store.PreserveTransactions(ctx, []chainhash.Hash{txHash}, 500)
 		require.NoError(t, err)
 
-		// Update to a higher height
+		// Update to a higher height (the tx is already preserved, so the eligibility gate
+		// still admits it even though the first preserve cleared its deleteAtHeight).
 		err = store.PreserveTransactions(ctx, []chainhash.Hash{txHash}, 1000)
 		require.NoError(t, err)
 

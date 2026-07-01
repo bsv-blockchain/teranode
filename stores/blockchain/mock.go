@@ -92,6 +92,11 @@ func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string
 	return http.StatusOK, "OK", nil
 }
 
+// Close is a no-op for the mock store, which holds no closable resource.
+func (m *MockStore) Close(_ context.Context) error {
+	return nil
+}
+
 // GetDB returns the underlying SQL database instance.
 func (m *MockStore) GetDB() *usql.DB {
 	return nil

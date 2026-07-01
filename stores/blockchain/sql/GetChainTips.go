@@ -26,7 +26,7 @@ func (s *SQL) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 
 	// Try to get from response cache using derived cache key
 	cacheID := chainhash.HashH([]byte("GetChainTips"))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {

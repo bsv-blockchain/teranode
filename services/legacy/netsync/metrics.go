@@ -23,7 +23,6 @@ var (
 	prometheusLegacyNetsyncBlockTxSize                    prometheus.Histogram
 	prometheusLegacyNetsyncBlockTxNrInputs                prometheus.Histogram
 	prometheusLegacyNetsyncBlockTxNrOutputs               prometheus.Histogram
-	prometheusLegacyNetsyncBlockTxExtend                  prometheus.Histogram
 	prometheusLegacyNetsyncBlockTxValidate                prometheus.Histogram
 	prometheusLegacyNetsyncOrphans                        prometheus.Gauge
 	prometheusLegacyNetsyncOrphanTime                     prometheus.Histogram
@@ -177,15 +176,6 @@ func _initPrometheusMetrics() {
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 20),
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncBlockTxNrOutputs)
-
-	prometheusLegacyNetsyncBlockTxExtend = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "block_tx_extend",
-		Help:      "The time taken to extend a transaction",
-		Buckets:   util.MetricsBucketsMilliSeconds,
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncBlockTxExtend)
 
 	prometheusLegacyNetsyncBlockTxValidate = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "teranode",

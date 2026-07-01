@@ -40,7 +40,7 @@ RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GIT_VERSION="${GIT_VERSI
 
 # This could be run in the ${BASE_IMG} so we don't have to do it on every build, but it's not a big deal and this is pretty quick
 ENV GOPATH=/go
-RUN go install github.com/go-delve/delve/cmd/dlv@latest
+RUN go install github.com/go-delve/delve/cmd/dlv@v1.27.0
 
 # RUN_IMG should be overritten by --build-args
 FROM ${RUN_IMG}

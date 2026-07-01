@@ -404,12 +404,12 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // shutdown orchestration.
 //
 // Parameters:
-//   - ctx: Context for shutdown operation (currently unused but maintained for interface consistency)
+//   - ctx: Context bounding the shutdown; producer stops are raced against it so a wedged broker can't stall shutdown
 //
 // Returns:
 //   - error: Any shutdown errors encountered during the cleanup process
 //     Returns nil if shutdown is successful or if no cleanup was necessary
-func (v *Server) Stop(_ context.Context) error {
+func (v *Server) Stop(ctx context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
 	}
@@ -420,6 +420,24 @@ func (v *Server) Stop(_ context.Context) error {
 			v.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 		}
 	}
+
+	// DC15: drain the tx-meta batcher BEFORE stopping the txmeta producer below,
+	// so queued tx-meta is flushed INTO the producer first; then the producer
+	// flushes to Kafka. The batcher lives on the concrete *Validator (same
+	// package); type-assert so non-*Validator Interface impls (test doubles) are
+	// skipped. Bounded drain (go-batcher v2.0.4 Close blocks + is idempotent).
+	if val, ok := v.validator.(*Validator); ok && val.txmetaKafkaBatcher != nil {
+		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, val.txmetaKafkaBatcher.Close)
+	}
+
+	// DC11: stop the async producers so their final flush runs during shutdown
+	// instead of racing process exit. Each Stop() is raced against ctx so a wedged
+	// broker flush can't block past the bounded Stop() window — the outstanding
+	// Stop() finishes the flush later if it can. Each is nil-guarded and
+	// non-fatal; failures are logged and shutdown continues.
+	kafka.StopProducerCtx(ctx, v.logger, "validator txmeta", v.txMetaKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, v.logger, "validator rejectedTx", v.rejectedTxKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, v.logger, "validator policy-rejected tx", v.policyRejectedTxKafkaProducerClient)
 
 	return nil
 }

@@ -65,7 +65,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetHeader-%s", blockHash.String())))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil && cached.Value() != nil {
@@ -126,7 +126,11 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 		return nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 	}
 
-	bits, _ := model.NewNBitFromSlice(nBits)
+	bits, err := model.NewNBitFromSlice(nBits)
+	if err != nil {
+		return nil, errors.NewStorageError("error in GetHeader: malformed n_bits (length %d, expected 4) for block %s", len(nBits), blockHash.String(), err)
+	}
+
 	blockHeader.Bits = *bits
 
 	// Cache the result in response cache

@@ -152,10 +152,13 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		// The normal path leans on BDK to reject MEMPOOL_HEIGHT in consensus mode
 		// (bdk/core/txvalidator.cpp:779), but skipping script validation bypasses
 		// BDK entirely. Without this guard the unconfirmedParentHeight sentinel
-		// would propagate to BIP68 (height conversion produces -1 from 0xFFFFFFFF
-		// in sequenceLocks; MTP lookup in Validator.readMTPsLocked clamps to
-		// blockMTP) and the tx would be silently accepted. Mirror BDK's
-		// UnconfirmedInputInBlock rejection here.
+		// would propagate to BIP68. With the int64 height arithmetic in
+		// sequenceLocks the sentinel now evaluates to 4294967295 (not the old
+		// int32 wrap to -1), so an unguarded sentinel would FAIL the height check
+		// rather than be silently accepted; we still reject explicitly here to
+		// mirror BDK's UnconfirmedInputInBlock with the correct error instead of a
+		// generic BIP68 height failure (the MTP lookup in
+		// Validator.readMTPsLocked clamps to blockMTP).
 		if validationOptions.SkipPolicyChecks {
 			for _, h := range utxoHeights {
 				if h == unconfirmedParentHeight {
@@ -229,7 +232,13 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 	// Initial value -1 means "no constraint": the semantics of nLockTime are the
 	// last INVALID height/time, so -1 means any height or time is valid.
 	// This matches BSV C++: int32_t nMinHeight = -1; int64_t nMinTime = -1;
-	minHeight := int32(-1)
+	//
+	// nMinHeight is computed in int64 (rather than int32 as in the C++ reference)
+	// so that the height arithmetic below cannot silently overflow/wrap. utxoHeights
+	// are uint32 and sequenceMasked is at most 0x0000ffff, so coinHeight + nSequence - 1
+	// always fits in int64 exactly; the resulting comparison decisions are identical to
+	// the in-range int32 computation but defined for the full uint32 input domain.
+	minHeight := int64(-1)
 	minTime := int64(-1)
 
 	// Process each input to determine lock requirements
@@ -270,8 +279,9 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 
 			// Add the relative height offset to the UTXO's height, minus 1
 			// (matching Bitcoin Core: nMinHeight = coinHeight + nSequence - 1,
-			// so the tx is valid starting from blockHeight >= coinHeight + nSequence)
-			nTxHeight := int32(utxoHeights[i]) + int32(sequenceMasked) - 1
+			// so the tx is valid starting from blockHeight >= coinHeight + nSequence).
+			// Computed in int64 to avoid int32 overflow/wrap on the uint32 inputs.
+			nTxHeight := int64(utxoHeights[i]) + int64(sequenceMasked) - 1
 
 			// Update minimum height if this input requires a later height
 			if nTxHeight > minHeight {
@@ -284,13 +294,13 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 	// The transaction can only be included if both height and time requirements are met
 
 	// Check height requirement: minimum required height must be less than current block height.
-	// blockHeight is uint32 but int32 conversion would wrap for values > math.MaxInt32; reject
-	// such heights as invalid since no realistic block will ever reach that range.
+	// blockHeight is uint32; int32 conversion would wrap for values > math.MaxInt32, so reject
+	// such heights as invalid since no realistic block will ever reach that range. This preserves
+	// the prior decision boundary while minHeight is now compared in int64 (overflow-free).
 	if blockHeight > math.MaxInt32 {
 		return errors.NewTxInvalidError("block height %d exceeds maximum safe int32 value", blockHeight)
 	}
-	blockHeightInt32 := int32(blockHeight)
-	if minHeight >= blockHeightInt32 {
+	if minHeight >= int64(blockHeight) {
 		return errors.NewTxInvalidError("transaction sequence lock height not satisfied: required %d, current %d", minHeight, blockHeight)
 	}
 

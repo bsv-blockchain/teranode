@@ -207,7 +207,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		s.updateMaxBlockID(newBlockID)
 
 		cacheID := chainhash.HashH([]byte("getBestBlockID"))
-		cacheOp := s.responseCache.Begin(cacheID)
+		cacheOp := s.responseCache.NewOp(cacheID)
 		cacheOp.Set(bestBlockIDResult{id: uint32(newBlockID), hash: block.Hash()}, s.cacheTTL)
 
 		return newBlockID, height, nil
