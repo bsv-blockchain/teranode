@@ -1712,7 +1712,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		}
 	}
 
-	if err = storeSubtreeFiles(ctx, subtreeStore, subtree, subtreeData, subtreeMeta); err != nil {
+	if err = storeSubtreeFiles(ctx, subtreeStore, subtree, subtreeData, subtreeMeta, 100); err != nil {
 		return nil, err
 	}
 
@@ -1720,7 +1720,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 }
 
 // storeSubtreeFiles serializes and stores the subtree, subtree data, and subtree meta in the provided subtree store.
-func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMeta *subtreepkg.Meta) error {
+func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMeta *subtreepkg.Meta, deleteAtHeight uint32) error {
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
 		return err
@@ -1731,7 +1731,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtree.RootHash()[:],
 		fileformat.FileTypeSubtreeToCheck, // this needs to be FileTypeSubtreeToCheck for tx processing to occur
 		subtreeBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1748,7 +1748,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtreeData.RootHash()[:],
 		fileformat.FileTypeSubtreeData,
 		subtreeDataBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1765,7 +1765,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtree.RootHash()[:],
 		fileformat.FileTypeSubtreeMeta,
 		subtreeMetaBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1773,6 +1773,49 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 	}
 
 	return nil
+}
+
+// StoreSubtreeForBlock builds the single subtree for a block whose only
+// non-coinbase transactions are those given (a coinbase placeholder followed by
+// the supplied transactions, in order), then persists the subtree, its data and
+// its meta to the subtree store. This makes the transactions locally available
+// to the block-validation subtree pass, which fetches the subtree data and
+// consensus-validates every non-coinbase transaction.
+//
+// It is the test-side complement to model.NewBlockFromMsgBlock: that constructor
+// records the subtree root on the block, but the transaction bodies (carried only
+// in the original wire block) are not part of the serialised block and must be
+// supplied to the store separately for validation to reach them.
+//
+// deleteAtHeight controls blob retention and must be above the height of the
+// block being validated so the subtree is not pruned before validation runs.
+// The returned root hash matches block.Subtrees[0] for a block built from the
+// same coinbase-plus-transactions set.
+func (td *TestDaemon) StoreSubtreeForBlock(t *testing.T, txs []*bt.Tx, deleteAtHeight uint32) *chainhash.Hash {
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(txs) + 1)
+	require.NoError(t, err)
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	for i, tx := range txs {
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 0, uint64(tx.Size()))) //nolint:gosec
+		// node index is i+1 because index 0 is the coinbase placeholder
+		require.NoError(t, subtreeData.AddTx(tx, i+1))
+		require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx))
+	}
+
+	rootHash := subtree.RootHash()
+
+	// Delegate the persist path to storeSubtreeFiles. subtreeData.RootHash() equals
+	// subtree.RootHash() for a NewSubtreeData(subtree), so the stored keys are unchanged.
+	// FileTypeSubtreeToCheck (set by storeSubtreeFiles) is required so the
+	// subtree-validation pass treats the transactions as pending and validates them.
+	require.NoError(t, storeSubtreeFiles(td.Ctx, td.SubtreeStore, subtree, subtreeData, subtreeMeta, deleteAtHeight))
+
+	return rootHash
 }
 
 // ResetServiceManagerContext resets the ServiceManager context to allow for a fresh start.

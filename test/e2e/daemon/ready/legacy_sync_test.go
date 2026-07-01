@@ -1760,6 +1760,12 @@ func TestFloatingBlock_SubmitToTeranodeFirst(t *testing.T) {
 	require.NoError(t, err, "Should create model block from wire.MsgBlock")
 
 	expectedHeight := fundingBlockHeight + 1
+
+	// model.NewBlockFromMsgBlock records the subtree root on the block but not the
+	// transaction bodies, so persist the subtree (coinbase placeholder + the spending
+	// tx) to the subtree store for validation to reach the transaction.
+	td.StoreSubtreeForBlock(t, []*bt.Tx{tx}, expectedHeight+1000)
+
 	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, expectedHeight, "test", "", 0)
 	require.NoError(t, err, "Teranode should accept the floating block")
 	t.Logf("Submitted floating block to Teranode at height %d", expectedHeight)

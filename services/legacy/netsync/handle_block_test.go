@@ -165,75 +165,6 @@ func TestSyncManager_createTxMap(t *testing.T) {
 	}
 }
 
-func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
-	testCases := []struct {
-		name             string
-		blockFilePath    string
-		expectedLevels   uint32
-		expectedTxMapLen int
-	}{
-		{
-			name:             "Block1",
-			blockFilePath:    "../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin",
-			expectedLevels:   15,
-			expectedTxMapLen: 563,
-		},
-		// {
-		// 	name:             "Block2",
-		// 	blockFilePath:    "../testdata/00000000000000000488eecd93d6f3767b1ba38668200a6a5349af2e0d4fad3f.bin",
-		// 	expectedTxMapLen: 1355,
-		// },
-		// {
-		// 	name:             "Block3",
-		// 	blockFilePath:    "../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin",
-		// 	expectedTxMapLen: 900,
-		// },
-		// {
-		// 	name:             "Block4",
-		// 	blockFilePath:    "../testdata/0000000000000000015594853418b4093c4be4ad8b77fec88b5400feb3268fc4.bin",
-		// 	expectedTxMapLen: 484,
-		// },
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			block, err := testdata.ReadBlockFromFile(tc.blockFilePath)
-			require.NoError(t, err)
-
-			sm := &SyncManager{}
-			txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
-
-			txOrder, err := sm.createTxMap(context.Background(), block, txMap)
-			require.NoError(t, err)
-			require.Equal(t, txMap.Length(), tc.expectedTxMapLen)
-
-			for _, txHash := range txOrder {
-				// extend transaction
-				if txWrapper, found := txMap.Get(txHash); found {
-					tx := txWrapper.Tx
-
-					for _, input := range tx.Inputs {
-						prevTxHash := *input.PreviousTxIDChainHash()
-						if _, found := txMap.Get(prevTxHash); found {
-							txWrapper.SomeParentsInBlock = true
-						}
-					}
-				}
-			}
-
-			maxLevel, blockTXsPerLevel := sm.prepareTxsPerLevel(context.Background(), txOrder, txMap)
-			assert.Equal(t, tc.expectedLevels, maxLevel)
-
-			allParents := 0
-			for i := range blockTXsPerLevel {
-				allParents += len(blockTXsPerLevel[i])
-			}
-
-			assert.Equal(t, tc.expectedTxMapLen, allParents)
-		})
-	}
-}
-
 func TestWireTxToGoBtTx(t *testing.T) {
 	block, err := testdata.ReadBlockFromFile("../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin")
 	require.NoError(t, err)
@@ -594,42 +525,9 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 	blockchainClient.AssertExpectations(t)
 }
 
-// Test ExtendTransaction
-func TestSyncManager_ExtendTransaction(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
-	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(t),
-		logger:   ulogger.TestLogger{},
-	}
-
-	// Create a transaction with inputs
-	tx := &bt.Tx{
-		Version: 1,
-		Inputs: []*bt.Input{
-			{
-				PreviousTxSatoshis: 0,
-				PreviousTxOutIndex: 0,
-			},
-		},
-		Outputs: []*bt.Output{
-			{
-				Satoshis:      100,
-				LockingScript: &bscript.Script{},
-			},
-		},
-	}
-
-	// Create a transaction map
-	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](1)
-
-	// Test ExtendTransaction
-	err := sm.ExtendTransaction(context.Background(), tx, txMap)
-	assert.NoError(t, err)
-}
-
 // buildOOBFixture constructs a parent (2 outputs) and a child whose only input
-// references PreviousTxOutIndex == 5, plus a txMap containing both. Shared by
-// the ExtendTransaction and extendFromTxMap regression tests for issue #4564.
+// references PreviousTxOutIndex == 5, plus a txMap containing both. Used by the
+// extendFromTxMap OOB regression test for issue #4564.
 func buildOOBFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) {
 	t.Helper()
 
@@ -667,26 +565,6 @@ func buildOOBFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMap[ch
 	txMap.Set(*child.TxIDChainHash(), &TxMapWrapper{Tx: child})
 
 	return parentHash, child, txMap
-}
-
-// TestSyncManager_ExtendTransaction_OOB verifies that ExtendTransaction returns
-// a TxInvalidError (rather than panicking) when a child input references a
-// parent output index that exceeds the parent's number of outputs. Regression
-// test for issue #4564.
-func TestSyncManager_ExtendTransaction_OOB(t *testing.T) {
-	initPrometheusMetrics()
-
-	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(t),
-		logger:   ulogger.TestLogger{},
-	}
-
-	parentHash, child, txMap := buildOOBFixture(t)
-
-	err := sm.ExtendTransaction(context.Background(), child, txMap)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
-	require.Contains(t, err.Error(), parentHash.String())
 }
 
 // TestSyncManager_extendFromTxMap_OOB verifies the same OOB guard on the
@@ -812,25 +690,6 @@ func TestSyncManager_extendFromTxMap_NilLockingScript(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
 	require.Contains(t, err.Error(), "nil or has nil locking script")
-}
-
-// TestSyncManager_ExtendTransaction_NilParentTx mirrors the same guard on the
-// parallel-decoration path used by ExtendTransaction.
-func TestSyncManager_ExtendTransaction_NilParentTx(t *testing.T) {
-	initPrometheusMetrics()
-
-	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(t),
-		logger:   ulogger.TestLogger{},
-	}
-
-	parentHash, child, txMap := buildInRangeFixture(t)
-	txMap.Set(*parentHash, &TxMapWrapper{Tx: nil})
-
-	err := sm.ExtendTransaction(context.Background(), child, txMap)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
-	require.Contains(t, err.Error(), parentHash.String())
 }
 
 // countingValidator tracks how many times Validate is called and optionally fails

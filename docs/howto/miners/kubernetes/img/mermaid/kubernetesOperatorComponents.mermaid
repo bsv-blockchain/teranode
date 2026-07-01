@@ -46,7 +46,9 @@ graph TB
 
     %% Configuration relationships
         CM[ConfigMap<br/>teranode-operator-config]
+        SEC[Secret<br/>teranode-operator-secrets]
         TO -->|reads| CM
+        TO -->|reads| SEC
     end
 
     classDef storage fill:#f9f,stroke:#333,stroke-width:2px;

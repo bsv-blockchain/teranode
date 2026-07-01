@@ -300,7 +300,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		require.NoError(t, err)
 
 		// Increment spentExtraRecs by 1
-		res, err := store.IncrementSpentRecords(txID, 1)
+		res, err := store.IncrementSpentRecords(txID, 1, 0)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -317,7 +317,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		assert.Equal(t, 1, resp.Bins[fields.SpentExtraRecs.String()])
 
 		// Decrement spentExtraRecs by 1
-		res, err = store.IncrementSpentRecords(txID, -1)
+		res, err = store.IncrementSpentRecords(txID, -1, 0)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -364,7 +364,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		assert.Equal(t, []interface{}{101}, rec.Bins[fields.BlockIDs.String()])
 
 		// Increment spentExtraRecs by 1
-		res, err := store.IncrementSpentRecords(txID, 1)
+		res, err := store.IncrementSpentRecords(txID, 1, 0)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -382,7 +382,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		assert.Equal(t, 1, rec.Bins[fields.SpentExtraRecs.String()])
 		assert.Equal(t, []interface{}{101}, rec.Bins[fields.BlockIDs.String()])
 
-		res, err = store.IncrementSpentRecords(txID, 1)
+		res, err = store.IncrementSpentRecords(txID, 1, 0)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -417,7 +417,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		// We have a master record and 2 extra records
 		for i := 0; i < 2; i++ {
 			// Increment spentExtraRecs by 1
-			res, err := store.IncrementSpentRecords(txID, 1)
+			res, err := store.IncrementSpentRecords(txID, 1, 0)
 			require.NoError(t, err)
 			require.NotNil(t, res)
 		}
@@ -449,7 +449,7 @@ func TestStore_IncrementSpentRecords_Timeout(t *testing.T) {
 	// Set an extremely short timeout so the batcher can't respond in time
 	tSettings.UtxoStore.SpendWaitTimeout = time.Nanosecond
 
-	_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
+	_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1, 0)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errors.ErrServiceUnavailable), "expected service unavailable error, got: %v", err)
 }

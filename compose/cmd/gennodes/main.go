@@ -419,7 +419,7 @@ func writeAll(outDir string, s spec) error {
 		if err := renderToFile("templates/"+name+".tmpl", p, s); err != nil {
 			return err
 		}
-		if err := os.Chmod(p, 0o755); err != nil {
+		if err := os.Chmod(p, 0o750); err != nil {
 			return err
 		}
 	}

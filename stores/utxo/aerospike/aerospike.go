@@ -518,6 +518,39 @@ func (s *Store) GetBlockHeight() uint32 {
 	return s.blockHeight.Load()
 }
 
+// effectiveBlockHeight resolves the block height to use for DAH computation,
+// falling back to the store's current cached block height when the caller did not
+// supply one (blockHeight == 0). Paths that know the operation's block height (the
+// mined block height, or the spend's block height) pass it; paths that don't get
+// the current block height, preserving the historical behaviour.
+func (s *Store) effectiveBlockHeight(blockHeight uint32) uint32 {
+	if blockHeight == 0 {
+		return s.blockHeight.Load()
+	}
+
+	return blockHeight
+}
+
+// deleteAtHeightFor returns the delete-at-height (DAH) to stamp on a record that
+// becomes prunable at blockHeight — blockHeight + the configured retention window —
+// and whether retention is enabled. When retention is 0 ("don't use automatic
+// retention") the second return is false and no DAH should be set. A blockHeight of
+// 0 falls back to the current block height (see effectiveBlockHeight).
+//
+// This is the single source of truth for the Go DAH formula and the retention
+// guard, shared by the create, spend and setMined paths so they cannot drift. The
+// Aerospike filter-expression path (buildDeleteAtHeightExpression) and the Lua
+// setDeleteAtHeight UDF compute the same blockHeight + retention and MUST be kept
+// in sync with this function.
+func (s *Store) deleteAtHeightFor(blockHeight uint32) (uint32, bool) {
+	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	if retention == 0 {
+		return 0, false
+	}
+
+	return s.effectiveBlockHeight(blockHeight) + retention, true
+}
+
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
 	s.medianBlockTime.Store(medianTime)
