@@ -506,6 +506,10 @@ func recordToMetaDataMasked(rec teraslab.TxRecord, includeTx bool) (*meta.Data, 
 		data.SizeInBytes = md.SizeInBytes
 		data.LockTime = md.Locktime
 		data.UnminedSince = md.UnminedSince
+		// CreatedAt drives the first-seen tiebreak in process_conflicting (the
+		// lowest-CreatedAt spender wins a double-spend); dropping it here forces a
+		// fallback to lexicographic txid compare, diverging from Aerospike.
+		data.CreatedAt = int64(md.CreatedAt) //nolint:gosec // wall-clock millis, fits int64
 		// TeraSlab TxFlags: bit 0=IS_COINBASE, bit 1=CONFLICTING, bit 2=LOCKED
 		data.IsCoinbase = md.Flags&0x01 != 0
 		data.Conflicting = md.Flags&0x02 != 0

@@ -497,6 +497,19 @@ func TestRecordToMetaData(t *testing.T) {
 		require.True(t, data.Locked)
 	})
 
+	t.Run("CreatedAt is decoded (drives first-seen tiebreak)", func(t *testing.T) {
+		// process_conflicting uses CreatedAt to pick the canonical first-seen
+		// spender on a double-spend; if Get/GetMeta drop it (return 0) that choice
+		// silently falls through to a lexicographic txid compare, diverging from
+		// the first-seen rule and from the Aerospike backend.
+		data, err := recordToMetaData(teraslab.TxRecord{
+			Found:    true,
+			Metadata: &teraslab.TxMetadata{CreatedAt: 1717000000000},
+		})
+		require.NoError(t, err)
+		require.Equal(t, int64(1717000000000), data.CreatedAt)
+	})
+
 	t.Run("slots decode spent spending data and frozen flag", func(t *testing.T) {
 		spendTxid := &chainhash.Hash{}
 		spendTxid[0] = 0x42
