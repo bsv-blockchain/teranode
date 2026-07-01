@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -40,10 +41,12 @@ type SyncCoordinator struct {
 	lastBlockHash   string    // Track last known block hash
 
 	// Backoff management
-	allPeersAttempted       bool      // Flag when all eligible peers have been tried
-	lastAllPeersAttemptTime time.Time // When we last exhausted all peers
-	backoffMultiplier       int       // Current backoff multiplier (1, 2, 4, 8...)
-	maxBackoffMultiplier    int       // Maximum backoff multiplier (e.g., 32)
+	allPeersAttempted            bool      // Flag when all eligible peers have been tried
+	lastAllPeersAttemptTime      time.Time // When we last exhausted all peers
+	backoffMultiplier            int       // Current backoff multiplier (1, 2, 4, 8...)
+	maxBackoffMultiplier         int       // Maximum backoff multiplier (e.g., 32)
+	unprovenProbeBudgetRemaining int       // Remaining advertised/header-only probes in this backoff window
+	lastLocalChainWork           []byte    // Last local validated chainwork observed by the coordinator
 
 	// Dependencies for sync operations
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI // Kafka producer for blocks
@@ -65,16 +68,17 @@ func NewSyncCoordinator(
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) *SyncCoordinator {
 	return &SyncCoordinator{
-		logger:                    logger,
-		settings:                  settings,
-		registry:                  registry,
-		selector:                  selector,
-		blockchainClient:          blockchainClient,
-		blocksKafkaProducerClient: blocksKafkaProducerClient,
-		ctx:                       ctx,
-		stopCh:                    make(chan struct{}),
-		backoffMultiplier:         1,
-		maxBackoffMultiplier:      32, // Max backoff of 64 seconds (32 * 2s)
+		logger:                       logger,
+		settings:                     settings,
+		registry:                     registry,
+		selector:                     selector,
+		blockchainClient:             blockchainClient,
+		blocksKafkaProducerClient:    blocksKafkaProducerClient,
+		ctx:                          ctx,
+		stopCh:                       make(chan struct{}),
+		backoffMultiplier:            1,
+		maxBackoffMultiplier:         32, // Max backoff of 64 seconds (32 * 2s)
+		unprovenProbeBudgetRemaining: maxUnprovenProbeBudget(settings),
 	}
 }
 
@@ -94,8 +98,8 @@ const (
 // caught up and when determining whether all eligible peers have been
 // attempted. Keeping this in one place ensures both call sites stay in sync.
 //
-// These filters — not banned, has a DataHub URL, non-zero advertised height,
-// and sufficient reputation — exclude obviously unsuitable peers. They do
+// These filters — not banned, has a DataHub URL, and sufficient reputation —
+// exclude obviously unsuitable peers. They do
 // not validate whether a peer's advertised height is truthful: a peer can
 // still claim an inflated height while passing them. The HTTP health check
 // applied during peer selection (when `settings.P2P.HealthCheckEnabled` is
@@ -105,7 +109,61 @@ const (
 // downgrades after failed catchup, and banning — not by a height-delta
 // tolerance here.
 func isViableSyncCandidate(p *blockchain.PeerInfo) bool {
-	return !p.IsBanned && p.DataHubURL != "" && p.Height != 0 && p.ReputationScore >= 20
+	return !p.IsBanned && p.DataHubURL != "" && p.ReputationScore >= 20
+}
+
+func maxUnprovenProbeBudget(settings *settings.Settings) int {
+	if settings == nil || settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow < 0 {
+		return 0
+	}
+	return settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow
+}
+
+func (sc *SyncCoordinator) fullDeliveryFreshnessWindow() time.Duration {
+	if sc.settings == nil {
+		return 0
+	}
+	return sc.settings.P2P.FullDeliveryFreshnessWindow
+}
+
+func peerHasValidatedWork(p *blockchain.PeerInfo) bool {
+	return p != nil && p.ValidatedBlockHash != nil && len(p.ValidatedChainWork) > 0
+}
+
+func peerAheadByValidatedWork(p *blockchain.PeerInfo, localChainWork []byte) bool {
+	return peerHasValidatedWork(p) && len(localChainWork) > 0 && chainWorkGreater(p.ValidatedChainWork, localChainWork)
+}
+
+func chainWorkGreater(a, b []byte) bool {
+	if len(a) == 0 {
+		return false
+	}
+	if len(b) == 0 {
+		return true
+	}
+	return new(big.Int).SetBytes(a).Cmp(new(big.Int).SetBytes(b)) > 0
+}
+
+func (sc *SyncCoordinator) peerHasRecentFullBlockDelivery(p *blockchain.PeerInfo, now time.Time) bool {
+	if p == nil || p.BlocksReceived <= 0 || p.LastBlockTime.IsZero() {
+		return false
+	}
+	window := sc.fullDeliveryFreshnessWindow()
+	if window <= 0 {
+		return true
+	}
+	if p.LastBlockTime.After(now) {
+		return true
+	}
+	return now.Sub(p.LastBlockTime) <= window
+}
+
+func (sc *SyncCoordinator) peerEligibleForAdvertisedProbe(p *blockchain.PeerInfo, localHeight uint32) bool {
+	return isViableSyncCandidate(p) && p.Height > localHeight && p.BlockHash != nil
+}
+
+func (sc *SyncCoordinator) isUnprovenProbeCandidate(p *blockchain.PeerInfo, now time.Time) bool {
+	return !sc.peerHasRecentFullBlockDelivery(p, now)
 }
 
 // listAllPeers returns every peer known to the centralized registry. Errors
@@ -129,33 +187,92 @@ func (sc *SyncCoordinator) getPeer(id peer.ID) (*blockchain.PeerInfo, bool) {
 	return info, found
 }
 
+func (sc *SyncCoordinator) getLocalTipWorkSafe(ctx context.Context) (uint32, []byte, bool) {
+	if sc.blockchainClient == nil {
+		return sc.getLocalHeightSafe(), nil, false
+	}
+	_, meta, err := sc.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		sc.logger.Warnf("[SyncCoordinator] GetBestBlockHeader failed: %v", err)
+		return sc.getLocalHeightSafe(), nil, false
+	}
+	if meta == nil || len(meta.ChainWork) == 0 {
+		return sc.getLocalHeightSafe(), nil, false
+	}
+	chainWork := append([]byte(nil), meta.ChainWork...)
+	return meta.Height, chainWork, true
+}
+
+func (sc *SyncCoordinator) refreshProbeBudgetFromLocalTip(ctx context.Context) {
+	_, chainWork, ok := sc.getLocalTipWorkSafe(ctx)
+	if ok {
+		sc.resetProbeBudgetIfLocalChainWorkAdvanced(chainWork)
+	}
+}
+
+func (sc *SyncCoordinator) resetProbeBudgetIfLocalChainWorkAdvanced(chainWork []byte) {
+	if len(chainWork) == 0 {
+		return
+	}
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if chainWorkGreater(chainWork, sc.lastLocalChainWork) {
+		sc.lastLocalChainWork = append([]byte(nil), chainWork...)
+		sc.unprovenProbeBudgetRemaining = maxUnprovenProbeBudget(sc.settings)
+	}
+}
+
+func (sc *SyncCoordinator) hasUnprovenProbeBudget() bool {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.unprovenProbeBudgetRemaining > 0
+}
+
+func (sc *SyncCoordinator) currentSyncPeerLocked() string {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.currentSyncPeer
+}
+
 // isCaughtUp determines if we're caught up with the network
 func (sc *SyncCoordinator) isCaughtUp() bool {
 	localHeight := sc.getLocalHeightSafe()
-
-	// Get all peers
-	peers := sc.listAllPeers()
-
-	// Check if any eligible peer is ahead of us.
-	// This must align with sync peer selection criteria; otherwise, a low-quality
-	// peer we would never select could cause us to think we're perpetually behind.
-	for _, p := range peers {
-		// Only consider peers that pass the unconditional viability filters
-		// (see isViableSyncCandidate). The HTTP health check, when enabled,
-		// only confirms that the peer's DataHub endpoint is reachable.
-		// Validation of whether an advertised height is truthful is handled
-		// elsewhere via catchup validation, reputation downgrades after
-		// failed catchup, and banning, so no extra height-delta tolerance is
-		// needed here.
-		if !isViableSyncCandidate(p) {
-			continue
+	if tipHeight, chainWork, ok := sc.getLocalTipWorkSafe(sc.ctx); ok {
+		localHeight = tipHeight
+		peers := sc.listAllPeers()
+		for _, p := range peers {
+			if isViableSyncCandidate(p) && peerAheadByValidatedWork(p, chainWork) {
+				return false
+			}
 		}
-		if p.Height > localHeight {
-			return false // At least one viable peer is ahead
+		if sc.currentSyncPeerLocked() != "" {
+			return false
+		}
+		if sc.hasUnprovenProbeBudget() {
+			for _, p := range peers {
+				if sc.peerEligibleForAdvertisedProbe(p, localHeight) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
+	peers := sc.listAllPeers()
+	if sc.currentSyncPeerLocked() != "" {
+		return false
+	}
+
+	if sc.hasUnprovenProbeBudget() {
+		for _, p := range peers {
+			if sc.peerEligibleForAdvertisedProbe(p, localHeight) {
+				return false
+			}
 		}
 	}
 
-	return true // We're at the same height or ahead of every eligible peer
+	return true
 }
 
 // Start begins the coordinator
@@ -202,42 +319,13 @@ func (sc *SyncCoordinator) ClearSyncPeer() {
 func (sc *SyncCoordinator) TriggerSync() error {
 	sc.logger.Debugf("[SyncCoordinator] Sync triggered")
 
-	// Select new sync peer
-	newPeer := sc.selectNewSyncPeer()
-	if newPeer == "" {
-		sc.logger.Warnf("[SyncCoordinator] No suitable sync peer found")
-		// Check if we've tried all available peers
+	localHeight := sc.getLocalHeightSafe()
+	oldPeer := sc.currentSyncPeerLocked()
+	if oldPeer == "" && len(sc.listAllPeers()) == 0 {
 		sc.checkAllPeersAttempted()
 		return nil
 	}
-
-	// Record the sync attempt for this peer
-	if err := sc.registry.RecordSyncAttempt(sc.ctx, newPeer); err != nil {
-		sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", newPeer, err)
-	}
-
-	// Update current sync peer
-	sc.mu.Lock()
-	oldPeer := sc.currentSyncPeer
-	sc.currentSyncPeer = newPeer
-	sc.syncStartTime = time.Now()
-	sc.lastSyncTrigger = time.Now() // Track when we trigger sync
-	sc.mu.Unlock()
-
-	// Reset backoff if we found a peer to sync with
-	sc.resetBackoff()
-
-	// Notify if peer changed
-	if newPeer != oldPeer {
-		sc.logger.Infof("[SyncCoordinator] Sync peer changed from %s to %s", oldPeer, newPeer)
-
-		if err := sc.sendSyncMessage(newPeer); err != nil {
-			sc.logger.Errorf("[SyncCoordinator] Failed to send sync message: %v", err)
-			return err
-		}
-	}
-
-	return nil
+	return sc.selectAndActivateNewPeer(localHeight, oldPeer)
 }
 
 // HandlePeerDisconnected handles peer disconnection. peerID is the libp2p peer.ID.
@@ -293,26 +381,26 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 // selectNewSyncPeer selects a new sync peer based on current criteria.
 // The returned ID is a canonical libp2p ID string.
 func (sc *SyncCoordinator) selectNewSyncPeer() string {
-	// Get local height
-	localHeight := uint32(0)
-	if sc.getLocalHeight != nil {
-		localHeight = sc.getLocalHeight()
+	localHeight, _, _ := sc.getLocalTipWorkSafe(sc.ctx)
+	previousPeer := sc.currentSyncPeerLocked()
+
+	peers := sc.listAllPeers()
+	eligiblePeers := sc.filterEligiblePeers(peers, previousPeer, localHeight)
+	if sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "" {
+		eligiblePeers = peers
 	}
 
-	// Get current sync peer to pass as previous peer
-	sc.mu.RLock()
-	previousPeer := sc.currentSyncPeer
-	sc.mu.RUnlock()
+	return sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, previousPeer)
+}
 
-	// Build selection criteria
+func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, previousPeer string) SelectionCriteria {
 	criteria := SelectionCriteria{
 		LocalHeight:         int32(localHeight),
 		PreviousPeer:        previousPeer,
 		SyncAttemptCooldown: 1 * time.Minute, // Don't retry peers for at least 1 minute
 	}
-
 	// Check for forced peer
-	if sc.settings.P2P.ForceSyncPeer != "" {
+	if sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "" {
 		// Try to decode as a proper peer ID first; on success store its canonical
 		// string form, on failure store the raw configured value.
 		if forcedPeer, err := peer.Decode(sc.settings.P2P.ForceSyncPeer); err == nil {
@@ -323,10 +411,11 @@ func (sc *SyncCoordinator) selectNewSyncPeer() string {
 			sc.logger.Debugf("[SyncCoordinator] Using forced sync peer %s", sc.settings.P2P.ForceSyncPeer)
 		}
 	}
+	return criteria
+}
 
-	// Get all peers and select
-	peers := sc.listAllPeers()
-
+func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, previousPeer string) string {
+	criteria := sc.selectionCriteria(localHeight, previousPeer)
 	return sc.selector.SelectSyncPeer(peers, criteria)
 }
 
@@ -347,6 +436,7 @@ func (sc *SyncCoordinator) monitorFSM(ctx context.Context) {
 			sc.logger.Infof("[SyncCoordinator] FSM monitor stopping (stop requested)")
 			return
 		case <-timer.C:
+			sc.refreshProbeBudgetFromLocalTip(ctx)
 			if sc.isCaughtUp() {
 				timer.Reset(slowMonitorInterval)
 			} else {
@@ -363,6 +453,7 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 		sc.logger.Warnf("[SyncCoordinator] No blockchain client available for FSM monitoring")
 		return
 	}
+	sc.refreshProbeBudgetFromLocalTip(ctx)
 
 	// Check if we're in backoff mode
 	if sc.checkAndClearExpiredBackoff() {
@@ -401,8 +492,10 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 		sc.mu.Unlock()
 
 		if currentPeer != "" {
-			// Get local height and peer height to determine if this is a failure
-			localHeight := sc.getLocalHeightSafe()
+			_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+			if localWorkOK {
+				sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
+			}
 			peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, currentPeer)
 			if err != nil {
 				sc.logger.Warnf("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
@@ -417,18 +510,22 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 				return true // Transition handled
 			}
 
-			if peerInfo.Height > localHeight {
-				// Only consider it a failure if we're still behind the sync peer
-				sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed (local height: %d < peer height: %d)",
-					currentPeer, localHeight, peerInfo.Height)
+			if !localWorkOK || !peerHasValidatedWork(peerInfo) {
+				sc.logger.Debugf("[SyncCoordinator] Deferring sync-peer transition for %s until validated chainwork is available", currentPeer)
+				return false
+			}
+
+			if peerAheadByValidatedWork(peerInfo, localChainWork) {
+				sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed; peer still has higher validated work",
+					currentPeer)
 				sc.ClearSyncPeer()
 				_ = sc.TriggerSync()
 				return true // Transition handled
 			}
 			// We've caught up or surpassed the peer, this is success not failure
-			sc.logger.Infof("[SyncCoordinator] Sync completed successfully with peer %s (local height: %d, peer height: %d)",
-				currentPeer, localHeight, peerInfo.Height)
+			sc.logger.Infof("[SyncCoordinator] Sync completed successfully with peer %s by validated work", currentPeer)
 			sc.resetBackoff()
+			sc.ClearSyncPeer()
 			_ = sc.TriggerSync()
 			return true // Transition handled
 		}
@@ -457,15 +554,21 @@ func (sc *SyncCoordinator) getLocalHeightSafe() uint32 {
 
 // selectAndActivateNewPeer selects a new sync peer and activates it.
 // oldPeer is the previously selected peer's canonical libp2p ID string (or empty).
-func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer string) {
-	// Clear current sync peer
-	sc.ClearSyncPeer()
+func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer string) error {
+	if oldPeer != "" {
+		sc.logger.Debugf("[SyncCoordinator] Sync peer %s already active; skipping new activation", oldPeer)
+		return nil
+	}
+	sc.refreshProbeBudgetFromLocalTip(sc.ctx)
 
 	// Get all peers
 	peers := sc.listAllPeers()
 
 	// Filter eligible peers
 	eligiblePeers := sc.filterEligiblePeers(peers, oldPeer, localHeight)
+	if sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "" {
+		eligiblePeers = peers
+	}
 
 	if len(eligiblePeers) == 0 {
 		// No eligible peers - either we're caught up or all peers are filtered
@@ -473,62 +576,121 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 		sc.logger.Infof("[SyncCoordinator] No eligible peers found at height %d", localHeight)
 		// Enter backoff to prevent busy loop
 		sc.enterBackoffMode()
-		return
+		return nil
 	}
 
 	// Select from eligible peers
-	criteria := SelectionCriteria{
-		LocalHeight:         int32(localHeight),
-		SyncAttemptCooldown: 1 * time.Minute, // Don't retry peers for at least 1 minute
-	}
-
-	newSyncPeer := sc.selector.SelectSyncPeer(eligiblePeers, criteria)
-	if newSyncPeer == "" || newSyncPeer == oldPeer {
+	newSyncPeer := sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, oldPeer)
+	if newSyncPeer == "" {
 		sc.logger.Warnf("[SyncCoordinator] No suitable new sync peer found (different from %s)", oldPeer)
 		sc.logCandidateList(eligiblePeers)
 		// Enter backoff mode to prevent busy loop when all peers fail selection
 		// (e.g., all health checks fail or peers are on cooldown)
 		sc.enterBackoffMode()
-		return
+		return nil
 	}
 
-	// Activate the new sync peer
-	sc.activateSyncPeer(newSyncPeer)
+	selectedPeer := findPeerByID(peers, newSyncPeer)
+	if selectedPeer == nil {
+		sc.logger.Warnf("[SyncCoordinator] Selected sync peer %s no longer exists", newSyncPeer)
+		return nil
+	}
+	if !sc.claimSelectedSyncPeer(newSyncPeer, selectedPeer, time.Now()) {
+		if sc.currentSyncPeerLocked() == "" {
+			sc.logger.Warnf("[SyncCoordinator] Unproven sync probe budget exhausted before activating %s", newSyncPeer)
+			sc.enterBackoffMode()
+		} else {
+			sc.logger.Debugf("[SyncCoordinator] Sync peer already claimed before activating %s", newSyncPeer)
+		}
+		return nil
+	}
+	if err := sc.registry.RecordSyncAttempt(sc.ctx, newSyncPeer); err != nil {
+		sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", newSyncPeer, err)
+	}
+
+	if err := sc.sendSyncMessage(newSyncPeer); err != nil {
+		sc.logger.Errorf("[SyncCoordinator] Failed to trigger sync: %v", err)
+		return err
+	}
+	sc.logger.Infof("[SyncCoordinator] Triggered sync with peer %s via Kafka", newSyncPeer)
+	return nil
 }
 
 // filterEligiblePeers filters peers that are eligible for syncing
 func (sc *SyncCoordinator) filterEligiblePeers(peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32) []*blockchain.PeerInfo {
-	eligiblePeers := make([]*blockchain.PeerInfo, 0, len(peers))
+	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	if localWorkOK {
+		localHeight = tipHeight
+	}
+	validatedPeers := make([]*blockchain.PeerInfo, 0, len(peers))
 	for _, p := range peers {
-		// Skip the old peer and peers not ahead of us
-		if p.ID == oldPeer || p.Height <= localHeight {
-			// Only log if this is the old peer (which is more important to know)
+		if p.ID == oldPeer || !isViableSyncCandidate(p) {
 			if p.ID == oldPeer {
-				sc.logger.Debugf("[SyncCoordinator] Skipping old peer %s (height=%d, local=%d)", p.ID, p.Height, localHeight)
+				sc.logger.Debugf("[SyncCoordinator] Skipping old peer %s", p.ID)
 			}
 			continue
 		}
+		if localWorkOK && peerAheadByValidatedWork(p, localChainWork) {
+			validatedPeers = append(validatedPeers, peerForSelector(p, localHeight))
+		}
+	}
+	if len(validatedPeers) > 0 {
+		return validatedPeers
+	}
 
-		eligiblePeers = append(eligiblePeers, p)
+	if !sc.hasUnprovenProbeBudget() {
+		return nil
+	}
+
+	eligiblePeers := make([]*blockchain.PeerInfo, 0, len(peers))
+	for _, p := range peers {
+		if p.ID == oldPeer {
+			continue
+		}
+		if sc.peerEligibleForAdvertisedProbe(p, localHeight) {
+			eligiblePeers = append(eligiblePeers, p)
+		}
 	}
 	return eligiblePeers
 }
 
-// activateSyncPeer sets and activates a new sync peer (canonical libp2p ID string).
-func (sc *SyncCoordinator) activateSyncPeer(newSyncPeer string) {
-	// Set the new sync peer
+func (sc *SyncCoordinator) claimSelectedSyncPeer(newSyncPeer string, peerInfo *blockchain.PeerInfo, now time.Time) bool {
 	sc.mu.Lock()
-	sc.currentSyncPeer = newSyncPeer
-	sc.syncStartTime = time.Now()
-	sc.lastSyncTrigger = time.Now()
-	sc.mu.Unlock()
+	defer sc.mu.Unlock()
 
-	// Trigger sync directly (sends to Kafka)
-	if err := sc.sendSyncMessage(newSyncPeer); err != nil {
-		sc.logger.Errorf("[SyncCoordinator] Failed to trigger sync: %v", err)
-	} else {
-		sc.logger.Infof("[SyncCoordinator] Triggered sync with peer %s via Kafka", newSyncPeer)
+	if sc.currentSyncPeer != "" {
+		return false
 	}
+	if sc.isUnprovenProbeCandidate(peerInfo, now) {
+		if sc.unprovenProbeBudgetRemaining <= 0 {
+			return false
+		}
+		sc.unprovenProbeBudgetRemaining--
+	}
+	sc.currentSyncPeer = newSyncPeer
+	sc.syncStartTime = now
+	sc.lastSyncTrigger = now
+	return true
+}
+
+func findPeerByID(peers []*blockchain.PeerInfo, id string) *blockchain.PeerInfo {
+	for _, p := range peers {
+		if p.ID == id {
+			return p
+		}
+	}
+	return nil
+}
+
+func peerForSelector(p *blockchain.PeerInfo, localHeight uint32) *blockchain.PeerInfo {
+	if p.Height > localHeight {
+		return p
+	}
+	candidate := *p
+	if localHeight < ^uint32(0) {
+		candidate.Height = localHeight + 1
+	}
+	return &candidate
 }
 
 // logPeerList logs the list of peers for debugging
@@ -624,16 +786,21 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	}
 
 	// Check if we've caught up
-	if sc.getLocalHeight != nil {
-		localHeight := int32(sc.getLocalHeight())
-		if uint32(localHeight) >= peerInfo.Height && peerInfo.Height > 0 {
-			sc.logger.Infof("[SyncCoordinator] Caught up to sync peer %s (height %d)",
-				currentPeer, localHeight)
-			// Don't clear peer yet, but look for better peer
-			if betterPeer := sc.selectNewSyncPeer(); betterPeer != currentPeer && betterPeer != "" {
-				sc.logger.Infof("[SyncCoordinator] Found better sync peer %s", betterPeer)
-				_ = sc.TriggerSync()
-			}
+	_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	if localWorkOK {
+		sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
+	}
+	if !localWorkOK || !peerHasValidatedWork(peerInfo) {
+		sc.logger.Debugf("[SyncCoordinator] Skipping caught-up evaluation for %s until validated chainwork is available", currentPeer)
+		return
+	}
+	if !peerAheadByValidatedWork(peerInfo, localChainWork) {
+		sc.logger.Infof("[SyncCoordinator] Caught up to sync peer %s by validated work", currentPeer)
+		// Don't clear peer yet, but look for better peer.
+		if betterPeer := sc.selectNewSyncPeer(); betterPeer != currentPeer && betterPeer != "" {
+			sc.logger.Infof("[SyncCoordinator] Found better sync peer %s", betterPeer)
+			sc.ClearSyncPeer()
+			_ = sc.TriggerSync()
 		}
 	}
 }
@@ -701,6 +868,7 @@ func (sc *SyncCoordinator) checkAndClearExpiredBackoff() bool {
 
 	// Backoff period expired; clear backoff state and increase multiplier for next time.
 	sc.allPeersAttempted = false
+	sc.unprovenProbeBudgetRemaining = maxUnprovenProbeBudget(sc.settings)
 	if sc.backoffMultiplier < sc.maxBackoffMultiplier {
 		sc.backoffMultiplier *= 2
 	}
@@ -719,6 +887,7 @@ func (sc *SyncCoordinator) resetBackoff() {
 		sc.backoffMultiplier = 1
 		sc.lastAllPeersAttemptTime = time.Time{}
 	}
+	sc.unprovenProbeBudgetRemaining = maxUnprovenProbeBudget(sc.settings)
 }
 
 // enterBackoffMode marks that all peers have been attempted.
@@ -752,18 +921,20 @@ func (sc *SyncCoordinator) enterBackoffMode() {
 func (sc *SyncCoordinator) checkAllPeersAttempted() {
 	// Get all peers and check how many were attempted recently
 	peers := sc.listAllPeers()
-	localHeight := sc.getLocalHeightSafe()
+	localHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	probeBudgetAvailable := sc.hasUnprovenProbeBudget()
 
 	eligibleCount := 0
 	recentlyAttemptedCount := 0
 	syncAttemptCooldown := 1 * time.Minute // Don't retry a peer for at least 1 minute
 
 	for _, p := range peers {
-		// Count peers that are viable sync candidates (must match isCaughtUp criteria)
 		if !isViableSyncCandidate(p) {
 			continue
 		}
-		if p.Height > localHeight { // Same comparison as isCaughtUp
+		eligibleByValidatedWork := localWorkOK && peerAheadByValidatedWork(p, localChainWork)
+		eligibleByAdvertisedProbe := probeBudgetAvailable && sc.peerEligibleForAdvertisedProbe(p, localHeight)
+		if eligibleByValidatedWork || eligibleByAdvertisedProbe {
 			eligibleCount++
 
 			// Check if attempted recently

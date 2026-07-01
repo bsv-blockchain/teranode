@@ -2,12 +2,19 @@ package p2p
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +27,9 @@ func newTestSyncCoordinator(t *testing.T) (*SyncCoordinator, *blockchain.Central
 	tSettings := &settings.Settings{
 		P2P: settings.P2PSettings{
 			AllowPrunedNodeFallback:                   true,
+			MaxUnvalidatedAdvertisedHeightLead:        10_000,
+			MaxUnprovenSyncProbesPerBackoffWindow:     3,
+			FullDeliveryFreshnessWindow:               24 * time.Hour,
 			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
 		},
 	}
@@ -37,10 +47,50 @@ func newTestSyncCoordinator(t *testing.T) (*SyncCoordinator, *blockchain.Central
 	return sc, reg
 }
 
+func syncCoordinatorTestHash(t *testing.T) *chainhash.Hash {
+	t.Helper()
+
+	hash, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+	return hash
+}
+
+func setSyncCoordinatorLocalTip(t *testing.T, sc *SyncCoordinator, height uint32, chainWork []byte) *blockchain.Mock {
+	t.Helper()
+
+	client := &blockchain.Mock{}
+	client.On("GetBestBlockHeader", mock.Anything).Return(
+		&model.BlockHeader{},
+		&model.BlockHeaderMeta{Height: height, ChainWork: chainWork},
+		nil,
+	)
+	sc.blockchainClient = client
+	return client
+}
+
+func setSyncCoordinatorLocalTipError(t *testing.T, sc *SyncCoordinator, err error) *blockchain.Mock {
+	t.Helper()
+
+	client := &blockchain.Mock{}
+	client.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, err)
+	sc.blockchainClient = client
+	return client
+}
+
+func setSyncCoordinatorProbeBudget(sc *SyncCoordinator, budget int) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.unprovenProbeBudgetRemaining = budget
+}
+
+func syncCoordinatorProbeBudget(sc *SyncCoordinator) int {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.unprovenProbeBudgetRemaining
+}
+
 func TestSyncCoordinator_IsViableSyncCandidate(t *testing.T) {
-	good := &blockchain.PeerInfo{
-		DataHubURL: "http://x", Height: 100, ReputationScore: 50,
-	}
+	good := &blockchain.PeerInfo{DataHubURL: "http://x", ReputationScore: 50}
 	require.True(t, isViableSyncCandidate(good))
 
 	cases := []struct {
@@ -49,7 +99,6 @@ func TestSyncCoordinator_IsViableSyncCandidate(t *testing.T) {
 	}{
 		{"banned", &blockchain.PeerInfo{IsBanned: true, DataHubURL: "x", Height: 1, ReputationScore: 50}},
 		{"no url", &blockchain.PeerInfo{Height: 1, ReputationScore: 50}},
-		{"zero height", &blockchain.PeerInfo{DataHubURL: "x", ReputationScore: 50}},
 		{"low rep", &blockchain.PeerInfo{DataHubURL: "x", Height: 1, ReputationScore: 5}},
 	}
 	for _, c := range cases {
@@ -97,6 +146,7 @@ func TestSyncCoordinator_IsCaughtUp_AheadPeerMakesUsBehind(t *testing.T) {
 		ID:               "ahead",
 		DataHubURL:       "http://ahead",
 		Height:           100,
+		BlockHash:        syncCoordinatorTestHash(t),
 		TransportType:    0,
 		TransportTypeSet: false,
 	})
@@ -214,8 +264,8 @@ func TestSyncCoordinator_SelectNewSyncPeer_PrefersFullNode(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	sc.SetGetLocalHeightCallback(func() uint32 { return 50 })
 
-	reg.Register(&blockchain.PeerInfo{ID: "pruned", DataHubURL: "http://p", Height: 100, Storage: "pruned"})
-	reg.Register(&blockchain.PeerInfo{ID: "full", DataHubURL: "http://f", Height: 100, Storage: "full"})
+	reg.Register(&blockchain.PeerInfo{ID: "pruned", DataHubURL: "http://p", Height: 100, BlockHash: syncCoordinatorTestHash(t), Storage: "pruned"})
+	reg.Register(&blockchain.PeerInfo{ID: "full", DataHubURL: "http://f", Height: 100, BlockHash: syncCoordinatorTestHash(t), Storage: "full"})
 	for _, id := range []string{"pruned", "full"} {
 		for i := 0; i < 5; i++ {
 			reg.UpdateMetrics(id, 0, 0, 0, true, false, false, 100)
@@ -229,9 +279,9 @@ func TestSyncCoordinator_FilterEligiblePeers_DropsLowAndOldPeer(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
 
 	peers := []*blockchain.PeerInfo{
-		{ID: "old", DataHubURL: "x", Height: 100, ReputationScore: 80},
-		{ID: "low", DataHubURL: "x", Height: 10, ReputationScore: 80},
-		{ID: "good", DataHubURL: "x", Height: 100, ReputationScore: 80},
+		{ID: "old", DataHubURL: "x", Height: 100, BlockHash: syncCoordinatorTestHash(t), ReputationScore: 80},
+		{ID: "low", DataHubURL: "x", Height: 10, BlockHash: syncCoordinatorTestHash(t), ReputationScore: 80},
+		{ID: "good", DataHubURL: "x", Height: 100, BlockHash: syncCoordinatorTestHash(t), ReputationScore: 80},
 	}
 
 	got := sc.filterEligiblePeers(peers, "old", 50)
@@ -320,27 +370,335 @@ func TestSyncCoordinator_SelectAndActivateNewPeer_NoEligibleEntersBackoff(t *tes
 func TestSyncCoordinator_SelectAndActivateNewPeer_ActivatesEligible(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 
-	reg.Register(&blockchain.PeerInfo{ID: "good", DataHubURL: "http://g", Height: 100, Storage: "full"})
+	reg.Register(&blockchain.PeerInfo{ID: "good", DataHubURL: "http://g", Height: 100, BlockHash: syncCoordinatorTestHash(t), Storage: "full"})
 	for i := 0; i < 5; i++ {
 		reg.UpdateMetrics("good", 0, 0, 0, true, false, false, 100)
 	}
 
-	// activateSyncPeer fires sendSyncMessage which fails (no block hash) but
-	// the coordinator still records the peer as the current sync target.
+	// selectAndActivateNewPeer fires sendSyncMessage; the coordinator records the peer
+	// as the current sync target even without a Kafka producer in this test.
 	sc.selectAndActivateNewPeer(50, "")
 
 	require.Equal(t, "good", sc.GetCurrentSyncPeer())
 }
 
-func TestSyncCoordinator_ActivateSyncPeer_StoresIDEvenIfSendFails(t *testing.T) {
-	sc, _ := newTestSyncCoordinator(t)
+func TestSyncCoordinator_SelectAndActivateNewPeer_StoresIDEvenIfSendFails(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 10, []byte{0x02})
 
-	sc.activateSyncPeer("doomed-peer")
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "doomed-peer",
+		DataHubURL:         "http://doomed",
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+	})
 
+	err := sc.selectAndActivateNewPeer(10, "")
+
+	require.Error(t, err)
 	require.Equal(t, "doomed-peer", sc.GetCurrentSyncPeer())
 	sc.mu.RLock()
 	require.False(t, sc.syncStartTime.IsZero())
 	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_ColdStart_FarBehind_WithAdvertisedOnlyPeers_InitiatesSync(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	setSyncCoordinatorLocalTip(t, sc, 0, []byte{0x01})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     10_000,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	require.False(t, sc.isCaughtUp())
+
+	err := sc.selectAndActivateNewPeer(0, "")
+	require.NoError(t, err)
+	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_StartupLocalChainWorkUnavailable_UsesBoundedAdvertisedProbe(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	client := setSyncCoordinatorLocalTipError(t, sc, errors.New("chainwork unavailable"))
+	state := blockchain_api.FSMStateType_RUNNING
+	client.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	sc.checkFSMState(context.Background())
+
+	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_InflatedAdvertisedOnlyPeer_ConsumesProbeBudgetAndBacksOff(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow = 1
+	setSyncCoordinatorProbeBudget(sc, 1)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "inflated",
+		DataHubURL: "http://inflated",
+		Height:     10_000,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	require.NoError(t, sc.selectAndActivateNewPeer(0, ""))
+	require.Equal(t, "inflated", sc.GetCurrentSyncPeer())
+	require.Equal(t, 0, syncCoordinatorProbeBudget(sc))
+
+	sc.ClearSyncPeer()
+	require.NoError(t, sc.selectAndActivateNewPeer(0, ""))
+
+	sc.mu.RLock()
+	require.True(t, sc.allPeersAttempted)
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_ConcurrentActivation_ClaimsOnceAndConsumesOneProbe(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow = 2
+	setSyncCoordinatorProbeBudget(sc, 2)
+	producer := kafka.NewKafkaAsyncProducerMock()
+	sc.blocksKafkaProducerClient = producer
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "racy",
+		DataHubURL: "http://racy",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = sc.selectAndActivateNewPeer(0, "")
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	require.Equal(t, "racy", sc.GetCurrentSyncPeer())
+	require.Equal(t, 1, syncCoordinatorProbeBudget(sc))
+	require.Len(t, producer.PublishChannel(), 1)
+}
+
+func TestSyncCoordinator_ProbeBudgetResetsAfterValidatedProgress(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	sc.mu.Lock()
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.unprovenProbeBudgetRemaining = 0
+	sc.mu.Unlock()
+
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x03})
+
+	sc.refreshProbeBudgetFromLocalTip(context.Background())
+	require.Equal(t, sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow, syncCoordinatorProbeBudget(sc))
+}
+
+func TestSyncCoordinator_UnprovenProbeBudget_NotConsumedByEligibilityChecks(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorProbeBudget(sc, 2)
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	require.False(t, sc.isCaughtUp())
+	require.Len(t, sc.filterEligiblePeers(sc.listAllPeers(), "", 0), 1)
+	sc.checkAllPeersAttempted()
+
+	require.Equal(t, 2, syncCoordinatorProbeBudget(sc))
+}
+
+func TestSyncCoordinator_SlowInitialCatchup_DoesNotBecomeCaughtUpWhenProbeBudgetExhausted(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorProbeBudget(sc, 0)
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "active",
+		DataHubURL: "http://active",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "active"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	require.False(t, sc.isCaughtUp())
+}
+
+func TestSyncCoordinator_IsCaughtUp_UsesValidatedChainWork(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "validated",
+		DataHubURL:         "http://validated",
+		Height:             0,
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+	})
+
+	require.False(t, sc.isCaughtUp())
+}
+
+func TestSyncCoordinator_IsCaughtUp_AdvertisedOnlyNeedsProbeOnlyWithinBudget(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	setSyncCoordinatorProbeBudget(sc, 1)
+	require.False(t, sc.isCaughtUp())
+
+	setSyncCoordinatorProbeBudget(sc, 0)
+	require.True(t, sc.isCaughtUp())
+}
+
+func TestSyncCoordinator_FilterEligiblePeers_UsesValidatedWorkBeforeAdvertisedProbe(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	validatedHash := syncCoordinatorTestHash(t)
+
+	peers := []*blockchain.PeerInfo{
+		{
+			ID:                 "validated",
+			DataHubURL:         "http://validated",
+			Height:             1,
+			ReputationScore:    80,
+			ValidatedBlockHash: validatedHash,
+			ValidatedChainWork: []byte{0x03},
+		},
+		{
+			ID:              "advertised",
+			DataHubURL:      "http://advertised",
+			Height:          150,
+			BlockHash:       syncCoordinatorTestHash(t),
+			ReputationScore: 80,
+		},
+	}
+
+	got := sc.filterEligiblePeers(peers, "", 100)
+
+	require.Len(t, got, 1)
+	require.Equal(t, "validated", got[0].ID)
+	require.Greater(t, got[0].Height, uint32(100))
+}
+
+func TestSyncCoordinator_CheckAllPeersAttempted_UsesValidatedWorkAndProbeEligibility(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "validated",
+		DataHubURL:         "http://validated",
+		Height:             0,
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+		LastSyncAttempt:    time.Now(),
+	})
+
+	sc.checkAllPeersAttempted()
+
+	sc.mu.RLock()
+	require.True(t, sc.allPeersAttempted)
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_EvaluateSyncPeer_ValidatedWorkCaughtUp(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x04})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "current",
+		DataHubURL:         "http://current",
+		Height:             1_000,
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+		LastMessageTime:    time.Now(),
+	})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "better",
+		DataHubURL:         "http://better",
+		Height:             1_001,
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05},
+		LastMessageTime:    time.Now(),
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	sc.evaluateSyncPeer()
+
+	require.Equal(t, "better", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_HandleFSMTransition_DoesNotUseAdvertisedHeightAsFailureProof(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     1_000,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "advertised"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	state := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&state))
+	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_MaxUnvalidatedAdvertisedHeightLead_AllowsProbeAtTenThousand(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func() uint32 { return 100 })
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "bounded",
+		DataHubURL: "http://bounded",
+		Height:     10_100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	require.False(t, sc.isCaughtUp())
+	require.Equal(t, "bounded", sc.selectNewSyncPeer())
 }
 
 func TestSyncCoordinator_SendSyncTriggerToKafka_NilProducerNoOp(t *testing.T) {
