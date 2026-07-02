@@ -56,7 +56,7 @@ func sortValue(v interface{}) interface{} {
 
 	// Additional check: if the pointer type implements json.Marshaler, create a pointer
 	// This matches Go's JSON marshaling behavior which automatically takes addresses when needed
-	ptrType := reflect.PtrTo(typ)
+	ptrType := reflect.PointerTo(typ)
 	if ptrType.Implements(reflect.TypeOf((*json.Marshaler)(nil)).Elem()) {
 		// Create a new pointer to this value to enable custom marshaling
 		newVal := reflect.New(typ)
@@ -71,7 +71,7 @@ func sortValue(v interface{}) interface{} {
 	}
 
 	// Handle pointers
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		if val.IsNil() {
 			return nil
 		}
