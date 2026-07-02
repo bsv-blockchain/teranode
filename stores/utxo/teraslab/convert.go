@@ -400,10 +400,18 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, gene
 	inputsBlob := serializeInputs(tx.Inputs)
 	outputsBlob := serializeOutputs(tx.Outputs)
 
-	var inpointsBlob []byte
+	// Inpoints (parent outpoints) are stored so the unmined iterator can preserve
+	// a tx's parents from pruning; a silently-empty blob would let those parents
+	// be pruned and a later resubmission fail validation. Fail loud on error,
+	// matching the serializeInputs/serializeOutputs discipline, rather than
+	// storing a nil inpoints blob.
 	txInpoints, err := subtree.NewTxInpointsFromTx(tx)
-	if err == nil {
-		inpointsBlob, _ = txInpoints.Serialize()
+	if err != nil {
+		return teraslab.CreateItem{}, errors.NewProcessingError("teraslab: could not build tx inpoints", err)
+	}
+	inpointsBlob, err := txInpoints.Serialize()
+	if err != nil {
+		return teraslab.CreateItem{}, errors.NewProcessingError("teraslab: could not serialize tx inpoints", err)
 	}
 
 	item := teraslab.CreateItem{
