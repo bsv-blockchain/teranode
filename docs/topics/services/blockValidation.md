@@ -912,56 +912,6 @@ The `markBlockAsInvalid()` function:
 
 For implementation details, see `InvalidBlocksKafkaProducer_test.go` and `BlockValidation.go` (`markBlockAsInvalid()`, `kafkaNotifyBlockInvalid()`, `reValidateBlock()`).
 
-#### 2.2.11. Subtree Deduplication
-
-The Block Validation service implements a deduplication system to prevent redundant processing of subtrees that may arrive from multiple sources simultaneously.
-
-##### Purpose
-
-During block propagation and validation:
-
-- Multiple peers may send the same subtree
-- Subtree validation requests may be duplicated
-- Parallel block processing may request same subtrees
-- Network retries may resend subtree data
-
-The `DeDuplicator` prevents wasted processing by ensuring each subtree is validated only once.
-
-##### Implementation
-
-**TTL-Based Tracking:**
-
-The deduplicator maintains a time-based cache of recently processed subtrees:
-
-- Each subtree hash is recorded when processing begins
-- Entries expire after `blockHeightRetention` period
-- Memory automatically cleaned up as entries age out
-
-**Concurrency Safety:**
-
-The deduplicator is thread-safe for concurrent access:
-
-- Multiple validation workers can query simultaneously
-- Lock-free reads for checking if subtree is being processed
-- Atomic operations for adding new subtree entries
-
-##### Integration with Subtree Validation
-
-When the Block Validation service needs to validate a subtree:
-
-1. **Check Deduplicator**: Query if subtree is already being processed
-2. **If Already Processing**: Skip validation, wait for result from first processor
-3. **If New Subtree**: Mark as processing in deduplicator, proceed with validation
-4. **After Completion**: Entry remains in cache with TTL to prevent duplicate work
-
-This coordination ensures:
-
-- No redundant subtree validation computations
-- Reduced load on UTXO store and transaction validators
-- Lower memory and CPU usage during high block arrival rates
-
-For implementation details, see `deduplicator.go` in `services/blockvalidation/`.
-
 ### 2.3. Marking Txs as mined
 
 When a block is validated and added to the blockchain, the transactions within that block must be marked as mined in the UTXO store. This process is the second phase of the two-phase transaction commit system and is triggered through an event-driven notification mechanism.

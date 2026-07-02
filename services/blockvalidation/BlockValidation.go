@@ -166,9 +166,6 @@ type BlockValidation struct {
 	// subtreeValidationClient manages subtree validation processes
 	subtreeValidationClient subtreevalidation.Interface
 
-	// subtreeDeDuplicator prevents duplicate processing of subtrees
-	subtreeDeDuplicator *DeDuplicator
-
 	// lastValidatedBlocks caches recently validated blocks for 2 minutes
 	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
 
@@ -320,7 +317,6 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		utxoStore:                   utxoStore,
 		validatorClient:             validatorClient,
 		subtreeValidationClient:     subtreeValidationClient,
-		subtreeDeDuplicator:         NewDeDuplicator(tSettings.GetSubtreeValidationBlockHeightRetention()),
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute).
 			WithEvictionFunction(func(_ chainhash.Hash, block *model.Block) bool {
 				// Return pooled []Node backing slices to the per-class pool

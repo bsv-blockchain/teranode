@@ -109,9 +109,6 @@ type BlockValidation struct {
     // subtreeValidationClient manages subtree validation processes
     subtreeValidationClient subtreevalidation.Interface
 
-    // subtreeDeDuplicator prevents duplicate processing of subtrees
-    subtreeDeDuplicator *DeDuplicator
-
     // lastValidatedBlocks caches recently validated blocks for 2 minutes
     lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
 
