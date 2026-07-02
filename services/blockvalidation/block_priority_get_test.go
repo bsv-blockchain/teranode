@@ -308,6 +308,62 @@ func TestBlockPriorityQueue_WaitForBlock_Integration(t *testing.T) {
 	assert.Equal(t, hash, gotBlock.hash)
 }
 
+// TestBlockPriorityQueue_WaitForBlock_AllBlockedParks verifies that when every
+// queued block is fork-blocked (GetAllBlocked), WaitForBlock parks on the
+// condition variable instead of busy-looping. A spin would call CanProcessBlock
+// thousands of times; parking bounds the calls to a single Get() pass until a
+// Signal wakes the worker.
+func TestBlockPriorityQueue_WaitForBlock_AllBlockedParks(t *testing.T) {
+	initPrometheusMetrics()
+	logger := ulogger.TestLogger{}
+	pq := NewBlockPriorityQueue(logger)
+	mockBP := NewMockBlockProcessor()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hash1 := &chainhash.Hash{}
+	hash1[0] = 1
+	hash2 := &chainhash.Hash{}
+	hash2[0] = 2
+
+	pq.Add(processBlockFound{hash: hash1}, PriorityChainExtending, 1000)
+	pq.Add(processBlockFound{hash: hash2}, PriorityNearFork, 1001)
+
+	// Every queued block is blocked -> Get() returns GetAllBlocked on a non-empty queue.
+	mockBP.SetCanProcess(hash1, false)
+	mockBP.SetCanProcess(hash2, false)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	var gotBlock processBlockFound
+	var gotStatus GetStatus
+
+	go func() {
+		defer wg.Done()
+		gotBlock, gotStatus = pq.WaitForBlock(ctx, mockBP)
+	}()
+
+	// Let the worker reach GetAllBlocked and park. If it spins, CanProcessBlock
+	// is hammered continuously during this window.
+	time.Sleep(150 * time.Millisecond)
+
+	// A parked worker performs at most a couple of full Get() passes before
+	// waiting; a spin would produce hundreds/thousands of calls in 150ms.
+	callsWhileWaiting := mockBP.GetCallCount()
+	require.LessOrEqual(t, callsWhileWaiting, 10,
+		"WaitForBlock should park on GetAllBlocked, not busy-loop calling CanProcessBlock")
+
+	// Unblock one block and Signal, mimicking a fork resolution / processing slot freeing up.
+	mockBP.SetCanProcess(hash1, true)
+	pq.Signal()
+
+	wg.Wait()
+
+	require.Equal(t, GetOK, gotStatus, "worker should wake and return the now-processable block")
+	require.Equal(t, hash1, gotBlock.hash)
+}
+
 // TestForkManager_CanProcessBlock_EdgeCases tests CanProcessBlock edge cases
 func TestForkManager_CanProcessBlock_EdgeCases(t *testing.T) {
 	initPrometheusMetrics()

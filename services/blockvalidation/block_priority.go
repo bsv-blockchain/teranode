@@ -265,9 +265,15 @@ func (pq *BlockPriorityQueue) WaitForBlock(ctx context.Context, bp BlockProcesso
 			// to avoid busy loop burning CPU
 			pq.mu.Lock()
 
-			// Double-check queue status after acquiring lock
-			// Items might have been added between Get() and Lock()
-			if len(pq.items) > 0 {
+			// Double-check queue status after acquiring lock.
+			// Only GetEmpty can be resolved by items appearing: for GetEmpty the
+			// queue was empty, so if items are now present we retry Get() instead
+			// of parking. For GetAllBlocked the queue is by definition non-empty,
+			// so len(pq.items) > 0 is always true; we must still cond.Wait() and let
+			// a Signal from Add (new block), FinishProcessingBlock, or the fork
+			// BlockProcessingGuard.Release (a processing slot freeing up) wake us when
+			// a block becomes processable, otherwise this spins at 100% CPU re-running Get().
+			if status == GetEmpty && len(pq.items) > 0 {
 				pq.mu.Unlock()
 				continue // Items appeared, try Get() again
 			}
