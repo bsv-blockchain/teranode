@@ -343,7 +343,7 @@ func (pq *BlockPriorityQueue) GetAlternativeSource(blockHash *chainhash.Hash) (p
 }
 
 // getQueueStats returns statistics about the queue without locking
-func (pq *BlockPriorityQueue) getQueueStats(items []*PrioritizedBlock) (chainExtending, nearFork, deepFork int) {
+func getQueueStats(items []*PrioritizedBlock) (chainExtending, nearFork, deepFork int) {
 	for _, item := range items {
 		switch item.priority {
 		case PriorityChainExtending:
@@ -361,7 +361,7 @@ func (pq *BlockPriorityQueue) GetQueueStats() (chainExtending, nearFork, deepFor
 	pq.mu.Lock()
 	defer pq.mu.Unlock()
 
-	return pq.getQueueStats(pq.items)
+	return getQueueStats(pq.items)
 }
 
 func (pq *BlockPriorityQueue) Clear() {
@@ -477,8 +477,7 @@ func updateQueueSizeMetrics(items []*PrioritizedBlock) {
 		return
 	}
 
-	pq := &BlockPriorityQueue{items: items}
-	chainExtending, nearFork, deepFork := pq.getQueueStats(items)
+	chainExtending, nearFork, deepFork := getQueueStats(items)
 	prometheusBlockPriorityQueueSize.WithLabelValues("chain_extending").Set(float64(chainExtending))
 	prometheusBlockPriorityQueueSize.WithLabelValues("near_fork").Set(float64(nearFork))
 	prometheusBlockPriorityQueueSize.WithLabelValues("deep_fork").Set(float64(deepFork))
