@@ -3,6 +3,7 @@ package blockvalidation
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -65,7 +66,7 @@ func TestReadSubtree_MmapFallbackReReadsFromStart(t *testing.T) {
 	// Force the mmap path: a non-empty mmapDir enables it, and pointing it at a
 	// non-existent directory makes the mmap allocator's os.CreateTemp fail, which
 	// triggers the heap fallback after the underlying stream was already consumed.
-	bv.mmapDir = t.TempDir() + "/does-not-exist"
+	bv.mmapDir = filepath.Join(t.TempDir(), "does-not-exist")
 
 	block := &model.Block{
 		Header: &model.BlockHeader{

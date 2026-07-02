@@ -767,7 +767,11 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	if err != nil {
 		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)}
 	}
-	defer subtreeReader.Close()
+	defer func() {
+		if subtreeReader != nil {
+			subtreeReader.Close()
+		}
+	}()
 
 	// Use pooled buffered reader to reduce GC pressure
 	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
@@ -787,6 +791,11 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 			// reader onto it would read from mid-stream and produce a corrupt subtree.
 			// Open a fresh reader from the store so the heap path reads from the start.
 			u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
+
+			// The mmap attempt has consumed subtreeReader and it is no longer used; close it
+			// now rather than leaving it open alongside the fallback reader until return.
+			_ = subtreeReader.Close()
+			subtreeReader = nil
 
 			fallbackReader, ferr := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
 			if ferr != nil {
