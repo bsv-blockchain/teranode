@@ -56,6 +56,11 @@
 - `AllowBlockPriority = true`: Enables block priority messages via connection streaming
 - Sent via Protoconf message during peer handshake
 
+### Block Prefetch
+
+- `BlockPrefetchBufferBytes` bounds the bytes of received-but-not-yet-processed blocks so download overlaps validation during sync; `0` disables prefetch (synchronous ingestion).
+- Big-block era: a block at least as large as the whole budget is admitted alone (weight clamped), giving zero overlap — identical to pre-prefetch behaviour. To get overlap on large blocks, set the budget to at least ~2× the typical block size.
+
 ## Service Dependencies
 
 | Dependency | Interface | Usage |
