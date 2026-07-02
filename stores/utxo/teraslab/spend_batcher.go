@@ -9,6 +9,12 @@ import (
 	teraslab "github.com/icellan/teraslab/client/go"
 )
 
+// maxAggregatedSpendErrs caps how many per-input spend errors are wrapped into
+// the returned top-level error (mirrors the Aerospike backend); an uncapped
+// chain is O(N^2) to build and to walk with errors.Is. The per-input errors also
+// remain available on each Spend.Err.
+const maxAggregatedSpendErrs = 10
+
 // batchSpendItem is one transaction's spend, submitted to the spend batcher. The
 // whole transaction's inputs (items/results) and its per-call SpendBatch params
 // travel together so the flush keeps results — and any atomic rollback — scoped
@@ -150,7 +156,16 @@ func (s *Store) flushSpendGroup(ctx context.Context, params teraslab.SpendBatchP
 			if needsRollback {
 				s.rollbackPartialSpend(b)
 			}
-			b.done <- batchSpendResult{spends: b.results, err: errors.ErrUtxoError}
+			// Wrap the per-input causes into the top-level error (mirrors Aerospike
+			// spend.go) so errors.Is(err, ErrTxNotFound/ErrSpent/ErrFrozen) matches
+			// the returned error, not only the per-input Spend.Err slice.
+			failed := make([]error, 0, len(b.results))
+			for _, sp := range b.results {
+				if sp.Err != nil {
+					failed = append(failed, sp.Err)
+				}
+			}
+			b.done <- batchSpendResult{spends: b.results, err: errors.NewUtxoError("teraslab spend failed", errors.JoinCapped(maxAggregatedSpendErrs, failed...))}
 			continue
 		}
 		b.done <- batchSpendResult{spends: b.results}
