@@ -21,9 +21,6 @@ import (
 func newTestSyncCoordinator(t *testing.T) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry) {
 	t.Helper()
 
-	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
-	client := blockchain.NewLocalPeerRegistryClient(reg)
-
 	tSettings := &settings.Settings{
 		P2P: settings.P2PSettings{
 			AllowPrunedNodeFallback:                   true,
@@ -33,6 +30,14 @@ func newTestSyncCoordinator(t *testing.T) (*SyncCoordinator, *blockchain.Central
 			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
 		},
 	}
+	return newTestSyncCoordinatorWithSettings(t, tSettings)
+}
+
+func newTestSyncCoordinatorWithSettings(t *testing.T, tSettings *settings.Settings) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry) {
+	t.Helper()
+
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	client := blockchain.NewLocalPeerRegistryClient(reg)
 
 	sc := NewSyncCoordinator(
 		context.Background(),
@@ -422,6 +427,24 @@ func TestSyncCoordinator_ColdStart_FarBehind_WithAdvertisedOnlyPeers_InitiatesSy
 	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
 }
 
+func TestSyncCoordinator_ColdStart_RealDefaultSettings_AdvertisedOnlyPeerIsNotCaughtUp(t *testing.T) {
+	tSettings := settings.NewSettings()
+	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
+	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	setSyncCoordinatorLocalTip(t, sc, 0, []byte{0x01})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     10_000,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	require.Equal(t, 3, syncCoordinatorProbeBudget(sc))
+	require.False(t, sc.isCaughtUp())
+}
+
 func TestSyncCoordinator_StartupLocalChainWorkUnavailable_UsesBoundedAdvertisedProbe(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
@@ -684,6 +707,76 @@ func TestSyncCoordinator_HandleFSMTransition_DoesNotUseAdvertisedHeightAsFailure
 	state := blockchain_api.FSMStateType_RUNNING
 	require.False(t, sc.handleFSMTransition(&state))
 	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_HandleFSMTransition_ChattyNoProgressPeerTimesOutAndSelectsBetterPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "current",
+		DataHubURL: "http://current",
+		Height:     200,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "better",
+		DataHubURL:         "http://better",
+		Height:             201,
+		BlockHash:          syncCoordinatorTestHash(t),
+		Storage:            "full",
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+	})
+	reg.UpdateLastMessageTime("current")
+
+	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = stalledAt
+	sc.lastSyncProgressTime = stalledAt
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	state := blockchain_api.FSMStateType_RUNNING
+	require.True(t, sc.handleFSMTransition(&state))
+
+	require.Equal(t, "better", sc.GetCurrentSyncPeer())
+	current, ok := reg.Get("current")
+	require.True(t, ok)
+	require.False(t, current.LastSyncAttempt.IsZero())
+	require.Equal(t, 50.0, current.ReputationScore)
+	require.WithinDuration(t, time.Now(), current.LastMessageTime, time.Minute)
+}
+
+func TestSyncCoordinator_EvaluateSyncPeer_ValidatedProgressKeepsNoProgressDeadlineFresh(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "current",
+		DataHubURL: "http://current",
+		Height:     200,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+	require.NoError(t, reg.RecordValidatedPeerProgress("current", 101, syncCoordinatorTestHash(t), []byte{0x03}))
+
+	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = stalledAt
+	sc.lastSyncProgressTime = stalledAt
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	sc.evaluateSyncPeer()
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+	_, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
+	require.False(t, timedOut)
+	require.Less(t, progressAge, syncPeerNoProgressLimit)
 }
 
 func TestSyncCoordinator_MaxUnvalidatedAdvertisedHeightLead_AllowsProbeAtTenThousand(t *testing.T) {

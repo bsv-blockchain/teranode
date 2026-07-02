@@ -33,12 +33,14 @@ type SyncCoordinator struct {
 	ctx context.Context
 
 	// Current sync state. currentSyncPeer holds the canonical libp2p ID string.
-	mu              sync.RWMutex
-	currentSyncPeer string
-	syncStartTime   time.Time
-	lastSyncTrigger time.Time // Track when we last triggered sync
-	lastLocalHeight uint32    // Track last known local height
-	lastBlockHash   string    // Track last known block hash
+	mu                             sync.RWMutex
+	currentSyncPeer                string
+	syncStartTime                  time.Time
+	lastSyncProgressTime           time.Time
+	lastSyncPeerValidatedChainWork []byte
+	lastSyncTrigger                time.Time // Track when we last triggered sync
+	lastLocalHeight                uint32    // Track last known local height
+	lastBlockHash                  string    // Track last known block hash
 
 	// Backoff management
 	allPeersAttempted            bool      // Flag when all eligible peers have been tried
@@ -89,8 +91,9 @@ func (sc *SyncCoordinator) SetGetLocalHeightCallback(getLocalHeight func() uint3
 
 // Constants for monitoring intervals
 const (
-	fastMonitorInterval = 2 * time.Second  // When actively syncing
-	slowMonitorInterval = 15 * time.Second // When caught up
+	fastMonitorInterval     = 2 * time.Second  // When actively syncing
+	slowMonitorInterval     = 15 * time.Second // When caught up
+	syncPeerNoProgressLimit = 5 * time.Minute
 )
 
 // isViableSyncCandidate returns true if a peer passes the unconditional
@@ -224,11 +227,15 @@ func (sc *SyncCoordinator) resetProbeBudgetIfLocalChainWorkAdvanced(chainWork []
 		return
 	}
 
+	now := time.Now()
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if chainWorkGreater(chainWork, sc.lastLocalChainWork) {
 		sc.lastLocalChainWork = append([]byte(nil), chainWork...)
 		sc.unprovenProbeBudgetRemaining = maxUnprovenProbeBudget(sc.settings)
+		if sc.currentSyncPeer != "" {
+			sc.lastSyncProgressTime = now
+		}
 	}
 }
 
@@ -318,14 +325,71 @@ func (sc *SyncCoordinator) GetCurrentSyncPeer() string {
 
 // ClearSyncPeer clears the current sync peer
 func (sc *SyncCoordinator) ClearSyncPeer() {
+	sc.clearSyncPeerIfCurrent("")
+}
+
+func (sc *SyncCoordinator) clearSyncPeerIfCurrent(peerID string) bool {
 	sc.mu.Lock()
 	oldPeer := sc.currentSyncPeer
+	if peerID != "" && oldPeer != peerID {
+		sc.mu.Unlock()
+		return false
+	}
 	sc.currentSyncPeer = ""
+	sc.syncStartTime = time.Time{}
+	sc.lastSyncProgressTime = time.Time{}
+	sc.lastSyncPeerValidatedChainWork = nil
 	sc.mu.Unlock()
 
 	if oldPeer != "" {
 		sc.logger.Infof("[SyncCoordinator] Cleared sync peer %s", oldPeer)
 	}
+	return oldPeer != ""
+}
+
+func (sc *SyncCoordinator) recordSyncPeerValidatedProgress(peerID string, chainWork []byte, now time.Time) {
+	if len(chainWork) == 0 {
+		return
+	}
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.currentSyncPeer != peerID {
+		return
+	}
+	if chainWorkGreater(chainWork, sc.lastSyncPeerValidatedChainWork) {
+		sc.lastSyncPeerValidatedChainWork = append([]byte(nil), chainWork...)
+		sc.lastSyncProgressTime = now
+	}
+}
+
+func (sc *SyncCoordinator) syncPeerNoProgressTimedOut(now time.Time) (string, time.Duration, bool) {
+	sc.mu.RLock()
+	currentPeer := sc.currentSyncPeer
+	lastProgress := sc.lastSyncProgressTime
+	if lastProgress.IsZero() {
+		lastProgress = sc.syncStartTime
+	}
+	sc.mu.RUnlock()
+
+	if currentPeer == "" || lastProgress.IsZero() {
+		return currentPeer, 0, false
+	}
+
+	progressAge := now.Sub(lastProgress)
+	return currentPeer, progressAge, progressAge > syncPeerNoProgressLimit
+}
+
+func (sc *SyncCoordinator) clearNoProgressSyncPeer(peerID string, progressAge time.Duration) bool {
+	sc.logger.Warnf("[SyncCoordinator] Sync peer %s made no validated progress for %v", peerID, progressAge.Round(time.Second))
+	if err := sc.registry.RecordSyncAttempt(sc.ctx, peerID); err != nil {
+		sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt(no-progress) failed for %s: %v", peerID, err)
+	}
+	if !sc.clearSyncPeerIfCurrent(peerID) {
+		return false
+	}
+	_ = sc.TriggerSync()
+	return true
 }
 
 // TriggerSync triggers a new sync operation
@@ -505,9 +569,9 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMStateType) bool {
 	if *currentState == blockchain_api.FSMStateType_RUNNING {
 		// Get current sync peer and check if we should consider this a failure
-		sc.mu.Lock()
+		sc.mu.RLock()
 		currentPeer := sc.currentSyncPeer
-		sc.mu.Unlock()
+		sc.mu.RUnlock()
 
 		if currentPeer != "" {
 			_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
@@ -526,6 +590,12 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 				sc.ClearSyncPeer()
 				_ = sc.TriggerSync()
 				return true // Transition handled
+			}
+
+			now := time.Now()
+			sc.recordSyncPeerValidatedProgress(currentPeer, peerInfo.ValidatedChainWork, now)
+			if stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now); timedOut && stalledPeer == currentPeer {
+				return sc.clearNoProgressSyncPeer(currentPeer, progressAge)
 			}
 
 			if !localWorkOK || !peerHasValidatedWork(peerInfo) {
@@ -695,6 +765,12 @@ func (sc *SyncCoordinator) claimSelectedSyncPeer(newSyncPeer string, peerInfo *b
 	}
 	sc.currentSyncPeer = newSyncPeer
 	sc.syncStartTime = now
+	sc.lastSyncProgressTime = now
+	if peerInfo != nil {
+		sc.lastSyncPeerValidatedChainWork = append([]byte(nil), peerInfo.ValidatedChainWork...)
+	} else {
+		sc.lastSyncPeerValidatedChainWork = nil
+	}
 	sc.lastSyncTrigger = now
 	return true
 }
@@ -767,9 +843,9 @@ func (sc *SyncCoordinator) periodicEvaluation(ctx context.Context) {
 
 // evaluateSyncPeer evaluates current sync peer performance
 func (sc *SyncCoordinator) evaluateSyncPeer() {
+	now := time.Now()
 	sc.mu.RLock()
 	currentPeer := sc.currentSyncPeer
-	syncDuration := time.Since(sc.syncStartTime)
 	sc.mu.RUnlock()
 
 	if currentPeer == "" {
@@ -797,25 +873,17 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		return
 	}
 
-	// Check if we've been syncing too long without progress
-	if syncDuration > 5*time.Minute {
-		timeSinceLastMessage := time.Since(peerInfo.LastMessageTime)
-		if timeSinceLastMessage > 1*time.Minute {
-			sc.logger.Warnf("[SyncCoordinator] Sync peer %s inactive for %v", currentPeer, timeSinceLastMessage)
-			if err := sc.registry.UpdatePeerMetrics(sc.ctx, currentPeer, 0, 0, 0, false, true, false, 0); err != nil {
-				sc.logger.Warnf("[SyncCoordinator] UpdatePeerMetrics(failure) for %s: %v", currentPeer, err)
-			}
-			sc.ClearSyncPeer()
-			_ = sc.TriggerSync()
-			return
-		}
-	}
-
-	// Check if we've caught up
 	_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
 	if localWorkOK {
 		sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
 	}
+	sc.recordSyncPeerValidatedProgress(currentPeer, peerInfo.ValidatedChainWork, now)
+	if stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now); timedOut && stalledPeer == currentPeer {
+		sc.clearNoProgressSyncPeer(currentPeer, progressAge)
+		return
+	}
+
+	// Check if we've caught up
 	if !localWorkOK || !peerHasValidatedWork(peerInfo) {
 		sc.logger.Debugf("[SyncCoordinator] Skipping caught-up evaluation for %s until validated chainwork is available", currentPeer)
 		return
