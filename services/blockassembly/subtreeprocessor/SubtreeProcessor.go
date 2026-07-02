@@ -1551,7 +1551,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 }
 
 func (stp *SubtreeProcessor) getConflictingNodes(ctx context.Context, block *model.Block) ([]chainhash.Hash, error) {
-	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(context.Background(), "getConflictingNodes",
+	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "getConflictingNodes",
 		tracing.WithParentStat(stp.stats),
 		tracing.WithDebugLogMessage(stp.logger, "[SubtreeProcessor][getConflictingNodes][%s] getting conflicting nodes", block.String()),
 	)
