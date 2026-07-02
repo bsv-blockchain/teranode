@@ -2,6 +2,7 @@ package settings
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/stretchr/testify/require"
@@ -145,4 +146,13 @@ func TestMaxRawTxFee_EnvZeroDisables(t *testing.T) {
 	t.Setenv("maxrawtxfee", "0")
 	tSettings := NewSettings()
 	require.Equal(t, uint64(0), tSettings.Policy.MaxRawTxFee)
+}
+
+func TestP2PSyncHardeningDefaultsAreLoaded(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+
+	require.Equal(t, uint32(10_000), tSettings.P2P.MaxUnvalidatedAdvertisedHeightLead)
+	require.Equal(t, 3, tSettings.P2P.MaxUnprovenSyncProbesPerBackoffWindow)
+	require.Equal(t, 24*time.Hour, tSettings.P2P.FullDeliveryFreshnessWindow)
 }
