@@ -629,7 +629,9 @@ func (sc *SyncCoordinator) handleRunningState(_ context.Context) {
 	currentSyncPeer := sc.currentSyncPeer
 	sc.mu.RUnlock()
 
-	sc.selectAndActivateNewPeer(localHeight, currentSyncPeer)
+	if err := sc.selectAndActivateNewPeer(localHeight, currentSyncPeer); err != nil {
+		sc.logger.Warnf("[SyncCoordinator] selectAndActivateNewPeer failed: %v", err)
+	}
 }
 
 // getLocalHeightSafe safely gets the local blockchain height

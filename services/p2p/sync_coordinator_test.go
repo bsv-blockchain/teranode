@@ -2,12 +2,12 @@ package p2p
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -365,7 +365,7 @@ func TestSyncCoordinator_EvaluateSyncPeer_MissingPeerClears(t *testing.T) {
 func TestSyncCoordinator_SelectAndActivateNewPeer_NoEligibleEntersBackoff(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
 
-	sc.selectAndActivateNewPeer(50, "")
+	require.NoError(t, sc.selectAndActivateNewPeer(50, ""))
 
 	sc.mu.RLock()
 	require.True(t, sc.allPeersAttempted, "no peers above local height should enter backoff")
@@ -382,7 +382,7 @@ func TestSyncCoordinator_SelectAndActivateNewPeer_ActivatesEligible(t *testing.T
 
 	// selectAndActivateNewPeer fires sendSyncMessage; the coordinator records the peer
 	// as the current sync target even without a Kafka producer in this test.
-	sc.selectAndActivateNewPeer(50, "")
+	require.NoError(t, sc.selectAndActivateNewPeer(50, ""))
 
 	require.Equal(t, "good", sc.GetCurrentSyncPeer())
 }
@@ -448,7 +448,7 @@ func TestSyncCoordinator_ColdStart_RealDefaultSettings_AdvertisedOnlyPeerIsNotCa
 func TestSyncCoordinator_StartupLocalChainWorkUnavailable_UsesBoundedAdvertisedProbe(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
-	client := setSyncCoordinatorLocalTipError(t, sc, errors.New("chainwork unavailable"))
+	client := setSyncCoordinatorLocalTipError(t, sc, errors.NewProcessingError("chainwork unavailable"))
 	state := blockchain_api.FSMStateType_RUNNING
 	client.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
 
