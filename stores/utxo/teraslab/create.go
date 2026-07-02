@@ -5,6 +5,8 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	teraslab "github.com/icellan/teraslab/client/go"
@@ -64,6 +66,18 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	data.Conflicting = options.Conflicting
 	data.Locked = options.Locked
 	data.Frozen = options.Frozen
+
+	// Populate TxInpoints so the returned meta.Data serializes ParentTxHashes into
+	// the txmeta-cache payload (MetaBytes()). Without it the validator publishes a
+	// tx with zero parents and the cache consumer rejects it as partial, disabling
+	// the txmeta cache for this backend (an extra store round-trip per tx). Matches
+	// Aerospike (util.TxMetaDataFromTx) and SQL. txToCreateItem already validated
+	// the inpoints build for this tx, so this recompute does not fail in practice.
+	txInpoints, err := subtree.NewTxInpointsFromTx(tx)
+	if err != nil {
+		return nil, errors.NewProcessingError("teraslab: could not build tx inpoints for meta", err)
+	}
+	data.TxInpoints = txInpoints
 
 	if len(options.MinedBlockInfos) > 0 {
 		data.BlockIDs = make([]uint32, 0, len(options.MinedBlockInfos))
