@@ -112,10 +112,6 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 		defer close(workQueue)
 
 		// In production, commonAncestorMeta is always set during catchup initialization
-		if catchupCtx == nil {
-			return errors.NewProcessingError("[catchup:fetchBlocksConcurrently][%s] catchupCtx must not be nil", blockUpTo.Hash().String())
-		}
-
 		if catchupCtx.commonAncestorMeta == nil {
 			return errors.NewProcessingError("[catchup:fetchBlocksConcurrently][%s] commonAncestorMeta must not be nil", blockUpTo.Hash().String())
 		}
@@ -909,7 +905,7 @@ func reverseBlocks(blocks []*model.Block) {
 // verifyBlockHeaders checks that each fetched block's hash matches the expected header.
 func verifyBlockHeaders(blocks []*model.Block, headers []*model.BlockHeader, blockUpTo *model.Block) error {
 	for j, block := range blocks {
-		if block.Hash().String() != headers[j].Hash().String() {
+		if !block.Hash().IsEqual(headers[j].Hash()) {
 			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s",
 				blockUpTo.Hash().String(), j, headers[j].Hash().String(), block.Hash().String())
 		}
