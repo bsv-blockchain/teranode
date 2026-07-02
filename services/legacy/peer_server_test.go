@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1170,24 +1171,25 @@ func TestShouldDisconnectOnBlockErr(t *testing.T) {
 }
 
 // TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
-// path: awaitBlockResult must not block forever (leaking its goroutine and the
-// reserved budget) when a block's reply never arrives because the peer or server
-// is shutting down. sp.ctx is the long-lived Init context that Stop() does not
-// cancel, so sp.quit is the teardown signal that actually fires. A nil prefetch
-// budget makes ReleaseBlockPrefetch a no-op, so this exercises the control flow
-// without standing up a full SyncManager.
+// path: awaitBlockResult must hold the reserved budget until the block actually
+// finishes processing — even after the peer is torn down (sp.quit) — because the
+// block's memory is still live in the netsync pipeline. It releases (via defer)
+// only when done arrives, or, as a shutdown-race backstop, when sp.ctx (the
+// ServiceManager errgroup Init context, cancelled on daemon shutdown) fires. A
+// nil prefetch budget makes ReleaseBlockPrefetch a no-op, so this exercises the
+// control flow without standing up a full SyncManager.
 func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
-	newPeer := func() *serverPeer {
+	newPeer := func(ctx context.Context) *serverPeer {
 		return &serverPeer{
-			server: &server{syncManager: &netsync.SyncManager{}},
-			ctx:    context.Background(),
+			server: &server{syncManager: &netsync.SyncManager{}, logger: ulogger.TestLogger{}},
+			ctx:    ctx,
 			quit:   make(chan struct{}),
 		}
 	}
 
-	t.Run("exits on sp.quit when the reply never arrives", func(t *testing.T) {
-		sp := newPeer()
-		done := make(chan error, 1) // intentionally never written
+	t.Run("holds after sp.quit until the block completes", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
 
 		finished := make(chan struct{})
 		go func() {
@@ -1195,24 +1197,52 @@ func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
 			close(finished)
 		}()
 
-		// Still blocked: no reply, quit open.
+		// Peer torn down, but the block is still queued: must NOT return yet
+		// (that would release the budget while the block's memory is still live).
+		close(sp.quit)
 		select {
 		case <-finished:
-			t.Fatal("awaitBlockResult returned before any teardown signal")
+			t.Fatal("awaitBlockResult released on sp.quit instead of holding until the block completed")
 		case <-time.After(50 * time.Millisecond):
 		}
 
-		close(sp.quit)
-
+		// Block finishes processing: now it releases and exits.
+		done <- nil
 		select {
 		case <-finished:
 		case <-time.After(time.Second):
-			t.Fatal("awaitBlockResult leaked: did not exit after sp.quit closed")
+			t.Fatal("awaitBlockResult did not exit after the block completed")
+		}
+	})
+
+	t.Run("sp.ctx is the shutdown-race backstop after sp.quit", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		sp := newPeer(ctx)
+		done := make(chan error, 1) // reply never arrives (shutdown drain race)
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before the block completed or ctx cancelled")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		cancel() // daemon shutdown cancels the errgroup ctx
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not exit on sp.ctx cancellation")
 		}
 	})
 
 	t.Run("completes when the reply arrives", func(t *testing.T) {
-		sp := newPeer()
+		sp := newPeer(context.Background())
 		done := make(chan error, 1)
 		done <- nil // successful processing, no disconnect
 
@@ -1227,5 +1257,45 @@ func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("awaitBlockResult did not return after the reply arrived")
 		}
+	})
+
+	t.Run("validation failure after sp.quit does not disconnect", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+
+		// Recover in the goroutine and assert on the test goroutine: a
+		// disconnect-worthy validation error arriving after teardown must be
+		// logged but NOT disconnect the already-gone peer. The embedded
+		// *peer.Peer is nil, so reaching DisconnectWithWarning would panic —
+		// a nil recovered value therefore proves the disconnect path is skipped.
+		panicked := make(chan any, 1)
+		finished := make(chan struct{})
+		go func() {
+			defer func() {
+				panicked <- recover()
+				close(finished)
+			}()
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+		}()
+
+		// Tear down with done still empty so the goroutine must take the sp.quit
+		// branch and park in its inner wait (rather than racing the outer <-done).
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before the late reply arrived")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		// The late validation failure now arrives: logged, but must not disconnect.
+		done <- errors.NewBlockInvalidError("bad block after teardown")
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not return after the late reply")
+		}
+
+		require.Nil(t, <-panicked, "awaitBlockResult must not disconnect (panic) a torn-down peer")
 	})
 }

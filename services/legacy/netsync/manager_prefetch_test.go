@@ -77,6 +77,28 @@ func TestBlockPrefetchEnabled(t *testing.T) {
 	require.True(t, newPrefetchManager(100).BlockPrefetchEnabled())
 }
 
+// TestUsePrefetchIngestion proves OnBlock's gate: prefetch ingestion is used only
+// with a configured budget and off regression net, so regtest keeps the
+// synchronous submit-then-query ordering the acceptance tooling depends on.
+func TestUsePrefetchIngestion(t *testing.T) {
+	withBudget := func(params *chaincfg.Params) *SyncManager {
+		return &SyncManager{
+			chainParams:              params,
+			blockPrefetchBudgetBytes: 100,
+			blockPrefetchBudget:      semaphore.NewWeighted(100),
+		}
+	}
+
+	// Budget disabled → synchronous regardless of network.
+	require.False(t, (&SyncManager{chainParams: &chaincfg.MainNetParams}).UsePrefetchIngestion())
+
+	// Budget enabled off regtest → prefetch path.
+	require.True(t, withBudget(&chaincfg.MainNetParams).UsePrefetchIngestion())
+
+	// Budget enabled on regtest → synchronous path.
+	require.False(t, withBudget(&chaincfg.RegressionNetParams).UsePrefetchIngestion())
+}
+
 func TestAcquireBlockPrefetch_Disabled(t *testing.T) {
 	sm := newPrefetchManager(0)
 

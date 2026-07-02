@@ -2354,6 +2354,16 @@ func (sm *SyncManager) BlockPrefetchEnabled() bool {
 	return sm.blockPrefetchBudget != nil
 }
 
+// UsePrefetchIngestion reports whether OnBlock should take the bounded async
+// prefetch path. It requires a configured budget AND that we are not on
+// regression net: the block-acceptance tooling depends on submit-then-query
+// ordering, which only the synchronous path (OnBlock returns after the block is
+// fully processed) guarantees. So regtest keeps synchronous ingestion — paired
+// with, and for the same reason as, the regtest exception in BlockRequested.
+func (sm *SyncManager) UsePrefetchIngestion() bool {
+	return sm.BlockPrefetchEnabled() && sm.chainParams != &chaincfg.RegressionNetParams
+}
+
 // BlockRequested reports whether blockHash is one we have an outstanding
 // getdata request for from the given peer (resolving stream peers to their
 // association primary, as handleBlockMsg does). It lets the read-loop reject
@@ -2429,11 +2439,12 @@ func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, quit <-chan str
 	defer sm.blockPrefetchWaiters.Add(-1)
 
 	// Abort the wait on peer teardown too, not just whole-process ctx cancellation:
-	// the caller's ctx is the long-lived Init context that Stop() does not cancel,
-	// while quit (the peer's quit channel) closes on both individual disconnect and
-	// shutdown. This mirrors awaitBlockResult so a budget-parked read-loop never
-	// outlives its peer. The linking goroutine only exists while we are blocked
-	// (the rare backpressure case) and exits as soon as the acquire resolves.
+	// the caller's ctx (the ServiceManager errgroup Init context) is cancelled on
+	// daemon shutdown but not by legacy.Server.Stop() alone, while quit (the peer's
+	// quit channel) closes on both individual disconnect and shutdown. This mirrors
+	// awaitBlockResult so a budget-parked read-loop never outlives its peer. The
+	// linking goroutine only exists while we are blocked (the rare backpressure
+	// case) and exits as soon as the acquire resolves.
 	if quit != nil {
 		var cancel context.CancelFunc
 

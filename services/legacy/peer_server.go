@@ -979,17 +979,20 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		// collected once processing is done.
 		sm := sp.server.syncManager
 
-		if !sm.BlockPrefetchEnabled() {
-			// Synchronous ingestion (prefetch disabled): block the read-loop
-			// until the block is fully processed. One block in flight per peer
-			// with full TCP backpressure — the original behaviour, kept as a
-			// kill switch. This also intentionally limits how many bad blocks a
-			// malicious peer can queue before being disconnected.
+		if !sm.UsePrefetchIngestion() {
+			// Synchronous ingestion: block the read-loop until the block is fully
+			// processed. One block in flight per peer with full TCP backpressure —
+			// the original behaviour. Taken when prefetch is disabled (kill switch
+			// legacy_blockPrefetchBufferBytes=0) OR on regression net, where the
+			// block-acceptance tooling depends on submit-then-query ordering that
+			// only this synchronous path guarantees. Also intentionally limits how
+			// many bad blocks a malicious peer can queue before being disconnected.
 			sm.QueueBlock(block, sp.Peer, sp.blockProcessed)
 
 			// Wait for processing, but also bail on teardown so a lost shutdown
-			// race on the block-queue drain can't block the read-loop forever
-			// (sp.ctx is the long-lived Init context, so watch sp.quit too).
+			// race on the block-queue drain can't block the read-loop forever.
+			// sp.quit closes on individual disconnect and shutdown; sp.ctx (the
+			// ServiceManager errgroup Init context) is cancelled on daemon shutdown.
 			select {
 			case err = <-sp.blockProcessed:
 			case <-sp.quit:
@@ -1040,8 +1043,9 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		// oversized block is admitted alone). Admitting before QueueBlock is
 		// essential: otherwise the block would sit in the deep msgChan/blockQueue
 		// pinning its decode arena without being counted against the budget.
-		// sp.quit lets a budget-parked read-loop unblock on peer teardown, since
-		// sp.ctx (the Init context) is not cancelled by Stop() — mirrors awaitBlockResult.
+		// sp.quit lets a budget-parked read-loop unblock on peer teardown; sp.ctx
+		// (the ServiceManager errgroup Init context) is cancelled on daemon
+		// shutdown but not by legacy.Server.Stop() alone. Mirrors awaitBlockResult.
 		weight, err := sm.AcquireBlockPrefetch(sp.ctx, sp.quit, size)
 		if err != nil {
 			// ctx cancelled or peer torn down: nothing reserved, drop the block.
@@ -1088,17 +1092,34 @@ func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash 
 	select {
 	case err = <-done:
 	case <-sp.quit:
-		// Peer is being torn down — individual disconnect or server shutdown
-		// (peerDoneHandler closes sp.quit in both). On shutdown the sync manager
-		// best-effort drains its block queue, but a block enqueued after that
-		// drain returns gets no reply, so we cannot rely on <-done here; exit
-		// (releasing the budget via defer) rather than block forever and leak this
-		// goroutine. sp.ctx is the long-lived Init context and is NOT cancelled by
-		// Stop(), so sp.quit — not sp.ctx — is the teardown signal that fires here.
+		// The peer is being torn down (individual disconnect or shutdown;
+		// peerDoneHandler closes sp.quit in both), but the block is still
+		// queued/validating in the netsync pipeline — its decoded memory stays
+		// live. Hold the reserved budget until the block actually leaves the
+		// pipeline; releasing it now (on peer lifetime rather than block
+		// completion) would let the semaphore under-count and over-admit, so
+		// buffered-block memory could exceed the budget under churny disconnects.
+		//
+		// While the SyncManager runs, handleBlockMsg always replies on the
+		// buffered(1) done channel; on shutdown the sm.quit drain replies with an
+		// error. The one narrow exception is a shutdown race where the feeder
+		// enqueues after that drain returned and no reply is ever sent — then we
+		// fall back to sp.ctx. sp.ctx is the ServiceManager's errgroup-derived Init
+		// context: it IS cancelled on daemon shutdown (signal / ForceShutdown /
+		// errgroup), though legacy.Server.Stop() alone does not cancel it. Only the
+		// disconnect action below is skipped here — the peer is already gone.
+		select {
+		case e := <-done:
+			// Log a late validation failure for observability parity with the
+			// connected path; the peer is already gone, so do not disconnect.
+			if e != nil {
+				sp.server.logger.Errorf("block %s processing failed after peer teardown: %v", blockHash, e)
+			}
+		case <-sp.ctx.Done():
+		}
+
 		return
 	case <-sp.ctx.Done():
-		// Whole-process teardown backstop, for the case the connection is not
-		// torn down (sp.quit unclosed) before the root context is cancelled.
 		return
 	}
 
