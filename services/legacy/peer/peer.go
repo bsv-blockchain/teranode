@@ -1827,6 +1827,17 @@ cleanup:
 	p.logger.Debugf("Peer stall handler done for %s", p)
 }
 
+// shouldArmProcessingTimer reports whether the per-message processing watchdog
+// should run for this command. With block prefetch enabled, OnBlock legitimately
+// blocks in AcquireBlockPrefetch under budget backpressure for longer than
+// PeerProcessingTimeout; block-stall detection is owned by the netsync stall
+// detector, the idle timer, and MaxBlockDownloadTime, so the watchdog is not
+// armed for block messages in that mode. It still arms for all other commands,
+// and for every command (including blocks) when prefetch is disabled.
+func shouldArmProcessingTimer(cmd string, prefetchEnabled bool) bool {
+	return !prefetchEnabled || cmd != wire.CmdBlock
+}
+
 // inHandler handles all incoming messages for the peer.  It must be run as a goroutine.
 func (p *Peer) inHandler() {
 	// The timer is stopped when a new message is received and reset after it is processed.
@@ -1931,7 +1942,15 @@ out:
 		p.processingCmdMtx.Lock()
 		p.currentProcessingMsgCmd = rmsg.Command()
 		p.processingCmdMtx.Unlock()
-		processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
+
+		// With block prefetch enabled, OnBlock legitimately parks in
+		// AcquireBlockPrefetch under budget backpressure for longer than
+		// PeerProcessingTimeout; block-stall detection is then owned by the
+		// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
+		// per-message watchdog must not fire for block messages in that mode.
+		if shouldArmProcessingTimer(rmsg.Command(), p.settings.Legacy.BlockPrefetchBufferBytes > 0) {
+			processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
+		}
 
 		atomic.StoreInt64(&p.lastRecv, time.Now().Unix())
 		p.signalReceived(rmsg)
