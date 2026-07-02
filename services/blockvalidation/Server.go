@@ -368,7 +368,11 @@ func New(
 		blockClassifier:     NewBlockClassifier(logger, nearForkThreshold, blockchainClient),
 		forkManager:         fm,
 		catchupCh:           make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
-		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
+		// 10m TTL is a safety net: entries are normally removed by explicit Delete
+		// when catchup completes or fails, but a missed Delete on any error/early-return
+		// branch would otherwise leak the entry permanently. Mirrors catchupAlternatives,
+		// the sibling cache for the same in-flight block.
+		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](ttlcache.WithTTL[chainhash.Hash, bool](10 * time.Minute)),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),

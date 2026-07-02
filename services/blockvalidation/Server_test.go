@@ -447,6 +447,24 @@ func Test_Server_processBlockFound(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestServer_processBlockNotifyHasTTL guards against regressing to a TTL-less
+// processBlockNotify cache. Entries are normally removed by explicit Delete when
+// catchup completes or fails, but a missed Delete on any error/early-return branch
+// would leak the entry permanently unless a TTL acts as a safety net. Setting with
+// ttlcache.DefaultTTL must therefore resolve to a real expiry, not 0 (no expiry).
+func TestServer_processBlockNotifyHasTTL(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	s := New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	var hash chainhash.Hash
+	item := s.processBlockNotify.Set(hash, true, ttlcache.DefaultTTL)
+
+	require.False(t, item.ExpiresAt().IsZero(), "processBlockNotify entry must have an expiry so missed Delete paths cannot leak it")
+	require.True(t, item.ExpiresAt().After(time.Now()), "processBlockNotify entry expiry must be in the future")
+}
+
 func TestServer_processBlockFoundChannel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
