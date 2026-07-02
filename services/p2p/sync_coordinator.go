@@ -3,7 +3,6 @@ package p2p
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"sync"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -138,13 +138,11 @@ func peerAheadByValidatedWork(p *blockchain.PeerInfo, localChainWork []byte) boo
 }
 
 func chainWorkGreater(a, b []byte) bool {
-	if len(a) == 0 {
-		return false
-	}
-	if len(b) == 0 {
-		return true
-	}
-	return new(big.Int).SetBytes(a).Cmp(new(big.Int).SetBytes(b)) > 0
+	// Delegates to the shared big-endian comparison in services/blockchain/work,
+	// which compares the byte slices as unsigned big integers (empty/nil == zero).
+	// Callers only pass real, positive chainwork (both slices non-empty), so this
+	// matches the original behaviour on every value that actually occurs here.
+	return work.CompareChainWork(a, b) > 0
 }
 
 // BlocksReceived and LastBlockTime are written by ReportValidBlock through
@@ -269,6 +267,13 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 		if sc.currentSyncPeerLocked() != "" {
 			return false
 		}
+		// When no peer is ahead by validated work, advertised-probe activation is
+		// gated on the unproven-probe budget. Once that budget is exhausted we
+		// intentionally report caught-up here, which lets monitorFSM back off to
+		// slowMonitorInterval. This is by design: the budget bounds probe churn
+		// against peers advertising an unproven higher tip, and sync-driving
+		// resumes when checkAndClearExpiredBackoff refills the budget on the next
+		// backoff window.
 		if sc.hasUnprovenProbeBudget() {
 			for _, p := range peers {
 				if sc.peerEligibleForAdvertisedProbe(p, localHeight) {
@@ -279,6 +284,10 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 		return true
 	}
 
+	// Fallback path taken when local tip work is unavailable (transient
+	// GetBestBlockHeader error / empty ChainWork). Probe activation is likewise
+	// budget-gated, so an exhausted budget reports caught-up and relies on the
+	// same backoff-window refill to resume sync-driving.
 	peers := sc.listAllPeers()
 	if sc.currentSyncPeerLocked() != "" {
 		return false

@@ -2,12 +2,12 @@ package p2p
 
 import (
 	"context"
-	"math/big"
 	"net/http"
 	"sort"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
@@ -270,7 +270,7 @@ func localHeightFromCriteria(criteria SelectionCriteria) uint32 {
 }
 
 func compareChainWork(a, b []byte) int {
-	return new(big.Int).SetBytes(a).Cmp(new(big.Int).SetBytes(b))
+	return work.CompareChainWork(a, b)
 }
 
 // checkPeerAvailability tests if a peer's DataHub URL is reachable via HTTP.

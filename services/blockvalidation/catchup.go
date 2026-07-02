@@ -1000,6 +1000,13 @@ func (u *Server) filterExistingBlocks(ctx context.Context, headers []*model.Bloc
 
 // reportValidatedHeaderProgress records locally verified header work for the
 // peer that served the header chain. The report is advisory and best-effort.
+//
+// This runs after the per-header proof-of-work checks but before Step 10's full
+// block validation, so the credited value is per-header-PoW work, not yet
+// difficulty-adjustment-validated work. That is safe against upward forgery: a
+// higher credited value requires correspondingly harder bits backed by real PoW,
+// so a peer cannot inflate its rank. A valid-PoW but wrong-difficulty chain can
+// still be credited here; it is rejected later by full block validation.
 func (u *Server) reportValidatedHeaderProgress(ctx context.Context, catchupCtx *CatchupContext) {
 	height, blockHash, workBytes, ok := u.computeValidatedHeaderProgress(catchupCtx)
 	if !ok {

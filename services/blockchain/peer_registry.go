@@ -2,7 +2,6 @@ package blockchain
 
 import (
 	"context"
-	"math/big"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -564,9 +564,7 @@ func shouldAdvanceValidatedWork(storedChainWork []byte, incomingBlockHash *chain
 	if len(storedChainWork) == 0 {
 		return true
 	}
-	incomingWork := new(big.Int).SetBytes(incomingChainWork)
-	storedWork := new(big.Int).SetBytes(storedChainWork)
-	return incomingWork.Cmp(storedWork) > 0
+	return work.CompareChainWork(incomingChainWork, storedChainWork) > 0
 }
 
 // Count returns the number of peers currently in the registry.
@@ -1106,8 +1104,6 @@ func (r *CentralizedPeerRegistry) RecordValidatedPeerProgress(peerID string, hei
 		return errors.NewInvalidArgumentError("validated chainwork is too large: %d bytes", len(chainWork))
 	}
 
-	incomingWork := new(big.Int).SetBytes(chainWork)
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -1117,8 +1113,7 @@ func (r *CentralizedPeerRegistry) RecordValidatedPeerProgress(peerID string, hei
 	}
 
 	if len(info.ValidatedChainWork) > 0 {
-		storedWork := new(big.Int).SetBytes(info.ValidatedChainWork)
-		if incomingWork.Cmp(storedWork) <= 0 {
+		if work.CompareChainWork(chainWork, info.ValidatedChainWork) <= 0 {
 			return nil
 		}
 	}
