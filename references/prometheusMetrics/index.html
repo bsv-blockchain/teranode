@@ -8449,9 +8449,14 @@
 <td>Duration of bless missing transaction</td>
 </tr>
 <tr>
-<td><code>teranode_subtreevalidation_set_tx_meta_cache_kafka</code></td>
+<td><code>teranode_subtreevalidation_set_tx_meta_cache_kafka_batch</code></td>
 <td>Histogram</td>
-<td>Duration of setting tx meta cache from kafka</td>
+<td>Duration of one SetCacheMulti batch from a Kafka txmeta message (per Kafka message, not per entry)</td>
+</tr>
+<tr>
+<td><code>teranode_subtreevalidation_set_tx_meta_cache_kafka_count</code></td>
+<td>Counter</td>
+<td>Number of ADD entries processed from Kafka (per-entry; mirrors the pre-batching histogram count)</td>
 </tr>
 <tr>
 <td><code>teranode_subtreevalidation_del_tx_meta_cache_kafka</code></td>
@@ -8611,11 +8616,6 @@
 <td><code>teranode_tx_meta_cache_total_elements_added</code></td>
 <td>Gauge</td>
 <td>Number of total number of elements added to the txmetacache</td>
-</tr>
-<tr>
-<td><code>teranode_tx_meta_cache_hit_old_tx</code></td>
-<td>Gauge</td>
-<td>Number of hits on old txs in the tx meta cache</td>
 </tr>
 <tr>
 <td><code>teranode_tx_meta_cache_valid_entries_count</code></td>
