@@ -1828,14 +1828,19 @@ cleanup:
 }
 
 // shouldArmProcessingTimer reports whether the per-message processing watchdog
-// should run for this command. With block prefetch enabled, OnBlock legitimately
-// blocks in AcquireBlockPrefetch under budget backpressure for longer than
-// PeerProcessingTimeout; block-stall detection is owned by the netsync stall
-// detector, the idle timer, and MaxBlockDownloadTime, so the watchdog is not
-// armed for block messages in that mode. It still arms for all other commands,
-// and for every command (including blocks) when prefetch is disabled.
-func shouldArmProcessingTimer(cmd string, prefetchEnabled bool) bool {
-	return !prefetchEnabled || cmd != wire.CmdBlock
+// should run for this command. With block prefetch ingestion active, OnBlock
+// legitimately blocks in AcquireBlockPrefetch under budget backpressure for
+// longer than PeerProcessingTimeout; block-stall detection is owned by the
+// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
+// watchdog is not armed for block messages in that mode. Prefetch ingestion is
+// active only with a configured budget and off regression net — regtest always
+// takes the synchronous path (see netsync.SyncManager.UsePrefetchIngestion,
+// which this predicate must mirror; it cannot be called here without an import
+// cycle), so regtest keeps the watchdog for blocks. It still arms for all other
+// commands, and for every command (including blocks) when ingestion is not active.
+func shouldArmProcessingTimer(cmd string, prefetchBudgetBytes int64, net wire.BitcoinNet) bool {
+	prefetchIngestion := prefetchBudgetBytes > 0 && net != wire.RegTestNet
+	return !prefetchIngestion || cmd != wire.CmdBlock
 }
 
 // inHandler handles all incoming messages for the peer.  It must be run as a goroutine.
@@ -1948,7 +1953,7 @@ out:
 		// PeerProcessingTimeout; block-stall detection is then owned by the
 		// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
 		// per-message watchdog must not fire for block messages in that mode.
-		if shouldArmProcessingTimer(rmsg.Command(), p.settings.Legacy.BlockPrefetchBufferBytes > 0) {
+		if shouldArmProcessingTimer(rmsg.Command(), p.settings.Legacy.BlockPrefetchBufferBytes, p.cfg.ChainParams.Net) {
 			processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
 		}
 
