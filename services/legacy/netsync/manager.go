@@ -1407,6 +1407,26 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	state.requestedBlocks.Delete(bmsg.blockHash)
 	sm.requestedBlocks.Delete(bmsg.blockHash)
 
+	// Per-block transient-failure backoff (#1187): if this block recently failed
+	// with a storage/service error, skip the expensive HandleBlockDirect path
+	// until the backoff window elapses instead of re-running the full decorate at
+	// full concurrency. Returning a retryable error (not sleeping) keeps the
+	// single block-processing goroutine free. The block was already removed from
+	// requestedBlocks above, so re-delivery is driven by the existing recovery
+	// plumbing — the next block arrives as an orphan of this un-stored one and
+	// triggers a getblocks, and/or the stall detector rotates the sync peer — not
+	// by a proactive re-request here. Placed before the block-size sampling below
+	// so a block re-delivered repeatedly while backed off does not keep re-sampling
+	// its size into the moving average and biasing calculateMaxInFlightBlocks()
+	// (only actually-processed blocks should feed the tracker). Nil-guarded: tests
+	// build SyncManager as a struct literal that bypasses New().
+	if sm.blockFailureBackoff != nil {
+		if fs, ok := sm.blockFailureBackoff.Get(bmsg.blockHash); ok && time.Now().Before(fs.nextRetry) {
+			sm.logger.Warnf("[handleBlockMsg][%s] in backoff after %d transient failure(s), skipping until %s", bmsg.blockHash, fs.attempts, fs.nextRetry)
+			return errors.NewServiceUnavailableError("[handleBlockMsg][%s] block in backoff after %d transient failure(s)", bmsg.blockHash, fs.attempts)
+		}
+	}
+
 	// Track block size for dynamic in-flight adjustment during headers-first mode.
 	// This allows us to start aggressive (20 blocks) and automatically reduce
 	// to 1 block when encountering large (>2GB) blocks on mainnet.
@@ -1418,23 +1438,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		avgSize := sm.blockSizeTracker.getAverageSize()
 		sm.logger.Debugf("[handleBlockMsg][%s] Block size: %d bytes, avg: %d bytes, dynamic max in-flight: %d",
 			bmsg.blockHash, blockSize, avgSize, dynamicMax)
-	}
-
-	// Per-block transient-failure backoff (#1187): if this block recently failed
-	// with a storage/service error, skip the expensive HandleBlockDirect path
-	// until the backoff window elapses instead of re-running the full decorate at
-	// full concurrency. Returning a retryable error (not sleeping) keeps the
-	// single block-processing goroutine free. The block was already removed from
-	// requestedBlocks above, so re-delivery is driven by the existing recovery
-	// plumbing — the next block arrives as an orphan of this un-stored one and
-	// triggers a getblocks, and/or the stall detector rotates the sync peer — not
-	// by a proactive re-request here. Nil-guarded: tests build SyncManager as a
-	// struct literal that bypasses New().
-	if sm.blockFailureBackoff != nil {
-		if fs, ok := sm.blockFailureBackoff.Get(bmsg.blockHash); ok && time.Now().Before(fs.nextRetry) {
-			sm.logger.Warnf("[handleBlockMsg][%s] in backoff after %d transient failure(s), skipping until %s", bmsg.blockHash, fs.attempts, fs.nextRetry)
-			return errors.NewServiceUnavailableError("[handleBlockMsg][%s] block in backoff after %d transient failure(s)", bmsg.blockHash, fs.attempts)
-		}
 	}
 
 	sm.logger.Debugf("[handleBlockMsg][%s] calling HandleBlockDirect", bmsg.blockHash)
