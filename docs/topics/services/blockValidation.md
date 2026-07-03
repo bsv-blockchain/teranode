@@ -1108,8 +1108,6 @@ The Block Validation Service uses gRPC for communication between nodes. The prot
 │   └── (catchup helper functions)
 ├── Client.go                               - Client-side API for block validation service.
 ├── Client_test.go                          - Client tests.
-├── deduplicator.go                         - Subtree deduplication to prevent redundant processing.
-├── deduplicator_test.go                    - Deduplication tests.
 ├── fork_manager.go                         - Fork tracking and chain reorganization management.
 ├── fork_manager_test.go                    - Fork manager tests.
 ├── fork_manager_atomic_counter_test.go     - Atomic counter tests for fork tracking.
