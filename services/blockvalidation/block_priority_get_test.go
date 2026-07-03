@@ -95,6 +95,72 @@ func TestBlockPriorityQueue_Get_SingleProcessableBlock(t *testing.T) {
 	assert.Equal(t, 0, pq.Size(), "Block should be removed from queue")
 }
 
+// TestBlockPriorityQueue_Get_FastPathDeepQueue verifies the steady-state fast path:
+// when the highest-priority (front) block is processable, Get claims it after probing
+// only that one block, without scanning the rest of a deep queue.
+func TestBlockPriorityQueue_Get_FastPathDeepQueue(t *testing.T) {
+	initPrometheusMetrics()
+	logger := ulogger.TestLogger{}
+	pq := NewBlockPriorityQueue(logger)
+	mockBP := NewMockBlockProcessor()
+	ctx := context.Background()
+
+	// Highest-priority (front) block is processable.
+	front := &chainhash.Hash{}
+	front[0] = 1
+	pq.Add(processBlockFound{hash: front}, PriorityChainExtending, 1000)
+	mockBP.SetCanProcess(front, true)
+
+	// Many lower-priority followers queued behind it.
+	for i := 2; i <= 100; i++ {
+		h := &chainhash.Hash{}
+		h[0] = byte(i)
+		pq.Add(processBlockFound{hash: h}, PriorityDeepFork, uint32(1000+i))
+		mockBP.SetCanProcess(h, false)
+	}
+
+	block, status := pq.Get(ctx, mockBP)
+	require.Equal(t, GetOK, status)
+	require.Equal(t, front, block.hash)
+	require.Equal(t, 99, pq.Size(), "only the front block should be removed")
+	require.Equal(t, 1, mockBP.GetCallCount(), "fast path should probe only the front block")
+}
+
+// TestBlockPriorityQueue_Get_SlowPathFallbackDeepQueue verifies the fallback: when the
+// front block is blocked, Get still scans the rest of the queue and returns a deeper
+// processable block.
+func TestBlockPriorityQueue_Get_SlowPathFallbackDeepQueue(t *testing.T) {
+	initPrometheusMetrics()
+	logger := ulogger.TestLogger{}
+	pq := NewBlockPriorityQueue(logger)
+	mockBP := NewMockBlockProcessor()
+	ctx := context.Background()
+
+	// Front block is blocked, forcing the slow-path scan.
+	front := &chainhash.Hash{}
+	front[0] = 1
+	pq.Add(processBlockFound{hash: front}, PriorityChainExtending, 1000)
+	mockBP.SetCanProcess(front, false)
+
+	// Followers sorted by height; only the last (deepest) one is processable.
+	var processable *chainhash.Hash
+	for i := 2; i <= 20; i++ {
+		h := &chainhash.Hash{}
+		h[0] = byte(i)
+		pq.Add(processBlockFound{hash: h}, PriorityNearFork, uint32(1000+i))
+		last := i == 20
+		mockBP.SetCanProcess(h, last)
+		if last {
+			processable = h
+		}
+	}
+
+	block, status := pq.Get(ctx, mockBP)
+	require.Equal(t, GetOK, status)
+	require.Equal(t, processable, block.hash)
+	require.Equal(t, 19, pq.Size(), "only the processable block should be removed")
+}
+
 // TestBlockPriorityQueue_Get_AllBlocksBlocked tests Get when all blocks are blocked
 func TestBlockPriorityQueue_Get_AllBlocksBlocked(t *testing.T) {
 	initPrometheusMetrics()
