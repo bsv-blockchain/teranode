@@ -846,12 +846,9 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 // Takes transactions directly (without coinbase nil entry).
 // Note: Subtree meta files (.subtreemeta) are intentionally skipped during quick validation
 // for performance. They will be generated on-demand if needed later.
-func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *model.Block, subtreeIdx int, subtree *subtreepkg.Subtree, txs []*bt.Tx, subtreeHash chainhash.Hash) error {
-	fullSubtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
-	if err != nil {
-		return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to check existence of full subtree %s", block.Hash().String(), subtreeHash.String(), err)
-	}
-
+func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *model.Block, subtreeIdx int, subtree *subtreepkg.Subtree, txs []*bt.Tx, subtreeHash chainhash.Hash, fullSubtreeExists bool) error {
+	// fullSubtreeExists was already computed during prefetch (readSubtree); reuse it
+	// instead of issuing another subtreeStore.Exists round-trip here.
 	if !fullSubtreeExists {
 		fullSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(subtree.Size())
 		if err != nil {
@@ -1265,9 +1262,10 @@ func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *
 		txRange := batch.txRanges[localIdx]
 		subtreeTxs := batch.batchTxs[txRange[0]:txRange[1]]
 		subtreeHash := batch.subtreeHashes[localIdx]
+		fullSubtreeExists := batch.fullSubtreeExists[localIdx]
 
 		writeG.Go(func() error {
-			return u.writeSubtreeFilesFromTxs(writeCtx, block, globalIdx, subtree, subtreeTxs, subtreeHash)
+			return u.writeSubtreeFilesFromTxs(writeCtx, block, globalIdx, subtree, subtreeTxs, subtreeHash, fullSubtreeExists)
 		})
 	}
 
