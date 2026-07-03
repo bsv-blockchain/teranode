@@ -218,7 +218,7 @@ func TestCompleteBlobDeletions(t *testing.T) {
 
 	completed1 := schedule("c1", 100)
 	completed2 := schedule("c2", 100)
-	failedRetry := schedule("f1", 100) // below max -> retry incremented
+	failedRetry := schedule("f1", 100)  // below max -> retry incremented
 	failedRemove := schedule("f2", 100) // at max -> removed
 
 	// Push failedRemove to one below its max so this completion pass trips it over.
