@@ -43,14 +43,12 @@ import (
 // These metrics are critical for operational monitoring and can help identify:
 // - Cache hit ratio (hits vs. misses) to evaluate cache effectiveness
 // - Insertion and eviction rates to detect memory pressure
-// - Age-related expiration patterns through hitOldTx tracking
 type metrics struct {
 	insertions atomic.Uint64 // Tracks number of items inserted into the cache; indicates write throughput
 	hits       atomic.Uint64 // Tracks number of successful cache retrievals; indicates cache effectiveness
 	misses     atomic.Uint64 // Tracks number of failed cache retrievals; helps identify sizing issues
 	evictions  atomic.Uint64 // Tracks number of items evicted from the cache; indicates memory pressure
 	getOrigin  atomic.Uint64 // Tracks origin-store metadata retrievals
-	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions; monitors expiration policy
 }
 
 const (
