@@ -21,7 +21,7 @@ func TestAssignBlockID_IdempotentPerHash(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -48,7 +48,7 @@ func TestAssignBlockID_ConcurrentCallersConverge(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 	h := chainhash.HashH([]byte("block-race"))
@@ -79,7 +79,7 @@ func TestAssignBlockID_ClearedOnCommit(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -108,7 +108,7 @@ func TestAssignBlockID_TwoPathRace_NoPhantom(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -159,7 +159,7 @@ func TestReserveDurableBlockID_CommittedDuringReserveReturnsCommittedID(t *testi
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -195,7 +195,7 @@ func TestReservationSweep_RunsWithInMemoryChainCheckDisabled(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -223,7 +223,7 @@ func TestReserveDurableBlockID_NextValError(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	require.NoError(t, s.Close()) // closed DB → GetNextBlockID fails
+	require.NoError(t, s.Close(context.Background())) // closed DB → GetNextBlockID fails
 
 	h := chainhash.HashH([]byte("block-nextval-error"))
 	_, err = s.reserveDurableBlockID(context.Background(), &h)
@@ -242,7 +242,7 @@ func TestAssignBlockID_DurableLookupError(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -277,7 +277,7 @@ func TestAssignBlockID_SurvivesTTLExpiry(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 	h := chainhash.HashH([]byte("block-ttl-expiry"))
@@ -306,7 +306,7 @@ func TestAssignBlockID_DurableReservationClearedOnCommit(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -337,7 +337,7 @@ func TestSweepStaleReservations(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -379,7 +379,7 @@ func TestAssignBlockID_DBError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Close the store (and its DB) so the committed-id lookup SELECT errors.
-	require.NoError(t, s.Close())
+	require.NoError(t, s.Close(context.Background()))
 
 	h := chainhash.HashH([]byte("block-db-error"))
 	_, err = s.AssignBlockID(context.Background(), &h)

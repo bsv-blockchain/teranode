@@ -91,6 +91,11 @@ spec:
             cpu: 1
             memory: 1Gi
   configMapName: teranode-operator-config
+  # Secret holding sensitive settings (blockchain_store, utxostore).
+  # Create it before applying this CR — see the installation docs.
+  envFrom:
+    - secretRef:
+        name: teranode-operator-secrets
   legacy:
     enabled: true
     spec:

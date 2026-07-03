@@ -237,12 +237,15 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 	_ = c.httpServer.AddHTTPHandler("/connection/websocket", c.authMiddleware(websocketHandler))
 	_ = c.httpServer.AddHTTPHandler("/client/", http.FileServer(http.Dir("./client")))
 
-	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = shutdownCancel
-
 	<-ctx.Done()
 
 	c.logger.Infof("[AssetService] Centrifuge (impl) service shutting down")
+
+	// Derive the graceful-shutdown timeout here, after ctx is already Done. Using
+	// WithoutCancel keeps ctx's values (e.g. tracing) while giving shutdown its own
+	// 5s budget; deriving it earlier would let the timer expire during the wait above.
+	shutdownContext, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer shutdownCancel()
 
 	if err = c.centrifugeNode.Shutdown(shutdownContext); err != nil {
 		c.logger.Errorf("[AssetService] Centrifuge (impl) node service shutdown error: %s", err)

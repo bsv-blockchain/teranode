@@ -45,6 +45,15 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 		return 0, nil
 	}
 
+	if settings.UtxoStore.ParentPreservationBlocks == 0 {
+		// Preserve-until would be set to the current height (blockHeight + 0) and then expire in the
+		// same pruner cycle (Phase 1b clears preserve_until <= currentHeight), so preservation would
+		// protect nothing. Skip rather than do the work. This is a misconfiguration — the default is
+		// 1440; use pruner_skipPreserveParents to disable preservation deliberately.
+		logger.Warnf("[pruner][%s:%d] phase 1: skipped — utxostore_parentPreservationBlocks=0 gives no protection window", blockHashStr, blockHeight)
+		return 0, nil
+	}
+
 	// Calculate cutoff block height
 	cutoffBlockHeight := blockHeight - settings.UtxoStore.UnminedTxRetention
 

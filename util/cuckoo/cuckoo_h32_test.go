@@ -123,6 +123,20 @@ func TestH32_SaturationLatchesAndShortCircuits(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// Measure a per-Insert floor on THIS machine so the bound auto-scales to
+	// the runner's speed instead of assuming a fast dev box (the old fixed 1s
+	// bound flaked on slow/contended CI runners). extract() is the hashing work
+	// every Insert does before the short-circuit; it's the cheapest honest
+	// proxy for irreducible per-op cost and scales with machine speed.
+	floorStart := time.Now()
+	var sink uint64
+	for i := 0; i < n; i++ {
+		fp, idx := cf.extract(&hashes[i])
+		sink += uint64(fp) + idx
+	}
+	floor := time.Since(floorStart)
+	require.NotZero(t, sink+1) // keep the loop from being optimised away
+
 	// Time a batch of Inserts that we expect to fail. With saturation
 	// latched, these should all return immediately (no eviction churn).
 	start := time.Now()
@@ -131,10 +145,15 @@ func TestH32_SaturationLatchesAndShortCircuits(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	// Sanity bound: if the short-circuit is broken and eviction runs for
-	// every Insert, we'd see ~100K × 500 kicks × ~30 ns = ~1.5 s. With
-	// the short-circuit, this loop should complete in well under 100 ms
-	// even on a modest machine. Allow generous slack for CI variance.
-	require.Less(t, elapsed, time.Second,
-		"saturated Insert short-circuit appears broken: %d Inserts took %v", n, elapsed)
+	// The saturated short-circuit does extract + two failed CAS probes
+	// (2 × bucketSize atomic loads) + an atomic flag load: a small constant
+	// multiple of the extract floor. A broken short-circuit would run the full
+	// eviction loop (up to maxKicks=500 kicks per Insert), i.e. ~2 orders of
+	// magnitude more work. A 50× floor bound (plus a small constant to absorb
+	// timer noise) sits comfortably between the two and rides the machine's
+	// speed, so it catches a broken short-circuit without flaking on slow CI.
+	bound := 50*floor + 100*time.Millisecond
+	require.Less(t, elapsed, bound,
+		"saturated Insert short-circuit appears broken: %d Inserts took %v (floor %v, bound %v)",
+		n, elapsed, floor, bound)
 }

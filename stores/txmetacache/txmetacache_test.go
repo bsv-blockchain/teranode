@@ -892,6 +892,82 @@ func Test_TxMetaCache_BatchDecorate(t *testing.T) {
 
 // Note: GetSpend test skipped due to type compatibility issues
 
+// TestBatchDecorate_DoesNotCachePartialInpoints pins the producer-side root-cause
+// fix: BatchDecorate must never cache a partial meta — a non-coinbase tx whose
+// TxInpoints (parent tx hashes) was not populated, as a reduced-field
+// BatchDecorate ({BlockIDs, BlockHeights}) yields. Caching it poisons the cache
+// and wedges block validation because subtree-meta serialization rejects an
+// inpoints-less non-coinbase node.
+func TestBatchDecorate_DoesNotCachePartialInpoints(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+	require.NoError(t, ns.SetBlockHeight(100))
+
+	// The store returns a partial meta: non-coinbase but no parent tx hashes.
+	partial := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		BlockIDs:    make([]uint32, 0),
+	}
+	store := &decoratingNullStore{NullStore: ns, metaData: partial}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	h := chainhash.HashH([]byte("partial-batchdecorate"))
+	items := []*utxo.UnresolvedMetaData{{Hash: h}}
+
+	err = cache.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights)
+	require.NoError(t, err)
+
+	_, found := cache.GetMetaCached(ctx, h)
+	require.False(t, found, "BatchDecorate must not cache a partial (inpoints-less) non-coinbase meta")
+}
+
+// TestBatchDecorate_CachesCompleteInpoints is the positive counterpart: a meta
+// with populated parent tx hashes is complete and must be cached as before.
+func TestBatchDecorate_CachesCompleteInpoints(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+	require.NoError(t, ns.SetBlockHeight(100))
+
+	parent := chainhash.HashH([]byte("parent"))
+	in := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, in.PreviousTxIDAdd(&parent))
+	ti, err := subtree.NewTxInpointsFromInputs([]*bt.Input{in})
+	require.NoError(t, err)
+
+	complete := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  ti,
+		BlockIDs:    make([]uint32, 0),
+	}
+	store := &decoratingNullStore{NullStore: ns, metaData: complete}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	h := chainhash.HashH([]byte("complete-batchdecorate"))
+	items := []*utxo.UnresolvedMetaData{{Hash: h}}
+
+	err = cache.BatchDecorate(ctx, items, fields.Fee, fields.SizeInBytes, fields.TxInpoints)
+	require.NoError(t, err)
+
+	cached, found := cache.GetMetaCached(ctx, h)
+	require.True(t, found, "BatchDecorate must cache a complete meta")
+	require.Len(t, cached.TxInpoints.ParentTxHashes, 1)
+}
+
 func Test_TxMetaCache_MiningOperations(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)

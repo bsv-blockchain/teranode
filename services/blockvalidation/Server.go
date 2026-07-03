@@ -129,6 +129,11 @@ type Server struct {
 	// for checking if coinbase transactions have been processed
 	blockAssemblyClient blockassembly.ClientI
 
+	// subtreeValidationClient is the subtree validation client this server
+	// constructs in Init (service-owned, not borrowed from the daemon). It is
+	// closed exactly once in Stop().
+	subtreeValidationClient subtreevalidation.Interface
+
 	// blockFoundCh receives notifications of newly discovered blocks
 	// that need validation. This channel buffers requests when high load occurs.
 	blockFoundCh chan processBlockFound
@@ -602,6 +607,19 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("[Init] failed to create subtree validation client", err)
 	}
 
+	// Service-owned: retain it so Stop() closes it. If Init fails before
+	// completing, close it here and clear the field so Stop() doesn't double
+	// close (closeSubtreeValidationClient is nil-safe and idempotent).
+	u.subtreeValidationClient = subtreeValidationClient
+
+	initOK := false
+
+	defer func() {
+		if !initOK {
+			u.closeSubtreeValidationClient()
+		}
+	}()
+
 	storeURL := u.settings.UtxoStore.UtxoStore
 	if storeURL == nil {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
@@ -682,7 +700,28 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}()
 
+	initOK = true
+
 	return nil
+}
+
+// closeSubtreeValidationClient closes the service-owned subtree validation
+// client exactly once. Nil-safe (for Server-literal test fixtures that never
+// ran Init) and idempotent (clears the field after closing). The client is held
+// by the Interface type, which does not declare Close, so it is closed via the
+// optional Close() error the concrete client gained in Fix group A.
+func (u *Server) closeSubtreeValidationClient() {
+	if u.subtreeValidationClient == nil {
+		return
+	}
+
+	if c, ok := u.subtreeValidationClient.(interface{ Close() error }); ok {
+		if err := c.Close(); err != nil {
+			u.logger.Errorf("[BlockValidation] failed to close subtree validation client: %v", err)
+		}
+	}
+
+	u.subtreeValidationClient = nil
 }
 
 func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
@@ -1047,10 +1086,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // It ensures clean termination of all service resources and connections.
 //
 // Parameters:
-//   - ctx: Context for shutdown operations (currently unused)
+//   - ctx: Context bounding the shutdown; the BlockValidation.Close() (which stops the invalid-block producer) is raced against it so a wedged broker can't stall shutdown
 //
 // Returns an error if shutdown encounters issues, though typically returns nil
-func (u *Server) Stop(_ context.Context) error {
+func (u *Server) Stop(ctx context.Context) error {
 	u.processBlockNotify.Stop()
 	u.catchupAlternatives.Stop()
 	// nil-guarded: this cache is newer than some Server-literal test fixtures that
@@ -1063,12 +1102,35 @@ func (u *Server) Stop(_ context.Context) error {
 	if u.blockValidation != nil {
 		u.blockValidation.Wait()
 		u.blockValidation.StopCaches()
+
+		// DC11: drain the BlockValidation-owned invalid-block kafka producer via
+		// Close(). Close() ends in a producer Stop() whose final flush does not
+		// honour a deadline, so it is raced against ctx here: a wedged broker flush
+		// can't block past the bounded Stop() window, and the outstanding Close()
+		// (its inner producer Stop()) finishes the flush later if it can. Guarded
+		// and non-fatal.
+		closeDone := make(chan struct{})
+		go func() {
+			defer close(closeDone)
+			if err := u.blockValidation.Close(); err != nil {
+				u.logger.Errorf("[BlockValidation] failed to close block validation cleanly: %v", err)
+			}
+		}()
+
+		select {
+		case <-closeDone:
+		case <-ctx.Done():
+			u.logger.Errorf("[BlockValidation] block validation close exceeded stop budget; relying on outstanding close: %v", ctx.Err())
+		}
 	}
 
 	// close the kafka consumer gracefully
 	if err := u.kafkaConsumerClient.Close(); err != nil {
 		u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 	}
+
+	// close the service-owned subtree validation client (constructed in Init)
+	u.closeSubtreeValidationClient()
 
 	return nil
 }
@@ -1673,7 +1735,45 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			return
 		}
 
-		// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue
+		// Peer-side failure: every peer we tried (primary + alternatives)
+		// returned bad/incomplete data or rejected/failed the request.
+		// Distinguished from ErrServiceError so the silent "clear markers,
+		// retry" loop below doesn't absorb peer issues. We clear markers (so
+		// future P2P notifications for this block can re-trigger catchup),
+		// report peer failure for the originating peer (so P2P routes the
+		// next attempt to a different peer), and log loudly. This avoids the
+		// hot-loop where the same peer keeps being asked for the same
+		// missing subtree data.
+		//
+		// ORDER IS LOAD-BEARING: this check must run before the
+		// ErrServiceError check. errors.Is matches by code across the whole
+		// wrapped chain, and the ERR_EXTERNAL classification from
+		// fetchAndStoreSubtreeAndSubtreeData arrives buried mid-chain — it
+		// wraps the per-peer ServiceError, and is itself re-wrapped by
+		// fetchSubtreeDataForBlock (ServiceError) and orderedDelivery
+		// (ProcessingError) on the way up. So errors.Is(err, ErrServiceError)
+		// is also true for these errors, and matching on the outermost code
+		// would see ERR_PROCESSING. ERR_EXTERNAL anywhere in the chain means
+		// a peer-side failure was classified, which is what we dispatch on.
+		if errors.Is(err, errors.ErrExternal) {
+			// #1057: count this cycle toward the per-block cap (unless it made
+			// progress) so persistently failing peers cannot drive unbounded
+			// re-entry via repeated P2P notifications.
+			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
+			u.logger.Warnf("[catchup] All peers failed for block %s (attempt %d/%d), clearing markers and reporting peer failure to allow retry from a different peer: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
+			u.processBlockNotify.Delete(*c.block.Hash())
+			u.catchupAlternatives.Delete(*c.block.Hash())
+			u.reportCatchupFailure(ctx, c.peerID)
+
+			if reportErr := u.blockchainClient.ReportPeerFailure(ctx, c.block.Hash(), c.peerID, "catchup", err.Error()); reportErr != nil {
+				u.logger.Errorf("[catchup] failed to report peer failure for block %s peer %s: %v", c.block.Hash().String(), c.peerID, reportErr)
+			}
+
+			return
+		}
+
+		// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue.
+		// Must run after the ErrExternal check above (see the ordering note there).
 		if errors.Is(err, errors.ErrServiceError) {
 			// #1057: count this cycle toward the per-block cap (unless it made
 			// progress) so a persistent local service error cannot drive unbounded

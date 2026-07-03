@@ -118,7 +118,13 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 	}, nil
 }
 
-// NewBlockFromMsgBlock creates a new model.Block from a wire.MsgBlock
+// NewBlockFromMsgBlock creates a new model.Block from a wire.MsgBlock.
+//
+// All non-coinbase transactions are packed into a single subtree sized to the
+// transaction count. This is intended for the genesis block and the small
+// offline/test blocks that are this constructor's only callers; it is NOT
+// subtree-size-limit aware and must not be used to assemble real, full-sized
+// blocks (which split transactions across multiple bounded subtrees).
 func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Settings) (*Block, error) {
 	if msgBlock == nil {
 		return nil, errors.NewInvalidArgumentError("msgBlock is nil")
@@ -182,15 +188,59 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 	if err = subtree.AddCoinbaseNode(); err != nil {
 		return nil, errors.NewSubtreeError("failed to add coinbase placeholder", err)
 	}
-	// TODO: support more than coinbase tx in the subtree
-	// if txCount > 1 {
-	// 	// loop through the transactions ignoring the first coinbase tx and add them to the subtrees list
 
-	// 	// subtrees = append(subtrees, subtree.RootHash())
-	// }
+	// Add every non-coinbase transaction to the subtree so the resulting block
+	// exposes its full transaction set, not just the coinbase. Without this,
+	// block.Valid() and the block-validation service skip all per-transaction
+	// checks for a block built from a wire.MsgBlock, because they gate those
+	// checks on the block carrying at least one subtree root.
+	//
+	// Transaction input values are not available from a raw (non-extended) block,
+	// so the per-node fee is recorded as 0 here. That is enough to place the
+	// transaction in the subtree and to validate consensus rules that do not depend
+	// on fees (e.g. sequence locks): the subtree-validation/store path recomputes and
+	// rewrites fee metadata when it persists and validates the subtree. Note that
+	// model.Block.Valid()'s block-reward check sums the SubtreeSlices fees directly
+	// and does not recompute them, so validating a block in memory straight from this
+	// constructor is only sound for offline blocks whose coinbase claims no fees
+	// (subsidy only). A single subtree holds the whole block, which is sufficient for
+	// the offline blocks this constructor handles.
+	for i := 1; i < len(msgBlock.Transactions); i++ {
+		// The transaction hash is the canonical double-SHA256 of the wire
+		// serialization, identical to the value the subtree/merkle path expects.
+		hash := msgBlock.Transactions[i].TxHash()
 
-	// Create and return the new Block
-	return NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0)
+		txSize, sizeErr := safeconversion.IntToUint64(msgBlock.Transactions[i].SerializeSize())
+		if sizeErr != nil {
+			return nil, errors.NewProcessingError("failed to compute size for transaction %d", i, sizeErr)
+		}
+
+		if addErr := subtree.AddNode(hash, 0, txSize); addErr != nil {
+			return nil, errors.NewSubtreeError("failed to add transaction %d to subtree", i, addErr)
+		}
+	}
+
+	// Only a block that carries transactions beyond the coinbase gets a subtree
+	// root recorded on the block. A coinbase-only block (e.g. the genesis block)
+	// keeps an empty subtree list, preserving the historical behaviour of this
+	// function and its callers.
+	var subtreeSlices []*subtreepkg.Subtree
+
+	if txCount > 1 {
+		subtrees = append(subtrees, subtree.RootHash())
+		subtreeSlices = []*subtreepkg.Subtree{subtree}
+	}
+
+	// Create the new Block. NewBlock never returns an error, so the result is
+	// used directly.
+	block, _ := NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0)
+
+	// Retain the in-memory subtree so in-process callers can validate the block
+	// without a subtree-store round trip. This field is not serialised, so it is
+	// dropped when the block is sent over the wire.
+	block.SubtreeSlices = subtreeSlices
+
+	return block, nil
 }
 
 func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
@@ -695,10 +745,16 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 	}
 
 	if len(diskMapDirs) > 0 {
+		// An empty (coinbase-only) block has TransactionCount == 0, but the
+		// mmap-backed table rejects a zero capacity — clamp to 1.
+		filterCapacity := b.TransactionCount
+		if filterCapacity == 0 {
+			filterCapacity = 1
+		}
 		diskMap, diskErr := NewDiskTxMapUint64(DiskTxMapUint64Options{
 			BasePaths:      diskMapDirs,
 			Prefix:         "bv-txmap",
-			FilterCapacity: uint(b.TransactionCount),
+			FilterCapacity: uint(filterCapacity),
 		})
 		if diskErr != nil {
 			return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to create disk tx map", b.String(), diskErr)
@@ -802,6 +858,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		parentSpendsCapacityMultiplier = 1
 	}
 	expectedInpoints := b.TransactionCount * parentSpendsCapacityMultiplier
+	if expectedInpoints == 0 {
+		// Empty (coinbase-only) block: TransactionCount == 0, but the
+		// mmap-backed table rejects a zero capacity — clamp to 1.
+		expectedInpoints = 1
+	}
 
 	var psMap ParentSpendsMap
 	if len(diskMapDirs) > 0 {

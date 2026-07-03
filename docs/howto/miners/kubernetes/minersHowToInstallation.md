@@ -166,6 +166,39 @@ helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/helm/teran
     -f deploy/kubernetes/teranode/teranode-operator.yaml
 ```
 
+#### Create the Teranode Secret
+
+Sensitive settings (`blockchain_store` and `utxostore` — they contain database
+credentials and connection strings) are **not** stored in the ConfigMap. They are
+supplied through a Kubernetes Secret named `teranode-operator-secrets`, which the
+Cluster CR references via `spec.envFrom`. This Secret is intentionally not committed
+to the repository — you must create it yourself.
+
+Create it with a manifest (replace the example values with your own credentials):
+
+```yaml
+# teranode-secret.yaml — DO NOT commit this file
+apiVersion: v1
+kind: Secret
+metadata:
+  name: teranode-operator-secrets
+  namespace: teranode-operator
+type: Opaque
+stringData:
+  blockchain_store: "postgres://POSTGRES_EXAMPLE_URI_CHANGE_ME"
+  utxostore: "aerospike://AEROSPIKE_EXAMPLE_URI_CHANGE_ME"
+```
+
+```bash
+kubectl apply -f teranode-secret.yaml -n teranode-operator
+```
+
+The keys in the Secret are injected into the Teranode pods as environment variables,
+overriding the corresponding settings. Keep the Secret out of version control and
+rotate the database credentials for production deployments.
+
+If you manage your keys via different secret providers ([1password](https://github.com/1Password/onepassword-operator), [External Secrets](https://github.com/external-secrets/external-secrets), [Vault](https://github.com/hashicorp/vault-secrets-operator)), please make sure that the secret passed to Teranode Operator is ready.
+
 #### Apply Teranode Configuration
 
 Apply the Teranode configuration and custom resources:

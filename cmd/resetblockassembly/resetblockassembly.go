@@ -29,6 +29,7 @@ func ResetBlockAssembly(logger ulogger.Logger, settings *settings.Settings, full
 	if err != nil {
 		return errors.NewConfigurationError("failed to create block assembly client: %w", err)
 	}
+	defer func() { _ = ba.Close() }()
 
 	if validateInputs {
 		if err = ba.ResetBlockAssemblyValidateInputs(ctx); err != nil {

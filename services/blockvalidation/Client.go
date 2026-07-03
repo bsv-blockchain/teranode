@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"google.golang.org/grpc"
 )
 
 // Client provides an interface to interact with the block validation service.
@@ -33,6 +34,9 @@ import (
 type Client struct {
 	// apiClient handles gRPC communication with the validation service
 	apiClient blockvalidation_api.BlockValidationAPIClient
+
+	// conn is the gRPC connection owned by this client; closed by Close()
+	conn *grpc.ClientConn
 
 	// logger provides structured logging capabilities
 	logger ulogger.Logger
@@ -71,11 +75,21 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	client := &Client{
 		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
+		conn:      baConn,
 		logger:    logger,
 		settings:  tSettings,
 	}
 
 	return client, nil
+}
+
+// Close releases the gRPC connection owned by this client.
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+
+	return nil
 }
 
 // Health performs a comprehensive health check of the block validation service.

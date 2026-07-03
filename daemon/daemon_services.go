@@ -303,6 +303,8 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
+	d.daemonStores.retainClient(blockAssemblyClient)
+
 	// Create a Kafka consumer group for rejected transactions
 	var rejectedTxKafkaConsumerClient *kafka.KafkaConsumerGroup
 
@@ -488,6 +490,8 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
+	d.daemonStores.retainClient(legacyPeerClient)
+
 	p2pClient, err := d.daemonStores.GetP2PClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
 		return err
@@ -569,6 +573,8 @@ func (d *Daemon) startAlertService(ctx context.Context, appSettings *settings.Se
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(peerClient)
 
 	// Create the P2P client for the Alert service
 	p2pClient, err = d.daemonStores.GetP2PClient(ctx, createLogger(loggerAlert), appSettings)
@@ -876,6 +882,8 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		d.daemonStores.retainClient(blockAssemblyClient)
+
 		// Create the P2P client for the BlockValidation service
 		var p2pClient p2p.ClientI
 
@@ -985,6 +993,8 @@ func (d *Daemon) startValidatorService(
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(blockAssemblyClient)
 
 	// Add the Validator service to the ServiceManager
 	return d.ServiceManager.AddService(serviceValidatorFormal, validator.NewServer(
@@ -1139,6 +1149,8 @@ func (d *Daemon) startLegacyService(
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(blockassemblyClient)
 
 	// Add the Legacy service to the ServiceManager
 	return d.ServiceManager.AddService(serviceLegacyFormal, legacy.New(

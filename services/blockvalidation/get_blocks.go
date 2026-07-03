@@ -112,10 +112,6 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 		defer close(workQueue)
 
 		// In production, commonAncestorMeta is always set during catchup initialization
-		if catchupCtx == nil {
-			return errors.NewProcessingError("[catchup:fetchBlocksConcurrently][%s] catchupCtx must not be nil", blockUpTo.Hash().String())
-		}
-
 		if catchupCtx.commonAncestorMeta == nil {
 			return errors.NewProcessingError("[catchup:fetchBlocksConcurrently][%s] commonAncestorMeta must not be nil", blockUpTo.Hash().String())
 		}
@@ -700,10 +696,24 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 		}
 	}
 
-	// All peers failed. errors.NewServiceError extracts the trailing error param as
-	// the wrapped error, so a "%v" placeholder for lastErr would render as
-	// %!v(MISSING). The wrapped error is preserved in the chain.
-	return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s", subtreeHash.String(), lastErr)
+	// All peers failed. Classify as ErrExternal — every peer we tried returned bad data
+	// or rejected/failed the request, but none of the local infrastructure (subtree
+	// store, blockchain client, context) failed. ErrServiceError is reserved for genuine
+	// local failures and the catchup top-level handler short-circuits ErrServiceError
+	// into a silent "clear markers, retry" loop that hides peer-data-quality issues.
+	// With ErrExternal the handler reports peer failure and lets P2P switch peers instead.
+	//
+	// Note on detection: lastErr usually carries ERR_SERVICE_ERROR (the per-peer HTTP
+	// fetch wrappers), and callers wrap this error further (fetchSubtreeDataForBlock
+	// adds a ServiceError, orderedDelivery a ProcessingError), so by the time it
+	// reaches processCatchupChItem the ERR_EXTERNAL code sits mid-chain and
+	// errors.Is(err, ErrServiceError) is also true. The handler therefore checks
+	// ErrExternal before ErrServiceError — see processCatchupChItem.
+	//
+	// errors.NewExternalError extracts the trailing error param as the wrapped error,
+	// so a "%v" placeholder for lastErr would render as %!v(MISSING). The wrapped error
+	// is preserved in the chain.
+	return "", errors.NewExternalError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s", subtreeHash.String(), lastErr)
 }
 
 // fetchSubtreeFromPeer fetches subtree (for subtreeToCheck) from a peer via HTTP
@@ -909,7 +919,7 @@ func reverseBlocks(blocks []*model.Block) {
 // verifyBlockHeaders checks that each fetched block's hash matches the expected header.
 func verifyBlockHeaders(blocks []*model.Block, headers []*model.BlockHeader, blockUpTo *model.Block) error {
 	for j, block := range blocks {
-		if block.Hash().String() != headers[j].Hash().String() {
+		if !block.Hash().IsEqual(headers[j].Hash()) {
 			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s",
 				blockUpTo.Hash().String(), j, headers[j].Hash().String(), block.Hash().String())
 		}

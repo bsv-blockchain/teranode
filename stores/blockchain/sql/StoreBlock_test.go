@@ -50,7 +50,7 @@ func TestStoreBlock_Genesis(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Test storing regular blocks (genesis is automatically handled by framework)
 	// Store first regular block
@@ -67,7 +67,7 @@ func TestStoreBlock_RegularBlock(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store regular blocks (genesis is automatically handled)
 	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer")
@@ -89,7 +89,7 @@ func TestStoreBlock_WithOptions(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store block with options (genesis is automatically handled)
 	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer",
@@ -107,7 +107,7 @@ func TestStoreBlock_DuplicateBlock(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store block first time
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -128,7 +128,7 @@ func TestStoreBlock_InvalidPreviousBlock(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Create a block that references a non-existent previous block
 	nonExistentPrevHash, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
@@ -164,7 +164,7 @@ func TestStoreBlock_ContextCancellation(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Create cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -185,7 +185,7 @@ func TestStoreBlock_WithCustomID(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store first block with custom ID
 	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer",
@@ -209,7 +209,7 @@ func TestStoreBlock_InvalidCustomIDForGenesis(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store block first time
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -231,7 +231,7 @@ func TestStoreBlock_InvalidBlock(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store block marked as invalid
 	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer", options.WithInvalid(true))
@@ -247,7 +247,7 @@ func TestGetPreviousBlockInfo_FromCache(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store a block to populate cache
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -269,7 +269,7 @@ func TestGetPreviousBlockInfo_FromDatabase(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store a block
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -294,7 +294,7 @@ func TestGetPreviousBlockInfo_NotFound(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Try to get info for non-existent block
 	nonExistentHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
@@ -311,7 +311,7 @@ func TestGetPreviousBlockInfo_ContextCancellation(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Clear response cache to force database lookup
 	s.ResetResponseCache()
@@ -369,7 +369,7 @@ func TestGetPreviousBlockData_Genesis(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Test genesis block data
 	coinbaseTxID := s.chainParams.GenesisBlock.Transactions[0].TxHash().String()
@@ -391,7 +391,7 @@ func TestGetPreviousBlockData_RegularBlock(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store first block to create a valid parent for block2
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -415,7 +415,7 @@ func TestGetPreviousBlockData_MissingPreviousBlock(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Create a block with non-existent previous block hash
 	nonExistentPrevHash, _ := chainhash.NewHashFromStr("2222222222222222222222222222222222222222222222222222222222222222")
@@ -468,7 +468,7 @@ func TestValidateCoinbaseHeight_NoValidationNeeded(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Test block with version 1 (no BIP34 validation required)
 	blockVersion1 := &model.Block{
@@ -489,7 +489,7 @@ func TestValidateCoinbaseHeight_NoCoinbaseTx(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Test block without coinbase transaction
 	blockNoCoinbase := &model.Block{
@@ -510,7 +510,7 @@ func TestValidateCoinbaseHeight_PreBIP34(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Test with block height before BIP34 activation
 	err = s.validateCoinbaseHeight(block1, 100) // height < 227835
@@ -538,7 +538,7 @@ func TestStoreBlock_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Close database to cause error
-	s.Close()
+	s.Close(context.Background())
 
 	// Try to store block with closed database
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -553,7 +553,7 @@ func TestStoreBlock_CacheManagement(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store block
 	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer")
@@ -575,7 +575,7 @@ func TestStoreBlock_MinerExtraction(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store block (has coinbase transaction)
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -596,7 +596,7 @@ func TestStoreBlock_SequenceOfBlocks(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store sequence of blocks
 	blockID1, height1, err := s.StoreBlock(context.Background(), block1, "peer-1")
@@ -621,7 +621,7 @@ func TestStoreBlock_ValidCoinbaseTransaction(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// First store a normal block to create a valid parent
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -655,7 +655,7 @@ func TestStoreBlock_NilCoinbaseTransaction(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// First store a normal block to create a valid parent
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -690,7 +690,7 @@ func TestStoreBlock_InheritInvalidFromParent(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Genesis is automatically handled by New()
 
@@ -719,7 +719,7 @@ func TestStoreBlock_ContextCancellationDuringPrevBlockLookup(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Clear response cache to force database lookup
 	s.ResetResponseCache()
@@ -741,7 +741,7 @@ func TestGetPreviousBlockData_ContextCancellation(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Clear response cache to force database lookup
 	s.ResetResponseCache()
@@ -781,7 +781,7 @@ func TestValidateCoinbaseHeight_PostBIP34InvalidHeight(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Create a block that would be post-BIP34 but with invalid coinbase height extraction
 	// This test verifies the BIP34 validation logic, though exact behavior depends on
@@ -806,7 +806,7 @@ func TestStoreBlock_SubtreeProcessing(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Genesis is automatically handled by New()
 
@@ -830,7 +830,7 @@ func TestStoreBlock_TimeConversionHandling(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Normal block storage should handle time conversion correctly
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -849,7 +849,7 @@ func TestStoreBlock_ResponseCacheInvalidation(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store a block - should invalidate response cache
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
@@ -868,7 +868,7 @@ func TestStoreBlock_WithPersistedAt(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -928,7 +928,7 @@ func TestStoreBlock_WithPersistedAt_Postgres(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store block without WithPersistedAt - should be NULL
 	blockID1, _, err := s.StoreBlock(ctx, block1, "test-peer")

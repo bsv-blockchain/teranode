@@ -267,6 +267,18 @@ Limits deletions per cycle to prevent overwhelming the blob store. Remaining del
 
 When enabled, parent transactions will not be protected from deletion even if they have unmined children.
 
+### pruner_skipProcessExpiredPreservations
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_skipProcessExpiredPreservations`
+
+**Description**: Skip Phase 1b - expire old parent preservations
+
+When disabled (default), each pruner cycle clears expired PreserveUntil markers and re-stamps DeleteAtHeight on preserved parents that have become safe to prune (mined, on the longest chain, and fully spent, or conflicting). When enabled, preserved parents keep PreserveUntil set and DeleteAtHeight cleared indefinitely and are never pruned. Intended as an emergency kill-switch only.
+
 ### pruner_skipDeletions
 
 **Type**: Boolean

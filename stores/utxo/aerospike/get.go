@@ -559,6 +559,64 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 	return newBins
 }
 
+// buildBatchRecords constructs the per-item aerospike BatchRead records for a
+// BatchDecorate call: one aerospike.Key per item (digest of the tx hash) plus
+// the expanded field-name set to read. It also records the expanded field set
+// back onto each item (item.Fields) so the result-parsing pass knows which bins
+// were requested. This is pure construction — no network I/O — which makes it
+// the unit the allocation benchmark targets.
+func (s *Store) buildBatchRecords(items []*utxo.UnresolvedMetaData, policy *aerospike.BatchReadPolicy, optionalFields []fields.FieldName) ([]aerospike.BatchRecordIfc, error) {
+	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
+
+	// Most BatchDecorate calls request a uniform field set for every item:
+	// callers either pass optionalFields or rely on the default and leave
+	// item.Fields nil. Expand that shared set and convert it to wire names ONCE
+	// and reuse the (read-only) results across every such item, instead of
+	// re-expanding and re-allocating per item. Items that carry their own
+	// item.Fields (the rare per-item path) are expanded individually below.
+	//
+	// The shared slices are only read downstream: the result-parsing pass ranges
+	// over item.Fields, and the aerospike client only reads BatchRead BinNames
+	// (it never sorts or mutates them in place), so sharing one backing array
+	// across records is safe.
+	sharedBins := optionalFields
+	if len(sharedBins) == 0 {
+		sharedBins = defaultDecorateBins
+	}
+
+	sharedExpanded := s.addAbstractedBins(sharedBins)
+	sharedNames := fields.FieldNamesToStrings(sharedExpanded)
+
+	for idx, item := range items {
+		key, err := aerospike.NewKey(s.namespace, s.setName, item.Hash[:])
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
+		}
+
+		expanded := sharedExpanded
+		names := sharedNames
+
+		if len(item.Fields) > 0 {
+			// Item-specific field set: expand and convert it on its own.
+			expanded = s.addAbstractedBins(item.Fields)
+			names = fields.FieldNamesToStrings(expanded)
+		}
+
+		item.Fields = expanded
+
+		// Add to batch
+		batchRecords[idx] = aerospike.NewBatchRead(policy, key, names)
+	}
+
+	return batchRecords, nil
+}
+
+// defaultDecorateBins is the field set BatchDecorate reads when the caller
+// requests none — optimized for common use cases without scripts. Services that
+// need the full transaction (persister, API) explicitly request fields.Tx. Kept
+// package-level so the common path does not re-allocate it per item.
+var defaultDecorateBins = []fields.FieldName{fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase}
+
 // BatchDecorate efficiently fetches metadata for multiple transactions.
 // It optimizes database access by:
 //   - Batching multiple queries
@@ -571,8 +629,6 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 //   - items: Transactions to fetch
 //   - fields: Optional fields to retrieve
 func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, optionalFields ...fields.FieldName) error {
-	var err error
-
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	// we only want to read from the master for tx metadata, due to blockIDs being updated
 	// however we still want to read from the replica for the utxos in case of aerospike failures
@@ -580,28 +636,9 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 	policy := util.GetAerospikeBatchReadPolicy(s.settings)
 
-	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
-
-	for idx, item := range items {
-		key, err := aerospike.NewKey(s.namespace, s.setName, item.Hash[:])
-		if err != nil {
-			return errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
-		}
-
-		// Default fields - optimized for common use cases without scripts
-		// Services that need full transaction (persister, API) explicitly request fields.Tx
-		bins := []fields.FieldName{fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase}
-		if len(item.Fields) > 0 {
-			bins = item.Fields
-		} else if len(optionalFields) > 0 {
-			bins = optionalFields
-		}
-
-		item.Fields = s.addAbstractedBins(bins)
-
-		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(item.Fields))
-		// Add to batch
-		batchRecords[idx] = record
+	batchRecords, err := s.buildBatchRecords(items, policy, optionalFields)
+	if err != nil {
+		return err
 	}
 
 	if len(batchRecords) == 0 {

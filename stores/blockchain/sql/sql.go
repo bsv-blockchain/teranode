@@ -383,7 +383,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 
 	// Always reclaim abandoned durable block-id reservations: the table is written
 	// regardless of useInMemoryChainCheck, so its sweep must run regardless too.
-	go s.reservationSweepLoop()
+	go s.reservationSweepLoop(reservationSweepInterval)
 
 	return s, nil
 }
@@ -406,7 +406,7 @@ func (s *SQL) GetDBEngine() util.SQLEngine {
 	return s.engine
 }
 
-func (s *SQL) Close() error {
+func (s *SQL) Close(_ context.Context) error {
 	// Signal the background refresh goroutine to stop.
 	if s.backgroundDone != nil {
 		select {
@@ -1809,8 +1809,13 @@ var reservationSweepInterval = 10 * time.Minute
 // sweep, or a toggle-off node would never reclaim reservations for blocks that get
 // an id but never commit — failed validation, crash-before-commit, abandoned
 // forks — letting the table grow unbounded.)
-func (s *SQL) reservationSweepLoop() {
-	ticker := time.NewTicker(reservationSweepInterval)
+//
+// The interval is passed as a parameter (evaluated synchronously at the go
+// statement in New) rather than read from the reservationSweepInterval global,
+// so a test reassigning the global cannot race with a loop goroutine from a
+// previously created store.
+func (s *SQL) reservationSweepLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

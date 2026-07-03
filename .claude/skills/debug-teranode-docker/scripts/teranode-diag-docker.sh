@@ -58,11 +58,11 @@ subheader() { echo ""; echo "── $1 ──"; }
 
 # ── Discovery ────────────────────────────────────────────────────────────────
 # Compose project: the project label most common among containers running a teranode image.
-if [ -z "$COMPOSE_PROJECT" ]; then
+if [[ -z "$COMPOSE_PROJECT" ]]; then
     COMPOSE_PROJECT=$(docker ps --format '{{.Label "com.docker.compose.project"}}\t{{.Image}}' 2>/dev/null \
         | grep -iE 'teranode' | awk -F'\t' '{print $1}' | grep -v '^$' | sort | uniq -c | sort -rn | awk 'NR==1{print $2}')
 fi
-if [ -z "$COMPOSE_PROJECT" ]; then
+if [[ -z "$COMPOSE_PROJECT" ]]; then
     echo "No teranode compose project detected. Is the stack running? (docker compose ls)" >&2
     docker compose ls 2>/dev/null
     exit 1
@@ -72,7 +72,7 @@ fi
 PROJ_FILTER="label=com.docker.compose.project=$COMPOSE_PROJECT"
 # (read loop rather than mapfile/readarray — those are bash 4+, macOS ships bash 3.2)
 ALL_ROWS=()
-while IFS= read -r _row; do [ -n "$_row" ] && ALL_ROWS+=("$_row"); done < <(docker ps -a --filter "$PROJ_FILTER" --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Label "com.docker.compose.service"}}' 2>/dev/null)
+while IFS= read -r _row; do [[ -n "$_row" ]] && ALL_ROWS+=("$_row"); done < <(docker ps -a --filter "$PROJ_FILTER" --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Label "com.docker.compose.service"}}' 2>/dev/null)
 
 # Classify containers by image. Teranode node services use the teranode image but NOT the
 # coinbase/blaster image (teranode-coinbase). Datastores by their image.
@@ -89,11 +89,11 @@ for row in "${ALL_ROWS[@]}"; do
         *redpanda*|*kafka*) [[ "$name" == *console* ]] || KAFKA_CTRS="$KAFKA_CTRS $name" ;;
     esac
 done
-[ -n "${TERANODE_CONTAINERS:-}" ] && TERANODE_CTRS=$(norm_list "$TERANODE_CONTAINERS")
+[[ -n "${TERANODE_CONTAINERS:-}" ]] && TERANODE_CTRS=$(norm_list "$TERANODE_CONTAINERS")
 TERANODE_CTRS=$(echo "$TERANODE_CTRS" | xargs)
-AERO_CTRS=$(echo "$AERO_CTRS" | xargs);   [ -n "${AEROSPIKE_CONTAINER:-}" ] && AERO_CTRS="$AEROSPIKE_CONTAINER"
-PG_CTRS=$(echo "$PG_CTRS" | xargs);       [ -n "${POSTGRES_CONTAINER:-}" ] && PG_CTRS="$POSTGRES_CONTAINER"
-KAFKA_CTRS=$(echo "$KAFKA_CTRS" | xargs); [ -n "${KAFKA_CONTAINER:-}" ] && KAFKA_CTRS="$KAFKA_CONTAINER"
+AERO_CTRS=$(echo "$AERO_CTRS" | xargs);   [[ -n "${AEROSPIKE_CONTAINER:-}" ]] && AERO_CTRS="$AEROSPIKE_CONTAINER"
+PG_CTRS=$(echo "$PG_CTRS" | xargs);       [[ -n "${POSTGRES_CONTAINER:-}" ]] && PG_CTRS="$POSTGRES_CONTAINER"
+KAFKA_CTRS=$(echo "$KAFKA_CTRS" | xargs); [[ -n "${KAFKA_CONTAINER:-}" ]] && KAFKA_CTRS="$KAFKA_CONTAINER"
 BLASTER_CTRS=$(echo "$BLASTER_CTRS" | xargs)
 
 FIRST_TN=$(echo "$TERANODE_CTRS" | awk '{print $1}')
@@ -103,7 +103,7 @@ FIRST_KAFKA=$(echo "$KAFKA_CTRS" | awk '{print $1}')
 
 # Settings context + UTXO backend, from a teranode container.
 SETTINGS_CTX=""; UTXO_BACKEND="unknown"
-if [ -n "$FIRST_TN" ]; then
+if [[ -n "$FIRST_TN" ]]; then
     SETTINGS_CTX=$(docker exec "$FIRST_TN" sh -c 'printf "%s" "$SETTINGS_CONTEXT"' 2>/dev/null)
     _scheme=$(docker exec "$FIRST_TN" sh -c 'printf "%s\n" "$utxostore"; grep -ihoE "utxostore[^=]*=[a-z]+://" /app/settings*.conf 2>/dev/null' 2>/dev/null | grep -oE '[a-z]+://' | head -1)
     case "$_scheme" in
@@ -113,24 +113,24 @@ if [ -n "$FIRST_TN" ]; then
         memory://)    UTXO_BACKEND="memory" ;;
     esac
 fi
-[ "$UTXO_BACKEND" = "unknown" ] && [ -n "$FIRST_AERO" ] && UTXO_BACKEND="aerospike (assumed — aerospike container present)"
-[ "$UTXO_BACKEND" = "unknown" ] && [ -z "$FIRST_AERO" ] && [ -n "$FIRST_PG" ] && UTXO_BACKEND="postgres (assumed — no aerospike, postgres present)"
+[[ "$UTXO_BACKEND" = "unknown" ]] && [[ -n "$FIRST_AERO" ]] && UTXO_BACKEND="aerospike (assumed — aerospike container present)"
+[[ "$UTXO_BACKEND" = "unknown" ]] && [[ -z "$FIRST_AERO" ]] && [[ -n "$FIRST_PG" ]] && UTXO_BACKEND="postgres (assumed — no aerospike, postgres present)"
 
 # Aerospike container + DB namespace.
 AERO_CONTAINER="${AEROSPIKE_CONTAINER:-$FIRST_AERO}"
 AERO_DB_NS="${AEROSPIKE_DB_NS:-}"
-if [ -z "$AERO_DB_NS" ] && [ -n "$AERO_CONTAINER" ]; then
+if [[ -z "$AERO_DB_NS" ]] && [[ -n "$AERO_CONTAINER" ]]; then
     _ap=$(aero_port "$AERO_CONTAINER"); _ap=${_ap:-3000}
     AERO_DB_NS=$(docker exec "$AERO_CONTAINER" asinfo -p "$_ap" -v 'namespaces' 2>/dev/null | tr ';' '\n' | grep -v '^$' | head -1 | tr -d '\r')
 fi
-[ -z "$AERO_DB_NS" ] && AERO_DB_NS="utxo-store"
+[[ -z "$AERO_DB_NS" ]] && AERO_DB_NS="utxo-store"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 # Pull an HTTP endpoint from a container: prefer a host-published port, else exec inside.
 fetch_http() {
     local ctr="$1" port="$2" path="$3" hostport
     hostport=$(docker port "$ctr" "$port/tcp" 2>/dev/null | head -1 | sed 's/.*://')
-    if [ -n "$hostport" ] && command -v curl >/dev/null 2>&1; then
+    if [[ -n "$hostport" ]] && command -v curl >/dev/null 2>&1; then
         curl -s --max-time 15 "http://localhost:${hostport}${path}" 2>/dev/null
     else
         docker exec "$ctr" sh -c "curl -s http://localhost:${port}${path} 2>/dev/null || wget -qO- http://localhost:${port}${path} 2>/dev/null" 2>/dev/null
@@ -231,7 +231,7 @@ echo "  Timestamp: $TIMESTAMP"
 echo "  Compose project: $COMPOSE_PROJECT"
 echo "  Settings context: ${SETTINGS_CTX:-(unknown)}"
 echo "  UTXO store backend: $UTXO_BACKEND"
-[ -n "$AERO_CONTAINER" ] && echo "  Aerospike: container=$AERO_CONTAINER  db-namespace=$AERO_DB_NS"
+[[ -n "$AERO_CONTAINER" ]] && echo "  Aerospike: container=$AERO_CONTAINER  db-namespace=$AERO_DB_NS"
 echo "  pprof port: $PPROF_PORT (host-published per container if mapped, else via docker exec)"
 echo ""
 echo "  Containers:"
@@ -244,23 +244,23 @@ done
 echo ""
 echo "  Roles: teranode=[$TERANODE_CTRS]"
 echo "         aerospike=[${AERO_CTRS:--}]  postgres=[${PG_CTRS:--}]  kafka=[${KAFKA_CTRS:--}]"
-[ -n "$BLASTER_CTRS" ] && echo "         blaster/coinbase=[$BLASTER_CTRS]  (load tooling)"
+[[ -n "$BLASTER_CTRS" ]] && echo "         blaster/coinbase=[$BLASTER_CTRS]  (load tooling)"
 echo ""
 # FSM state: try the asset service first, else any teranode container serving 8090.
 echo "  FSM state:"
 _fsm_any=0
 for ctr in $TERANODE_CTRS; do
     state=$(fetch_http "$ctr" 8090 "/api/v1/fsm/state" | grep -oE 'IDLE|RUNNING|CATCHINGBLOCKS|LEGACYSYNCING' | head -1)
-    if [ -n "$state" ]; then printf "    %-34s %s\n" "$ctr" "$state"; _fsm_any=1; fi
+    if [[ -n "$state" ]]; then printf "    %-34s %s\n" "$ctr" "$state"; _fsm_any=1; fi
 done
-[ "$_fsm_any" -eq 0 ] && echo "    (unknown — no container answered the asset FSM endpoint on :8090)"
+[[ "$_fsm_any" -eq 0 ]] && echo "    (unknown — no container answered the asset FSM endpoint on :8090)"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 2: RESOURCE USAGE (docker stats)
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 2: RESOURCE USAGE"
 STATS_TARGETS=$(echo "$TERANODE_CTRS $AERO_CTRS $PG_CTRS $KAFKA_CTRS $BLASTER_CTRS" | xargs)
-if [ -n "$STATS_TARGETS" ]; then
+if [[ -n "$STATS_TARGETS" ]]; then
     # shellcheck disable=SC2086
     docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}' $STATS_TARGETS 2>/dev/null \
         | sed 's/^/  /'
@@ -272,7 +272,7 @@ fi
 # SECTION 3: AEROSPIKE HEALTH
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 3: AEROSPIKE HEALTH"
-if [ -z "$AERO_CTRS" ]; then
+if [[ -z "$AERO_CTRS" ]]; then
     echo "  (no Aerospike container — UTXO backend is '$UTXO_BACKEND'. Skipping.)"
 else
     for ctr in $AERO_CTRS; do
@@ -294,7 +294,7 @@ fi
 # SECTION 4: POSTGRESQL HEALTH
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 4: POSTGRESQL HEALTH"
-if [ -z "$PG_CTRS" ]; then
+if [[ -z "$PG_CTRS" ]]; then
     echo "  (no PostgreSQL container detected — skipping)"
 else
     for ctr in $PG_CTRS; do
@@ -312,7 +312,7 @@ fi
 # SECTION 5: KAFKA / REDPANDA HEALTH
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 5: KAFKA / REDPANDA HEALTH"
-if [ -z "$KAFKA_CTRS" ]; then
+if [[ -z "$KAFKA_CTRS" ]]; then
     echo "  (no Kafka/Redpanda container detected — skipping)"
 else
     for ctr in $KAFKA_CTRS; do
@@ -323,7 +323,7 @@ else
             # in one shell, emit group<TAB>lag. (list cols BROKER GROUP STATE → name=$2;
             # describe has a TOTAL-LAG line.)
             LAGS=$(docker exec "$ctr" sh -c 'rpk group list 2>/dev/null | awk "NR>1 && NF>=2{print \$2}" | while read g; do lag=$(rpk group describe "$g" 2>/dev/null | awk "/^TOTAL-LAG/{print \$2; exit}"); printf "%s\t%s\n" "$g" "${lag:-?}"; done' 2>/dev/null)
-            if [ -z "$LAGS" ]; then
+            if [[ -z "$LAGS" ]]; then
                 echo "    (no consumer groups)"
             else
                 echo "$LAGS" | sort -t"$(printf '\t')" -k2,2 -nr | awk -F'\t' 'NF>=2{printf "    %-54s total-lag=%s\n", $1, $2}'
@@ -345,20 +345,20 @@ for ctr in $TERANODE_CTRS; do
 done
 for ctr in $TERANODE_CTRS; do
     f="$TMPDIR/gr_${ctr}.txt"
-    if [ -s "$f" ]; then
+    if [[ -s "$f" ]]; then
         subheader "$ctr"
         aggregate_goroutines "$f"
     fi
 done
 # Blaster profiles (if present): port varies — try named 9092 then 7092.
-if [ -n "$BLASTER_CTRS" ] && [ "$QUICK" -eq 0 ]; then
+if [[ -n "$BLASTER_CTRS" ]] && [[ "$QUICK" -eq 0 ]]; then
     for ctr in $BLASTER_CTRS; do
         out=""
         for p in 9092 7092 6060; do
             out=$(fetch_http "$ctr" "$p" "/debug/pprof/goroutine?debug=1" | parse_goroutines_raw)
-            [ -n "$out" ] && break
+            [[ -n "$out" ]] && break
         done
-        if [ -n "$out" ]; then subheader "blaster: $ctr"; echo "$out" > "$TMPDIR/bl_${ctr}.txt"; aggregate_goroutines "$TMPDIR/bl_${ctr}.txt"; fi
+        if [[ -n "$out" ]]; then subheader "blaster: $ctr"; echo "$out" > "$TMPDIR/bl_${ctr}.txt"; aggregate_goroutines "$TMPDIR/bl_${ctr}.txt"; fi
     done
 fi
 
@@ -366,13 +366,13 @@ fi
 # SECTION 7: LOG ERROR SCAN
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 7: LOG ERROR SCAN (last $SINCE)"
-if [ "$QUICK" -eq 1 ]; then
+if [[ "$QUICK" -eq 1 ]]; then
     echo "  (skipped in --quick mode)"
 else
     for ctr in $TERANODE_CTRS; do
         n=$(docker logs --since "$SINCE" "$ctr" 2>&1 | grep -cE '\| ERROR \||"level":"error"|level=error')
         printf "  %-34s %s ERROR lines\n" "$ctr" "${n:-0}"
-        if [ "${n:-0}" -gt 0 ]; then
+        if [[ "${n:-0}" -gt 0 ]]; then
             docker logs --since "$SINCE" "$ctr" 2>&1 | grep -E '\| ERROR \||"level":"error"|level=error' | tail -3 | sed 's/^/      /'
         fi
     done

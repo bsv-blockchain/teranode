@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -45,6 +46,9 @@ type batchItem struct {
 type Client struct {
 	// client is the gRPC client for block assembly API
 	client blockassembly_api.BlockAssemblyAPIClient
+
+	// conn is the gRPC connection owned by this client; closed by Close()
+	conn *grpc.ClientConn
 
 	// logger provides logging functionality
 	logger ulogger.Logger
@@ -109,6 +113,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	client := &Client{
 		client:    blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+		conn:      baConn,
 		logger:    logger,
 		settings:  tSettings,
 		batchSize: batchSize,
@@ -173,6 +178,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 	client := &Client{
 		client:    blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+		conn:      baConn,
 		logger:    logger,
 		settings:  tSettings,
 		batchSize: batchSize,
@@ -203,6 +209,23 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	client.batcher = b
 
 	return client, nil
+}
+
+// Close drains the transaction batcher (so queued submissions are flushed) and
+// then releases the gRPC connection owned by this client. The drain runs BEFORE
+// the conn close so in-flight batch sends still have a live connection; it is
+// bounded so a hung flush cannot stall shutdown (go-batcher v2.0.4 Close blocks
+// until drained and is idempotent — DC17).
+func (s *Client) Close() error {
+	if s.batcher != nil {
+		util.DrainBatcher(s.logger, "blockassembly_client", util.DefaultBatcherDrainTimeout, s.batcher.Close)
+	}
+
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+
+	return nil
 }
 
 // Health checks the health status of the block assembly service.

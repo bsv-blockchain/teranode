@@ -63,10 +63,20 @@ var (
 	// which is an important aspect of subtree validation.
 	prometheusSubtreeValidationBlessMissingTransaction prometheus.Histogram
 
-	// prometheusSubtreeValidationSetTXMetaCacheKafka tracks the duration of setting tx meta cache from kafka operations.
-	// This histogram measures the time taken to update the transaction metadata cache
-	// from Kafka messages, which is a critical step in subtree validation.
-	prometheusSubtreeValidationSetTXMetaCacheKafka prometheus.Histogram
+	// prometheusSubtreeValidationSetTXMetaCacheKafkaBatch tracks the duration of processing one
+	// SetCacheMulti batch from a Kafka message. One observation per Kafka message that contained
+	// at least one ADD entry, regardless of how many entries the batch held.
+	prometheusSubtreeValidationSetTXMetaCacheKafkaBatch prometheus.Histogram
+
+	// prometheusSubtreeValidationSetTXMetaCacheKafkaCount counts individual ADD entries
+	// processed from Kafka (attempts, not successes — failures are tracked separately by
+	// prometheusSubtreeValidationSetTXMetaCacheKafkaErrors, matching the pre-batching
+	// behaviour where the histogram was observed regardless of cache write outcome).
+	// Pre-batching this was the auto-emitted "set_tx_meta_cache_kafka_count" of the
+	// duration histogram; the batched dispatch path emits one histogram observation per
+	// Kafka message, so the per-entry rate moved to this explicit counter to keep
+	// `rate(set_tx_meta_cache_kafka_count[…])` reading entries/sec.
+	prometheusSubtreeValidationSetTXMetaCacheKafkaCount prometheus.Counter
 
 	// prometheusSubtreeValidationDelTXMetaCacheKafka tracks the duration of deleting tx meta cache from kafka operations.
 	// This histogram measures the time taken to remove transaction metadata from the cache
@@ -164,13 +174,22 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusSubtreeValidationSetTXMetaCacheKafka = promauto.NewHistogram(
+	prometheusSubtreeValidationSetTXMetaCacheKafkaBatch = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
 			Subsystem: "subtreevalidation",
-			Name:      "set_tx_meta_cache_kafka",
-			Help:      "Duration of setting tx meta cache from kafka",
+			Name:      "set_tx_meta_cache_kafka_batch",
+			Help:      "Duration of one SetCacheMulti batch from a Kafka txmeta message (per Kafka message, not per entry)",
 			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationSetTXMetaCacheKafkaCount = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "set_tx_meta_cache_kafka_count",
+			Help:      "Number of ADD entries processed from Kafka (per-entry; attempts, not successes — failures separately in *_errors)",
 		},
 	)
 

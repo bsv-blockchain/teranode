@@ -3265,8 +3265,12 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 	if s.settings != nil {
 		retention = s.settings.GetUtxoStoreBlockHeightRetention()
 	}
-	// +1 because blockHeight lags during block processing (mirrors aerospike set_mined.go:162)
-	newDAH := int64(s.blockHeight.Load() + 1 + retention)
+	// Stamp the DAH relative to the height of the block the tx is mined into
+	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip. s.blockHeight
+	// is updated asynchronously via blockchain notifications and lags behind the
+	// block being validated during catchup/sync; using it stamped the DAH too low
+	// and let the pruner delete the record before the retention window elapsed.
+	newDAH := int64(minedBlockInfo.BlockHeight) + int64(retention)
 
 	if minedBlockInfo.OnLongestChain {
 		if retention > 0 {
@@ -4203,14 +4207,23 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 	}
 
-	// When setting conflicting=true: set DAH only if not already set (mirrors aerospike line 944-951).
+	// When setting conflicting=true: set DAH only if not already set (mirrors aerospike line 944-951),
+	// AND only when the row is not preserved. The preserve_until guard mirrors the Lua
+	// setDeleteAtHeight, which returns early when preserveUntil is set (teranode.lua:973) — without it
+	// a preserved parent marked conflicting would be stamped for deletion while still inside its
+	// preservation window, and the pruner deletes purely on the stamp. The conflicting flag itself is
+	// always applied; only the DAH is gated. ProcessExpiredPreservations later stamps the DAH once the
+	// preservation expires.
 	// When clearing conflicting: clear DAH (conditions for deletion no longer met).
 	var qUpdate string
 	if setValue {
 		qUpdate = `
 			UPDATE transactions SET
 			 conflicting = $2
-			,delete_at_height = COALESCE(delete_at_height, $3)
+			,delete_at_height = CASE
+			     WHEN preserve_until IS NOT NULL THEN delete_at_height
+			     ELSE COALESCE(delete_at_height, $3)
+			 END
 			WHERE hash = $1
 			RETURNING id
 		`
@@ -5264,6 +5277,19 @@ func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeig
 // This clears any existing DeleteAtHeight and sets PreserveUntil to the specified height.
 // Used to protect parent transactions when cleaning up unmined transactions.
 //
+// PRUNE-ELIGIBILITY GATE: only transactions that already carry a delete_at_height stamp (eligible
+// now) or are already being preserved (preserve_until set, so renewal still works) are preserved.
+// A transaction with neither is not fully spent, so it is not at risk of pruning and there is
+// nothing to protect — preserving it would be pointless work, and it is exactly the not-fully-spent
+// input that the expiry path could otherwise turn into a bad deletion stamp. The setter-side check
+// in ProcessExpiredPreservations remains the safety net for the case where a preserved (eligible)
+// tx is later un-spent by a reorg.
+//
+// The gate assumes preservation re-runs each pruner cycle for still-needed parents: a parent that
+// has no DAH when a cycle runs is skipped, but if it later becomes fully spent it gains a DAH via
+// the normal setDAH path and a subsequent cycle re-admits and re-protects it — well within the
+// retention window before the pruner would act.
+//
 // IDEMPOTENCY: This operation is safely re-runnable:
 // - SQL UPDATE returns 0 rows affected (not an error) if records already deleted
 // - Multiple preservation attempts with same preserveUntil are idempotent
@@ -5287,12 +5313,19 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 			chunk[j] = txID[:]
 		}
 
-		// preserveUntilHeight is $1, hashes start at $2
+		// preserveUntilHeight is $1, hashes start at $2.
+		// Only preserve prune-eligible txs: those that already carry a delete_at_height stamp
+		// (eligible now), OR are already preserved (preserve_until set — they were eligible and
+		// are being held; this lets a still-needed preservation be renewed/extended each cycle
+		// even though the first preservation cleared the DAH). A tx with neither is not fully
+		// spent, so it is not at risk of pruning and needs no protection — gating here avoids
+		// pointless writes and keeps not-fully-spent inputs out of the preservation/expiry path.
 		inClause, inArgs := buildINClause(chunk, 2)
 		query := fmt.Sprintf(`
 			UPDATE transactions
 			SET preserve_until = $1, delete_at_height = NULL
 			WHERE hash IN %s
+			AND (delete_at_height IS NOT NULL OR preserve_until IS NOT NULL)
 		`, inClause)
 		args := append([]interface{}{preserveUntilHeight}, inArgs...)
 
@@ -5315,14 +5348,60 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 }
 
 // ProcessExpiredPreservations handles transactions whose preservation period has expired.
-// For each transaction with PreserveUntil <= currentHeight, it sets an appropriate DeleteAtHeight
-// and clears the PreserveUntil field.
+// For each transaction with PreserveUntil <= currentHeight it clears PreserveUntil, and sets
+// delete_at_height ONLY when the transaction is genuinely safe to drop.
+//
+// Upholding the invariant "delete_at_height set ⟹ safe to delete": preservation can be
+// requested for ANY parent of an old unmined transaction, including parents that are not yet
+// fully spent (e.g. a parent with one output spent by a now-resolved mempool child and another
+// output still live). Stamping such a parent for deletion would let the pruner — which deletes
+// purely on the delete_at_height stamp — remove a transaction that still has live UTXOs.
+//
+// The eligibility CASE mirrors setDAH's conditions (the canonical setter):
+//   - conflicting transactions get a DAH (they do not need to be mined); and
+//   - non-conflicting transactions get a DAH only when all outputs are spent AND the tx is in at
+//     least one block AND it is on the longest chain (unmined_since IS NULL).
+//
+// The stamped height (currentHeight+retention) is computed from the pruner's currentHeight rather
+// than setDAH's blockHeight.Load()+1, so it may differ by a block; this is immaterial against the
+// retention window and avoids depending on the store's async block-height counter here.
+//
+// An ineligible transaction simply has its preserve_until cleared with delete_at_height left
+// NULL; the store's normal DAH mechanism (setDAH on the next spend/mine) re-stamps it if and
+// when it actually becomes eligible. This runs once per pruner cycle over only the small set of
+// expiring preservations, so the correlated subqueries are off the hot delete path.
 func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
-	deleteAtHeight := currentHeight + s.settings.GetUtxoStoreBlockHeightRetention()
+	// Retention 0 disables pruning: no DAH is ever stamped (mirrors setDAH's early return), so
+	// clearing preserve_until is all that remains to do here.
+	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	if retention == 0 {
+		query := `UPDATE transactions SET preserve_until = NULL WHERE preserve_until IS NOT NULL AND preserve_until <= $1`
+		if _, err := s.db.ExecContext(ctx, query, currentHeight); err != nil {
+			return errors.NewStorageError("failed to process expired preservations", err)
+		}
 
+		return nil
+	}
+
+	deleteAtHeight := currentHeight + retention
+
+	// The conflicting branch writes $1 unconditionally rather than preserving an existing DAH the
+	// way setDAH does (COALESCE). That is intentional and safe here, NOT a bug to "fix": every row
+	// matched by the WHERE clause has preserve_until set, and a preserved row always has a NULL
+	// delete_at_height — PreserveTransactions clears it at preserve time, and every DAH setter
+	// (setDAH, the SetMined CASE, and SetConflicting) leaves it untouched while preserve_until is
+	// set — so there is never an existing conflicting DAH to keep.
 	query := `
 		UPDATE transactions
-		SET delete_at_height = $1, preserve_until = NULL
+		SET delete_at_height = CASE
+			WHEN conflicting THEN $1
+			WHEN unmined_since IS NULL
+			     AND EXISTS(SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id)
+			     AND NOT EXISTS(SELECT 1 FROM outputs o WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL)
+			THEN $1
+			ELSE NULL
+		END,
+		preserve_until = NULL
 		WHERE preserve_until IS NOT NULL AND preserve_until <= $2
 	`
 

@@ -82,14 +82,51 @@ const batchSignalTimeout = 5 * time.Second
 // the caller goroutine is released after this bound instead of parking for the
 // life of the process.
 //
-// It is derived from the batch policy's own TotalTimeout (the maximum a healthy
-// batch can legitimately take, retries included) plus grace, so it never fires
-// during normal slow operation — only on a genuine wedge. Falls back to a sane
-// default when the policy carries no total timeout.
+// It must outlast the longest a batch can *legitimately* take, or it fires
+// during normal slow operation and aborts work the lower layers would still
+// have completed (the legacy-sync stall this guard once caused). Two layers
+// contribute to that legitimate time:
+//
+//   - the batch policy TotalTimeout — the ceiling on a single BatchOperate, and
+//   - the uaerospike overload-retry wrapper, which runs an initial BatchOperate
+//     and *then* starts an OverloadRetryMaxElapsed budget clock
+//     (retryBatchOnOverload sets its deadline after the first attempt, see
+//     util/uaerospike/overload_retry.go), re-issuing the still-overloaded
+//     records until that budget is spent.
+//
+// So the legitimate submit-to-completion wall time is roughly
+// initial-attempt (≤ TotalTimeout) + overload budget. The guard sums both —
+// rather than taking the larger — because the budget clock starts only after
+// the initial attempt, so the two windows are sequential, not overlapping.
+// Summing also keeps the coupling from silently going stale: lowering a
+// context's TotalTimeout can no longer drop the guard below the overload
+// budget.
+//
+// Best-effort, not a strict bound: the initial connection-permit wait
+// (~TotalTimeout/10, acquirePermit) and the untimed permit re-acquisition
+// between retries (reacquirePermit) still fall outside the sum; the +30s grace
+// only partially absorbs them. Falls back to a sane default when the policy
+// carries no total timeout; adds nothing when the overload retry layer is
+// disabled (OverloadRetryMaxElapsed <= 0), preserving the prior behaviour.
 func batcherWaitTimeout(tSettings *settings.Settings) time.Duration {
-	d := util.GetAerospikeBatchPolicy(tSettings).TotalTimeout
+	return batcherWaitFor(
+		util.GetAerospikeBatchPolicy(tSettings).TotalTimeout,
+		tSettings.Aerospike.OverloadRetryMaxElapsed,
+	)
+}
+
+// batcherWaitFor is the pure leak-guard formula extracted from batcherWaitTimeout
+// so the coverage invariant (guard always outlasts the overload budget) can be
+// unit-tested without a live Aerospike client populating the batch policy. See
+// batcherWaitTimeout for the rationale behind summing the two windows.
+func batcherWaitFor(totalTimeout, overloadBudget time.Duration) time.Duration {
+	d := totalTimeout
 	if d <= 0 {
 		d = 2 * time.Minute
+	}
+
+	if overloadBudget > 0 {
+		d += overloadBudget
 	}
 
 	return d + 30*time.Second

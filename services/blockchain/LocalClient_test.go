@@ -495,7 +495,7 @@ func TestLocalClient_AssignBlockID(t *testing.T) {
 
 	store, err := sql.New(logger, storeURL, tSettings)
 	require.NoError(t, err)
-	defer store.Close()
+	defer store.Close(context.Background())
 
 	client, err := NewLocalClient(logger, tSettings, store, nil, nil)
 	require.NoError(t, err)

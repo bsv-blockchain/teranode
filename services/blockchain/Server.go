@@ -116,6 +116,7 @@ type Blockchain struct {
 	kafkaChan                     chan *kafka.Message                  // Channel for Kafka messages
 	stats                         *gocore.Stat                         // Statistics tracking
 	finiteStateMachine            *fsm.FSM                             // FSM for blockchain state
+	fsmMu                         sync.Mutex                           // Serialises SendFSMEvent transitions (FSM read-modify-write + stateChangeTimestamp)
 	stateChangeTimestamp          time.Time                            // Timestamp of last state change
 	AppCtx                        context.Context                      // Application context
 	localTestStartState           string                               // Initial state for testing
@@ -958,11 +959,17 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 // - Releasing acquired resources
 //
 // Parameters:
-// - _: Context for the shutdown operation (currently unused)
+// - ctx: Context bounding the shutdown; the final-blocks producer stop is raced against it so a wedged broker can't stall shutdown
 //
 // Returns:
 // - Error if shutdown encounters issues, nil on successful shutdown
 func (b *Blockchain) Stop(ctx context.Context) error {
+	// DC11: stop the async final-blocks producer first — before the peer-registry
+	// save below, which can early-return on failure. The Stop() is raced against
+	// ctx so a wedged broker flush can't block past the bounded Stop() window; the
+	// outstanding Stop() finishes the flush later if it can. Guarded and non-fatal.
+	kafka.StopProducerCtx(ctx, b.logger, "blockchain final-blocks", b.blocksFinalKafkaAsyncProducer)
+
 	// Drain background goroutines (ban decay loop, cleanup loop) before saving
 	// so we can't race a write against the final Save snapshot. Close is
 	// idempotent and safe to call even if StartBanDecay never ran.
@@ -2794,6 +2801,15 @@ func (b *Blockchain) IsFullyReady(ctx context.Context) (bool, error) {
 
 // SendFSMEvent sends an event to the finite state machine.
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
+	// Serialise FSM transitions. SendFSMEvent performs a read-modify-write across
+	// the FSM (prior-state checks -> Event -> stateChangeTimestamp update) that
+	// must be atomic; concurrent callers (e.g. Run and CatchUpBlocks arriving as
+	// separate gRPC requests) would otherwise race on stateChangeTimestamp and
+	// interleave transitions. The only FSM callback (enter_state -> SendNotification)
+	// does not re-enter SendFSMEvent, so holding this lock cannot deadlock.
+	b.fsmMu.Lock()
+	defer b.fsmMu.Unlock()
+
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
 	priorState := b.finiteStateMachine.Current()

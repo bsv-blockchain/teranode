@@ -182,7 +182,20 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
-	// Step 3.5: If fork detected, reset mined_set on old blocks for transaction state consistency
+	// Step 4: Validate fork depth against coinbase maturity
+	if err = u.validateForkDepth(catchupCtx); err != nil {
+		return err
+	}
+
+	// Step 5: Check for secret mining attempts
+	if err = u.checkSecretMining(ctx, catchupCtx); err != nil {
+		return err
+	}
+
+	// Step 5.5: If fork detected, reset mined_set on old blocks for transaction state consistency.
+	// This must run only AFTER the fork-depth and secret-mining safety checks pass; otherwise a peer
+	// merely announcing a deep or secretly-mined fork would un-stamp this node's own still-canonical
+	// txs for a fork that is then rejected, churning honest tx-mined state for no reorg (issue #1145).
 	if catchupCtx.forkDepth > 0 {
 		u.logger.Infof("[catchup][%s] Fork detected (depth %d), clearing mined_set on old blocks",
 			catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth)
@@ -217,16 +230,6 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 			u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
 				catchupCtx.blockUpTo.Hash().String(), len(headers))
 		}
-	}
-
-	// Step 4: Validate fork depth against coinbase maturity
-	if err = u.validateForkDepth(catchupCtx); err != nil {
-		return err
-	}
-
-	// Step 5: Check for secret mining attempts
-	if err = u.checkSecretMining(ctx, catchupCtx); err != nil {
-		return err
 	}
 
 	// Step 6: Filter headers to only those we need to catchup

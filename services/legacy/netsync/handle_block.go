@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"runtime"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -1443,12 +1441,12 @@ func (sm *SyncManager) extendFromTxMap(ctx context.Context, tx *bt.Tx, txMap *tx
 		prometheusLegacyNetsyncBlockTxSize.Observe(float64(tx.Size()))
 		prometheusLegacyNetsyncBlockTxNrInputs.Observe(float64(len(tx.Inputs)))
 		prometheusLegacyNetsyncBlockTxNrOutputs.Observe(float64(len(tx.Outputs)))
-		// NOTE: prometheusLegacyNetsyncBlockTxExtend is intentionally NOT observed here.
-		// This function is phase 1 only (same-block parents from txMap); phase 2 (bulk
-		// DB decoration via BatchPreviousOutputsDecorate) runs block-wide in
-		// extendTransactions. Observing a tx-level duration here would under-report
-		// end-to-end extend cost versus the old per-tx DB path. We could revisit by
-		// adding a block-level phase-2 histogram if dashboards need it.
+		// NOTE: no per-tx extend-duration metric is observed here. This function is
+		// phase 1 only (same-block parents from txMap); phase 2 (bulk DB decoration
+		// via BatchPreviousOutputsDecorate) runs block-wide in extendTransactions.
+		// Observing a tx-level duration here would under-report end-to-end extend
+		// cost versus the old per-tx DB path. We could revisit by adding a
+		// block-level phase-2 histogram if dashboards need it.
 	}()
 
 	txWrapper, found := txMap.Get(*tx.TxIDChainHash())
@@ -1689,168 +1687,6 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 	}
 
 	return txOrder, nil
-}
-
-// prepareTxsPerLevel prepares the transactions per level for processing
-// levels are determined by the number of parents in the block
-func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, txOrder []chainhash.Hash, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) (uint32, [][]*bt.Tx) {
-	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareTxsPerLevel")
-	defer deferFn()
-
-	maxLevel := uint32(0)
-	sizePerLevel := make(map[uint32]uint64)
-
-	for _, txHash := range txOrder {
-		if txWrapper, found := txMap.Get(txHash); found {
-			if txWrapper.SomeParentsInBlock {
-				for _, input := range txWrapper.Tx.Inputs {
-					parentTxHash := *input.PreviousTxIDChainHash()
-					if parentTxWrapper, found := txMap.Get(parentTxHash); found {
-						// if the parent from this input is at the same level or higher,
-						// we need to increase the child level of this transaction
-						if parentTxWrapper.ChildLevelInBlock >= txWrapper.ChildLevelInBlock {
-							txWrapper.ChildLevelInBlock = parentTxWrapper.ChildLevelInBlock + 1
-						}
-
-						if txWrapper.ChildLevelInBlock > maxLevel {
-							maxLevel = txWrapper.ChildLevelInBlock
-						}
-					}
-				}
-			}
-
-			sizePerLevel[txWrapper.ChildLevelInBlock] += 1
-		}
-	}
-
-	blockTxsPerLevel := make([][]*bt.Tx, maxLevel+1)
-
-	// pre-allocation of the blockTxsPerLevel map
-	for i := uint32(0); i <= maxLevel; i++ {
-		blockTxsPerLevel[i] = make([]*bt.Tx, 0, sizePerLevel[i])
-	}
-
-	// put all transactions in a map per level for processing
-	for _, txWrapper := range txMap.Range() {
-		blockTxsPerLevel[txWrapper.ChildLevelInBlock] = append(blockTxsPerLevel[txWrapper.ChildLevelInBlock], txWrapper.Tx)
-	}
-
-	return maxLevel, blockTxsPerLevel
-}
-
-func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) error {
-	timeStart := time.Now()
-	defer func() {
-		prometheusLegacyNetsyncBlockTxSize.Observe(float64(tx.Size()))
-		prometheusLegacyNetsyncBlockTxNrInputs.Observe(float64(len(tx.Inputs)))
-		prometheusLegacyNetsyncBlockTxNrOutputs.Observe(float64(len(tx.Outputs)))
-		prometheusLegacyNetsyncBlockTxExtend.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
-	}()
-
-	txWrapper, found := txMap.Get(*tx.TxIDChainHash())
-	if !found {
-		return errors.NewProcessingError("tx %s not found in txMap", tx.TxIDChainHash())
-	}
-
-	inputLen := len(tx.Inputs)
-	populatedInputs := atomic.Int32{}
-
-	g := errgroup.Group{}
-	// Limit goroutines to number of CPU cores to prevent scheduler thrashing
-	// This prevents spawning thousands of goroutines for transactions with many inputs
-	util.SafeSetLimit(sm.logger, &g, runtime.NumCPU()*2)
-
-	for i, input := range tx.Inputs {
-		i := i         // capture the loop variable
-		input := input // capture the input variable
-		prevTxHash := *input.PreviousTxIDChainHash()
-
-		if prevTxWrapper, found := txMap.Get(prevTxHash); found {
-			g.Go(func() error {
-				txWrapper.SomeParentsInBlock = true
-
-				// A malformed/hostile block could carry a wrapper without a parsed
-				// parent transaction; fail fast instead of panicking on the
-				// dereferences below.
-				if prevTxWrapper.Tx == nil {
-					return errors.NewTxInvalidError("tx %s input %d references missing previous transaction %s",
-						tx.TxIDChainHash(), i, prevTxHash)
-				}
-
-				// Parent Outputs are populated at wire-parse time and never mutated afterwards,
-				// so the bounds check is safe to run before WaitForParent and lets us reject
-				// malformed peer blocks without burning up to 120s on the polling loop.
-				if input.PreviousTxOutIndex >= uint32(len(prevTxWrapper.Tx.Outputs)) {
-					return errors.NewTxInvalidError("tx %s input %d references out-of-range output %d on parent %s (has %d outputs)",
-						tx.TxIDChainHash(), i, input.PreviousTxOutIndex, prevTxHash, len(prevTxWrapper.Tx.Outputs))
-				}
-
-				prevOutput := prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex]
-				if prevOutput == nil || prevOutput.LockingScript == nil {
-					return errors.NewTxInvalidError("tx %s input %d previous output %d is nil or has nil locking script (parent %s)",
-						tx.TxIDChainHash(), i, input.PreviousTxOutIndex, prevTxHash)
-				}
-
-				// we do have a parent, but since everything is happening in parallel, we need to check if the parent has
-				// already been extended
-				timeOut := time.After(120 * time.Second)
-
-			WaitForParent:
-				for {
-					select {
-					case <-timeOut:
-						return errors.NewProcessingError("timed out waiting for parent transaction %s to be extended", prevTxHash.String())
-					default:
-						if prevTxWrapper.Tx.IsExtended() {
-							break WaitForParent
-						}
-
-						time.Sleep(10 * time.Millisecond) // wait for the parent transaction to be extended
-					}
-				}
-
-				// No lock needed - each goroutine writes to a unique index
-				tx.Inputs[i].PreviousTxSatoshis = prevOutput.Satoshis
-				tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevOutput.LockingScript)
-
-				populatedInputs.Add(1)
-
-				return nil
-			})
-		}
-	}
-
-	if err := g.Wait(); err != nil {
-		return errors.NewProcessingError("failed to extend transaction %s", tx.TxIDChainHash(), err)
-	}
-
-	if int(populatedInputs.Load()) == inputLen {
-		// all inputs were populated, we can return early
-		return nil
-	}
-
-	if err := sm.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
-		if errors.Is(err, errors.ErrProcessing) || errors.Is(err, errors.ErrTxNotFound) {
-			// we could not decorate the transaction. This could be because the parent transaction has been DAH'd, which
-			// can only happen if this transaction has been processed. In that case, we can try getting the transaction
-			// itself.
-			txMeta, err := sm.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)
-			if err == nil && txMeta != nil {
-				if txMeta.Tx != nil {
-					for i, input := range txMeta.Tx.Inputs {
-						tx.Inputs[i].PreviousTxSatoshis = input.PreviousTxSatoshis
-						tx.Inputs[i].PreviousTxScript = input.PreviousTxScript
-					}
-
-					return nil
-				}
-			}
-		}
-
-		return errors.NewProcessingError("failed to decorate previous outputs for tx %s", tx.TxIDChainHash(), err)
-	}
-
-	return nil
 }
 
 // WireTxToGoBtTx converts a wire.Tx to a bt.Tx.

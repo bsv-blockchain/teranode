@@ -55,6 +55,33 @@ func TestClient_Put(t *testing.T) {
 	})
 }
 
+// TestClient_Execute_AcquiresPermit verifies the Execute wrapper participates
+// in the connection semaphore. When no permit is available it must fail closed
+// with a timeout from acquirePermit, before the (here nil) embedded client is
+// ever touched. This is the behaviour finding #1 adds: the unspend UDF path
+// previously called the embedded Execute directly and bypassed the semaphore
+// (and the overload-retry layer) entirely.
+func TestClient_Execute_AcquiresPermit(t *testing.T) {
+	client := &Client{
+		Client:        nil,                    // must NOT be dereferenced when the permit acquire fails
+		connSemaphore: make(chan struct{}, 1), // capacity 1
+		stats:         NewClientStats(),
+	}
+
+	// Saturate the semaphore so the next acquire cannot succeed.
+	client.connSemaphore <- struct{}{}
+
+	policy := aerospike.NewWritePolicy(0, 0)
+	policy.TotalTimeout = 50 * time.Millisecond
+
+	ret, err := client.Execute(policy, nil, "pkg", "fn")
+
+	require.Nil(t, ret)
+	require.NotNil(t, err, "Execute must fail closed when no permit is available")
+	require.True(t, err.Matches(types.TIMEOUT),
+		"acquirePermit timeout must surface as TIMEOUT, got %v", err)
+}
+
 func TestCalculateKeySource(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -528,6 +555,15 @@ func TestClientWrapperMethods_WithLocalAerospike(t *testing.T) {
 		record := aerospike.NewBatchWrite(writePolicy, key, aerospike.GetOp())
 
 		_ = client.BatchOperate(policy, []aerospike.BatchRecordIfc{record})
+	})
+
+	t.Run("test execute wrapper", func(t *testing.T) {
+		policy := aerospike.NewWritePolicy(0, 0)
+		key, _ := aerospike.NewKey("test", "test", "test-key")
+
+		// No UDF module is registered on the test server, so this returns an
+		// error; the point is to exercise the wrapper's permit + retry path.
+		_, _ = client.Execute(policy, key, "pkg", "fn")
 	})
 }
 
