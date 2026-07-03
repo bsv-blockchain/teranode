@@ -591,7 +591,12 @@ func TestSyncCoordinator_IsCaughtUp_UsesValidatedChainWork(t *testing.T) {
 	require.False(t, sc.isCaughtUp())
 }
 
-func TestSyncCoordinator_IsCaughtUp_AdvertisedOnlyNeedsProbeOnlyWithinBudget(t *testing.T) {
+// P1-b: an advertised-ahead peer keeps us NOT caught up regardless of the
+// unproven-probe budget (fallback path, local tip unavailable). Treating an
+// exhausted budget as caught-up wedges monitorFSM at slowMonitorInterval and
+// makes the budget refill unreachable. Probe *activation* stays budget-gated
+// elsewhere (filterEligiblePeersWithTip / claimSelectedSyncPeer).
+func TestSyncCoordinator_IsCaughtUp_AdvertisedAheadPeerNotCaughtUpRegardlessOfBudget(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	reg.Register(&blockchain.PeerInfo{
 		ID:         "advertised",
@@ -604,7 +609,7 @@ func TestSyncCoordinator_IsCaughtUp_AdvertisedOnlyNeedsProbeOnlyWithinBudget(t *
 	require.False(t, sc.isCaughtUp())
 
 	setSyncCoordinatorProbeBudget(sc, 0)
-	require.True(t, sc.isCaughtUp())
+	require.False(t, sc.isCaughtUp())
 }
 
 func TestSyncCoordinator_FilterEligiblePeers_UsesValidatedWorkBeforeAdvertisedProbe(t *testing.T) {
@@ -750,7 +755,7 @@ func TestSyncCoordinator_HandleFSMTransition_ChattyNoProgressPeerTimesOutAndSele
 	require.WithinDuration(t, time.Now(), current.LastMessageTime, time.Minute)
 }
 
-func TestSyncCoordinator_EvaluateSyncPeer_ValidatedProgressKeepsNoProgressDeadlineFresh(t *testing.T) {
+func TestSyncCoordinator_EvaluateSyncPeer_BlockDeliveryKeepsNoProgressDeadlineFresh(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
 
@@ -761,13 +766,16 @@ func TestSyncCoordinator_EvaluateSyncPeer_ValidatedProgressKeepsNoProgressDeadli
 		BlockHash:  syncCoordinatorTestHash(t),
 		Storage:    "full",
 	})
-	require.NoError(t, reg.RecordValidatedPeerProgress("current", 101, syncCoordinatorTestHash(t), []byte{0x03}))
+	// A fully-validated block delivered by the sync peer bumps BlocksReceived; this
+	// is the only signal that should refresh the no-progress deadline.
+	reg.RecordBlockReceived("current", 0)
 
 	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
 	sc.mu.Lock()
 	sc.currentSyncPeer = "current"
 	sc.syncStartTime = stalledAt
 	sc.lastSyncProgressTime = stalledAt
+	sc.lastSyncPeerBlocksReceived = 0
 	sc.lastLocalChainWork = []byte{0x02}
 	sc.mu.Unlock()
 
@@ -777,6 +785,102 @@ func TestSyncCoordinator_EvaluateSyncPeer_ValidatedProgressKeepsNoProgressDeadli
 	_, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
 	require.False(t, timedOut)
 	require.Less(t, progressAge, syncPeerNoProgressLimit)
+}
+
+// P2-a: validated header work is credited before any block body is delivered, so
+// it must not refresh the no-progress stall deadline. Only peer-attributable block
+// delivery (BlocksReceived) does.
+func TestSyncCoordinator_RecordSyncPeerBlockProgress_HeaderCreditDoesNotRefreshDeadline(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = stalledAt
+	sc.lastSyncProgressTime = stalledAt
+	sc.lastSyncPeerBlocksReceived = 0
+	sc.mu.Unlock()
+
+	// No new block delivered (BlocksReceived unchanged) — the deadline stays stale.
+	sc.recordSyncPeerBlockProgress("current", 0, time.Now())
+	stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
+	require.True(t, timedOut, "header credit alone must not keep the deadline fresh")
+	require.Equal(t, "current", stalledPeer)
+	require.Greater(t, progressAge, syncPeerNoProgressLimit)
+
+	// A delivered block DOES refresh it.
+	sc.recordSyncPeerBlockProgress("current", 1, time.Now())
+	_, _, timedOut = sc.syncPeerNoProgressTimedOut(time.Now())
+	require.False(t, timedOut)
+}
+
+// P1-a: local best-tip chainwork advances from ordinary block gossip delivered by
+// any peer. Such an advance must refill the probe budget but must NOT refresh a
+// stalled sync peer's no-progress deadline, otherwise the peer pins the slot for
+// as long as the network produces blocks.
+func TestSyncCoordinator_LocalTipAdvanceDoesNotRefreshStallDeadline(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	setSyncCoordinatorProbeBudget(sc, 0)
+
+	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "stalled"
+	sc.syncStartTime = stalledAt
+	sc.lastSyncProgressTime = stalledAt
+	sc.lastSyncPeerBlocksReceived = 0
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	sc.resetProbeBudgetIfLocalChainWorkAdvanced([]byte{0x05})
+
+	require.Equal(t, maxUnprovenProbeBudget(sc.settings), syncCoordinatorProbeBudget(sc),
+		"local-tip advance should refill the probe budget")
+
+	stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
+	require.True(t, timedOut, "stalled sync peer must still time out despite local-tip advance")
+	require.Equal(t, "stalled", stalledPeer)
+	require.Greater(t, progressAge, syncPeerNoProgressLimit)
+}
+
+// P1-b: when an advertised-ahead peer exists but the unproven-probe budget is
+// spent and no peer is pinned, isCaughtUp must still report NOT caught up so
+// monitorFSM keeps ticking fast and the budget refill stays reachable.
+func TestSyncCoordinator_IsCaughtUp_AdvertisedAheadPeerNotCaughtUpWhenBudgetSpent(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     200,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	setSyncCoordinatorProbeBudget(sc, 0)
+
+	require.Empty(t, sc.GetCurrentSyncPeer())
+	require.False(t, sc.isCaughtUp(),
+		"an advertised-ahead peer means not caught up even with the probe budget spent")
+}
+
+// P2-b: a peer inside an active block-incomplete / full-storage penalty window
+// loses its top-tier "ahead by validated work" eligibility, and regains it once
+// the window expires.
+func TestSyncCoordinator_PeerAheadByValidatedWork_PenaltyWindowSuppressesEligibility(t *testing.T) {
+	local := []byte{0x02}
+	ahead := &blockchain.PeerInfo{
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05},
+	}
+	require.True(t, peerAheadByValidatedWork(ahead, local))
+
+	ahead.FullStoragePenaltyUntil = time.Now().Add(time.Hour)
+	require.False(t, peerAheadByValidatedWork(ahead, local),
+		"active penalty window must withhold validated-work eligibility")
+
+	ahead.FullStoragePenaltyUntil = time.Now().Add(-time.Hour)
+	require.True(t, peerAheadByValidatedWork(ahead, local),
+		"expired penalty window must restore validated-work eligibility")
 }
 
 func TestSyncCoordinator_MaxUnvalidatedAdvertisedHeightLead_AllowsProbeAtTenThousand(t *testing.T) {

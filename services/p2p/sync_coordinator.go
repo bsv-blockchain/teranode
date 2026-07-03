@@ -33,14 +33,14 @@ type SyncCoordinator struct {
 	ctx context.Context
 
 	// Current sync state. currentSyncPeer holds the canonical libp2p ID string.
-	mu                             sync.RWMutex
-	currentSyncPeer                string
-	syncStartTime                  time.Time
-	lastSyncProgressTime           time.Time
-	lastSyncPeerValidatedChainWork []byte
-	lastSyncTrigger                time.Time // Track when we last triggered sync
-	lastLocalHeight                uint32    // Track last known local height
-	lastBlockHash                  string    // Track last known block hash
+	mu                         sync.RWMutex
+	currentSyncPeer            string
+	syncStartTime              time.Time
+	lastSyncProgressTime       time.Time
+	lastSyncPeerBlocksReceived int64
+	lastSyncTrigger            time.Time // Track when we last triggered sync
+	lastLocalHeight            uint32    // Track last known local height
+	lastBlockHash              string    // Track last known block hash
 
 	// Backoff management
 	allPeersAttempted            bool      // Flag when all eligible peers have been tried
@@ -134,7 +134,19 @@ func peerHasValidatedWork(p *blockchain.PeerInfo) bool {
 }
 
 func peerAheadByValidatedWork(p *blockchain.PeerInfo, localChainWork []byte) bool {
-	return peerHasValidatedWork(p) && len(localChainWork) > 0 && chainWorkGreater(p.ValidatedChainWork, localChainWork)
+	return peerHasValidatedWork(p) && len(localChainWork) > 0 &&
+		!peerInFullStoragePenalty(p, time.Now()) &&
+		chainWorkGreater(p.ValidatedChainWork, localChainWork)
+}
+
+// peerInFullStoragePenalty reports whether the peer is inside an active
+// block-incomplete / full-storage penalty window. During the window the peer's
+// validated chainwork does not confer top-tier "ahead by validated work"
+// eligibility: a peer whose header work was credited before delivery but that
+// then failed to serve a full block body is demoted to the advertised-probe tier
+// (which is budget-gated) rather than pinning the sync slot.
+func peerInFullStoragePenalty(p *blockchain.PeerInfo, now time.Time) bool {
+	return p != nil && !p.FullStoragePenaltyUntil.IsZero() && now.Before(p.FullStoragePenaltyUntil)
 }
 
 func chainWorkGreater(a, b []byte) bool {
@@ -225,16 +237,18 @@ func (sc *SyncCoordinator) resetProbeBudgetIfLocalChainWorkAdvanced(chainWork []
 		return
 	}
 
-	now := time.Now()
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if chainWorkGreater(chainWork, sc.lastLocalChainWork) {
 		sc.lastLocalChainWork = append([]byte(nil), chainWork...)
 		sc.unprovenProbeBudgetRemaining = maxUnprovenProbeBudget(sc.settings)
-		if sc.currentSyncPeer != "" {
-			sc.lastSyncProgressTime = now
-		}
 	}
+	// The no-progress stall deadline (lastSyncProgressTime) is intentionally NOT
+	// refreshed here. Local best-tip chainwork advances from ordinary block gossip
+	// delivered by any peer, so refreshing the deadline on a local-tip advance would
+	// let a stalled sync peer keep its slot for as long as the network produces
+	// blocks. The deadline is refreshed solely from peer-attributable delivery
+	// progress in recordSyncPeerBlockProgress.
 }
 
 func (sc *SyncCoordinator) hasUnprovenProbeBudget() bool {
@@ -267,37 +281,33 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 		if sc.currentSyncPeerLocked() != "" {
 			return false
 		}
-		// When no peer is ahead by validated work, advertised-probe activation is
-		// gated on the unproven-probe budget. Once that budget is exhausted we
-		// intentionally report caught-up here, which lets monitorFSM back off to
-		// slowMonitorInterval. This is by design: the budget bounds probe churn
-		// against peers advertising an unproven higher tip, and sync-driving
-		// resumes when checkAndClearExpiredBackoff refills the budget on the next
-		// backoff window.
-		if sc.hasUnprovenProbeBudget() {
-			for _, p := range peers {
-				if sc.peerEligibleForAdvertisedProbe(p, localHeight) {
-					return false
-				}
+		// A viable advertised-ahead peer means we are NOT caught up, regardless of
+		// the unproven-probe budget. Probe *activation* stays budget-gated (see
+		// filterEligiblePeersWithTip and claimSelectedSyncPeer), but the caught-up
+		// determination must not hide an ahead peer: reporting caught-up on an
+		// exhausted budget lets monitorFSM back off to slowMonitorInterval, which
+		// stops calling checkFSMState and makes checkAndClearExpiredBackoff — the
+		// only budget/backoff refill — unreachable, wedging the node as caught-up.
+		for _, p := range peers {
+			if sc.peerEligibleForAdvertisedProbe(p, localHeight) {
+				return false
 			}
 		}
 		return true
 	}
 
 	// Fallback path taken when local tip work is unavailable (transient
-	// GetBestBlockHeader error / empty ChainWork). Probe activation is likewise
-	// budget-gated, so an exhausted budget reports caught-up and relies on the
-	// same backoff-window refill to resume sync-driving.
+	// GetBestBlockHeader error / empty ChainWork). As above, a viable
+	// advertised-ahead peer keeps us not-caught-up regardless of the probe budget;
+	// probe activation remains budget-gated at the point of selection.
 	peers := sc.listAllPeers()
 	if sc.currentSyncPeerLocked() != "" {
 		return false
 	}
 
-	if sc.hasUnprovenProbeBudget() {
-		for _, p := range peers {
-			if sc.peerEligibleForAdvertisedProbe(p, localHeight) {
-				return false
-			}
+	for _, p := range peers {
+		if sc.peerEligibleForAdvertisedProbe(p, localHeight) {
+			return false
 		}
 	}
 
@@ -347,7 +357,7 @@ func (sc *SyncCoordinator) clearSyncPeerIfCurrent(peerID string) bool {
 	sc.currentSyncPeer = ""
 	sc.syncStartTime = time.Time{}
 	sc.lastSyncProgressTime = time.Time{}
-	sc.lastSyncPeerValidatedChainWork = nil
+	sc.lastSyncPeerBlocksReceived = 0
 	sc.mu.Unlock()
 
 	if oldPeer != "" {
@@ -356,18 +366,21 @@ func (sc *SyncCoordinator) clearSyncPeerIfCurrent(peerID string) bool {
 	return oldPeer != ""
 }
 
-func (sc *SyncCoordinator) recordSyncPeerValidatedProgress(peerID string, chainWork []byte, now time.Time) {
-	if len(chainWork) == 0 {
-		return
-	}
-
+// recordSyncPeerBlockProgress refreshes the no-progress stall deadline only when
+// the sync peer has delivered a new fully-validated block. blocksReceived is the
+// peer's BlocksReceived counter, which is incremented by ReportValidBlock after a
+// block body is delivered and validated locally. Keying the deadline off block
+// delivery (rather than validated header chainwork) ensures a peer that only
+// serves headers — header work is credited before any block body arrives — still
+// times out, closing the header-only-non-deliverer griefing window.
+func (sc *SyncCoordinator) recordSyncPeerBlockProgress(peerID string, blocksReceived int64, now time.Time) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if sc.currentSyncPeer != peerID {
 		return
 	}
-	if chainWorkGreater(chainWork, sc.lastSyncPeerValidatedChainWork) {
-		sc.lastSyncPeerValidatedChainWork = append([]byte(nil), chainWork...)
+	if blocksReceived > sc.lastSyncPeerBlocksReceived {
+		sc.lastSyncPeerBlocksReceived = blocksReceived
 		sc.lastSyncProgressTime = now
 	}
 }
@@ -602,7 +615,7 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 			}
 
 			now := time.Now()
-			sc.recordSyncPeerValidatedProgress(currentPeer, peerInfo.ValidatedChainWork, now)
+			sc.recordSyncPeerBlockProgress(currentPeer, peerInfo.BlocksReceived, now)
 			if stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now); timedOut && stalledPeer == currentPeer {
 				return sc.clearNoProgressSyncPeer(currentPeer, progressAge)
 			}
@@ -778,9 +791,9 @@ func (sc *SyncCoordinator) claimSelectedSyncPeer(newSyncPeer string, peerInfo *b
 	sc.syncStartTime = now
 	sc.lastSyncProgressTime = now
 	if peerInfo != nil {
-		sc.lastSyncPeerValidatedChainWork = append([]byte(nil), peerInfo.ValidatedChainWork...)
+		sc.lastSyncPeerBlocksReceived = peerInfo.BlocksReceived
 	} else {
-		sc.lastSyncPeerValidatedChainWork = nil
+		sc.lastSyncPeerBlocksReceived = 0
 	}
 	sc.lastSyncTrigger = now
 	return true
@@ -888,7 +901,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	if localWorkOK {
 		sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
 	}
-	sc.recordSyncPeerValidatedProgress(currentPeer, peerInfo.ValidatedChainWork, now)
+	sc.recordSyncPeerBlockProgress(currentPeer, peerInfo.BlocksReceived, now)
 	if stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now); timedOut && stalledPeer == currentPeer {
 		sc.clearNoProgressSyncPeer(currentPeer, progressAge)
 		return

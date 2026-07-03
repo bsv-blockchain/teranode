@@ -102,21 +102,33 @@ func (s *Server) recordBlockIncompleteCatchupFailure(ctx context.Context, peerID
 		return errors.NewServiceError("record block-incomplete catchup error", err)
 	}
 
-	if !found || info.Storage != "full" {
+	if !found {
 		return nil
 	}
 
-	penaltyUntil := time.Now().Add(s.fullStoragePenaltyDuration())
-	if err := s.peerRegistry.RegisterPeer(ctx, &blockchain.PeerInfo{
-		ID:                        peerID,
-		FullStorageContradictions: info.FullStorageContradictions + 1,
-		FullStoragePenaltyUntil:   penaltyUntil,
-	}); err != nil {
-		return errors.NewServiceError("record full-storage penalty", err)
+	// A block-incomplete failure means the peer served header work it could not
+	// back with a full block body. Validated header work is credited before the
+	// block body is delivered, so without a penalty a header-only non-deliverer
+	// keeps top-of-pool ranking. Open a penalty window so the credited validated
+	// work stops conferring top-tier sync eligibility (see peerAheadByValidatedWork)
+	// until fresh delivery re-establishes confidence — for any storage class, not
+	// just peers that claimed full storage. A full-storage claim additionally
+	// counts as a contradiction and is demoted to non-full for the duration.
+	penalty := &blockchain.PeerInfo{
+		ID:                      peerID,
+		FullStoragePenaltyUntil: time.Now().Add(s.fullStoragePenaltyDuration()),
+	}
+	if info.Storage == "full" {
+		penalty.FullStorageContradictions = info.FullStorageContradictions + 1
+	}
+	if err := s.peerRegistry.RegisterPeer(ctx, penalty); err != nil {
+		return errors.NewServiceError("record block-incomplete penalty", err)
 	}
 
-	if err := s.peerRegistry.UpdateStorage(ctx, peerID, ""); err != nil {
-		return errors.NewServiceError("clear contradicted full-storage claim", err)
+	if info.Storage == "full" {
+		if err := s.peerRegistry.UpdateStorage(ctx, peerID, ""); err != nil {
+			return errors.NewServiceError("clear contradicted full-storage claim", err)
+		}
 	}
 
 	return nil

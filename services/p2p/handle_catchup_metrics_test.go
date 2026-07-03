@@ -122,6 +122,35 @@ func TestRecordCatchupFailure_BlockIncomplete_DowngradesFullPeer(t *testing.T) {
 	require.Contains(t, got.LastCatchupError, blockHash.String())
 }
 
+// P2-c: validated header work is credited before delivery, so a header-only
+// non-deliverer of any storage class must have its ranking withheld on a
+// block-incomplete failure — not just peers that claimed full storage.
+func TestRecordCatchupFailure_BlockIncomplete_PenalizesNonFullPeer(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	s.settings = &settings.Settings{
+		P2P: settings.P2PSettings{
+			FullStoragePenaltyDuration: 30 * time.Minute,
+		},
+	}
+	reg.Register(&blockchain.PeerInfo{ID: pid.String(), Storage: "pruned"})
+
+	blockHash := chainhash.HashH([]byte("incomplete-block-pruned"))
+	resp, err := s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{
+		PeerId:      pid.String(),
+		FailureKind: catchupFailureKindBlockIncomplete,
+		BlockHash:   blockHash.String(),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.True(t, got.FullStoragePenaltyUntil.After(time.Now()), "penalty window opens for any storage class")
+	require.Zero(t, got.FullStorageContradictions, "non-full peer is not counted as a full-storage contradiction")
+	require.Equal(t, "pruned", got.Storage, "non-full storage is left unchanged")
+	require.Contains(t, got.LastCatchupError, blockHash.String())
+}
+
 func TestRecordCatchupFailure_BlockIncomplete_DoesNotBanPeer(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String(), Storage: "full"})

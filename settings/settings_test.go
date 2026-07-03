@@ -154,5 +154,13 @@ func TestP2PSyncHardeningDefaultsAreLoaded(t *testing.T) {
 
 	require.Equal(t, uint32(10_000), tSettings.P2P.MaxUnvalidatedAdvertisedHeightLead)
 	require.Equal(t, 3, tSettings.P2P.MaxUnprovenSyncProbesPerBackoffWindow)
+	require.Equal(t, time.Hour, tSettings.P2P.FullStoragePenaltyDuration)
 	require.Equal(t, 24*time.Hour, tSettings.P2P.FullDeliveryFreshnessWindow)
+}
+
+func TestP2PFullStoragePenaltyDuration_EnvOverride(t *testing.T) {
+	t.Setenv("p2p_full_storage_penalty_duration", "2h")
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+	require.Equal(t, 2*time.Hour, tSettings.P2P.FullStoragePenaltyDuration)
 }
