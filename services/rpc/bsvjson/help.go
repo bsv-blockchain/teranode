@@ -395,12 +395,7 @@ func argHelp(xT descLookupFunc, rtp reflect.Type, defaults map[int]reflect.Value
 		kind := fieldType.Kind()
 
 		switch kind {
-		case reflect.Struct:
-			fieldDescKey := fmt.Sprintf("%s-%s", method, fieldName)
-			resultText := resultTypeHelp(xT, fieldType, fieldDescKey)
-			args = append(args, resultText)
-
-		case reflect.Map:
+		case reflect.Struct, reflect.Map:
 			fieldDescKey := fmt.Sprintf("%s-%s", method, fieldName)
 			resultText := resultTypeHelp(xT, fieldType, fieldDescKey)
 			args = append(args, resultText)

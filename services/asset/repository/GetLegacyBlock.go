@@ -481,6 +481,7 @@ func sendChunkResult(ctx context.Context, resultsChan chan<- chunkResult, result
 
 func drainChunkResults(resultsChan <-chan chunkResult) {
 	for range resultsChan {
+		// drain remaining results until the channel is closed
 	}
 }
 
