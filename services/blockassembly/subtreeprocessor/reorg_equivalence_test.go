@@ -697,24 +697,10 @@ func TestReorg_RollbackOnPartialFailure(t *testing.T) {
 	require.True(t, txMap.Exists(txA), "pre-reorg tx must survive the rolled-back reorg")
 	require.True(t, txMap.Exists(txB), "pre-reorg tx must survive the rolled-back reorg")
 
-	// FINDING (logged, not asserted): reorgBlocks' deferred rollback restores the
-	// best-block reference (asserted above), chainedSubtrees and currentSubtree, and
-	// recomputes txCount — but it does NOT restore currentTxMap CONTENT.
-	// moveBackBlockBulkBuild adds the move-back block's txs (txBack) into currentTxMap in
-	// place, and the rollback only reassigns the same (already-mutated) map pointer, so
-	// txBack survives. Immediately after a failed raw stp.Reorg the map is therefore
-	// inconsistent with the restored subtrees.
-	//
-	// This does not breach the letter of BA-REORG-007 (best-block reference unchanged) and
-	// is not a live corruption: BlockAssembler.handleReorg runs a full reset() whenever
-	// subtreeProcessor.Reorg returns an error, rebuilding currentTxMap from the UTXO store
-	// and healing the inconsistency. It is, however, an incomplete internal rollback that
-	// only the mandatory reset fallback masks — worth tracking. Asserting either of the
-	// two conditions below as a hard requirement FAILS against the current implementation.
-	if checkErr := stp.CheckSubtreeProcessor(); checkErr != nil {
-		t.Logf("KNOWN GAP (BA-REORG-007 internal rollback): CheckSubtreeProcessor after a failed reorg: %v", checkErr)
-	}
-	if txMap.Exists(txBack) {
-		t.Logf("KNOWN GAP (BA-REORG-007 internal rollback): move-back-only tx %s still present in currentTxMap after rollback", txBack.String())
-	}
+	// Strengthen this to a hard requirement: rollback must restore internal
+	// subtree-processor consistency, not only the best-block reference.
+	require.NoError(t, stp.CheckSubtreeProcessor(),
+		"rolled-back reorg must restore subtree processor invariants")
+	require.False(t, txMap.Exists(txBack),
+		"move-back-only tx must not remain in currentTxMap after rollback")
 }
