@@ -596,6 +596,129 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 	})
 }
 
+// TestCatchup_NoMinedSetChurnOnRejectedFork verifies that catchup does NOT clear the
+// mined_set (or emit BlockMinedUnset notifications) on the node's own still-canonical
+// blocks when the announced fork is going to be rejected by the fork-depth or
+// secret-mining safety checks. Clearing must only happen for forks that pass both gates.
+// Regression test for issue #1145.
+func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
+	initPrometheusMetrics()
+
+	// buildForkScenario wires up a server whose chain forks from a known common
+	// ancestor at ancestorHeight, with the local UTXO tip at currentHeight. The peer
+	// announces a short fork off that ancestor. mined_set/notification mocks are
+	// registered permissively so the (buggy) early-clear path would execute without
+	// panicking, letting AssertNotCalled catch the regression rather than a panic.
+	buildForkScenario := func(t *testing.T, ancestorHeight, currentHeight uint32) (*Server, *blockchain.Mock, *model.Block, func()) {
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
+
+		mockUTXOStore.On("GetBlockHeight").Return(currentHeight)
+
+		// Common ancestor header that exists in our chain at ancestorHeight.
+		ancestorHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: testhelpers.GenerateMerkleRoot(0),
+			Timestamp:      uint32(time.Now().Unix() - 3600),
+			Nonce:          0,
+		}
+		nBits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		ancestorHeader.Bits = *nBits
+		testhelpers.MineHeader(ancestorHeader)
+
+		// Peer's fork: a few blocks built on top of the common ancestor.
+		forkHeaders := testhelpers.CreateSyntheticChainFrom(ancestorHeader, 5)
+		targetBlock := &model.Block{
+			Header: forkHeaders[len(forkHeaders)-1],
+			Height: currentHeight + uint32(len(forkHeaders)),
+		}
+
+		// Ancestor exists locally; fork blocks (and target) do not.
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, ancestorHeader.Hash()).
+			Return(true, nil).Maybe()
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).
+			Return(false, nil).Maybe()
+
+		// Metadata for the common ancestor.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, ancestorHeader.Hash()).
+			Return(ancestorHeader, &model.BlockHeaderMeta{Height: ancestorHeight, ID: 1}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: ancestorHeight}, nil).Maybe()
+
+		// Header-fetch plumbing.
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
+			Return(ancestorHeader, &model.BlockHeaderMeta{Height: currentHeight}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*chainhash.Hash{ancestorHeader.Hash()}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{ancestorHeader}, []*model.BlockHeaderMeta{{Height: ancestorHeight, ID: 1}}, nil).Maybe()
+		currentState := blockchain.FSMStateRUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Maybe()
+
+		// mined_set churn surface — registered so the buggy path runs without panic.
+		mockBlockchainClient.On("GetBlockHeadersByHeight", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{ancestorHeader}, []*model.BlockHeaderMeta{{Height: ancestorHeight}}, nil).Maybe()
+		mockBlockchainClient.On("ClearBlockMinedSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("SendNotification", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+
+		var responseHeaders []byte
+		responseHeaders = append(responseHeaders, ancestorHeader.Bytes()...)
+		for _, h := range forkHeaders {
+			responseHeaders = append(responseHeaders, h.Bytes()...)
+		}
+		httpmock.RegisterResponder(
+			"GET",
+			`=~^http://peer/headers_from_common_ancestor/.*`,
+			httpmock.NewBytesResponder(200, responseHeaders),
+		)
+
+		combinedCleanup := func() {
+			httpmock.DeactivateAndReset()
+			cleanup()
+		}
+
+		return server, mockBlockchainClient, targetBlock, combinedCleanup
+	}
+
+	t.Run("ForkDepthExceedsCoinbaseMaturity", func(t *testing.T) {
+		// Fork depth 250 - 100 = 150 > CoinbaseMaturity (100) => validateForkDepth rejects.
+		server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 250)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 1000 // don't let secret mining fire first
+
+		err := server.catchup(context.Background(), targetBlock, "peer-1145", "http://peer")
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "exceeds coinbase maturity")
+
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "SendNotification", mock.Anything, mock.Anything)
+	})
+
+	t.Run("SecretMiningDepth", func(t *testing.T) {
+		// Fork depth 180 - 100 = 80 <= CoinbaseMaturity (100) so validateForkDepth passes,
+		// but blocksBehind 80 > SecretMiningThreshold (50) => checkSecretMining rejects.
+		server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 180)
+		defer cleanup()
+
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 50
+
+		err := server.catchup(context.Background(), targetBlock, "peer-1145", "http://peer")
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "secretly mined")
+
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "SendNotification", mock.Anything, mock.Anything)
+	})
+}
+
 // TestCatchup_CompetingEqualWorkChains tests handling of chains with equal proof of work
 func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 	t.Run("FollowFirstSeenWithEqualWork", func(t *testing.T) {
