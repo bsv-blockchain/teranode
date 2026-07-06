@@ -3,7 +3,6 @@ package profiling
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +25,7 @@ func TestParseRegionStat(t *testing.T) {
 		"Referenced:            7 kB",
 		"Anonymous:             9 kB",
 		"Swap:                 10 kB",
-		"VmFlags: rd wr mr mw me ac", // unrecognised -> no-op
+		"VmFlags: rd wr mr mw me ac",  // unrecognised -> no-op
 		"KernelPageSize:        4 kB", // unrecognised (not a tracked prefix)
 	}
 	for _, l := range lines {
@@ -35,21 +34,21 @@ func TestParseRegionStat(t *testing.T) {
 
 	const kB = int64(1024)
 	// Per-region fields (value * 1024).
-	assert.Equal(t, 8*kB, region.Size)
-	assert.Equal(t, 4*kB, region.Rss)
-	assert.Equal(t, 2*kB, region.Pss)
-	assert.Equal(t, 1*kB, region.SharedClean)
-	assert.Equal(t, 3*kB, region.SharedDirty)
-	assert.Equal(t, 5*kB, region.PrivateClean)
-	assert.Equal(t, 6*kB, region.PrivateDirty)
-	assert.Equal(t, 7*kB, region.Referenced)
-	assert.Equal(t, 9*kB, region.Anonymous)
-	assert.Equal(t, 10*kB, region.Swap)
+	require.Equal(t, 8*kB, region.Size)
+	require.Equal(t, 4*kB, region.Rss)
+	require.Equal(t, 2*kB, region.Pss)
+	require.Equal(t, 1*kB, region.SharedClean)
+	require.Equal(t, 3*kB, region.SharedDirty)
+	require.Equal(t, 5*kB, region.PrivateClean)
+	require.Equal(t, 6*kB, region.PrivateDirty)
+	require.Equal(t, 7*kB, region.Referenced)
+	require.Equal(t, 9*kB, region.Anonymous)
+	require.Equal(t, 10*kB, region.Swap)
 
 	// Aggregate totals (only Size/Rss/Pss accumulate).
-	assert.Equal(t, 8*kB, breakdown.TotalVirtual)
-	assert.Equal(t, 4*kB, breakdown.TotalRss)
-	assert.Equal(t, 2*kB, breakdown.TotalPss)
+	require.Equal(t, 8*kB, breakdown.TotalVirtual)
+	require.Equal(t, 4*kB, breakdown.TotalRss)
+	require.Equal(t, 2*kB, breakdown.TotalPss)
 
 	// Unrecognised prefixes (KernelPageSize also mentions "kB") must not leak
 	// into any tracked field — nothing above should have been overwritten.
@@ -70,10 +69,10 @@ func TestParseRegionStat_Accumulates(t *testing.T) {
 	parseRegionStat("Rss: 1 kB", r2, breakdown)
 
 	const kB = int64(1024)
-	assert.Equal(t, 10*kB, breakdown.TotalVirtual)
-	assert.Equal(t, 5*kB, breakdown.TotalRss)
-	assert.Equal(t, int64(0), breakdown.TotalPss)
+	require.Equal(t, 10*kB, breakdown.TotalVirtual)
+	require.Equal(t, 5*kB, breakdown.TotalRss)
+	require.Equal(t, int64(0), breakdown.TotalPss)
 	// Each region keeps only its own value.
-	assert.Equal(t, 8*kB, r1.Size)
-	assert.Equal(t, 2*kB, r2.Size)
+	require.Equal(t, 8*kB, r1.Size)
+	require.Equal(t, 2*kB, r2.Size)
 }

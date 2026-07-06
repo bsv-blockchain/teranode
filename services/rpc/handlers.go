@@ -271,7 +271,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 
 // getBlockHeaderVerboseResult builds the verbose getblockheader reply from the
 // block header and its metadata.
-func (s *RPCServer) getBlockHeaderVerboseResult(ctx context.Context, b *model.BlockHeader, meta *model.BlockHeaderMeta) (interface{}, error) {
+func (s *RPCServer) getBlockHeaderVerboseResult(ctx context.Context, b *model.BlockHeader, meta *model.BlockHeaderMeta) (*bsvjson.GetBlockHeaderVerboseResult, error) {
 	versionInt32, err := safeconversion.Uint32ToInt32(b.Version)
 	if err != nil {
 		return nil, err
@@ -365,7 +365,6 @@ func (s *RPCServer) getBlockHeaderVerboseResult(ctx context.Context, b *model.Bl
 
 	if !isOnMainChain {
 		headerReply.Confirmations = -1
-		return headerReply, nil
 	}
 
 	return headerReply, nil
