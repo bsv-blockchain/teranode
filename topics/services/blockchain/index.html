@@ -8463,7 +8463,7 @@ Explanation of the sequences:</p>
 <ul>
 <li>Detects chain splits and reorganizations automatically through block header validation</li>
 <li>Uses rollback and catch-up operations to handle chain reorganizations</li>
-<li>Limits reorganization depth for security (configurable via <code>blockchain_maxReorgDepth</code>)</li>
+<li>Selects the active tip purely by cumulative chainwork (most-work-wins); tip selection itself is <strong>not</strong> depth-capped. Deep-reorg / secret-mining protection is enforced in the Block Validation catchup path rather than by a blockchain-level reorg-depth limit (see <em>Configuration Options</em> below).</li>
 </ul>
 <h5 id="optimized-longest-chain-selection">Optimized Longest Chain Selection<a class="headerlink" href="#optimized-longest-chain-selection" title="Permanent link">&para;</a></h5>
 <p>The service employs an optimized algorithm for tracking and selecting the longest valid chain:</p>
@@ -8494,10 +8494,9 @@ Explanation of the sequences:</p>
 <li>Improved resilience to chain split scenarios</li>
 </ul>
 <p><strong>Configuration Options:</strong></p>
+<p>There is no blockchain-level reorganization-depth cap. The active tip is always the chain with the most cumulative chainwork. Protection against deep/secret reorgs is enforced by the Block Validation service during catchup:</p>
 <ul>
-<li><code>blockchain_maxReorgDepth</code>: Maximum allowed reorganization depth (default: 6 blocks)</li>
-<li><code>blockchain_chainTipCacheSize</code>: Number of competing tips to track (default: 10)</li>
-<li><code>blockchain_forkPointCacheSize</code>: Size of fork point cache (default: 100)</li>
+<li><code>blockvalidation_secret_mining_threshold</code>: A candidate chain whose common ancestor is more than this many blocks behind the current tip is rejected as potential secret mining (default: coinbase maturity − 1). Coinbase-maturity fork depth provides the additional bound. See <a href="../blockValidation/">Block Validation</a>.</li>
 </ul>
 <h4 id="storage-errors">Storage Errors<a class="headerlink" href="#storage-errors" title="Permanent link">&para;</a></h4>
 <ul>

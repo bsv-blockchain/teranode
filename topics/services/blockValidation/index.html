@@ -3465,10 +3465,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#bloom-filter-implementation" class="md-nav__link">
+  <a href="#chain-membership-check" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bloom Filter Implementation
+        Chain-Membership Check
       
     </span>
   </a>
@@ -7733,10 +7733,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#bloom-filter-implementation" class="md-nav__link">
+  <a href="#chain-membership-check" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bloom Filter Implementation
+        Chain-Membership Check
       
     </span>
   </a>
@@ -8424,14 +8424,14 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </li>
 </ul>
 <h5 id="optimistic-mining-mode">Optimistic Mining Mode<a class="headerlink" href="#optimistic-mining-mode" title="Permanent link">&para;</a></h5>
-<p>The <code>optimisticMining</code> setting provides an alternative validation strategy that prioritizes block propagation speed over immediate validation completion. This experimental feature reverses the normal validate-then-add sequence.</p>
-<p><strong>Normal Mode (Default):</strong></p>
+<p>The <code>optimisticMining</code> setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion. It is <strong>enabled by default</strong> (<code>blockvalidation_optimistic_mining</code> defaults to <code>true</code>) and reverses the normal validate-then-add sequence.</p>
+<p><strong>Normal Mode (validate-then-add):</strong></p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>1. Validate block (subtrees, transactions, proof of work)
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>2. If valid → Add to blockchain
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>3. Update stores and caches
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>4. Notify other services
 </span></code></pre></div>
-<p><strong>Optimistic Mining Mode:</strong></p>
+<p><strong>Optimistic Mining Mode (Default):</strong></p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>1. Add block to blockchain immediately (before full validation)
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>2. Mark block as existing in cache
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>3. Validate in background goroutine:
@@ -8497,20 +8497,15 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 </li>
 </ol>
-<p><strong>When to Use Optimistic Mining:</strong></p>
+<p><strong>Disabling Optimistic Mining:</strong></p>
+<p>Optimistic mining is on by default. Where the risk tradeoffs above are unacceptable, it can be turned off:</p>
 <ul>
-<li><strong>Performance Testing</strong>: Measure maximum throughput without validation bottleneck</li>
-<li><strong>Low-Risk Environments</strong>: Test networks where temporary forks acceptable</li>
-<li><strong>High-Trust Scenarios</strong>: When block sources are highly trusted (e.g., own miners)</li>
-</ul>
-<p><strong>NOT Recommended For:</strong></p>
-<ul>
-<li><strong>Production Networks</strong>: Risk of temporary chain corruption unacceptable</li>
-<li><strong>Public Nodes</strong>: May propagate invalid blocks to network</li>
-<li><strong>Financial Applications</strong>: Temporary invalid state could affect transaction processing</li>
+<li><strong>Globally</strong>: set <code>blockvalidation_optimistic_mining</code> to <code>false</code></li>
+<li><strong>Per-block</strong>: via <code>ValidateBlockOptions.DisableOptimisticMining</code></li>
+<li><strong>Automatically</strong>: it is always disabled during catchup mode for better reliability</li>
 </ul>
 <p><strong>Future Improvements:</strong></p>
-<p>The optimistic mining feature is experimental and currently disabled by default. Future enhancements may include:</p>
+<p>Future enhancements may include:</p>
 <ul>
 <li>Better rollback mechanisms</li>
 <li>Invalid block notifications to dependent services</li>
@@ -8612,7 +8607,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <p><strong>Malicious Behavior Detection:</strong></p>
 <p>The system detects and records:</p>
 <ol>
-<li><strong>Secret Mining</strong>: Common ancestor more than <code>secret_mining_threshold</code> blocks behind (default: 10)</li>
+<li><strong>Secret Mining</strong>: Common ancestor more than <code>blockvalidation_secret_mining_threshold</code> blocks behind (default: coinbase maturity − 1, i.e. 99)</li>
 <li><strong>Coinbase Maturity Violation</strong>: Fork depth exceeds coinbase maturity (default: 100 blocks)</li>
 <li><strong>Invalid Block Propagation</strong>: Blocks that fail consensus validation (PoW, merkle root, timestamps)</li>
 <li><strong>Checkpoint Mismatch</strong>: Peer provides chain with incorrect checkpoint hashes</li>
@@ -8869,19 +8864,13 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </li>
 </ul>
 <h4 id="226-transaction-re-presentation-detection">2.2.6. Transaction Re-presentation Detection<a class="headerlink" href="#226-transaction-re-presentation-detection" title="Permanent link">&para;</a></h4>
-<p>The Block Validation service implements a robust mechanism for detecting re-presented transactions using bloom filters. This mechanism, implemented in the <code>validOrderAndBlessed</code> function, is critical for preventing double-spending and ensuring transaction integrity in the blockchain.</p>
-<p><img alt="bloom_filter_validation.svg" src="../img/plantuml/blockvalidation/bloom_filter_validation.svg" /></p>
-<h5 id="bloom-filter-implementation">Bloom Filter Implementation<a class="headerlink" href="#bloom-filter-implementation" title="Permanent link">&para;</a></h5>
-<p>Teranode maintains bloom filters for recent blocks to efficiently detect re-presented transactions:</p>
+<p>The Block Validation service detects re-presented (already-mined) transactions during block processing through two related mechanisms. During <code>Block.Valid()</code>, the <code>validOrderAndBlessed</code> function (<code>model/Block.go</code>) verifies <strong>parent chain-membership</strong>: each transaction's parents must either appear earlier in the same block or already be mined on the current chain, and blocks whose transactions have unknown or forked-off parents are rejected. The rejection of transactions that have <em>themselves</em> already been mined on the current chain happens after block validation, in <code>model.UpdateTxMinedStatus</code> (invoked from the Block Validation set-mined path): a fast path compares each transaction's existing block IDs against a map of current-chain block IDs, with a <code>CheckBlockIsAncestorOfBlock</code> RPC slow path for older block IDs. Both mechanisms rely on <strong>exact block-ID set membership</strong> plus an authoritative RPC fallback — there are no probabilistic bloom filters in either path, and therefore no false-positive/false-negative risk.</p>
+<h5 id="chain-membership-check">Chain-Membership Check<a class="headerlink" href="#chain-membership-check" title="Permanent link">&para;</a></h5>
+<p>To decide whether a transaction's parents already exist on the current chain (the <code>validOrderAndBlessed</code> side of the detection), Teranode uses an exact set of block-header IDs rather than a probabilistic filter:</p>
 <ul>
-<li><strong>Creation</strong>: Each validated block generates a bloom filter containing all of its transaction hashes</li>
-<li><strong>Storage</strong>: Bloom filters are stored in both memory (for active validation) and in the subtree store (for persistence)</li>
-<li><strong>Retention</strong>: Filters are maintained for a configurable number of recent blocks (<code>blockvalidation_bloom_filter_retention_size</code>)</li>
-<li><strong>TTL Ordering</strong>: The system enforces a strict TTL (Time-To-Live) ordering: txmetacache &lt; utxo store &lt; bloom filter<ul>
-<li>This ensures that even if a transaction is pruned from txmetacache, the bloom filter can still detect its re-presentation</li>
-<li>The longer retention period for bloom filters provides an extended window for detecting re-presented transactions</li>
-</ul>
-</li>
+<li><strong>Current-chain ID set</strong>: validation builds a map of the current chain's block-header IDs (<code>currentBlockHeaderIDsMap</code>). The IDs come from <code>GetBlockHeaderIDs</code> on the optimistic-mining path and from <code>GetBlockHeaders</code> metadata on the normal and revalidation paths; in every case the set is a bounded window of recent headers (100 by default), not the whole chain. Membership is exact, so a hit is a sound positive.</li>
+<li><strong>Old-parent resolution</strong>: parents that resolve to blocks outside the prefetched set are collected per transaction (<code>oldBlockIDsMap</code>) and confirmed by the Block Validation service in <code>checkOldBlockIDs</code>, which prefetches a window of up to 10,000 recent current-chain block-header IDs via <code>GetBlockHeaderIDs</code>. Because that window is truncated, any block ID not found in it falls back to the authoritative <code>CheckBlockIsInCurrentChain</code> RPC — the bounded window is the reason the fallback exists.</li>
+<li><strong>In-memory chain-check route</strong>: when <code>blockchain_use_in_memory_chain_check</code> is enabled, Block Validation holds no local prefetched ID set and defers every distinct parent-block-ID set to the authoritative <code>CheckBlockIsInCurrentChain</code>. The store applies <code>maxBlockID</code> as an in-memory upper-bound reject for uncommitted / too-new IDs, then confirms the remaining committed candidates in SQL — an <code>on_main_chain</code> flag query, with the recursive <code>parent_id</code> CTE as the fallback on the about-to-reject path and while the store's main-chain state (the <code>on_main_chain</code> flags and off-chain block-ID set) is rebuilding.</li>
 </ul>
 <h5 id="the-validorderandblessed-mechanism">The validOrderAndBlessed Mechanism<a class="headerlink" href="#the-validorderandblessed-mechanism" title="Permanent link">&para;</a></h5>
 <p>The <code>validOrderAndBlessed</code> function performs several critical validations during block processing:</p>
@@ -8894,18 +8883,17 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 </li>
 <li>
-<p><strong>Re-presented Transaction Detection</strong>:</p>
+<p><strong>Parent Chain-Membership Validation</strong>:</p>
 <ul>
-<li>Efficiently checks if transactions have already been mined in the current chain using bloom filters</li>
-<li>For potential matches in the bloom filter (which may include false positives), performs definitive verification against the txMetaStore</li>
-<li>Rejects blocks containing transactions that have already been mined in the current chain</li>
+<li>Checks whether a transaction's parents have already been mined in the current chain via exact block-ID set membership, falling back to the authoritative <code>CheckBlockIsInCurrentChain</code> RPC on a set miss</li>
+<li>Rejects blocks containing transactions whose parents are neither earlier in the block nor on the current chain</li>
+<li>Note: transactions that have <em>themselves</em> already been mined are rejected separately, in <code>model.UpdateTxMinedStatus</code> during the set-mined phase (see above)</li>
 </ul>
 </li>
 <li>
 <p><strong>Duplicate Input Prevention</strong>:</p>
 <ul>
 <li>Tracks all inputs being spent within the block to detect duplicate spends</li>
-<li>If a transaction is found to be already mined in another block on the same chain, the new block is marked as invalid</li>
 <li>Ensures no two transactions in the block spend the same input</li>
 </ul>
 </li>
@@ -8917,7 +8905,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 </li>
 </ol>
-<p>This comprehensive validation mechanism operates with high concurrency (configurable via <code>block_validOrderAndBlessedConcurrency</code>) to maintain performance while ensuring the integrity of the blockchain by preventing double-spends and transaction re-presentations.</p>
+<p>This comprehensive validation mechanism operates with high concurrency (configurable via <code>block_validOrderAndBlessedConcurrency</code>) to maintain performance while ensuring the integrity of the blockchain by preventing in-block double-spends and enforcing parent availability; re-presented transactions are caught by the separate <code>UpdateTxMinedStatus</code> check described above.</p>
 <h4 id="227-fork-management-and-chain-reorganization">2.2.7. Fork Management and Chain Reorganization<a class="headerlink" href="#227-fork-management-and-chain-reorganization" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service implements a sophisticated fork manager to track and manage parallel chain branches that may occur during blockchain operation. This system is critical for handling chain reorganizations and ensuring the node selects and maintains the correct chain.</p>
 <h5 id="fork-states-and-lifecycle">Fork States and Lifecycle<a class="headerlink" href="#fork-states-and-lifecycle" title="Permanent link">&para;</a></h5>
@@ -9041,7 +9029,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <p><strong>Secret Mining Detection:</strong></p>
 <p>The service detects potential secret mining attacks during catchup by checking if:</p>
 <ul>
-<li>Common ancestor is more than <code>blockvalidation_secret_mining_threshold</code> blocks behind current tip (default: 10)</li>
+<li>Common ancestor is more than <code>blockvalidation_secret_mining_threshold</code> blocks behind current tip (default: coinbase maturity − 1, i.e. 99)</li>
 <li>Peer withheld blocks to build a secret chain</li>
 <li>Fork depth exceeds expected values for honest mining</li>
 </ul>
