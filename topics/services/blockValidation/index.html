@@ -3768,56 +3768,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#2211-subtree-deduplication" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2.2.11. Subtree Deduplication
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="2.2.11. Subtree Deduplication">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Purpose
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#implementation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Implementation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#integration-with-subtree-validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Integration with Subtree Validation
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -8036,56 +7986,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#2211-subtree-deduplication" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2.2.11. Subtree Deduplication
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="2.2.11. Subtree Deduplication">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Purpose
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#implementation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Implementation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#integration-with-subtree-validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Integration with Subtree Validation
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -9163,47 +9063,6 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Updates metrics for tracking</li>
 </ol>
 <p>For implementation details, see <code>InvalidBlocksKafkaProducer_test.go</code> and <code>BlockValidation.go</code> (<code>markBlockAsInvalid()</code>, <code>kafkaNotifyBlockInvalid()</code>, <code>reValidateBlock()</code>).</p>
-<h4 id="2211-subtree-deduplication">2.2.11. Subtree Deduplication<a class="headerlink" href="#2211-subtree-deduplication" title="Permanent link">&para;</a></h4>
-<p>The Block Validation service implements a deduplication system to prevent redundant processing of subtrees that may arrive from multiple sources simultaneously.</p>
-<h5 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h5>
-<p>During block propagation and validation:</p>
-<ul>
-<li>Multiple peers may send the same subtree</li>
-<li>Subtree validation requests may be duplicated</li>
-<li>Parallel block processing may request same subtrees</li>
-<li>Network retries may resend subtree data</li>
-</ul>
-<p>The <code>DeDuplicator</code> prevents wasted processing by ensuring each subtree is validated only once.</p>
-<h5 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h5>
-<p><strong>TTL-Based Tracking:</strong></p>
-<p>The deduplicator maintains a time-based cache of recently processed subtrees:</p>
-<ul>
-<li>Each subtree hash is recorded when processing begins</li>
-<li>Entries expire after <code>blockHeightRetention</code> period</li>
-<li>Memory automatically cleaned up as entries age out</li>
-</ul>
-<p><strong>Concurrency Safety:</strong></p>
-<p>The deduplicator is thread-safe for concurrent access:</p>
-<ul>
-<li>Multiple validation workers can query simultaneously</li>
-<li>Lock-free reads for checking if subtree is being processed</li>
-<li>Atomic operations for adding new subtree entries</li>
-</ul>
-<h5 id="integration-with-subtree-validation">Integration with Subtree Validation<a class="headerlink" href="#integration-with-subtree-validation" title="Permanent link">&para;</a></h5>
-<p>When the Block Validation service needs to validate a subtree:</p>
-<ol>
-<li><strong>Check Deduplicator</strong>: Query if subtree is already being processed</li>
-<li><strong>If Already Processing</strong>: Skip validation, wait for result from first processor</li>
-<li><strong>If New Subtree</strong>: Mark as processing in deduplicator, proceed with validation</li>
-<li><strong>After Completion</strong>: Entry remains in cache with TTL to prevent duplicate work</li>
-</ol>
-<p>This coordination ensures:</p>
-<ul>
-<li>No redundant subtree validation computations</li>
-<li>Reduced load on UTXO store and transaction validators</li>
-<li>Lower memory and CPU usage during high block arrival rates</li>
-</ul>
-<p>For implementation details, see <code>deduplicator.go</code> in <code>services/blockvalidation/</code>.</p>
 <h3 id="23-marking-txs-as-mined">2.3. Marking Txs as mined<a class="headerlink" href="#23-marking-txs-as-mined" title="Permanent link">&para;</a></h3>
 <p>When a block is validated and added to the blockchain, the transactions within that block must be marked as mined in the UTXO store. This process is the second phase of the two-phase transaction commit system and is triggered through an event-driven notification mechanism.</p>
 <h4 id="trigger-points-and-sequence">Trigger Points and Sequence<a class="headerlink" href="#trigger-points-and-sequence" title="Permanent link">&para;</a></h4>
@@ -9422,34 +9281,32 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25" href="#__codelineno-12-25"></a>│   └── (catchup helper functions)
 </span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26" href="#__codelineno-12-26"></a>├── Client.go                               - Client-side API for block validation service.
 </span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27" href="#__codelineno-12-27"></a>├── Client_test.go                          - Client tests.
-</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28" href="#__codelineno-12-28"></a>├── deduplicator.go                         - Subtree deduplication to prevent redundant processing.
-</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29" href="#__codelineno-12-29"></a>├── deduplicator_test.go                    - Deduplication tests.
-</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30" href="#__codelineno-12-30"></a>├── fork_manager.go                         - Fork tracking and chain reorganization management.
-</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31" href="#__codelineno-12-31"></a>├── fork_manager_test.go                    - Fork manager tests.
-</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32" href="#__codelineno-12-32"></a>├── fork_manager_atomic_counter_test.go     - Atomic counter tests for fork tracking.
-</span><span id="__span-12-33"><a id="__codelineno-12-33" name="__codelineno-12-33" href="#__codelineno-12-33"></a>├── fork_manager_coverage_test.go           - Coverage tests for fork manager.
-</span><span id="__span-12-34"><a id="__codelineno-12-34" name="__codelineno-12-34" href="#__codelineno-12-34"></a>├── fork_manager_metrics_test.go            - Fork manager metrics tests.
-</span><span id="__span-12-35"><a id="__codelineno-12-35" name="__codelineno-12-35" href="#__codelineno-12-35"></a>├── get_blocks.go                           - Block retrieval and fetching logic.
-</span><span id="__span-12-36"><a id="__codelineno-12-36" name="__codelineno-12-36" href="#__codelineno-12-36"></a>├── get_blocks_test.go                      - Block retrieval tests.
-</span><span id="__span-12-37"><a id="__codelineno-12-37" name="__codelineno-12-37" href="#__codelineno-12-37"></a>├── integration_retry_test.go               - Integration tests for retry logic.
-</span><span id="__span-12-38"><a id="__codelineno-12-38" name="__codelineno-12-38" href="#__codelineno-12-38"></a>├── Interface.go                            - Block validation service interface definition.
-</span><span id="__span-12-39"><a id="__codelineno-12-39" name="__codelineno-12-39" href="#__codelineno-12-39"></a>├── InvalidBlocksKafkaProducer_test.go      - Tests for Kafka invalid block notifications.
-</span><span id="__span-12-40"><a id="__codelineno-12-40" name="__codelineno-12-40" href="#__codelineno-12-40"></a>├── malicious_peer_handling_test.go         - Malicious peer tracking and banning tests.
-</span><span id="__span-12-41"><a id="__codelineno-12-41" name="__codelineno-12-41" href="#__codelineno-12-41"></a>├── metrics.go                              - Prometheus metrics for monitoring.
-</span><span id="__span-12-42"><a id="__codelineno-12-42" name="__codelineno-12-42" href="#__codelineno-12-42"></a>├── mock.go                                 - Mock implementations for testing.
-</span><span id="__span-12-43"><a id="__codelineno-12-43" name="__codelineno-12-43" href="#__codelineno-12-43"></a>├── quick_validate.go                       - Optimized validation for checkpointed blocks.
-</span><span id="__span-12-44"><a id="__codelineno-12-44" name="__codelineno-12-44" href="#__codelineno-12-44"></a>├── quick_validate_test.go                  - Quick validation tests.
-</span><span id="__span-12-45"><a id="__codelineno-12-45" name="__codelineno-12-45" href="#__codelineno-12-45"></a>├── Server.go                               - Server-side implementation of block validation.
-</span><span id="__span-12-46"><a id="__codelineno-12-46" name="__codelineno-12-46" href="#__codelineno-12-46"></a>├── Server_test.go                          - Server tests.
-</span><span id="__span-12-47"><a id="__codelineno-12-47" name="__codelineno-12-47" href="#__codelineno-12-47"></a>├── blockvalidation_api/
-</span><span id="__span-12-48"><a id="__codelineno-12-48" name="__codelineno-12-48" href="#__codelineno-12-48"></a>│   ├── blockvalidation_api.pb.go           - Auto-generated protobuf Go bindings.
-</span><span id="__span-12-49"><a id="__codelineno-12-49" name="__codelineno-12-49" href="#__codelineno-12-49"></a>│   ├── blockvalidation_api.proto           - Protocol Buffers API definition.
-</span><span id="__span-12-50"><a id="__codelineno-12-50" name="__codelineno-12-50" href="#__codelineno-12-50"></a>│   └── blockvalidation_api_grpc.pb.go      - gRPC-specific generated code.
-</span><span id="__span-12-51"><a id="__codelineno-12-51" name="__codelineno-12-51" href="#__codelineno-12-51"></a>├── testdata/                               - Test fixtures and data.
-</span><span id="__span-12-52"><a id="__codelineno-12-52" name="__codelineno-12-52" href="#__codelineno-12-52"></a>├── testhelpers/                            - Test helper utilities.
-</span><span id="__span-12-53"><a id="__codelineno-12-53" name="__codelineno-12-53" href="#__codelineno-12-53"></a>├── ttl_queue.go                            - TTL queue for caching with time-based expiration.
-</span><span id="__span-12-54"><a id="__codelineno-12-54" name="__codelineno-12-54" href="#__codelineno-12-54"></a>├── txmetacache.go                          - Transaction metadata cache for performance.
-</span><span id="__span-12-55"><a id="__codelineno-12-55" name="__codelineno-12-55" href="#__codelineno-12-55"></a>└── txmetacache_test.go                     - Transaction metadata cache tests.
+</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28" href="#__codelineno-12-28"></a>├── fork_manager.go                         - Fork tracking and chain reorganization management.
+</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29" href="#__codelineno-12-29"></a>├── fork_manager_test.go                    - Fork manager tests.
+</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30" href="#__codelineno-12-30"></a>├── fork_manager_atomic_counter_test.go     - Atomic counter tests for fork tracking.
+</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31" href="#__codelineno-12-31"></a>├── fork_manager_coverage_test.go           - Coverage tests for fork manager.
+</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32" href="#__codelineno-12-32"></a>├── fork_manager_metrics_test.go            - Fork manager metrics tests.
+</span><span id="__span-12-33"><a id="__codelineno-12-33" name="__codelineno-12-33" href="#__codelineno-12-33"></a>├── get_blocks.go                           - Block retrieval and fetching logic.
+</span><span id="__span-12-34"><a id="__codelineno-12-34" name="__codelineno-12-34" href="#__codelineno-12-34"></a>├── get_blocks_test.go                      - Block retrieval tests.
+</span><span id="__span-12-35"><a id="__codelineno-12-35" name="__codelineno-12-35" href="#__codelineno-12-35"></a>├── integration_retry_test.go               - Integration tests for retry logic.
+</span><span id="__span-12-36"><a id="__codelineno-12-36" name="__codelineno-12-36" href="#__codelineno-12-36"></a>├── Interface.go                            - Block validation service interface definition.
+</span><span id="__span-12-37"><a id="__codelineno-12-37" name="__codelineno-12-37" href="#__codelineno-12-37"></a>├── InvalidBlocksKafkaProducer_test.go      - Tests for Kafka invalid block notifications.
+</span><span id="__span-12-38"><a id="__codelineno-12-38" name="__codelineno-12-38" href="#__codelineno-12-38"></a>├── malicious_peer_handling_test.go         - Malicious peer tracking and banning tests.
+</span><span id="__span-12-39"><a id="__codelineno-12-39" name="__codelineno-12-39" href="#__codelineno-12-39"></a>├── metrics.go                              - Prometheus metrics for monitoring.
+</span><span id="__span-12-40"><a id="__codelineno-12-40" name="__codelineno-12-40" href="#__codelineno-12-40"></a>├── mock.go                                 - Mock implementations for testing.
+</span><span id="__span-12-41"><a id="__codelineno-12-41" name="__codelineno-12-41" href="#__codelineno-12-41"></a>├── quick_validate.go                       - Optimized validation for checkpointed blocks.
+</span><span id="__span-12-42"><a id="__codelineno-12-42" name="__codelineno-12-42" href="#__codelineno-12-42"></a>├── quick_validate_test.go                  - Quick validation tests.
+</span><span id="__span-12-43"><a id="__codelineno-12-43" name="__codelineno-12-43" href="#__codelineno-12-43"></a>├── Server.go                               - Server-side implementation of block validation.
+</span><span id="__span-12-44"><a id="__codelineno-12-44" name="__codelineno-12-44" href="#__codelineno-12-44"></a>├── Server_test.go                          - Server tests.
+</span><span id="__span-12-45"><a id="__codelineno-12-45" name="__codelineno-12-45" href="#__codelineno-12-45"></a>├── blockvalidation_api/
+</span><span id="__span-12-46"><a id="__codelineno-12-46" name="__codelineno-12-46" href="#__codelineno-12-46"></a>│   ├── blockvalidation_api.pb.go           - Auto-generated protobuf Go bindings.
+</span><span id="__span-12-47"><a id="__codelineno-12-47" name="__codelineno-12-47" href="#__codelineno-12-47"></a>│   ├── blockvalidation_api.proto           - Protocol Buffers API definition.
+</span><span id="__span-12-48"><a id="__codelineno-12-48" name="__codelineno-12-48" href="#__codelineno-12-48"></a>│   └── blockvalidation_api_grpc.pb.go      - gRPC-specific generated code.
+</span><span id="__span-12-49"><a id="__codelineno-12-49" name="__codelineno-12-49" href="#__codelineno-12-49"></a>├── testdata/                               - Test fixtures and data.
+</span><span id="__span-12-50"><a id="__codelineno-12-50" name="__codelineno-12-50" href="#__codelineno-12-50"></a>├── testhelpers/                            - Test helper utilities.
+</span><span id="__span-12-51"><a id="__codelineno-12-51" name="__codelineno-12-51" href="#__codelineno-12-51"></a>├── ttl_queue.go                            - TTL queue for caching with time-based expiration.
+</span><span id="__span-12-52"><a id="__codelineno-12-52" name="__codelineno-12-52" href="#__codelineno-12-52"></a>├── txmetacache.go                          - Transaction metadata cache for performance.
+</span><span id="__span-12-53"><a id="__codelineno-12-53" name="__codelineno-12-53" href="#__codelineno-12-53"></a>└── txmetacache_test.go                     - Transaction metadata cache tests.
 </span></code></pre></div>
 <h2 id="7-how-to-run">7. How to run<a class="headerlink" href="#7-how-to-run" title="Permanent link">&para;</a></h2>
 <p>To run the Block Validation Service locally, you can execute the following command:</p>
