@@ -73,20 +73,20 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		}
 		data, err := s.Get(ctx, h)
 		if err != nil {
-			return result, errors.NewStorageError("teraslab: SetMinedMulti backfill Get failed for %s", h.String(), err)
-		}
-		if data == nil {
-			// Get returns (nil, nil) for an absent record. When marking mined
-			// (UnsetMined false) the postcondition requires every hash in the map,
-			// and a tx that does not exist cannot be marked mined — error rather
-			// than silently omit it (matching Aerospike, which returns a non-nil
-			// error on any per-record failure). When UNmarking (reorg), a
-			// pruned/absent tx is a tolerated no-op (the postcondition does not
-			// apply), so skip it.
-			if !minedBlockInfo.UnsetMined {
-				return result, errors.NewProcessingError("teraslab: SetMinedMulti: tx %s not found, cannot be marked mined", h.String())
+			// A missing record surfaces as ErrTxNotFound (sendGetBatch ->
+			// mapErrorCode), not (nil, nil). When marking mined (UnsetMined false)
+			// the postcondition requires every hash in the map and a non-existent tx
+			// cannot be marked mined, so error (matching Aerospike, which fails on
+			// any per-record failure). On reorg unmark (UnsetMined true) a
+			// pruned/absent tx is a tolerated no-op, so skip it. Any other error is a
+			// real backfill fault.
+			if errors.Is(err, errors.ErrTxNotFound) {
+				if !minedBlockInfo.UnsetMined {
+					return result, errors.NewProcessingError("teraslab: SetMinedMulti: tx %s not found, cannot be marked mined", h.String())
+				}
+				continue
 			}
-			continue
+			return result, errors.NewStorageError("teraslab: SetMinedMulti backfill Get failed for %s", h.String(), err)
 		}
 		result[*h] = data.BlockIDs
 	}
