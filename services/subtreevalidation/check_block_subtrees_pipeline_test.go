@@ -112,7 +112,7 @@ func TestCheckBlockSubtrees_MultiBatch_BalancesArenas(t *testing.T) {
 
 	wireMultiBatchMocks(server)
 
-	mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+	mockValidator := server.validatorClient.(*validator.MockValidator)
 	mockValidator.UtxoStore = server.utxoStore
 
 	const numSubtrees = 5
@@ -123,7 +123,7 @@ func TestCheckBlockSubtrees_MultiBatch_BalancesArenas(t *testing.T) {
 
 	// arenaGets/arenaPuts are package-global; the pre/post delta is only valid
 	// because subtreevalidation tests run sequentially (no t.Parallel, per
-	// .claude/rules/testing.md). A concurrent test touching the pool would
+	// the Testing section in AGENTS.md). A concurrent test touching the pool would
 	// perturb these deltas.
 	gets0, puts0 := arenaGets.Load(), arenaPuts.Load()
 
@@ -153,7 +153,7 @@ func TestCheckBlockSubtrees_MultiBatch_ProcessErrorBalancesArenas(t *testing.T) 
 
 	wireMultiBatchMocks(server)
 
-	mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+	mockValidator := server.validatorClient.(*validator.MockValidator)
 	mockValidator.UtxoStore = server.utxoStore
 	// Fail the very first transaction validated, forcing an early batch's
 	// processTransactionsInLevels to error while later batches are in flight.

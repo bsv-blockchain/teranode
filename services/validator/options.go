@@ -176,6 +176,24 @@ type Options struct {
 	// extension, so the prefetch can never reduce correctness. nil = always
 	// read from the store (the non-catchup default).
 	PrefetchedParents map[chainhash.Hash]*meta.Data
+
+	// OutpointOnlySpend enables the below-checkpoint fast path:
+	//   - Parent Get (block-heights + extend) is skipped entirely — utxoHeights
+	//     is left nil, which is safe because SkipScriptValidation must also be
+	//     set on this path, bypassing the BDK/BIP68 code that consumes heights.
+	//   - Spend is issued with IgnoreFlags.SkipUTXOHashCheck=true so the SQL
+	//     store builds spends via outpoint lookup (no UTXO-hash comparison).
+	//   - Create is issued with utxo.WithSkipExtendedInputs(true) so fee
+	//     computation is skipped for un-extended inputs.
+	//   - The SkipUtxoCreation fallback calls util.TxMetaDataFromTxNoFee
+	//     instead of util.TxMetaDataFromTx (which calls GetFees and errors on
+	//     un-decorated inputs).
+	//
+	// MUST be paired with WithSkipScriptValidation(true). Default OFF — every
+	// code path when false is byte-identical to the pre-existing behaviour.
+	// The checkpoint gate is enforced by the caller (Stage C task C2); this
+	// option simply honours the flag.
+	OutpointOnlySpend bool
 }
 
 // Option defines a function type for setting options
@@ -366,6 +384,14 @@ func WithCandidateParentMedianTime(mtp uint32) Option {
 func WithUnconfirmedParentsAtCandidateHeight(enabled bool) Option {
 	return func(o *Options) {
 		o.UnconfirmedParentsAtCandidateHeight = enabled
+	}
+}
+
+// WithOutpointOnlySpend enables the below-checkpoint outpoint-only fast path.
+// See Options.OutpointOnlySpend for the full contract.
+func WithOutpointOnlySpend(b bool) Option {
+	return func(o *Options) {
+		o.OutpointOnlySpend = b
 	}
 }
 

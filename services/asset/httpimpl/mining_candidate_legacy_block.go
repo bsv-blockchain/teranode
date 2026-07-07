@@ -63,5 +63,5 @@ func (h *HTTP) handleMiningCandidateLegacyBlock(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
+	return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r)
 }

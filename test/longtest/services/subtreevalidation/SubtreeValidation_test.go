@@ -57,6 +57,8 @@ func (t *testUtxoStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data 
 	return nil
 }
 
+func (t *testUtxoStore) SupportsOutpointOnlySpend() bool { return false }
+
 func (t *testUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*utxometa.Data, error) {
 	return &utxometa.Data{Fee: 100, SizeInBytes: 200}, nil
 }
@@ -101,7 +103,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		txMetaMap: txMetaMap,
 	}
 
-	validatorClient := &validator.MockValidatorClient{UtxoStore: testStore}
+	validatorClient := &validator.MockValidator{UtxoStore: testStore}
 
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()

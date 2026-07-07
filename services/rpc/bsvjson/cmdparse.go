@@ -25,7 +25,7 @@ func makeParams(rt reflect.Type, rv reflect.Value) []interface{} {
 		rtf := rt.Field(i)
 		rvf := rv.Field(i)
 
-		if rtf.Type.Kind() == reflect.Ptr {
+		if rtf.Type.Kind() == reflect.Pointer {
 			if rvf.IsNil() {
 				break
 			}
@@ -240,7 +240,7 @@ func typesMaybeCompatible(dest reflect.Type, src reflect.Type) bool {
 func baseType(arg reflect.Type) (reflect.Type, int) {
 	var numIndirects int
 
-	for arg.Kind() == reflect.Ptr {
+	for arg.Kind() == reflect.Pointer {
 		arg = arg.Elem()
 		numIndirects++
 	}
@@ -307,7 +307,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 	}
 
 	// Indirect through to the base source value.
-	for src.Kind() == reflect.Ptr {
+	for src.Kind() == reflect.Pointer {
 		src = src.Elem()
 	}
 

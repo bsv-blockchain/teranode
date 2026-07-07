@@ -330,7 +330,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 
-	validatorClient := &validator.MockValidatorClient{UtxoStore: utxoStore}
+	validatorClient := &validator.MockValidator{UtxoStore: utxoStore}
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	if err != nil {
@@ -3255,7 +3255,6 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
 		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
@@ -3357,7 +3356,6 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
 		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
@@ -4263,7 +4261,6 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
 		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		invalidBlockKafkaProducer:     mockKafka,
@@ -4585,4 +4582,27 @@ func TestBlockValidation_FloaterPersistedInvalidWhenCaughtUp(t *testing.T) {
 	exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
 	require.NoError(t, existsErr)
 	require.True(t, exists, "caught-up floater must be persisted as invalid (storeInvalidBlock)")
+}
+
+func TestQuickValidateOutpointOnly_GateBounds(t *testing.T) {
+	// A store that reports fast-path support; the gate now asks the store, not settings.
+	u := &BlockValidation{
+		settings:  test.CreateBaseTestSettings(t),
+		utxoStore: &utxostore.MockUtxostore{SupportsOutpointOnlySpendResult: true},
+	}
+	// Two hardcoded checkpoints; highest is height 200.
+	u.settings.ChainCfgParams = &chaincfg.Params{Checkpoints: []chaincfg.Checkpoint{{Height: 100}, {Height: 200}}}
+
+	u.settings.BlockValidation.OutpointOnlyBelowCheckpoint = false
+	require.False(t, u.quickValidateOutpointOnly(&model.Block{Height: 150}), "off by default")
+
+	u.settings.BlockValidation.OutpointOnlyBelowCheckpoint = true
+	require.True(t, u.quickValidateOutpointOnly(&model.Block{Height: 150}), "on, below highest checkpoint")
+	require.True(t, u.quickValidateOutpointOnly(&model.Block{Height: 200}), "on, at highest checkpoint")
+	require.False(t, u.quickValidateOutpointOnly(&model.Block{Height: 201}), "on, above highest checkpoint")
+
+	// Store-capability dimension: a store that does not support the fast path keeps it off
+	// even below the checkpoint with the flag on.
+	u.utxoStore = &utxostore.MockUtxostore{SupportsOutpointOnlySpendResult: false}
+	require.False(t, u.quickValidateOutpointOnly(&model.Block{Height: 150}), "unsupported store keeps it off")
 }

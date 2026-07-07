@@ -299,6 +299,20 @@ func (d *Data) Bytes() ([]byte, error) {
 // Use this method when you need to efficiently store or transmit just the
 // metadata portion of a transaction record.
 func (d *Data) MetaBytes() ([]byte, error) {
+	return d.MetaBytesInto(nil)
+}
+
+// MetaBytesInto is MetaBytes that serializes into the caller-provided buffer's
+// backing array when it is large enough, reusing its capacity instead of
+// allocating a fresh slice. The caller passes dst[:0] (any length is reset) and
+// uses the returned slice; dst may be nil (equivalent to MetaBytes). This lets a
+// hot caller — notably the txmetacache cache-repopulate path, which serializes
+// one buffer per transaction and discards it after the cache copies it — recycle
+// the buffer through a sync.Pool and avoid the per-tx outer-buffer allocation.
+//
+// The returned slice's length bounds exactly the bytes written, so stale
+// capacity from a recycled buffer never leaks into the result.
+func (d *Data) MetaBytesInto(dst []byte) ([]byte, error) {
 	// Serialize the TxInpoints first so we can size the outer buffer exactly.
 	// The previous fixed cap of 1024 over-allocated ~10x for the common case
 	// (single-parent tx) and dominated allocator pressure on hot paths (profile
@@ -311,10 +325,20 @@ func (d *Data) MetaBytes() ([]byte, error) {
 		return nil, err
 	}
 
-	buf := make([]byte, 17, 17+len(txInpointsBytes))
+	need := 17 + len(txInpointsBytes)
+
+	buf := dst[:0]
+	if cap(buf) < need {
+		buf = make([]byte, 0, need)
+	}
+
+	buf = buf[:17]
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
+
+	// Reset the flags byte: a recycled buffer may carry stale bits here.
+	buf[16] = 0
 
 	if d.IsCoinbase {
 		buf[16] |= 0b01

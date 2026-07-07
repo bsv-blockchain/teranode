@@ -71,7 +71,7 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 		utxoStore, _, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 		t.Cleanup(deferFunc)
 
-		recordingClient := newRecordingValidatorClient(&validator.MockValidatorClient{UtxoStore: utxoStore})
+		recordingClient := newRecordingValidatorClient(&validator.MockValidator{UtxoStore: utxoStore})
 
 		for _, f := range fixtures {
 			// the legacy handler branch reads the FULL subtree serialization

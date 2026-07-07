@@ -262,107 +262,112 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 		return nil, err
 	}
 
-	if *c.Verbose {
-		versionInt32, err := safeconversion.Uint32ToInt32(b.Version)
-		if err != nil {
-			return nil, err
-		}
-
-		nonceUint64, err := safeconversion.Uint32ToUint64(b.Nonce)
-		if err != nil {
-			return nil, err
-		}
-
-		timeInt64, err := safeconversion.Uint32ToInt64(b.Timestamp)
-		if err != nil {
-			return nil, err
-		}
-
-		heightInt32, err := safeconversion.Uint32ToInt32(meta.Height)
-		if err != nil {
-			return nil, err
-		}
-
-		diff := b.Bits.CalculateDifficulty()
-		diffFloat, _ := diff.Float64()
-
-		// Get best block header for confirmations calculation
-		_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		// Calculate median time for this block
-		medianTime, err := calculateMedianTime(ctx, s.blockchainClient, b.Hash())
-		if err != nil {
-			// If we can't calculate median time, use block time
-			s.logger.Warnf("Failed to calculate median time for block %s: %v, falling back to block timestamp", b.Hash(), err)
-			medianTime = b.Timestamp
-		}
-
-		// Handle previousblockhash for genesis block
-		previousBlockHash := b.HashPrevBlock.String()
-		if meta.Height == 0 {
-			// For genesis block, return empty string instead of zeros
-			previousBlockHash = ""
-		}
-
-		// Get next block hash unless there are none
-		nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height+1)
-		var nextBlockHash string
-		if err == nil && nextBlock != nil {
-			nextBlockHash = nextBlock.Hash().String()
-		}
-
-		// Get block size
-		blockBytes := b.Bytes()
-		blockSizeInt32, err := safeconversion.IntToInt32(len(blockBytes))
-		if err != nil {
-			return nil, err
-		}
-
-		// Get transaction count from the block at this height
-		block, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height)
-		var numTx int
-		if err == nil && block != nil {
-			numTx = int(block.TransactionCount)
-		}
-
-		headerReply := &bsvjson.GetBlockHeaderVerboseResult{
-			Hash:          b.Hash().String(),
-			Version:       versionInt32,
-			VersionHex:    fmt.Sprintf("%08x", b.Version),
-			PreviousHash:  previousBlockHash,
-			Nonce:         nonceUint64,
-			Time:          timeInt64,
-			Bits:          b.Bits.String(),
-			Difficulty:    diffFloat,
-			MerkleRoot:    b.HashMerkleRoot.String(),
-			Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
-			Height:        heightInt32,
-			Size:          blockSizeInt32,
-			NumTx:         numTx,
-			MedianTime:    int64(medianTime),
-			ChainWork:     hex.EncodeToString(meta.ChainWork),
-			NextHash:      nextBlockHash,
-			Status:        "active",
-		}
-
-		// Check if this block is on the main chain
-		isOnMainChain, err := s.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{meta.ID})
-		if err != nil {
-			return nil, err
-		}
-
-		if !isOnMainChain {
-			headerReply.Confirmations = -1
-			return headerReply, nil
-		}
-
-		return headerReply, nil
+	if !*c.Verbose {
+		return fmt.Sprintf("%x", b.Bytes()), nil
 	}
 
-	return fmt.Sprintf("%x", b.Bytes()), nil
+	return s.getBlockHeaderVerboseResult(ctx, b, meta)
+}
+
+// getBlockHeaderVerboseResult builds the verbose getblockheader reply from the
+// block header and its metadata.
+func (s *RPCServer) getBlockHeaderVerboseResult(ctx context.Context, b *model.BlockHeader, meta *model.BlockHeaderMeta) (*bsvjson.GetBlockHeaderVerboseResult, error) {
+	versionInt32, err := safeconversion.Uint32ToInt32(b.Version)
+	if err != nil {
+		return nil, err
+	}
+
+	nonceUint64, err := safeconversion.Uint32ToUint64(b.Nonce)
+	if err != nil {
+		return nil, err
+	}
+
+	timeInt64, err := safeconversion.Uint32ToInt64(b.Timestamp)
+	if err != nil {
+		return nil, err
+	}
+
+	heightInt32, err := safeconversion.Uint32ToInt32(meta.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	diff := b.Bits.CalculateDifficulty()
+	diffFloat, _ := diff.Float64()
+
+	// Get best block header for confirmations calculation
+	_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate median time for this block
+	medianTime, err := calculateMedianTime(ctx, s.blockchainClient, b.Hash())
+	if err != nil {
+		// If we can't calculate median time, use block time
+		s.logger.Warnf("Failed to calculate median time for block %s: %v, falling back to block timestamp", b.Hash(), err)
+		medianTime = b.Timestamp
+	}
+
+	// Handle previousblockhash for genesis block
+	previousBlockHash := b.HashPrevBlock.String()
+	if meta.Height == 0 {
+		// For genesis block, return empty string instead of zeros
+		previousBlockHash = ""
+	}
+
+	// Get next block hash unless there are none
+	nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height+1)
+	var nextBlockHash string
+	if err == nil && nextBlock != nil {
+		nextBlockHash = nextBlock.Hash().String()
+	}
+
+	// Get block size
+	blockBytes := b.Bytes()
+	blockSizeInt32, err := safeconversion.IntToInt32(len(blockBytes))
+	if err != nil {
+		return nil, err
+	}
+
+	// Get transaction count from the block at this height
+	block, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height)
+	var numTx int
+	if err == nil && block != nil {
+		numTx = int(block.TransactionCount)
+	}
+
+	headerReply := &bsvjson.GetBlockHeaderVerboseResult{
+		Hash:          b.Hash().String(),
+		Version:       versionInt32,
+		VersionHex:    fmt.Sprintf("%08x", b.Version),
+		PreviousHash:  previousBlockHash,
+		Nonce:         nonceUint64,
+		Time:          timeInt64,
+		Bits:          b.Bits.String(),
+		Difficulty:    diffFloat,
+		MerkleRoot:    b.HashMerkleRoot.String(),
+		Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
+		Height:        heightInt32,
+		Size:          blockSizeInt32,
+		NumTx:         numTx,
+		MedianTime:    int64(medianTime),
+		ChainWork:     hex.EncodeToString(meta.ChainWork),
+		NextHash:      nextBlockHash,
+		Status:        "active",
+	}
+
+	// Check if this block is on the main chain
+	isOnMainChain, err := s.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{meta.ID})
+	if err != nil {
+		return nil, err
+	}
+
+	if !isOnMainChain {
+		headerReply.Confirmations = -1
+	}
+
+	return headerReply, nil
 }
 
 // blockToJSON converts a block to JSON format based on verbosity level.

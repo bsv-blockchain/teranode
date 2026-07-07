@@ -10,9 +10,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20260526081552-cdfa7814ee5d
-	github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv4
+	github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv5
 	github.com/bsv-blockchain/go-bt/v2 v2.6.7
-	github.com/bsv-blockchain/go-chaincfg v1.5.8
+	github.com/bsv-blockchain/go-chaincfg v1.6.0
 	github.com/bsv-blockchain/go-sdk v1.2.24
 	github.com/bsv-blockchain/go-subtree v1.4.2
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.4.0
@@ -38,7 +38,7 @@ require (
 	github.com/mrz1836/go-datastore v1.2.6
 	github.com/mrz1836/go-logger v1.0.4
 	github.com/multiformats/go-multiaddr v0.16.1
-	github.com/ordishs/gocore v1.0.81
+	github.com/ordishs/gocore v1.0.82
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.33.0
 	github.com/segmentio/encoding v0.4.0 // indirect
@@ -194,14 +194,14 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.1.3
 	github.com/bsv-blockchain/go-alert-system v0.1.6
-	github.com/bsv-blockchain/go-batcher/v2 v2.0.4
+	github.com/bsv-blockchain/go-batcher/v2 v2.0.6
 	github.com/bsv-blockchain/go-bc v1.1.5
 	github.com/bsv-blockchain/go-bn v1.1.4
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.17
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
 	github.com/bsv-blockchain/go-tx-map v1.4.1
-	github.com/bsv-blockchain/go-wire v1.2.9
+	github.com/bsv-blockchain/go-wire v1.2.10
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -381,7 +381,7 @@ require (
 	github.com/polydawn/refmt v0.89.1-0.20231129105047-37766d95467a // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.68.0 // indirect
+	github.com/prometheus/common v0.68.1 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/webtransport-go v0.10.0 // indirect

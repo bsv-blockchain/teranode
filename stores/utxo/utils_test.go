@@ -300,6 +300,22 @@ func BenchmarkGetUtxoHashes(b *testing.B) {
 	}
 }
 
+func TestGetSpendsOutpointOnly_NoDecorateDependency(t *testing.T) {
+	// A NON-extended tx: inputs have a parent outpoint but no PreviousTxScript/Satoshis.
+	parent := chainhash.HashH([]byte("parent"))
+	tx := bt.NewTx()
+	require.NoError(t, tx.From(parent.String(), 0, "", 0)) // outpoint only, empty script, 0 sats
+
+	spends, err := GetSpendsOutpointOnly(tx)
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+	require.Equal(t, uint32(0), spends[0].Vout)
+	require.Equal(t, parent.String(), spends[0].TxID.String())
+	require.NotNil(t, spends[0].UTXOHash, "must be a non-nil pointer so spend.UTXOHash[:] never panics")
+	require.Equal(t, chainhash.Hash{}, *spends[0].UTXOHash, "outpoint-only spends carry the zero hash")
+	require.NotNil(t, spends[0].SpendingData)
+}
+
 func BenchmarkGetUtxoHashes_ManyOutputs(b *testing.B) {
 	// Create a mock transaction with 1000 outputs
 	tx := bt.NewTx()

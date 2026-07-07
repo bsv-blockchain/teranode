@@ -123,6 +123,11 @@ func (s *Store) GetBlockState() utxo.BlockState {
 	return blockState
 }
 
+// SupportsOutpointOnlySpend delegates to the wrapped store.
+func (s *Store) SupportsOutpointOnlySpend() bool {
+	return s.store.SupportsOutpointOnlySpend()
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)
@@ -201,7 +206,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 }
 
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
-	err := s.store.Unspend(ctx, spends, false)
+	err := s.store.Unspend(ctx, spends, flagAsLocked...)
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {

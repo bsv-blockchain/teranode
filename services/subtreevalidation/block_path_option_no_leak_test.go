@@ -57,7 +57,7 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 		utxoStore, _, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 		t.Cleanup(deferFunc)
 
-		recordingClient := newRecordingValidatorClient(&validator.MockValidatorClient{UtxoStore: utxoStore})
+		recordingClient := newRecordingValidatorClient(&validator.MockValidator{UtxoStore: utxoStore})
 
 		childSubtree, err := subtreepkg.NewTreeByLeafCount(1)
 		require.NoError(t, err)

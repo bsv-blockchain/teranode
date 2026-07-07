@@ -68,6 +68,9 @@ func (m *NullStore) GetBlockState() utxo.BlockState {
 	}
 }
 
+// SupportsOutpointOnlySpend reports false: the null store performs no real UTXO work.
+func (m *NullStore) SupportsOutpointOnlySpend() bool { return false }
+
 func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "NullStore Store available", nil
 }

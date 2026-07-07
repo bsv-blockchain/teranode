@@ -246,3 +246,24 @@ func GetSpends(tx *bt.Tx) (spends []*Spend, err error) {
 
 	return spends, nil
 }
+
+// GetSpendsOutpointOnly creates Spend objects addressed solely by outpoint (parent txid + vout),
+// without computing the per-input UTXO hash. Used by the below-checkpoint outpoint-only fast path
+// where the integrity checksum is intentionally skipped (spec §3.2 Seam 1). UTXOHash is set to a
+// non-nil pointer to the zero hash so existing store dereferences (spend.UTXOHash[:]) never panic;
+// the store must skip the hash comparison via IgnoreFlags.SkipUTXOHashCheck, never on the zero hash alone.
+func GetSpendsOutpointOnly(tx *bt.Tx) ([]*Spend, error) {
+	txIDChainHash := tx.TxIDChainHash()
+	spends := make([]*Spend, 0, len(tx.Inputs))
+
+	for i, input := range tx.Inputs {
+		spends = append(spends, &Spend{
+			TxID:         input.PreviousTxIDChainHash(),
+			Vout:         input.PreviousTxOutIndex,
+			UTXOHash:     &chainhash.Hash{},
+			SpendingData: spend.NewSpendingData(txIDChainHash, i),
+		})
+	}
+
+	return spends, nil
+}

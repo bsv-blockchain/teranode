@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
@@ -41,35 +42,22 @@ func writeLuaErr(rec aerospike.BatchRecordIfc, msg string) {
 	rec.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{LuaSuccess.String(): m}}
 }
 
-func newLockedItem(b byte) *batchLocked {
-	// Production sizes errCh at cap 1; here we use cap 2 so that a regression
-	// which double-signals an item (production sends via the non-blocking
-	// trySignal) is not silently dropped on the second send — it lands in the
-	// buffer where recvOnce's "exactly once" check can observe it.
-	return &batchLocked{ctx: context.Background(), txHash: chainhash.Hash{b}, setValue: true, errCh: make(chan error, 2)}
+func newLockedItem(b byte, group *completion.Group) *batchLocked {
+	return &batchLocked{ctx: context.Background(), txHash: chainhash.Hash{b}, setValue: true, group: group}
 }
 
-// recvOnce returns the value delivered on a completion channel and asserts the
-// item was signalled exactly once. The channel is sized cap 2 (see
-// newLockedItem) so a spurious second trySignal is buffered rather than dropped,
-// making double-signalling observable here.
-func recvOnce(t *testing.T, ch chan error) error {
+// requireBatchCompleted waits once for every item in the batch (via the
+// shared group, sized to len(items) by the caller) and asserts it did so
+// without timing out. Unlike the old per-item errCh/recvOnce check, this
+// cannot directly observe a double-complete() call — complete is CAS-guarded
+// and silently absorbs a second call by design (the production-safe
+// equivalent of the previous trySignal-on-a-full-buffer no-op). What it does
+// still catch: an item never being completed (Wait times out), or an
+// over-decrement of the shared counter (Group.Done panics on more calls than
+// its count — see completion.Group), both of which would fail this call.
+func requireBatchCompleted(t *testing.T, group *completion.Group) {
 	t.Helper()
-
-	var e error
-	select {
-	case e = <-ch:
-	case <-time.After(2 * time.Second):
-		t.Fatal("errCh was not signalled")
-	}
-
-	select {
-	case <-ch:
-		t.Fatal("errCh signalled more than once")
-	default:
-	}
-
-	return e
+	require.NoError(t, group.Wait(context.Background(), 2*time.Second), "not every item in the batch completed")
 }
 
 // TestSetLockedBatch_MultiRecordSuccess: a master reporting childCount=N drives a
@@ -105,7 +93,8 @@ func TestSetLockedBatch_MultiRecordSuccess(t *testing.T) {
 		return nil
 	}
 
-	item := newLockedItem(1)
+	group := completion.NewGroup(1)
+	item := newLockedItem(1, group)
 	require.NotPanics(t, func() { s.setLockedBatch([]*batchLocked{item}) })
 
 	require.Equal(t, 2, calls, "expected one master and one child batchOperate")
@@ -119,16 +108,18 @@ func TestSetLockedBatch_MultiRecordSuccess(t *testing.T) {
 		require.True(t, want.Equals(childPass[i-1].BatchRec().Key), "child record %d has wrong key", i)
 	}
 
-	require.NoError(t, recvOnce(t, item.errCh))
+	requireBatchCompleted(t, group)
+	require.NoError(t, item.result)
 }
 
 // TestSetLockedBatch_MixedChildCounts: single-record items complete from the
 // master pass without contributing children; only paginated items add child
-// records. Every item is signalled exactly once.
+// records. Every item is completed exactly once.
 func TestSetLockedBatch_MixedChildCounts(t *testing.T) {
 	s := newTestStoreForGet(t)
 
-	items := []*batchLocked{newLockedItem(1), newLockedItem(2), newLockedItem(3)}
+	group := completion.NewGroup(3)
+	items := []*batchLocked{newLockedItem(1, group), newLockedItem(2, group), newLockedItem(3, group)}
 	counts := []int{0, 2, 0} // only items[1] paginates
 
 	var (
@@ -161,8 +152,9 @@ func TestSetLockedBatch_MixedChildCounts(t *testing.T) {
 	require.Equal(t, 2, calls, "child pass runs because one item paginates")
 	require.Len(t, childPass, 2, "only the paginated item contributes children")
 
+	requireBatchCompleted(t, group)
 	for _, it := range items {
-		require.NoError(t, recvOnce(t, it.errCh))
+		require.NoError(t, it.result)
 	}
 }
 
@@ -171,8 +163,9 @@ func TestSetLockedBatch_MixedChildCounts(t *testing.T) {
 func TestSetLockedBatch_ChildBatchError(t *testing.T) {
 	s := newTestStoreForGet(t)
 
-	single := newLockedItem(1) // childCount 0 — completes in master pass
-	paged := newLockedItem(2)  // childCount 2 — deferred to child pass
+	group := completion.NewGroup(2)
+	single := newLockedItem(1, group) // childCount 0 — completes in master pass
+	paged := newLockedItem(2, group)  // childCount 2 — deferred to child pass
 
 	var calls int
 
@@ -192,11 +185,12 @@ func TestSetLockedBatch_ChildBatchError(t *testing.T) {
 	require.NotPanics(t, func() { s.setLockedBatch([]*batchLocked{single, paged}) })
 
 	require.Equal(t, 2, calls)
-	require.NoError(t, recvOnce(t, single.errCh), "single-record item is unaffected by child-batch failure")
+	requireBatchCompleted(t, group)
 
-	err := recvOnce(t, paged.errCh)
-	require.Error(t, err, "paginated item must surface the child-batch write error")
-	require.Contains(t, err.Error(), "could not batch write locked child records")
+	require.NoError(t, single.result, "single-record item is unaffected by child-batch failure")
+
+	require.Error(t, paged.result, "paginated item must surface the child-batch write error")
+	require.Contains(t, paged.result.Error(), "could not batch write locked child records")
 }
 
 // TestSetLockedBatch_ChildRecordFailure: a per-record failure in the child pass
@@ -204,8 +198,9 @@ func TestSetLockedBatch_ChildBatchError(t *testing.T) {
 func TestSetLockedBatch_ChildRecordFailure(t *testing.T) {
 	s := newTestStoreForGet(t)
 
-	bad := newLockedItem(1)  // first in batch; one of its children returns ERROR
-	good := newLockedItem(2) // children all OK
+	group := completion.NewGroup(2)
+	bad := newLockedItem(1, group)  // first in batch; one of its children returns ERROR
+	good := newLockedItem(2, group) // children all OK
 
 	var calls int
 
@@ -230,10 +225,10 @@ func TestSetLockedBatch_ChildRecordFailure(t *testing.T) {
 	require.NotPanics(t, func() { s.setLockedBatch([]*batchLocked{bad, good}) })
 
 	require.Equal(t, 2, calls)
+	requireBatchCompleted(t, group)
 
-	err := recvOnce(t, bad.errCh)
-	require.Error(t, err, "item with a failing child record must surface the error")
-	require.Contains(t, err.Error(), "error from setLocked child")
+	require.Error(t, bad.result, "item with a failing child record must surface the error")
+	require.Contains(t, bad.result.Error(), "error from setLocked child")
 
-	require.NoError(t, recvOnce(t, good.errCh), "sibling with all children OK is unaffected")
+	require.NoError(t, good.result, "sibling with all children OK is unaffected")
 }

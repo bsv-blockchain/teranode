@@ -132,70 +132,75 @@ import (
 //	GET /tx/{hash}/hex
 func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		hashStr := c.Param("hash")
+		return h.getTransaction(c, mode)
+	}
+}
 
-		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTransaction_http",
-			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetTransaction in %s for %s: %s", mode, c.RealIP(), hashStr),
-		)
+// getTransaction serves a single GetTransaction request in the given read mode.
+func (h *HTTP) getTransaction(c echo.Context, mode ReadMode) error {
+	hashStr := c.Param("hash")
 
-		defer deferFn()
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTransaction_http",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetTransaction in %s for %s: %s", mode, c.RealIP(), hashStr),
+	)
 
-		if len(hashStr) != 64 {
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash length").Error())
+	defer deferFn()
+
+	if len(hashStr) != 64 {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash length").Error())
+	}
+
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
+	}
+
+	b, err := h.repository.GetTransaction(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		} else {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
+	}
 
-		hash, err := chainhash.NewHashFromStr(hashStr)
+	// sign the response, if the private key is set, ignore error
+	// do this before any output is sent to the client, this adds a signature to the response header
+	_ = h.Sign(c.Response(), hash.CloneBytes())
+
+	prometheusAssetHTTPGetTransaction.WithLabelValues("OK", "200").Inc()
+
+	switch mode {
+	case BINARY_STREAM:
+		return c.Blob(200, echo.MIMEOctetStream, b)
+
+	case HEX:
+		return c.String(200, hex.EncodeToString(b))
+
+	case JSON:
+		tx, err := bt.NewTxFromBytes(b)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
+			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error parsing transaction", err).Error())
 		}
 
-		b, err := h.repository.GetTransaction(ctx, hash)
-		if err != nil {
-			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
+		// Debug logging for extended transaction format
+		h.logger.Debugf("[Asset_http] GetTransaction: Transaction %s - IsExtended: %v, IsCoinbase: %v",
+			hash.String(), tx.IsExtended(), tx.IsCoinbase())
 
-		// sign the response, if the private key is set, ignore error
-		// do this before any output is sent to the client, this adds a signature to the response header
-		_ = h.Sign(c.Response(), hash.CloneBytes())
-
-		prometheusAssetHTTPGetTransaction.WithLabelValues("OK", "200").Inc()
-
-		switch mode {
-		case BINARY_STREAM:
-			return c.Blob(200, echo.MIMEOctetStream, b)
-
-		case HEX:
-			return c.String(200, hex.EncodeToString(b))
-
-		case JSON:
-			tx, err := bt.NewTxFromBytes(b)
-			if err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error parsing transaction", err).Error())
-			}
-
-			// Debug logging for extended transaction format
-			h.logger.Debugf("[Asset_http] GetTransaction: Transaction %s - IsExtended: %v, IsCoinbase: %v",
-				hash.String(), tx.IsExtended(), tx.IsCoinbase())
-
-			if len(tx.Inputs) > 0 {
-				// Log details about the first few inputs
-				for i, input := range tx.Inputs {
-					if i < 3 { // Log first 3 inputs
-						h.logger.Debugf("[Asset_http] GetTransaction: Tx %s - Input[%d] PreviousTxSatoshis: %d",
-							hash.String(), i, input.PreviousTxSatoshis)
-					}
+		if len(tx.Inputs) > 0 {
+			// Log details about the first few inputs
+			for i, input := range tx.Inputs {
+				if i < 3 { // Log first 3 inputs
+					h.logger.Debugf("[Asset_http] GetTransaction: Tx %s - Input[%d] PreviousTxSatoshis: %d",
+						hash.String(), i, input.PreviousTxSatoshis)
 				}
 			}
-
-			return c.JSONPretty(200, tx, "  ")
-
-		default:
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
 		}
+
+		return c.JSONPretty(200, tx, "  ")
+
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
 	}
 }

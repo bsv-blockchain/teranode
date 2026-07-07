@@ -29,6 +29,10 @@ import (
 //	mockStore.AssertExpectations(t)
 type MockUtxostore struct {
 	mock.Mock
+
+	// SupportsOutpointOnlySpendResult is what SupportsOutpointOnlySpend returns.
+	// Defaults to false; set true in tests that exercise the below-checkpoint fast path.
+	SupportsOutpointOnlySpendResult bool
 }
 
 // Health mocks the health check functionality of the UTXO store.
@@ -43,6 +47,11 @@ func (m *MockUtxostore) Close(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
 }
+
+// SupportsOutpointOnlySpend returns the configurable SupportsOutpointOnlySpendResult
+// (default false). Reading a field rather than m.Called() keeps the mock usable in
+// tests that have not set an expectation for this capability query.
+func (m *MockUtxostore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
 
 // Create mocks the creation of transaction metadata in the UTXO store.
 // Returns the configured mock response for transaction creation operations.

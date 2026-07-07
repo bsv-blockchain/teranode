@@ -122,107 +122,112 @@ type UTXOItem struct {
 //   - UTXOs can be in various states (spent, unspent, frozen, etc.)
 func (h *HTTP) GetUTXOsByTxID(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		hashStr := c.Param("hash")
+		return h.getUTXOsByTxID(c, mode)
+	}
+}
 
-		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetUTXOsByTxID_http",
-			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetUTXOsByTxID in %s for %s: %s", mode, c.RealIP(), hashStr),
-		)
+// getUTXOsByTxID serves a single GetUTXOsByTxID request in the given read mode.
+func (h *HTTP) getUTXOsByTxID(c echo.Context, mode ReadMode) error {
+	hashStr := c.Param("hash")
 
-		defer deferFn()
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetUTXOsByTxID_http",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetUTXOsByTxID in %s for %s: %s", mode, c.RealIP(), hashStr),
+	)
 
-		if len(hashStr) != 64 {
-			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewInvalidArgumentError("invalid transaction hash length").Error())
-		}
+	defer deferFn()
 
-		hash, err := chainhash.NewHashFromStr(hashStr)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewInvalidArgumentError("invalid transaction hash format", err).Error())
-		}
+	if len(hashStr) != 64 {
+		return echo.NewHTTPError(http.StatusInternalServerError, errors.NewInvalidArgumentError("invalid transaction hash length").Error())
+	}
 
-		b, err := h.repository.GetTransaction(ctx, hash)
-		if err != nil {
-			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTxID error getting transaction: %s", hash.String(), err.Error())
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, errors.NewInvalidArgumentError("invalid transaction hash format", err).Error())
+	}
 
-			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
+	b, err := h.repository.GetTransaction(ctx, hash)
+	if err != nil {
+		h.logger.Errorf("[Asset_http][%s] GetUTXOsByTxID error getting transaction: %s", hash.String(), err.Error())
 
-		tx, err := bt.NewTxFromBytes(b)
-		if err != nil {
-			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTxID error creating transaction: %s", hash.String(), err.Error())
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
+	}
 
-		// Go through all the outputs and get the UTXOHash for each one
-		// and then look up the UTXO by that hash.  This is done in parallel
-		// to help speed things up.
+	tx, err := bt.NewTxFromBytes(b)
+	if err != nil {
+		h.logger.Errorf("[Asset_http][%s] GetUTXOsByTxID error creating transaction: %s", hash.String(), err.Error())
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
 
-		g, ctx := errgroup.WithContext(c.Request().Context())
+	// Go through all the outputs and get the UTXOHash for each one
+	// and then look up the UTXO by that hash.  This is done in parallel
+	// to help speed things up.
 
-		// Create a channel to receive the results from the goroutines
-		// that will be created.
-		utxos := make([]*UTXOItem, len(tx.Outputs))
+	g, ctx := errgroup.WithContext(c.Request().Context())
 
-		// Create a goroutine for each output in the transaction.
-		for i, output := range tx.Outputs {
-			safeI, safeOutput := i, output
+	// Create a channel to receive the results from the goroutines
+	// that will be created.
+	utxos := make([]*UTXOItem, len(tx.Outputs))
 
-			g.Go(func() error {
-				// Get the UTXOHash for this output.
-				//nolint:gosec
-				utxoHash, err := util.UTXOHash(hash, uint32(safeI), safeOutput.LockingScript, safeOutput.Satoshis)
-				if err != nil {
-					return err
-				}
+	// Create a goroutine for each output in the transaction.
+	for i, output := range tx.Outputs {
+		safeI, safeOutput := i, output
 
-				//nolint:gosec
-				utxoItem := &UTXOItem{
-					Txid:          hash,
-					Vout:          uint32(safeI),
-					LockingScript: safeOutput.LockingScript,
-					Satoshis:      safeOutput.Satoshis,
-					UtxoHash:      utxoHash,
-				}
+		g.Go(func() error {
+			// Get the UTXOHash for this output.
+			//nolint:gosec
+			utxoHash, err := util.UTXOHash(hash, uint32(safeI), safeOutput.LockingScript, safeOutput.Satoshis)
+			if err != nil {
+				return err
+			}
 
-				// Get the UTXO for this output.
-				//nolint:gosec
-				utxoRes, _ := h.repository.GetUtxo(ctx, &utxo.Spend{
-					UTXOHash: utxoHash,
-					TxID:     tx.TxIDChainHash(),
-					Vout:     uint32(safeI),
-				})
+			//nolint:gosec
+			utxoItem := &UTXOItem{
+				Txid:          hash,
+				Vout:          uint32(safeI),
+				LockingScript: safeOutput.LockingScript,
+				Satoshis:      safeOutput.Satoshis,
+				UtxoHash:      utxoHash,
+			}
 
-				//nolint:gosec
-				if utxoRes != nil && utxoRes.Status != int(utxo.Status_NOT_FOUND) {
-					utxoItem.Status = utxo.Status(utxoRes.Status).String()
-					utxoItem.SpendingData = utxoRes.SpendingData
-					utxoItem.LockTime = utxoRes.LockTime
-				} else {
-					utxoItem.Status = utxo.Status_NOT_FOUND.String()
-				}
-
-				// this can be set here, but only directly by index
-				utxos[safeI] = utxoItem
-
-				return nil
+			// Get the UTXO for this output.
+			//nolint:gosec
+			utxoRes, _ := h.repository.GetUtxo(ctx, &utxo.Spend{
+				UTXOHash: utxoHash,
+				TxID:     tx.TxIDChainHash(),
+				Vout:     uint32(safeI),
 			})
-		}
 
-		if err = g.Wait(); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("[Asset_http][%s] error getting utxos", hash.String(), err).Error())
-		}
+			//nolint:gosec
+			if utxoRes != nil && utxoRes.Status != int(utxo.Status_NOT_FOUND) {
+				utxoItem.Status = utxo.Status(utxoRes.Status).String()
+				utxoItem.SpendingData = utxoRes.SpendingData
+				utxoItem.LockTime = utxoRes.LockTime
+			} else {
+				utxoItem.Status = utxo.Status_NOT_FOUND.String()
+			}
 
-		prometheusAssetHTTPGetUTXO.WithLabelValues("OK", "200").Inc()
+			// this can be set here, but only directly by index
+			utxos[safeI] = utxoItem
 
-		switch mode {
-		case JSON:
-			return c.JSONPretty(200, utxos, "  ")
-		default:
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
-		}
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("[Asset_http][%s] error getting utxos", hash.String(), err).Error())
+	}
+
+	prometheusAssetHTTPGetUTXO.WithLabelValues("OK", "200").Inc()
+
+	switch mode {
+	case JSON:
+		return c.JSONPretty(200, utxos, "  ")
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
 	}
 }

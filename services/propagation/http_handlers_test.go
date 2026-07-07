@@ -32,7 +32,7 @@ func init() {
 
 // MockValidatorForTxTest is a mock validator implementation for transaction tests
 type MockValidatorForTxTest struct {
-	validator.MockValidatorClient
+	validator.MockValidator
 	validateCalled atomic.Bool
 	validateErr    error
 }

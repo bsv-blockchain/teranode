@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
@@ -660,14 +661,11 @@ func TestClient_GetTransactionHashes(t *testing.T) {
 	})
 }
 
-func TestClient_sendBatchToBlockAssembly(t *testing.T) {
-	ctx := context.Background()
-	mockClient := &mockBlockAssemblyAPIClient{}
-	client := createTestClient(mockClient, 5)
-
-	// Create mock batch items
-	done1 := make(chan error, 1)
-	done2 := make(chan error, 1)
+// newTestBatch builds a two-item batch sharing one completion.Group sized to
+// the batch length, mirroring how the Store producer wires items to the
+// dispatcher in the group-completion model.
+func newTestBatch() (*completion.Group, []*batchItem) {
+	group := completion.NewGroup(2)
 
 	batch := []*batchItem{
 		{
@@ -676,7 +674,7 @@ func TestClient_sendBatchToBlockAssembly(t *testing.T) {
 				Fee:  1000,
 				Size: 250,
 			},
-			done: done1,
+			group: group,
 		},
 		{
 			req: &blockassembly_api.AddTxRequest{
@@ -684,49 +682,69 @@ func TestClient_sendBatchToBlockAssembly(t *testing.T) {
 				Fee:  2000,
 				Size: 500,
 			},
-			done: done2,
+			group: group,
 		},
 	}
 
+	return group, batch
+}
+
+func TestClient_sendBatchToBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	mockClient := &mockBlockAssemblyAPIClient{}
+	client := createTestClient(mockClient, 5)
+
 	t.Run("successful batch", func(t *testing.T) {
+		group, batch := newTestBatch()
+
 		mockClient.ExpectedCalls = nil
 		mockClient.On("AddTxBatch", ctx, mock.MatchedBy(func(req *blockassembly_api.AddTxBatchRequest) bool {
 			return len(req.TxRequests) == 2
 		}), mock.Anything).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
 
-		// Send batch in goroutine to avoid blocking
-		go client.sendBatchToBlockAssembly(ctx, batch)
+		client.sendBatchToBlockAssembly(ctx, batch)
 
-		// Check that all done channels receive nil
-		err1 := <-done1
-		err2 := <-done2
-		assert.NoError(t, err1)
-		assert.NoError(t, err2)
+		// group completes (no timer): every item was completed exactly once. A
+		// double-Done would have panicked in the dispatcher before we got here.
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.NoError(t, batch[0].result)
+		require.NoError(t, batch[1].result)
 
 		mockClient.AssertExpectations(t)
 	})
 
 	t.Run("batch error", func(t *testing.T) {
-		// Reset done channels
-		done1 = make(chan error, 1)
-		done2 = make(chan error, 1)
-		batch[0].done = done1
-		batch[1].done = done2
+		group, batch := newTestBatch()
 
 		mockClient.ExpectedCalls = nil
 		mockClient.On("AddTxBatch", ctx, mock.Anything, mock.Anything).Return(
 			nil, status.Error(codes.Internal, "batch failed"))
 
-		// Send batch in goroutine to avoid blocking
-		go client.sendBatchToBlockAssembly(ctx, batch)
+		client.sendBatchToBlockAssembly(ctx, batch)
 
-		// Check that all done channels receive the error
-		err1 := <-done1
-		err2 := <-done2
-		assert.Error(t, err1)
-		assert.Error(t, err2)
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.Error(t, batch[0].result)
+		require.Error(t, batch[1].result)
 
 		mockClient.AssertExpectations(t)
+	})
+
+	t.Run("dispatcher panic completes every item", func(t *testing.T) {
+		group, batch := newTestBatch()
+
+		mockClient.ExpectedCalls = nil
+		// AddTxBatch panics part-way through the dispatch fn. The whole-batch
+		// panic sweep must recover and complete every item so no producer is
+		// stranded on group.Wait.
+		mockClient.On("AddTxBatch", ctx, mock.Anything, mock.Anything).
+			Run(func(mock.Arguments) { panic("boom") }).
+			Return(nil, error(nil))
+
+		require.NotPanics(t, func() { client.sendBatchToBlockAssembly(ctx, batch) })
+
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.Error(t, batch[0].result)
+		require.Error(t, batch[1].result)
 	})
 }
 
