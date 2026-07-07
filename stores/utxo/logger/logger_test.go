@@ -229,29 +229,6 @@ func (m *MockStore) ProcessExpiredPreservations(ctx context.Context, currentHeig
 	return args.Error(0)
 }
 
-// MockIterator implements utxo.UnminedTxIterator for testing
-type MockIterator struct {
-	mock.Mock
-}
-
-func (m *MockIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*utxo.UnminedTransaction), args.Error(1)
-}
-
-func (m *MockIterator) Err() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *MockIterator) Close() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
 // Helper functions for creating test data
 func createTestHash(nonce byte) *chainhash.Hash {
 	hash := &chainhash.Hash{}
@@ -528,23 +505,50 @@ func TestSpend(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
+// TestUnspend proves the decorator forwards flagAsLocked unchanged (#1154).
+// Dropping it and hardcoding false defeats the SQL fix on the ?logging=true path
+// (a no-flag rollback would still write locked=false) and inverts
+// ProcessConflicting's Unspend(..., true) lock-set into a lock-clear.
 func TestUnspend(t *testing.T) {
-	logger := ulogger.TestLogger{}
-	mockStore := &MockStore{}
-	store := New(context.Background(), logger, mockStore).(*Store)
-
 	ctx := context.Background()
 	spends := []*utxo.Spend{createTestSpend(1), createTestSpend(2)}
 	expectedErr := errors.NewError("unspend error")
 
-	// Note: The implementation always passes false as the third argument (ignoring variadic parameter)
-	// The mock receives it as []bool{false} due to variadic expansion
-	mockStore.On("Unspend", ctx, spends, []bool{false}).Return(expectedErr)
+	t.Run("no flag is forwarded as no flag", func(t *testing.T) {
+		mockStore := &MockStore{}
+		store := New(ctx, ulogger.TestLogger{}, mockStore).(*Store)
 
-	err := store.Unspend(ctx, spends, true) // flagAsLocked is ignored in implementation
+		mockStore.On("Unspend", ctx, spends, []bool(nil)).Return(expectedErr)
 
-	assert.Equal(t, expectedErr, err)
-	mockStore.AssertExpectations(t)
+		err := store.Unspend(ctx, spends)
+
+		assert.Equal(t, expectedErr, err)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("explicit true is forwarded unchanged", func(t *testing.T) {
+		mockStore := &MockStore{}
+		store := New(ctx, ulogger.TestLogger{}, mockStore).(*Store)
+
+		mockStore.On("Unspend", ctx, spends, []bool{true}).Return(expectedErr)
+
+		err := store.Unspend(ctx, spends, true)
+
+		assert.Equal(t, expectedErr, err)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("explicit false is forwarded unchanged", func(t *testing.T) {
+		mockStore := &MockStore{}
+		store := New(ctx, ulogger.TestLogger{}, mockStore).(*Store)
+
+		mockStore.On("Unspend", ctx, spends, []bool{false}).Return(expectedErr)
+
+		err := store.Unspend(ctx, spends, false)
+
+		assert.Equal(t, expectedErr, err)
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestDelete(t *testing.T) {
@@ -592,7 +596,7 @@ func TestGetUnminedTxIterator(t *testing.T) {
 	mockStore := &MockStore{}
 	store := New(context.Background(), logger, mockStore).(*Store)
 
-	mockIterator := &MockIterator{}
+	mockIterator := &utxo.MockUnminedTxIterator{}
 	expectedErr := errors.NewError("iterator error")
 
 	mockStore.On("GetUnminedTxIterator").Return(mockIterator, expectedErr)
@@ -1065,7 +1069,7 @@ func TestGetUnminedTxIteratorPassthrough(t *testing.T) {
 	mockStore := &MockStore{}
 	store := New(context.Background(), logger, mockStore).(*Store)
 
-	mockIterator := &MockIterator{}
+	mockIterator := &utxo.MockUnminedTxIterator{}
 	mockStore.On("GetUnminedTxIterator").Return(mockIterator, nil)
 
 	iterator, err := store.GetUnminedTxIterator()

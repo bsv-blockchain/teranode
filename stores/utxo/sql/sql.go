@@ -2966,12 +2966,10 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	// qFindTxID runs after q1 returns 0 rows. Unspend is idempotent: if the output
 	// row exists but our caller doesn't own the spend (stored data is NULL or
 	// belongs to someone else), we no-op on spending_data but still need the
-	// transaction_id to apply the locked/DAH housekeeping below — callers like
-	// ProcessConflicting rely on the parent transaction's locked state being
-	// updated regardless of whether the spend was the loser's. Only a missing
-	// row is a real error (NotFound). Mirrors stores/utxo/aerospike/teranode.lua
-	// where the unspend UDF returns STATUS_OK with no bin mutation for the same
-	// non-owning cases.
+	// transaction_id to apply the DAH housekeeping below. Only a missing row is a
+	// real error (NotFound). Mirrors stores/utxo/aerospike/teranode.lua where the
+	// unspend UDF returns STATUS_OK with no bin mutation for the same non-owning
+	// cases.
 	qFindTxID := `
 		SELECT transaction_id FROM outputs
 		WHERE transaction_id IN (
@@ -2980,8 +2978,17 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		AND idx = $2
 	`
 
+	// Only touch the parent's locked flag when the caller explicitly supplies one.
+	// The Aerospike unspend UDF never mutates locked (it is cleared on setMined),
+	// so a plain spend-rollback (no flagAsLocked) must leave locked untouched here
+	// too — otherwise an overlapping rollback would clear an independently-set 2PC
+	// locked flag and make a parent's outputs spendable before 2PC completes.
+	// Callers that intend to change locked pass it explicitly: ProcessConflicting
+	// locks affected parents (true) and ReverseProcessConflicting unlocks them (false).
+	flagLockedProvided := len(flagAsLocked) > 0
+
 	locked := false
-	if len(flagAsLocked) > 0 {
+	if flagLockedProvided {
 		locked = flagAsLocked[0]
 	}
 
@@ -3026,8 +3033,10 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 				}
 			}
 
-			if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
-				return errors.NewStorageError("[Unspend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
+			if flagLockedProvided {
+				if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
+					return errors.NewStorageError("[Unspend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
+				}
 			}
 
 			if err = s.setDAH(ctx, txn, transactionID); err != nil {

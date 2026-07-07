@@ -368,7 +368,11 @@ func New(
 		blockClassifier:     NewBlockClassifier(logger, nearForkThreshold, blockchainClient),
 		forkManager:         fm,
 		catchupCh:           make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
-		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
+		// 10m TTL is a safety net: entries are normally removed by explicit Delete
+		// when catchup completes or fails, but a missed Delete on any error/early-return
+		// branch would otherwise leak the entry permanently. Mirrors catchupAlternatives,
+		// the sibling cache for the same in-flight block.
+		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](ttlcache.WithTTL[chainhash.Hash, bool](10 * time.Minute)),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),
@@ -1735,7 +1739,45 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			return
 		}
 
-		// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue
+		// Peer-side failure: every peer we tried (primary + alternatives)
+		// returned bad/incomplete data or rejected/failed the request.
+		// Distinguished from ErrServiceError so the silent "clear markers,
+		// retry" loop below doesn't absorb peer issues. We clear markers (so
+		// future P2P notifications for this block can re-trigger catchup),
+		// report peer failure for the originating peer (so P2P routes the
+		// next attempt to a different peer), and log loudly. This avoids the
+		// hot-loop where the same peer keeps being asked for the same
+		// missing subtree data.
+		//
+		// ORDER IS LOAD-BEARING: this check must run before the
+		// ErrServiceError check. errors.Is matches by code across the whole
+		// wrapped chain, and the ERR_EXTERNAL classification from
+		// fetchAndStoreSubtreeAndSubtreeData arrives buried mid-chain — it
+		// wraps the per-peer ServiceError, and is itself re-wrapped by
+		// fetchSubtreeDataForBlock (ServiceError) and orderedDelivery
+		// (ProcessingError) on the way up. So errors.Is(err, ErrServiceError)
+		// is also true for these errors, and matching on the outermost code
+		// would see ERR_PROCESSING. ERR_EXTERNAL anywhere in the chain means
+		// a peer-side failure was classified, which is what we dispatch on.
+		if errors.Is(err, errors.ErrExternal) {
+			// #1057: count this cycle toward the per-block cap (unless it made
+			// progress) so persistently failing peers cannot drive unbounded
+			// re-entry via repeated P2P notifications.
+			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
+			u.logger.Warnf("[catchup] All peers failed for block %s (attempt %d/%d), clearing markers and reporting peer failure to allow retry from a different peer: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
+			u.processBlockNotify.Delete(*c.block.Hash())
+			u.catchupAlternatives.Delete(*c.block.Hash())
+			u.reportCatchupFailure(ctx, c.peerID)
+
+			if reportErr := u.blockchainClient.ReportPeerFailure(ctx, c.block.Hash(), c.peerID, "catchup", err.Error()); reportErr != nil {
+				u.logger.Errorf("[catchup] failed to report peer failure for block %s peer %s: %v", c.block.Hash().String(), c.peerID, reportErr)
+			}
+
+			return
+		}
+
+		// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue.
+		// Must run after the ErrExternal check above (see the ordering note there).
 		if errors.Is(err, errors.ErrServiceError) {
 			// #1057: count this cycle toward the per-block cap (unless it made
 			// progress) so a persistent local service error cannot drive unbounded

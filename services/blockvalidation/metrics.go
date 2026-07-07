@@ -77,8 +77,9 @@ var (
 	// unbounded Prometheus cardinality (one permanent series per distinct hash
 	// over the node's lifetime). The specific block hash is recorded in the
 	// accompanying log lines for manual repair.
-	prometheusBlockValidationSetMinedRetries prometheus.Counter
-	prometheusBlockValidationSetMinedDrops   prometheus.Counter
+	prometheusBlockValidationSetMinedRetries         prometheus.Counter
+	prometheusBlockValidationSetMinedDrops           prometheus.Counter
+	prometheusBlockValidationSetMinedEnqueueOverflow prometheus.Counter
 )
 
 var (
@@ -233,6 +234,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "setmined_drops_total",
 			Help:      "Total number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention; the specific block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusBlockValidationSetMinedEnqueueOverflow = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "setmined_enqueue_overflow_total",
+			Help:      "Total number of setMined enqueues parked in the overflow set because setMinedChan was full. A sustained rise means producers are outpacing the serial setMined worker; the overflow set is deduped by block hash, so memory stays bounded by the number of distinct blocks.",
 		},
 	)
 

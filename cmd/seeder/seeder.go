@@ -19,6 +19,7 @@ package seeder
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -39,6 +40,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -56,6 +58,15 @@ import (
 const (
 	errMsgFailedToReadUTXO = "failed to read UTXO set header"
 )
+
+// utxoSetTip identifies the block at which an imported UTXO set is complete.
+// The BlockAssembler checkpoint is keyed to this tip, since block assembly may
+// only safely resume on top of the block up to which the UTXO set (including
+// coinbase UTXOs) has been fully materialised.
+type utxoSetTip struct {
+	hash   chainhash.Hash
+	height uint32
+}
 
 // usage prints the usage message and exits the program with an error code.
 func usage(msg string) {
@@ -86,7 +97,7 @@ func usage(msg string) {
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
 func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir string, hash string,
-	skipHeaders bool, skipUTXOs bool, skipCheck bool) {
+	skipHeaders bool, skipUTXOs bool, force bool) error {
 	profilerAddr := appSettings.ProfilerAddr
 	if profilerAddr != "" {
 		go func() {
@@ -112,14 +123,15 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 		}()
 	}
 
-	var (
-		headerFile string
-		utxoFile   string
-	)
+	// The headers-file path is always derived (not only when processing headers):
+	// the UTXO pass reads it to recover the authoritative coinbase transactions
+	// so seeded coinbases keep their input. Existence is only enforced when the
+	// header pass will actually consume it.
+	headerFile := filepath.Join(inputDir, hash+".utxo-headers")
+	utxoFile := filepath.Join(inputDir, hash+".utxo-set")
 
 	if !skipHeaders {
 		// Check the header file exists
-		headerFile = filepath.Join(inputDir, hash+".utxo-headers")
 		if _, err := os.Stat(headerFile); os.IsNotExist(err) {
 			usage(fmt.Sprintf("Headers file %s does not exist", headerFile))
 		}
@@ -127,7 +139,6 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 
 	if !skipUTXOs {
 		// Check the UTXO file exists
-		utxoFile = filepath.Join(inputDir, hash+".utxo-set")
 		if _, err := os.Stat(utxoFile); os.IsNotExist(err) {
 			usage(fmt.Sprintf("UTXO file %s does not exist", utxoFile))
 		}
@@ -153,6 +164,30 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 
 	wg := sync.WaitGroup{}
 
+	// A single blockchain store handle is shared across header import, the
+	// BlockAssembler-state pre-flight check and the final state write. Opening
+	// it once (rather than per pass) is required for correctness: an in-memory
+	// store is per-handle, and concurrent handles would race on schema creation.
+	var (
+		blockchainStore blockchain.Store
+		headerErr       error
+		utxoErr         error
+		utxoTip         *utxoSetTip
+	)
+
+	if !skipHeaders || !skipUTXOs {
+		var err error
+
+		blockchainStore, err = newBlockchainStore(logger, appSettings)
+		if err != nil {
+			logger.Fatalf("Failed to create blockchain store: %v", err)
+		}
+
+		defer func() {
+			_ = blockchainStore.Close(context.Background())
+		}()
+	}
+
 	if !skipHeaders {
 		wg.Add(1)
 
@@ -163,8 +198,10 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			logger.Infof("Blockchain store: %s", appSettings.BlockChain.StoreURL)
 
 			// Process the headers
-			if err := processHeaders(ctx, logger, appSettings, headerFile); err != nil {
+			if err := processHeaders(ctx, logger, blockchainStore, headerFile); err != nil {
+				headerErr = err
 				logger.Errorf("Failed to process headers: %v", err)
+
 				return
 			}
 
@@ -182,46 +219,55 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			logger.Infof("UTXO store: %s", appSettings.UtxoStore.UtxoStore.String())
 
 			// Process the UTXOs
-			if err := processUTXOs(ctx, logger, appSettings, utxoFile, skipCheck); err != nil {
+			tip, err := processUTXOs(ctx, logger, appSettings, blockchainStore, utxoFile, headerFile, force)
+			if err != nil {
+				utxoErr = err
 				logger.Errorf("Failed to process UTXOs: %v", err)
+
 				return
 			}
+
+			utxoTip = tip
 
 			logger.Infof("Finished processing UTXOs")
 		}()
 	}
 
 	wg.Wait()
+
+	if headerErr != nil {
+		return errors.NewProcessingError("seeder failed to process headers", headerErr)
+	}
+
+	if utxoErr != nil {
+		return errors.NewProcessingError("seeder failed to process UTXOs", utxoErr)
+	}
+
+	// Persist the BlockAssembler checkpoint only after the UTXO set has been
+	// imported successfully. The checkpoint reflects the UTXO store's
+	// completeness (block assembly is the sole creator of coinbase UTXOs), so it
+	// must never be advanced when UTXOs were skipped or failed. When UTXOs were
+	// skipped because lastProcessed.dat already existed, utxoTip is nil and any
+	// existing checkpoint is left untouched. A failure here must be fatal: the
+	// UTXO set is imported but the node would otherwise start with no checkpoint
+	// and a plain re-run skips the (now-complete) UTXO pass, never retrying it.
+	if !skipUTXOs && utxoTip != nil {
+		if err := writeBlockAssemblerState(ctx, logger, blockchainStore, utxoTip); err != nil {
+			return errors.NewProcessingError("seeder failed to set BlockAssembler state", err)
+		}
+	}
+
+	return nil
 }
 
 // processHeaders reads the UTXO headers from a file and stores them in the blockchain store.
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
-func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, headersFile string) error {
-	blockchainStoreURL := appSettings.BlockChain.StoreURL
-	if blockchainStoreURL == nil {
-		return errors.NewConfigurationError("blockchain store URL not found in config")
-	}
-
-	q := blockchainStoreURL.Query()
-	q.Set("seeder", "true")
-
-	blockchainStoreURL.RawQuery = q.Encode()
-	logger.Infof("Using blockchain store at %s", blockchainStoreURL)
-
-	blockchainStore, err := blockchain.NewStore(logger, blockchainStoreURL, appSettings)
-	if err != nil {
-		logger.Fatalf("Failed to create blockchain client: %v", err)
-	}
-
-	// _, meta, err := blockchainStore.GetBestBlockHeader(ctx)
-	// if err != nil {
-	// 	logger.Fatalf("Failed to get best block header: %v", err)
-	// }
-
-	// _ = meta
-
-	var f *os.File
+func processHeaders(ctx context.Context, logger ulogger.Logger, blockchainStore blockchain.Store, headersFile string) error {
+	var (
+		f   *os.File
+		err error
+	)
 
 	f, err = os.Open(headersFile)
 	if err != nil {
@@ -326,10 +372,10 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 // processUTXOs reads the UTXO set from a file and stores it in the UTXO store.
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
-func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, utxoFile string, skipCheck bool) error {
+func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, blockchainStore blockchain.Store, utxoFile string, headersFile string, force bool) (*utxoSetTip, error) {
 	blockStoreURL := appSettings.Block.BlockStore
 	if blockStoreURL == nil {
-		return errors.NewConfigurationError("blockstore URL not found in config")
+		return nil, errors.NewConfigurationError("blockstore URL not found in config")
 	}
 
 	var err error
@@ -347,20 +393,37 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
-		return errors.NewStorageError("failed to create blockStore", err)
+		return nil, errors.NewStorageError("failed to create blockStore", err)
 	}
 
-	if !skipCheck {
+	if !force {
 		var exists bool
 
 		exists, err = blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
 		if err != nil {
-			return errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
+			return nil, errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
 		}
 
 		if exists {
+			// The store has already been fully seeded. Skip idempotently and
+			// leave any existing BlockAssembler checkpoint untouched (returning a
+			// nil tip signals the caller not to write state).
 			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
-			return nil
+			return nil, nil
+		}
+
+		// No seed marker, but if a BlockAssembler checkpoint already exists then
+		// this UTXO store is owned by a running/seeded assembler. Overwriting its
+		// UTXO set would corrupt live state, so refuse unless explicitly forced.
+		var stateExists bool
+
+		stateExists, err = blockAssemblerStateExists(ctx, blockchainStore)
+		if err != nil {
+			return nil, errors.NewStorageError("failed to check BlockAssembler state", err)
+		}
+
+		if stateExists {
+			return nil, errors.NewProcessingError("BlockAssembler state already exists in the blockchain store — refusing to seed UTXOs over a store already owned by a block assembler; use -force to override")
 		}
 	}
 
@@ -370,8 +433,22 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	utxoStore, err = utxofactory.NewStore(ctx, logger, appSettings, "seeder", false)
 	if err != nil {
-		return errors.NewStorageError("failed to create utxostore", err)
+		return nil, errors.NewStorageError("failed to create utxostore", err)
 	}
+
+	// Recover the authoritative coinbase transactions from the V2 utxo-headers
+	// file. The UTXO set only records outputs, so a coinbase rebuilt from it
+	// alone has no input; these let processUTXO store the real coinbase instead.
+	// Best-effort: an absent/legacy/unreadable file just means coinbases keep
+	// the output-only representation rather than failing the whole import.
+	coinbaseTxs, err := loadCoinbaseTxs(logger, headersFile)
+	if err != nil {
+		logger.Warnf("[processUTXOs] could not load coinbase transactions from %s; coinbases will be stored without their input: %v", headersFile, err)
+
+		coinbaseTxs = map[chainhash.Hash]*bt.Tx{}
+	}
+
+	logger.Infof("[processUTXOs] loaded %s coinbase transactions for input restoration", formatNumber(uint64(len(coinbaseTxs))))
 
 	channelSize, _ := gocore.Config().GetInt("channelSize", 1000)
 
@@ -387,7 +464,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		workerID := i
 
 		g.Go(func() error {
-			return worker(gCtx, logger, utxoStore, workerID, utxoWrapperCh)
+			return worker(gCtx, logger, utxoStore, workerID, utxoWrapperCh, coinbaseTxs)
 		})
 	}
 
@@ -396,7 +473,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	// Read the UTXO data from the store
 	f, err = os.Open(utxoFile)
 	if err != nil {
-		return errors.NewStorageError("failed to open file", err)
+		return nil, errors.NewStorageError("failed to open file", err)
 	}
 
 	defer func() {
@@ -409,22 +486,22 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	header, err = fileformat.ReadHeader(reader)
 	if err != nil {
-		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
 	if header.FileType() != fileformat.FileTypeUtxoSet {
-		return errors.NewProcessingError("invalid file type: %s", header.FileType)
+		return nil, errors.NewProcessingError("invalid file type: %s", header.FileType)
 	}
 
 	var hash chainhash.Hash
 
 	if err = binary.Read(reader, binary.LittleEndian, &hash); err != nil {
-		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
 	var height uint32
 	if err = binary.Read(reader, binary.LittleEndian, &height); err != nil {
-		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
 	// With UTXOSets, we also read the previous block hash before we start reading the UTXOs
@@ -432,7 +509,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	_, err = reader.Read(previousBlockHash[:])
 	if err != nil {
-		return errors.NewProcessingError("couldn't read previous block hash from file", err)
+		return nil, errors.NewProcessingError("couldn't read previous block hash from file", err)
 	}
 
 	var (
@@ -486,7 +563,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	})
 
 	if err = g.Wait(); err != nil {
-		return errors.NewProcessingError("error in worker", err)
+		return nil, errors.NewProcessingError("error in worker", err)
 	}
 
 	logger.Infof("All workers finished successfully")
@@ -494,15 +571,15 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	heightStr := fmt.Sprintf("%d\n", height)
 
 	if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix()); err != nil {
-		return errors.NewStorageError("failed to write height of %d to lastProcessed.dat", height, err)
+		return nil, errors.NewStorageError("failed to write height of %d to lastProcessed.dat", height, err)
 	}
 
-	return nil
+	return &utxoSetTip{hash: hash, height: height}, nil
 }
 
 // worker processes UTXOWrapper messages from the channel and stores them in the UTXO store.
 func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
-	id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper) error {
+	id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -515,7 +592,7 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 				return nil
 			}
 
-			if err := processUTXO(ctx, store, utxoWrapper); err != nil {
+			if err := processUTXO(ctx, store, utxoWrapper, coinbaseTxs); err != nil {
 				logger.Errorf("Worker %d failed to process UTXO: %v", id, err)
 				return err
 			}
@@ -524,7 +601,9 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 }
 
 // processUTXO processes a single UTXOWrapper and stores it in the UTXO store.
-func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper) error {
+// coinbaseTxs maps coinbase txid to the authoritative coinbase transaction
+// recovered from the V2 utxo-headers file; it may be empty.
+func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx) error {
 	if utxoWrapper == nil {
 		return nil
 	}
@@ -542,6 +621,14 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		}
 
 		tx.Outputs = append(tx.Outputs, output)
+	}
+
+	// A coinbase rebuilt from the UTXO set alone has no input (the coinbase
+	// scriptSig is input data, not a UTXO) and hashes to the wrong txid. When the
+	// real coinbase is available, restore its input so the stored transaction is
+	// faithful and hashes back to the txid the block commits to.
+	if utxoWrapper.Coinbase {
+		restoreCoinbaseInput(tx, coinbaseTxs[utxoWrapper.TxID], &utxoWrapper.TxID)
 	}
 
 	if gocore.Config().GetBool("skipStore", false) {
@@ -562,6 +649,171 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 
 		return err
 	}
+
+	return nil
+}
+
+// restoreCoinbaseInput copies the version, lock time and coinbase input from the
+// authoritative coinbase transaction (recovered from a V2 utxo-headers file)
+// onto the output-only transaction rebuilt from the UTXO set.
+//
+// It only does so when the result is byte-faithful to the real coinbase — every
+// output still unspent and present — for two reasons:
+//   - Once a transaction has inputs, the UTXO store derives each output's UTXO
+//     hash from the transaction's own hash rather than the override txid; a
+//     non-faithful reconstruction would persist UTXO hashes that no future spend
+//     could ever match.
+//   - Serialising a transaction that has input(s) and nil output holes panics.
+//
+// When the reconstruction is not faithful (a coinbase output was already spent),
+// tx is left untouched, preserving the safe output-only representation.
+func restoreCoinbaseInput(tx *bt.Tx, coinbaseTx *bt.Tx, txid *chainhash.Hash) {
+	if coinbaseTx == nil || len(coinbaseTx.Inputs) == 0 {
+		return
+	}
+
+	// A faithful reconstruction has exactly the coinbase's outputs, all present.
+	// A differing count means a trailing output was spent; a nil hole means an
+	// earlier output was spent.
+	if len(tx.Outputs) != len(coinbaseTx.Outputs) {
+		return
+	}
+
+	for _, o := range tx.Outputs {
+		if o == nil {
+			return
+		}
+	}
+
+	origVersion, origLockTime, origInputs := tx.Version, tx.LockTime, tx.Inputs
+
+	tx.Version = coinbaseTx.Version
+	tx.LockTime = coinbaseTx.LockTime
+	tx.Inputs = coinbaseTx.Inputs
+
+	// Confirm the outputs also match (values and scripts), so the stored tx truly
+	// hashes to the coinbase txid. Otherwise revert to the output-only form.
+	if !tx.TxIDChainHash().IsEqual(txid) {
+		tx.Version, tx.LockTime, tx.Inputs = origVersion, origLockTime, origInputs
+	}
+}
+
+// loadCoinbaseTxs reads the V2 utxo-headers file and returns a map from coinbase
+// txid to the coinbase transaction. Legacy V1 files carry no coinbase
+// transactions and yield an empty map, as does an absent file: coinbase input
+// restoration is best-effort and never blocks the UTXO import.
+func loadCoinbaseTxs(logger ulogger.Logger, headersFile string) (map[chainhash.Hash]*bt.Tx, error) {
+	coinbaseTxs := make(map[chainhash.Hash]*bt.Tx)
+
+	if headersFile == "" {
+		return coinbaseTxs, nil
+	}
+
+	f, err := os.Open(headersFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Infof("[loadCoinbaseTxs] headers file %s not present; coinbase inputs will not be restored", headersFile)
+			return coinbaseTxs, nil
+		}
+
+		return nil, errors.NewStorageError("failed to open headers file", err)
+	}
+
+	defer func() {
+		_ = f.Close()
+	}()
+
+	reader := bufio.NewReader(f)
+
+	header, err := fileformat.ReadHeader(reader)
+	if err != nil {
+		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+	}
+
+	if header.FileType() != fileformat.FileTypeUtxoHeaders {
+		return nil, errors.NewProcessingError("invalid file type: %s", header.FileType())
+	}
+
+	if header.IsUtxoHeadersV1() {
+		logger.Infof("[loadCoinbaseTxs] V1 utxo-headers carry no coinbase transactions; coinbase inputs will not be restored")
+		return coinbaseTxs, nil
+	}
+
+	// Skip the tip hash (32 bytes) and height (4 bytes) preamble that precedes
+	// the per-block BlockIndex entries.
+	var preamble [36]byte
+	if _, err = io.ReadFull(reader, preamble[:]); err != nil {
+		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+	}
+
+	for {
+		var blockIndex *utxopersister.BlockIndex
+
+		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader, false)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			return nil, errors.NewProcessingError("failed to read UTXO header", err)
+		}
+
+		if blockIndex.CoinbaseTx != nil {
+			coinbaseTxs[*blockIndex.CoinbaseTx.TxIDChainHash()] = blockIndex.CoinbaseTx
+		}
+	}
+
+	return coinbaseTxs, nil
+}
+
+// newBlockchainStore opens the blockchain store in bulk-import (seeder) mode.
+// A single shared handle is used for header import, the BlockAssembler-state
+// pre-flight check and the final state write.
+func newBlockchainStore(logger ulogger.Logger, appSettings *settings.Settings) (blockchain.Store, error) {
+	blockchainStoreURL := appSettings.BlockChain.StoreURL
+	if blockchainStoreURL == nil {
+		return nil, errors.NewConfigurationError("blockchain store URL not found in config")
+	}
+
+	q := blockchainStoreURL.Query()
+	q.Set("seeder", "true")
+	blockchainStoreURL.RawQuery = q.Encode()
+
+	return blockchain.NewStore(logger, blockchainStoreURL, appSettings)
+}
+
+// blockAssemblerStateExists reports whether a BlockAssembler checkpoint is
+// already persisted in the blockchain store. A missing checkpoint is the normal
+// state of an unseeded node and is not treated as an error.
+func blockAssemblerStateExists(ctx context.Context, store blockchain.Store) (bool, error) {
+	data, err := store.GetState(ctx, blockassembly.StateKey)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return len(data) > 0, nil
+}
+
+// writeBlockAssemblerState persists the BlockAssembler checkpoint at the given
+// utxo-set tip, so block assembly can resume on top of the seeded chain. The
+// tip's block header is looked up from the blockchain store; if it is absent the
+// seed is inconsistent and we refuse to write, rather than let block assembly
+// adopt a header the node has no record of.
+func writeBlockAssemblerState(ctx context.Context, logger ulogger.Logger, store blockchain.Store, tip *utxoSetTip) error {
+	header, _, err := store.GetBlockHeader(ctx, &tip.hash)
+	if err != nil {
+		return errors.NewProcessingError("cannot set BlockAssembler state: header for utxo-set tip %s (height %d) not found in blockchain store", tip.hash.String(), tip.height, err)
+	}
+
+	if err = store.SetState(ctx, blockassembly.StateKey, blockassembly.EncodeState(header, tip.height)); err != nil {
+		return errors.NewStorageError("failed to set BlockAssembler state", err)
+	}
+
+	logger.Infof("Set BlockAssembler state to utxo-set tip %s at height %d", tip.hash.String(), tip.height)
 
 	return nil
 }

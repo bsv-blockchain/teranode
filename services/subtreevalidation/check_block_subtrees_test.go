@@ -138,7 +138,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 			Return(&utxometa.Data{}, nil)
 
 		// Mock validator to return success - set up the validator client to succeed
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		// Mock blockchain client
@@ -405,7 +405,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 			Return(&utxometa.Data{}, nil)
 
 		// Mock validator and blockchain client
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
@@ -1628,7 +1628,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return success - set up the validator client to succeed
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		// Mock blockchain client
@@ -1652,7 +1652,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return validation errors
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 		// Add an error to the validator to simulate validation failure
 		mockValidator.Errors = []error{errors.NewTxInvalidError("invalid transaction for testing")}
@@ -1679,7 +1679,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return missing parent errors
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 		// Add missing parent error
 		mockValidator.Errors = []error{errors.NewTxMissingParentError("missing parent for testing")}
@@ -1727,7 +1727,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return success
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		// Mock blockchain client
@@ -1754,7 +1754,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return errors for some transactions
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 		// Set up errors for specific transactions
 		mockValidator.Errors = []error{
@@ -2043,7 +2043,7 @@ func TestBlessMissingTransaction(t *testing.T) {
 		blockIds[1] = true
 
 		// Mock validator to return success
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		// Call blessMissingTransaction
@@ -2123,7 +2123,7 @@ func TestCheckBlockSubtrees_ConcurrentProcessing(t *testing.T) {
 		Return(true, nil)
 
 	// Mock validator
-	mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+	mockValidator := server.validatorClient.(*validator.MockValidator)
 	mockValidator.UtxoStore = server.utxoStore
 
 	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
@@ -2303,7 +2303,7 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		Return(&utxometa.Data{}, nil).Maybe()
 
 	// Mock validator client
-	mockValidatorClient := &validator.MockValidatorClient{}
+	mockValidatorClient := &validator.MockValidator{}
 
 	// Mock blockchain client
 	mockBlockchainClient := &blockchain.Mock{}

@@ -310,12 +310,12 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	for _, bItem := range batch {
 		key, err := s.getOrCreateAerospikeKey(bItem, s.utxoBatchSize, aeroKeyMap)
 		if err != nil {
-			bItem.errCh <- err
+			bItem.complete(err)
 			continue
 		}
 
 		if err := s.validateSpendItem(bItem); err != nil {
-			bItem.errCh <- err
+			bItem.complete(err)
 			continue
 		}
 
@@ -358,9 +358,12 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
+		// complete is CAS-guarded: items already completed above (key-creation/
+		// validation failures) are no-ops here, so this safely covers every
+		// remaining item without racing or double-signalling.
 		for _, bItem := range batch {
-			bItem.errCh <- errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend: %w", err)
+			bItem.complete(errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend: %w", err))
 		}
 		return
 	}
@@ -406,8 +409,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 		DAH  uint32
 	}, 0)
 
-	// Records filtered out by the expression — retried through Lua before sending
-	// any response on their errCh, so each caller still sees exactly one result.
+	// Records filtered out by the expression — retried through Lua before
+	// completing them, so each item is still completed exactly once.
 	var retryThroughLua []*batchSpend
 
 	for idx, batchRecord := range batchRecords {
@@ -423,7 +426,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 			var aErr *aerospike.AerospikeError
 			if errors.As(batchRec.Err, &aErr) {
 				if aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
-					bItem.errCh <- errors.NewTxNotFoundError("transaction not found: %s", bItem.spend.TxID.String())
+					bItem.complete(errors.NewTxNotFoundError("transaction not found: %s", bItem.spend.TxID.String()))
 					errCount++
 					continue
 				}
@@ -440,7 +443,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 				}
 			}
 
-			bItem.errCh <- errors.NewStorageError("spend error for %s:%d: %w", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err)
+			bItem.complete(errors.NewStorageError("spend error for %s:%d: %w", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err))
 			errCount++
 			if isInfrastructureFailure(batchRec.Err) {
 				infraErrCount++
@@ -450,14 +453,14 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 		// Parse successful result
 		if batchRec.Record == nil || batchRec.Record.Bins == nil {
-			bItem.errCh <- nil
+			bItem.complete(nil)
 			okCount++
 			continue
 		}
 
 		state, err := s.parseSpendState(batchRec.Record.Bins)
 		if err != nil {
-			bItem.errCh <- errors.NewProcessingError("failed to parse spend state: %w", err)
+			bItem.complete(errors.NewProcessingError("failed to parse spend state: %w", err))
 			errCount++
 			continue
 		}
@@ -502,7 +505,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 			}
 		}
 
-		bItem.errCh <- nil
+		bItem.complete(nil)
 		okCount++
 	}
 
@@ -550,8 +553,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 	// Dispatch FILTERED_OUT records to the Lua UDF for a correct decision. The Lua
 	// path checks UtxoSpendableIn per-offset and returns the precise rejection
-	// reason for records that genuinely cannot be spent. Each item still has a
-	// pending errCh receive — Lua sends exactly one response on it.
+	// reason for records that genuinely cannot be spent. Each item is still
+	// uncompleted at this point — Lua's dispatch completes it exactly once.
 	//
 	// This is a single additional batched Lua call per expression batch — its
 	// cost is independent of how many records were filtered out, but it is only

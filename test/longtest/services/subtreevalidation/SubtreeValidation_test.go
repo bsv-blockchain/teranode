@@ -101,7 +101,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		txMetaMap: txMetaMap,
 	}
 
-	validatorClient := &validator.MockValidatorClient{UtxoStore: testStore}
+	validatorClient := &validator.MockValidator{UtxoStore: testStore}
 
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()

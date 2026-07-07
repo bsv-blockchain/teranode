@@ -18,9 +18,7 @@ package utxopersister
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -902,14 +900,11 @@ func WriteHeadersToStore(ctx context.Context, logger ulogger.Logger, settings *s
 		return errors.NewStorageError("error creating utxo-headers file", err)
 	}
 
-	hasher := sha256.New()
-	multiWriter := io.MultiWriter(storer, hasher)
-
-	if err = binary.Write(multiWriter, binary.LittleEndian, bestBlock.Hash); err != nil {
+	if err = binary.Write(storer, binary.LittleEndian, bestBlock.Hash); err != nil {
 		return errors.NewProcessingError("couldn't write block hash to file", err)
 	}
 
-	if err = binary.Write(multiWriter, binary.LittleEndian, bestBlock.Height); err != nil {
+	if err = binary.Write(storer, binary.LittleEndian, bestBlock.Height); err != nil {
 		return errors.NewProcessingError("error writing block height", err)
 	}
 
@@ -919,7 +914,7 @@ func WriteHeadersToStore(ctx context.Context, logger ulogger.Logger, settings *s
 	)
 
 	for _, block := range blocks {
-		if err = block.Serialise(multiWriter); err != nil {
+		if err = block.Serialise(storer); err != nil {
 			return errors.NewProcessingError("couldn't write header to file", err)
 		}
 
@@ -932,12 +927,6 @@ func WriteHeadersToStore(ctx context.Context, logger ulogger.Logger, settings *s
 	}
 
 	logger.Infof("Wrote %d block headers with %d total transactions", recordCount, txCount)
-
-	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), tipHash.String()+".utxo-headers")
-
-	if err = blobStore.Set(ctx, tipHash[:], fileformat.FileTypeUtxoHeaders+".sha256", []byte(hashData), options.WithAllowOverwrite(true)); err != nil {
-		return errors.NewStorageError("error writing hash file", err)
-	}
 
 	return nil
 }

@@ -107,91 +107,96 @@ type SubtreeMeta struct {
 //   - The subtree count (total_records) comes from the block's subtree list length
 func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		hashStr := c.Param("hash")
-
-		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockSubtrees_http",
-			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockSubtrees in %s for %s: %s", mode, c.RealIP(), hashStr),
-		)
-
-		defer deferFn()
-
-		if len(hashStr) != 64 {
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash length").Error())
-		}
-
-		hash, err := chainhash.NewHashFromStr(hashStr)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
-		}
-
-		block, err := h.repository.GetBlockByHash(ctx, hash)
-		if err != nil {
-			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-		}
-
-		offset, limit, err := h.getLimitOffset(c)
-		if err != nil {
-			// error is already an echo error
-			return err
-		}
-
-		result := ExtendedResponse{
-			Pagination: Pagination{
-				Offset:       offset,
-				Limit:        limit,
-				TotalRecords: len(block.Subtrees),
-			},
-		}
-
-		// get all the subtrees for the block
-		var (
-			subtreeHead *subtree.Subtree
-			numNodes    int
-		)
-
-		data := make([]SubtreeMeta, 0, limit)
-
-		if len(block.Subtrees) > 0 {
-			for i := offset; i < offset+limit; i++ {
-				if i >= len(block.Subtrees) {
-					break
-				}
-
-				subtreeHash := block.Subtrees[i]
-
-				// do not check for error here, we will just return an empty row for the subtree
-				subtreeHead, numNodes, _ = h.repository.GetSubtreeHead(ctx, subtreeHash)
-
-				if subtreeHead != nil {
-					data = append(data, SubtreeMeta{
-						Index:   i,
-						Hash:    subtreeHash.String(),
-						TxCount: numNodes,
-						Fee:     subtreeHead.Fees,
-						Size:    subtreeHead.SizeInBytes,
-					})
-				} else {
-					data = append(data, SubtreeMeta{
-						Index: i,
-						Hash:  subtreeHash.String(),
-					})
-				}
-			}
-		}
-
-		result.Data = data
-
-		prometheusAssetHTTPGetBlock.WithLabelValues("OK", "200").Inc()
-
-		if mode == JSON {
-			return c.JSONPretty(200, result, "  ")
-		}
-
-		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
+		return h.getBlockSubtrees(c, mode)
 	}
+}
+
+// getBlockSubtrees serves a single GetBlockSubtrees request in the given read mode.
+func (h *HTTP) getBlockSubtrees(c echo.Context, mode ReadMode) error {
+	hashStr := c.Param("hash")
+
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockSubtrees_http",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockSubtrees in %s for %s: %s", mode, c.RealIP(), hashStr),
+	)
+
+	defer deferFn()
+
+	if len(hashStr) != 64 {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash length").Error())
+	}
+
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
+	}
+
+	block, err := h.repository.GetBlockByHash(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		} else {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+	}
+
+	offset, limit, err := h.getLimitOffset(c)
+	if err != nil {
+		// error is already an echo error
+		return err
+	}
+
+	result := ExtendedResponse{
+		Pagination: Pagination{
+			Offset:       offset,
+			Limit:        limit,
+			TotalRecords: len(block.Subtrees),
+		},
+	}
+
+	// get all the subtrees for the block
+	var (
+		subtreeHead *subtree.Subtree
+		numNodes    int
+	)
+
+	data := make([]SubtreeMeta, 0, limit)
+
+	if len(block.Subtrees) > 0 {
+		for i := offset; i < offset+limit; i++ {
+			if i >= len(block.Subtrees) {
+				break
+			}
+
+			subtreeHash := block.Subtrees[i]
+
+			// do not check for error here, we will just return an empty row for the subtree
+			subtreeHead, numNodes, _ = h.repository.GetSubtreeHead(ctx, subtreeHash)
+
+			if subtreeHead != nil {
+				data = append(data, SubtreeMeta{
+					Index:   i,
+					Hash:    subtreeHash.String(),
+					TxCount: numNodes,
+					Fee:     subtreeHead.Fees,
+					Size:    subtreeHead.SizeInBytes,
+				})
+			} else {
+				data = append(data, SubtreeMeta{
+					Index: i,
+					Hash:  subtreeHash.String(),
+				})
+			}
+		}
+	}
+
+	result.Data = data
+
+	prometheusAssetHTTPGetBlock.WithLabelValues("OK", "200").Inc()
+
+	if mode == JSON {
+		return c.JSONPretty(200, result, "  ")
+	}
+
+	return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
 }

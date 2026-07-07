@@ -409,6 +409,55 @@ func TestUnspend(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestUnspendLockedFlag proves the #1154 fix: a spend-rollback (Unspend with no
+// flagAsLocked) must not clear a parent's independently-set 2PC locked flag, matching
+// the Aerospike unspend UDF which never touches locked. It also proves the deliberate
+// semantics are retained: an explicit false clears locked, an explicit true keeps it set.
+func TestUnspendLockedFlag(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, tx := setup(ctx, t)
+
+	// Parent created with the 2PC locked flag set.
+	_, err := utxoStore.Create(ctx, tx, 0, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	lockedNow := func() bool {
+		m := &meta.Data{}
+		require.NoError(t, utxoStore.GetMeta(ctx, tx.TxIDChainHash(), m))
+		return m.Locked
+	}
+	require.True(t, lockedNow(), "parent should be locked after Create(WithLocked(true))")
+
+	// Spend a child of the locked parent. The parent is locked, so IgnoreLocked is required.
+	spendTx := utxo2.GetSpendingTx(tx, 0)
+	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1, utxo.IgnoreFlags{IgnoreLocked: true})
+	require.NoError(t, err)
+
+	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	spend := &utxo.Spend{
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		UTXOHash:     utxohash,
+		SpendingData: spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0),
+	}
+
+	// No flag: the parent's locked flag must be left untouched.
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}))
+	require.True(t, lockedNow(), "Unspend without a flag must not clear the parent's locked flag")
+
+	// Explicit true: still locked.
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}, true))
+	require.True(t, lockedNow(), "Unspend(true) must keep the parent locked")
+
+	// Explicit false: locked is cleared (ReverseProcessConflicting semantics).
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}, false))
+	require.False(t, lockedNow(), "Unspend(false) must clear the parent's locked flag")
+}
+
 func TestGetSpend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

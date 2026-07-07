@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -60,12 +60,10 @@ func TestHandleBatchError(t *testing.T) {
 	}
 
 	t.Run("Single transaction batch", func(t *testing.T) {
-		// Create a batch with a single item
-		done := make(chan error, 1)
+		// Create a batch with a single item sharing a completion group.
+		group := completion.NewGroup(1)
 		batch := []*batchItem{
-			{
-				done: done,
-			},
+			{group: group},
 		}
 
 		// Create an error to pass
@@ -82,27 +80,20 @@ func TestHandleBatchError(t *testing.T) {
 		assert.Contains(t, returnedErr.Error(), "Batch processing failed")
 		assert.Contains(t, returnedErr.Error(), "test error")
 
-		// Verify the error was sent to the transaction
-		select {
-		case err := <-done:
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "Batch processing failed")
-			assert.Contains(t, err.Error(), "test error")
-		case <-time.After(100 * time.Millisecond):
-			t.Fatal("Timed out waiting for error to be sent to transaction")
-		}
+		// Verify the error was delivered to the transaction via the group.
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.Error(t, batch[0].result)
+		assert.Contains(t, batch[0].result.Error(), "Batch processing failed")
+		assert.Contains(t, batch[0].result.Error(), "test error")
 	})
 
 	t.Run("Multiple transaction batch", func(t *testing.T) {
-		// Create a batch with multiple items
-		done1 := make(chan error, 1)
-		done2 := make(chan error, 1)
-		done3 := make(chan error, 1)
-
+		// Create a batch with multiple items sharing one completion group.
+		group := completion.NewGroup(3)
 		batch := []*batchItem{
-			{done: done1},
-			{done: done2},
-			{done: done3},
+			{group: group},
+			{group: group},
+			{group: group},
 		}
 
 		// Create an error to pass
@@ -120,20 +111,16 @@ func TestHandleBatchError(t *testing.T) {
 		assert.Contains(t, returnedErr.Error(), "Failed to process batch with ID test-batch-123")
 		assert.Contains(t, returnedErr.Error(), "batch failure")
 
-		// Verify the same error was sent to all transactions
-		for i, doneChan := range []chan error{done1, done2, done3} {
-			select {
-			case err := <-doneChan:
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "Failed to process batch with ID test-batch-123")
-				assert.Contains(t, err.Error(), "batch failure")
+		// Verify the same error was delivered to all transactions.
+		require.NoError(t, group.Wait(context.Background(), 0))
+		for i, item := range batch {
+			require.Error(t, item.result)
+			assert.Contains(t, item.result.Error(), "Failed to process batch with ID test-batch-123")
+			assert.Contains(t, item.result.Error(), "batch failure")
 
-				// Verify it's a service error
-				_, ok := err.(*errors.Error)
-				assert.True(t, ok, fmt.Sprintf("Error sent to transaction %d is not a service error", i))
-			case <-time.After(100 * time.Millisecond):
-				t.Fatalf("Timed out waiting for error to be sent to transaction %d", i)
-			}
+			// Verify it's a service error
+			_, ok := item.result.(*errors.Error)
+			assert.True(t, ok, fmt.Sprintf("Error sent to transaction %d is not a service error", i))
 		}
 	})
 

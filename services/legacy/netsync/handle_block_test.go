@@ -78,7 +78,7 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 
 	utxoStore := &nullstore.NullStore{}
 
-	validationClient := &validator.MockValidatorClient{
+	validationClient := &validator.MockValidator{
 		UtxoStore: utxoStore,
 	}
 
@@ -435,7 +435,7 @@ func TestSyncManager_validateTransactions(t *testing.T) {
 	t.Skip("Skipping test due to nil pointer issue")
 	initPrometheusMetrics()
 
-	validationClient := &validator.MockValidatorClient{}
+	validationClient := &validator.MockValidator{}
 
 	sm := &SyncManager{
 		settings:         test.CreateBaseTestSettings(t),
@@ -464,7 +464,7 @@ func TestSyncManager_validateTransactions(t *testing.T) {
 
 	// Test validateTransactions - it should handle validation gracefully even without mocks
 	err := sm.validateTransactions(context.Background(), 1, txsPerLevel, testBlockIdent(block))
-	// We expect this to succeed since MockValidatorClient has default behavior
+	// We expect this to succeed since MockValidator has default behavior
 	assert.NoError(t, err)
 }
 
@@ -505,7 +505,7 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
 
-	validationClient := &validator.MockValidatorClient{}
+	validationClient := &validator.MockValidator{}
 
 	sm := &SyncManager{
 		settings:         test.CreateBaseTestSettings(t),

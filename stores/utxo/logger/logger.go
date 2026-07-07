@@ -201,7 +201,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 }
 
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
-	err := s.store.Unspend(ctx, spends, false)
+	err := s.store.Unspend(ctx, spends, flagAsLocked...)
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {

@@ -893,11 +893,6 @@ func TestGenerateBlocks_NegativeCount(t *testing.T) {
 	})
 }
 
-// MockBlockchainClientForCoverage provides targeted mock functionality for coverage tests
-type MockBlockchainClientForCoverage struct {
-	*blockchain.Mock
-}
-
 // TestNewIntensive tests the New function with comprehensive scenarios
 func TestNewIntensive(t *testing.T) {
 	t.Run("New function creates valid instance", func(t *testing.T) {

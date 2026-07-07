@@ -17,7 +17,7 @@ import (
 // size (240 bytes) to calculate max number of transactions that could fit
 // in a block which at this time is 4000000/240=16666
 //
-// bitcoin ABC has removed this check and has been marked "FIXME".
+// bitcoin ABC has removed this check and flagged it for revisiting.
 //
 // we have opted to use a similar calculation to core based on smallest
 // possible transaction size spending OP_TRUE at 61 bytes with max block
