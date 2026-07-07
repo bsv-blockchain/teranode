@@ -1282,7 +1282,8 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 
 		// Mock GetBlockHeader to return not found for new headers
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
-			nil, errors.NewServiceError("not found"),
+			(*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+			errors.NewBlockNotFoundError("not found"),
 		).Maybe()
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
@@ -1500,9 +1501,11 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 					nil,
 				).Maybe()
 			} else {
-				// Blocks 18-19 are new from the peer
+				// Blocks 18-19 are new from the peer: not found stops the
+				// common-ancestor walk at the divergence point
 				mockBlockchainClient.On("GetBlockHeader", mock.Anything, block.Header.Hash()).Return(
-					nil, errors.NewServiceError("not found"),
+					(*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("not found"),
 				).Maybe()
 			}
 		}
@@ -2366,9 +2369,11 @@ func SkipTestCatchupPerformanceWithHeaderCache(t *testing.T) {
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, blocks[0].Header.Hash()).
 		Return(blocks[0].Header, &model.BlockHeaderMeta{Height: 0}, nil)
 
-	// Mock GetBlockHeader for any other blocks (return not found)
+	// Mock GetBlockHeader for any other blocks (report not found so the
+	// common-ancestor walk stops at the divergence point)
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-		Return(nil, errors.NewNotFoundError("block not found")).Maybe()
+		Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+			errors.NewBlockNotFoundError("block not found")).Maybe()
 
 	// Track GetBlockHeaders calls to measure header fetch reduction
 	headerFetchCount := 0
@@ -2589,9 +2594,11 @@ func TestCatchup_NoRepeatedHeaderFetching(t *testing.T) {
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, allHeaders[0].Hash()).
 		Return(allHeaders[0], &model.BlockHeaderMeta{Height: 0}, nil).Maybe()
 
-	// Mock GetBlockHeader for any other blocks (return not found)
+	// Mock GetBlockHeader for any other blocks (report not found so the
+	// common-ancestor walk stops at the divergence point)
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-		Return(nil, errors.NewNotFoundError("block not found")).Maybe()
+		Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+			errors.NewBlockNotFoundError("block not found")).Maybe()
 
 	// Track HTTP requests
 	requestCount := 0
@@ -3728,7 +3735,9 @@ func TestCatchup_MemoryLimitAfterDuplicateRemoval(t *testing.T) {
 
 	locatorHashes := []*chainhash.Hash{bestBlock.Header.Hash()}
 	mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
-	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, errors.NewServiceError("not found")).Maybe()
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+		Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+			errors.NewBlockNotFoundError("not found")).Maybe()
 
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
