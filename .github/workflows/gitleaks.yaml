@@ -34,6 +34,11 @@ jobs:
           "${RUNNER_TEMP}/bin/gitleaks" version
 
       - name: Scan PR commits for secrets
+        # SHAs are passed via env, never interpolated directly into the script,
+        # to avoid GitHub Actions template injection.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           gitleaks detect \
@@ -42,4 +47,4 @@ jobs:
             --redact \
             --no-banner \
             --exit-code 1 \
-            --log-opts="--no-merges ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+            --log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"
