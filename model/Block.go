@@ -530,6 +530,19 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		return false, errors.NewBlockInvalidError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
 	}
 
+	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
+	// Parity with bitcoin-sv CheckCoinbase (bad-cb-length): inclusive 2 <= size <= MaxCoinbaseScriptSigSize.
+	// IsCoinbase() above guarantees exactly one input, so Inputs[0] is safe to index; a nil
+	// UnlockingScript is treated as length 0 and fails the lower bound, matching an empty scriptSig.
+	scriptSigLen := 0
+	if us := b.CoinbaseTx.Inputs[0].UnlockingScript; us != nil {
+		scriptSigLen = len(*us)
+	}
+
+	if scriptSigLen < 2 || scriptSigLen > int(settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] bad coinbase length", b.String())
+	}
+
 	// We can only calculate the height from coinbase transactions in block versions 2 and higher
 
 	// https://en.bitcoin.it/wiki/BIP_0034

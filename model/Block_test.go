@@ -438,6 +438,88 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 	})
 }
 
+// TestBlock_Valid_CoinbaseScriptSigLength pins the coinbase scriptSig length check in Block.Valid.
+// Parity with bitcoin-sv CheckCoinbase (bad-cb-length): valid iff 2 <= size <= MaxCoinbaseScriptSigSize,
+// inclusive. See GitHub issue #1141.
+func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	maxLen := int(tSettings.ChainCfgParams.MaxCoinbaseScriptSigSize)
+
+	// buildBlock returns a coinbase-only, otherwise-valid block whose coinbase scriptSig is
+	// either a controlled byte length (setNil == false) or a nil UnlockingScript (setNil == true).
+	// Height 0 skips BIP-34 and the reward/fee checks; nil subtreeStore/txMetaStore skip the
+	// subtree and order/blessed checks; empty currentChain skips the median-time-past check.
+	buildBlock := func(t *testing.T, n int, setNil bool) *Block {
+		t.Helper()
+
+		blockHeaderBytes, err := hex.DecodeString(block1Header)
+		require.NoError(t, err)
+
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		if setNil {
+			coinbase.Inputs[0].UnlockingScript = nil
+		} else {
+			coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes(make([]byte, n))
+		}
+
+		// The swapped coinbase must still be recognised as a coinbase for step 4b to fire.
+		require.True(t, coinbase.IsCoinbase())
+
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		require.NoError(t, err)
+
+		return block
+	}
+
+	callValid := func(t *testing.T, block *Block) (bool, error) {
+		t.Helper()
+
+		return block.Valid(context.Background(), ulogger.TestLogger{}, nil, nil,
+			txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
+	}
+
+	t.Run("too short (length 1) is rejected", func(t *testing.T) {
+		valid, err := callValid(t, buildBlock(t, 1, false))
+		require.False(t, valid)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad coinbase length")
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	})
+
+	t.Run("too long (length Max+1) is rejected", func(t *testing.T) {
+		valid, err := callValid(t, buildBlock(t, maxLen+1, false))
+		require.False(t, valid)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad coinbase length")
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	})
+
+	t.Run("boundary low (length exactly 2) passes", func(t *testing.T) {
+		valid, err := callValid(t, buildBlock(t, 2, false))
+		require.NoError(t, err)
+		require.True(t, valid)
+	})
+
+	t.Run("boundary high (length exactly Max) passes", func(t *testing.T) {
+		valid, err := callValid(t, buildBlock(t, maxLen, false))
+		require.NoError(t, err)
+		require.True(t, valid)
+	})
+
+	t.Run("nil unlocking script is rejected", func(t *testing.T) {
+		valid, err := callValid(t, buildBlock(t, 0, true))
+		require.False(t, valid)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad coinbase length")
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	})
+}
+
 // TestBlock_NewBlockFromMsgBlock_ComprehensiveCoverage tests various paths in NewBlockFromMsgBlock
 func TestBlock_NewBlockFromMsgBlock_ComprehensiveCoverage(t *testing.T) {
 	t.Run("nil msgBlock error", func(t *testing.T) {
