@@ -4281,6 +4281,31 @@ func TestSetMinedChanWorker_RetryPendingDedup(t *testing.T) {
 	require.Equal(t, uint64(1), attempts, "skipped re-triggers must not inflate the retry counter")
 }
 
+// TestIsParentFinalizing guards the child parent-wait fix: checkParentProcessingComplete
+// must treat a parent that is either actively being processed OR waiting out a setTxMined
+// retry backoff as "still finalizing", so a child keeps waiting across the parent's whole
+// retry window instead of falling through to the bounded parent-mined wait and giving up.
+func TestIsParentFinalizing(t *testing.T) {
+	u := &BlockValidation{
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+	}
+	h := chainhash.HashH([]byte("parent"))
+
+	require.False(t, u.isParentFinalizing(&h), "an unknown block is not finalizing")
+
+	// Actively being processed by the setMined worker.
+	_ = u.blockHashesCurrentlyValidated.Put(h)
+	require.True(t, u.isParentFinalizing(&h), "a block in blockHashesCurrentlyValidated is finalizing")
+	require.NoError(t, u.blockHashesCurrentlyValidated.Delete(h))
+	require.False(t, u.isParentFinalizing(&h), "no longer finalizing once the claim is released")
+
+	// Waiting out a retry backoff (the off-loaded case the old code did not cover).
+	u.setMinedRetryPending.Store(h, struct{}{})
+	require.True(t, u.isParentFinalizing(&h), "a block with a pending setMined retry is finalizing")
+	u.setMinedRetryPending.Delete(h)
+	require.False(t, u.isParentFinalizing(&h), "no longer finalizing once the retry fires")
+}
+
 // TestBlockValidation_BlockchainSubscription_TriggersSetMined ensures that receiving a NotificationType_Block on the blockchainSubscription triggers setMined.
 func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	initPrometheusMetrics()

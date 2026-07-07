@@ -503,6 +503,16 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		}()
 	}
 
+	// Register the setMinedChan worker in backgroundTasks here - synchronously, before
+	// start() is launched - so Wait() can never observe a zero counter during the startup
+	// window. start() runs asynchronously and only reaches the worker launch after the
+	// (potentially long) mined-not-set recovery g.Wait(); registering there would leave a
+	// window in which Server.Stop() -> Wait() sees zero, returns without waiting for the
+	// worker, and races the later Add from zero (illegal WaitGroup use, can panic). start()
+	// balances this Add: the worker goroutine defers Done(), and the single early-return
+	// path that never launches the worker calls Done() itself.
+	bv.backgroundTasks.Add(1)
+
 	go func() {
 		if err := bv.start(ctx); err != nil {
 			// Check if context is done before logging
@@ -549,6 +559,11 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 		// wait for all blocks to be processed
 		if err := g.Wait(); err != nil {
+			// The setMinedChan worker (registered in backgroundTasks by NewBlockValidation
+			// before start() was launched) never starts on this early-return path, so
+			// release its registration here to keep Wait() balanced.
+			u.backgroundTasks.Done()
+
 			// we cannot start the block validation, we are in a bad state
 			return errors.NewServiceError("[BlockValidation:start] failed to start, process old block mined/subtrees sets", err)
 		}
@@ -580,17 +595,11 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	// start a worker to process the setMinedChan
 	u.logger.Infof("[BlockValidation:start] starting setMined goroutine")
 
-	// Register the worker in backgroundTasks (synchronously, before the goroutine
-	// launches) so the counter is >= 1 for the entire lifetime of the worker.
-	// scheduleSetMinedRetry does its own Add(1) from inside this worker; without a
-	// live registration the counter would transition 0 -> 1 there, which can race a
-	// concurrent Wait() on a zero counter during shutdown - illegal WaitGroup usage
-	// that can panic. Keeping the worker registered means every such Add(1) happens
-	// while the counter is already positive, and Wait() only returns once this worker
-	// (and any pending retries it scheduled) have drained. The worker's ctx is always
-	// cancelled before Server.Stop() -> Wait() runs, so this never deadlocks Wait().
-	u.backgroundTasks.Add(1)
-
+	// This worker is registered in backgroundTasks by NewBlockValidation (before start()
+	// was launched, so shutdown cannot race the registration on a zero counter); this
+	// goroutine owns the matching Done(). scheduleSetMinedRetry does its own Add(1)/Done()
+	// from inside this worker, always while this registration keeps the counter positive,
+	// so those never transition the counter from zero either.
 	go func() {
 		defer u.backgroundTasks.Done()
 		defer u.logger.Infof("[BlockValidation:start] setMinedChan worker stopped")
@@ -940,6 +949,25 @@ func (u *BlockValidation) scheduleSetMinedRetry(ctx context.Context, blockHash *
 			u.setMinedRetryPending.Delete(*blockHash)
 		}
 	}()
+}
+
+// isParentFinalizing reports whether blockHash is still going through setTxMined
+// finalization: either actively being processed by the setMinedChan worker
+// (blockHashesCurrentlyValidated) or waiting out a retry backoff in a
+// scheduleSetMinedRetry goroutine (setMinedRetryPending). checkParentProcessingComplete
+// uses this so a child keeps waiting across its parent's whole retry window - the
+// backoff is now off-loaded and releases the blockHashesCurrentlyValidated claim
+// immediately, so without also consulting setMinedRetryPending a child would fall
+// straight through to the bounded parent-mined wait and give up (block-found churn)
+// while a transiently-failing parent is still retrying.
+func (u *BlockValidation) isParentFinalizing(blockHash *chainhash.Hash) bool {
+	if u.blockHashesCurrentlyValidated.Exists(*blockHash) {
+		return true
+	}
+
+	_, retryPending := u.setMinedRetryPending.Load(*blockHash)
+
+	return retryPending
 }
 
 func (u *BlockValidation) processSubtreesNotSet(ctx context.Context, g *errgroup.Group) {
@@ -2626,6 +2654,15 @@ func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 // it first. Returning on ctx.Done() bounds Wait() to the caller's stop deadline in
 // those cases (the still-running worker is reaped at process exit) instead of hanging
 // forever and silently discarding the deadline.
+//
+// Two accepted costs on those abnormal paths (ctx fires before the tasks drain),
+// deliberately traded for not hanging shutdown:
+//   - Wait() now blocks for the full stop budget rather than returning promptly (it did
+//     before the worker was tracked).
+//   - the inner backgroundTasks.Wait() goroutine and its done channel leak until the
+//     worker eventually exits. sync.WaitGroup has no cancellable wait, and on these paths
+//     the worker itself is already leaking (its ctx was never cancelled), so this adds
+//     nothing that outlives the worker. The daemon path never hits this.
 func (u *BlockValidation) Wait(ctx context.Context) {
 	done := make(chan struct{})
 
