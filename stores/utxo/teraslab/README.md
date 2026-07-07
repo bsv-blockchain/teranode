@@ -106,11 +106,11 @@ TeraSlab uses a per-field bitmask to control which metadata fields the server re
 | `fields.ConflictingChildren` | `FieldConflictingChildren` |
 | `fields.TxInpoints` | `FieldColdData` |
 
-Default behaviour:
+Default behaviour (no requested fields resolves to `defaultGetMask`, `convert.go`):
 
-- `Get(ctx, hash)` with no fields uses `utxo.MetaFieldsWithTx` (metadata + transaction data)
-- `GetMeta(ctx, hash, data)` uses `utxo.MetaFields` (metadata only, no tx body)
-- `BatchDecorate(ctx, items)` with no fields uses `utxo.MetaFieldsWithTx`
+- `Get(ctx, hash)` with no fields requests `FieldAllMetadata | FieldColdData | FieldBlockEntries` (all metadata bits + cold data + block entries) — a superset of `utxo.MetaFieldsWithTx`, since it also carries `unmined_since`, `created_at` and `spending_height`.
+- `GetMeta(ctx, hash, data)` requests the same mask, then discards the reconstructed tx body, yielding metadata only.
+- `BatchDecorate(ctx, items)` with no fields uses the same default mask; with explicit fields it maps each to its TeraSlab bits and skips the tx-body decode unless `Tx`/`Inputs`/`Outputs` is requested.
 
 ## Transaction Data Storage
 
