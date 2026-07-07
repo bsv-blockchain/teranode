@@ -1465,8 +1465,10 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		targetBlock := blocks[19]
 		t.Logf("Target block: %s at height %d", targetBlock.Header.Hash().String(), targetBlock.Height)
 
-		// Override the UTXO height to match our best block (17)
-		server.utxoStore.(*utxo.MockUtxostore).On("GetBlockHeight").Return(uint32(1017)).Maybe()
+		// Note: the UTXO height is 1018, registered in createServerWithEnhancedCatchup.
+		// A later .On("GetBlockHeight") here would never match — testify uses the first
+		// registered expectation — so the common ancestor (block 17, height 1017) sits
+		// one below the UTXO height and catchup treats this as a depth-1 fork.
 
 		// Add block 17 to the blockExists cache so verifyChainContinuity can find it
 		bv.blockExistsCache.Set(*blocks[17].Header.Hash(), true)
@@ -1528,6 +1530,36 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Maybe()
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
 		mockBlockchainClient.On("Run", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		// findCommonAncestor now resolves block 17 as the common ancestor (height 1017,
+		// UTXO height 1018 from createServerWithEnhancedCatchup), so catchup proceeds
+		// past the walk for the first time: fork cleanup (forkDepth 1) and then the
+		// concurrent block processing this test is about. Mock the fork-cleanup calls
+		// and the validation-path calls for blocks 18-19.
+		mockBlockchainClient.On("GetBlockHeadersByHeight", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+		mockBlockchainClient.On("ClearBlockMinedSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("SendNotification", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		raceTestNBits := blocks[18].Header.Bits
+		mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).
+			Return(&raceTestNBits, nil).Maybe()
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
+			Return([]uint32{}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
+			Return(&model.Block{Height: 1017}, nil).Maybe()
+		mockBlockchainClient.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil).Maybe()
+		mockBlockchainClient.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
+		mockBlockchainClient.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
+		// Failure-path insurance: if a block fails validation mid-path, storeInvalidBlock
+		// must not panic on an unexpected mock call.
+		mockBlockchainClient.On("InvalidateBlock", mock.Anything, mock.Anything).
+			Return([]chainhash.Hash{}, nil).Maybe()
 
 		// Mock block assembly client methods
 		mockBAClient.On("GetBlockAssemblyState", mock.Anything).Return(&blockassembly_api.StateMessage{
