@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -1091,20 +1092,30 @@ func TestCatchup(t *testing.T) {
 		// Mock GetBlockHeight to return our current height
 		mockUTXOStore.On("GetBlockHeight").Return(currentHeight)
 
+		// Local chain carries far more validated work than the deep fork offers, and the
+		// depth trigger reads its tip from this same best header (height = currentHeight).
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{},
+			&model.BlockHeaderMeta{Height: currentHeight, ChainWork: new(big.Int).SetInt64(1_000_000).Bytes()},
+			nil,
+		)
+
 		// Create test blocks
 		blocks := testhelpers.CreateTestBlockChain(t, 2)
 		blockUpTo := blocks[1]
 
-		// Create common ancestor hash and meta
+		// Create common ancestor hash and meta (tiny cumulative work)
 		commonAncestorHash := blocks[0].Header.Hash()
 		commonAncestorMeta := &model.BlockHeaderMeta{
-			Height: commonAncestorHeight,
+			Height:    commonAncestorHeight,
+			ChainWork: new(big.Int).SetInt64(1_000).Bytes(),
 		}
 
-		// Call the secret mining check function directly
-		err := server.checkSecretMiningFromCommonAncestor(ctx, blockUpTo, "", "http://test-peer", commonAncestorHash, commonAncestorMeta)
+		// Peer offers a deep fork whose few blocks add negligible work: a shorter-work deep chain.
+		offered := testhelpers.CreateTestHeaders(t, 5)
+		err := server.checkSecretMiningFromCommonAncestor(ctx, blockUpTo, "", "http://test-peer", commonAncestorHash, commonAncestorMeta, offered)
 
-		// Should return an error because 180 blocks behind > 100 threshold
+		// Should return an error because the deep fork carries less work than our chain
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "secretly mined chain")
 	})
@@ -1135,11 +1146,171 @@ func TestCatchup(t *testing.T) {
 		}
 
 		// Call the secret mining check function directly
-		err := server.checkSecretMiningFromCommonAncestor(ctx, blockUpTo, "", "http://test-peer", commonAncestorHash, commonAncestorMeta)
+		err := server.checkSecretMiningFromCommonAncestor(ctx, blockUpTo, "", "http://test-peer", commonAncestorHash, commonAncestorMeta, nil)
 
 		// Should return an error because common ancestor is ahead of current height
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "ahead of current height")
+	})
+}
+
+// recordingP2PClient records whether malicious behaviour was reported for a peer,
+// so tests can distinguish the reputation penalty from a mere policy-driven abort.
+type recordingP2PClient struct {
+	P2PClientI
+
+	mu     sync.Mutex
+	called bool
+	peerID string
+}
+
+func (r *recordingP2PClient) RecordCatchupMalicious(_ context.Context, peerID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.called = true
+	r.peerID = peerID
+
+	return nil
+}
+
+func (r *recordingP2PClient) maliciousCalled() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.called
+}
+
+func (r *recordingP2PClient) peer() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.peerID
+}
+
+// TestCheckSecretMiningWorkGating verifies that the secret-mining check gates the
+// malicious verdict on cumulative work, not fork depth: an honest peer serving a
+// heavier deep reorg is followed and left unpenalised (issue #1160), while a deep
+// fork that carries no additional work is still flagged.
+func TestCheckSecretMiningWorkGating(t *testing.T) {
+	initPrometheusMetrics()
+
+	const (
+		currentHeight        = uint32(200)
+		commonAncestorHeight = uint32(20) // 180 blocks behind, exceeds the threshold of 100
+	)
+
+	newServer := func(t *testing.T, localChainWork *big.Int, rec *recordingP2PClient) (*Server, *chainhash.Hash, *model.BlockHeaderMeta) {
+		t.Helper()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.SecretMiningThreshold = 100
+
+		mockUTXOStore := &utxo.MockUtxostore{}
+		mockUTXOStore.On("GetBlockHeight").Return(currentHeight)
+
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{},
+			&model.BlockHeaderMeta{Height: currentHeight, ChainWork: localChainWork.Bytes()},
+			nil,
+		)
+
+		srv := &Server{
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			blockchainClient: mockBlockchainClient,
+			utxoStore:        mockUTXOStore,
+			stats:            gocore.NewStat("test"),
+		}
+		if rec != nil {
+			srv.p2pClient = rec
+		}
+
+		ancestorHash := testhelpers.CreateTestHeaders(t, 1)[0].Hash()
+		ancestorMeta := &model.BlockHeaderMeta{
+			Height:    commonAncestorHeight,
+			ChainWork: big.NewInt(1_000).Bytes(),
+		}
+
+		return srv, ancestorHash, ancestorMeta
+	}
+
+	blockUpTo := testhelpers.CreateTestBlockChain(t, 2)[1]
+
+	t.Run("heavier deep reorg is followed and not flagged malicious", func(t *testing.T) {
+		rec := &recordingP2PClient{}
+
+		// Local best work equals the common ancestor work (1000): any positive work the
+		// peer's offered headers add makes the offered chain strictly heavier.
+		srv, ancestorHash, ancestorMeta := newServer(t, big.NewInt(1_000), rec)
+
+		offered := testhelpers.CreateTestHeaders(t, 5)
+
+		err := srv.checkSecretMiningFromCommonAncestor(context.Background(), blockUpTo, "peer-good", "http://good-peer", ancestorHash, ancestorMeta, offered)
+
+		require.NoError(t, err)
+		require.False(t, rec.maliciousCalled(), "honest peer serving a heavier deep chain must not be flagged malicious")
+	})
+
+	t.Run("deep fork with no extra work is flagged malicious", func(t *testing.T) {
+		rec := &recordingP2PClient{}
+
+		// Local best work dwarfs the offered chain: the deep fork carries no extra work.
+		srv, ancestorHash, ancestorMeta := newServer(t, big.NewInt(1_000_000), rec)
+
+		offered := testhelpers.CreateTestHeaders(t, 5)
+
+		err := srv.checkSecretMiningFromCommonAncestor(context.Background(), blockUpTo, "peer-bad", "http://bad-peer", ancestorHash, ancestorMeta, offered)
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "secretly mined chain")
+		require.True(t, rec.maliciousCalled(), "a withheld shorter-work deep chain must be flagged malicious")
+		require.Equal(t, "peer-bad", rec.peer())
+	})
+
+	t.Run("deep fork with no offered headers aborts without flagging malicious", func(t *testing.T) {
+		rec := &recordingP2PClient{}
+
+		// Local chain is heavier, but with no offered headers we cannot weigh the candidate
+		// chain: uncertainty must abort without penalising the peer, not flag it malicious.
+		srv, ancestorHash, ancestorMeta := newServer(t, big.NewInt(1_000_000), rec)
+
+		err := srv.checkSecretMiningFromCommonAncestor(context.Background(), blockUpTo, "peer-empty", "http://empty-peer", ancestorHash, ancestorMeta, nil)
+
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "secretly mined chain")
+		require.False(t, rec.maliciousCalled(), "an unweighable fork must not penalise the peer")
+	})
+
+	t.Run("chainwork lookup failure aborts without flagging malicious", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.SecretMiningThreshold = 100
+
+		mockUTXOStore := &utxo.MockUtxostore{}
+		mockUTXOStore.On("GetBlockHeight").Return(currentHeight)
+
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.NewProcessingError("boom"))
+
+		rec := &recordingP2PClient{}
+		srv := &Server{
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			blockchainClient: mockBlockchainClient,
+			utxoStore:        mockUTXOStore,
+			stats:            gocore.NewStat("test"),
+			p2pClient:        rec,
+		}
+
+		ancestorHash := testhelpers.CreateTestHeaders(t, 1)[0].Hash()
+		ancestorMeta := &model.BlockHeaderMeta{Height: commonAncestorHeight, ChainWork: big.NewInt(1_000).Bytes()}
+
+		err := srv.checkSecretMiningFromCommonAncestor(context.Background(), blockUpTo, "peer-x", "http://x", ancestorHash, ancestorMeta, testhelpers.CreateTestHeaders(t, 3))
+
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "secretly mined chain")
+		require.False(t, rec.maliciousCalled(), "an internal lookup failure must not penalise the peer")
 	})
 }
 

@@ -2002,24 +2002,6 @@ func TestBlockAssembly_CoinbaseCalculationFix(t *testing.T) {
 	})
 }
 
-// MockCleanupService is a mock implementation of the cleanup service interface
-type MockCleanupService struct {
-	mock.Mock
-}
-
-func (m *MockCleanupService) Start(ctx context.Context) {
-	m.Called(ctx)
-}
-
-func (m *MockCleanupService) Prune(ctx context.Context, height uint32) (int64, error) {
-	args := m.Called(ctx, height)
-	return args.Get(0).(int64), args.Error(1)
-}
-
-func (m *MockCleanupService) SetPersistedHeightGetter(getter func() uint32) {
-	m.Called(getter)
-}
-
 // containsHash is a helper to check if a slice of hashes contains a specific hash
 func containsHash(list []chainhash.Hash, target chainhash.Hash) bool {
 	for _, h := range list {

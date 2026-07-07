@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
@@ -33,74 +34,20 @@ func okOperate() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerosp
 	return func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error { return nil }
 }
 
-func requireSignalled[T any](t *testing.T, ch chan T, i int) {
+// requireGroupCompleted is the group-completion-protocol
+// equivalent: a single group.Wait standing in for "every item in the batch
+// received a completion signal, none was orphaned" (the group's counter
+// only reaches zero once every item's complete() has run).
+func requireGroupCompleted(t *testing.T, group *completion.Group, timeout time.Duration) {
 	t.Helper()
-	select {
-	case <-ch:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("item %d was orphaned: no completion signal", i)
-	}
-}
-
-func TestSendIncrementBatch_NeverOrphans(t *testing.T) {
-	mk := func() []*batchIncrement {
-		b := make([]*batchIncrement, 4)
-		for i := range b {
-			h := chainhash.Hash{byte(i + 1)}
-			b[i] = &batchIncrement{txID: &h, increment: 1, res: make(chan incrementSpentRecordsRes, 1)}
-		}
-		return b
-	}
-
-	for name, fn := range map[string]func() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error{
-		"panic": panicOperate, "batchOperate error": errorOperate, "ok (nil records)": okOperate,
-	} {
-		t.Run(name, func(t *testing.T) {
-			s := newTestStoreForGet(t)
-			s.batchOperateFn = fn()
-
-			b := mk()
-			require.NotPanics(t, func() { s.sendIncrementBatch(b) })
-
-			for i, it := range b {
-				requireSignalled(t, it.res, i)
-			}
-		})
-	}
-}
-
-func TestSendSetDAHBatch_NeverOrphans(t *testing.T) {
-	mk := func() []*batchDAH {
-		b := make([]*batchDAH, 4)
-		for i := range b {
-			h := chainhash.Hash{byte(i + 1)}
-			b[i] = &batchDAH{txID: &h, childIdx: uint32(i + 1), deleteAtHeight: 100, errCh: make(chan error, 1)}
-		}
-		return b
-	}
-
-	for name, fn := range map[string]func() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error{
-		"panic": panicOperate, "batchOperate error": errorOperate, "ok (nil records)": okOperate,
-	} {
-		t.Run(name, func(t *testing.T) {
-			s := newTestStoreForGet(t)
-			s.batchOperateFn = fn()
-
-			b := mk()
-			require.NotPanics(t, func() { s.sendSetDAHBatch(b) })
-
-			for i, it := range b {
-				requireSignalled(t, it.errCh, i)
-			}
-		})
-	}
+	require.NoError(t, group.Wait(context.Background(), timeout), "group did not complete: an item was orphaned")
 }
 
 func TestSetLockedBatch_NeverOrphans(t *testing.T) {
-	mk := func() []*batchLocked {
+	mk := func(group *completion.Group) []*batchLocked {
 		b := make([]*batchLocked, 4)
 		for i := range b {
-			b[i] = &batchLocked{ctx: context.Background(), txHash: chainhash.Hash{byte(i + 1)}, setValue: true, errCh: make(chan error, 1)}
+			b[i] = &batchLocked{ctx: context.Background(), txHash: chainhash.Hash{byte(i + 1)}, setValue: true, group: group}
 		}
 		return b
 	}
@@ -115,62 +62,55 @@ func TestSetLockedBatch_NeverOrphans(t *testing.T) {
 			s := newTestStoreForGet(t)
 			s.batchOperateFn = fn()
 
-			b := mk()
+			group := completion.NewGroup(4)
+			b := mk(group)
 			require.NotPanics(t, func() { s.setLockedBatch(b) })
 
-			for i, it := range b {
-				requireSignalled(t, it.errCh, i)
-			}
+			requireGroupCompleted(t, group, 2*time.Second)
 		})
 	}
 }
 
-func TestSendSpendBatchLua_PanicSignalsAllWaiters(t *testing.T) {
-	s := newTestStoreForGet(t)
-	s.utxoBatchSize = 2
-	s.batchOperateFn = panicOperate()
-
+func TestSendSpendBatchLua_NeverOrphans(t *testing.T) {
 	const n = 4
 
-	batch := make([]*batchSpend, n)
-	for i := range batch {
-		txID := chainhash.HashH([]byte{byte(i), 't', 'x'})
-		utxoHash := chainhash.HashH([]byte{byte(i), 'u'})
-		spender := chainhash.HashH([]byte{byte(i), 's'})
-		batch[i] = &batchSpend{
-			spend: &utxo.Spend{
-				TxID:         &txID,
-				Vout:         uint32(i),
-				UTXOHash:     &utxoHash,
-				SpendingData: spendpkg.NewSpendingData(&spender, 0),
-			},
-			blockHeight: 100,
-			errCh:       make(chan error, 1),
+	mk := func(group *completion.Group) []*batchSpend {
+		batch := make([]*batchSpend, n)
+		for i := range batch {
+			txID := chainhash.HashH([]byte{byte(i), 't', 'x'})
+			utxoHash := chainhash.HashH([]byte{byte(i), 'u'})
+			spender := chainhash.HashH([]byte{byte(i), 's'})
+			batch[i] = &batchSpend{
+				spend: &utxo.Spend{
+					TxID:         &txID,
+					Vout:         uint32(i),
+					UTXOHash:     &utxoHash,
+					SpendingData: spendpkg.NewSpendingData(&spender, 0),
+				},
+				blockHeight: 100,
+				group:       group,
+			}
 		}
+		return batch
 	}
 
-	require.NotPanics(t, func() { s.sendSpendBatchLua(batch) })
+	// "ok (nil records)" exercises the missing-LuaSuccess-bin branch (the
+	// mocked records carry no Record), which must complete with an error
+	// rather than fall through and orphan the submitter.
+	for name, fn := range map[string]func() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error{
+		"panic": panicOperate, "batchOperate error": errorOperate, "ok (nil records)": okOperate,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newTestStoreForGet(t)
+			s.utxoBatchSize = 2
+			s.batchOperateFn = fn()
 
-	for i, it := range batch {
-		requireSignalled(t, it.errCh, i)
-	}
-}
+			group := completion.NewGroup(n)
+			batch := mk(group)
 
-func TestSendStoreBatch_PanicSignalsAllWaiters(t *testing.T) {
-	s := newTestStoreForSendStoreBatch(t)
-	s.batchOperateFn = panicOperate()
+			require.NotPanics(t, func() { s.sendSpendBatchLua(batch) })
 
-	const n = 3
-
-	batch := make([]*BatchStoreItem, n)
-	for i := range batch {
-		tx := txWithSingleOutput(t)
-		batch[i] = NewBatchStoreItem(tx.TxIDChainHash(), false, tx, 100, nil, 0, make(chan error, 1))
-	}
-
-	require.NotPanics(t, func() { s.sendStoreBatch(batch) })
-
-	for i, item := range batch {
-		requireSignalled(t, item.done, i)
+			requireGroupCompleted(t, group, 2*time.Second)
+		})
 	}
 }

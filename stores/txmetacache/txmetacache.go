@@ -43,14 +43,12 @@ import (
 // These metrics are critical for operational monitoring and can help identify:
 // - Cache hit ratio (hits vs. misses) to evaluate cache effectiveness
 // - Insertion and eviction rates to detect memory pressure
-// - Age-related expiration patterns through hitOldTx tracking
 type metrics struct {
 	insertions atomic.Uint64 // Tracks number of items inserted into the cache; indicates write throughput
 	hits       atomic.Uint64 // Tracks number of successful cache retrievals; indicates cache effectiveness
 	misses     atomic.Uint64 // Tracks number of failed cache retrievals; helps identify sizing issues
 	evictions  atomic.Uint64 // Tracks number of items evicted from the cache; indicates memory pressure
 	getOrigin  atomic.Uint64 // Tracks origin-store metadata retrievals
-	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions; monitors expiration policy
 }
 
 const (
@@ -493,6 +491,36 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, f ...fields
 	return t.utxoStore.Get(ctx, hash, f...)
 }
 
+const (
+	metaBytesBufInitialCapacity = 256
+	metaBytesBufMaxRetain       = 64 * 1024
+)
+
+// metaBytesBufPool recycles the per-transaction MetaBytes serialization buffers
+// used to repopulate the cache in BatchDecorate. The initial capacity covers the
+// common single-parent transaction (17-byte header + a few dozen inpoint bytes)
+// with headroom; larger transactions grow their buffer on first use.
+var metaBytesBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, metaBytesBufInitialCapacity)
+		return &b
+	},
+}
+
+// putMetaBytesBuf returns a buffer to metaBytesBufPool, mirroring the max-retain
+// guard on putTxMetaCacheReadBuffer: an occasional large-parent tx must not pin a
+// hundreds-of-KB backing array in the pool forever and ratchet up process RSS, so
+// any buffer grown past metaBytesBufMaxRetain is dropped for a fresh initial-cap one.
+func putMetaBytesBuf(bp *[]byte) {
+	if cap(*bp) > metaBytesBufMaxRetain {
+		*bp = make([]byte, 0, metaBytesBufInitialCapacity)
+	} else {
+		*bp = (*bp)[:0]
+	}
+
+	metaBytesBufPool.Put(bp)
+}
+
 // BatchDecorate retrieves metadata for multiple transactions in a single batch operation.
 // This is more efficient than calling Get for each transaction individually.
 //
@@ -517,6 +545,19 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	// Note: values are serialized the same way SetCache() does (via MetaBytes).
 	keys := make([][]byte, 0, len(hashes))
 	values := make([][]byte, 0, len(hashes))
+
+	// The per-tx MetaBytes serialization buffers are recycled through a pool:
+	// SetCacheMultiValuesRaw (SetMulti) copies the value bytes into the cache's
+	// own chunk storage before returning, so each buffer is dead afterwards.
+	// They are held in `values` until then, so return them only after the cache
+	// write completes (deferred), not per iteration.
+	bufPtrs := make([]*[]byte, 0, len(hashes))
+
+	defer func() {
+		for _, bp := range bufPtrs {
+			putMetaBytesBuf(bp)
+		}
+	}()
 
 	for _, data := range hashes {
 		if data == nil || data.Data == nil {
@@ -545,16 +586,24 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 			t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
 		}
 
-		// get the metabytes directly here.
-		txMetaBytes, err := data.Data.MetaBytes()
+		// Serialize into a pooled buffer; the cache copies it on insert.
+		bufPtr := metaBytesBufPool.Get().(*[]byte)
+
+		txMetaBytes, err := data.Data.MetaBytesInto((*bufPtr)[:0])
 		if err != nil {
+			putMetaBytesBuf(bufPtr)
+
 			if errors.Is(err, errors.ErrProcessing) {
 				t.logger.Debugf("error serializing txMeta for [%s]: %v", data.Hash.String(), err)
 			} else {
 				t.logger.Errorf("error serializing txMeta for [%s]: %v", data.Hash.String(), err)
 			}
+
 			continue
 		}
+
+		*bufPtr = txMetaBytes // keep the (possibly grown) backing array for reuse
+		bufPtrs = append(bufPtrs, bufPtr)
 
 		keys = append(keys, data.Hash.CloneBytes())
 		values = append(values, txMetaBytes)
@@ -838,6 +887,11 @@ func (t *TxMetaCache) GetCacheStats() *CacheStats {
 // - Error if the health check encounters a problem
 func (t *TxMetaCache) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return t.utxoStore.Health(ctx, checkLiveness)
+}
+
+// SupportsOutpointOnlySpend delegates to the wrapped store.
+func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
+	return t.utxoStore.SupportsOutpointOnlySpend()
 }
 
 // Close delegates to the wrapped UTXO store so its in-flight batched writes

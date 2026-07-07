@@ -1282,19 +1282,12 @@ func (b *BlockAssembler) initState(ctx context.Context) error {
 //   - uint32: Current block height
 //   - error: Any error encountered during state retrieval
 func (b *BlockAssembler) GetState(ctx context.Context) (*model.BlockHeader, uint32, error) {
-	state, err := b.blockchainClient.GetState(ctx, "BlockAssembler")
+	state, err := b.blockchainClient.GetState(ctx, StateKey)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	bestBlockHeight := binary.LittleEndian.Uint32(state[:4])
-
-	bestBlockHeader, err := model.NewBlockHeaderFromBytes(state[4:])
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return bestBlockHeader, bestBlockHeight, nil
+	return DecodeState(state)
 }
 
 // SetState persists the current state of the block assembler to the blockchain.
@@ -1310,15 +1303,9 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 		return errors.NewError("bestBlockHeader is nil")
 	}
 
-	blockHeaderBytes := blockHeader.Bytes()
-
-	state := make([]byte, 4+len(blockHeaderBytes))
-	binary.LittleEndian.PutUint32(state[:4], blockHeight)
-	state = append(state[:4], blockHeaderBytes...)
-
 	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", blockHeight, blockHeader.Hash())
 
-	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
+	return b.blockchainClient.SetState(ctx, StateKey, EncodeState(blockHeader, blockHeight))
 }
 
 func (b *BlockAssembler) SetStateChangeCh(ch chan BestBlockInfo) {
@@ -2285,6 +2272,141 @@ func (b *BlockAssembler) validateParentChain(
 	return validTxs, nil
 }
 
+// stableSortUnminedByCreatedAt orders unmined transactions by CreatedAt (oldest
+// first) with a topological tiebreak: when transactions share the same
+// CreatedAt, any parent that is also in the set is placed before its children.
+//
+// CreatedAt is stamped independently per transaction with no enforced gap, and
+// has coarse resolution — millisecond on the Aerospike store and one-second on
+// the SQLite store (its CURRENT_TIMESTAMP default emits "YYYY-MM-DD HH:MM:SS").
+// A parent and child created close together therefore routinely share a
+// CreatedAt value. An unstable sort could then emit the child before its
+// parent, and validateParentChain treats parent-after-child as invalid ordering
+// and drops the child (cascading to its descendants). The stable base sort
+// preserves iterator order on ties, and the per-run reorder guarantees parents
+// precede their children regardless of iterator order.
+func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
+	sort.SliceStable(txs, func(i, j int) bool {
+		return txs[i].CreatedAt < txs[j].CreatedAt
+	})
+
+	// Reorder within each maximal run of equal CreatedAt so in-set parents come
+	// before their children. Only same-timestamp transactions can be misordered,
+	// so unrelated timestamps are left untouched.
+	for start := 0; start < len(txs); {
+		end := start + 1
+		for end < len(txs) && txs[end].CreatedAt == txs[start].CreatedAt {
+			end++
+		}
+
+		if end-start > 1 {
+			orderRunParentsFirst(txs[start:end])
+		}
+
+		start = end
+	}
+}
+
+// orderRunParentsFirst reorders, in place, a run of transactions that all share
+// the same CreatedAt so any transaction which is a parent of another in the run
+// appears before its children. Transactions with no parent/child relationship
+// inside the run keep their incoming relative order (the sort is stable), which
+// preserves the iterator's ordering for unrelated transactions.
+func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
+	n := len(run)
+
+	// Map each hash in the run to its slot so intra-run parent edges can be found.
+	pos := make(map[chainhash.Hash]int, n)
+	for i, tx := range run {
+		pos[tx.Node.Hash] = i
+	}
+
+	// parents[i] = slots within the run whose outputs transaction i spends.
+	parents := make([][]int, n)
+	for i, tx := range run {
+		if tx.TxInpoints == nil {
+			continue
+		}
+
+		for _, parentHash := range tx.TxInpoints.GetParentTxHashes() {
+			if p, ok := pos[parentHash]; ok && p != i {
+				parents[i] = append(parents[i], p)
+			}
+		}
+	}
+
+	// depth[i] = length of the longest in-run ancestor chain ending at i. A
+	// parent always has a strictly smaller depth than its child, so ordering by
+	// depth places parents before children. Computed iteratively (explicit
+	// stack) to avoid deep recursion on long dependency chains.
+	const (
+		unvisited int8 = iota
+		active
+		done
+	)
+
+	depth := make([]int, n)
+	state := make([]int8, n)
+	stack := make([]int, 0, n)
+
+	for i := 0; i < n; i++ {
+		if state[i] != unvisited {
+			continue
+		}
+
+		stack = append(stack, i)
+
+		for len(stack) > 0 {
+			v := stack[len(stack)-1]
+
+			if state[v] == unvisited {
+				state[v] = active
+				for _, p := range parents[v] {
+					if state[p] == unvisited {
+						stack = append(stack, p)
+					}
+				}
+
+				continue
+			}
+
+			stack = stack[:len(stack)-1]
+			if state[v] == done {
+				continue
+			}
+
+			d := 0
+			for _, p := range parents[v] {
+				// Parents still active indicate a cycle (impossible for a tx
+				// DAG); skip them so this terminates rather than looping.
+				if state[p] == done && depth[p]+1 > d {
+					d = depth[p] + 1
+				}
+			}
+
+			depth[v] = d
+			state[v] = done
+		}
+	}
+
+	// Stable-sort slot indices by depth; equal depths keep original order.
+	order := make([]int, n)
+	for i := range order {
+		order[i] = i
+	}
+
+	sort.SliceStable(order, func(a, b int) bool {
+		return depth[order[a]] < depth[order[b]]
+	})
+
+	reordered := make([]*utxo.UnminedTransaction, n)
+	for k, idx := range order {
+		reordered[k] = run[idx]
+	}
+
+	copy(run, reordered)
+}
+
 // fixUnminedSinceInconsistencies performs a lightweight scan of all records in the UTXO store
 // to detect and fix unmined_since inconsistencies: transactions that have block_ids on the
 // main chain but still have unmined_since set. This can happen from previous bugs, crashes,
@@ -2683,10 +2805,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 
 	b.logger.Infof("[loadUnminedTransactions] sorting %d unmined transactions by createdAt", len(unminedTransactions))
 
-	sort.Slice(unminedTransactions, func(i, j int) bool {
-		// sort by createdAt, oldest first
-		return unminedTransactions[i].CreatedAt < unminedTransactions[j].CreatedAt
-	})
+	stableSortUnminedByCreatedAt(unminedTransactions)
 
 	txCount := len(unminedTransactions)
 
@@ -3172,7 +3291,15 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 	// Sort the lightweight entries in memory
 	sortStart := time.Now()
 	sort.Slice(sortEntries, func(i, j int) bool {
-		return sortEntries[i].CreatedAt < sortEntries[j].CreatedAt
+		if sortEntries[i].CreatedAt != sortEntries[j].CreatedAt {
+			return sortEntries[i].CreatedAt < sortEntries[j].CreatedAt
+		}
+		// Deterministic tiebreak on equal CreatedAt: Sequence is the iterator
+		// yield order, which places parents before children where the iterator
+		// itself is ordered. This path does not run validateParentChain (it is
+		// gated on OnRestartValidateParentChain being false), so it never drops
+		// on misordering; the tiebreak removes non-determinism between restarts.
+		return sortEntries[i].Sequence < sortEntries[j].Sequence
 	})
 	txCount := len(sortEntries)
 	var countBucket string

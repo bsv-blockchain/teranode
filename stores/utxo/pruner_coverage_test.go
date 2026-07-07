@@ -14,29 +14,6 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// mockIterator is a configurable mock iterator for testing
-type mockIterator struct {
-	mock.Mock
-}
-
-func (m *mockIterator) Next(ctx context.Context) ([]*UnminedTransaction, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*UnminedTransaction), args.Error(1)
-}
-
-func (m *mockIterator) Err() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *mockIterator) Close() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
 // Simple tests focused on achieving code coverage
 
 func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
@@ -77,7 +54,7 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 		txInpoints, _ := subtree.NewTxInpointsFromTx(tx)
 
 		// Create mock iterator
-		mockIter := new(mockIterator)
+		mockIter := new(MockUnminedTxIterator)
 		mockIter.On("Next", mock.Anything).Return([]*UnminedTransaction{
 			{
 				Node:         &subtree.Node{Hash: hash1},

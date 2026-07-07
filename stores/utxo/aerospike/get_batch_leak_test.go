@@ -7,6 +7,8 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -47,26 +49,67 @@ func TestSendGetBatch_PanicSignalsAllWaiters(t *testing.T) {
 
 	const n = 8
 
+	group := completion.NewGroup(n)
+	results := make([]batchGetItemData, n)
 	batch := make([]*batchGetItem, n)
+
 	for i := range batch {
 		batch[i] = &batchGetItem{
 			hash:   chainhash.Hash{byte(i)},
 			fields: []fields.FieldName{fields.Fee},
-			done:   make(chan batchGetItemData, 1),
+			group:  group,
+			result: &results[i],
 		}
 	}
 
-	// Our recover-defer must swallow the panic (after signalling), so calling it
-	// directly does not propagate.
+	// Our recover-defer must swallow the panic (after completing every item), so
+	// calling it directly does not propagate.
 	require.NotPanics(t, func() { s.sendGetBatch(batch) })
 
-	for i, it := range batch {
-		select {
-		case data := <-it.done:
-			require.Error(t, data.Err, "item %d was orphaned", i)
-		case <-time.After(2 * time.Second):
-			t.Fatalf("item %d orphaned: no done signal after panic", i)
+	// A single group.Wait stands in for "every item received a completion signal,
+	// none was orphaned": the group's counter only reaches zero once every item's
+	// complete() has run.
+	requireGroupCompleted(t, group, 2*time.Second)
+
+	for i := range results {
+		require.Error(t, results[i].Err, "item %d was orphaned", i)
+	}
+}
+
+// TestSendOutpointBatch_NeverOrphans drives sendOutpointBatch through its panic /
+// BatchOperate-error / result paths and asserts the whole group completes — no
+// waiting submitter is orphaned on any path.
+func TestSendOutpointBatch_NeverOrphans(t *testing.T) {
+	const n = 4
+
+	mk := func(group *completion.Group) []*batchOutpoint {
+		b := make([]*batchOutpoint, n)
+		for i := range b {
+			in := &bt.Input{PreviousTxOutIndex: 0}
+			h := chainhash.Hash{byte(i + 1)}
+			_ = in.PreviousTxIDAdd(&h)
+			b[i] = &batchOutpoint{outpoint: in, group: group}
 		}
+		return b
+	}
+
+	// "ok (nil records)" drives the success path with mocked records that carry
+	// no Record; the resulting nil-deref is caught by the panic guard, which must
+	// still complete every item rather than orphan the submitters.
+	for name, fn := range map[string]func() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error{
+		"panic": panicOperate, "batchOperate error": errorOperate, "ok (nil records)": okOperate,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newTestStoreForGet(t)
+			s.batchOperateFn = fn()
+
+			group := completion.NewGroup(n)
+			b := mk(group)
+
+			require.NotPanics(t, func() { s.sendOutpointBatch(b) })
+
+			requireGroupCompleted(t, group, 2*time.Second)
+		})
 	}
 }
 

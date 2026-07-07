@@ -81,7 +81,7 @@ Steps:
 7. **Probe-only variant**: when uncertain, `git cherry-pick -n <merge-sha>` dry-runs without committing.
    - **Precondition: working tree must be clean.** Verify with `git status --porcelain` returning empty. If dirty, stash user changes first (`git stash push -m user-state-before-probe`) and pop them back **after** the probe is done. Never run a blanket discard while user state is mixed in.
    - Cleanup after a clean-precondition probe: `git reset HEAD && git stash push --include-untracked -m probe-discard && git stash drop` (the `-n` variant doesn't leave a cherry-pick session for `--abort`).
-   - Avoid `git reset --hard`, `git checkout HEAD -- <path>`, and `git clean -f` (per `.claude/rules/git-workflow.md`). Developer-local safety tooling (e.g. dcg, pre-commit guards) may also block these — fall back to stash-based recovery.
+   - Avoid `git reset --hard`, `git checkout HEAD -- <path>`, and `git clean -f` (per the Git Workflow section in `AGENTS.md`). Developer-local safety tooling (e.g. dcg, pre-commit guards) may also block these — fall back to stash-based recovery.
 
 ### `beta <X.Y.Z>` — cut a numbered beta tag
 
@@ -192,7 +192,7 @@ Use `gh api graphql` to create the discussion if the user approves. The category
 
 These apply to every git operation in this skill:
 
-- **NEVER** `git reset --hard`, `git checkout HEAD -- <path>`, `git restore .`, or `git clean -f` — per `.claude/rules/git-workflow.md`. Developer-local safety tooling (e.g. dcg) may also block them. Alternatives:
+- **NEVER** `git reset --hard`, `git checkout HEAD -- <path>`, `git restore .`, or `git clean -f` — per the Git Workflow section in `AGENTS.md`. Developer-local safety tooling (e.g. dcg) may also block them. Alternatives:
   - Rewind a branch: switch off it first, then `git branch -f <branch> <ref>`, then switch back.
   - Discard dirty state: `git stash push --include-untracked -m discard && git stash drop` (only when working tree changes are known-safe to lose).
   - Restore one file: `git stash` first, then `git checkout <ref> -- <file>` (safe when WT is clean for that path).

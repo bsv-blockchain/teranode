@@ -4,9 +4,11 @@ package blockassembly
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -23,16 +25,40 @@ import (
 )
 
 // batchItem represents an item in a transaction batch.
-// This structure encapsulates a transaction request along with a channel
-// for signaling completion, enabling asynchronous batch processing while
-// still allowing the caller to wait for individual transaction results.
+// This structure encapsulates a transaction request along with a shared
+// completion.Group used to signal completion of batch processing, enabling
+// asynchronous batch processing while still allowing the caller to wait for
+// its transaction result.
 
 type batchItem struct {
 	// req contains the transaction request
 	req *blockassembly_api.AddTxRequest
 
-	// done signals completion of batch processing
-	done chan error
+	// group is the shared completion group the producer waits on; the
+	// dispatcher calls Done exactly once per item via complete.
+	group *completion.Group
+
+	// completed guards exactly-once completion (CAS). A panic-recovery sweep
+	// over an already-completed item is therefore a no-op.
+	completed atomic.Bool
+
+	// result holds the terminal error for this item (nil on success). Written
+	// by the CAS winner, after the CAS and before group.Done(); safe to read
+	// only once group.Wait returns nil.
+	result error
+}
+
+// complete writes err into the item's result slot and marks the shared group's
+// completion counter. Idempotent: only the first call has any effect, so a
+// panic-recovery sweep over an already-completed item never double-signals or
+// races a second write into result.
+func (it *batchItem) complete(err error) {
+	if it.completed.CompareAndSwap(false, true) {
+		it.result = err
+		if it.group != nil {
+			it.group.Done()
+		}
+	}
 }
 
 // Client implements the ClientI interface for block assembly operations.
@@ -296,15 +322,22 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 		}
 	} else {
 		/* batch mode */
-		done := make(chan error)
-		s.batcher.PutCtx(ctx, &batchItem{
-			req:  req,
-			done: done,
-		})
+		group := completion.NewGroup(1)
+		item := &batchItem{
+			req:   req,
+			group: group,
+		}
+		s.batcher.PutCtx(ctx, item)
 
-		err := <-done
-		if err != nil {
-			return false, err
+		// group.Wait(context.Background(), 0): 0 timeout allocates no timer and
+		// a background context never cancels, so this blocks purely on the
+		// dispatcher completing the item — identical to the previous bare
+		// <-done receive (no timeout, no ctx arm). It can only return nil, so
+		// the result slot is always safe to read here.
+		_ = group.Wait(context.Background(), 0)
+
+		if item.result != nil {
+			return false, item.result
 		}
 	}
 
@@ -443,6 +476,21 @@ func (s *Client) GetCandidateBlock(ctx context.Context, candidateID []byte) (*bl
 //   - ctx: Context for cancellation
 //   - batch: Batch of transactions to send
 func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchItem) {
+	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
+	// panic part-way through would strand every producer blocked on group.Wait
+	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
+	// re-completing an item an earlier stage already completed is a no-op.
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("[sendBatchToBlockAssembly] recovered panic, failing %d batch item(s): %v", len(batch), r)
+
+			err := errors.NewProcessingError("panic in sendBatchToBlockAssembly: %v", r)
+			for _, item := range batch {
+				item.complete(err)
+			}
+		}
+	}()
+
 	if s.settings.BlockAssembly.UseColumnarBatch {
 		s.sendBatchColumnar(ctx, batch)
 	} else {
@@ -467,14 +515,14 @@ func (s *Client) sendBatchRowOriented(ctx context.Context, batch []*batchItem) {
 		s.logger.Errorf("%v", err)
 
 		for _, item := range batch {
-			item.done <- errors.UnwrapGRPC(err)
+			item.complete(errors.UnwrapGRPC(err))
 		}
 
 		return
 	}
 
 	for _, item := range batch {
-		item.done <- nil
+		item.complete(nil)
 	}
 }
 
@@ -485,7 +533,7 @@ func (s *Client) sendBatchColumnar(ctx context.Context, batch []*batchItem) {
 	if err != nil {
 		s.logger.Errorf("failed to convert batch to columnar format: %v", err)
 		for _, item := range batch {
-			item.done <- err
+			item.complete(err)
 		}
 		return
 	}
@@ -500,6 +548,7 @@ func (s *Client) sendBatchColumnar(ctx context.Context, batch []*batchItem) {
 		// persistently-old server; acceptable for the simpler code path.
 		if status.Code(err) == codes.Unimplemented {
 			s.logger.Debugf("[blockassembly] columnar AddTxBatch unimplemented on peer; falling back to row-oriented batch (rolling deploy?): %v", err)
+			// No completion here: the row-oriented path completes every item.
 			s.sendBatchRowOriented(ctx, batch)
 			return
 		}
@@ -507,14 +556,14 @@ func (s *Client) sendBatchColumnar(ctx context.Context, batch []*batchItem) {
 		s.logger.Errorf("%v", err)
 
 		for _, item := range batch {
-			item.done <- errors.UnwrapGRPC(err)
+			item.complete(errors.UnwrapGRPC(err))
 		}
 
 		return
 	}
 
 	for _, item := range batch {
-		item.done <- nil
+		item.complete(nil)
 	}
 }
 

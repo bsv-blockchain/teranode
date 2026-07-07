@@ -250,7 +250,8 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			u.logger.Debugf("[txmetaHandler] failed to set tx meta data batch (%d items): %v", len(bufs.keys), err)
 		}
 		elapsed := float64(time.Since(enqueuedAt).Microseconds()) / 1_000_000
-		prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(elapsed)
+		prometheusSubtreeValidationSetTXMetaCacheKafkaBatch.Observe(elapsed)
+		prometheusSubtreeValidationSetTXMetaCacheKafkaCount.Add(float64(len(bufs.keys)))
 	}
 
 	for i := range bufs.deletes {

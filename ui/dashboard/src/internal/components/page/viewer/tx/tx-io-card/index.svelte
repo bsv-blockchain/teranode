@@ -45,8 +45,16 @@
     inputViewModes = { ...inputViewModes } // Trigger reactivity
   }
 
-  const inputSlice = $derived(data.inputs.slice(0, sliceCount))
-  const outputSlice = $derived(data.outputs.slice(0, sliceCount))
+  // A transaction reconstructed from the UTXO set (e.g. a seeded coinbase) can
+  // arrive with null inputs/outputs. Treat missing arrays as empty for rendering
+  // and flag them so the UI can say the data is unavailable rather than crash.
+  const inputs = $derived(Array.isArray(data.inputs) ? data.inputs : [])
+  const outputs = $derived(Array.isArray(data.outputs) ? data.outputs : [])
+  const inputsMissing = $derived(data.inputs == null)
+  const outputsMissing = $derived(data.outputs == null)
+
+  const inputSlice = $derived(inputs.slice(0, sliceCount))
+  const outputSlice = $derived(outputs.slice(0, sliceCount))
 
   // Track which outputs we've already processed to avoid re-processing
   let processedOutputsHash = ''
@@ -105,16 +113,21 @@
 <div class="io" class:collapse>
   <div class="col">
     <div class="title">
-      <div>{t(`${baseKey}.input.title`, { count: data.inputs.length })}</div>
-      <div class="total">
-        {t(`${baseKey}.input.total`, {
-          amount: formatSatoshi(
-            data.inputs.reduce((acc, item) => (acc += item.previousTxSatoshis || 0), 0),
-          ),
-        })}
-      </div>
+      <div>{inputsMissing ? t(`${baseKey}.input.title-unknown`) : t(`${baseKey}.input.title`, { count: inputs.length })}</div>
+      {#if !inputsMissing}
+        <div class="total">
+          {t(`${baseKey}.input.total`, {
+            amount: formatSatoshi(
+              inputs.reduce((acc, item) => (acc += item.previousTxSatoshis || 0), 0),
+            ),
+          })}
+        </div>
+      {/if}
     </div>
     <div class="items">
+      {#if inputsMissing}
+        <div class="missing-data">{t(`${baseKey}.input.missing`)}</div>
+      {/if}
       {#each inputSlice as input, i}
         <div class="entry">
           <div class="index">
@@ -148,7 +161,7 @@
         </div>
       {/each}
     </div>
-    {#if data.inputs.length > inputSlice.length}
+    {#if inputs.length > inputSlice.length}
       <button class="load-more" onclick={increaseSlize} type="button"
         >{t(`${baseKey}.load-more`)}</button
       >
@@ -156,14 +169,19 @@
   </div>
   <div class="col">
     <div class="title">
-      <div>{t(`${baseKey}.output.title`, { count: data.outputs.length })}</div>
-      <div class="total">
-        {t(`${baseKey}.output.total`, {
-          amount: formatSatoshi(data.outputs.reduce((acc, item) => (acc += item.satoshis), 0)),
-        })}
-      </div>
+      <div>{outputsMissing ? t(`${baseKey}.output.title-unknown`) : t(`${baseKey}.output.title`, { count: outputs.length })}</div>
+      {#if !outputsMissing}
+        <div class="total">
+          {t(`${baseKey}.output.total`, {
+            amount: formatSatoshi(outputs.reduce((acc, item) => (acc += item?.satoshis || 0), 0)),
+          })}
+        </div>
+      {/if}
     </div>
     <div class="items">
+      {#if outputsMissing}
+        <div class="missing-data">{t(`${baseKey}.output.missing`)}</div>
+      {/if}
       {#each outputSlice as output, i}
         {@const scriptType = detectScriptType(output.lockingScript)}
         {@const viewMode = outputViewModes[i] || 'default'}
@@ -208,7 +226,7 @@
         </div>
       {/each}
     </div>
-    {#if data.outputs.length > outputSlice.length}
+    {#if outputs.length > outputSlice.length}
       <button class="load-more" onclick={increaseSlize} type="button"
         >{t(`${baseKey}.load-more`)}</button
       >
@@ -430,6 +448,13 @@
   .coinbase-input {
     color: #ffc107;
     font-weight: 500;
+  }
+
+  .missing-data {
+    padding: 12px 24px;
+    color: var(--comp-label-color);
+    font-style: italic;
+    word-break: break-word;
   }
 
   .address {
