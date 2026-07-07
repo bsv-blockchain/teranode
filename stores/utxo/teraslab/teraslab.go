@@ -199,6 +199,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	return s, nil
 }
 
+// SupportsOutpointOnlySpend reports whether this store honours the below-checkpoint
+// outpoint-only spend fast path (spending from an input's outpoint alone, without
+// decorated parent data). TeraSlab derives the UTXO hash from the decorated input
+// and hard-errors when PreviousTxScript is absent (see Spend / util.UTXOHashFromInput),
+// so it does not support the fast path — returns false, matching the Aerospike backend.
+func (s *Store) SupportsOutpointOnlySpend() bool { return false }
+
 // Health checks the health status of the TeraSlab store.
 //
 // It always performs a shallow server health check (OpHealth). When
