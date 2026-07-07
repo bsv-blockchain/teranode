@@ -1102,9 +1102,11 @@ func (u *Server) Stop(ctx context.Context) error {
 		u.blockCatchupAttempts.Stop()
 	}
 
-	// Wait for all background tasks in BlockValidation to complete
+	// Wait for all background tasks in BlockValidation to complete, bounded by the
+	// caller's stop deadline (ctx) so a worker whose Init ctx was not cancelled first
+	// cannot hang shutdown indefinitely.
 	if u.blockValidation != nil {
-		u.blockValidation.Wait()
+		u.blockValidation.Wait(ctx)
 		u.blockValidation.StopCaches()
 
 		// DC11: drain the BlockValidation-owned invalid-block kafka producer via
