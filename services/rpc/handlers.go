@@ -2118,7 +2118,7 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// Legacy service only handles IPs
 	var peerBanned bool
 
-	if isIP && s.legacyP2PClient != nil {
+	if isIP && s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
 		isBannedLegacy, err := s.legacyP2PClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
 		if err != nil {
 			s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
@@ -2201,7 +2201,7 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 	}
 
 	// check if legacy peer service is available
-	if s.legacyP2PClient != nil {
+	if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
 		// Create a timeout context for the legacy peer client call
 		legacyCtx, cancel := context.WithTimeout(ctx, clientCallTimeout)
 		defer cancel()
@@ -2278,7 +2278,7 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		}
 	}
 	// check if legacy peer service is available
-	if s.legacyP2PClient != nil {
+	if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
 		_, err := s.legacyP2PClient.ClearBanned(ctx, &emptypb.Empty{})
 		if err != nil {
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
@@ -2379,7 +2379,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 
 		// and ban legacy peers
-		if s.legacyP2PClient != nil {
+		if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
 			until := expirationTimeInt64
 
 			resp, err := s.legacyP2PClient.BanPeer(ctx, &peer_api.BanPeerRequest{
@@ -2420,7 +2420,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 
 		// unban legacy peer
-		if s.legacyP2PClient != nil {
+		if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
 			resp, err := s.legacyP2PClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
 				Addr: c.IPOrSubnet,
 			})

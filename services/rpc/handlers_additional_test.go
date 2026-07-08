@@ -3078,6 +3078,16 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 }
 
 // TestHandleIsBannedComprehensive tests the handleIsBanned handler
+// newLegacySubscriberMock returns a blockchain mock whose subscriber list
+// includes the legacy manager, so ban RPC handlers treat the legacy peer
+// service as active (mirroring handleGetInfo's isSubscriberActive gate).
+func newLegacySubscriberMock() *blockchain.Mock {
+	m := &blockchain.Mock{}
+	m.On("GetSubscribers", mock.Anything).Return([]string{blockchain.SubscriberLegacy}, nil)
+
+	return m
+}
+
 func TestHandleIsBannedComprehensive(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
 
@@ -3140,9 +3150,10 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3198,8 +3209,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3217,6 +3229,42 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		assert.True(t, banned)
 	})
 
+	t.Run("legacy skipped when legacy not an active subscriber", func(t *testing.T) {
+		legacyCalled := false
+		mockPeer := &mockLegacyPeerClient{
+			isBannedFunc: func(ctx context.Context, req *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error) {
+				legacyCalled = true
+				return &peer_api.IsBannedResponse{IsBanned: true}, nil
+			},
+		}
+
+		// blockchain reports no legacy subscriber, so the legacy client (though
+		// non-nil) must not be consulted.
+		mockBlockchain := &blockchain.Mock{}
+		mockBlockchain.On("GetSubscribers", mock.Anything).Return([]string{blockchain.SubscriberP2P}, nil)
+
+		s := &RPCServer{
+			logger:           logger,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: mockBlockchain,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.IsBannedCmd{
+			IPOrSubnet: "10.0.0.1",
+		}
+
+		result, err := handleIsBanned(context.Background(), s, cmd, nil)
+
+		require.NoError(t, err)
+		banned, ok := result.(bool)
+		require.True(t, ok)
+		assert.False(t, banned, "IP should not be reported banned when legacy is inactive")
+		assert.False(t, legacyCalled, "legacy client must not be called when legacy is not an active subscriber")
+	})
+
 	t.Run("both clients return not banned", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
 			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
@@ -3231,9 +3279,10 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3265,9 +3314,10 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3299,9 +3349,10 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3422,8 +3473,9 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3455,9 +3507,10 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3493,9 +3546,10 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3578,9 +3632,10 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3608,9 +3663,10 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3655,8 +3711,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3700,9 +3757,10 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3790,9 +3848,10 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3893,9 +3952,10 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -4011,9 +4071,10 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -4050,9 +4111,10 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:          logger,
-			p2pClient:       mockP2P,
-			legacyP2PClient: mockPeer,
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: newLegacySubscriberMock(),
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
