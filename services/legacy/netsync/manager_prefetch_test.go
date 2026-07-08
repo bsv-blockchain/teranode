@@ -8,6 +8,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	txmap "github.com/bsv-blockchain/go-tx-map"
+	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/errors"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
@@ -77,26 +79,33 @@ func TestBlockPrefetchEnabled(t *testing.T) {
 	require.True(t, newPrefetchManager(100).BlockPrefetchEnabled())
 }
 
-// TestUsePrefetchIngestion proves OnBlock's gate: prefetch ingestion is used only
-// with a configured budget and off regression net, so regtest keeps the
-// synchronous submit-then-query ordering the acceptance tooling depends on.
+// TestUsePrefetchIngestion proves OnBlock's gate across the full budget {0,
+// positive} × net {mainnet, testnet, regtest} matrix: prefetch ingestion is used
+// only with a configured budget and off regression net, so regtest keeps the
+// synchronous submit-then-query ordering the acceptance tooling depends on. It
+// asserts the gate tracks the shared peerpkg.UseBlockPrefetchIngestion predicate
+// so the sync manager and the read-loop's shouldArmProcessingTimer cannot drift.
 func TestUsePrefetchIngestion(t *testing.T) {
-	withBudget := func(params *chaincfg.Params) *SyncManager {
-		return &SyncManager{
-			chainParams:              params,
-			blockPrefetchBudgetBytes: 100,
-			blockPrefetchBudget:      semaphore.NewWeighted(100),
+	budgets := []int64{0, 100}
+	params := []*chaincfg.Params{&chaincfg.MainNetParams, &chaincfg.TestNetParams, &chaincfg.RegressionNetParams}
+
+	for _, budget := range budgets {
+		for _, p := range params {
+			sm := &SyncManager{chainParams: p}
+			if budget > 0 {
+				sm.blockPrefetchBudgetBytes = budget
+				sm.blockPrefetchBudget = semaphore.NewWeighted(budget)
+			}
+
+			want := budget > 0 && p.Net != wire.RegTestNet
+
+			// The shared predicate is true exactly for a positive budget off regtest.
+			require.Equal(t, want, peerpkg.UseBlockPrefetchIngestion(budget, p.Net))
+
+			// The gate tracks the shared predicate for the manager's own budget/net.
+			require.Equal(t, peerpkg.UseBlockPrefetchIngestion(budget, p.Net), sm.UsePrefetchIngestion())
 		}
 	}
-
-	// Budget disabled → synchronous regardless of network.
-	require.False(t, (&SyncManager{chainParams: &chaincfg.MainNetParams}).UsePrefetchIngestion())
-
-	// Budget enabled off regtest → prefetch path.
-	require.True(t, withBudget(&chaincfg.MainNetParams).UsePrefetchIngestion())
-
-	// Budget enabled on regtest → synchronous path.
-	require.False(t, withBudget(&chaincfg.RegressionNetParams).UsePrefetchIngestion())
 }
 
 func TestAcquireBlockPrefetch_Disabled(t *testing.T) {
@@ -257,27 +266,50 @@ func TestAcquireBlockPrefetch_QuitAbort(t *testing.T) {
 }
 
 func TestLocalReadBackpressured(t *testing.T) {
-	t.Run("disabled: tracks the block backlog", func(t *testing.T) {
+	// stale backdates the progress stamp well past the stall timeout so a
+	// non-empty backlog reads as a hung pipeline rather than progressing work.
+	stale := func(sm *SyncManager) {
+		sm.lastBacklogProgress.Store(time.Now().Add(-time.Hour).UnixNano())
+	}
+
+	t.Run("disabled: suppresses only while a fresh backlog is progressing", func(t *testing.T) {
 		sm := newPrefetchManager(0)
 		require.False(t, sm.localReadBackpressured())
 
+		// A queued / mid-validation backlog with a fresh progress stamp is
+		// self-backpressure: suppress the stall check.
 		sm.blockBacklog.Add(1)
+		sm.noteBacklogProgress()
 		require.True(t, sm.localReadBackpressured())
+
+		// Same backlog, but no progress for longer than the stall timeout: a
+		// genuine hang, so stop suppressing and let the peer rotate.
+		stale(sm)
+		require.False(t, sm.localReadBackpressured())
 
 		sm.blockBacklog.Add(-1)
 		require.False(t, sm.localReadBackpressured())
 	})
 
-	t.Run("enabled: suppresses on backlog or on a budget waiter", func(t *testing.T) {
+	t.Run("enabled: suppresses on a progressing backlog or a budget waiter", func(t *testing.T) {
 		sm := newPrefetchManager(100)
 		require.False(t, sm.localReadBackpressured())
 
-		// A queued / mid-validation backlog is self-backpressure: a stale
-		// last-block-time then reflects our validation speed, not the peer, so the
-		// stall check must be suppressed (a genuinely stalled peer drains the
-		// backlog and the check resumes).
+		// A progressing backlog is self-backpressure: a stale last-block-time
+		// then reflects our validation speed, not the peer.
 		sm.blockBacklog.Add(5)
+		sm.noteBacklogProgress()
 		require.True(t, sm.localReadBackpressured())
+
+		// Progress has stalled past the timeout — a genuine hang. Deliberately do
+		// NOT fall through to the waiter signal: a hung pipeline with a full budget
+		// accumulates waiters, and we WANT rotation then.
+		stale(sm)
+		require.False(t, sm.localReadBackpressured())
+		sm.blockPrefetchWaiters.Add(1)
+		require.False(t, sm.localReadBackpressured())
+		sm.blockPrefetchWaiters.Add(-1)
+
 		sm.blockBacklog.Add(-5)
 		require.False(t, sm.localReadBackpressured())
 
@@ -330,17 +362,33 @@ func TestHandleCheckSyncPeer_PrefetchBackpressure(t *testing.T) {
 		require.Equal(t, sp, sm.loadSyncPeer())
 	})
 
-	t.Run("keeps sync peer while a backlog is draining (slow local validation)", func(t *testing.T) {
+	t.Run("keeps sync peer while a backlog is draining (slow but progressing validation)", func(t *testing.T) {
 		sp := &peerpkg.Peer{}
 		sm := newSyncManager(sp, newStalledState())
 
-		// Blocks queued / mid-validation with no read-loop parked: a stale
-		// last-block-time reflects our validation speed, not the peer. The healthy
-		// peer must be kept (rotation would panic in this minimal SyncManager).
+		// Blocks queued / mid-validation with a fresh progress stamp and no
+		// read-loop parked: the backlog is advancing, so a stale last-block-time
+		// reflects our validation speed, not the peer. The healthy peer must be
+		// kept (rotation would panic in this minimal SyncManager).
 		sm.blockBacklog.Add(3)
+		sm.noteBacklogProgress()
 
 		require.NotPanics(t, func() { sm.handleCheckSyncPeer() })
 		require.Equal(t, sp, sm.loadSyncPeer())
+	})
+
+	t.Run("rotates when the backlog has stalled past the processing timeout", func(t *testing.T) {
+		sp := &peerpkg.Peer{}
+		sm := newSyncManager(sp, newStalledState())
+
+		// A non-empty backlog whose progress stamp predates the stall timeout is a
+		// hung pipeline, not slow-but-progressing validation: suppression lifts and
+		// the rotation path runs (panicking in this minimal SyncManager, which
+		// proves it ran rather than being suppressed).
+		sm.blockBacklog.Add(3)
+		sm.lastBacklogProgress.Store(time.Now().Add(-time.Hour).UnixNano())
+
+		require.Panics(t, func() { sm.handleCheckSyncPeer() })
 	})
 
 	t.Run("rotates a genuinely idle stalled peer (no backlog, no waiters)", func(t *testing.T) {
@@ -352,4 +400,41 @@ func TestHandleCheckSyncPeer_PrefetchBackpressure(t *testing.T) {
 		// which proves it ran rather than being suppressed).
 		require.Panics(t, func() { sm.handleCheckSyncPeer() })
 	})
+}
+
+// TestHandleBlockMsg_SkipsDisconnectedPeer proves the async prefetch path stops
+// validating a peer's queued blocks once that peer is disconnected: after
+// awaitBlockResult disconnects on the first bad block, the remaining FIFO tail
+// must be skipped rather than fully validated. The skip must be a benign
+// ServiceError (not disconnect-worthy) so it only releases budget and logs, and
+// it must return before any FSM/blockchain work (blockchainClient is nil here,
+// so reaching that code would panic).
+func TestHandleBlockMsg_SkipsDisconnectedPeer(t *testing.T) {
+	sm := &SyncManager{
+		logger:                   ulogger.TestLogger{},
+		chainParams:              &chaincfg.MainNetParams,
+		peerStates:               txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+		blockPrefetchBudgetBytes: 100,
+		blockPrefetchBudget:      semaphore.NewWeighted(100),
+	}
+
+	// A zero-value Peer has never been marked connected, so Connected() is false,
+	// standing in for a peer awaitBlockResult has just disconnected.
+	p := &peerpkg.Peer{}
+	require.False(t, p.Connected())
+	sm.peerStates.Set(p, &peerSyncState{
+		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+	})
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		blockHash: chainhash.Hash{0x01},
+		peer:      p,
+	})
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceError), "skip must be benign to shouldDisconnectOnBlockErr")
+
+	// Sanity: the skip is only reached because prefetch ingestion is active; the
+	// synchronous/regtest path is gated out and would proceed toward validation.
+	require.True(t, sm.UsePrefetchIngestion())
 }

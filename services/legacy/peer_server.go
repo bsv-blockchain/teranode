@@ -913,7 +913,7 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 // so the read-loop can download the next block while this one is processed; with
 // prefetch disabled (budget 0) it blocks until the block has been fully processed.
 // Either way blocks are handed to the sync manager in order.
-func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payloadSize int64) {
 	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnBlock",
 		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
 	)
@@ -1023,18 +1023,38 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		// synchronous backpressure) and also spares fabricated blocks the
 		// SerializeSize walk below. Blocks we actually requested take the fast path.
 		if !sm.BlockRequested(sp.Peer, blockHash) {
-			sp.DisconnectWithWarning(fmt.Sprintf("Got unrequested block %s, disconnecting", blockHash))
+			// Disconnect the association PRIMARY, mirroring handleBlockMsg's
+			// unrequested-block eviction (manager.go resolves a stream sub-peer
+			// to its primary and disconnects that). Disconnecting only the
+			// stream sub-peer here would leave the association intact:
+			// handleDonePeerMsg does nothing but assoc.RemoveStream(...) for a
+			// stream peer, so a BlockPriority peer flooding unrequested blocks
+			// over its DATA stream would just re-open the stream and repeat.
+			// Disconnecting the primary instead makes handleDonePeerMsg evict
+			// the whole association (associationMgr.Remove).
+			//
+			// We ALSO disconnect sp itself when it is a distinct stream sub-peer:
+			// handleDonePeerMsg tears down the association's bookkeeping on
+			// primary disconnect but never closes the stream sub-peers' live TCP
+			// connections, so without this the flooding DATA stream keeps reading
+			// off the wire. DisconnectWithWarning is idempotent (atomic guard),
+			// so the sp == primary (non-stream) case disconnects exactly once.
+			target := misbehaviorDisconnectTarget(sp.Peer)
+			target.DisconnectWithWarning(fmt.Sprintf("Got unrequested block %s, disconnecting", blockHash))
+
+			if target != sp.Peer {
+				sp.DisconnectWithWarning(fmt.Sprintf("Got unrequested block %s on stream, disconnecting stream", blockHash))
+			}
+
 			return
 		}
 
-		// Weight the block by its serialized size. On the single-stream path buf is
-		// the raw serialized payload, so len(buf) is that size for free; the
-		// BlockPriority streaming path passes buf == nil, so fall back to
-		// SerializeSize() (which walks the tx set) only there.
-		size := int64(len(buf))
-		if size == 0 {
-			size = int64(msg.SerializeSize())
-		}
+		// Weight the block by its serialized size. The live read-loop uses the
+		// streaming reader, which measures the payload off the wire for free and
+		// hands it in as payloadSize — so the SerializeSize() walk below is only
+		// a belt-and-braces fallback for callers that supply neither the wire
+		// measurement nor the raw bytes.
+		size := blockAdmissionWeight(payloadSize, buf, msg)
 
 		// Bounded async prefetch. Admit the block against the global byte budget
 		// FIRST — this blocks the read-loop only when in-flight blocks already
@@ -1075,6 +1095,44 @@ func shouldDisconnectOnBlockErr(err error) bool {
 	return err != nil &&
 		!errors.Is(err, errors.ErrServiceError) &&
 		!errors.Is(err, errors.ErrStorageError)
+}
+
+// misbehaviorDisconnectTarget resolves the peer whose disconnect evicts a
+// misbehaving peer's entire association. For a stream sub-peer (e.g. a
+// BlockPriority DATA stream) it returns the association's primary peer, so
+// disconnecting the returned target drives handleDonePeerMsg's
+// associationMgr.Remove(...) eviction rather than the RemoveStream(...) that
+// leaves the primary/association intact. For a peer with no association — or a
+// primary peer — it returns the peer itself. This mirrors handleBlockMsg's
+// stream-peer → primary resolution for unrequested blocks.
+func misbehaviorDisconnectTarget(p *peer.Peer) *peer.Peer {
+	if assoc := p.AssociationRef(); assoc != nil {
+		if primary := assoc.PrimaryPeer(); primary != nil {
+			return primary
+		}
+	}
+
+	return p
+}
+
+// blockAdmissionWeight returns the byte weight a block should be charged against
+// the prefetch budget. payloadSize is the exact serialized block size the
+// streaming read-loop measures off the wire (message bytes minus the wire
+// header); it is the cheap, allocation-free measurement and is preferred when
+// positive. buf, when non-nil, is the raw serialized payload from a buffered
+// read path, so len(buf) is its size for free. Only when neither is available
+// does it fall back to msg.SerializeSize(), which walks the entire tx set — the
+// O(all-tx) cost the wire measurement exists to keep off the read-loop.
+func blockAdmissionWeight(payloadSize int64, buf []byte, msg *wire.MsgBlock) int64 {
+	if payloadSize > 0 {
+		return payloadSize
+	}
+
+	if len(buf) > 0 {
+		return int64(len(buf))
+	}
+
+	return int64(msg.SerializeSize())
 }
 
 // awaitBlockResult releases the prefetch budget reserved for an asynchronously

@@ -13,8 +13,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
+	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1168,6 +1170,56 @@ func TestShouldDisconnectOnBlockErr(t *testing.T) {
 
 	// A genuine block validation failure rotates the peer.
 	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
+}
+
+// TestBlockAdmissionWeight verifies the prefetch-budget weight selection used by
+// OnBlock: the wire-measured payload size is preferred, then the raw buffer
+// length, and only as a last resort the O(all-tx) SerializeSize() walk.
+func TestBlockAdmissionWeight(t *testing.T) {
+	msg := wire.NewMsgBlock(wire.NewBlockHeader(1, &chainhash.Hash{}, &chainhash.Hash{}, 1, 1))
+	fallback := int64(msg.SerializeSize())
+	require.Positive(t, fallback, "empty block must still serialize to a positive size")
+
+	// Wire measurement present: used even when buf is also non-nil.
+	require.Equal(t, int64(1000), blockAdmissionWeight(1000, make([]byte, 200), msg))
+
+	// No wire measurement, but the raw buffer is available: use its length.
+	require.Equal(t, int64(200), blockAdmissionWeight(0, make([]byte, 200), msg))
+
+	// Neither available: fall back to SerializeSize().
+	require.Equal(t, fallback, blockAdmissionWeight(0, nil, msg))
+
+	// A non-positive wire measurement must not be trusted; fall through.
+	require.Equal(t, fallback, blockAdmissionWeight(-1, nil, msg))
+}
+
+// TestMisbehaviorDisconnectTarget verifies the unrequested-block eviction
+// resolves a stream sub-peer to its association primary (so the whole
+// association is torn down), while a peer with no association disconnects
+// itself. This mirrors handleBlockMsg's stream-peer → primary resolution.
+func TestMisbehaviorDisconnectTarget(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	// A peer with no association is its own disconnect target.
+	lone := newPeer()
+	require.Same(t, lone, misbehaviorDisconnectTarget(lone))
+
+	// A stream sub-peer resolves to the association primary.
+	primary := newPeer()
+	assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+	primary.SetAssociation(assoc)
+
+	dataStream := newPeer()
+	require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
+	dataStream.SetAssociation(assoc)
+
+	require.Same(t, primary, misbehaviorDisconnectTarget(dataStream))
+
+	// The primary itself resolves to itself.
+	require.Same(t, primary, misbehaviorDisconnectTarget(primary))
 }
 
 // TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown

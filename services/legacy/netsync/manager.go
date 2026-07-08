@@ -77,6 +77,16 @@ const (
 	// clamp binds; the channel holds pointers, so this is ~512 KiB.
 	maxBlockQueueSlots = 65536
 
+	// defaultBlockProcessingStallTimeout bounds how long localReadBackpressured
+	// keeps suppressing the sync-peer stall check while the block backlog is
+	// non-empty but not advancing (see lastBacklogProgress). It is only the
+	// fallback for settings.Legacy.PeerProcessingTimeout — the pre-prefetch
+	// per-message watchdog whose coverage this progress-aware rule restores —
+	// used when a SyncManager has no settings wired (unit tests) or the setting
+	// is unset. Kept equal to that setting's own default so behaviour matches
+	// production when it is configured.
+	defaultBlockProcessingStallTimeout = 3 * time.Minute
+
 	// maxNetworkViolations is the max number of network violations a
 	// sync peer can have before a new sync peer is found.
 	maxNetworkViolations = 3
@@ -445,6 +455,19 @@ type SyncManager struct {
 	// detector must not hold the resulting zero throughput against the sync
 	// peer. Written by the blockHandler goroutines, read by handleCheckSyncPeer.
 	blockBacklog atomic.Int64
+
+	// lastBacklogProgress is the UnixNano time the block backlog last advanced:
+	// the 0->1 enqueue that opened the current backpressure window, or the most
+	// recent block completion. localReadBackpressured suppresses the sync-peer
+	// stall check only while this stays fresh — a backlog that stops advancing
+	// for longer than blockProcessingStallTimeout is a genuine processing hang
+	// (store/validator deadlock, Aerospike overload), not slow-but-progressing
+	// validation, and must be allowed to rotate the peer. This restores the
+	// liveness coverage lost when the per-message watchdog was disarmed for
+	// prefetched blocks, without the false rotation of a merely-slow block.
+	// Written by the blockHandler goroutines (the 0->1 enqueue and every
+	// completion, via noteBacklogProgress), read by handleCheckSyncPeer.
+	lastBacklogProgress atomic.Int64
 
 	// blockPrefetchBudget bounds, by total serialized bytes, the blocks that
 	// have been received from peers but not yet finished processing. It lets
@@ -1331,6 +1354,28 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
+	// Under async prefetch, awaitBlockResult disconnects the source peer on its
+	// first validation failure, but blocks it already admitted keep draining the
+	// queue FIFO until handleDonePeerMsg evicts peerStates — a racy window in
+	// which we would validate the whole tail of a peer that has already proven it
+	// serves bad blocks. Peer.Disconnect* flips the connected flag synchronously
+	// (atomic), so skipping here as soon as that flag drops deterministically
+	// stops the tail, bounding wasted validation to the block already in flight
+	// (disconnect on first validation failure before draining the rest). We test
+	// bmsg.peer — the exact peer OnBlock queued and awaitBlockResult disconnects
+	// (sp.Peer) — NOT the resolved primary: for a BlockPriority stream the failure
+	// disconnects only the stream sub-peer while its association primary stays
+	// connected, so the resolved `peer` would miss precisely the streaming case
+	// this guards. The ServiceError is benign to shouldDisconnectOnBlockErr, so
+	// it only makes awaitBlockResult release budget and log — no second
+	// disconnect. Gated on UsePrefetchIngestion so the regtest/synchronous path,
+	// where block-acceptance tooling feeds blocks in ways this must not disturb,
+	// is completely untouched.
+	if sm.UsePrefetchIngestion() && !bmsg.peer.Connected() {
+		sm.logger.Debugf("[handleBlockMsg][%s] skipping block from disconnected peer %s", bmsg.blockHash, bmsg.peer)
+		return errors.NewServiceError("[handleBlockMsg] skipping block %s from disconnected peer %s", bmsg.blockHash, bmsg.peer)
+	}
+
 	catchingBlocks := false
 
 	sm.logger.Debugf("[handleBlockMsg][%s] checking current FSM state", bmsg.blockHash)
@@ -2176,7 +2221,12 @@ func (sm *SyncManager) blockHandler() {
 				for {
 					select {
 					case msg := <-blockQueue:
+						// Keep the backlog decrement and its progress stamp paired
+						// on every completion path (here the shutdown drain) so the
+						// liveness invariant holds uniformly; rotation is moot during
+						// shutdown, but the uniform pairing is easier to reason about.
 						sm.blockBacklog.Add(-1)
+						sm.noteBacklogProgress()
 
 						if msg.reply != nil {
 							msg.reply <- errors.NewServiceError("sync manager shutting down")
@@ -2190,7 +2240,11 @@ func (sm *SyncManager) blockHandler() {
 
 				err := sm.handleBlockMsg(msg)
 
+				// A completion advances the backlog: stamp it so the stall check
+				// treats the pipeline as live for another window (see
+				// noteBacklogProgress / localReadBackpressured).
 				sm.blockBacklog.Add(-1)
+				sm.noteBacklogProgress()
 
 				if msg.reply != nil {
 					msg.reply <- err
@@ -2243,7 +2297,16 @@ out:
 			case *blockMsg:
 				sm.logger.Debugf("[blockHandler][%s] queueing block for validation", msg.block.Hash())
 
-				sm.blockBacklog.Add(1)
+				// A 0->1 transition opens a fresh backpressure window: stamp its
+				// start so localReadBackpressured can tell slow-but-progressing
+				// validation from a genuine processing hang. Enqueues into an
+				// already-non-empty backlog deliberately do NOT stamp — only
+				// completions advance processing, so letting a peer refresh the
+				// liveness signal merely by feeding more blocks into a hung
+				// pipeline would mask the hang.
+				if sm.blockBacklog.Add(1) == 1 {
+					sm.noteBacklogProgress()
+				}
 
 				// Guard the enqueue with sm.quit. This is the sole feeder of
 				// blockQueue; without the guard, a full queue whose consumer has
@@ -2259,7 +2322,11 @@ out:
 					reply:       msg.reply,
 				}:
 				case <-sm.quit:
+					// Enqueue aborted on shutdown: undo the Add(1) above and keep
+					// the decrement paired with its progress stamp, matching every
+					// other completion path (uniform invariant; harmless here).
 					sm.blockBacklog.Add(-1)
+					sm.noteBacklogProgress()
 
 					if msg.reply != nil {
 						msg.reply <- errors.NewServiceError("sync manager shutting down")
@@ -2359,9 +2426,13 @@ func (sm *SyncManager) BlockPrefetchEnabled() bool {
 // regression net: the block-acceptance tooling depends on submit-then-query
 // ordering, which only the synchronous path (OnBlock returns after the block is
 // fully processed) guarantees. So regtest keeps synchronous ingestion — paired
-// with, and for the same reason as, the regtest exception in BlockRequested.
+// with, and for the same reason as, the regtest exception in BlockRequested. It
+// shares the peerpkg.UseBlockPrefetchIngestion predicate with the read-loop's
+// shouldArmProcessingTimer so both agree on when prefetch is active (a positive
+// budget matches BlockPrefetchEnabled, since the budget semaphore is created iff
+// the byte budget is positive).
 func (sm *SyncManager) UsePrefetchIngestion() bool {
-	return sm.BlockPrefetchEnabled() && sm.chainParams != &chaincfg.RegressionNetParams
+	return peerpkg.UseBlockPrefetchIngestion(sm.blockPrefetchBudgetBytes, sm.chainParams.Net)
 }
 
 // BlockRequested reports whether blockHash is one we have an outstanding
@@ -2476,6 +2547,32 @@ func (sm *SyncManager) ReleaseBlockPrefetch(weight int64) {
 	sm.blockPrefetchBudget.Release(weight)
 }
 
+// noteBacklogProgress records that the block backlog just advanced — a block was
+// enqueued to open a fresh backpressure window, or one finished processing. It
+// must run on every backlog transition that constitutes progress: the 0->1
+// enqueue and every completion decrement. localReadBackpressured treats a stamp
+// older than blockProcessingStallTimeout as a hung pipeline rather than
+// slow-but-progressing validation, so keeping this current is what lets the
+// stall detector distinguish the two. Enqueues into an already-non-empty backlog
+// deliberately do NOT call this (only completions advance processing).
+func (sm *SyncManager) noteBacklogProgress() {
+	sm.lastBacklogProgress.Store(time.Now().UnixNano())
+}
+
+// blockProcessingStallTimeout is how long a non-empty block backlog may go
+// without advancing before localReadBackpressured stops suppressing the
+// sync-peer stall check. It tracks settings.Legacy.PeerProcessingTimeout — the
+// per-message watchdog that this progress-aware rule replaces for prefetched
+// blocks — and falls back to defaultBlockProcessingStallTimeout when settings
+// are absent (unit-test SyncManagers) or the value is unset.
+func (sm *SyncManager) blockProcessingStallTimeout() time.Duration {
+	if sm.settings != nil && sm.settings.Legacy.PeerProcessingTimeout > 0 {
+		return sm.settings.Legacy.PeerProcessingTimeout
+	}
+
+	return defaultBlockProcessingStallTimeout
+}
+
 // localReadBackpressured reports whether the node is currently throttling its
 // own network reads because local block processing cannot keep up. The stall
 // detector skips its checks while this holds, since zero throughput then
@@ -2484,14 +2581,23 @@ func (sm *SyncManager) ReleaseBlockPrefetch(weight int64) {
 // disabled it is the original condition of any block queued or mid-validation.
 func (sm *SyncManager) localReadBackpressured() bool {
 	// A non-empty local backlog means blocks are queued or mid-validation, so a
-	// stale last-block-time and zero throughput reflect our own validation speed,
-	// not the sync peer's health — suppress the stall check until it drains. This
-	// cannot mask a real peer stall indefinitely: a genuinely stalled peer stops
-	// feeding the queue, the backlog drains, and the check resumes. Losing this
-	// (checking only the waiter signal below) would rotate a healthy peer whenever
-	// a single block was merely slow to validate while the budget was not full.
+	// stale last-block-time and zero throughput normally reflect our own
+	// validation speed, not the sync peer's health. Suppress the stall check —
+	// but only while the backlog is still ADVANCING. Disarming the per-message
+	// watchdog for prefetched blocks removed the only timeout over the processing
+	// phase; if we suppressed on any non-zero backlog, a genuine hang
+	// (store/validator deadlock, Aerospike overload) would leave the backlog
+	// pinned >=1 forever and the node would silently stop syncing with no
+	// rotation. So a backlog that has not advanced for longer than
+	// blockProcessingStallTimeout is treated as a stalled pipeline, not
+	// slow-but-progressing validation: stop suppressing so handleCheckSyncPeer
+	// logs and rotates — restoring the pre-prefetch liveness signal without the
+	// false rotation of a merely-slow block that motivated disarming the
+	// watchdog. Deliberately do NOT fall through to the waiter check when the
+	// backlog is stale: a hung pipeline with a full budget accumulates waiters,
+	// and we WANT rotation then.
 	if sm.blockBacklog.Load() > 0 {
-		return true
+		return time.Since(time.Unix(0, sm.lastBacklogProgress.Load())) < sm.blockProcessingStallTimeout()
 	}
 
 	// Under prefetch also suppress while a read-loop is parked in
