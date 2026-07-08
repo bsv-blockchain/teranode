@@ -171,6 +171,25 @@ func TestDisconnectBannedPeerByID_UsesNetworkDisconnectWhenAvailable(t *testing.
 		"ban path must sever the libp2p connection when the client supports it")
 }
 
+func TestDisconnectPeersOnBanList_SeversConnectionEvenWhenNotInRegistry(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	pid := mustNewPeerID(t)
+	require.Equal(t, 0, reg.Count(), "peer intentionally absent from the registry")
+
+	s.banList = &recordingBanList{banned: map[string]bool{"198.51.100.9": true}}
+	client := &disconnectCapableClient{}
+	client.peers = []p2pMessageBus.PeerInfo{{
+		ID:    pid.String(),
+		Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", pid)},
+	}}
+	s.P2PClient = client
+
+	s.disconnectPeersOnBanList(context.Background(), "sweep")
+
+	require.Equal(t, []peer.ID{pid}, client.disconnected,
+		"sweep must still sever the libp2p connection when the client supports it")
+}
+
 func TestServer_ConnectPeer_RefusesBannedAddress(t *testing.T) {
 	s, _ := newServerWithLocalRegistry(t)
 	s.banList = &recordingBanList{banned: map[string]bool{"198.51.100.9": true}}

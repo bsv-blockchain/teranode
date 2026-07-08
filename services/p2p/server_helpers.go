@@ -60,8 +60,9 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	}
 
 	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing.
-	if s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
+	// forwarding, or further processing. Own messages skip the registry
+	// round-trip; they return at the isOwnMessage check below.
+	if !s.isOwnMessage(fromID, blockMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
 		return
 	}
 
@@ -179,8 +180,9 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	}
 
 	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing.
-	if s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
+	// forwarding, or further processing. Own messages skip the registry
+	// round-trip; they return at the isOwnMessage check below.
+	if !s.isOwnMessage(fromID, subtreeMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
 		return
 	}
 
@@ -404,8 +406,10 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
-	// Drop messages from banned peers before any registration or further processing.
-	if s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
+	// Drop messages from banned peers before any registration or further
+	// processing. Own messages skip the registry round-trip; they return at
+	// the isOwnMessage check below.
+	if !s.isOwnMessage(fromID, rejectedTxMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
 		return
 	}
 
@@ -1154,6 +1158,12 @@ func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 		return
 	}
 
+	// Without network severance a banned peer stays connected at the libp2p
+	// layer forever, so the periodic sweep would re-match it on every pass.
+	// Only act when there is something to do: the peer re-entered the registry
+	// or the client can actually close the connection.
+	_, canSever := s.P2PClient.(networkDisconnector)
+
 	for _, p := range s.P2PClient.GetPeers() {
 		for _, addr := range p.Addrs {
 			ip := extractIPFromMultiaddr(addr)
@@ -1167,7 +1177,9 @@ func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 				break
 			}
 
-			s.disconnectBannedPeerByID(ctx, pid, reason)
+			if _, inRegistry := s.getPeer(pid); inRegistry || canSever {
+				s.disconnectBannedPeerByID(ctx, pid, reason)
+			}
 
 			break
 		}
