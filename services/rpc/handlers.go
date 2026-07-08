@@ -1604,15 +1604,13 @@ func calculateMedianTime(ctx context.Context, blockchainClient blockchain.Client
 	return medianTimestampUint32, nil
 }
 
-// isSubscriberActive checks whether a blockchain subscriber whose source
-// contains substr is currently registered. This lets RPC handlers skip
-// expensive calls to services that are not running.
 // isSubscriberActive checks whether source is present in the blockchain
 // subscriber list. This lets RPC handlers skip expensive calls to services
 // that are not running.
 func isSubscriberActive(ctx context.Context, s *RPCServer, source string) bool {
 	subs, err := s.blockchainClient.GetSubscribers(ctx)
 	if err != nil {
+		s.logger.Warnf("[isSubscriberActive] GetSubscribers failed, treating %s as inactive: %v", source, err)
 		return false
 	}
 	for _, src := range subs {
