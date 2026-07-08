@@ -216,6 +216,17 @@ type BlockValidation struct {
 	// (uint64 stored as any). Reset on success / MinedSet shortcut.
 	setMinedRetries sync.Map
 
+	// setMinedRetryPending marks blocks whose setTxMined retry is currently waiting
+	// out its backoff in a scheduleSetMinedRetry goroutine. Keyed by chainhash.Hash,
+	// value is struct{}. While an entry is present the setMinedChan worker skips
+	// re-processing that hash, so re-triggers arriving during the backoff window
+	// (e.g. a child re-triggering its not-yet-mined parent) do not race a second
+	// setTxMinedStatus and inflate setMinedRetries toward a premature drop. Set when
+	// a retry is scheduled, cleared when it fires (just before the re-enqueue) or on
+	// shutdown. Distinct from blockHashesCurrentlyValidated so the parent-finalization
+	// wait in checkParentProcessingComplete is unaffected by the backoff window.
+	setMinedRetryPending sync.Map
+
 	// revalidateBlockChan receives blocks that need revalidation
 	revalidateBlockChan chan revalidateBlockData
 
@@ -492,6 +503,16 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		}()
 	}
 
+	// Register the setMinedChan worker in backgroundTasks here - synchronously, before
+	// start() is launched - so Wait() can never observe a zero counter during the startup
+	// window. start() runs asynchronously and only reaches the worker launch after the
+	// (potentially long) mined-not-set recovery g.Wait(); registering there would leave a
+	// window in which Server.Stop() -> Wait() sees zero, returns without waiting for the
+	// worker, and races the later Add from zero (illegal WaitGroup use, can panic). start()
+	// balances this Add: the worker goroutine defers Done(), and the single early-return
+	// path that never launches the worker calls Done() itself.
+	bv.backgroundTasks.Add(1)
+
 	go func() {
 		if err := bv.start(ctx); err != nil {
 			// Check if context is done before logging
@@ -538,6 +559,11 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 		// wait for all blocks to be processed
 		if err := g.Wait(); err != nil {
+			// The setMinedChan worker (registered in backgroundTasks by NewBlockValidation
+			// before start() was launched) never starts on this early-return path, so
+			// release its registration here to keep Wait() balanced.
+			u.backgroundTasks.Done()
+
 			// we cannot start the block validation, we are in a bad state
 			return errors.NewServiceError("[BlockValidation:start] failed to start, process old block mined/subtrees sets", err)
 		}
@@ -569,7 +595,13 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	// start a worker to process the setMinedChan
 	u.logger.Infof("[BlockValidation:start] starting setMined goroutine")
 
+	// This worker is registered in backgroundTasks by NewBlockValidation (before start()
+	// was launched, so shutdown cannot race the registration on a zero counter); this
+	// goroutine owns the matching Done(). scheduleSetMinedRetry does its own Add(1)/Done()
+	// from inside this worker, always while this registration keeps the counter positive,
+	// so those never transition the counter from zero either.
 	go func() {
+		defer u.backgroundTasks.Done()
 		defer u.logger.Infof("[BlockValidation:start] setMinedChan worker stopped")
 
 		for {
@@ -604,6 +636,15 @@ func (u *BlockValidation) start(ctx context.Context) error {
 			if blockHeaderMeta.MinedSet {
 				u.logger.Infof("[BlockValidation:start][%s] block already has mined_set true, skipping setTxMined", blockHash.String())
 				u.setMinedRetries.Delete(*blockHash)
+				continue
+			}
+
+			// A retry for this block is already waiting out its backoff; the scheduled
+			// goroutine will re-enqueue it when it fires. Skip re-processing so re-triggers
+			// during the backoff window don't race a second setTxMinedStatus and inflate
+			// the retry counter (tripping the manual_intervention_required drop early).
+			if _, retryPending := u.setMinedRetryPending.Load(*blockHash); retryPending {
+				u.logger.Debugf("[BlockValidation:start][%s] setTxMined retry already pending, skipping", blockHash.String())
 				continue
 			}
 
@@ -659,21 +700,12 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 					backoff := setMinedRetryBackoff(int(attempt))
 					u.logger.Warnf("[BlockValidation:start][%s] setTxMined retry %d/%d in %s", blockHash.String(), attempt, setMinedMaxRetries, backoff)
-					time.Sleep(backoff)
 
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-
-					// put the block back in the setMinedChan for retry — non-blocking,
-					// because this runs on the worker goroutine that is the sole drainer
-					// of setMinedChan; a blocking self-send into a full channel wedges it.
-					// Re-queue order is best-effort (an overflow entry is only delivered
-					// after the channel drains); correctness relies on the worker's
-					// idempotent MinedSet/tryClaim guards, not on FIFO delivery.
-					u.enqueueSetMined(blockHash)
+					// Off-load the backoff wait + re-enqueue to a dedicated goroutine so this
+					// worker keeps draining setMinedChan (and its overflow) during the backoff
+					// instead of sleeping inline. The re-enqueue still goes through the
+					// non-blocking, overflow-backed enqueueSetMined.
+					u.scheduleSetMinedRetry(ctx, blockHash, backoff)
 					return
 				}
 
@@ -876,6 +908,66 @@ func (u *BlockValidation) popSetMinedOverflow() *chainhash.Hash {
 	}
 
 	return nil
+}
+
+// scheduleSetMinedRetry waits out backoff in a dedicated goroutine and then re-enqueues
+// blockHash for the setMinedChan worker, rather than sleeping on the worker itself.
+//
+// The worker is the sole drainer of setMinedChan (and its overflow set); sleeping there
+// stops it draining for the whole backoff, so mined-status notifications back up behind a
+// single failing block. Off-loading keeps the worker draining while the retry waits. The
+// re-enqueue goes through enqueueSetMined, which never blocks (it falls back to the
+// overflow set), so only the timer is a cancellable wait.
+//
+// The goroutine is registered with backgroundTasks and cancellable via ctx so it can
+// never outlive shutdown. The block is marked retry-pending (setMinedRetryPending) for
+// the whole backoff window: while a retry is pending the worker skips re-processing the
+// same hash, so a re-trigger arriving during the backoff (e.g. a child re-triggering its
+// not-yet-mined parent) does not race a second setTxMinedStatus and inflate the retry
+// counter toward a premature manual_intervention_required drop. This restores the dedup
+// the old inline time.Sleep provided implicitly.
+func (u *BlockValidation) scheduleSetMinedRetry(ctx context.Context, blockHash *chainhash.Hash, backoff time.Duration) {
+	u.setMinedRetryPending.Store(*blockHash, struct{}{})
+
+	u.backgroundTasks.Add(1)
+
+	go func() {
+		defer u.backgroundTasks.Done()
+
+		t := time.NewTimer(backoff)
+		defer t.Stop()
+
+		select {
+		case <-t.C:
+			// Clear the pending marker before re-enqueueing so the worker re-claims and
+			// re-processes this hash; the tiny window between clear and re-pickup can at
+			// most let one already-queued duplicate through, which is equivalent to the
+			// retry itself (same hash) and still advances the counter by exactly one.
+			u.setMinedRetryPending.Delete(*blockHash)
+			u.enqueueSetMined(blockHash)
+		case <-ctx.Done():
+			u.setMinedRetryPending.Delete(*blockHash)
+		}
+	}()
+}
+
+// isParentFinalizing reports whether blockHash is still going through setTxMined
+// finalization: either actively being processed by the setMinedChan worker
+// (blockHashesCurrentlyValidated) or waiting out a retry backoff in a
+// scheduleSetMinedRetry goroutine (setMinedRetryPending). checkParentProcessingComplete
+// uses this so a child keeps waiting across its parent's whole retry window - the
+// backoff is now off-loaded and releases the blockHashesCurrentlyValidated claim
+// immediately, so without also consulting setMinedRetryPending a child would fall
+// straight through to the bounded parent-mined wait and give up (block-found churn)
+// while a transiently-failing parent is still retrying.
+func (u *BlockValidation) isParentFinalizing(blockHash *chainhash.Hash) bool {
+	if u.blockHashesCurrentlyValidated.Exists(*blockHash) {
+		return true
+	}
+
+	_, retryPending := u.setMinedRetryPending.Load(*blockHash)
+
+	return retryPending
 }
 
 func (u *BlockValidation) processSubtreesNotSet(ctx context.Context, g *errgroup.Group) {
@@ -2624,10 +2716,36 @@ func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 	return
 }
 
-// Wait waits for all background tasks to complete.
-// This should be called during shutdown to ensure graceful termination.
-func (u *BlockValidation) Wait() {
-	u.backgroundTasks.Wait()
+// Wait blocks until all background tasks complete or ctx is cancelled, whichever
+// happens first. It must honour ctx: the setMinedChan worker is now tracked in
+// backgroundTasks and only exits when its own (Init-scoped) ctx is cancelled. The
+// daemon cancels that shared ctx before Server.Stop() runs, so tasks drain promptly
+// there; but embedded/test shutdown paths may tear the server down without cancelling
+// it first. Returning on ctx.Done() bounds Wait() to the caller's stop deadline in
+// those cases (the still-running worker is reaped at process exit) instead of hanging
+// forever and silently discarding the deadline.
+//
+// Two accepted costs on those abnormal paths (ctx fires before the tasks drain),
+// deliberately traded for not hanging shutdown:
+//   - Wait() now blocks for the full stop budget rather than returning promptly (it did
+//     before the worker was tracked).
+//   - the inner backgroundTasks.Wait() goroutine and its done channel leak until the
+//     worker eventually exits. sync.WaitGroup has no cancellable wait, and on these paths
+//     the worker itself is already leaking (its ctx was never cancelled), so this adds
+//     nothing that outlives the worker. The daemon path never hits this.
+func (u *BlockValidation) Wait(ctx context.Context) {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		u.backgroundTasks.Wait()
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		u.logger.Warnf("[BlockValidation] Wait aborted before background tasks drained: %s", ctx.Err())
+	}
 }
 
 // StopCaches stops the background cleanup goroutines for all expiring caches.

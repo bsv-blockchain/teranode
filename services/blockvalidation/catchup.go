@@ -503,49 +503,41 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 
 	// Walk through peer's headers (oldest to newest) to find the highest common ancestor
 	commonAncestorIndex := -1
+	var commonAncestorMeta *model.BlockHeaderMeta
 	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current UTXO height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
 
 	for i, header := range peerHeaders {
-		exists, err := u.blockchainClient.GetBlockExists(ctx, header.Hash())
+		// GetBlockHeader conveys both existence and height in a single RPC: a
+		// not-found error means the block is absent from our chain (stop the search),
+		// while any other error is a genuine failure.
+		_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
 		if err != nil {
-			return errors.NewProcessingError("[catchup][%s] failed to check if block %s exists: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
-		}
-
-		if exists {
-			// Get the block's height to ensure it's not ahead of our UTXO store
-			_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
-			if err != nil {
-				return errors.NewProcessingError("[catchup][%s] failed to get metadata for block %s: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
+				break // Once we find a header we don't have, stop
 			}
 
-			// Only consider blocks at or below our current UTXO height as potential common ancestors
-			// Blocks ahead of our UTXO height exist in blockchain store but aren't fully processed yet
-			if meta.Height > currentHeight {
-				u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of current UTXO height %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
-				break
-			}
-
-			commonAncestorIndex = i // Keep updating to find the LAST match
-			u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
-		} else {
-			u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
-			break // Once we find a header we don't have, stop
+			return errors.NewProcessingError("[catchup][%s] failed to get header for block %s: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
 		}
+
+		// Only consider blocks at or below our current UTXO height as potential common ancestors
+		// Blocks ahead of our UTXO height exist in blockchain store but aren't fully processed yet
+		if meta.Height > currentHeight {
+			u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of current UTXO height %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
+			break
+		}
+
+		commonAncestorIndex = i // Keep updating to find the LAST match
+		commonAncestorMeta = meta
+		u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
 	}
 
 	if commonAncestorIndex == -1 {
 		return errors.NewProcessingError("[catchup][%s] no common ancestor found in peer headers", catchupCtx.blockUpTo.Hash().String())
 	}
 
-	// Get the common ancestor header and its metadata
-	commonAncestorHeader := peerHeaders[commonAncestorIndex]
-	commonAncestorHash := commonAncestorHeader.Hash()
-
-	// Get metadata for the common ancestor
-	_, commonAncestorMeta, err := u.blockchainClient.GetBlockHeader(ctx, commonAncestorHash)
-	if err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to get metadata for common ancestor %s: %v", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), err)
-	}
+	// The common ancestor's metadata was already fetched during the walk above.
+	commonAncestorHash := peerHeaders[commonAncestorIndex].Hash()
 
 	if commonAncestorMeta.Invalid {
 		return errors.NewBlockInvalidError("[catchup][%s] common ancestor %s at height %d is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)

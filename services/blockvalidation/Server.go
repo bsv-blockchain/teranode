@@ -1102,9 +1102,11 @@ func (u *Server) Stop(ctx context.Context) error {
 		u.blockCatchupAttempts.Stop()
 	}
 
-	// Wait for all background tasks in BlockValidation to complete
+	// Wait for all background tasks in BlockValidation to complete, bounded by the
+	// caller's stop deadline (ctx) so a worker whose Init ctx was not cancelled first
+	// cannot hang shutdown indefinitely.
 	if u.blockValidation != nil {
-		u.blockValidation.Wait()
+		u.blockValidation.Wait(ctx)
 		u.blockValidation.StopCaches()
 
 		// DC11: drain the BlockValidation-owned invalid-block kafka producer via
@@ -1525,43 +1527,51 @@ func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model
 	delay := 10 * time.Millisecond
 	maxDelay := 10 * time.Second
 
-	// check if the parent block is being validated, then wait for it to finish.
-	blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock)
+	parentHash := block.Header.HashPrevBlock
 
-	if blockBeingFinalized {
-		u.logger.Infof("[processBlockFound][%s] parent block is being validated (hash: %s), waiting for it to finish: validated %v",
-			block.Hash().String(),
-			block.Header.HashPrevBlock.String(),
-			u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock),
-		)
+	// Wait while the parent is still finalizing - either actively being processed by the
+	// setMined worker, or waiting out a setTxMined retry backoff. Consulting
+	// setMinedRetryPending (via isParentFinalizing) keeps the child blocked across the
+	// parent's whole retry window; the backoff is now off-loaded and releases the
+	// blockHashesCurrentlyValidated claim immediately, so without this the child would
+	// fall straight through to the bounded parent-mined wait and give up (block-found
+	// churn) while a transiently-failing parent is still retrying.
+	if !u.blockValidation.isParentFinalizing(parentHash) {
+		return
+	}
 
-		retries := 0
+	u.logger.Infof("[processBlockFound][%s] parent block is being finalized (hash: %s), waiting for it to finish",
+		block.Hash().String(),
+		parentHash.String(),
+	)
 
-		for {
-			blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock)
+	retries := 0
 
-			if !blockBeingFinalized {
-				break
-			}
-
-			if (retries % 10) == 0 {
-				u.logger.Infof("[processBlockFound][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: validated %v",
-					block.Hash().String(),
-					retries,
-					block.Header.HashPrevBlock.String(),
-					u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock),
-				)
-			}
-
-			time.Sleep(delay)
-
-			delay *= 2
-			if delay > maxDelay {
-				delay = maxDelay
-			}
-
-			retries++
+	for u.blockValidation.isParentFinalizing(parentHash) {
+		if (retries % 10) == 0 {
+			u.logger.Infof("[processBlockFound][%s] parent block is still (%d) being finalized (hash: %s), waiting for it to finish",
+				block.Hash().String(),
+				retries,
+				parentHash.String(),
+			)
 		}
+
+		// Honour shutdown: the parent's retry window can be long (worst case ~111s), so a
+		// bare sleep here would keep this goroutine alive well past a stop request.
+		select {
+		case <-ctx.Done():
+			u.logger.Warnf("[processBlockFound][%s] context cancelled while waiting for parent %s to finalize: %s",
+				block.Hash().String(), parentHash.String(), ctx.Err())
+			return
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+
+		retries++
 	}
 }
 
