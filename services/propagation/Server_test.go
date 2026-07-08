@@ -759,7 +759,7 @@ func Test_handleMultipleTx(t *testing.T) {
 // orderedErrValidator returns a Validator whose Validate method fails with an
 // error that embeds the tx's txid, so a caller can verify per-tx error order.
 type orderedErrValidator struct {
-	validator.MockValidatorClient
+	validator.MockValidator
 }
 
 func (m *orderedErrValidator) Validate(_ context.Context, tx *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {

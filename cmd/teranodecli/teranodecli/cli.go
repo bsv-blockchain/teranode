@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 
 	"github.com/bsv-blockchain/teranode/cmd/aerospikekafkaconnector"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
@@ -201,8 +202,29 @@ func Start(args []string, version, commit string) {
 				logger, tSettings, *kafkaURL, *txid, *namespace, *set, *statsInterval)
 		}
 	case "utxopersister":
+		endHeight := uint32Flag(cmd.FlagSet, "end-height", 0,
+			"Build the UTXO set up to this block height and exit (one-shot). 0 = run the service.")
+		startHeight := uint32Flag(cmd.FlagSet, "start-height", 0,
+			"Start the one-shot build on top of the existing utxo-set at this height (0 = genesis). Requires --end-height.")
+		updateLastProcessed := cmd.FlagSet.Bool("update-last-processed", false,
+			"After a one-shot build, write lastProcessed.dat = end-height so a later service start resumes there.")
+
 		cmd.Execute = func(args []string) error {
+			if *endHeight > 0 {
+				if *startHeight >= *endHeight {
+					return errors.NewProcessingError("--start-height (%d) must be less than --end-height (%d)", *startHeight, *endHeight)
+				}
+
+				return utxopersister.RunUtxoPersisterToHeight(logger, tSettings,
+					*startHeight, *endHeight, *updateLastProcessed)
+			}
+
+			if *startHeight > 0 || *updateLastProcessed {
+				return errors.NewProcessingError("--start-height / --update-last-processed require --end-height")
+			}
+
 			utxopersister.RunUtxoPersister(logger, tSettings)
+
 			return nil
 		}
 	case "seeder":
@@ -210,7 +232,7 @@ func Start(args []string, version, commit string) {
 		hash := cmd.FlagSet.String("hash", "", "Hash of the UTXO set / headers to process.")
 		skipHeaders := cmd.FlagSet.Bool("skipHeaders", false, "Skip processing headers.")
 		skipUTXOs := cmd.FlagSet.Bool("skipUTXOs", false, "Skip processing UTXOs.")
-		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat exists.")
+		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat or BlockAssembler state already exists.")
 		cmd.Execute = func(args []string) error {
 			if *inputDir == "" {
 				return errors.NewProcessingError("Please provide an inputDir")
@@ -220,9 +242,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Please provide a hash")
 			}
 
-			seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force)
-
-			return nil
+			return seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force)
 		}
 	case "bitcointoutxoset":
 		blockchainDir := cmd.FlagSet.String("bitcoinDir", "", "Location of bitcoin data")
@@ -561,4 +581,32 @@ func formatSatoshis(satoshis uint64) string {
 	}
 
 	return string(result)
+}
+
+// uint32Value is a flag.Value that parses into a uint32, rejecting values
+// outside the uint32 range at parse time rather than silently truncating.
+type uint32Value uint32
+
+func (u *uint32Value) Set(s string) error {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return err
+	}
+
+	*u = uint32Value(n)
+
+	return nil
+}
+
+func (u *uint32Value) String() string {
+	return strconv.FormatUint(uint64(*u), 10)
+}
+
+// uint32Flag registers a uint32-typed flag on fs and returns a pointer to its value.
+func uint32Flag(fs *flag.FlagSet, name string, value uint32, usage string) *uint32 {
+	p := new(uint32)
+	*p = value
+	fs.Var((*uint32Value)(p), name, usage)
+
+	return p
 }

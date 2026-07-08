@@ -36,9 +36,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -55,20 +57,45 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// batchItem represents a single transaction in a batch along with its completion channel.
+// batchItem represents a single transaction in a batch along with its completion state.
 // This type serves as the fundamental unit in the transaction batch processing system:
 //
 // - tx: Contains the parsed Bitcoin transaction (bt.Tx) ready for submission
-// - done: Channel used for asynchronous completion notification and error reporting
+// - group: Shared completion.Group the submitting caller waits on
+// - result: Terminal error for this transaction (nil on success)
 //
 // When a transaction is submitted through the batching system, it's wrapped in a batchItem
 // and placed in the batch queue. Once the transaction is processed (either successfully
-// or with an error), the result is sent through the done channel, allowing the original
-// caller to continue execution with proper error handling.
+// or with an error), the dispatcher writes result and calls Done on the shared group,
+// allowing the original caller to continue execution with proper error handling.
 type batchItem struct {
-	ctx  context.Context
-	tx   *bt.Tx     // Bitcoin transaction to process
-	done chan error // Channel to signal completion and return any error
+	ctx context.Context
+	tx  *bt.Tx // Bitcoin transaction to process
+
+	// group is the shared completion group the submitter waits on; the
+	// dispatcher calls Done exactly once per item via complete.
+	group *completion.Group
+
+	// completed guards exactly-once completion (CAS).
+	completed atomic.Bool
+
+	// result holds the terminal error for this item (nil on success). Written
+	// by the CAS winner, after the CAS and before group.Done(); safe to read
+	// only once group.Wait returns nil.
+	result error
+}
+
+// complete writes err into the item's result slot and marks the shared group's
+// completion counter. Idempotent: only the first call has any effect, so a
+// panic-recovery sweep over an already-completed item never double-signals or
+// races a second write into result.
+func (it *batchItem) complete(err error) {
+	if it.completed.CompareAndSwap(false, true) {
+		it.result = err
+		if it.group != nil {
+			it.group.Done()
+		}
+	}
 }
 
 // Client implements a batching transaction client for the BSV propagation service.
@@ -247,17 +274,30 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	if c.batchSize > 0 {
-		done := make(chan error)
+		// Single-item submissions allocate a completion.Group (a struct plus one
+		// internal channel) where the pre-group code allocated a single bare
+		// channel — a net +1 small heap allocation per call. This is an accepted
+		// trade-off: it keeps one uniform completion mechanism across the single-
+		// and multi-item (PutBatch) paths. The group's real win — eliminating the
+		// per-item collector goroutine and timer — applies to the multi-item store
+		// batchers; here it is purely the wait primitive.
+		group := completion.NewGroup(1)
+		item := &batchItem{
+			ctx:   ctx,
+			tx:    tx,
+			group: group,
+		}
 
-		c.batcher.PutCtx(ctx, &batchItem{
-			ctx:  ctx,
-			tx:   tx,
-			done: done,
-		})
+		c.batcher.PutCtx(ctx, item)
 
-		err := <-done
+		// group.Wait(context.Background(), 0): 0 timeout allocates no timer and
+		// a background context never cancels, so this blocks purely on the
+		// dispatcher completing the item — identical to the previous bare
+		// <-done receive (no timeout, no ctx arm). It can only return nil, so
+		// the result slot is always safe to read here.
+		_ = group.Wait(context.Background(), 0)
 
-		return err
+		return item.result
 	}
 
 	// Try gRPC first
@@ -354,15 +394,15 @@ func (c *Client) TriggerBatcher() {
 // This method provides uniform error handling for batch processing failures:
 //
 //  1. Logs the error with the provided format string and additional context
-//  2. Distributes the error to all transaction items in the batch through their
-//     individual completion channels
+//  2. Distributes the error to all transaction items in the batch by completing
+//     each on the shared completion group
 //  3. Ensures all goroutines waiting on transaction completion are unblocked
 //
 // This centralized error handling ensures consistent behavior across different
 // batch processing failure scenarios.
 //
 // Parameters:
-//   - batch: Slice of transaction items with completion channels
+//   - batch: Slice of transaction items sharing a completion group
 //   - err: Error to propagate to all transactions
 //   - format: Log message format string
 //   - args: Additional arguments for the format string
@@ -374,7 +414,7 @@ func (c *Client) handleBatchError(batch []*batchItem, err error, format string, 
 	c.logger.Errorf("%s", wrappedErr.Error())
 
 	for _, tx := range batch {
-		tx.done <- wrappedErr
+		tx.complete(wrappedErr)
 	}
 
 	return wrappedErr
@@ -385,21 +425,36 @@ func (c *Client) handleBatchError(batch []*batchItem, err error, format string, 
 //
 // 1. Iterating through each transaction in the batch
 // 2. Mapping response errors to the corresponding transactions
-// 3. Sending appropriate errors or success notifications via completion channels
+// 3. Completing each transaction on the shared completion group with its error or success
 // 4. Ensuring all waiting goroutines are unblocked with the correct status
 //
 // The method ensures that even within a successful batch, individual transaction
 // errors are properly captured and reported.
 //
 // Parameters:
-//   - batch: Slice of transaction items with completion channels
+//   - batch: Slice of transaction items sharing a completion group
 //   - response: gRPC response containing per-transaction error status
 func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_api.ProcessTransactionBatchResponse) {
+	// The server must return exactly one result per batch item. If it returns
+	// fewer (a contract violation), ranging over response.Errors would leave the
+	// tail items un-completed and strand their callers forever on group.Wait
+	// (single-item ProcessTransaction waits unbounded with no ctx arm). Guard the
+	// length and fail every item with a clear error rather than stranding them or
+	// index-panicking into the sweep.
+	if len(response.Errors) != len(batch) {
+		err := errors.NewProcessingError("[handleBatchResponse] propagation returned %d results for a batch of %d", len(response.Errors), len(batch))
+		for _, item := range batch {
+			item.complete(err)
+		}
+
+		return
+	}
+
 	for i, err := range response.Errors {
 		if !err.IsNil() { // don't do err != nil, proto can't return nil TError
-			batch[i].done <- err
+			batch[i].complete(err)
 		} else {
-			batch[i].done <- nil
+			batch[i].complete(nil)
 		}
 	}
 }
@@ -418,7 +473,7 @@ func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_a
 //
 // Parameters:
 //   - ctx: Context for HTTP request processing
-//   - batch: Slice of transaction items with completion channels
+//   - batch: Slice of transaction items sharing a completion group
 //   - txs: Raw transaction bytes for each transaction in the batch
 //
 // Returns:
@@ -465,7 +520,7 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, it
 	c.logger.Debugf("[processBatchViaHTTP] Successfully processed %d transactions via HTTP fallback", len(batch))
 
 	for _, tx := range batch {
-		tx.done <- nil
+		tx.complete(nil)
 	}
 
 	return nil
@@ -488,15 +543,30 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, it
 // 4. For other types of errors, properly unwraps and propagates them
 //
 // The method ensures all transactions in the batch receive appropriate error
-// feedback through their individual completion channels.
+// feedback by completing each on the shared completion group.
 //
 // Parameters:
 //   - ctx: Context for batch processing with timeout/cancellation
-//   - batch: Slice of transaction items with completion channels
+//   - batch: Slice of transaction items sharing a completion group
 //
 // Returns:
 //   - error: Error if batch processing fails at the transport level
 func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
+	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
+	// panic part-way through would strand every submitter blocked on group.Wait
+	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
+	// re-completing an item an earlier stage already completed is a no-op.
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.Errorf("[ProcessTransactionBatch] recovered panic, failing %d batch item(s): %v", len(batch), r)
+
+			err := errors.NewProcessingError("panic in ProcessTransactionBatch: %v", r)
+			for _, item := range batch {
+				item.complete(err)
+			}
+		}
+	}()
+
 	// Create a slice of raw transaction bytes for the gRPC request
 	items := make([]*propagation_api.BatchTransactionItem, len(batch))
 

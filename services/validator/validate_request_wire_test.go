@@ -140,3 +140,52 @@ func TestUnconfirmedParentsAtCandidateHeight_WireRoundTrip(t *testing.T) {
 		require.False(t, reconstructed.UnconfirmedParentsAtCandidateHeight)
 	})
 }
+
+// TestSkipScriptValidationAndOutpointOnlySpend_WireRoundTrip pins the
+// client-build → wire → server-reconstruction path for skip_script_validation
+// (field 13) and outpoint_only_spend (field 14). Both flags are set by the
+// below-checkpoint fast path on the netsync leg; a silently-dropped flag
+// would cause the validator to perform full script validation and extend+spend
+// instead of the cheap outpoint-only path.
+func TestSkipScriptValidationAndOutpointOnlySpend_WireRoundTrip(t *testing.T) {
+	t.Run("both true survive build, marshal, and reconstruction", func(t *testing.T) {
+		opts := ProcessOptions(
+			WithSkipScriptValidation(true),
+			WithOutpointOnlySpend(true),
+		)
+
+		req := buildValidateTxRequest([]byte{1, 2, 3}, 500000, opts)
+		require.NotNil(t, req.SkipScriptValidation)
+		require.True(t, *req.SkipScriptValidation)
+		require.NotNil(t, req.OutpointOnlySpend)
+		require.True(t, *req.OutpointOnlySpend)
+
+		bytesOut, err := proto.Marshal(req)
+		require.NoError(t, err)
+
+		got := &validator_api.ValidateTransactionRequest{}
+		require.NoError(t, proto.Unmarshal(bytesOut, got))
+
+		reconstructed, err := optionsFromValidateRequest(got)
+		require.NoError(t, err)
+		require.True(t, reconstructed.SkipScriptValidation)
+		require.True(t, reconstructed.OutpointOnlySpend)
+	})
+
+	t.Run("both false survive round-trip (byte-identical to pre-existing behaviour)", func(t *testing.T) {
+		opts := ProcessOptions()
+
+		req := buildValidateTxRequest([]byte{1, 2, 3}, 500000, opts)
+
+		bytesOut, err := proto.Marshal(req)
+		require.NoError(t, err)
+
+		got := &validator_api.ValidateTransactionRequest{}
+		require.NoError(t, proto.Unmarshal(bytesOut, got))
+
+		reconstructed, err := optionsFromValidateRequest(got)
+		require.NoError(t, err)
+		require.False(t, reconstructed.SkipScriptValidation)
+		require.False(t, reconstructed.OutpointOnlySpend)
+	})
+}

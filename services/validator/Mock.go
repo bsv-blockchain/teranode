@@ -26,97 +26,111 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
-// MockValidatorClient implements a test double for the validator client interface.
-// This mock provides controllable behavior for testing validator integration scenarios,
-// allowing tests to simulate various validation states, errors, and blockchain conditions.
+// Ensure MockValidator satisfies the validator Interface.
+var _ Interface = &MockValidator{}
+
+// MockValidator is the canonical test double for the validator Interface. It provides
+// controllable behavior for testing validator integration scenarios, allowing tests to
+// simulate various validation states, errors, and blockchain conditions.
 //
-// The mock supports:
-// - Configurable block height and median time simulation
-// - Error injection for testing failure scenarios
-// - UTXO store integration for transaction validation testing
-// - Thread-safe operation for concurrent test scenarios
-type MockValidatorClient struct {
-	// BlockHeight represents the current blockchain height for validation context
+// Validation behavior (in precedence order):
+//   - ValidateFunc, if set, is invoked directly.
+//   - Otherwise, if Errors is non-empty, the first queued error is returned and popped.
+//   - Otherwise, if UtxoStore is set, the transaction is created in that store.
+//   - Otherwise, transaction metadata is derived directly from the transaction.
+//
+// The mock is safe for concurrent use of the error queue.
+type MockValidator struct {
+	// BlockHeight represents the current blockchain height for validation context.
 	BlockHeight uint32
 
-	// MedianBlockTime represents the median time of recent blocks for timelock validation
+	// MedianBlockTime represents the median time of recent blocks for timelock validation.
 	MedianBlockTime uint32
 
-	// Errors contains a list of errors to return from validation operations
+	// Errors contains a list of errors to return from validation operations.
 	Errors []error
 
-	// ErrorsMu provides thread-safe access to the Errors slice
+	// ErrorsMu provides thread-safe access to the Errors slice.
 	ErrorsMu sync.Mutex
 
-	// UtxoStore provides access to UTXO data for transaction validation
+	// UtxoStore, when set, is used to create UTXO entries during validation.
 	UtxoStore utxo.Store
+
+	// ValidateFunc, when set, overrides Validate/ValidateWithOptions behavior entirely.
+	ValidateFunc func(ctx context.Context, tx *bt.Tx) (*meta.Data, error)
+
+	// HealthFunc, when set, overrides Health behavior.
+	HealthFunc func() (int, string, error)
 }
 
-// Health implements the validator client health check interface for testing.
-// Always returns successful status with "MockValidator" identifier.
-func (m *MockValidatorClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+// Health returns the configured health status, or a successful default.
+func (m *MockValidator) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if m.HealthFunc != nil {
+		return m.HealthFunc()
+	}
+
 	return 0, "MockValidator", nil
 }
 
 // SetBlockHeight updates the mock's blockchain height for validation context.
-// Allows tests to simulate different blockchain states and height-dependent validation rules.
-func (m *MockValidatorClient) SetBlockHeight(blockHeight uint32) error {
+func (m *MockValidator) SetBlockHeight(blockHeight uint32) error {
 	m.BlockHeight = blockHeight
 	return nil
 }
 
 // GetBlockHeight returns the configured blockchain height.
-// Used for height-dependent validation rules and timelock verification.
-func (m *MockValidatorClient) GetBlockHeight() uint32 {
+func (m *MockValidator) GetBlockHeight() uint32 {
 	return m.BlockHeight
 }
 
 // SetMedianBlockTime updates the mock's median block time for timelock validation.
-// Allows tests to simulate different time-based validation scenarios.
-func (m *MockValidatorClient) SetMedianBlockTime(medianTime uint32) error {
+func (m *MockValidator) SetMedianBlockTime(medianTime uint32) error {
 	m.MedianBlockTime = medianTime
 	return nil
 }
 
 // GetMedianBlockTime returns the configured median block time.
-// Used for timelock validation and time-based transaction rules.
-func (m *MockValidatorClient) GetMedianBlockTime() uint32 {
+func (m *MockValidator) GetMedianBlockTime() uint32 {
 	return m.MedianBlockTime
 }
 
-// Validate performs mock transaction validation with configurable error injection.
-// Processes options and delegates to ValidateWithOptions.
-func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
-	validationOptions := ProcessOptions(opts...)
-	return m.ValidateWithOptions(context.Background(), tx, blockHeight, validationOptions)
+// Validate performs mock transaction validation, delegating to ValidateWithOptions.
+func (m *MockValidator) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
+	return m.ValidateWithOptions(context.Background(), tx, blockHeight, ProcessOptions(opts...))
 }
 
-// ValidateWithOptions performs mock transaction validation with error injection support.
-// If errors are queued, returns the first error and removes it from the queue.
-// Otherwise, creates UTXO entries using the configured UTXO store.
-func (m *MockValidatorClient) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
+// ValidateWithOptions performs mock transaction validation. See MockValidator for the
+// precedence of ValidateFunc, the error queue, the UTXO store, and the tx-derived default.
+func (m *MockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error) {
+	if m.ValidateFunc != nil {
+		return m.ValidateFunc(ctx, tx)
+	}
+
 	m.ErrorsMu.Lock()
 	defer m.ErrorsMu.Unlock()
 
 	if len(m.Errors) > 0 {
-		// return error and pop of stack
-		err = m.Errors[0]
+		// return error and pop off the stack
+		err := m.Errors[0]
 		m.Errors = m.Errors[1:]
 
 		return nil, err
 	}
 
-	return m.UtxoStore.Create(context.Background(), tx, 0)
+	if m.UtxoStore != nil {
+		return m.UtxoStore.Create(context.Background(), tx, 0)
+	}
+
+	return util.TxMetaDataFromTx(tx)
 }
 
-// TriggerBatcher implements the batcher trigger interface for testing.
-// This is a no-op in the mock implementation as no actual batching occurs.
-func (m *MockValidatorClient) TriggerBatcher() {}
+// TriggerBatcher is a no-op in the mock implementation as no actual batching occurs.
+func (m *MockValidator) TriggerBatcher() {}
 
-// EnsureMTPLoaded implements mock MTP store pre-warming.
-// This is a no-op in the mock implementation as no actual MTP loading occurs.
-func (m *MockValidatorClient) EnsureMTPLoaded(_ context.Context, _ uint32) error {
+// EnsureMTPLoaded is a no-op in the mock implementation as no actual MTP loading occurs.
+func (m *MockValidator) EnsureMTPLoaded(_ context.Context, _ uint32) error {
 	return nil
 }

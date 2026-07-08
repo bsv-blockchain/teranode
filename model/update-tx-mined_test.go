@@ -42,6 +42,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		tSettings.UtxoStore = settings.UtxoStoreSettings{
+			SpendBatcherSize:    1,
 			UpdateTxMinedStatus: true,
 			MaxMinedBatchSize:   1024,
 			MaxMinedRoutines:    1,                // SQLite only supports one writer at a time
@@ -239,6 +240,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   10,
 		MaxMinedRoutines:    1,
@@ -393,6 +395,7 @@ func TestUpdateTxMinedStatus_ContextCancellation(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   10,
 		MaxMinedRoutines:    1,
@@ -438,6 +441,7 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   10,
 		MaxMinedRoutines:    1,
@@ -559,6 +563,7 @@ func TestUpdateTxMinedStatus_ConfigurationDisabled(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: false, // Disabled
 	}
 	setWorkerSettings(tSettings)
@@ -582,6 +587,7 @@ func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   1, // Very small batch size
 		MaxMinedRoutines:    1,
@@ -627,6 +633,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   10,
 		MaxMinedRoutines:    1,
@@ -706,6 +713,7 @@ func TestUpdateTxMinedStatus_ConcurrentProcessing(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   10,
 		MaxMinedRoutines:    3, // Allow concurrent processing
@@ -761,6 +769,7 @@ func TestUpdateTxMinedStatus_MissingSubtree(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   10,
 		MaxMinedRoutines:    1,
@@ -789,6 +798,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   2, // Small batch size for testing
 		MaxMinedRoutines:    1,
@@ -877,6 +887,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		disabledSettings := test.CreateBaseTestSettings(t)
 		disabledSettings.UtxoStore = settings.UtxoStoreSettings{
+			SpendBatcherSize:    1,
 			UpdateTxMinedStatus: false, // Disabled
 		}
 
@@ -1142,6 +1153,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// trigger.
 		freshSettings := test.CreateBaseTestSettings(t)
 		freshSettings.UtxoStore = settings.UtxoStoreSettings{
+			SpendBatcherSize:    1,
 			UpdateTxMinedStatus: true,
 			MaxMinedBatchSize:   1,
 			MaxMinedRoutines:    1,
@@ -1191,6 +1203,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		SpendBatcherSize:    1,
 		UpdateTxMinedStatus: true,
 		MaxMinedBatchSize:   10,
 		MaxMinedRoutines:    1,
@@ -1251,6 +1264,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		// Create large batch size settings
 		largeBatchSettings := test.CreateBaseTestSettings(t)
 		largeBatchSettings.UtxoStore = settings.UtxoStoreSettings{
+			SpendBatcherSize:    1,
 			UpdateTxMinedStatus: true,
 			MaxMinedBatchSize:   1000, // Very large batch
 			MaxMinedRoutines:    1,
@@ -1289,6 +1303,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		boundarySettings := test.CreateBaseTestSettings(t)
 		boundarySettings.UtxoStore = settings.UtxoStoreSettings{
+			SpendBatcherSize:    1,
 			UpdateTxMinedStatus: true,
 			MaxMinedBatchSize:   3, // Exact boundary testing
 			MaxMinedRoutines:    1,

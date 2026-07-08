@@ -576,7 +576,7 @@ func setupBenchmarkServer(t *testing.T) (*Server, func()) {
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(&utxometa.Data{}, nil).Maybe()
 
-	mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+	mockValidator := server.validatorClient.(*validator.MockValidator)
 	mockValidator.UtxoStore = server.utxoStore
 
 	return server, cleanup
@@ -608,7 +608,7 @@ func setupBenchmarkServerForBench(b *testing.B) (*Server, func()) {
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(&utxometa.Data{}, nil).Maybe()
 
-	mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+	mockValidator := server.validatorClient.(*validator.MockValidator)
 	mockValidator.UtxoStore = server.utxoStore
 
 	return server, cleanup

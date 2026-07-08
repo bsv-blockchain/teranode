@@ -296,6 +296,61 @@ func TestProcessCatchupChItem(t *testing.T) {
 		require.Nil(t, u.catchupAlternatives.Get(*b.Hash()), "alternatives cleared on success")
 	})
 
+	// ChiR1 regression: the ErrExternal classification from
+	// fetchAndStoreSubtreeAndSubtreeData reaches processCatchupChItem buried in
+	// the middle of the chain — fetchSubtreeDataForBlock wraps it in a
+	// ServiceError (get_blocks.go) and orderedDelivery wraps that in a
+	// ProcessingError. errors.Is matches by code across the whole chain, so
+	// errors.Is(err, ErrServiceError) is ALSO true for this error; the handler
+	// must check ErrExternal before ErrServiceError or the peer-failure path is
+	// never taken for peer-unreachable/HTTP-error failures.
+	t.Run("external error buried under service and processing wraps takes the peer-failure path", func(t *testing.T) {
+		// Reconstruct the real catchup-path chain, innermost first:
+		// fetchSubtreeFromPeer(HTTP failure) -> ExternalError(all peers failed)
+		// -> ServiceError(fetchSubtreeDataForBlock) -> ProcessingError(orderedDelivery).
+		httpErr := errors.NewServiceError("failed to fetch subtree from http://peer/subtree/aa")
+		allPeersErr := errors.NewExternalError("all peers failed to fetch subtree aa", httpErr)
+		svcWrap := errors.NewServiceError("failed to fetch subtree data for block bb", allPeersErr)
+		chain := errors.NewProcessingError("worker failed for block bb", svcWrap)
+
+		require.True(t, errors.Is(chain, errors.ErrServiceError), "precondition: the chain also matches ErrServiceError — that is the trap")
+		require.True(t, errors.Is(chain, errors.ErrExternal))
+
+		u, _ := newServer(3, chain)
+		b := testBlock()
+		u.processBlockNotify.Set(*b.Hash(), true, ttlcache.DefaultTTL)
+		u.catchupAlternatives.Set(*b.Hash(), []processBlockCatchup{{block: b, peerID: "altpeer"}}, ttlcache.DefaultTTL)
+
+		u.processCatchupChItem(ctx, item(b))
+
+		require.Nil(t, u.processBlockNotify.Get(*b.Hash()), "peer-failure path must clear the processing guard")
+		require.Nil(t, u.catchupAlternatives.Get(*b.Hash()), "peer-failure path must clear cached alternatives")
+
+		it := u.blockCatchupAttempts.Get(*b.Hash())
+		require.NotNil(t, it, "an all-peers-failed cycle must count toward the #1057 cap")
+		require.Equal(t, 1, it.Value())
+
+		mockBC := u.blockchainClient.(*blockchain.Mock)
+		mockBC.AssertCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, "catchup", mock.Anything)
+	})
+
+	t.Run("plain external error takes the peer-failure path", func(t *testing.T) {
+		u, _ := newServer(3, errors.NewExternalError("all peers failed"))
+		b := testBlock()
+		u.processBlockNotify.Set(*b.Hash(), true, ttlcache.DefaultTTL)
+
+		u.processCatchupChItem(ctx, item(b))
+
+		require.Nil(t, u.processBlockNotify.Get(*b.Hash()))
+
+		it := u.blockCatchupAttempts.Get(*b.Hash())
+		require.NotNil(t, it)
+		require.Equal(t, 1, it.Value())
+
+		mockBC := u.blockchainClient.(*blockchain.Mock)
+		mockBC.AssertCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, "catchup", mock.Anything)
+	})
+
 	t.Run("invalid block clears notify without counting toward cap", func(t *testing.T) {
 		u, _ := newServer(3, errors.NewBlockInvalidError("bad block"))
 		b := testBlock()

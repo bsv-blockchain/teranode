@@ -108,6 +108,13 @@ var (
 type batcherIfc[T any] interface {
 	Put(item *T, payloadSize ...int)
 	PutCtx(ctx context.Context, item *T, payloadSize ...int)
+	// PutBatch / PutBatchCtx enqueue a whole group of items in a single channel
+	// send instead of one send per item. Used by producers that already have all
+	// their items ready together (e.g. all inputs of one tx in Spend, all hashes
+	// in SetLocked). Batch size is always honoured — a group larger than the
+	// configured size is split into full-size batches, never one oversized batch.
+	PutBatch(items []*T, payloadSize ...int)
+	PutBatchCtx(ctx context.Context, items []*T, payloadSize ...int)
 	Trigger()
 	SetDrainMode(enabled bool)
 	SetTickInterval(d time.Duration)
@@ -340,7 +347,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		}
 	}
 
-	storeBatcherInst := batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendStoreBatch, batcherBackground, batcherOpts("aerospike_store")...)
+	storeBatcherInst := batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendStoreBatch, batcherBackground, append(batcherOpts("aerospike_store"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.StoreBatcherGreedyAccumulate))...)
 	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.StoreBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
 		storeBatcherInst.SetMaxConcurrent(mc)
 	}
@@ -349,7 +356,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchSize := s.settings.UtxoStore.GetBatcherSize
 	getBatchDurationStr := s.settings.UtxoStore.GetBatcherDurationMillis
 	getBatchDuration := time.Duration(getBatchDurationStr) * time.Millisecond
-	getBatcherInst := batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, batcherBackground, batcherOpts("aerospike_get")...)
+	getBatcherInst := batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, batcherBackground, append(batcherOpts("aerospike_get"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.GetBatcherGreedyAccumulate))...)
 	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.GetBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
 		getBatcherInst.SetMaxConcurrent(mc)
 	}
@@ -379,7 +386,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
-	spendBatcherInst := batcher.NewWithPool(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, batcherBackground, batcherOpts("aerospike_spend")...)
+	spendBatcherInst := batcher.NewWithPool(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, batcherBackground, append(batcherOpts("aerospike_spend"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.SpendBatcherGreedyAccumulate))...)
 	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.SpendBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
 		spendBatcherInst.SetMaxConcurrent(mc)
 	}
@@ -396,7 +403,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	outpointBatchSize := s.settings.UtxoStore.OutpointBatcherSize
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
-	outpointBatcherInst := batcher.NewWithPool(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, batcherBackground, batcherOpts("aerospike_outpoint")...)
+	outpointBatcherInst := batcher.NewWithPool(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, batcherBackground, append(batcherOpts("aerospike_outpoint"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.OutpointBatcherGreedyAccumulate))...)
 	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.OutpointBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
 		outpointBatcherInst.SetMaxConcurrent(mc)
 	}
@@ -423,7 +430,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	lockedBatcherSize := tSettings.UtxoStore.LockedBatcherSize
 	lockedBatchDurationStr := tSettings.UtxoStore.LockedBatcherDurationMillis
 	lockedBatchDuration := time.Duration(lockedBatchDurationStr) * time.Millisecond
-	lockedBatcherInst := batcher.NewWithPool(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, batcherBackground, batcherOpts("aerospike_locked")...)
+	lockedBatcherInst := batcher.NewWithPool(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, batcherBackground, append(batcherOpts("aerospike_locked"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.LockedBatcherGreedyAccumulate))...)
 	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.LockedBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
 		lockedBatcherInst.SetMaxConcurrent(mc)
 	}
@@ -674,6 +681,12 @@ func (s *Store) Close(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+// SupportsOutpointOnlySpend reports false: the Aerospike store does not yet honour the
+// below-checkpoint outpoint-only fast path (it ignores SkipExtendedInputs /
+// SkipUTXOHashCheck and would hard-error on un-decorated inputs). Deferred to Stage B;
+// until then callers keep the fast path OFF on Aerospike.
+func (s *Store) SupportsOutpointOnlySpend() bool { return false }
 
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/* As written by one of the Aerospike developers, Go contexts are not supported:

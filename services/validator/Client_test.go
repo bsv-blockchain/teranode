@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
@@ -358,7 +359,8 @@ func TestBatchValidation(t *testing.T) {
 	tx := createTestTransaction(t)
 	txBytes := tx.Bytes()
 
-	// Create test batch with valid transaction data
+	// Create test batch with valid transaction data sharing one completion group.
+	group := completion.NewGroup(2)
 	batch := []*batchItem{
 		{
 			req: &validator_api.ValidateTransactionRequest{
@@ -369,7 +371,7 @@ func TestBatchValidation(t *testing.T) {
 				SkipPolicyChecks:     boolPtr(false),
 				CreateConflicting:    boolPtr(false),
 			},
-			done: make(chan validateBatchResponse),
+			group: group,
 		},
 		{
 			req: &validator_api.ValidateTransactionRequest{
@@ -380,16 +382,18 @@ func TestBatchValidation(t *testing.T) {
 				SkipPolicyChecks:     boolPtr(false),
 				CreateConflicting:    boolPtr(false),
 			},
-			done: make(chan validateBatchResponse),
+			group: group,
 		},
 	}
 
-	// Call the method under test in a goroutine
-	go client.sendBatchToValidator(context.Background(), batch)
+	// Call the method under test.
+	client.sendBatchToValidator(context.Background(), batch)
 
-	// Get the results from the channels
-	response1 := <-batch[0].done
-	response2 := <-batch[1].done
+	// Every item was completed exactly once (a double-Done would have panicked
+	// in the dispatcher); read the result slots after the group completes.
+	require.NoError(t, group.Wait(context.Background(), 0))
+	response1 := batch[0].result
+	response2 := batch[1].result
 
 	// Verify results
 	assert.NoError(t, response1.err)
@@ -416,7 +420,8 @@ func TestBatchValidation_ResourceExhausted(t *testing.T) {
 	tx := createTestTransaction(t)
 	txBytes := tx.Bytes()
 
-	// Create test batch with valid transaction data
+	// Create test batch with valid transaction data sharing one completion group.
+	group := completion.NewGroup(1)
 	batch := []*batchItem{
 		{
 			req: &validator_api.ValidateTransactionRequest{
@@ -427,19 +432,73 @@ func TestBatchValidation_ResourceExhausted(t *testing.T) {
 				SkipPolicyChecks:     boolPtr(false),
 				CreateConflicting:    boolPtr(false),
 			},
-			done: make(chan validateBatchResponse),
+			group: group,
 		},
 	}
 
-	// Call the method under test in a goroutine
-	go client.sendBatchToValidator(context.Background(), batch)
+	// Call the method under test.
+	client.sendBatchToValidator(context.Background(), batch)
 
-	// Get the results from the channel
-	response := <-batch[0].done
+	// Read the result slot after the group completes.
+	require.NoError(t, group.Wait(context.Background(), 0))
+	response := batch[0].result
 
 	// Verify results - HTTP fallback should work
 	assert.NoError(t, response.err)
 	assert.Nil(t, response.metaData)
+}
+
+func TestBatchValidation_DispatcherPanic(t *testing.T) {
+	// Create mock client whose ValidateTransactionBatch panics mid-dispatch.
+	mockClient := &MockValidatorAPIClient{
+		validateBatchFunc: func(ctx context.Context, in *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+			panic("boom")
+		},
+	}
+
+	// Setup test client with batching enabled
+	client, server := setupTestClient(t, mockClient)
+	client.batchSize = 2 // Enable batch mode
+	defer server.Close()
+
+	// Create test transaction to get valid transaction data
+	tx := createTestTransaction(t)
+	txBytes := tx.Bytes()
+
+	// Create test batch with valid transaction data sharing one completion group.
+	group := completion.NewGroup(2)
+	batch := []*batchItem{
+		{
+			req: &validator_api.ValidateTransactionRequest{
+				TransactionData:      txBytes,
+				BlockHeight:          100,
+				SkipUtxoCreation:     boolPtr(false),
+				AddTxToBlockAssembly: boolPtr(true),
+				SkipPolicyChecks:     boolPtr(false),
+				CreateConflicting:    boolPtr(false),
+			},
+			group: group,
+		},
+		{
+			req: &validator_api.ValidateTransactionRequest{
+				TransactionData:      txBytes,
+				BlockHeight:          100,
+				SkipUtxoCreation:     boolPtr(false),
+				AddTxToBlockAssembly: boolPtr(true),
+				SkipPolicyChecks:     boolPtr(false),
+				CreateConflicting:    boolPtr(false),
+			},
+			group: group,
+		},
+	}
+
+	// The whole-batch panic sweep must recover and complete every item so no
+	// producer is stranded on group.Wait.
+	require.NotPanics(t, func() { client.sendBatchToValidator(context.Background(), batch) })
+
+	require.NoError(t, group.Wait(context.Background(), 0))
+	require.Error(t, batch[0].result.err)
+	require.Error(t, batch[1].result.err)
 }
 
 // Helper for creating bool pointers

@@ -1856,6 +1856,8 @@ type CorruptMetaUtxoStore struct {
 	*sql.Store
 }
 
+func (c *CorruptMetaUtxoStore) SupportsOutpointOnlySpend() bool { return false }
+
 func (c *CorruptMetaUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, error) {
 	metaData, err := c.Store.Create(ctx, tx, blockHeight, opts...)
 	if err != nil {

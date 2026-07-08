@@ -3,6 +3,8 @@ package blockvalidation
 
 import (
 	"context"
+	"encoding/binary"
+	"math/big"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -15,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -500,49 +503,41 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 
 	// Walk through peer's headers (oldest to newest) to find the highest common ancestor
 	commonAncestorIndex := -1
+	var commonAncestorMeta *model.BlockHeaderMeta
 	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current UTXO height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
 
 	for i, header := range peerHeaders {
-		exists, err := u.blockchainClient.GetBlockExists(ctx, header.Hash())
+		// GetBlockHeader conveys both existence and height in a single RPC: a
+		// not-found error means the block is absent from our chain (stop the search),
+		// while any other error is a genuine failure.
+		_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
 		if err != nil {
-			return errors.NewProcessingError("[catchup][%s] failed to check if block %s exists: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
-		}
-
-		if exists {
-			// Get the block's height to ensure it's not ahead of our UTXO store
-			_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
-			if err != nil {
-				return errors.NewProcessingError("[catchup][%s] failed to get metadata for block %s: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
+				break // Once we find a header we don't have, stop
 			}
 
-			// Only consider blocks at or below our current UTXO height as potential common ancestors
-			// Blocks ahead of our UTXO height exist in blockchain store but aren't fully processed yet
-			if meta.Height > currentHeight {
-				u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of current UTXO height %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
-				break
-			}
-
-			commonAncestorIndex = i // Keep updating to find the LAST match
-			u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
-		} else {
-			u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
-			break // Once we find a header we don't have, stop
+			return errors.NewProcessingError("[catchup][%s] failed to get header for block %s: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
 		}
+
+		// Only consider blocks at or below our current UTXO height as potential common ancestors
+		// Blocks ahead of our UTXO height exist in blockchain store but aren't fully processed yet
+		if meta.Height > currentHeight {
+			u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of current UTXO height %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
+			break
+		}
+
+		commonAncestorIndex = i // Keep updating to find the LAST match
+		commonAncestorMeta = meta
+		u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
 	}
 
 	if commonAncestorIndex == -1 {
 		return errors.NewProcessingError("[catchup][%s] no common ancestor found in peer headers", catchupCtx.blockUpTo.Hash().String())
 	}
 
-	// Get the common ancestor header and its metadata
-	commonAncestorHeader := peerHeaders[commonAncestorIndex]
-	commonAncestorHash := commonAncestorHeader.Hash()
-
-	// Get metadata for the common ancestor
-	_, commonAncestorMeta, err := u.blockchainClient.GetBlockHeader(ctx, commonAncestorHash)
-	if err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to get metadata for common ancestor %s: %v", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), err)
-	}
+	// The common ancestor's metadata was already fetched during the walk above.
+	commonAncestorHash := peerHeaders[commonAncestorIndex].Hash()
 
 	if commonAncestorMeta.Invalid {
 		return errors.NewBlockInvalidError("[catchup][%s] common ancestor %s at height %d is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
@@ -612,7 +607,18 @@ func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 func (u *Server) checkSecretMining(ctx context.Context, catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 4: Checking for secret mining", catchupCtx.blockUpTo.Hash().String())
 
-	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta)
+	// The headers the peer offers beyond the common ancestor form the candidate chain
+	// whose cumulative work we weigh against our local chain. Not yet filtered at this
+	// point, so slice directly after the common ancestor index.
+	var offeredHeaders []*model.BlockHeader
+	if catchupCtx.headersFetchResult != nil {
+		peerHeaders := catchupCtx.headersFetchResult.Headers
+		if catchupCtx.commonAncestorIndex >= 0 && catchupCtx.commonAncestorIndex+1 < len(peerHeaders) {
+			offeredHeaders = peerHeaders[catchupCtx.commonAncestorIndex+1:]
+		}
+	}
+
+	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta, offeredHeaders)
 }
 
 // filterHeaders filters headers to only those after the common ancestor that we don't have.
@@ -1226,7 +1232,14 @@ func getLowestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
 }
 
 // checkSecretMiningFromCommonAncestor detects if a peer withheld blocks (secret mining).
-// Checks if common ancestor is too far behind, indicating potential attack.
+//
+// A common ancestor more than SecretMiningThreshold blocks back is a necessary but not
+// sufficient signal: a legitimate reorg carrying more accumulated proof-of-work can fork
+// just as deeply. The malicious verdict is therefore gated on WORK, not depth — a deep
+// fork is only treated as secret mining when the chain the peer offers fails to exceed
+// our local validated chainwork. This keeps the reputation penalty ("peer is malicious")
+// separate from the policy decision of whether to auto-apply a deep reorg, which is
+// enforced independently by validateForkDepth against coinbase maturity.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -1234,16 +1247,25 @@ func getLowestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
 //   - baseURL: Peer URL for metrics
 //   - commonAncestorHash: Hash of the common ancestor
 //   - commonAncestorMeta: Metadata of the common ancestor
+//   - offeredHeaders: Peer's headers after the common ancestor (the candidate chain)
 //
 // Returns:
-//   - error: If secret mining is detected
-func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string, commonAncestorHash *chainhash.Hash, commonAncestorMeta *model.BlockHeaderMeta) error {
-	// Check whether the common ancestor is more than X blocks behind our current chain.
-	// This indicates potential secret mining.
-	currentHeight := u.utxoStore.GetBlockHeight()
+//   - error: If secret mining is detected, or the deep fork cannot be safely followed
+func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string, commonAncestorHash *chainhash.Hash, commonAncestorMeta *model.BlockHeaderMeta, offeredHeaders []*model.BlockHeader) error {
+	// Read the local best chain tip once, from the same source used for the work comparison
+	// below, so the depth trigger and the work gate reason about the same tip (they can
+	// momentarily disagree during catchup). If it can't be read we cannot evaluate the fork:
+	// abort this catchup without penalising the peer — uncertainty must not be treated as malice.
+	_, bestMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		u.logger.Warnf("[catchup][%s] cannot read best block header for secret-mining check from peer %s: %v - aborting without flagging malicious", blockUpTo.Hash().String(), baseURL, err)
+		return errors.NewProcessingError("[catchup][%s] unable to read best block header for secret-mining check", blockUpTo.Hash().String(), err)
+	}
 
-	// Common ancestor should always be at or below current height due to findCommonAncestor validation
-	// If not, this indicates a bug in the ancestor finding logic
+	currentHeight := bestMeta.Height
+
+	// Common ancestor should always be at or below current height due to findCommonAncestor
+	// validation. If not, we cannot reason about the fork - abort without penalising the peer.
 	if commonAncestorMeta.Height > currentHeight {
 		return errors.NewProcessingError("[catchup][%s] common ancestor height %d is ahead of current height %d - this should not happen", blockUpTo.Hash().String(), commonAncestorMeta.Height, currentHeight)
 	}
@@ -1255,7 +1277,22 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 		return nil
 	}
 
-	// The chain is potentially a secretly mined chain
+	// The fork is deep. Without any offered headers we cannot weigh the candidate chain, so we
+	// can prove neither that it is heavier nor that it is a withheld shorter chain. Treat this
+	// like any other uncertainty: abort without penalising the peer.
+	if len(offeredHeaders) == 0 {
+		u.logger.Warnf("[catchup][%s] deep fork from peer %s (%d blocks behind) but no offered headers to weigh - aborting without flagging malicious", blockUpTo.Hash().String(), baseURL, blocksBehind)
+		return errors.NewProcessingError("[catchup][%s] deep fork with no offered headers to compare chainwork from common ancestor at height %d", blockUpTo.Hash().String(), commonAncestorMeta.Height)
+	}
+
+	// Weigh the offered chain's cumulative work against our own before penalising.
+	if offeredChainHasMoreWork(bestMeta.ChainWork, commonAncestorMeta, offeredHeaders) {
+		// A legitimate heavier chain that happens to fork deep. Follow it; do not penalise the peer.
+		u.logger.Infof("[catchup][%s] deep reorg (%d blocks) from peer %s carries more validated work than local chain - following heavier chain, not flagging secret mining", blockUpTo.Hash().String(), blocksBehind, baseURL)
+		return nil
+	}
+
+	// A deep fork that offers no additional work: potential secret mining (withheld shorter chain).
 	u.logger.Errorf("[catchup][%s] is potentially a secretly mined chain from common ancestor %s at height %d, ignoring", blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
 
 	// Record error metric for secret mining
@@ -1275,6 +1312,39 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 	u.logger.Errorf("[catchup][%s] SECURITY: Peer %s attempted secret mining - should be banned (banning not yet implemented)", blockUpTo.Hash().String(), baseURL)
 
 	return errors.NewServiceError("[catchup][%s] is potentially a secretly mined chain from common ancestor at height %d, ignoring", blockUpTo.Hash().String(), commonAncestorMeta.Height)
+}
+
+// offeredChainHasMoreWork reports whether the chain offered by the peer — the common
+// ancestor extended by offeredHeaders — carries strictly more cumulative proof-of-work
+// than our local validated best chain (localChainWork, the best block header's cumulative
+// work). It distinguishes a legitimate heavier deep reorg from a withheld shorter-work
+// chain ("secret mining").
+//
+// Parameters:
+//   - localChainWork: Cumulative work of the local best chain tip (big-endian bytes)
+//   - commonAncestorMeta: Metadata of the common ancestor (supplies its cumulative work)
+//   - offeredHeaders: Peer's headers after the common ancestor
+//
+// Returns:
+//   - bool: True if the offered chain has strictly more cumulative work than the local chain
+func offeredChainHasMoreWork(localChainWork []byte, commonAncestorMeta *model.BlockHeaderMeta, offeredHeaders []*model.BlockHeader) bool {
+	// ChainWork is stored big-endian (see stores/blockchain/sql calculateAndPrepareChainWork),
+	// so SetBytes reconstructs the cumulative work value directly.
+	localWork := new(big.Int).SetBytes(localChainWork)
+
+	// Start from the common ancestor's cumulative work and add each offered block's work,
+	// mirroring work.CalculateWork (work = 2^256 / (target+1)).
+	offeredWork := new(big.Int).SetBytes(commonAncestorMeta.ChainWork)
+	for _, header := range offeredHeaders {
+		if header == nil {
+			continue
+		}
+
+		bits := binary.LittleEndian.Uint32(header.Bits.CloneBytes())
+		offeredWork.Add(offeredWork, work.CalcBlockWork(bits))
+	}
+
+	return offeredWork.Cmp(localWork) > 0
 }
 
 // validateBatchHeaders validates a batch of block headers.

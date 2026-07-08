@@ -330,11 +330,15 @@
       "txs": {
         "input": {
           "title": "Input ({{ count }} Tx)",
-          "total": "Total Input: {{ amount }} BSV"
+          "title-unknown": "Input",
+          "total": "Total Input: {{ amount }} BSV",
+          "missing": "Input data is not available for this transaction."
         },
         "output": {
           "title": "Output ({{ count }} Tx)",
-          "total": "Total Output: {{ amount }} BSV"
+          "title-unknown": "Output",
+          "total": "Total Output: {{ amount }} BSV",
+          "missing": "Output data is not available for this transaction."
         },
         "load-more": "Load 10 More"
       }

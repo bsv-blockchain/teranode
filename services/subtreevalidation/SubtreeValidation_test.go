@@ -117,7 +117,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 	})
 }
 
-func setup(t *testing.T) (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, blockchain.ClientI, func()) {
+func setup(t *testing.T) (utxo.Store, *validator.MockValidator, blob.Store, blob.Store, blockchain.ClientI, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	httpmock.RegisterResponder(
@@ -151,7 +151,7 @@ func setup(t *testing.T) (utxo.Store, *validator.MockValidatorClient, blob.Store
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 
-	validatorClient := &validator.MockValidatorClient{UtxoStore: utxoStore}
+	validatorClient := &validator.MockValidator{UtxoStore: utxoStore}
 
 	mockBlockChainStore := &blockchainstore.MockStore{}
 

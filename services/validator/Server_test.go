@@ -63,8 +63,8 @@ func TestHTTPServer_Endpoints(t *testing.T) {
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			// Check if this is an invalid transaction by seeing if it has inputs and outputs
 			if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
 				return nil, echo.NewHTTPError(http.StatusBadRequest, "invalid transaction: no inputs or outputs")
@@ -206,8 +206,8 @@ func TestValidatorHTTP_Endpoints(t *testing.T) {
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
@@ -315,8 +315,8 @@ func TestHTTPServerIntegration(t *testing.T) {
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
@@ -358,8 +358,8 @@ func TestHTTPServerHandlers(t *testing.T) {
 
 	// Create a mock validator for testing
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
@@ -426,67 +426,6 @@ func TestHTTPServerHandlers(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, "Expected status OK, got %d", rec.Code)
 		require.Equal(t, "OK", rec.Body.String(), "Expected body 'OK', got %q", rec.Body.String())
 	})
-}
-
-// TestMockValidator provides a test double for validator functionality.
-type TestMockValidator struct {
-	validateTxFunc func(ctx context.Context, tx *bt.Tx) (*meta.Data, error)
-}
-
-func (m *TestMockValidator) Init(ctx context.Context) error {
-	return nil
-}
-
-func (m *TestMockValidator) Start(ctx context.Context) error {
-	return nil
-}
-
-func (m *TestMockValidator) Stop() error {
-	return nil
-}
-
-func (m *TestMockValidator) Health(ctx context.Context, _ bool) (int, string, error) {
-	return http.StatusOK, "OK", nil
-}
-
-func (m *TestMockValidator) ValidateTx(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
-	if m.validateTxFunc != nil {
-		return m.validateTxFunc(ctx, tx)
-	}
-
-	return &meta.Data{}, nil
-}
-
-func (m *TestMockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
-	if m.validateTxFunc != nil {
-		return m.validateTxFunc(ctx, tx)
-	}
-
-	return &meta.Data{}, nil
-}
-
-func (m *TestMockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error) {
-	if m.validateTxFunc != nil {
-		return m.validateTxFunc(ctx, tx)
-	}
-
-	return &meta.Data{}, nil
-}
-
-func (m *TestMockValidator) GetBlockHeight() uint32 {
-	return 101
-}
-
-func (m *TestMockValidator) GetMedianBlockTime() uint32 {
-	return uint32(time.Now().Unix()) // nolint:gosec
-}
-
-func (m *TestMockValidator) TriggerBatcher() {
-	// No-op implementation for testing
-}
-
-func (m *TestMockValidator) EnsureMTPLoaded(_ context.Context, _ uint32) error {
-	return nil
 }
 
 // TestServer_Start_FSMContextCancellation verifies graceful shutdown handling

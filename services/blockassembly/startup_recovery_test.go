@@ -80,7 +80,7 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 		mockBC := &blockchain.Mock{}
 		mockBC.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
 
-		iter := new(MockUnminedTxIterator)
+		iter := new(utxostore.MockUnminedTxIterator)
 		iter.On("Next", mock.Anything).Return(nil, nil).Once()
 		iter.On("Close").Return(nil)
 		mockStore.On("GetUnminedTxIterator").Return(iter, nil)
@@ -111,7 +111,7 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 			Node: &subtreepkg.Node{Hash: txHash, Fee: 100, SizeInBytes: 250},
 		}}
 
-		iter := new(MockUnminedTxIterator)
+		iter := new(utxostore.MockUnminedTxIterator)
 		iter.On("Next", mock.Anything).Return(unmined, nil).Once()
 		iter.On("Next", mock.Anything).Return(nil, nil).Once()
 		iter.On("Close").Return(nil)
@@ -152,7 +152,7 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 		unmined := []*utxostore.UnminedTransaction{{
 			Node: &subtreepkg.Node{Hash: txHash, Fee: 100, SizeInBytes: 250},
 		}}
-		iter := new(MockUnminedTxIterator)
+		iter := new(utxostore.MockUnminedTxIterator)
 		iter.On("Next", mock.Anything).Return(unmined, nil).Once()
 		iter.On("Next", mock.Anything).Return(nil, nil).Once()
 		iter.On("Close").Return(nil)
@@ -207,7 +207,7 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 			{Node: &subtreepkg.Node{Hash: skippedHash}, Skip: true},
 			{Node: &subtreepkg.Node{Hash: minedHash}, BlockIDs: []uint32{bestBlockID}},
 		}
-		iter := new(MockUnminedTxIterator)
+		iter := new(utxostore.MockUnminedTxIterator)
 		iter.On("Next", mock.Anything).Return(unmined, nil).Once()
 		iter.On("Next", mock.Anything).Return(nil, nil).Once()
 		iter.On("Close").Return(nil)

@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -407,6 +408,55 @@ func TestUnspend(t *testing.T) {
 	// Spend again with the same spending tx — should succeed because the UTXO is now unspent.
 	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
+}
+
+// TestUnspendLockedFlag proves the #1154 fix: a spend-rollback (Unspend with no
+// flagAsLocked) must not clear a parent's independently-set 2PC locked flag, matching
+// the Aerospike unspend UDF which never touches locked. It also proves the deliberate
+// semantics are retained: an explicit false clears locked, an explicit true keeps it set.
+func TestUnspendLockedFlag(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, tx := setup(ctx, t)
+
+	// Parent created with the 2PC locked flag set.
+	_, err := utxoStore.Create(ctx, tx, 0, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	lockedNow := func() bool {
+		m := &meta.Data{}
+		require.NoError(t, utxoStore.GetMeta(ctx, tx.TxIDChainHash(), m))
+		return m.Locked
+	}
+	require.True(t, lockedNow(), "parent should be locked after Create(WithLocked(true))")
+
+	// Spend a child of the locked parent. The parent is locked, so IgnoreLocked is required.
+	spendTx := utxo2.GetSpendingTx(tx, 0)
+	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1, utxo.IgnoreFlags{IgnoreLocked: true})
+	require.NoError(t, err)
+
+	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	spend := &utxo.Spend{
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		UTXOHash:     utxohash,
+		SpendingData: spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0),
+	}
+
+	// No flag: the parent's locked flag must be left untouched.
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}))
+	require.True(t, lockedNow(), "Unspend without a flag must not clear the parent's locked flag")
+
+	// Explicit true: still locked.
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}, true))
+	require.True(t, lockedNow(), "Unspend(true) must keep the parent locked")
+
+	// Explicit false: locked is cleared (ReverseProcessConflicting semantics).
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}, false))
+	require.False(t, lockedNow(), "Unspend(false) must clear the parent's locked flag")
 }
 
 func TestGetSpend(t *testing.T) {
@@ -2964,4 +3014,560 @@ func TestBuildCompositeValuesPairs(t *testing.T) {
 		require.Equal(t, "", clause)
 		require.Nil(t, args)
 	})
+}
+
+// newTestStore creates a fresh in-memory SQLite store for minimal-create tests.
+// Uses the default BatchSQLOperations setting (true → createInputsBatched path on SQLite).
+func newTestStore(t *testing.T) (*Store, *sql.DB) {
+	t.Helper()
+	return newTestStoreBatch(t, true)
+}
+
+// newTestStoreBatch creates a fresh in-memory SQLite store with BatchSQLOperations forced.
+// On SQLite, batchSQL=true exercises createInputsBatched; batchSQL=false exercises createInputsPerRow.
+// (The createCTE / buildInputArrays path is postgres-only and unreachable from this harness.)
+func newTestStoreBatch(t *testing.T, batchSQL bool) (*Store, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.UtxoStore.BatchSQLOperations = batchSQL
+	tSettings.BatcherDrainMode = true
+	tSettings.Pruner.UTXODefensiveEnabled = false
+
+	dbName := "minimal_create_test_batched"
+	if !batchSQL {
+		dbName = "minimal_create_test_perrow"
+	}
+	utxoStoreURL, err := url.Parse("sqlitememory:///" + dbName)
+	require.NoError(t, err)
+
+	store, err := New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	return store, store.db.DB
+}
+
+// newExtendedTxWithOutputs builds a transaction with n outputs and a fully-decorated
+// (extended) input whose PreviousTxSatoshis and PreviousTxScript are populated.
+// The unlocking_script column is NOT NULL in the schema so an empty script is provided.
+func newExtendedTxWithOutputs(t *testing.T, n int) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+
+	// Use a deterministic prev hash so the tx is reproducible.
+	prevHashBytes := make([]byte, 32)
+	prevHashBytes[0] = 0xDE
+	prevHash, err := chainhash.NewHash(prevHashBytes)
+	require.NoError(t, err)
+
+	lockScript, err := bscript.NewP2PKHFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+	require.NoError(t, err)
+
+	// Build a decorated input. Use PreviousTxIDAdd to properly initialise the internal hash field.
+	emptyUnlocking := bscript.Script{}
+	input := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0xFFFFFFFF,
+		PreviousTxSatoshis: 100_000,
+		PreviousTxScript:   lockScript,
+		UnlockingScript:    &emptyUnlocking,
+	}
+	require.NoError(t, input.PreviousTxIDAdd(prevHash))
+	tx.Inputs = append(tx.Inputs, input)
+
+	for i := 0; i < n; i++ {
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(10_000)))
+	}
+	return tx
+}
+
+// newSpendingTx builds a transaction spending vOut from parent without decorating the input
+// (PreviousTxSatoshis=0, PreviousTxScript=nil) to simulate the below-checkpoint path.
+// An empty unlocking script satisfies the NOT NULL constraint on inputs.unlocking_script.
+func newSpendingTx(t *testing.T, parent *bt.Tx, vOut uint32) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+
+	emptyUnlocking := bscript.Script{}
+	input := &bt.Input{
+		PreviousTxOutIndex: vOut,
+		SequenceNumber:     0xFFFFFFFF,
+		UnlockingScript:    &emptyUnlocking,
+		// PreviousTxSatoshis defaults to 0, PreviousTxScript defaults to nil.
+	}
+	require.NoError(t, input.PreviousTxIDAdd(parent.TxIDChainHash()))
+	tx.Inputs = append(tx.Inputs, input)
+	return tx
+}
+
+// newExtendedSpendingTx builds a transaction spending parent's vOut with the input FULLY
+// decorated (PreviousTxSatoshis and PreviousTxScript populated). Used to prove that the
+// SkipExtendedInputs flag FORCES the columns to zero even when the input carries real values.
+func newExtendedSpendingTx(t *testing.T, parent *bt.Tx, vOut uint32) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+
+	emptyUnlocking := bscript.Script{}
+	input := &bt.Input{
+		PreviousTxOutIndex: vOut,
+		SequenceNumber:     0xFFFFFFFF,
+		UnlockingScript:    &emptyUnlocking,
+		PreviousTxSatoshis: parent.Outputs[vOut].Satoshis,
+		PreviousTxScript:   parent.Outputs[vOut].LockingScript,
+	}
+	require.NoError(t, input.PreviousTxIDAdd(parent.TxIDChainHash()))
+	tx.Inputs = append(tx.Inputs, input)
+	return tx
+}
+
+// corruptPreviousScript replaces the PreviousTxScript on input 0 of tx with a
+// different script so that UTXOHashFromInput computes a hash that will not match
+// what was stored when the parent was created. Used only in hash-enforcement tests.
+func corruptPreviousScript(t *testing.T, tx *bt.Tx) {
+	t.Helper()
+	badScript, err := bscript.NewP2PKHFromAddress("1CounterpartyXXXXXXXXXXXXXXXUWLpVr")
+	require.NoError(t, err)
+	tx.Inputs[0].PreviousTxScript = badScript
+}
+
+// addOutputs appends n P2PKH outputs to tx.
+func addOutputs(t *testing.T, tx *bt.Tx, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(5_000)))
+	}
+}
+
+// queryOutputUTXOHash reads utxo_hash for a specific output (txHash, vout) from the DB.
+func queryOutputUTXOHash(t *testing.T, db *sql.DB, txHash *chainhash.Hash, vout int) []byte {
+	t.Helper()
+	row := db.QueryRow(`
+		SELECT o.utxo_hash
+		FROM outputs o
+		JOIN transactions tx ON tx.id = o.transaction_id
+		WHERE tx.hash = ? AND o.idx = ?`, txHash[:], vout)
+	var h []byte
+	require.NoError(t, row.Scan(&h))
+	return h
+}
+
+// queryInputRow reads the input row columns we care about for testing.
+// Returns (previous_tx_satoshis, previous_tx_script, previous_transaction_hash, previous_tx_idx).
+func queryInputRow(t *testing.T, db *sql.DB, txHash *chainhash.Hash, idx int) (int64, []byte, []byte, int32) {
+	t.Helper()
+	row := db.QueryRow(`
+		SELECT i.previous_tx_satoshis, i.previous_tx_script, i.previous_transaction_hash, i.previous_tx_idx
+		FROM inputs i
+		JOIN transactions tx ON tx.id = i.transaction_id
+		WHERE tx.hash = ? AND i.idx = ?`, txHash[:], idx)
+	var sats int64
+	var script []byte
+	var prevHash []byte
+	var prevIdx int32
+	require.NoError(t, row.Scan(&sats, &script, &prevHash, &prevIdx))
+	return sats, script, prevHash, prevIdx
+}
+
+// TestMinimalCreate_FeeZero_OutputsIntact verifies that WithSkipExtendedInputs(true):
+// - does not call GetFees (so an un-decorated tx is accepted without error)
+// - returns Fee=0 in meta
+// - fully persists the output (utxo_hash matches)
+// - zeroes previous_tx_satoshis and previous_tx_script in the inputs row
+// - retains the outpoint (previous_transaction_hash, previous_tx_idx)
+func TestMinimalCreate_FeeZero_OutputsIntact(t *testing.T) {
+	store, db := newTestStore(t)
+	ctx := context.Background()
+
+	// Extended parent so we have a real output to spend; child is NOT extended.
+	parent := newExtendedTxWithOutputs(t, 2)
+	_, err := store.Create(ctx, parent, 1)
+	require.NoError(t, err)
+
+	child := newSpendingTx(t, parent, 0) // not extended
+	addOutputs(t, child, 1)              // one new output
+	txMeta, err := store.Create(ctx, child, 2, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err, "minimal create must not call GetFees on an un-decorated tx")
+	require.Equal(t, uint64(0), txMeta.Fee, "fee is zero below checkpoint")
+
+	// Output fully persisted with its OWN utxo_hash (parent-independent).
+	wantHash, err := util.UTXOHashFromOutput(child.TxIDChainHash(), child.Outputs[0], 0)
+	require.NoError(t, err)
+	gotHash := queryOutputUTXOHash(t, db, child.TxIDChainHash(), 0)
+	require.Equal(t, wantHash[:], gotHash)
+
+	// Per-input parent columns are zeroed/empty, but the outpoint is retained.
+	sats, script, prevHash, prevIdx := queryInputRow(t, db, child.TxIDChainHash(), 0)
+	require.Equal(t, int64(0), sats)
+	require.Empty(t, script)
+	require.Equal(t, child.Inputs[0].PreviousTxIDChainHash()[:], prevHash, "outpoint retained for pruner")
+	require.Equal(t, int32(child.Inputs[0].PreviousTxOutIndex), prevIdx)
+}
+
+// TestCreate_FlagOff_ByteIdentical verifies that when WithSkipExtendedInputs is NOT set (default),
+// the extended satoshis and script are persisted unchanged — flag-off is byte-identical to prior behaviour.
+func TestCreate_FlagOff_ByteIdentical(t *testing.T) {
+	store, db := newTestStore(t)
+	tx := newExtendedTxWithOutputs(t, 2)
+	_, err := store.Create(context.Background(), tx, 1) // no options
+	require.NoError(t, err)
+	sats, script, _, _ := queryInputRow(t, db, tx.TxIDChainHash(), 0)
+	require.Equal(t, int64(tx.Inputs[0].PreviousTxSatoshis), sats, "flag off persists real satoshis")
+	require.NotEmpty(t, script, "flag off persists the parent script")
+}
+
+// TestMinimalCreate_ForcesZero_AllInputPaths proves that SkipExtendedInputs FORCES the parent
+// columns to zero even when the child input carries REAL (decorated) satoshis/script — across
+// both SQLite input-insertion paths: createInputsBatched (BatchSQLOperations=true, the default)
+// and createInputsPerRow (BatchSQLOperations=false). This is the meaningful flag test: an
+// un-decorated input would round-trip zeros regardless of the flag, so here we decorate the
+// input and assert the flag still zeroes the columns while retaining the outpoint.
+func TestMinimalCreate_ForcesZero_AllInputPaths(t *testing.T) {
+	cases := []struct {
+		name     string
+		batchSQL bool
+	}{
+		{"batched (createInputsBatched)", true},
+		{"perRow (createInputsPerRow)", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, db := newTestStoreBatch(t, tc.batchSQL)
+			ctx := context.Background()
+
+			parent := newExtendedTxWithOutputs(t, 2)
+			_, err := store.Create(ctx, parent, 1)
+			require.NoError(t, err)
+
+			// Child IS decorated (real parent satoshis + script) — the flag must override it.
+			child := newExtendedSpendingTx(t, parent, 0)
+			require.NotZero(t, child.Inputs[0].PreviousTxSatoshis, "precondition: input is decorated")
+			require.NotNil(t, child.Inputs[0].PreviousTxScript, "precondition: input is decorated")
+
+			_, err = store.Create(ctx, child, 2, utxo.WithSkipExtendedInputs(true))
+			require.NoError(t, err)
+
+			sats, script, prevHash, prevIdx := queryInputRow(t, db, child.TxIDChainHash(), 0)
+			require.Equal(t, int64(0), sats, "flag forces satoshis to zero even when input is decorated")
+			require.Empty(t, script, "flag forces script to nil even when input is decorated")
+			require.Equal(t, child.Inputs[0].PreviousTxIDChainHash()[:], prevHash, "outpoint retained")
+			require.Equal(t, int32(child.Inputs[0].PreviousTxOutIndex), prevIdx, "outpoint idx retained")
+		})
+	}
+}
+
+// TestOutpointOnlySpend_SkipsHashCheck proves that SkipUTXOHashCheck=true allows spending
+// an undecorated child (no PreviousTxScript) without a hash-mismatch or locking-script error,
+// while double-spend protection (spending_data IS NULL guard) still rejects a second spender.
+func TestOutpointOnlySpend_SkipsHashCheck(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Parent: extended (so its utxo_hash is stored). Child: NOT extended (no PreviousTxScript).
+	parent := newExtendedTxWithOutputs(t, 1)
+	_, err := store.Create(ctx, parent, 1)
+	require.NoError(t, err)
+
+	child := newSpendingTx(t, parent, 0) // no PreviousTxScript — GetSpends would fail on this
+	_, err = store.Create(ctx, child, 2, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+
+	// Outpoint-only spend: hash check skipped, must succeed.
+	_, err = store.Spend(ctx, child, 2, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err)
+
+	// Double-spend by a genuinely different tx (different txid via extra output) must still be rejected.
+	doubleSpender := newSpendingTx(t, parent, 0)
+	addOutputs(t, doubleSpender, 1) // distinct txid from child
+	_, err = store.Spend(ctx, doubleSpender, 2, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.Error(t, err)
+}
+
+// TestSpend_FlagOff_StillEnforcesHash proves that when SkipUTXOHashCheck=false (the default),
+// the hash comparison is still enforced: a spending tx whose claimed parent script differs from
+// what was stored at create time must be rejected with a hash-mismatch error.
+func TestSpend_FlagOff_StillEnforcesHash(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Create parent with real decoration so utxo_hash is anchored to a specific script+satoshis.
+	parent := newExtendedTxWithOutputs(t, 1)
+	_, err := store.Create(ctx, parent, 1)
+	require.NoError(t, err)
+
+	// Child is fully decorated (same script/sats) — would normally succeed the hash check.
+	child := newExtendedSpendingTx(t, parent, 0)
+
+	// Corrupt the claimed parent script so UTXOHashFromInput computes a different hash.
+	corruptPreviousScript(t, child)
+
+	// Flag OFF: hash must be enforced and mismatch must be rejected.
+	_, err = store.Spend(ctx, child, 2, utxo.IgnoreFlags{IgnoreLocked: true})
+	require.Error(t, err, "hash mismatch must still be rejected when flag is off")
+}
+
+// newTestStoreNamed creates a fresh in-memory SQLite store with the given unique name.
+// Use distinct names when two stores must coexist in the same test (e.g. equivalence tests).
+func newTestStoreNamed(t *testing.T, name string) (*Store, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.UtxoStore.BatchSQLOperations = true
+	tSettings.BatcherDrainMode = true
+	tSettings.Pruner.UTXODefensiveEnabled = false
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///" + name)
+	require.NoError(t, err)
+
+	store, err := New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	return store, store.db.DB
+}
+
+// outputRowFields holds the per-output columns we compare for UTXO-set equivalence.
+type outputRowFields struct {
+	utxoHash               []byte
+	lockingScript          []byte
+	satoshis               int64
+	coinbaseSpendingHeight int64
+	spendingData           []byte
+}
+
+// queryAllOutputRows reads every output row from the store (ordered by transaction hash then idx)
+// and returns a map keyed by "txhex:idx" for stable cross-store comparison.
+func queryAllOutputRows(t *testing.T, db *sql.DB) map[string]outputRowFields {
+	t.Helper()
+	rows, err := db.Query(`
+		SELECT hex(t.hash), o.idx, o.utxo_hash, o.locking_script, o.satoshis,
+		       o.coinbase_spending_height, o.spending_data
+		FROM outputs o
+		JOIN transactions tx ON tx.id = o.transaction_id
+		JOIN transactions t ON t.id = o.transaction_id
+		ORDER BY t.hash, o.idx`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	result := make(map[string]outputRowFields)
+	for rows.Next() {
+		var txHex string
+		var idx int64
+		var f outputRowFields
+		require.NoError(t, rows.Scan(&txHex, &idx, &f.utxoHash, &f.lockingScript, &f.satoshis,
+			&f.coinbaseSpendingHeight, &f.spendingData))
+		key := fmt.Sprintf("%s:%d", txHex, idx)
+		result[key] = f
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
+// TestInBlockParentChild_OutpointOnly (T-U5): verifies that an in-block parent→child spend
+// under the minimal-create + outpoint-only path succeeds. The parent is minimal-created (no
+// extended inputs), and the child that spends the parent's output is also minimal-created;
+// the subsequent outpoint-only spend of the child must succeed.
+//
+// This exercises the §4.3 invariant: within a below-checkpoint block, all parents created in
+// the same block have their outputs persisted-and-visible before any in-block child Spend runs.
+func TestInBlockParentChild_OutpointOnly(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Parent: minimal create (no extended inputs, fee=0).
+	parent := newExtendedTxWithOutputs(t, 1)
+	_, err := store.Create(ctx, parent, 500, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err, "minimal create of in-block parent must succeed")
+
+	// Child: spends parent's output 0; minimal create too.
+	child := newSpendingTx(t, parent, 0)
+	addOutputs(t, child, 1)
+	_, err = store.Create(ctx, child, 500, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err, "minimal create of in-block child must succeed")
+
+	// Outpoint-only spend of the child tx (spending one of child's own outputs).
+	// child spends parent's output 0; we now spend child's output 0.
+	grandchild := newSpendingTx(t, child, 0)
+	addOutputs(t, grandchild, 1)
+	_, err = store.Create(ctx, grandchild, 500, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err, "minimal create of grandchild must succeed")
+
+	_, err = store.Spend(ctx, grandchild, 500, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err, "outpoint-only spend of in-block grandchild must succeed")
+
+	// Also exercise spending the original child (its inputs were spent by grandchild above; spend child outputs).
+	_, err = store.Spend(ctx, child, 500, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err, "outpoint-only spend of in-block child must succeed")
+}
+
+// TestUTXOSetEquivalence_OutputsByteIdentical (T-I1 — decisive correctness test): processes the
+// SAME sequence of create+spend operations into two fresh stores — control (flags OFF) and
+// treatment (WithSkipExtendedInputs + SkipUTXOHashCheck) — and asserts that every output's
+// per-output columns are BYTE-IDENTICAL between the two stores. The only permitted differences
+// are the per-input previous_tx_satoshis (0 in treatment) and previous_tx_script (empty in
+// treatment); output utxo_hash, locking_script, satoshis, coinbase_spending_height, and
+// spending_data MUST match exactly. The test MUST fail if any output utxo_hash differs.
+//
+// Includes a tx chain (parent→child) so some outputs are spent, exercising the spend path.
+// A sequence-locked tx (SequenceNumber != 0xFFFFFFFF) is included per spec §4.5 / §6 T-I1.
+func TestUTXOSetEquivalence_OutputsByteIdentical(t *testing.T) {
+	ctx := context.Background()
+
+	storeA, dbA := newTestStoreNamed(t, "equivalence_control")
+	storeB, dbB := newTestStoreNamed(t, "equivalence_treatment")
+
+	const height = uint32(500)
+
+	// Build a set of transactions:
+	//   tx1: standalone — two outputs, no spend (remains unspent).
+	//   tx2: parent in a chain — one output, to be spent by tx3.
+	//   tx3: spends tx2:0 — one new output, decorated (real PreviousTxSatoshis so
+	//        the control store's GetFees call succeeds). PreviousTxSatoshis does NOT
+	//        affect the txid (txid uses Bytes() not ExtendedBytes()), so both stores
+	//        see the same transaction hash and the same output utxo_hash.
+	//   tx4: sequence-locked tx (non-0xFFFFFFFF sequence number) per spec §4.5.
+	tx1 := newExtendedTxWithOutputs(t, 2)
+
+	tx2 := newExtendedTxWithOutputs(t, 1)
+
+	// tx3: decorated (real satoshis so control-store GetFees doesn't error); same txid
+	// as an undecorated variant because txid = hash(non-extended bytes).
+	tx3 := newExtendedSpendingTx(t, tx2, 0)
+	addOutputs(t, tx3, 1)
+
+	// tx4: sequence-locked (BIP68-style, non-final sequence). Extended input so the
+	// control store can compute fees; treatment store will zero the satoshis.
+	tx4 := bt.NewTx()
+	lockScript4, err := bscript.NewP2PKHFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+	require.NoError(t, err)
+	seqLockedInput := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0x00000001, // non-final, sequence-locked — exercises §4.5
+		UnlockingScript:    func() *bscript.Script { s := bscript.Script{}; return &s }(),
+		PreviousTxSatoshis: tx1.Outputs[0].Satoshis + 5000, // surplus so fees >= 0
+		PreviousTxScript:   lockScript4,
+	}
+	require.NoError(t, seqLockedInput.PreviousTxIDAdd(tx1.TxIDChainHash()))
+	tx4.Inputs = append(tx4.Inputs, seqLockedInput)
+	addOutputs(t, tx4, 1)
+
+	// ---- control store A: all flags OFF (normal path) ----
+	// tx1, tx2, tx4: extended inputs — GetFees succeeds.
+	// tx3: decorated input (real PreviousTxSatoshis) — GetFees succeeds.
+	_, err = storeA.Create(ctx, tx1, height)
+	require.NoError(t, err)
+	_, err = storeA.Create(ctx, tx2, height)
+	require.NoError(t, err)
+	_, err = storeA.Create(ctx, tx3, height)
+	require.NoError(t, err)
+	_, err = storeA.Create(ctx, tx4, height)
+	require.NoError(t, err)
+
+	// Spend tx3's output:0 from store A. Use SkipUTXOHashCheck on BOTH stores for
+	// consistency — the decisive correctness assertion is output-hash equality at create
+	// time, not the spend hash path. The output utxo_hash is set at Create and never
+	// changed by Spend.
+	tx3Spender := newExtendedSpendingTx(t, tx3, 0)
+	_, err = storeA.Spend(ctx, tx3Spender, height, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err)
+
+	// ---- treatment store B: flags ON (minimal create, outpoint-only spend) ----
+	_, err = storeB.Create(ctx, tx1, height, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+	_, err = storeB.Create(ctx, tx2, height, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+	_, err = storeB.Create(ctx, tx3, height, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+	_, err = storeB.Create(ctx, tx4, height, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+
+	tx3SpenderB := newSpendingTx(t, tx3, 0)
+	_, err = storeB.Spend(ctx, tx3SpenderB, height, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err)
+
+	// ---- compare output rows ----
+	rowsA := queryAllOutputRows(t, dbA)
+	rowsB := queryAllOutputRows(t, dbB)
+
+	require.Equal(t, len(rowsA), len(rowsB),
+		"control and treatment stores must have the same number of output rows; got A=%d B=%d", len(rowsA), len(rowsB))
+
+	for key, fa := range rowsA {
+		fb, ok := rowsB[key]
+		require.True(t, ok, "output %s present in control but missing in treatment", key)
+
+		// The decisive assertion: output utxo_hash MUST be byte-identical.
+		// This fails the test if the fast path corrupts or omits the own-output hash.
+		require.Equal(t, fa.utxoHash, fb.utxoHash,
+			"output %s: utxo_hash MUST be byte-identical between control and treatment (spec §1.4 T-I1)", key)
+
+		require.Equal(t, fa.lockingScript, fb.lockingScript,
+			"output %s: locking_script must be byte-identical", key)
+		require.Equal(t, fa.satoshis, fb.satoshis,
+			"output %s: satoshis must be identical", key)
+		require.Equal(t, fa.coinbaseSpendingHeight, fb.coinbaseSpendingHeight,
+			"output %s: coinbase_spending_height must be identical", key)
+		require.Equal(t, fa.spendingData, fb.spendingData,
+			"output %s: spending_data must be identical", key)
+	}
+
+	// Verify treatment store contains no keys absent from control (catch phantom rows).
+	for key := range rowsB {
+		_, ok := rowsA[key]
+		require.True(t, ok, "output %s present in treatment but missing in control", key)
+	}
+
+	// Sanity: we must have observed at least 4 outputs (tx1×2 + tx2×1 + tx4×1; tx3×1 is spent).
+	require.GreaterOrEqual(t, len(rowsA), 4, "expected at least 4 output rows in control store")
+}
+
+// TestMinimalCreate_CoinbaseMaturity_OutpointOnlySpend is the executable store-level
+// coverage of the consensus core of spec T-B1 (the full multi-block cross-checkpoint
+// flow remains deferred to e2e). It proves that a coinbase created via the
+// below-checkpoint minimal path (WithSkipExtendedInputs) still records
+// coinbase_spending_height, and that an outpoint-only spend (SkipUTXOHashCheck) of
+// that coinbase output still enforces coinbase maturity — the flag only zeroes input
+// parent data, never the output-side maturity guard.
+func TestMinimalCreate_CoinbaseMaturity_OutpointOnlySpend(t *testing.T) {
+	store, db := newTestStore(t)
+	ctx := context.Background()
+
+	maturity := uint32(store.settings.ChainCfgParams.CoinbaseMaturity)
+	require.Positive(t, maturity, "test settings must set a non-zero coinbase maturity for this to be meaningful")
+
+	const createHeight = uint32(100)
+
+	// A real coinbase tx (block 500,000); its single input is the null coinbase input.
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff580320a107152f5669614254432f48656c6c6f20576f726c64212f2cfabe6d6dbcbb1b0222e1aeebaca2a9c905bb23a3ad0302898ec600a9033a87ec1645a446010000000000000010f829ba0b13a84def80c389cde9840000ffffffff0174fdaf4a000000001976a914f1c075a01882ae0972f95d3a4177c86c852b7d9188ac00000000")
+	require.NoError(t, err)
+	require.True(t, coinbaseTx.IsCoinbase(), "precondition: tx is a coinbase")
+
+	// Minimal create below checkpoint.
+	meta, err := store.Create(ctx, coinbaseTx, createHeight, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+	require.True(t, meta.IsCoinbase)
+
+	// Maturity was still recorded despite the minimal create.
+	var gotCSH int64
+	require.NoError(t, db.QueryRow(`
+		SELECT o.coinbase_spending_height
+		FROM outputs o JOIN transactions tx ON tx.id = o.transaction_id
+		WHERE tx.hash = ? AND o.idx = 0`, coinbaseTx.TxIDChainHash()[:]).Scan(&gotCSH))
+	require.Equal(t, int64(createHeight+maturity), gotCSH,
+		"minimal create must still set coinbase_spending_height = height + maturity")
+
+	// Outpoint-only spend one block before maturity: must be rejected as immature.
+	spender := newSpendingTx(t, coinbaseTx, 0)
+	_, err = store.Spend(ctx, spender, createHeight+maturity-1,
+		utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.Error(t, err, "spending a below-checkpoint coinbase before maturity must fail even outpoint-only")
+	require.True(t, errors.Is(err, errors.ErrTxCoinbaseImmature),
+		"expected coinbase-immature error, got: %v", err)
+
+	// At maturity height: the same outpoint-only spend succeeds.
+	_, err = store.Spend(ctx, spender, createHeight+maturity,
+		utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err, "spending at maturity height must succeed")
 }

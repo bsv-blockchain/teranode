@@ -2923,21 +2923,11 @@ func (b *Blockchain) guardRunBelowHighestCheckpoint(ctx context.Context) error {
 }
 
 // HighestCheckpointHeight returns the largest Height in the supplied
-// checkpoint list, or 0 if the list is empty. Exported so callers in
-// other packages (e.g. blockvalidation) can share the same definition
-// rather than maintaining a parallel copy.
+// checkpoint list, or 0 if the list is empty. Retained for the many callers
+// in this and other packages; delegates to model.HighestCheckpointHeight so
+// there is a single definition (invariant I3) rather than a parallel copy.
 func HighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
-	var highest uint32
-	for _, cp := range checkpoints {
-		if cp.Height < 0 {
-			continue
-		}
-		h := uint32(cp.Height)
-		if h > highest {
-			highest = h
-		}
-	}
-	return highest
+	return model.HighestCheckpointHeight(checkpoints)
 }
 
 // Run transitions the blockchain service to the running state.

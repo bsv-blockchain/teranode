@@ -112,12 +112,12 @@ In parallel, the tx's subtree is validated network-wide (§4) so block validatio
 2. Fetch full block from the announcing node's Asset server.
 3. **Parent unknown → catchup** (11-step process in `catchup.go`): fetch headers via block-locator, find common ancestor, enforce coinbase-maturity & secret-mining thresholds, verify checkpoints, concurrent-fetch + sequential-validate. FSM goes `RUNNING → CATCHINGBLOCKS → RUNNING`. **On error the FSM stays in CATCHINGBLOCKS** (no auto-revert).
 4. **Parent known → validate**: for each subtree, if unknown → request Subtree Validation. Validate via `Block.Valid()`: PoW hash < target (nBits); merkle root matches subtrees; coinbase structure; coinbase value ≤ subsidy + fees; timestamp > MTP(11) and < now+2h.
-   - **`validOrderAndBlessed`**: tx ordering (children after parents), no duplicate inputs, and **re-presentation detection** via **bloom filters** (one per recent block) plus a two-phase already-mined check (in-memory recent block IDs, default 50,000 → fallback `CheckBlockIsInCurrentChain`).
+   - **`validOrderAndBlessed`**: tx ordering (children after parents), no duplicate inputs, and **parent chain-membership** via **exact block-ID set membership** (bounded window of current-chain block-header IDs; `checkOldBlockIDs` prefetches up to 10,000 via `GetBlockHeaderIDs` → per-miss fallback `CheckBlockIsInCurrentChain` RPC — the truncated window is why the fallback exists). Already-mined (re-presented) txs are rejected later in `model.UpdateTxMinedStatus` (set-mined path: fast path vs current-chain block IDs → `CheckBlockIsAncestorOfBlock` slow path). No bloom filters — membership is exact, so no false-positive/negative risk.
 5. `AddBlock` → Blockchain → `SetBlockSubtreesSet` → Block Validation `SetMinedMulti` marks txs mined (two-phase commit phase 2). On failure: block invalidated.
-   - **`optimisticMining`**: optionally add block *before* full validation, validate in background, `ReValidateBlock` on failure (≤3 retries). **[AMBIGUITY]** default — see §10.
+   - **`optimisticMining`**: add block *before* full validation, validate in background, `ReValidateBlock` on failure (≤3 retries). **On by default** (`blockvalidation_optimistic_mining` default `true`); always disabled during catchup.
 6. **Merkle-root caveat:** subtree 0's stored hash uses the coinbase **placeholder**; to recompute the block merkle root you must substitute the real coinbase for tx 0 in subtree 0. Subtree hashes ≠ merkle-tree nodes directly. (`docs/topics/datamodel/block_header_data_model.md`)
 
-**State management — Blockchain service** owns the canonical chain, selects the longest chain by **cumulative chainwork** (not height), handles reorgs (depth-limited `blockchain_maxReorgDepth` default 6), persists headers/blocks to the blockchain (SQL) store. *Building on the strongest chain* is **Block Assembly's** job, not Block Validation's.
+**State management — Blockchain service** owns the canonical chain, selects the longest chain by **cumulative chainwork** (not height) with **no depth cap on tip selection**, persists headers/blocks to the blockchain (SQL) store. Deep-reorg / secret-mining protection lives in the Block Validation catchup path (coinbase-maturity fork depth + `blockvalidation_secret_mining_threshold`, default coinbase maturity − 1), not a `maxReorgDepth` setting. *Building on the strongest chain* is **Block Assembly's** job, not Block Validation's.
 
 **Persistence:** Blockchain → Kafka `blocksFinal` → Block Persister writes `.block` + per-subtree `.subtree` + `.utxo-additions` + `.utxo-deletions`, sets `persisted_at`, fires `BlockPersisted`. UTXO Persister folds additions/deletions into a rolling `.utxo-set` file (≥100 blocks behind tip). Pruner deletes DAH-expired UTXO records up to the safely-persisted height.
 
@@ -266,8 +266,8 @@ seeding from an exported UTXO set.
     - **During block validation (PoW override)**: a double-spend inside a valid-PoW block is **stored and marked `conflicting`**. Subtree gets it in `ConflictingNodes`; the first non-conflicting parent records it in `conflictingChildren`. Conflicting records get a TTL/DAH.
     - **Poison-pill**: children of a conflicting tx are recursively marked conflicting.
     - **Reorg = five-phase commit**: (1) mark original+children conflicting; (2) unspend original+children, lock parent UTXOs; (3) process the double-spend, spending inputs even if locked; (4) mark double-spend non-conflicting; (5) unlock parents. **[AMBIGUITY]** §10.
-- **Finality / maturity.** Coinbase outputs spendable only after **100 blocks** (`spendingHeight = coinbase_height + 100`). UTXO Persister stays ≥100 blocks behind tip. Catchup enforces coinbase-maturity (100) and secret-mining (10) thresholds. Longest chain chosen by **cumulative chainwork**.
-- **Optimistic mining.** Add-before-validate for faster propagation, with background validate + `ReValidateBlock` rollback. Experimental; disabled during catchup.
+- **Finality / maturity.** Coinbase outputs spendable only after **100 blocks** (`spendingHeight = coinbase_height + 100`). UTXO Persister stays ≥100 blocks behind tip. Catchup enforces coinbase-maturity (100) and secret-mining (`blockvalidation_secret_mining_threshold`, default coinbase maturity − 1) thresholds. Longest chain chosen by **cumulative chainwork** with no depth cap.
+- **Optimistic mining.** Add-before-validate for faster propagation, with background validate + `ReValidateBlock` rollback. **On by default** (`blockvalidation_optimistic_mining` = `true`); always disabled during catchup.
 
 ---
 
@@ -309,9 +309,9 @@ seeding from an exported UTXO set.
 **Flagged ambiguities (docs unclear/contradictory — verify against code before relying):**
 
 1. **Block Persister trigger.** Described as both a **polling** service (`persisted_at IS NULL`) and Kafka `blocksFinal`-driven. Likely both (notify + poll fallback) but not reconciled in docs.
-2. **Optimistic mining default.** `blockValidation.md` shows default `true` in a config block yet calls it "experimental and disabled by default." Verify the real default.
+2. **Optimistic mining default.** *Resolved:* `blockvalidation_optimistic_mining` defaults to **`true`** (`settings/settings.go`, `settings/blockvalidation_settings.go`) — add-before-validate is ON by default. Earlier "experimental / disabled by default" wording in `blockValidation.md` was incorrect and has been corrected.
 3. **Five- vs four-phase commit.** `understandingDoubleSpends.md` §1.3 lists 4 steps; §3 details 5. The 5-phase version is authoritative.
 4. **UTXO store backends.** `technologyStack.md` frames Aerospike as *the* UTXO store; the store docs make clear it is **pluggable** (Aerospike / SQL / Memory / Null) and the **blockchain store is separate** SQL. Don't conflate.
 5. **Subtree size "1 million".** Overview docs say "1 million tx per subtree"; data-model says **configurable power of 2** (default 1,048,576, dynamic). Treat 1M as default/illustrative.
 6. **FSM diagram completeness.** `state-machine.diagram.md` omits `IDLE ↔ LEGACYSYNCING` edges documented in `stateManagement.md`. Trust `stateManagement.md` + `services/blockchain/fsm.go`.
-7. **Quick validation / optimistic mining status.** Both described with experimental/disabled status in places — historical-block fast paths may not be active in a given build.
+7. **Quick validation status.** Described with experimental/disabled status in places — historical-block fast paths may not be active in a given build. (Optimistic mining status is resolved — see item 2.)

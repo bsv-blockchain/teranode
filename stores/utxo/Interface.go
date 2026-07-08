@@ -199,6 +199,10 @@ func (s *Spend) Clone() *Spend {
 type IgnoreFlags struct {
 	IgnoreConflicting bool
 	IgnoreLocked      bool
+	// SkipUTXOHashCheck disables the per-input utxo-hash integrity comparison during Spend.
+	// Set ONLY on the gated below-checkpoint outpoint-only path (spec §3.2 Seam 1). Default
+	// false — above-checkpoint and steady-state spends always enforce the hash.
+	SkipUTXOHashCheck bool
 }
 
 // ConflictingChildRemoval identifies one (parent, child) pair that should be
@@ -248,12 +252,13 @@ type CreateOption func(*CreateOptions)
 
 // CreateOptions holds optional parameters for UTXO creation.
 type CreateOptions struct {
-	MinedBlockInfos []MinedBlockInfo
-	TxID            *chainhash.Hash
-	IsCoinbase      *bool
-	Frozen          bool
-	Conflicting     bool
-	Locked          bool
+	MinedBlockInfos    []MinedBlockInfo
+	TxID               *chainhash.Hash
+	IsCoinbase         *bool
+	Frozen             bool
+	Conflicting        bool
+	Locked             bool
+	SkipExtendedInputs bool
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -303,6 +308,15 @@ func WithLocked(b bool) CreateOption {
 	}
 }
 
+// WithSkipExtendedInputs marks a create as minimal: compute meta with fee=0 (no GetFees) and
+// persist per-input parent script/satoshis as empty/zero, while ALWAYS retaining the per-input
+// outpoint and every output. Set ONLY on the gated below-checkpoint path (spec §3.2 Seam 3, §3.3).
+func WithSkipExtendedInputs(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.SkipExtendedInputs = b
+	}
+}
+
 type MinedBlockInfo struct {
 	BlockID        uint32
 	BlockHeight    uint32
@@ -318,6 +332,17 @@ type Store interface {
 	// If checkLiveness is true, it performs additional liveness checks.
 	// Returns status code, status message and any error encountered.
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
+
+	// SupportsOutpointOnlySpend reports whether this store correctly honours the
+	// below-checkpoint outpoint-only fast path — i.e. whether it acts on the
+	// CreateOptions.SkipExtendedInputs and IgnoreFlags.SkipUTXOHashCheck flags rather
+	// than silently ignoring them. Callers that intend to skip decorate (and hence
+	// hand un-decorated inputs to Create/Spend) MUST consult this first: a store that
+	// returns false would still try to derive the UTXO hash from absent parent data
+	// and hard-error on every transaction. SQL stores return true; stores without
+	// fast-path support (e.g. Aerospike, pending Stage B) return false. Decorators
+	// delegate to the wrapped store.
+	SupportsOutpointOnlySpend() bool
 
 	// Close drains any in-flight batched writes (Create, Spend, Get, Unlock,
 	// or any other batched operations the implementation owns) and releases

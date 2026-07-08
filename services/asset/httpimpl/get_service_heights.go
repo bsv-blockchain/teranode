@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/labstack/echo/v4"
 )
 
@@ -38,7 +39,7 @@ func (h *HTTP) GetServiceHeights(c echo.Context) error {
 	}
 
 	// Get Block Assembly height
-	assemblyStateBytes, err := blockchainClient.GetState(ctx, "BlockAssembler")
+	assemblyStateBytes, err := blockchainClient.GetState(ctx, blockassembly.StateKey)
 	if err == nil && len(assemblyStateBytes) >= 4 {
 		assemblyHeight := binary.LittleEndian.Uint32(assemblyStateBytes)
 		response["block_assembly_height"] = assemblyHeight

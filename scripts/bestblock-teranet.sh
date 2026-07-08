@@ -2,19 +2,19 @@
 
 function get_block_header() {
   local node=$1
-  https://eu-central-1-teranode-teranet-prod-1.ubsv.dev/
+  local output_file=$2
   local url="https://$node.ubsv.dev/api/v1/bestblockheader/json"
   local output=$(curl -s "$url")
 
   if [[ -z $output ]]; then
-    echo "n/a" > "$2" # Write n/a to temp file
+    echo "n/a" > "$output_file" # Write n/a to temp file
   else
     # Check if the output is valid JSON
     echo $output | jq -e . > /dev/null 2>&1
     if [[ $? -ne 0 ]]; then
-      echo "n/a" > "$2" # Write n/a to temp file
+      echo "n/a" > "$output_file" # Write n/a to temp file
     else
-      echo $output | jq -r '. | "\(.height): \(.hash)"' > "$2" # Write output to temp file
+      echo $output | jq -r '. | "\(.height): \(.hash)"' > "$output_file" # Write output to temp file
     fi
   fi
 }

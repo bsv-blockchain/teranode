@@ -62,6 +62,8 @@ func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 }
 
 // Implement remaining interface methods as no-ops for testing
+func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
+
 func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	return nil, nil
 }
