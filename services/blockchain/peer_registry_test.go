@@ -495,6 +495,60 @@ func TestCentralizedPeerRegistry_Register_ValidatedChainWorkSizeCap(t *testing.T
 	require.Equal(t, uint32(100), got.ValidatedHeight)
 }
 
+func TestCentralizedPeerRegistry_Register_PenaltyAdvanceDecaysValidatedWork(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Seed then merge so validated work is actually stored (the new-peer path
+	// clones directly and would bypass the merge under test).
+	r.Register(&PeerInfo{ID: "p"})
+	workHash := mustPeerRegistryHash("validated-before-penalty")
+	r.Register(&PeerInfo{
+		ID:                 "p",
+		ValidatedHeight:    100,
+		ValidatedBlockHash: workHash,
+		ValidatedChainWork: []byte{0x05},
+	})
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x05}, got.ValidatedChainWork, "precondition: validated work is stored")
+
+	// A penalty that advances the window decays the credited validated work.
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: time.Now().Add(time.Hour)})
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.True(t, got.FullStoragePenaltyUntil.After(time.Now()))
+	require.Empty(t, got.ValidatedChainWork, "advancing penalty must decay validated work")
+	require.Nil(t, got.ValidatedBlockHash)
+	require.Equal(t, uint32(0), got.ValidatedHeight)
+
+	// Idempotency: re-earn work, then re-send the SAME penalty timestamp — a
+	// duplicate/late penalty must NOT re-wipe freshly re-earned work.
+	penaltyTime := time.Now().Add(2 * time.Hour)
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: penaltyTime})
+
+	reHash := mustPeerRegistryHash("validated-after-penalty")
+	r.Register(&PeerInfo{
+		ID:                 "p",
+		ValidatedHeight:    120,
+		ValidatedBlockHash: reHash,
+		ValidatedChainWork: []byte{0x06},
+	})
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x06}, got.ValidatedChainWork, "precondition: work re-earned")
+
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: penaltyTime})
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x06}, got.ValidatedChainWork, "same-timestamp penalty must not re-wipe re-earned work")
+	require.Equal(t, reHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, uint32(120), got.ValidatedHeight)
+}
+
 func TestCentralizedPeerRegistry_Register_ConcurrentFullStorageContradictionsAreNotLost(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
 

@@ -151,6 +151,47 @@ func TestRecordCatchupFailure_BlockIncomplete_PenalizesNonFullPeer(t *testing.T)
 	require.Contains(t, got.LastCatchupError, blockHash.String())
 }
 
+// N2: header work is credited before a block body is delivered, so a
+// block-incomplete failure must decay the stale validated credit — otherwise it
+// re-confers top-tier ranking once the penalty window expires. Verified on the
+// real RecordCatchupFailure path for both full and non-full peers.
+func TestRecordCatchupFailure_BlockIncomplete_DecaysValidatedWork(t *testing.T) {
+	for _, storage := range []string{"full", "pruned"} {
+		t.Run(storage, func(t *testing.T) {
+			s, reg, pid := freshTestServer(t)
+			s.settings = &settings.Settings{
+				P2P: settings.P2PSettings{
+					FullStoragePenaltyDuration: 30 * time.Minute,
+				},
+			}
+			reg.Register(&blockchain.PeerInfo{ID: pid.String(), Storage: storage})
+
+			validatedHash := chainhash.HashH([]byte("validated-" + storage))
+			require.NoError(t, reg.RecordValidatedPeerProgress(pid.String(), 100, &validatedHash, []byte{0x05}))
+
+			seeded, ok := reg.Get(pid.String())
+			require.True(t, ok)
+			require.Equal(t, []byte{0x05}, seeded.ValidatedChainWork, "precondition: validated work is credited")
+
+			blockHash := chainhash.HashH([]byte("incomplete-" + storage))
+			resp, err := s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{
+				PeerId:      pid.String(),
+				FailureKind: catchupFailureKindBlockIncomplete,
+				BlockHash:   blockHash.String(),
+			})
+			require.NoError(t, err)
+			require.True(t, resp.Ok)
+
+			got, ok := reg.Get(pid.String())
+			require.True(t, ok)
+			require.True(t, got.FullStoragePenaltyUntil.After(time.Now()))
+			require.Empty(t, got.ValidatedChainWork, "stale validated work must be decayed on block-incomplete failure")
+			require.Nil(t, got.ValidatedBlockHash)
+			require.Equal(t, uint32(0), got.ValidatedHeight)
+		})
+	}
+}
+
 func TestRecordCatchupFailure_BlockIncomplete_DoesNotBanPeer(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String(), Storage: "full"})

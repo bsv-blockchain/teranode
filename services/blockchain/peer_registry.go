@@ -334,9 +334,22 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 		existing.FullStorageContradictions += info.FullStorageContradictions
 	}
 	if !info.FullStoragePenaltyUntil.IsZero() {
+		prevPenalty := existing.FullStoragePenaltyUntil
 		existing.FullStoragePenaltyUntil = maxFullStoragePenaltyUntil(existing.FullStoragePenaltyUntil, info.FullStoragePenaltyUntil)
 		if existing.Storage == "full" && now.Before(existing.FullStoragePenaltyUntil) {
 			existing.Storage = ""
+		}
+		// A delivery-failure penalty that advances the window decays any credited
+		// validated work. Header work is credited before a block body is delivered,
+		// so stale never-delivered credit must not re-confer top-tier ranking once
+		// the penalty window expires; the peer must re-earn work via fresh delivery.
+		// Gated on advancing the window (strictly later than the prior penalty) so a
+		// duplicate or late penalty with the same/earlier timestamp does not re-wipe
+		// freshly re-earned work.
+		if info.FullStoragePenaltyUntil.After(prevPenalty) && now.Before(existing.FullStoragePenaltyUntil) {
+			existing.ValidatedChainWork = nil
+			existing.ValidatedBlockHash = nil
+			existing.ValidatedHeight = 0
 		}
 	}
 	// Only update TransportType when the caller explicitly set it.
