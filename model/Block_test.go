@@ -2023,6 +2023,31 @@ func TestBlock_CheckBlockRewardAndFees(t *testing.T) {
 		err = block.checkBlockRewardAndFees(params, true, true)
 		require.NoError(t, err)
 	})
+
+	t.Run("coinbase output satoshi sum overflow is rejected", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 1, 0)
+		require.NoError(t, err)
+
+		// Two coinbase outputs whose satoshi sum wraps uint64. Without the
+		// overflow guard the wrapped total (0) would slip past the
+		// no-inflation comparison; it must be rejected as an invalid block.
+		block.CoinbaseTx.Outputs = []*bt.Output{
+			{Satoshis: ^uint64(0)},
+			{Satoshis: 1},
+		}
+
+		params := &chaincfg.Params{SubsidyReductionInterval: 210000}
+		err = block.checkBlockRewardAndFees(params, true, true)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "overflow")
+	})
 }
 
 // newBlockWithCoinbaseRewardAndZeroSubtreeFees builds a Block at the given height
