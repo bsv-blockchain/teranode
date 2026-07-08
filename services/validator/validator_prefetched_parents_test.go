@@ -92,3 +92,34 @@ func Test_getUtxoBlockHeightsAndExtendTx_PartialPrefetchFallsBackToStore(t *test
 	// parent0 and parent2 came from the prefetch; only parent1 hit the store.
 	mockUtxoStore.AssertNumberOfCalls(t, "Get", 1)
 }
+
+// Test_getUtxoBlockHeightAndExtendForParentTx_InputIndexOutOfBounds guards the
+// dead bounds check in the extend path: an input index equal to len(tx.Inputs)
+// must return an out-of-bounds error rather than panic on tx.Inputs[idx]. The
+// guard was `idx > len(tx.Inputs)`, which let idx == len slip through to the
+// slice access; it should be `idx >= len(tx.Inputs)`.
+func Test_getUtxoBlockHeightAndExtendForParentTx_InputIndexOutOfBounds(t *testing.T) {
+	ctx := context.Background()
+
+	// Child tx with a single input, so len(tx.Inputs) == 1.
+	childTx := &bt.Tx{Inputs: []*bt.Input{{}}}
+
+	// Parent supplied via prefetch (Tx non-nil so the extend path uses it) with a
+	// recorded block height, so no store Get is needed.
+	// Parent Tx carries an output so that, without the guard fix, evaluation
+	// reaches tx.Inputs[idx] (rather than short-circuiting on nil Outputs) and
+	// panics with index-out-of-range — the exact defect being guarded.
+	parentHash := chainhash.Hash{}
+	prefetched := map[chainhash.Hash]*meta.Data{
+		parentHash: {BlockHeights: []uint32{100}, Tx: &bt.Tx{Outputs: []*bt.Output{{}}}},
+	}
+
+	v := &Validator{}
+	utxoHeights := make([]uint32, 2)
+
+	// idx == len(childTx.Inputs) is the boundary that previously slipped past the
+	// guard and panicked.
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{1}, utxoHeights, childTx, true, prefetched)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "out of bounds")
+}

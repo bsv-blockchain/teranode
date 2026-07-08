@@ -1172,7 +1172,7 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 	if extend {
 		// extend the transaction inputs with the parent tx outputs
 		for _, idx := range idxs {
-			if idx > len(tx.Inputs) {
+			if idx >= len(tx.Inputs) {
 				return errors.NewProcessingError("[Validate][%s] input index %d out of bounds for transaction with %d inputs",
 					tx.TxIDChainHash().String(), idx, len(tx.Inputs))
 			}
