@@ -151,10 +151,12 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 	if validationOptions.SkipScriptValidation {
 		// Skipping script validation bypasses BDK entirely, so the money-range and
 		// no-inflation invariants BDK normally enforces are applied here as a
-		// Go-side backstop. The check order mirrors BDK's ValidateTransaction
-		// sequence: output money-range/total first (implCheckTransactionCommon),
-		// then the unconfirmed-parent sentinel, then input money-range and
-		// inflation (implCheckInputValues).
+		// Go-side backstop. Output money-range/total is always checked first
+		// (implCheckTransactionCommon). The unconfirmed-parent sentinel and the
+		// input money-range/inflation check (implCheckInputValues) then run in an
+		// ERA-DEPENDENT order that mirrors BDK: pre-Genesis the sentinel first,
+		// post-Genesis the input/inflation check first. See the era switch below
+		// for why (bdk/core/txvalidator.cpp).
 		if err := tv.checkOutputValues(tx); err != nil {
 			return err
 		}
