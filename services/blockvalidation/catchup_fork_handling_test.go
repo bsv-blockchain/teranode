@@ -690,8 +690,12 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 		// Metadata for the common ancestor.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, ancestorHeader.Hash()).
 			Return(ancestorHeader, &model.BlockHeaderMeta{Height: ancestorHeight, ID: 1, ChainWork: ancestorChainWork.Bytes()}, nil).Maybe()
+		// Any other header (the peer's fork blocks) is absent from our chain, so
+		// GetBlockHeader reports not found and the common-ancestor walk stops at the
+		// divergence point, leaving the fork blocks as offered headers.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: ancestorHeight, ChainWork: ancestorChainWork.Bytes()}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Header-fetch plumbing.
 		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
