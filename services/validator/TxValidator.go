@@ -157,7 +157,8 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		// ERA-DEPENDENT order that mirrors BDK: pre-Genesis the sentinel first,
 		// post-Genesis the input/inflation check first. See the era switch below
 		// for why (bdk/core/txvalidator.cpp).
-		if err := tv.checkOutputValues(tx); err != nil {
+		totalOut, err := tv.checkOutputValues(tx)
+		if err != nil {
 			return err
 		}
 
@@ -190,11 +191,11 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 			if err := sentinelGuard(); err != nil {
 				return err
 			}
-			if err := tv.checkInputValuesAndInflation(tx); err != nil {
+			if err := tv.checkInputValuesAndInflation(tx, totalOut); err != nil {
 				return err
 			}
 		} else {
-			if err := tv.checkInputValuesAndInflation(tx); err != nil {
+			if err := tv.checkInputValuesAndInflation(tx, totalOut); err != nil {
 				return err
 			}
 			if err := sentinelGuard(); err != nil {
@@ -220,31 +221,32 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 // check. The running total is bounded after each addition, which also makes the
 // accumulation overflow-safe: every addend is within [0, MaxSatoshis], so the
 // total cannot wrap uint64 before it is rejected.
-func (tv *TxValidator) checkOutputValues(tx *bt.Tx) error {
+func (tv *TxValidator) checkOutputValues(tx *bt.Tx) (uint64, error) {
 	totalOut := uint64(0)
 
 	for _, out := range tx.Outputs {
 		if out.Satoshis > math.MaxInt64 {
-			return errors.NewTxInvalidError("bad-txns-vout-negative")
+			return 0, errors.NewTxInvalidError("bad-txns-vout-negative")
 		}
 
 		if out.Satoshis > MaxSatoshis {
-			return errors.NewTxInvalidError("bad-txns-vout-toolarge")
+			return 0, errors.NewTxInvalidError("bad-txns-vout-toolarge")
 		}
 
 		totalOut += out.Satoshis
 		if totalOut > MaxSatoshis {
-			return errors.NewTxInvalidError("bad-txns-txouttotal-toolarge")
+			return 0, errors.NewTxInvalidError("bad-txns-txouttotal-toolarge")
 		}
 	}
 
-	return nil
+	return totalOut, nil
 }
 
 // checkInputValuesAndInflation enforces the input money-range and no-inflation
 // invariants that BDK applies in implCheckInputValues: each input value and the
 // running total must be within [0, MaxSatoshis], and the sum of inputs must be at
-// least the sum of outputs (equality is allowed, i.e. a zero-fee transaction).
+// least totalOut (the output total already computed and bounded by
+// checkOutputValues; equality is allowed, i.e. a zero-fee transaction).
 // A high-bit or over-range input value both map to bad-txns-inputvalues-outofrange,
 // matching how the money-range predicate collapses the two cases.
 //
@@ -252,7 +254,7 @@ func (tv *TxValidator) checkOutputValues(tx *bt.Tx) error {
 // this holds for every caller that reaches ValidateTransaction. If a value-less
 // transaction were passed, the sum of inputs would be zero and the check fails
 // closed (bad-txns-in-belowout) rather than admitting coins from nothing.
-func (tv *TxValidator) checkInputValuesAndInflation(tx *bt.Tx) error {
+func (tv *TxValidator) checkInputValuesAndInflation(tx *bt.Tx, totalOut uint64) error {
 	totalIn := uint64(0)
 
 	for _, in := range tx.Inputs {
@@ -264,11 +266,6 @@ func (tv *TxValidator) checkInputValuesAndInflation(tx *bt.Tx) error {
 		if totalIn > MaxSatoshis {
 			return errors.NewTxInvalidError("bad-txns-inputvalues-outofrange")
 		}
-	}
-
-	totalOut := uint64(0)
-	for _, out := range tx.Outputs {
-		totalOut += out.Satoshis
 	}
 
 	if totalIn < totalOut {
