@@ -1130,6 +1130,19 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 //     height in policy mode.
 func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int,
 	utxoHeights []uint32, tx *bt.Tx, extend bool, prefetched map[chainhash.Hash]*meta.Data) error {
+	// Validate every target index up front, before any utxoHeights[idx] (the
+	// height loops below) or tx.Inputs[idx] (the extend loop) dereference. idxs
+	// are positions in tx.Inputs, and the caller sizes utxoHeights to
+	// len(tx.Inputs), so an out-of-range index would otherwise panic in the
+	// height loop before reaching the extend path. Unreachable today (idxs
+	// derive from range tx.Inputs), so this is purely defensive hardening.
+	for _, idx := range idxs {
+		if idx < 0 || idx >= len(tx.Inputs) || idx >= len(utxoHeights) {
+			return errors.NewProcessingError("[Validate][%s] input index %d out of bounds (%d inputs, %d height slots)",
+				tx.TxIDChainHash().String(), idx, len(tx.Inputs), len(utxoHeights))
+		}
+	}
+
 	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
 
 	if extend {
@@ -1170,13 +1183,9 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 	}
 
 	if extend {
-		// extend the transaction inputs with the parent tx outputs
+		// extend the transaction inputs with the parent tx outputs (idx bounds
+		// already validated at the top of the function)
 		for _, idx := range idxs {
-			if idx >= len(tx.Inputs) {
-				return errors.NewProcessingError("[Validate][%s] input index %d out of bounds for transaction with %d inputs",
-					tx.TxIDChainHash().String(), idx, len(tx.Inputs))
-			}
-
 			if txMeta.Tx == nil || txMeta.Tx.Outputs == nil || txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex] == nil {
 				return errors.NewProcessingError("[Validate][%s] parent transaction %s does not have outputs for input index %d",
 					tx.TxIDChainHash().String(), parentTxHash.String(), idx)
