@@ -80,6 +80,6 @@ func (h *HTTP) GetSubtreeData() func(c echo.Context) error {
 
 		prometheusAssetHTTPGetSubtreeData.WithLabelValues("OK", "200").Inc()
 
-		return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
+		return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r)
 	}
 }

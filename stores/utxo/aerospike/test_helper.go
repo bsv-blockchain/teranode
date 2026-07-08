@@ -56,7 +56,10 @@
 package aerospike
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -156,7 +159,7 @@ func NewBatchStoreItem(
 	blockHeight uint32,
 	blockIDs []uint32,
 	lockTime uint32,
-	done chan error,
+	group *completion.Group,
 ) *BatchStoreItem {
 	return &BatchStoreItem{
 		txHash:      txHash,
@@ -165,7 +168,7 @@ func NewBatchStoreItem(
 		blockHeight: blockHeight,
 		blockIDs:    blockIDs,
 		lockTime:    lockTime,
-		done:        done,
+		group:       group,
 	}
 }
 
@@ -174,12 +177,17 @@ func (i *BatchStoreItem) GetTxHash() *chainhash.Hash {
 	return i.txHash
 }
 
-// SendDone was implemented to facilitate testing
+// SendDone was implemented to facilitate testing. It completes the item with
+// the given error (CAS-guarded, exactly-once).
 func (i *BatchStoreItem) SendDone(e error) {
-	i.done <- e
+	i.complete(e)
 }
 
-// RecvDone was implemented to facilitate testing
+// RecvDone was implemented to facilitate testing. It waits for the item's
+// completion group and returns the terminal result.
 func (i *BatchStoreItem) RecvDone() error {
-	return <-i.done
+	if i.group != nil {
+		_ = i.group.Wait(context.Background(), 0)
+	}
+	return i.result
 }

@@ -105,6 +105,8 @@ func (m *mockCache) BatchDecorate(ctx context.Context, txs []*utxo.UnresolvedMet
 	return args.Error(0)
 }
 
+func (m *mockCache) SupportsOutpointOnlySpend() bool { return false }
+
 func (m *mockCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	args := m.Called(ctx, tx, blockHeight, opts)
 	if args.Get(0) == nil {

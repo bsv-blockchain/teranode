@@ -572,7 +572,7 @@ The Blockchain Service implements sophisticated chain reorganization handling wi
 
 - Detects chain splits and reorganizations automatically through block header validation
 - Uses rollback and catch-up operations to handle chain reorganizations
-- Limits reorganization depth for security (configurable via `blockchain_maxReorgDepth`)
+- Selects the active tip purely by cumulative chainwork (most-work-wins); tip selection itself is **not** depth-capped. Deep-reorg / secret-mining protection is enforced in the Block Validation catchup path rather than by a blockchain-level reorg-depth limit (see *Configuration Options* below).
 
 ##### Optimized Longest Chain Selection
 
@@ -604,9 +604,9 @@ The service employs an optimized algorithm for tracking and selecting the longes
 
 **Configuration Options:**
 
-- `blockchain_maxReorgDepth`: Maximum allowed reorganization depth (default: 6 blocks)
-- `blockchain_chainTipCacheSize`: Number of competing tips to track (default: 10)
-- `blockchain_forkPointCacheSize`: Size of fork point cache (default: 100)
+There is no blockchain-level reorganization-depth cap. The active tip is always the chain with the most cumulative chainwork. Protection against deep/secret reorgs is enforced by the Block Validation service during catchup:
+
+- `blockvalidation_secret_mining_threshold`: A candidate chain whose common ancestor is more than this many blocks behind the current tip is rejected as potential secret mining (default: coinbase maturity − 1). Coinbase-maturity fork depth provides the additional bound. See [Block Validation](blockValidation.md).
 
 #### Storage Errors
 

@@ -83,7 +83,7 @@ func TestCheckBlockSubtrees_SubtreeToCheckAlreadyExists(t *testing.T) {
 		Return(true, nil).Maybe()
 
 	// Let the mock validator bless txs against the server's utxo store.
-	server.validatorClient.(*validator.MockValidatorClient).UtxoStore = server.utxoStore
+	server.validatorClient.(*validator.MockValidator).UtxoStore = server.utxoStore
 
 	// Build a real subtree (coinbase placeholder + one tx) so its root matches its
 	// served node bytes and the root-hash check passes, taking us to the store call.

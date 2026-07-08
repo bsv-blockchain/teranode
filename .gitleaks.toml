@@ -1,0 +1,38 @@
+# gitleaks configuration for Teranode.
+#
+# Extends the upstream default ruleset and allowlists the committed
+# localhost/docker dev-default database credentials (well-known test creds where
+# the username equals the password, and ${ENV_VAR} placeholders substituted at
+# runtime). These are not real secrets — they only ever point at local/docker
+# service hosts for zero-config dev and test bring-up.
+#
+# The CI job scans only the commits introduced by a pull request, so existing
+# committed defaults are not re-flagged; this allowlist is the safety net for
+# when a PR legitimately touches those config lines.
+
+title = "Teranode gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Localhost/docker dev-default DB credentials and env placeholders"
+regexTarget = "line"
+regexes = [
+  # Postgres connection strings pointing at local/docker service hosts.
+  '''postgres://[^@\s"'`]+@(localhost|postgres|postgrest|toxiproxy|127\.0\.0\.1)([:/]|$)''',
+  # ${ENV_VAR} placeholders resolved at runtime (not literal secrets).
+  '''\$\{[A-Za-z0-9_]+\}''',
+  # Committed dev/test P2P key defaults (overridden per-deployment via
+  # settings_local.conf / env). Scoped to the specific config keys, so a real
+  # secret added to settings.conf under a different name is still caught.
+  '''(alert_genesis_keys|alert_p2p_private_key|coinbase_p2p_private_key|p2p_shared_key|tx_blaster_p2p_private_key)\b''',
+  # Dev test wallet key for the docker blaster stacks (overridden per-deploy).
+  '''COINBASE_WALLET_PRIVATE_KEY''',
+]
+paths = [
+  # Generated dev libp2p peer keys for local multi-node docker setups, and the
+  # tooling that emits them. Test fixtures only.
+  '''compose/cmd/gennodes/peer_keys\.json''',
+  '''compose/cmd/genpeerkeys/main\.go''',
+]

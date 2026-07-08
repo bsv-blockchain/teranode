@@ -508,6 +508,14 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.UnconfirmedParentsAtCandidateHeight = *req.UnconfirmedParentsAtCandidateHeight
 	}
 
+	if req.SkipScriptValidation != nil {
+		opts.SkipScriptValidation = *req.SkipScriptValidation
+	}
+
+	if req.OutpointOnlySpend != nil {
+		opts.OutpointOnlySpend = *req.OutpointOnlySpend
+	}
+
 	return opts, nil
 }
 
@@ -832,6 +840,16 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 	// cannot silently drop the flag a block-validation / legacy-sync caller set.
 	if unconfirmedParentsStr := c.QueryParam("unconfirmedParentsAtCandidateHeight"); unconfirmedParentsStr != "" {
 		options.UnconfirmedParentsAtCandidateHeight = unconfirmedParentsStr == trueString || unconfirmedParentsStr == "1"
+	}
+
+	// Parity with the gRPC body fields (SkipScriptValidation / OutpointOnlySpend) so
+	// the HTTP fallback path carries the below-checkpoint fast-path flags end-to-end.
+	if skipScriptStr := c.QueryParam("skipScriptValidation"); skipScriptStr != "" {
+		options.SkipScriptValidation = skipScriptStr == trueString || skipScriptStr == "1"
+	}
+
+	if outpointOnlyStr := c.QueryParam("outpointOnlySpend"); outpointOnlyStr != "" {
+		options.OutpointOnlySpend = outpointOnlyStr == trueString || outpointOnlyStr == "1"
 	}
 
 	return blockHeight, options

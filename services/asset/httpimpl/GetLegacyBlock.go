@@ -86,7 +86,7 @@ func (h *HTTP) GetLegacyBlock() func(c echo.Context) error {
 
 		prometheusAssetHTTPGetBlockLegacy.WithLabelValues("OK", "200").Inc()
 
-		return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
+		return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r)
 	}
 }
 
@@ -142,6 +142,6 @@ func (h *HTTP) GetRestLegacyBlock() func(c echo.Context) error {
 
 		prometheusAssetHTTPGetBlockLegacy.WithLabelValues("OK", "200").Inc()
 
-		return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
+		return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r)
 	}
 }

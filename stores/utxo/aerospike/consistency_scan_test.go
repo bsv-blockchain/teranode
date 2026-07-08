@@ -438,6 +438,7 @@ func Test_launchConsistencyScan(t *testing.T) {
 
 		// Drain — wait for channels to close (all workers done)
 		for range it.resultChan {
+			// drain until closed
 		}
 		require.Equal(t, int32(4096), workerCount.Load())
 		it.Close()

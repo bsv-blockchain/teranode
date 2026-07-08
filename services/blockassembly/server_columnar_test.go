@@ -346,7 +346,6 @@ func TestConvertToColumnarFormat_Success(t *testing.T) {
 				Size:       uint64(250 + i*10),
 				TxInpoints: inpointsForParents(t, parents, vouts),
 			},
-			done: make(chan error, 1),
 		}
 	}
 
@@ -410,7 +409,6 @@ func TestConvertToColumnarFormat_InvalidTxidLength(t *testing.T) {
 				Size:       250,
 				TxInpoints: []byte{},
 			},
-			done: make(chan error, 1),
 		},
 	}
 
@@ -466,7 +464,6 @@ func TestAddTxBatchColumnar_RoundTrip(t *testing.T) {
 				Size:       uint64(500 + i*50),
 				TxInpoints: inpointsForParents(t, parents, vouts),
 			},
-			done: make(chan error, 1),
 		}
 	}
 

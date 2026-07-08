@@ -24,27 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ExtendedMockValidator extends TestMockValidator with additional methods
-type ExtendedMockValidator struct {
-	TestMockValidator
-	getBlockHeightFunc     func() uint32
-	getMedianBlockTimeFunc func() uint32
-}
-
-func (m *ExtendedMockValidator) GetBlockHeight() uint32 {
-	if m.getBlockHeightFunc != nil {
-		return m.getBlockHeightFunc()
-	}
-	return 101
-}
-
-func (m *ExtendedMockValidator) GetMedianBlockTime() uint32 {
-	if m.getMedianBlockTimeFunc != nil {
-		return m.getMedianBlockTimeFunc()
-	}
-	return uint32(time.Now().Unix())
-}
-
 // TestServerInit tests the Init method comprehensively
 func TestServerInit(t *testing.T) {
 	t.Run("successful init with disabled block assembly", func(t *testing.T) {
@@ -214,8 +193,8 @@ func TestServerValidateTransaction(t *testing.T) {
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
@@ -260,8 +239,8 @@ func TestServerValidateTransaction(t *testing.T) {
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
@@ -296,8 +275,8 @@ func TestServerValidateTransaction(t *testing.T) {
 
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return nil, errors.NewServiceError("validation failed")
 			},
 		}
@@ -322,8 +301,8 @@ func TestServerValidateTransactionBatch(t *testing.T) {
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
 		txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
@@ -355,8 +334,8 @@ func TestServerValidateTransactionBatch(t *testing.T) {
 
 		var callCount int32
 		txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				count := atomic.AddInt32(&callCount, 1)
 				if count == 1 {
 					return &meta.Data{
@@ -403,11 +382,7 @@ func TestServerGetBlockHeight(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &ExtendedMockValidator{
-			getBlockHeightFunc: func() uint32 {
-				return 12345
-			},
-		}
+		server.validator = &MockValidator{BlockHeight: 12345}
 
 		response, err := server.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
 		require.NoError(t, err)
@@ -420,11 +395,7 @@ func TestServerGetBlockHeight(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &ExtendedMockValidator{
-			getBlockHeightFunc: func() uint32 {
-				return 0
-			},
-		}
+		server.validator = &MockValidator{BlockHeight: 0}
 
 		response, err := server.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
 		require.Error(t, err)
@@ -440,11 +411,7 @@ func TestServerGetMedianBlockTime(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &ExtendedMockValidator{
-			getMedianBlockTimeFunc: func() uint32 {
-				return 1609459200
-			},
-		}
+		server.validator = &MockValidator{MedianBlockTime: 1609459200}
 
 		response, err := server.GetMedianBlockTime(context.Background(), &validator_api.EmptyMessage{})
 		require.NoError(t, err)
@@ -457,11 +424,7 @@ func TestServerGetMedianBlockTime(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &ExtendedMockValidator{
-			getMedianBlockTimeFunc: func() uint32 {
-				return 0
-			},
-		}
+		server.validator = &MockValidator{MedianBlockTime: 0}
 
 		response, err := server.GetMedianBlockTime(context.Background(), &validator_api.EmptyMessage{})
 		require.Error(t, err)
@@ -555,8 +518,8 @@ func TestHandleSingleTx(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil, nil)
 
-		server.validator = &TestMockValidator{
-			validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+		server.validator = &MockValidator{
+			ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 				return nil, errors.NewServiceError("validation error")
 			},
 		}

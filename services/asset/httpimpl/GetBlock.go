@@ -288,76 +288,81 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 //	GET /block/hash/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/hex
 func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		hashStr := c.Param("hash")
+		return h.getBlockByHash(c, mode)
+	}
+}
 
-		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockByHash_http",
-			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockByHash in %s for %s: %s", mode, c.RealIP(), hashStr),
-		)
+// getBlockByHash serves a single GetBlockByHash request in the given read mode.
+func (h *HTTP) getBlockByHash(c echo.Context, mode ReadMode) error {
+	hashStr := c.Param("hash")
 
-		defer deferFn()
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockByHash_http",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockByHash in %s for %s: %s", mode, c.RealIP(), hashStr),
+	)
 
-		if len(hashStr) != 64 {
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash length").Error())
+	defer deferFn()
+
+	if len(hashStr) != 64 {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash length").Error())
+	}
+
+	hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
+	}
+
+	block, err := h.repository.GetBlockByHash(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		} else {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
+	}
 
-		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
-		}
+	// sign the response, if the private key is set, ignore error
+	// do this before any output is sent to the client, this adds a signature to the response header
+	_ = h.Sign(c.Response(), hash.CloneBytes())
 
-		block, err := h.repository.GetBlockByHash(ctx, hash)
-		if err != nil {
-			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
-				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	prometheusAssetHTTPGetBlock.WithLabelValues("OK", "200").Inc()
+
+	if mode == JSON {
+		height := block.Height
+		if height == 0 {
+			_, blockMeta, _ := h.repository.GetBlockHeader(c.Request().Context(), hash)
+			if blockMeta != nil {
+				height = blockMeta.Height
 			}
 		}
 
-		// sign the response, if the private key is set, ignore error
-		// do this before any output is sent to the client, this adds a signature to the response header
-		_ = h.Sign(c.Response(), hash.CloneBytes())
+		// get next hash to include in response
+		var nextBlockHash *chainhash.Hash
 
-		prometheusAssetHTTPGetBlock.WithLabelValues("OK", "200").Inc()
-
-		if mode == JSON {
-			height := block.Height
-			if height == 0 {
-				_, blockMeta, _ := h.repository.GetBlockHeader(c.Request().Context(), hash)
-				if blockMeta != nil {
-					height = blockMeta.Height
-				}
-			}
-
-			// get next hash to include in response
-			var nextBlockHash *chainhash.Hash
-
-			nextBlock, _ := h.repository.GetBlockByHeight(ctx, height+1)
-			if nextBlock != nil {
-				nextBlockHash = nextBlock.Hash()
-			}
-
-			blockExtended := BlockExtended{
-				Block:     block,
-				NextBlock: nextBlockHash,
-			}
-
-			return c.JSONPretty(200, blockExtended, "  ")
+		nextBlock, _ := h.repository.GetBlockByHeight(ctx, height+1)
+		if nextBlock != nil {
+			nextBlockHash = nextBlock.Hash()
 		}
 
-		b, err := block.Bytes()
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		blockExtended := BlockExtended{
+			Block:     block,
+			NextBlock: nextBlockHash,
 		}
 
-		switch mode {
-		case BINARY_STREAM:
-			return c.Blob(200, echo.MIMEOctetStream, b)
-		case HEX:
-			return c.String(200, hex.EncodeToString(b))
-		default:
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
-		}
+		return c.JSONPretty(200, blockExtended, "  ")
+	}
+
+	b, err := block.Bytes()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	switch mode {
+	case BINARY_STREAM:
+		return c.Blob(200, echo.MIMEOctetStream, b)
+	case HEX:
+		return c.String(200, hex.EncodeToString(b))
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
 	}
 }

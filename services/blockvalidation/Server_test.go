@@ -62,31 +62,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// mockBlockValidationInterface is a mock implementation of the Interface interface
-type mockBlockValidationInterface struct {
-	mock.Mock
-}
-
-func (m *mockBlockValidationInterface) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	args := m.Called(ctx, checkLiveness)
-	return args.Int(0), args.String(1), args.Error(2)
-}
-
-func (m *mockBlockValidationInterface) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseURL string, waitToComplete bool) error {
-	args := m.Called(ctx, blockHash, baseURL, waitToComplete)
-	return args.Error(0)
-}
-
-func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
-	args := m.Called(ctx, block, blockHeight, peerID, baseURL, blockID)
-	return args.Error(0)
-}
-
-func (m *mockBlockValidationInterface) ValidateBlock(ctx context.Context, block *model.Block, options *ValidateBlockOptions) error {
-	args := m.Called(ctx, block, options)
-	return args.Error(0)
-}
-
 var (
 	coinbaseTx, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08044c86041b020602ffffffff0100f2052a010000004341041b0e8c2567c12536aa13357b79a073dc4444acb83c4ec7a0e2f99dd7457516c5817242da796924ca4e99947d087fedf9ce467cb9f7c6287078f801df276fdf84ac00000000")
 
@@ -445,6 +420,24 @@ func Test_Server_processBlockFound(t *testing.T) {
 
 	err = s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
 	require.NoError(t, err)
+}
+
+// TestServer_processBlockNotifyHasTTL guards against regressing to a TTL-less
+// processBlockNotify cache. Entries are normally removed by explicit Delete when
+// catchup completes or fails, but a missed Delete on any error/early-return branch
+// would leak the entry permanently unless a TTL acts as a safety net. Setting with
+// ttlcache.DefaultTTL must therefore resolve to a real expiry, not 0 (no expiry).
+func TestServer_processBlockNotifyHasTTL(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	s := New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	var hash chainhash.Hash
+	item := s.processBlockNotify.Set(hash, true, ttlcache.DefaultTTL)
+
+	require.False(t, item.ExpiresAt().IsZero(), "processBlockNotify entry must have an expiry so missed Delete paths cannot leak it")
+	require.True(t, item.ExpiresAt().After(time.Now()), "processBlockNotify entry expiry must be in the future")
 }
 
 func TestServer_processBlockFoundChannel(t *testing.T) {

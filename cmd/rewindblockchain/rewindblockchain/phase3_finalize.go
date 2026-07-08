@@ -7,11 +7,11 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 )
 
 const (
-	blockAssemblerStateKey    = "BlockAssembler"
 	blockPersisterHeightKey   = "BlockPersisterHeight"
 	utxoPersisterLastHeightFn = "lastProcessed.dat"
 )
@@ -35,24 +35,16 @@ func (e *env) phase3Finalize(ctx context.Context, pf *preflightResult) error {
 }
 
 // resetBlockAssemblerState writes state["BlockAssembler"] = {target, targetHeader}
-// so BA bootstraps from the correct post-rewind tip.
-//
-// Format matches services/blockassembly/BlockAssembler.go:904-918:
-//
-//	[0:4]   LE uint32 height
-//	[4:]    block header bytes
+// so BA bootstraps from the correct post-rewind tip. It uses the shared
+// blockassembly.EncodeState / StateKey helpers so the on-disk format cannot
+// drift from what the BlockAssembler reads back on startup.
 func (e *env) resetBlockAssemblerState(ctx context.Context, pf *preflightResult) error {
 	header, _, err := e.blockchainStore.GetBlockHeader(ctx, pf.targetHash)
 	if err != nil {
 		return errors.NewStorageError("failed to read target header: %w", err)
 	}
 
-	headerBytes := header.Bytes()
-	payload := make([]byte, 4, 4+len(headerBytes))
-	binary.LittleEndian.PutUint32(payload, pf.target)
-	payload = append(payload, headerBytes...)
-
-	if err = e.blockchainStore.SetState(ctx, blockAssemblerStateKey, payload); err != nil {
+	if err = e.blockchainStore.SetState(ctx, blockassembly.StateKey, blockassembly.EncodeState(header, pf.target)); err != nil {
 		return errors.NewStorageError("failed to write state[BlockAssembler]: %w", err)
 	}
 

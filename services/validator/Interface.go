@@ -30,7 +30,6 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
-	"github.com/bsv-blockchain/teranode/util"
 )
 
 // Interface defines the core validation functionality required for Bitcoin transaction validation.
@@ -132,80 +131,4 @@ type Interface interface {
 	// Returns:
 	//   - error: Error if the MTP fetch fails; the caller should abort block validation
 	EnsureMTPLoaded(ctx context.Context, blockHeight uint32) error
-}
-
-// Type assertion to ensure MockValidator implements Interface
-var _ Interface = &MockValidator{}
-
-// MockValidator provides a mock implementation of the validator Interface
-// This implementation is primarily used for testing purposes and provides
-// no-op implementations of all required methods.
-type MockValidator struct{}
-
-// Health implements the health check for the mock validator
-// Always returns success without actually performing any checks
-// Parameters:
-//   - ctx: Context for the health check operation (unused in mock)
-//   - checkLiveness: Boolean flag for liveness check (unused in mock)
-//
-// Returns:
-//   - int: Always returns 0
-//   - string: Always returns "Mock Validator"
-//   - error: Always returns nil
-func (mv *MockValidator) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	return 0, "Mock Validator", nil
-}
-
-// Validate implements mock transaction validation
-// Always returns success without performing any actual validation
-// Parameters:
-//   - ctx: Context for validation (unused in mock)
-//   - tx: Transaction to validate (unused in mock)
-//   - blockHeight: Block height for validation context (unused in mock)
-//   - opts: Optional validation settings (unused in mock)
-//
-// Returns:
-//   - error: Always returns nil
-func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
-	return util.TxMetaDataFromTx(tx)
-}
-
-// ValidateWithOptions implements mock transaction validation with options set directly
-// Always returns success without performing any actual validation
-// Parameters:
-//   - ctx: Context for validation (unused in mock)
-//   - tx: Transaction to validate (unused in mock)
-//   - blockHeight: Block height for validation context (unused in mock)
-//   - validationOptions: Validation options for the transaction (unused in mock)
-//
-// Returns:
-//   - error: Always returns nil
-func (mv *MockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error) {
-	return util.TxMetaDataFromTx(tx)
-}
-
-// GetBlockHeight implements mock block height retrieval
-// Always returns 0 without actually checking any block height
-// Returns:
-//   - uint32: Always returns 0
-func (mv *MockValidator) GetBlockHeight() uint32 {
-	return 0
-}
-
-// GetMedianBlockTime implements mock median block time retrieval
-// Always returns 0 without calculating any actual median time
-// Returns:
-//   - uint32: Always returns 0
-func (mv *MockValidator) GetMedianBlockTime() uint32 {
-	return 0
-}
-
-// TriggerBatcher implements mock batch triggering
-// No-op implementation that does nothing
-func (mv *MockValidator) TriggerBatcher() {}
-
-// EnsureMTPLoaded implements mock MTP store pre-warming
-// No-op implementation that does nothing
-func (mv *MockValidator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) error {
-	return nil
 }

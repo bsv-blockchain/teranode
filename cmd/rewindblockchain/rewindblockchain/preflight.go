@@ -3,13 +3,12 @@ package rewindblockchain
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 )
 
 // preflightResult holds everything the phases need to know up-front.
@@ -116,18 +115,14 @@ func (e *env) resolveTarget(ctx context.Context) (uint32, *chainhash.Hash, error
 		return height, block.Hash(), nil
 	}
 
-	stateBytes, err := e.blockchainStore.GetState(ctx, "BlockAssembler")
+	stateBytes, err := e.blockchainStore.GetState(ctx, blockassembly.StateKey)
 	if err != nil {
 		return 0, nil, errors.NewStorageError(`failed to read state["BlockAssembler"] (pass --target-height to override): %w`, err)
 	}
-	if len(stateBytes) < 4+80 {
-		return 0, nil, errors.NewProcessingError(`state["BlockAssembler"] too short: %d bytes (pass --target-height)`, len(stateBytes))
-	}
 
-	height := binary.LittleEndian.Uint32(stateBytes[:4])
-	header, err := model.NewBlockHeaderFromBytes(stateBytes[4:])
+	header, height, err := blockassembly.DecodeState(stateBytes)
 	if err != nil {
-		return 0, nil, errors.NewProcessingError("failed to decode block header in state[BlockAssembler]: %w", err)
+		return 0, nil, errors.NewProcessingError(`failed to decode state["BlockAssembler"] (pass --target-height to override): %w`, err)
 	}
 
 	return height, header.Hash(), nil

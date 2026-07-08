@@ -22,29 +22,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// recordingValidatorClient wraps MockValidatorClient and captures the
+// recordingValidatorClient wraps MockValidator and captures the
 // Options passed to every Validate call. Used by the assembled-path test
 // to assert that the block-validation path sets
 // UnconfirmedParentsAtCandidateHeight on every per-tx Options struct it
 // hands to the validator (both the batch-loop and the ordered-retry
 // pipelines).
 type recordingValidatorClient struct {
-	*validator.MockValidatorClient
+	*validator.MockValidator
 	mu        sync.Mutex
 	callsByTx map[chainhash.Hash][]*validator.Options
 }
 
-func newRecordingValidatorClient(inner *validator.MockValidatorClient) *recordingValidatorClient {
+func newRecordingValidatorClient(inner *validator.MockValidator) *recordingValidatorClient {
 	return &recordingValidatorClient{
-		MockValidatorClient: inner,
-		callsByTx:           make(map[chainhash.Hash][]*validator.Options),
+		MockValidator: inner,
+		callsByTx:     make(map[chainhash.Hash][]*validator.Options),
 	}
 }
 
 // ValidateWithOptions captures the resolved Options struct and returns
 // Data with TxInpoints populated from the tx so the downstream subtreeMeta
 // serialisation in ValidateSubtreeInternal succeeds — the production
-// validator does this; MockValidatorClient.ValidateWithOptions does not
+// validator does this; MockValidator.ValidateWithOptions does not
 // (it just calls UtxoStore.Create which returns empty Data in tests).
 //
 // blessMissingTransaction in processTransactionsInLevels and
@@ -298,9 +298,9 @@ func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) 
 
 	// Recording validator client — captures the resolved Options per tx
 	// so the test can inspect UnconfirmedParentsAtCandidateHeight after
-	// CheckBlockSubtrees returns. Wraps the existing MockValidatorClient so
+	// CheckBlockSubtrees returns. Wraps the existing MockValidator so
 	// the underlying UtxoStore.Create plumbing still works.
-	rec := newRecordingValidatorClient(server.validatorClient.(*validator.MockValidatorClient))
+	rec := newRecordingValidatorClient(server.validatorClient.(*validator.MockValidator))
 	rec.UtxoStore = server.utxoStore
 	server.validatorClient = rec
 

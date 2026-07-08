@@ -33,7 +33,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 		var iteratorCalled bool
 
 		// Then iterator should be called
-		mockIterator := new(MockUnminedTxIterator)
+		mockIterator := new(utxo.MockUnminedTxIterator)
 		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Run(func(args mock.Arguments) {
@@ -75,31 +75,6 @@ func TestCleanupDuringStartup(t *testing.T) {
 	})
 }
 
-// Mock types for testing
-
-type MockUnminedTxIterator struct {
-	mock.Mock
-}
-
-func (m *MockUnminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-
-	return args.Get(0).([]*utxo.UnminedTransaction), args.Error(1)
-}
-
-func (m *MockUnminedTxIterator) Err() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *MockUnminedTxIterator) Close() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
 // TestLoadUnminedTransactionsExcludesConflicting tests that loadUnminedTransactions excludes conflicting transactions
 func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 	initPrometheusMetrics()
@@ -126,7 +101,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		}}
 
 		// Setup iterator expectations - iterator should only return non-conflicting transactions
-		mockIterator := new(MockUnminedTxIterator)
+		mockIterator := new(utxo.MockUnminedTxIterator)
 		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Once()
