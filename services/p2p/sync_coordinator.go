@@ -94,6 +94,15 @@ const (
 	fastMonitorInterval            = 2 * time.Second  // When actively syncing
 	slowMonitorInterval            = 15 * time.Second // When caught up
 	defaultSyncPeerNoProgressLimit = 5 * time.Minute  // Fallback when p2p_sync_peer_no_progress_timeout is unset
+
+	// syncPeerPreemptionGuardDivisor sets the opportunistic-preemption anti-flap
+	// guard to half the no-progress timeout: the incumbent must go this long
+	// without delivering a validated block before a higher-work peer may preempt
+	// it. Keyed off the configurable timeout (not the periodic-evaluation
+	// interval) so an honest peer streaming a large block — which records no
+	// validated progress until the body arrives — is not evicted before a
+	// realistic delivery window.
+	syncPeerPreemptionGuardDivisor = 2
 )
 
 // isViableSyncCandidate returns true if a peer passes the unconditional
@@ -138,6 +147,15 @@ func (sc *SyncCoordinator) syncPeerNoProgressLimit() time.Duration {
 		return defaultSyncPeerNoProgressLimit
 	}
 	return sc.settings.P2P.SyncPeerNoProgressTimeout
+}
+
+// preemptionProgressGuard is the minimum time the current sync peer must go
+// without delivering a validated block before opportunistic preemption toward a
+// higher-work peer is allowed. It is a fraction of the configurable no-progress
+// timeout so it always fires before the hard no-progress eviction, and scales
+// with the operator's timeout rather than the periodic-evaluation interval.
+func (sc *SyncCoordinator) preemptionProgressGuard() time.Duration {
+	return sc.syncPeerNoProgressLimit() / syncPeerPreemptionGuardDivisor
 }
 
 func peerHasValidatedWork(p *blockchain.PeerInfo) bool {
@@ -913,7 +931,8 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
 	}
 	sc.recordSyncPeerBlockProgress(currentPeer, peerInfo.BlocksReceived, now)
-	if stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now); timedOut && stalledPeer == currentPeer {
+	stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now)
+	if timedOut && stalledPeer == currentPeer {
 		sc.clearNoProgressSyncPeer(currentPeer, progressAge)
 		return
 	}
@@ -931,6 +950,35 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 			sc.ClearSyncPeer()
 			_ = sc.TriggerSync()
 		}
+		return
+	}
+
+	// The peer is still ahead by validated work but not timed out. Opportunistically
+	// preempt it toward a materially-higher-work peer so a top-ranked peer that
+	// drips just enough validated blocks to dodge the no-progress deadline cannot
+	// hold the slot and starve faster honest peers. Guards:
+	//   - progressAge must exceed preemptionProgressGuard() (a fraction of the
+	//     no-progress timeout), so a peer actively delivering a large block — which
+	//     records no validated progress until the body lands — is not evicted early;
+	//   - the candidate must have strictly greater validated work than the incumbent
+	//     (not merely greater than local), which is inherently non-thrashing since
+	//     equal work never preempts.
+	if progressAge <= sc.preemptionProgressGuard() {
+		return
+	}
+	candidate := sc.selectNewSyncPeer()
+	if candidate == "" || candidate == currentPeer {
+		return
+	}
+	candInfo, exists, err := sc.registry.GetPeer(sc.ctx, candidate)
+	if err != nil || !exists {
+		return
+	}
+	if chainWorkGreater(candInfo.ValidatedChainWork, peerInfo.ValidatedChainWork) {
+		sc.logger.Infof("[SyncCoordinator] Preempting sync peer %s for higher-work peer %s after %v without validated progress",
+			currentPeer, candidate, progressAge.Round(time.Second))
+		sc.ClearSyncPeer()
+		_ = sc.TriggerSync()
 	}
 }
 

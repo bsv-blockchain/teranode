@@ -755,6 +755,120 @@ func TestSyncCoordinator_HandleFSMTransition_ChattyNoProgressPeerTimesOutAndSele
 	require.WithinDuration(t, time.Now(), current.LastMessageTime, time.Minute)
 }
 
+// newPreemptionTestCoordinator wires an incumbent sync peer ("current") that is
+// still ahead of local by validated work and a candidate ("better"), with the
+// incumbent's last validated progress placed progressAge in the past. It reuses
+// the standard harness; noProgressTimeout=0 exercises the 5m fallback.
+func newPreemptionTestCoordinator(t *testing.T, noProgressTimeout time.Duration, incumbentWork, candidateWork []byte, progressAge time.Duration) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry) {
+	t.Helper()
+
+	tSettings := &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:                   true,
+			MaxUnvalidatedAdvertisedHeightLead:        10_000,
+			MaxUnprovenSyncProbesPerBackoffWindow:     3,
+			FullDeliveryFreshnessWindow:               24 * time.Hour,
+			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+			SyncPeerNoProgressTimeout:                 noProgressTimeout,
+		},
+	}
+	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "current",
+		DataHubURL:         "http://current",
+		Height:             200,
+		BlockHash:          syncCoordinatorTestHash(t),
+		Storage:            "full",
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: incumbentWork,
+	})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "better",
+		DataHubURL:         "http://better",
+		Height:             201,
+		BlockHash:          syncCoordinatorTestHash(t),
+		Storage:            "full",
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: candidateWork,
+	})
+
+	progressAt := time.Now().Add(-progressAge)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = progressAt
+	sc.lastSyncProgressTime = progressAt
+	sc.lastSyncPeerBlocksReceived = 0
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	return sc, reg
+}
+
+// P2-1(a): a materially-higher-work candidate preempts an incumbent that is still
+// ahead of local by validated work once it has stalled past the guard window.
+func TestSyncCoordinator_EvaluateSyncPeer_PreemptsForHigherWorkPeer(t *testing.T) {
+	// Default 5m timeout → 2.5m guard; progressAge 3m is past the guard but short
+	// of the hard no-progress eviction, and the candidate outranks the incumbent.
+	sc, _ := newPreemptionTestCoordinator(t, 0, []byte{0x03}, []byte{0x05}, 3*time.Minute)
+
+	sc.evaluateSyncPeer()
+
+	require.Equal(t, "better", sc.GetCurrentSyncPeer(), "higher-work candidate must preempt a stalled incumbent")
+}
+
+// P2-1(b): strict comparison — a candidate whose validated work is not strictly
+// greater than the incumbent's (equal OR lower) must never preempt, even when the
+// incumbent has stalled well past the guard window.
+func TestSyncCoordinator_EvaluateSyncPeer_DoesNotPreemptForNonHigherWorkPeer(t *testing.T) {
+	cases := []struct {
+		name          string
+		candidateWork []byte
+	}{
+		{"equal work", []byte{0x03}},
+		{"strictly lower work", []byte{0x01}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Incumbent work 0x03; stalled 3m (past the 2.5m guard at the 5m default).
+			sc, _ := newPreemptionTestCoordinator(t, 0, []byte{0x03}, tc.candidateWork, 3*time.Minute)
+
+			sc.evaluateSyncPeer()
+
+			require.Equal(t, "current", sc.GetCurrentSyncPeer(), "non-higher-work candidate must not preempt")
+		})
+	}
+}
+
+// P2-1(c): a higher-work candidate exists, but the incumbent made validated
+// progress within the guard window, so it must not be preempted mid-delivery.
+func TestSyncCoordinator_EvaluateSyncPeer_DoesNotPreemptRecentlyProgressingPeer(t *testing.T) {
+	// Default 5m timeout → 2.5m guard; progressAge 1m is below the guard.
+	sc, _ := newPreemptionTestCoordinator(t, 0, []byte{0x03}, []byte{0x05}, 1*time.Minute)
+
+	sc.evaluateSyncPeer()
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "recently-progressing peer must not be preempted")
+}
+
+// P2-1(d): the preemption guard tracks the configurable no-progress timeout, not
+// the periodic-evaluation interval. The SAME progressAge preempts under a small
+// timeout but not under a large one.
+func TestSyncCoordinator_EvaluateSyncPeer_PreemptionTimingScalesWithConfig(t *testing.T) {
+	const progressAge = 90 * time.Second
+
+	// Small timeout (2m → 1m guard): 90s is past the guard → preempt.
+	scSmall, _ := newPreemptionTestCoordinator(t, 2*time.Minute, []byte{0x03}, []byte{0x05}, progressAge)
+	scSmall.evaluateSyncPeer()
+	require.Equal(t, "better", scSmall.GetCurrentSyncPeer(), "small timeout: same progressAge preempts")
+
+	// Large timeout (30m → 15m guard): the SAME 90s is below the guard → no preempt.
+	scLarge, _ := newPreemptionTestCoordinator(t, 30*time.Minute, []byte{0x03}, []byte{0x05}, progressAge)
+	scLarge.evaluateSyncPeer()
+	require.Equal(t, "current", scLarge.GetCurrentSyncPeer(), "large timeout: same progressAge does not preempt")
+}
+
 func TestSyncCoordinator_EvaluateSyncPeer_BlockDeliveryKeepsNoProgressDeadlineFresh(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
