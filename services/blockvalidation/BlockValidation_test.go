@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4046,6 +4047,263 @@ func TestSetMinedRetryBackoff(t *testing.T) {
 		total += setMinedRetryBackoff(i)
 	}
 	require.Equal(t, 111*time.Second, total, "total worst-case backoff before drop changed - update operator docs")
+}
+
+// TestScheduleSetMinedRetry covers the off-loaded retry: instead of sleeping the
+// backoff inline on the sole setMinedChan drainer, the worker hands the wait + re-enqueue
+// to a dedicated, ctx-cancellable, WaitGroup-tracked goroutine that re-enqueues via the
+// non-blocking enqueueSetMined.
+func TestScheduleSetMinedRetry(t *testing.T) {
+	t.Run("re-enqueues after the backoff without blocking the caller", func(t *testing.T) {
+		u := newSetMinedTestBV(1)
+		ctx := context.Background()
+		h := chainhash.HashH([]byte("retry-me"))
+
+		const backoff = 500 * time.Millisecond
+
+		start := time.Now()
+		u.scheduleSetMinedRetry(ctx, &h, backoff)
+		// The caller (the worker) must return immediately - it cannot block for the
+		// backoff, otherwise it stops draining setMinedChan. A generous fraction of the
+		// backoff keeps this from flaking under CI/-race load while still failing loudly
+		// if scheduling ever waits out the full backoff inline.
+		require.Less(t, time.Since(start), backoff/2, "scheduling must not block the worker for the backoff")
+
+		select {
+		case got := <-u.setMinedChan:
+			require.True(t, got.IsEqual(&h), "the original block hash must be re-enqueued")
+		case <-time.After(2 * time.Second):
+			t.Fatal("block was never re-enqueued onto setMinedChan")
+		}
+
+		u.backgroundTasks.Wait() // goroutine must have finished after the re-enqueue
+	})
+
+	t.Run("context cancellation before the timer fires drops the retry", func(t *testing.T) {
+		u := newSetMinedTestBV(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		h := chainhash.HashH([]byte("cancel-before-fire"))
+
+		// Long backoff so ctx wins the race.
+		u.scheduleSetMinedRetry(ctx, &h, 10*time.Second)
+		cancel()
+
+		// The goroutine must exit promptly on ctx cancellation rather than wait out the
+		// full backoff.
+		done := make(chan struct{})
+		go func() { u.backgroundTasks.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("retry goroutine did not exit on context cancellation")
+		}
+
+		require.Len(t, u.setMinedChan, 0, "nothing must be re-enqueued after cancellation")
+		require.Nil(t, u.popSetMinedOverflow(), "nothing must land in the overflow set after cancellation")
+		_, pending := u.setMinedRetryPending.Load(h)
+		require.False(t, pending, "the pending marker must be cleared on cancellation")
+	})
+
+	t.Run("full channel: retry lands in overflow without blocking", func(t *testing.T) {
+		// With the buffer full, enqueueSetMined parks the hash in the overflow set rather
+		// than blocking (the worker is the sole drainer, so a blocking self-send would
+		// wedge it). Prove the off-loaded retry honours that: it re-enqueues into overflow
+		// and the goroutine finishes instead of parking on the send.
+		u := newSetMinedTestBV(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		filler := chainhash.HashH([]byte("filler"))
+		u.setMinedChan <- &filler // saturate the buffer
+
+		h := chainhash.HashH([]byte("overflow-me"))
+		u.scheduleSetMinedRetry(ctx, &h, 0) // fire immediately
+
+		done := make(chan struct{})
+		go func() { u.backgroundTasks.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("retry goroutine blocked instead of overflowing on a full channel")
+		}
+
+		require.Len(t, u.setMinedChan, 1, "the buffer stays full; the retry must not have displaced it")
+		got := u.popSetMinedOverflow()
+		require.NotNil(t, got, "the retry must be parked in the overflow set")
+		require.True(t, got.IsEqual(&h), "the overflowed hash must be the retried block")
+	})
+}
+
+// setMinedFaultClient is a thin decorator over a real blockchain.ClientI. It leaves
+// every method delegating to the real (sqlitememory-backed) client except the two the
+// setMinedChan worker uses to reach the retry branch, which it fault-injects for two
+// specific hashes. sqlitememory cannot itself produce "GetBlockHeader succeeds but
+// GetBlock fails", which is exactly the state that drives setTxMinedStatus into the
+// retry path, so a decorator is the minimal way to exercise the production wiring.
+type setMinedFaultClient struct {
+	blockchain.ClientI
+
+	// retryHash: header lookup succeeds (mined_set=false) so the worker proceeds to
+	// setTxMinedStatus, but the block fetch inside setTxMinedStatus fails, forcing the
+	// bounded-retry branch that now off-loads the re-enqueue via scheduleSetMinedRetry.
+	retryHash        *chainhash.Hash
+	getBlockAttempts atomic.Int32
+
+	// nextHash: header lookup reports mined_set=true so the worker short-circuits at
+	// its MinedSet guard. Seeing this proves the worker kept draining setMinedChan
+	// instead of stalling on retryHash's backoff.
+	nextHash     *chainhash.Hash
+	nextHashSeen chan struct{}
+	nextHashOnce sync.Once
+}
+
+func (c *setMinedFaultClient) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	switch {
+	case c.retryHash != nil && hash.IsEqual(c.retryHash):
+		return &model.BlockHeader{}, &model.BlockHeaderMeta{ID: 1, MinedSet: false}, nil
+	case c.nextHash != nil && hash.IsEqual(c.nextHash):
+		c.nextHashOnce.Do(func() { close(c.nextHashSeen) })
+		return &model.BlockHeader{}, &model.BlockHeaderMeta{ID: 2, MinedSet: true}, nil
+	default:
+		return c.ClientI.GetBlockHeader(ctx, hash)
+	}
+}
+
+func (c *setMinedFaultClient) GetBlock(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
+	if c.retryHash != nil && hash.IsEqual(c.retryHash) {
+		c.getBlockAttempts.Add(1)
+		// A generic (non-ErrBlockNotFound) failure so setTxMinedStatus takes the retry
+		// path rather than the "block is gone, drop it" path.
+		return nil, errors.NewServiceError("injected GetBlock failure for retry hash")
+	}
+
+	return c.ClientI.GetBlock(ctx, hash)
+}
+
+// TestSetMinedChanWorker_RetryDoesNotStallDrain is the production-level companion to
+// TestScheduleSetMinedRetry: it exercises the changed worker call site (start()'s
+// setTxMined failure branch). It proves the worker keeps draining setMinedChan during a
+// failed block's backoff instead of sleeping inline, and that the failed block is
+// genuinely re-enqueued for a later retry.
+func TestSetMinedChanWorker_RetryDoesNotStallDrain(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	retryHash := chainhash.HashH([]byte("worker-retry-hash"))
+	nextHash := chainhash.HashH([]byte("worker-next-hash"))
+
+	faultClient := &setMinedFaultClient{
+		ClientI:      blockchainClient,
+		retryHash:    &retryHash,
+		nextHash:     &nextHash,
+		nextHashSeen: make(chan struct{}),
+	}
+
+	// NewBlockValidation launches the setMinedChan worker over faultClient.
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, faultClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	// retryHash fails in setTxMinedStatus and must be re-enqueued off the worker; nextHash
+	// is enqueued right behind it. The first retry backoff is 1s (setMinedRetryBackoff(1)),
+	// so if the worker slept inline (the old behaviour) nextHash could not be seen for ~1s.
+	blockValidation.setMinedChan <- &retryHash
+	blockValidation.setMinedChan <- &nextHash
+
+	// The worker must process nextHash well within the 1s backoff, proving it kept draining.
+	select {
+	case <-faultClient.nextHashSeen:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("worker did not drain nextHash within the retry backoff - the retry stalled the drain loop")
+	}
+
+	// The failed block must be re-enqueued and retried (a second GetBlock attempt) after
+	// the backoff elapses, confirming scheduleSetMinedRetry actually put it back.
+	require.Eventually(t, func() bool {
+		return faultClient.getBlockAttempts.Load() >= 2
+	}, 3*time.Second, 20*time.Millisecond, "failed block was never re-enqueued for retry")
+}
+
+// TestSetMinedChanWorker_RetryPendingDedup guards the retry-counter regression: while a
+// block's setTxMined retry is waiting out its backoff, re-triggers for the same hash
+// (e.g. a child re-triggering its not-yet-mined parent) must be skipped rather than run a
+// second setTxMinedStatus. Re-processing during the window would advance the per-block
+// retry counter faster than the intended backoff steps and drop the block as
+// manual_intervention_required prematurely.
+func TestSetMinedChanWorker_RetryPendingDedup(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	retryHash := chainhash.HashH([]byte("dedup-retry-hash"))
+
+	faultClient := &setMinedFaultClient{
+		ClientI:   blockchainClient,
+		retryHash: &retryHash,
+	}
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, faultClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	// First failure schedules a retry and marks the block retry-pending for the 1s backoff.
+	blockValidation.setMinedChan <- &retryHash
+	require.Eventually(t, func() bool {
+		_, pending := blockValidation.setMinedRetryPending.Load(retryHash)
+		return pending
+	}, 2*time.Second, 5*time.Millisecond, "first failure must schedule a pending retry")
+
+	require.Equal(t, int32(1), faultClient.getBlockAttempts.Load(), "exactly one setTxMinedStatus attempt so far")
+
+	// Simulate a burst of re-triggers for the same block during the backoff window.
+	for i := 0; i < 5; i++ {
+		blockValidation.setMinedChan <- &retryHash
+	}
+
+	// The worker must drain them (consume from the channel) but skip each - proven by the
+	// channel emptying while the attempt count stays put and the retry counter stays at 1.
+	require.Eventually(t, func() bool {
+		return len(blockValidation.setMinedChan) == 0
+	}, 500*time.Millisecond, 5*time.Millisecond, "re-triggers must be drained by the worker")
+	require.Equal(t, int32(1), faultClient.getBlockAttempts.Load(), "re-triggers during the backoff must be skipped, not re-processed")
+
+	attempts, ok := blockValidation.setMinedRetries.Load(retryHash)
+	require.True(t, ok, "retry counter must be tracked for the failing block")
+	require.Equal(t, uint64(1), attempts, "skipped re-triggers must not inflate the retry counter")
+}
+
+// TestIsParentFinalizing guards the child parent-wait fix: checkParentProcessingComplete
+// must treat a parent that is either actively being processed OR waiting out a setTxMined
+// retry backoff as "still finalizing", so a child keeps waiting across the parent's whole
+// retry window instead of falling through to the bounded parent-mined wait and giving up.
+func TestIsParentFinalizing(t *testing.T) {
+	u := &BlockValidation{
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+	}
+	h := chainhash.HashH([]byte("parent"))
+
+	require.False(t, u.isParentFinalizing(&h), "an unknown block is not finalizing")
+
+	// Actively being processed by the setMined worker.
+	_ = u.blockHashesCurrentlyValidated.Put(h)
+	require.True(t, u.isParentFinalizing(&h), "a block in blockHashesCurrentlyValidated is finalizing")
+	require.NoError(t, u.blockHashesCurrentlyValidated.Delete(h))
+	require.False(t, u.isParentFinalizing(&h), "no longer finalizing once the claim is released")
+
+	// Waiting out a retry backoff (the off-loaded case the old code did not cover).
+	u.setMinedRetryPending.Store(h, struct{}{})
+	require.True(t, u.isParentFinalizing(&h), "a block with a pending setMined retry is finalizing")
+	u.setMinedRetryPending.Delete(h)
+	require.False(t, u.isParentFinalizing(&h), "no longer finalizing once the retry fires")
 }
 
 // TestBlockValidation_BlockchainSubscription_TriggersSetMined ensures that receiving a NotificationType_Block on the blockchainSubscription triggers setMined.

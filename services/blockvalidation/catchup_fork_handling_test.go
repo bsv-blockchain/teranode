@@ -14,6 +14,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
@@ -78,9 +79,14 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlock.Hash()}, nil)
 
-		// Mock common ancestor checks
+		// Mock common ancestor checks: our best block is the common ancestor; the
+		// peer's chain blocks are absent from our chain, so GetBlockHeader reports
+		// not found and the common-ancestor walk stops at the divergence point.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlock.Header.Hash()).
+			Return(bestBlock.Header, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -386,9 +392,26 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 50, ID: 1}}, nil).Maybe()
 
-		// Mock GetBlockHeader for any header lookups during validation
+		// GetBlockHeader conveys both existence and height in a single RPC during
+		// common-ancestor finding. Our best block (height 50) is in our chain and
+		// serves as the common ancestor; the adversarial fork headers are absent, so
+		// they must surface as not-found errors to stop the search.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
+			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 50, ID: 1}, nil).Maybe()
+		for _, h := range invalidChain {
+			mockBlockchainClient.On("GetBlockHeader", mock.Anything, h.Hash()).
+				Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("block not found")).Maybe()
+		}
+		// Catch-all for any other header lookups
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
+
+		// Fork cleanup (Step 3.5) queries the headers between the common ancestor and
+		// our tip to clear their mined_set; an empty result keeps the test focused.
+		mockBlockchainClient.On("GetBlockHeadersByHeight", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
@@ -484,6 +507,11 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 				nil,
 			)
 
+		// Fork blocks are absent from our chain: not-found stops the common-ancestor walk
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
+
 		// Mock GetBlock for secret mining check
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
 			Return(&model.Block{Height: forkPoint}, nil).Maybe()
@@ -568,8 +596,16 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 				nil,
 			).Once()
 
+		// GetBlockHeader conveys both existence and height in a single RPC during
+		// common-ancestor finding: a not-found error means the block is absent from
+		// our chain and stops the walk. Peer headers we don't have must surface as
+		// not-found, mirroring the old GetBlockExists=false behavior. Without this,
+		// the catch-all returning empty success makes every peer header look present,
+		// so the walk selects a bogus height-0 ancestor (forkDepth = 1020) and then
+		// panics in the unmocked fork-cleanup GetBlockHeadersByHeight call.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlock for validation
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(&model.Block{Height: 1015}, nil).Maybe()
@@ -654,8 +690,12 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 		// Metadata for the common ancestor.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, ancestorHeader.Hash()).
 			Return(ancestorHeader, &model.BlockHeaderMeta{Height: ancestorHeight, ID: 1, ChainWork: ancestorChainWork.Bytes()}, nil).Maybe()
+		// Any other header (the peer's fork blocks) is absent from our chain, so
+		// GetBlockHeader reports not found and the common-ancestor walk stops at the
+		// divergence point, leaving the fork blocks as offered headers.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: ancestorHeight, ChainWork: ancestorChainWork.Bytes()}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Header-fetch plumbing.
 		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
@@ -812,8 +852,14 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 0, ID: 1}}, nil).Maybe()
 
+		// The genesis block (height 0) is our chain tip and the common ancestor; the
+		// competing chains' blocks are absent, so GetBlockHeader reports not found and
+		// the common-ancestor walk stops at genesis.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
+			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 0}, nil).Maybe()
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 0}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlock for any block request
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
@@ -1051,8 +1097,11 @@ func TestCatchup_ForkBattleSimulation(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
+		// Peer fork blocks are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -1142,6 +1191,11 @@ func TestCatchup_ReorgMetrics(t *testing.T) {
 				nil,
 			).Maybe()
 
+		// Reorg blocks are absent from our chain: not-found stops the common-ancestor walk
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
+
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
 			Return(&model.Block{Height: 950}, nil).Maybe()
 
@@ -1214,8 +1268,11 @@ func TestCatchup_TimestampValidationDuringFork(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
+		// Peer fork blocks are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -1330,6 +1387,12 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 				},
 				nil,
 			).Maybe()
+
+		// Their fork headers are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders for common ancestor finding (returns empty when walking back)
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -1456,6 +1519,12 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 				},
 				nil,
 			).Maybe()
+
+		// Their fork headers are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockHeaders
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
