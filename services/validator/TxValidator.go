@@ -181,6 +181,21 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 			return nil
 		}
 
+		// The input money-range/inflation check needs previous-output values. The
+		// OutpointOnlySpend fast path intentionally leaves the transaction un-extended
+		// and reads no parent values (Validator.validateInternal skips parent extension
+		// below the highest checkpoint, where PoW + checkpoint linkage already establish
+		// canonicality). Skip the check there, matching the parent-value-dependent extend
+		// and BIP68 guards which are gated on OutpointOnlySpend for the same reason. Every
+		// other skip-path caller supplies an extended transaction, so the backstop still
+		// runs (and still fails closed on a value-less non-OutpointOnlySpend transaction).
+		inflationGuard := func() error {
+			if validationOptions.OutpointOnlySpend {
+				return nil
+			}
+			return tv.checkInputValuesAndInflation(tx, totalOut)
+		}
+
 		// The sentinel is placed before or after the input/inflation check
 		// depending on protocol era, matching BDK: pre-Genesis the MEMPOOL_HEIGHT
 		// rejection runs in the consensus sigops check before input values, while
@@ -191,11 +206,11 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 			if err := sentinelGuard(); err != nil {
 				return err
 			}
-			if err := tv.checkInputValuesAndInflation(tx, totalOut); err != nil {
+			if err := inflationGuard(); err != nil {
 				return err
 			}
 		} else {
-			if err := tv.checkInputValuesAndInflation(tx, totalOut); err != nil {
+			if err := inflationGuard(); err != nil {
 				return err
 			}
 			if err := sentinelGuard(); err != nil {
