@@ -4021,8 +4021,57 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 
 		result, err := handleSetBan(context.Background(), s, cmd, nil)
 
-		require.NoError(t, err)
-		assert.Nil(t, result) // Returns false when ban fails
+		// The p2p ban failed and no other leg applied it, so setban reports the
+		// failure rather than silently returning success.
+		require.Error(t, err)
+		assert.Nil(t, result)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Contains(t, rpcErr.Message, "Failed to apply ban")
+	})
+
+	t.Run("add ban p2p fails and legacy inactive reports failure", func(t *testing.T) {
+		banTime := int64(3600)
+		legacyCalled := false
+
+		mockP2P := &mockP2PClient{
+			banPeerFunc: func(ctx context.Context, addr string, until int64) error {
+				return errors.New(errors.ERR_ERROR, "ban failed")
+			},
+		}
+		mockPeer := &mockLegacyPeerClient{
+			banPeerFunc: func(ctx context.Context, req *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
+				legacyCalled = true
+				return &peer_api.BanPeerResponse{Ok: true}, nil
+			},
+		}
+		// legacy configured but NOT an active subscriber, so the legacy leg is
+		// skipped; the failed p2p leg must still surface as an error.
+		mockBlockchain := &blockchain.Mock{}
+		mockBlockchain.On("GetSubscribers", mock.Anything).Return([]string{blockchain.SubscriberP2P}, nil)
+
+		s := &RPCServer{
+			logger:           logger,
+			p2pClient:        mockP2P,
+			legacyP2PClient:  mockPeer,
+			blockchainClient: mockBlockchain,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.SetBanCmd{IPOrSubnet: "192.168.1.100", Command: "add", BanTime: &banTime}
+
+		result, err := handleSetBan(context.Background(), s, cmd, nil)
+
+		require.Error(t, err, "a failed p2p ban with the legacy leg skipped must surface an error, not silent success")
+		assert.Nil(t, result)
+		assert.False(t, legacyCalled, "legacy must not be consulted when inactive")
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Contains(t, rpcErr.Message, "Failed to apply ban")
 	})
 
 	t.Run("add ban with subnet", func(t *testing.T) {

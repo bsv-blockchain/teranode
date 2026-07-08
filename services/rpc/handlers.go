@@ -2341,11 +2341,17 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 	}
 
+	// success tracks whether at least one applicable ban leg actually applied
+	// the ban. It is checked after the switch so the outcome no longer depends
+	// on which legs ran: previously a failed p2p ban was only surfaced as an
+	// error inside the legacy block, so when the legacy leg was skipped (client
+	// absent, or - after the subscriber gate - configured but inactive) a failed
+	// ban silently returned success.
+	var success bool
+
 	// Handle the command
 	switch c.Command {
 	case "add":
-		var success bool
-
 		var expirationTime time.Time
 
 		// If BanTime is nil or 0, use a default ban time (e.g., 24 hours)
@@ -2402,12 +2408,11 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 					}
 				}
 			} else {
+				success = true
 				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 			}
 		}
 	case "remove":
-		var success bool
-
 		if s.p2pClient != nil {
 			err := s.p2pClient.UnbanPeer(ctx, c.IPOrSubnet)
 			if err == nil {
@@ -2439,6 +2444,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 					}
 				}
 			} else {
+				success = true
 				s.logger.Debugf("Removed ban for %s", c.IPOrSubnet)
 			}
 		}
@@ -2446,6 +2452,16 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInvalidParameter,
 			Message: "Invalid command. Must be 'add' or 'remove'.",
+		}
+	}
+
+	// No applicable ban leg succeeded (every attempted leg failed, or none was
+	// available). setban is an administrative control, so report the failure
+	// rather than silently returning success.
+	if !success {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: "Failed to apply ban",
 		}
 	}
 
