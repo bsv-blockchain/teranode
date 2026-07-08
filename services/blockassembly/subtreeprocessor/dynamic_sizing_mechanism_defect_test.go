@@ -54,3 +54,30 @@ func TestDynamicSizing_Mechanism_BlockIntervalSampling_IsPerBlockNotCumulative(t
 		"per-block sampling should reflect the latest block duration/subtree count, not cumulative lifetime averages")
 	mockBlockchainClient.AssertExpectations(t)
 }
+
+func TestDynamicSizing_Mechanism_HighUtilizationDoesNotDecreaseOnSlowIntervals(t *testing.T) {
+	stp := newDynamicSizingProcessor(t, 64, 4, 32768)
+	stp.currentItemsPerFile.Store(64)
+	setSubtreeNodeSamples(stp, []int{60, 60, 60, 60, 60, 60, 60, 60, 60, 60}) // >80% utilization
+	stp.blockIntervals = repeatInterval(2*time.Second, 3)                       // slower than target interval
+
+	before := stp.currentItemsPerFile.Load()
+	stp.adjustSubtreeSize()
+	after := stp.currentItemsPerFile.Load()
+
+	require.GreaterOrEqual(t, after, before,
+		"with high utilization, timing checks may suppress increases, but must not drive size below the current value")
+}
+
+func TestDynamicSizing_Mechanism_DoesNotAdjustFromTimingWithoutUtilizationSamples(t *testing.T) {
+	stp := newDynamicSizingProcessor(t, 64, 4, 32768)
+	stp.currentItemsPerFile.Store(64)
+	stp.blockIntervals = repeatInterval(50*time.Millisecond, 3)
+
+	before := stp.currentItemsPerFile.Load()
+	stp.adjustSubtreeSize()
+	after := stp.currentItemsPerFile.Load()
+
+	require.Equal(t, before, after,
+		"dynamic sizing should require utilization samples; timing-only inputs should not change subtree size")
+}
