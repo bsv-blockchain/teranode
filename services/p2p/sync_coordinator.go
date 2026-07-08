@@ -91,9 +91,9 @@ func (sc *SyncCoordinator) SetGetLocalHeightCallback(getLocalHeight func() uint3
 
 // Constants for monitoring intervals
 const (
-	fastMonitorInterval     = 2 * time.Second  // When actively syncing
-	slowMonitorInterval     = 15 * time.Second // When caught up
-	syncPeerNoProgressLimit = 5 * time.Minute
+	fastMonitorInterval            = 2 * time.Second  // When actively syncing
+	slowMonitorInterval            = 15 * time.Second // When caught up
+	defaultSyncPeerNoProgressLimit = 5 * time.Minute  // Fallback when p2p_sync_peer_no_progress_timeout is unset
 )
 
 // isViableSyncCandidate returns true if a peer passes the unconditional
@@ -127,6 +127,17 @@ func (sc *SyncCoordinator) fullDeliveryFreshnessWindow() time.Duration {
 		return 0
 	}
 	return sc.settings.P2P.FullDeliveryFreshnessWindow
+}
+
+// syncPeerNoProgressLimit is the configurable no-progress stall deadline. It
+// falls back to defaultSyncPeerNoProgressLimit when unset (nil settings or a
+// non-positive value) so existing deployments keep the historical 5-minute
+// behaviour exactly.
+func (sc *SyncCoordinator) syncPeerNoProgressLimit() time.Duration {
+	if sc.settings == nil || sc.settings.P2P.SyncPeerNoProgressTimeout <= 0 {
+		return defaultSyncPeerNoProgressLimit
+	}
+	return sc.settings.P2P.SyncPeerNoProgressTimeout
 }
 
 func peerHasValidatedWork(p *blockchain.PeerInfo) bool {
@@ -399,7 +410,7 @@ func (sc *SyncCoordinator) syncPeerNoProgressTimedOut(now time.Time) (string, ti
 	}
 
 	progressAge := now.Sub(lastProgress)
-	return currentPeer, progressAge, progressAge > syncPeerNoProgressLimit
+	return currentPeer, progressAge, progressAge > sc.syncPeerNoProgressLimit()
 }
 
 func (sc *SyncCoordinator) clearNoProgressSyncPeer(peerID string, progressAge time.Duration) bool {

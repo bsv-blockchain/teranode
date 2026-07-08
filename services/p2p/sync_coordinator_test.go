@@ -736,7 +736,7 @@ func TestSyncCoordinator_HandleFSMTransition_ChattyNoProgressPeerTimesOutAndSele
 	})
 	reg.UpdateLastMessageTime("current")
 
-	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
+	stalledAt := time.Now().Add(-defaultSyncPeerNoProgressLimit - time.Second)
 	sc.mu.Lock()
 	sc.currentSyncPeer = "current"
 	sc.syncStartTime = stalledAt
@@ -770,7 +770,7 @@ func TestSyncCoordinator_EvaluateSyncPeer_BlockDeliveryKeepsNoProgressDeadlineFr
 	// is the only signal that should refresh the no-progress deadline.
 	reg.RecordBlockReceived("current", 0)
 
-	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
+	stalledAt := time.Now().Add(-defaultSyncPeerNoProgressLimit - time.Second)
 	sc.mu.Lock()
 	sc.currentSyncPeer = "current"
 	sc.syncStartTime = stalledAt
@@ -784,7 +784,7 @@ func TestSyncCoordinator_EvaluateSyncPeer_BlockDeliveryKeepsNoProgressDeadlineFr
 	require.Equal(t, "current", sc.GetCurrentSyncPeer())
 	_, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
 	require.False(t, timedOut)
-	require.Less(t, progressAge, syncPeerNoProgressLimit)
+	require.Less(t, progressAge, defaultSyncPeerNoProgressLimit)
 }
 
 // P2-a: validated header work is credited before any block body is delivered, so
@@ -793,7 +793,7 @@ func TestSyncCoordinator_EvaluateSyncPeer_BlockDeliveryKeepsNoProgressDeadlineFr
 func TestSyncCoordinator_RecordSyncPeerBlockProgress_HeaderCreditDoesNotRefreshDeadline(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
 
-	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
+	stalledAt := time.Now().Add(-defaultSyncPeerNoProgressLimit - time.Second)
 	sc.mu.Lock()
 	sc.currentSyncPeer = "current"
 	sc.syncStartTime = stalledAt
@@ -806,7 +806,7 @@ func TestSyncCoordinator_RecordSyncPeerBlockProgress_HeaderCreditDoesNotRefreshD
 	stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
 	require.True(t, timedOut, "header credit alone must not keep the deadline fresh")
 	require.Equal(t, "current", stalledPeer)
-	require.Greater(t, progressAge, syncPeerNoProgressLimit)
+	require.Greater(t, progressAge, defaultSyncPeerNoProgressLimit)
 
 	// A delivered block DOES refresh it.
 	sc.recordSyncPeerBlockProgress("current", 1, time.Now())
@@ -822,7 +822,7 @@ func TestSyncCoordinator_LocalTipAdvanceDoesNotRefreshStallDeadline(t *testing.T
 	sc, _ := newTestSyncCoordinator(t)
 	setSyncCoordinatorProbeBudget(sc, 0)
 
-	stalledAt := time.Now().Add(-syncPeerNoProgressLimit - time.Second)
+	stalledAt := time.Now().Add(-defaultSyncPeerNoProgressLimit - time.Second)
 	sc.mu.Lock()
 	sc.currentSyncPeer = "stalled"
 	sc.syncStartTime = stalledAt
@@ -839,7 +839,7 @@ func TestSyncCoordinator_LocalTipAdvanceDoesNotRefreshStallDeadline(t *testing.T
 	stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
 	require.True(t, timedOut, "stalled sync peer must still time out despite local-tip advance")
 	require.Equal(t, "stalled", stalledPeer)
-	require.Greater(t, progressAge, syncPeerNoProgressLimit)
+	require.Greater(t, progressAge, defaultSyncPeerNoProgressLimit)
 }
 
 // P1-b: when an advertised-ahead peer exists but the unproven-probe budget is

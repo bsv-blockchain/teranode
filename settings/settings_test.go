@@ -156,6 +156,7 @@ func TestP2PSyncHardeningDefaultsAreLoaded(t *testing.T) {
 	require.Equal(t, 3, tSettings.P2P.MaxUnprovenSyncProbesPerBackoffWindow)
 	require.Equal(t, time.Hour, tSettings.P2P.FullStoragePenaltyDuration)
 	require.Equal(t, 24*time.Hour, tSettings.P2P.FullDeliveryFreshnessWindow)
+	require.Equal(t, 5*time.Minute, tSettings.P2P.SyncPeerNoProgressTimeout)
 }
 
 func TestP2PFullStoragePenaltyDuration_EnvOverride(t *testing.T) {
@@ -163,4 +164,11 @@ func TestP2PFullStoragePenaltyDuration_EnvOverride(t *testing.T) {
 	tSettings := NewSettings()
 	require.NotNil(t, tSettings)
 	require.Equal(t, 2*time.Hour, tSettings.P2P.FullStoragePenaltyDuration)
+}
+
+func TestP2PSyncPeerNoProgressTimeout_EnvOverride(t *testing.T) {
+	t.Setenv("p2p_sync_peer_no_progress_timeout", "12m")
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+	require.Equal(t, 12*time.Minute, tSettings.P2P.SyncPeerNoProgressTimeout)
 }

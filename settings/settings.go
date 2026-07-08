@@ -521,6 +521,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxUnprovenSyncProbesPerBackoffWindow: getInt("p2p_max_unproven_sync_probes_per_backoff_window", 3, alternativeContext...),
 			FullStoragePenaltyDuration:            getDuration("p2p_full_storage_penalty_duration", time.Hour, alternativeContext...),
 			FullDeliveryFreshnessWindow:           getDuration("p2p_full_delivery_freshness_window", 24*time.Hour, alternativeContext...),
+			SyncPeerNoProgressTimeout:             getDuration("p2p_sync_peer_no_progress_timeout", 5*time.Minute, alternativeContext...),
 			// DHT configuration
 			DHTMode:            getString("p2p_dht_mode", "server", alternativeContext...),
 			DHTCleanupInterval: getDuration("p2p_dht_cleanup_interval", 24*time.Hour, alternativeContext...),
