@@ -119,7 +119,9 @@ func (s *Server) recordBlockIncompleteCatchupFailure(ctx context.Context, peerID
 		FullStoragePenaltyUntil: time.Now().Add(s.fullStoragePenaltyDuration()),
 	}
 	if info.Storage == "full" {
-		penalty.FullStorageContradictions = info.FullStorageContradictions + 1
+		// Delta, not absolute: the registry adds this under its lock, so the
+		// increment can't be lost to a concurrent read-modify-write.
+		penalty.FullStorageContradictions = 1
 	}
 	if err := s.peerRegistry.RegisterPeer(ctx, penalty); err != nil {
 		return errors.NewServiceError("record block-incomplete penalty", err)

@@ -327,8 +327,11 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 			existing.LastValidatedAt = now
 		}
 	}
+	// Additive so callers pass a delta (e.g. +1 per observed contradiction)
+	// rather than a read-modify-write off a stale snapshot. Applied under
+	// r.mu, so concurrent increments for the same peer are not lost.
 	if info.FullStorageContradictions != 0 {
-		existing.FullStorageContradictions = info.FullStorageContradictions
+		existing.FullStorageContradictions += info.FullStorageContradictions
 	}
 	if !info.FullStoragePenaltyUntil.IsZero() {
 		existing.FullStoragePenaltyUntil = maxFullStoragePenaltyUntil(existing.FullStoragePenaltyUntil, info.FullStoragePenaltyUntil)

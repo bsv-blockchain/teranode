@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -492,6 +493,31 @@ func TestCentralizedPeerRegistry_Register_ValidatedChainWorkSizeCap(t *testing.T
 	require.Equal(t, atCap, got.ValidatedChainWork)
 	require.Equal(t, atCapHash.String(), got.ValidatedBlockHash.String())
 	require.Equal(t, uint32(100), got.ValidatedHeight)
+}
+
+func TestCentralizedPeerRegistry_Register_ConcurrentFullStorageContradictionsAreNotLost(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Seed the peer so subsequent Registers hit the merge path (the new-peer
+	// path clones directly and would not exercise the additive merge).
+	r.Register(&PeerInfo{ID: "p"})
+
+	const n = 200
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			// Each caller sends a delta of 1; the registry adds it under r.mu.
+			r.Register(&PeerInfo{ID: "p", FullStorageContradictions: 1})
+		}()
+	}
+	wg.Wait()
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, int64(n), got.FullStorageContradictions, "concurrent increments must not be lost")
 }
 
 func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_DeepCopiesInputs(t *testing.T) {
