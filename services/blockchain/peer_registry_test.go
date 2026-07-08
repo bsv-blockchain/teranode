@@ -444,6 +444,56 @@ func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_MonotonicChainWork(
 	require.Equal(t, []byte{0x03}, got.ValidatedChainWork)
 }
 
+func TestCentralizedPeerRegistry_Register_ValidatedChainWorkSizeCap(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// The 128-byte cap is enforced on the merge path (shouldAdvanceValidatedWork),
+	// NOT the new-peer path: Register clones a brand-new entry directly and returns
+	// before the merge. Seed each peer with only its ID first so the subsequent
+	// Register exercises the merge-path cap check.
+
+	// Over the cap (maxValidatedChainWorkBytes + 1 = 129 bytes): rejected by
+	// shouldAdvanceValidatedWork, so no validated progress is recorded.
+	r.Register(&PeerInfo{ID: "over"})
+
+	overCap := make([]byte, maxValidatedChainWorkBytes+1)
+	overCap[len(overCap)-1] = 0x01
+	oversizedHash := mustPeerRegistryHash("validated-oversized")
+	r.Register(&PeerInfo{
+		ID:                 "over",
+		ValidatedHeight:    100,
+		ValidatedBlockHash: oversizedHash,
+		ValidatedChainWork: overCap,
+	})
+
+	got, ok := r.Get("over")
+	require.True(t, ok)
+	require.Empty(t, got.ValidatedChainWork, "over-128-byte ChainWork must be rejected")
+	require.Nil(t, got.ValidatedBlockHash, "over-cap ChainWork must not advance validated progress")
+	require.Equal(t, uint32(0), got.ValidatedHeight)
+
+	// Exactly at the cap (128 bytes): accepted, so the test pins the boundary
+	// rather than merely "large is rejected".
+	r.Register(&PeerInfo{ID: "at"})
+
+	atCap := make([]byte, maxValidatedChainWorkBytes)
+	atCap[len(atCap)-1] = 0x01
+	atCapHash := mustPeerRegistryHash("validated-atcap")
+	r.Register(&PeerInfo{
+		ID:                 "at",
+		ValidatedHeight:    100,
+		ValidatedBlockHash: atCapHash,
+		ValidatedChainWork: atCap,
+	})
+
+	got, ok = r.Get("at")
+	require.True(t, ok)
+	require.Len(t, got.ValidatedChainWork, maxValidatedChainWorkBytes, "exactly-128-byte ChainWork must be accepted")
+	require.Equal(t, atCap, got.ValidatedChainWork)
+	require.Equal(t, atCapHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+}
+
 func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_DeepCopiesInputs(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
 
