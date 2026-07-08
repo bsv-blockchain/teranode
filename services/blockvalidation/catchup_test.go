@@ -4335,6 +4335,15 @@ func TestCatchup_ReportsValidatedHeaderChainWorkAfterHeaderValidation(t *testing
 		&model.BlockHeaderMeta{Height: blocks[0].Height, ID: 0, ChainWork: commonAncestorWork.Bytes()},
 		nil,
 	)
+	// findCommonAncestor probes each peer header via GetBlockHeader and treats a
+	// not-found error as "absent from our chain", stopping the walk. blocks[1:] are
+	// the peer's new headers we don't have yet, so report them not found; the walk
+	// stops at the divergence point with blocks[0] as the common ancestor.
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+		(*model.BlockHeader)(nil),
+		(*model.BlockHeaderMeta)(nil),
+		errors.NewBlockNotFoundError("block not found"),
+	).Maybe()
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop after validated progress report"))
 
