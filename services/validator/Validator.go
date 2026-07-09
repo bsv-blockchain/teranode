@@ -1186,14 +1186,22 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		// extend the transaction inputs with the parent tx outputs (idx bounds
 		// already validated at the top of the function)
 		for _, idx := range idxs {
-			if txMeta.Tx == nil || txMeta.Tx.Outputs == nil || txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex] == nil {
-				return errors.NewProcessingError("[Validate][%s] parent transaction %s does not have outputs for input index %d",
-					tx.TxIDChainHash().String(), parentTxHash.String(), idx)
+			// PreviousTxOutIndex comes from the (untrusted) child transaction, so
+			// bound it against the parent's output count before indexing.
+			// Otherwise a tx referencing a real parent but a non-existent vout
+			// (e.g. vout 99 on a 2-output parent) panics here with index out of
+			// range and crashes the validator. Mirrors the guard in
+			// stores/utxo/aerospike/get.go.
+			vout := tx.Inputs[idx].PreviousTxOutIndex
+			if txMeta.Tx == nil || txMeta.Tx.Outputs == nil ||
+				int(vout) >= len(txMeta.Tx.Outputs) || txMeta.Tx.Outputs[vout] == nil {
+				return errors.NewProcessingError("[Validate][%s] parent transaction %s has no output for index %d",
+					tx.TxIDChainHash().String(), parentTxHash.String(), vout)
 			}
 
 			// extend the input with the parent tx outputs
-			tx.Inputs[idx].PreviousTxSatoshis = txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex].Satoshis
-			tx.Inputs[idx].PreviousTxScript = txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex].LockingScript
+			tx.Inputs[idx].PreviousTxSatoshis = txMeta.Tx.Outputs[vout].Satoshis
+			tx.Inputs[idx].PreviousTxScript = txMeta.Tx.Outputs[vout].LockingScript
 		}
 	}
 

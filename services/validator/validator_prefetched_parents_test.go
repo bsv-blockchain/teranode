@@ -125,3 +125,29 @@ func Test_getUtxoBlockHeightAndExtendForParentTx_InputIndexOutOfBounds(t *testin
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of bounds")
 }
+
+// Test_getUtxoBlockHeightAndExtendForParentTx_VoutOutOfRange guards the extend
+// path against an out-of-range PreviousTxOutIndex. The vout comes from the
+// (untrusted) child transaction; a raw tx that references a real parent but a
+// vout beyond that parent's output count must be rejected with a clean error
+// rather than panicking on txMeta.Tx.Outputs[vout] and crashing the validator.
+func Test_getUtxoBlockHeightAndExtendForParentTx_VoutOutOfRange(t *testing.T) {
+	ctx := context.Background()
+
+	// Child tx with a single, validly-indexed input (idx 0) whose
+	// PreviousTxOutIndex points past the parent's outputs.
+	childTx := &bt.Tx{Inputs: []*bt.Input{{PreviousTxOutIndex: 99}}}
+	utxoHeights := make([]uint32, len(childTx.Inputs))
+
+	// Parent exists and is confirmed, but has only 2 outputs (vouts 0 and 1).
+	parentHash := chainhash.Hash{}
+	prefetched := map[chainhash.Hash]*meta.Data{
+		parentHash: {BlockHeights: []uint32{100}, Tx: &bt.Tx{Outputs: []*bt.Output{{}, {}}}},
+	}
+
+	v := &Validator{}
+
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{0}, utxoHeights, childTx, true, prefetched)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "has no output for index")
+}
