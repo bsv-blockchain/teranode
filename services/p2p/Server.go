@@ -668,18 +668,14 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		if err != nil {
 			return errors.NewServiceError("error generating random API key", err)
 		}
-	}
 
-	// Define protected methods - use the full gRPC method path
-	protectedMethods := map[string]bool{
-		"/p2p_api.PeerService/BanPeer":   true,
-		"/p2p_api.PeerService/UnbanPeer": true,
+		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban, clear bans, ban score, reputation reset, connect/disconnect peer) are unreachable until a key is configured")
 	}
 
 	// Create auth options
 	authOptions := &util.AuthOptions{
 		APIKey:           apiKey,
-		ProtectedMethods: protectedMethods,
+		ProtectedMethods: adminProtectedMethods(),
 	}
 
 	// this will block
@@ -845,6 +841,25 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 	for _, banned := range s.banList.ListBanned() {
 		s.handleBanEvent(ctx, BanEvent{Action: banActionAdd, IP: banned})
+	}
+}
+
+// adminProtectedMethods returns the full gRPC method paths of every
+// state-mutating admin RPC on the PeerService; the auth interceptor requires
+// the admin API key for these. Read-only queries and internal data-plane
+// reporting RPCs (catchup metrics, valid block/subtree reports, bytes
+// downloaded) stay unauthenticated because other services call them without
+// admin credentials. Any new mutating admin RPC must be added here; the
+// classification is enforced by TestAdminProtectedMethodsCoverAllRPCs.
+func adminProtectedMethods() map[string]bool {
+	return map[string]bool{
+		"/p2p_api.PeerService/BanPeer":         true,
+		"/p2p_api.PeerService/UnbanPeer":       true,
+		"/p2p_api.PeerService/ClearBanned":     true,
+		"/p2p_api.PeerService/AddBanScore":     true,
+		"/p2p_api.PeerService/ResetReputation": true,
+		"/p2p_api.PeerService/ConnectPeer":     true,
+		"/p2p_api.PeerService/DisconnectPeer":  true,
 	}
 }
 
