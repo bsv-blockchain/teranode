@@ -3077,16 +3077,6 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 	})
 }
 
-// newLegacySubscriberMock returns a blockchain mock whose subscriber list
-// includes the legacy manager, so ban RPC handlers treat the legacy peer
-// service as active (mirroring handleGetInfo's isSubscriberActive gate).
-func newLegacySubscriberMock() *blockchain.Mock {
-	m := &blockchain.Mock{}
-	m.On("GetSubscribers", mock.Anything).Return([]string{blockchain.SubscriberLegacy}, nil)
-
-	return m
-}
-
 // TestHandleIsBannedComprehensive tests the handleIsBanned handler
 func TestHandleIsBannedComprehensive(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
@@ -3150,10 +3140,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3209,9 +3198,8 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3229,42 +3217,6 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		assert.True(t, banned)
 	})
 
-	t.Run("legacy skipped when legacy not an active subscriber", func(t *testing.T) {
-		legacyCalled := false
-		mockPeer := &mockLegacyPeerClient{
-			isBannedFunc: func(ctx context.Context, req *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error) {
-				legacyCalled = true
-				return &peer_api.IsBannedResponse{IsBanned: true}, nil
-			},
-		}
-
-		// blockchain reports no legacy subscriber, so the legacy client (though
-		// non-nil) must not be consulted.
-		mockBlockchain := &blockchain.Mock{}
-		mockBlockchain.On("GetSubscribers", mock.Anything).Return([]string{blockchain.SubscriberP2P}, nil)
-
-		s := &RPCServer{
-			logger:           logger,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: mockBlockchain,
-			settings: &settings.Settings{
-				ChainCfgParams: &chaincfg.MainNetParams,
-			},
-		}
-
-		cmd := &bsvjson.IsBannedCmd{
-			IPOrSubnet: "10.0.0.1",
-		}
-
-		result, err := handleIsBanned(context.Background(), s, cmd, nil)
-
-		require.NoError(t, err)
-		banned, ok := result.(bool)
-		require.True(t, ok)
-		assert.False(t, banned, "IP should not be reported banned when legacy is inactive")
-		assert.False(t, legacyCalled, "legacy client must not be called when legacy is not an active subscriber")
-	})
-
 	t.Run("both clients return not banned", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
 			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
@@ -3279,10 +3231,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3314,10 +3265,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3349,10 +3299,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3473,9 +3422,8 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3507,10 +3455,9 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3546,10 +3493,9 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3632,10 +3578,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3663,10 +3608,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3711,9 +3655,8 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3757,10 +3700,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3848,10 +3790,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3952,10 +3893,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -4031,49 +3971,6 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		assert.Contains(t, rpcErr.Message, "Failed to apply ban")
 	})
 
-	t.Run("add ban p2p fails and legacy inactive reports failure", func(t *testing.T) {
-		banTime := int64(3600)
-		legacyCalled := false
-
-		mockP2P := &mockP2PClient{
-			banPeerFunc: func(ctx context.Context, addr string, until int64) error {
-				return errors.New(errors.ERR_ERROR, "ban failed")
-			},
-		}
-		mockPeer := &mockLegacyPeerClient{
-			banPeerFunc: func(ctx context.Context, req *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
-				legacyCalled = true
-				return &peer_api.BanPeerResponse{Ok: true}, nil
-			},
-		}
-		// legacy configured but NOT an active subscriber, so the legacy leg is
-		// skipped; the failed p2p leg must still surface as an error.
-		mockBlockchain := &blockchain.Mock{}
-		mockBlockchain.On("GetSubscribers", mock.Anything).Return([]string{blockchain.SubscriberP2P}, nil)
-
-		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: mockBlockchain,
-			settings: &settings.Settings{
-				ChainCfgParams: &chaincfg.MainNetParams,
-			},
-		}
-
-		cmd := &bsvjson.SetBanCmd{IPOrSubnet: "192.168.1.100", Command: "add", BanTime: &banTime}
-
-		result, err := handleSetBan(context.Background(), s, cmd, nil)
-
-		require.Error(t, err, "a failed p2p ban with the legacy leg skipped must surface an error, not silent success")
-		assert.Nil(t, result)
-		assert.False(t, legacyCalled, "legacy must not be consulted when inactive")
-
-		rpcErr, ok := err.(*bsvjson.RPCError)
-		require.True(t, ok)
-		assert.Contains(t, rpcErr.Message, "Failed to apply ban")
-	})
-
 	t.Run("add ban with subnet", func(t *testing.T) {
 		banTime := int64(7200)
 
@@ -4120,10 +4017,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -4143,7 +4039,7 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Failed to add ban")
+		assert.Contains(t, rpcErr.Message, "Failed to apply ban")
 	})
 
 	t.Run("remove ban both clients fail", func(t *testing.T) {
@@ -4160,10 +4056,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			p2pClient:        mockP2P,
-			legacyP2PClient:  mockPeer,
-			blockchainClient: newLegacySubscriberMock(),
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -4182,7 +4077,7 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Error while trying to unban peer")
+		assert.Contains(t, rpcErr.Message, "Failed to remove ban")
 	})
 
 	t.Run("malformed command type", func(t *testing.T) {
@@ -6746,87 +6641,132 @@ func TestSendRawTransactionAllowHighFeesHelp_NoLongerSaysNoEffect(t *testing.T) 
 		"help text must be updated to describe the new behaviour after T11")
 }
 
-// TestBanHandlers_LegacySkippedWhenInactive proves that when the legacy manager
-// is not an active blockchain subscriber, none of the ban RPC handlers consult
-// the (non-nil) legacy peer client. All five sites share the same
-// isSubscriberActive gate; TestHandleIsBannedComprehensive covers isbanned, and
-// this covers the other four so future drift in any of them is caught.
-func TestBanHandlers_LegacySkippedWhenInactive(t *testing.T) {
+// TestHandleSetBan_SuccessTracking exercises the post-switch success check
+// across the p2p x legacy matrix, including the legacy-only success path that
+// carries the result when p2p is absent — the load-bearing case for the
+// `success = true` set on the legacy branches.
+func TestHandleSetBan_SuccessTracking(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
-
-	// blockchain subscriber list omits the legacy manager.
-	newInactive := func() *blockchain.Mock {
-		m := &blockchain.Mock{}
-		m.On("GetSubscribers", mock.Anything).Return([]string{blockchain.SubscriberP2P}, nil)
-
-		return m
+	tSettings := &settings.Settings{
+		ChainCfgParams: &chaincfg.MainNetParams,
+		RPC:            settings.RPCSettings{ClientCallTimeout: 5 * time.Second},
 	}
 
-	settingsObj := &settings.Settings{ChainCfgParams: &chaincfg.MainNetParams}
-
-	t.Run("listbanned", func(t *testing.T) {
-		legacyCalled := false
-		mockPeer := &mockLegacyPeerClient{
-			listBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*peer_api.ListBannedResponse, error) {
-				legacyCalled = true
-				return &peer_api.ListBannedResponse{}, nil
-			},
-		}
-		s := &RPCServer{logger: logger, legacyP2PClient: mockPeer, blockchainClient: newInactive(), settings: settingsObj}
-
-		_, err := handleListBanned(context.Background(), s, nil, nil)
-		require.NoError(t, err)
-		assert.False(t, legacyCalled, "legacy ListBanned must not be called when legacy is inactive")
-	})
-
-	t.Run("clearbanned", func(t *testing.T) {
-		legacyCalled := false
-		mockPeer := &mockLegacyPeerClient{
-			clearBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*peer_api.ClearBannedResponse, error) {
-				legacyCalled = true
-				return &peer_api.ClearBannedResponse{}, nil
-			},
-		}
-		s := &RPCServer{logger: logger, legacyP2PClient: mockPeer, blockchainClient: newInactive(), settings: settingsObj}
-
-		_, err := handleClearBanned(context.Background(), s, nil, nil)
-		require.NoError(t, err)
-		assert.False(t, legacyCalled, "legacy ClearBanned must not be called when legacy is inactive")
-	})
-
-	t.Run("setban add", func(t *testing.T) {
-		legacyCalled := false
-		banTime := int64(3600)
+	t.Run("add: p2p absent, legacy applies ban -> success", func(t *testing.T) {
 		mockPeer := &mockLegacyPeerClient{
 			banPeerFunc: func(ctx context.Context, req *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
-				legacyCalled = true
 				return &peer_api.BanPeerResponse{Ok: true}, nil
 			},
 		}
-		// p2p present and succeeds so the add path completes without error.
-		mockP2P := &mockP2PClient{banPeerFunc: func(ctx context.Context, addr string, until int64) error { return nil }}
-		s := &RPCServer{logger: logger, p2pClient: mockP2P, legacyP2PClient: mockPeer, blockchainClient: newInactive(), settings: settingsObj}
+		s := &RPCServer{logger: logger, legacyP2PClient: mockPeer, settings: tSettings}
+		banTime := int64(3600)
 		cmd := &bsvjson.SetBanCmd{IPOrSubnet: "192.168.1.100", Command: "add", BanTime: &banTime}
 
-		_, err := handleSetBan(context.Background(), s, cmd, nil)
-		require.NoError(t, err)
-		assert.False(t, legacyCalled, "legacy BanPeer must not be called when legacy is inactive")
+		result, err := handleSetBan(context.Background(), s, cmd, nil)
+		require.NoError(t, err, "legacy leg alone must carry success")
+		assert.Nil(t, result)
 	})
 
-	t.Run("setban remove", func(t *testing.T) {
-		legacyCalled := false
+	t.Run("add: no clients -> Failed to apply ban", func(t *testing.T) {
+		s := &RPCServer{logger: logger, settings: tSettings}
+		banTime := int64(3600)
+		cmd := &bsvjson.SetBanCmd{IPOrSubnet: "192.168.1.100", Command: "add", BanTime: &banTime}
+
+		result, err := handleSetBan(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+		assert.Nil(t, result)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Contains(t, rpcErr.Message, "Failed to apply ban")
+	})
+
+	t.Run("remove: p2p absent, legacy removes ban -> success", func(t *testing.T) {
 		mockPeer := &mockLegacyPeerClient{
 			unbanPeerFunc: func(ctx context.Context, req *peer_api.UnbanPeerRequest) (*peer_api.UnbanPeerResponse, error) {
-				legacyCalled = true
 				return &peer_api.UnbanPeerResponse{Ok: true}, nil
 			},
 		}
-		mockP2P := &mockP2PClient{unbanPeerFunc: func(ctx context.Context, addr string) error { return nil }}
-		s := &RPCServer{logger: logger, p2pClient: mockP2P, legacyP2PClient: mockPeer, blockchainClient: newInactive(), settings: settingsObj}
+		s := &RPCServer{logger: logger, legacyP2PClient: mockPeer, settings: tSettings}
 		cmd := &bsvjson.SetBanCmd{IPOrSubnet: "192.168.1.100", Command: "remove"}
 
-		_, err := handleSetBan(context.Background(), s, cmd, nil)
-		require.NoError(t, err)
-		assert.False(t, legacyCalled, "legacy UnbanPeer must not be called when legacy is inactive")
+		result, err := handleSetBan(context.Background(), s, cmd, nil)
+		require.NoError(t, err, "legacy leg alone must carry success")
+		assert.Nil(t, result)
+	})
+
+	t.Run("remove: no clients -> Failed to remove ban", func(t *testing.T) {
+		s := &RPCServer{logger: logger, settings: tSettings}
+		cmd := &bsvjson.SetBanCmd{IPOrSubnet: "192.168.1.100", Command: "remove"}
+
+		result, err := handleSetBan(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+		assert.Nil(t, result)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Contains(t, rpcErr.Message, "Failed to remove ban")
+	})
+}
+
+// TestBanHandlers_LegacyCallBounded verifies the legacy ban calls are bounded by
+// ClientCallTimeout, so an unresponsive-but-configured legacy service cannot
+// stall the RPC on the parent context (#591). The mock blocks until its context
+// is cancelled; without the per-call timeout the handler would hang forever.
+func TestBanHandlers_LegacyCallBounded(t *testing.T) {
+	logger := mocklogger.NewTestLogger()
+	tSettings := &settings.Settings{
+		ChainCfgParams: &chaincfg.MainNetParams,
+		RPC:            settings.RPCSettings{ClientCallTimeout: 50 * time.Millisecond},
+	}
+
+	mustReturn := func(t *testing.T, fn func()) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() { fn(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler did not return; legacy call is not bounded by ClientCallTimeout")
+		}
+	}
+
+	t.Run("isbanned", func(t *testing.T) {
+		mockPeer := &mockLegacyPeerClient{
+			isBannedFunc: func(ctx context.Context, req *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+		s := &RPCServer{logger: logger, legacyP2PClient: mockPeer, settings: tSettings}
+		cmd := &bsvjson.IsBannedCmd{IPOrSubnet: "10.0.0.1"}
+		mustReturn(t, func() { _, _ = handleIsBanned(context.Background(), s, cmd, nil) })
+	})
+
+	t.Run("clearbanned", func(t *testing.T) {
+		mockPeer := &mockLegacyPeerClient{
+			clearBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*peer_api.ClearBannedResponse, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+		s := &RPCServer{logger: logger, legacyP2PClient: mockPeer, settings: tSettings}
+		mustReturn(t, func() { _, _ = handleClearBanned(context.Background(), s, nil, nil) })
+	})
+
+	t.Run("setban add", func(t *testing.T) {
+		mockPeer := &mockLegacyPeerClient{
+			banPeerFunc: func(ctx context.Context, req *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+		// p2p succeeds so the overall RPC still reports success; we only assert
+		// the legacy call does not hang.
+		mockP2P := &mockP2PClient{banPeerFunc: func(ctx context.Context, addr string, until int64) error { return nil }}
+		s := &RPCServer{logger: logger, p2pClient: mockP2P, legacyP2PClient: mockPeer, settings: tSettings}
+		banTime := int64(3600)
+		cmd := &bsvjson.SetBanCmd{IPOrSubnet: "10.0.0.1", Command: "add", BanTime: &banTime}
+		mustReturn(t, func() { _, _ = handleSetBan(context.Background(), s, cmd, nil) })
 	})
 }

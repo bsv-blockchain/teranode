@@ -1604,13 +1604,15 @@ func calculateMedianTime(ctx context.Context, blockchainClient blockchain.Client
 	return medianTimestampUint32, nil
 }
 
+// isSubscriberActive checks whether a blockchain subscriber whose source
+// contains substr is currently registered. This lets RPC handlers skip
+// expensive calls to services that are not running.
 // isSubscriberActive checks whether source is present in the blockchain
 // subscriber list. This lets RPC handlers skip expensive calls to services
 // that are not running.
 func isSubscriberActive(ctx context.Context, s *RPCServer, source string) bool {
 	subs, err := s.blockchainClient.GetSubscribers(ctx)
 	if err != nil {
-		s.logger.Warnf("[isSubscriberActive] GetSubscribers failed, treating %s as inactive: %v", source, err)
 		return false
 	}
 	for _, src := range subs {
@@ -2116,8 +2118,16 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// Legacy service only handles IPs
 	var peerBanned bool
 
-	if isIP && s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
-		isBannedLegacy, err := s.legacyP2PClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+	if isIP && s.legacyP2PClient != nil {
+		// Bound the call: the legacy peer client is lazily dialed and non-nil
+		// whenever legacy_grpcAddress is configured, so on a node without a
+		// running legacy service this would otherwise block on the parent
+		// context until the RPC's own deadline (see #591).
+		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+		isBannedLegacy, err := s.legacyP2PClient.IsBanned(legacyCtx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+
+		cancel()
+
 		if err != nil {
 			s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
 		} else {
@@ -2199,7 +2209,7 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 	}
 
 	// check if legacy peer service is available
-	if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
+	if s.legacyP2PClient != nil {
 		// Create a timeout context for the legacy peer client call
 		legacyCtx, cancel := context.WithTimeout(ctx, clientCallTimeout)
 		defer cancel()
@@ -2276,8 +2286,14 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		}
 	}
 	// check if legacy peer service is available
-	if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
-		_, err := s.legacyP2PClient.ClearBanned(ctx, &emptypb.Empty{})
+	if s.legacyP2PClient != nil {
+		// Bound the call so an absent-but-configured legacy service can't stall
+		// the RPC on the parent context (#591).
+		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+		_, err := s.legacyP2PClient.ClearBanned(legacyCtx, &emptypb.Empty{})
+
+		cancel()
+
 		if err != nil {
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
 		}
@@ -2342,11 +2358,9 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	}
 
 	// success tracks whether at least one applicable ban leg actually applied
-	// the ban. It is checked after the switch so the outcome no longer depends
-	// on which legs ran: previously a failed p2p ban was only surfaced as an
-	// error inside the legacy block, so when the legacy leg was skipped (client
-	// absent, or - after the subscriber gate - configured but inactive) a failed
-	// ban silently returned success.
+	// the ban; checked after the switch so the outcome no longer depends on
+	// which legs ran (previously a failed p2p ban was only surfaced when the
+	// legacy leg also ran and failed).
 	var success bool
 
 	// Handle the command
@@ -2383,30 +2397,22 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 
 		// and ban legacy peers
-		if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
-			until := expirationTimeInt64
+		if s.legacyP2PClient != nil {
+			// Bound the call so an absent-but-configured legacy service can't
+			// stall the RPC on the parent context (#591).
+			legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 
-			resp, err := s.legacyP2PClient.BanPeer(ctx, &peer_api.BanPeerRequest{
+			resp, err := s.legacyP2PClient.BanPeer(legacyCtx, &peer_api.BanPeerRequest{
 				Addr:  c.IPOrSubnet,
-				Until: until,
+				Until: expirationTimeInt64,
 			})
+
+			cancel()
 
 			if err != nil {
 				s.logger.Warnf("Error while trying to ban legacy peer: %v", err)
-
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to add ban",
-					}
-				}
 			} else if resp == nil || !resp.Ok {
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to ban peer",
-					}
-				}
+				s.logger.Warnf("Legacy peer service did not apply ban for %s", c.IPOrSubnet)
 			} else {
 				success = true
 				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
@@ -2423,26 +2429,21 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 
 		// unban legacy peer
-		if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
-			resp, err := s.legacyP2PClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
+		if s.legacyP2PClient != nil {
+			// Bound the call so an absent-but-configured legacy service can't
+			// stall the RPC on the parent context (#591).
+			legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+
+			resp, err := s.legacyP2PClient.UnbanPeer(legacyCtx, &peer_api.UnbanPeerRequest{
 				Addr: c.IPOrSubnet,
 			})
+
+			cancel()
+
 			if err != nil {
 				s.logger.Errorf("Error while trying to unban legacy peer: %v", err)
-
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Error while trying to unban peer",
-					}
-				}
 			} else if resp == nil || !resp.Ok {
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to unban peer",
-					}
-				}
+				s.logger.Warnf("Legacy peer service did not remove ban for %s", c.IPOrSubnet)
 			} else {
 				success = true
 				s.logger.Debugf("Removed ban for %s", c.IPOrSubnet)
@@ -2459,9 +2460,14 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	// available). setban is an administrative control, so report the failure
 	// rather than silently returning success.
 	if !success {
+		msg := "Failed to apply ban"
+		if c.Command == "remove" {
+			msg = "Failed to remove ban"
+		}
+
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInvalidParameter,
-			Message: "Failed to apply ban",
+			Message: msg,
 		}
 	}
 
