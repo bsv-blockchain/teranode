@@ -158,3 +158,42 @@ func TestExpiringMap_NoMaxSize_DefaultUnbounded(t *testing.T) {
 
 	require.Equal(t, 100, m.Len())
 }
+
+// TestExpiringMap_CleanEvictionSendDoesNotBlockUnderLock guards against the TTL
+// clean() path performing a blocking eviction-channel send while holding m.mu.
+// With an unbuffered, unconsumed eviction channel, a blocking send would stall
+// clean() under the write lock and deadlock all Get/Set/Delete/Len. The send
+// must be non-blocking (drop-on-full), so clean() always returns.
+func TestExpiringMap_CleanEvictionSendDoesNotBlockUnderLock(t *testing.T) {
+	// expire != 0 would start the hourly ticker; use a long expiry so the
+	// background goroutine never fires during the test and we drive clean()
+	// directly.
+	ch := make(chan []int) // unbuffered, no reader
+	m := New[string, int](time.Hour).WithEvictionChannel(ch)
+
+	// Insert an already-expired item so clean() selects it for eviction.
+	m.mu.Lock()
+	m.items["k"] = &itemWrapper[int]{
+		item:    1,
+		expiry:  time.Now().Add(-time.Hour).UnixNano(),
+		addedAt: time.Now().Add(-time.Hour).UnixNano(),
+	}
+	m.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		m.clean()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("clean() blocked on eviction-channel send while holding m.mu")
+	}
+
+	// The expired item must still have been removed even though the
+	// notification was dropped.
+	_, ok := m.Get("k")
+	require.False(t, ok, "expired item should be evicted")
+}
