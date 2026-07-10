@@ -194,7 +194,7 @@ test:
 .PHONY: test-teraslab
 test-teraslab:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache,teraslab" -count=1 -timeout=30m ./stores/utxo/teraslab/...
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache,teraslab" -count=1 -timeout=30m -coverprofile=coverage-teraslab.out -coverpkg=github.com/bsv-blockchain/teranode/stores/utxo/teraslab/...,github.com/bsv-blockchain/teranode/stores/utxo/conflictwal/... ./stores/utxo/teraslab/...
 
 # run tests in the test/longtest directory
 .PHONY: longtest

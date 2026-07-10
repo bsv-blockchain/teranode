@@ -85,6 +85,18 @@ jobs:
       - name: Run TeraSlab integration tests
         run: make test-teraslab
 
+      # The tagged suite is the only coverage for the client-coupled TeraSlab
+      # store code; upload it so sonar-pr-analyze unions it into the Sonar
+      # coverage report (sonar-project.properties reportPaths).
+      - name: Upload TeraSlab coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-teraslab-report
+          path: coverage-teraslab.out
+          if-no-files-found: warn
+          retention-days: 1
+
   test:
     name: test
     runs-on: teranode-runner-16-core-arm

@@ -103,6 +103,17 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Tagged TeraSlab integration coverage (test-teraslab job). Optional:
+      # continue-on-error so a failed/skipped test-teraslab run leaves the scan
+      # to use coverage.out alone (and the gate then reflects the reduced coverage).
+      - name: Download TeraSlab coverage artifact
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-teraslab-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Download golangci-lint report
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
