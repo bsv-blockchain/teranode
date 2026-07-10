@@ -67,6 +67,14 @@ var aerospikeHistogramLastBuckets = *safemap.New[string, []uint64]()
 
 func init() {
 	aerospikeConnections = make(map[string]*uaerospike.Client)
+
+	// Raise the aerospike client's read buffer to 512MB for large records.
+	// aerospike.MaxBufferSize is a package-global in the client library that its
+	// batch/read commands consult concurrently. Writing it here in init (once,
+	// before main and before any client or batch read exists) establishes a
+	// happens-before edge with those reads; writing it on every GetAerospikeClient
+	// call instead raced with in-flight batch reads on already-running clients.
+	aerospike.MaxBufferSize = 1024 * 1024 * 512 // 512MB
 }
 
 // GetAerospikeClient creates or retrieves a cached Aerospike client for the given URL.
@@ -93,9 +101,6 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	} else {
 		logger.Infof("[AEROSPIKE] Reusing aerospike client: %v", url.Host)
 	}
-
-	// increase buffer size to 256MB for large records
-	aerospike.MaxBufferSize = 1024 * 1024 * 512 // 512MB
 
 	return client, nil
 }
