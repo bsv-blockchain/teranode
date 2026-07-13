@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestNewUnknownError tests the NewUnknownError function to ensure it creates an error with the correct code and message.
@@ -141,6 +142,32 @@ func TestNewBlockIncompleteError(t *testing.T) {
 	assert.Equal(t, "test block incomplete error param1 42", err.Message(), "error message should match")
 
 	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
+}
+
+// TestBlockIncompleteTransient verifies the transient-local variant keeps the
+// ERR_BLOCK_INCOMPLETE code (so existing errors.Is retry checks still match) while being
+// distinguishable via IsTransientBlockIncomplete, including through wrapping.
+func TestBlockIncompleteTransient(t *testing.T) {
+	transient := NewBlockIncompleteTransientError("transient %s", "state")
+
+	// Same code: existing ErrBlockIncomplete retry/abort checks keep matching.
+	require.Equal(t, ERR_BLOCK_INCOMPLETE, transient.Code(), "transient variant keeps the ERR_BLOCK_INCOMPLETE code")
+	require.True(t, Is(transient, ErrBlockIncomplete), "transient variant must still match ErrBlockIncomplete")
+	require.True(t, IsTransientBlockIncomplete(transient), "transient variant must be detected as transient-local")
+
+	// A plain incomplete error is peer-attributable, not transient-local.
+	plain := NewBlockIncompleteError("plain incomplete")
+	require.True(t, Is(plain, ErrBlockIncomplete))
+	require.False(t, IsTransientBlockIncomplete(plain), "plain incomplete must not be flagged transient-local")
+
+	// The marker is still found when the transient error is wrapped by an outer *Error.
+	wrapped := NewProcessingError("outer wrap", transient)
+	require.True(t, Is(wrapped, ErrBlockIncomplete), "wrapped transient must still match ErrBlockIncomplete")
+	require.True(t, IsTransientBlockIncomplete(wrapped), "wrapped transient must still be detected as transient-local")
+
+	// Unrelated errors and nil are never transient-local.
+	require.False(t, IsTransientBlockIncomplete(NewBlockInvalidError("invalid")))
+	require.False(t, IsTransientBlockIncomplete(nil))
 }
 
 // TestNewBlockInvalidError tests the NewBlockInvalidError function to ensure it creates an error with the correct code and message.

@@ -263,7 +263,7 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
-	u.reportValidatedHeaderProgress(ctx, catchupCtx)
+	u.reportValidatedHeaderProgress(catchupCtx)
 
 	// Step 10: Fetch and validate blocks
 	if err = u.fetchAndValidateBlocks(ctx, catchupCtx); err != nil {
@@ -393,8 +393,17 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// Service unavailable errors are local system issues, not peer errors
 			errorType = "local_service_unavailable"
 			isPeerError = false
+		case errors.IsTransientBlockIncomplete(*err):
+			// Transient LOCAL catchup-ordering gap (unabsorbed parent, issue 1031). Shares the
+			// ErrBlockIncomplete code, so this case must precede the generic one below. Abort
+			// and retry another peer, but do NOT report a peer failure or open a full-storage
+			// penalty window: the serving peer is honest and possibly the sole source ahead.
+			errorType = "block_incomplete_transient"
+			isPeerError = false
 		case errors.Is(*err, errors.ErrBlockIncomplete):
-			// Incomplete blocks (e.g. seeded peers without full block data) are not peer errors
+			// Peer-attributable incomplete block: the peer served header work it could not back
+			// with a full block body (e.g. seeded peer without full block data). Penalize so a
+			// header-only non-deliverer stops holding top-tier sync eligibility.
 			errorType = "block_incomplete"
 			isPeerError = false
 			reportIncompleteBlock = true
@@ -1007,13 +1016,20 @@ func (u *Server) filterExistingBlocks(ctx context.Context, headers []*model.Bloc
 // higher credited value requires correspondingly harder bits backed by real PoW,
 // so a peer cannot inflate its rank. A valid-PoW but wrong-difficulty chain can
 // still be credited here; it is rejected later by full block validation.
-func (u *Server) reportValidatedHeaderProgress(ctx context.Context, catchupCtx *CatchupContext) {
+func (u *Server) reportValidatedHeaderProgress(catchupCtx *CatchupContext) {
 	height, blockHash, workBytes, ok := u.computeValidatedHeaderProgress(catchupCtx)
 	if !ok {
 		return
 	}
 
-	u.reportValidatedChainProgress(ctx, catchupCtx.peerID, height, blockHash.String(), workBytes)
+	// Advisory best-effort report made while the global catchup single-flight lock is
+	// held: bound it with the same timeout releaseCatchupLock uses for its reputation
+	// gRPC calls so a wedged p2p service whose transport still answers keepalives cannot
+	// stall all node catchup on the unbounded service context.
+	rpcCtx, cancel := context.WithTimeout(context.Background(), catchupReputationReportTimeout)
+	defer cancel()
+
+	u.reportValidatedChainProgress(rpcCtx, catchupCtx.peerID, height, blockHash.String(), workBytes)
 }
 
 func (u *Server) computeValidatedHeaderProgress(catchupCtx *CatchupContext) (uint32, *chainhash.Hash, []byte, bool) {

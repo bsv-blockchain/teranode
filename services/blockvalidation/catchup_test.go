@@ -4382,7 +4382,7 @@ func TestCatchup_ValidatedHeaderProgressCreditsHeaderServingPeerOnly(t *testing.
 	headers := makeProgressHeaders(t, 3, &commonAncestorHash)
 	catchupCtx := newValidatedProgressCatchupContext("header-peer", 100, big.NewInt(10), headers)
 
-	server.reportValidatedHeaderProgress(context.Background(), catchupCtx)
+	server.reportValidatedHeaderProgress(catchupCtx)
 
 	reports := recorder.snapshotValidatedReports()
 	require.Len(t, reports, 1)
@@ -4406,7 +4406,7 @@ func TestCatchup_ValidatedHeaderProgressDoesNotCreditContributingPeers(t *testin
 		"secondary-b": {},
 	}
 
-	server.reportValidatedHeaderProgress(context.Background(), catchupCtx)
+	server.reportValidatedHeaderProgress(catchupCtx)
 	server.reportValidBlockForPeers(context.Background(), catchupCtx.peerID, headers[len(headers)-1].Hash().String(), contributingPeers)
 
 	validatedReports := recorder.snapshotValidatedReports()
@@ -4443,7 +4443,7 @@ func TestCatchup_NoHeadersDoesNotRecordValidatedProgress(t *testing.T) {
 		},
 	}
 
-	server.reportValidatedHeaderProgress(context.Background(), catchupCtx)
+	server.reportValidatedHeaderProgress(catchupCtx)
 
 	require.Empty(t, recorder.snapshotValidatedReports())
 }
@@ -4459,7 +4459,7 @@ func TestCatchup_ValidatedProgressRPCErrorIsNonFatal(t *testing.T) {
 	headers := makeProgressHeaders(t, 1, &commonAncestorHash)
 	catchupCtx := newValidatedProgressCatchupContext("header-peer", 400, big.NewInt(40), headers)
 
-	server.reportValidatedHeaderProgress(context.Background(), catchupCtx)
+	server.reportValidatedHeaderProgress(catchupCtx)
 
 	require.Len(t, recorder.snapshotValidatedReports(), 1)
 }
@@ -4475,7 +4475,7 @@ func TestCatchup_ValidatedProgressUnimplementedIsNonFatal(t *testing.T) {
 	headers := makeProgressHeaders(t, 1, &commonAncestorHash)
 	catchupCtx := newValidatedProgressCatchupContext("header-peer", 500, big.NewInt(50), headers)
 
-	server.reportValidatedHeaderProgress(context.Background(), catchupCtx)
+	server.reportValidatedHeaderProgress(catchupCtx)
 
 	require.Len(t, recorder.snapshotValidatedReports(), 1)
 }
