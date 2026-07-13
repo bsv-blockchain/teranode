@@ -13,7 +13,10 @@ import (
 )
 
 const (
-	maxReportedChainWorkBytes = 128
+	// maxReportedChainWorkBytes bounds inbound advisory chainwork on the
+	// ReportValidatedChainProgress RPC. It aliases the registry's single source of
+	// truth so the two stay in lockstep.
+	maxReportedChainWorkBytes = blockchain.MaxValidatedChainWorkBytes
 
 	catchupFailureKindGeneric         = "generic"
 	catchupFailureKindBlockIncomplete = "block_incomplete"

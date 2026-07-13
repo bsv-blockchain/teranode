@@ -21,9 +21,11 @@ import (
 // resource exhaustion and oversized log lines.
 const maxPeerNameLength = 128
 
-// maxValidatedChainWorkBytes bounds advisory peer-progress input before it is
-// converted into a big.Int for monotonic comparison.
-const maxValidatedChainWorkBytes = 128
+// MaxValidatedChainWorkBytes bounds advisory peer-progress chainwork input before it
+// is converted into a big.Int for monotonic comparison. It is the single source of
+// truth for this cap; the p2p service's inbound ReportValidatedChainProgress guard
+// (maxReportedChainWorkBytes) aliases this value.
+const MaxValidatedChainWorkBytes = 128
 
 // sanitizeClientName scrubs an untrusted peer-supplied client name string.
 // Control characters and high-Unicode are dropped; XSS-flavoured ASCII
@@ -574,7 +576,7 @@ func maxFullStoragePenaltyUntil(existing, incoming time.Time) time.Time {
 }
 
 func shouldAdvanceValidatedWork(storedChainWork []byte, incomingBlockHash *chainhash.Hash, incomingChainWork []byte) bool {
-	if incomingBlockHash == nil || len(incomingChainWork) == 0 || len(incomingChainWork) > maxValidatedChainWorkBytes {
+	if incomingBlockHash == nil || len(incomingChainWork) == 0 || len(incomingChainWork) > MaxValidatedChainWorkBytes {
 		return false
 	}
 	if len(storedChainWork) == 0 {
@@ -1116,7 +1118,7 @@ func (r *CentralizedPeerRegistry) RecordValidatedPeerProgress(peerID string, hei
 	if len(chainWork) == 0 {
 		return errors.NewInvalidArgumentError("validated chainwork is required")
 	}
-	if len(chainWork) > maxValidatedChainWorkBytes {
+	if len(chainWork) > MaxValidatedChainWorkBytes {
 		return errors.NewInvalidArgumentError("validated chainwork is too large: %d bytes", len(chainWork))
 	}
 
@@ -1125,6 +1127,17 @@ func (r *CentralizedPeerRegistry) RecordValidatedPeerProgress(peerID string, hei
 
 	info, ok := r.peers[peerID]
 	if !ok {
+		return nil
+	}
+
+	// Do not credit validated header work while the peer is inside an active
+	// delivery-failure penalty window. Header work is credited before a block body is
+	// delivered, so a penalized header-only non-deliverer that keeps serving headers
+	// would otherwise re-accumulate work and regain top-tier eligibility the instant the
+	// window expired, without ever delivering a block. The one-time work wipe at penalty
+	// onset is handled separately in Register; this guard only prevents fresh crediting
+	// during the window, so the two are complementary rather than double-handling.
+	if !info.FullStoragePenaltyUntil.IsZero() && time.Now().Before(info.FullStoragePenaltyUntil) {
 		return nil
 	}
 

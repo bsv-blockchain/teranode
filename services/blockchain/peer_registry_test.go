@@ -453,11 +453,11 @@ func TestCentralizedPeerRegistry_Register_ValidatedChainWorkSizeCap(t *testing.T
 	// before the merge. Seed each peer with only its ID first so the subsequent
 	// Register exercises the merge-path cap check.
 
-	// Over the cap (maxValidatedChainWorkBytes + 1 = 129 bytes): rejected by
+	// Over the cap (MaxValidatedChainWorkBytes + 1 = 129 bytes): rejected by
 	// shouldAdvanceValidatedWork, so no validated progress is recorded.
 	r.Register(&PeerInfo{ID: "over"})
 
-	overCap := make([]byte, maxValidatedChainWorkBytes+1)
+	overCap := make([]byte, MaxValidatedChainWorkBytes+1)
 	overCap[len(overCap)-1] = 0x01
 	oversizedHash := mustPeerRegistryHash("validated-oversized")
 	r.Register(&PeerInfo{
@@ -477,7 +477,7 @@ func TestCentralizedPeerRegistry_Register_ValidatedChainWorkSizeCap(t *testing.T
 	// rather than merely "large is rejected".
 	r.Register(&PeerInfo{ID: "at"})
 
-	atCap := make([]byte, maxValidatedChainWorkBytes)
+	atCap := make([]byte, MaxValidatedChainWorkBytes)
 	atCap[len(atCap)-1] = 0x01
 	atCapHash := mustPeerRegistryHash("validated-atcap")
 	r.Register(&PeerInfo{
@@ -489,9 +489,64 @@ func TestCentralizedPeerRegistry_Register_ValidatedChainWorkSizeCap(t *testing.T
 
 	got, ok = r.Get("at")
 	require.True(t, ok)
-	require.Len(t, got.ValidatedChainWork, maxValidatedChainWorkBytes, "exactly-128-byte ChainWork must be accepted")
+	require.Len(t, got.ValidatedChainWork, MaxValidatedChainWorkBytes, "exactly-128-byte ChainWork must be accepted")
 	require.Equal(t, atCap, got.ValidatedChainWork)
 	require.Equal(t, atCapHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+}
+
+// RecordValidatedPeerProgress must not credit validated work while the peer is inside an
+// active delivery-failure penalty window; otherwise a header-only non-deliverer would
+// re-accumulate work and regain top-tier eligibility the moment the window expires without
+// ever delivering a block.
+func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_PenaltyWindowGatesCrediting(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Peer inside an active penalty window: crediting must be refused (no error, advisory).
+	r.Register(&PeerInfo{ID: "penalized", FullStoragePenaltyUntil: time.Now().Add(time.Hour)})
+	require.NoError(t, r.RecordValidatedPeerProgress("penalized", 100, mustPeerRegistryHash("penalized-work"), []byte{0x05}))
+
+	got, ok := r.Get("penalized")
+	require.True(t, ok)
+	require.Empty(t, got.ValidatedChainWork, "validated work must not be credited during an active penalty window")
+	require.Nil(t, got.ValidatedBlockHash)
+	require.Equal(t, uint32(0), got.ValidatedHeight)
+
+	// Peer whose penalty window has just expired: crediting resumes.
+	r.Register(&PeerInfo{ID: "expired", FullStoragePenaltyUntil: time.Now().Add(-time.Millisecond)})
+	require.NoError(t, r.RecordValidatedPeerProgress("expired", 100, mustPeerRegistryHash("expired-work"), []byte{0x05}))
+
+	got, ok = r.Get("expired")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x05}, got.ValidatedChainWork, "crediting resumes once the penalty window has expired")
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+}
+
+// RecordValidatedPeerProgress rejects chainwork over the 128-byte cap on its own validation
+// path (distinct from the Register/merge path covered above).
+func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_RejectsOverCapChainWork(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.Register(&PeerInfo{ID: "p"})
+
+	overCap := make([]byte, MaxValidatedChainWorkBytes+1)
+	overCap[len(overCap)-1] = 0x01
+	require.Error(t, r.RecordValidatedPeerProgress("p", 100, mustPeerRegistryHash("over"), overCap),
+		"chainwork over the cap must be rejected")
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Empty(t, got.ValidatedChainWork, "over-cap input must not advance validated progress")
+	require.Nil(t, got.ValidatedBlockHash)
+	require.Equal(t, uint32(0), got.ValidatedHeight)
+
+	// Exactly at the cap is accepted, pinning the boundary.
+	atCap := make([]byte, MaxValidatedChainWorkBytes)
+	atCap[len(atCap)-1] = 0x01
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 100, mustPeerRegistryHash("at"), atCap))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Len(t, got.ValidatedChainWork, MaxValidatedChainWorkBytes, "exactly-128-byte chainwork must be accepted")
 	require.Equal(t, uint32(100), got.ValidatedHeight)
 }
 
