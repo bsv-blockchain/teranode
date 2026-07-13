@@ -20,7 +20,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -447,27 +446,6 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 		}
 	}
 	return ""
-}
-
-// contains checks if a slice of strings contains a specific string.
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		bootstrapAddr, err := ma.NewMultiaddr(s)
-		if err != nil {
-			continue
-		}
-
-		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
-		if err != nil {
-			continue
-		}
-
-		if peerInfo.ID.String() == item {
-			return true
-		}
-	}
-
-	return false
 }
 
 // startInvalidBlockConsumer initializes and starts the Kafka consumer for invalid blocks
@@ -1014,41 +992,6 @@ func (s *Server) parseHash(hashStr string, context string) (*chainhash.Hash, err
 	}
 
 	return hash, nil
-}
-
-// shouldSkipDuringSync checks if we should skip processing during sync
-func (s *Server) shouldSkipDuringSync(from string, originatorPeerID string, messageHeight uint32, messageType string) bool {
-	syncPeer := s.getSyncPeer()
-	if syncPeer == "" {
-		return false
-	}
-
-	syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx)
-	if err != nil || !syncing {
-		return false
-	}
-
-	// Get sync peer's height from registry
-	syncPeerHeight := int32(0)
-	if peerInfo, exists := s.getPeer(syncPeer); exists {
-		syncPeerHeight = int32(peerInfo.Height)
-	}
-
-	// Discard announcements from peers that are behind our sync peer
-	if messageHeight < uint32(syncPeerHeight) {
-		s.logger.Debugf("[%s] Discarding announcement at height %d from %s (below sync peer height %d)",
-			messageType, messageHeight, from, syncPeerHeight)
-		return true
-	}
-
-	// Skip if it's not from our sync peer
-	peerID, err := peer.Decode(originatorPeerID)
-	if err != nil || peerID != syncPeer {
-		s.logger.Debugf("[%s] Skipping announcement during sync (not from sync peer)", messageType)
-		return true
-	}
-
-	return false
 }
 
 func (s *Server) startPeerMapCleanup(ctx context.Context) {

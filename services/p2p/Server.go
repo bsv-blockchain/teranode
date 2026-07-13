@@ -2032,45 +2032,6 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 	return nil
 }
 
-// myBanEventHandler implements BanEventHandler for the Server.
-type myBanEventHandler struct {
-	server *Server
-}
-
-// OnPeerBanned is called when a peer is banned.
-func (h *myBanEventHandler) OnPeerBanned(peerID string, until time.Time, reason string) {
-	h.server.logger.Infof("Peer %s banned until %s for reason: %s", peerID, until.Format(time.RFC3339), reason)
-	// get the ip for the peer id
-	pid, err := peer.Decode(peerID)
-	if err != nil {
-		h.server.logger.Errorf("Failed to decode peer ID %s: %v", peerID, err)
-		return
-	}
-
-	var ids []string
-	allPeers := h.server.P2PClient.GetPeers()
-	for _, p := range allPeers {
-		if p.ID == pid.String() {
-			h.server.logger.Infof("Found connected peer %s for banning", peerID)
-			ids = append(ids, p.Addrs...)
-			break
-		}
-	}
-
-	// add to ban list
-	for _, id := range ids {
-		if h.server.banList != nil {
-			if err := h.server.banList.Add(context.Background(), id, until); err != nil {
-				h.server.logger.Errorf("Failed to add peer %s to ban list: %v", id, err)
-			}
-		}
-	}
-
-	// Remove peer from SyncCoordinator before disconnecting
-	// Remove peer from registry
-	h.server.removePeer(pid)
-}
-
 // peerInfoToP2PProto converts a centralized blockchain.PeerInfo into the
 // existing p2p_api.PeerRegistryInfo wire format expected by external consumers
 // (RPC's getpeerinfo, asset dashboard, monitor). Preserved as the boundary

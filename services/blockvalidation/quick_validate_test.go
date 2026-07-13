@@ -1,13 +1,18 @@
 package blockvalidation
 
 import (
+	"context"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -15,7 +20,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
+	testutil "github.com/bsv-blockchain/teranode/util/test"
 	prometheustestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -789,6 +798,204 @@ func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 
 		assertCreatedLocked(t, suite.MockUTXOStore, true)
 		suite.MockUTXOStore.AssertCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
+}
+
+// newBlockValidationWithRealStore creates a BlockValidation backed by a real
+// sqlitememory UTXO store. It is used for end-to-end tests that need to assert
+// on actual store contents rather than on mock call expectations.
+//
+// The returned cleanup function must be deferred to release background goroutines.
+func newBlockValidationWithRealStore(t *testing.T) (*BlockValidation, utxo.Store, func()) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+	logger := ulogger.TestLogger{}
+	tSettings := testutil.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///skip_unspendable_test")
+	require.NoError(t, err)
+
+	realStore, err := sql.New(ctx, logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	bv := &BlockValidation{
+		logger:                        logger,
+		settings:                      tSettings,
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		utxoStore:                     realStore,
+		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
+	}
+
+	cleanup := func() {
+		bv.blockExistsCache.Stop()
+		bv.lastValidatedBlocks.Stop()
+		cancel()
+	}
+
+	return bv, realStore, cleanup
+}
+
+// setCheckpointsOnBV sets ChainCfgParams checkpoints on a BlockValidation to a
+// single checkpoint at the given height. It copies ChainCfgParams so it never
+// mutates the shared global instance.
+func setCheckpointsOnBV(t *testing.T, bv *BlockValidation, height uint32) {
+	t.Helper()
+	require.NotNil(t, bv.settings.ChainCfgParams)
+	params := *bv.settings.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: int32(height)}}
+	bv.settings.ChainCfgParams = &params
+}
+
+// TestSkipUnspendableTxStorageDuringCatchup_EndToEnd verifies that when both
+// QuickValidateSkipUtxoLock and SkipUnspendableTxStorageDuringCatchup are
+// enabled and the block is at/below the highest checkpoint:
+//   - An OP_RETURN-only tx is NOT written to the UTXO store (skipped).
+//   - A normal spendable tx IS written to the UTXO store.
+//   - The parent UTXO consumed by the OP_RETURN tx's input IS marked spent.
+//   - Processing returns no error.
+//
+// A negative case pins the safety invariant: with QuickValidateSkipUtxoLock=false
+// the skip does not fire, so the OP_RETURN tx IS stored.
+func TestSkipUnspendableTxStorageDuringCatchup_EndToEnd(t *testing.T) {
+	t.Run("both settings on, height below checkpoint: op_return skipped, spendable stored, parent spent", func(t *testing.T) {
+		bv, store, cleanup := newBlockValidationWithRealStore(t)
+		defer cleanup()
+
+		const blockHeight = uint32(100)
+		const checkpointHeight = uint32(1000)
+
+		bv.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		bv.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup = true
+		setCheckpointsOnBV(t, bv, checkpointHeight)
+
+		ctx := context.Background()
+
+		// Build a parent tx with 2 outputs and pre-seed it in the store.
+		// opReturnTx spends output 0; spendableTx spends output 1.
+		privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("SKIP_UNSPENDABLE_E2E_TEST_KEY"))
+		parentTx := transactions.Create(t,
+			transactions.WithCoinbaseData(1, "/genesis/"),
+			transactions.WithP2PKHOutputs(2, 5000, publicKey),
+		)
+		_, err := store.Create(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}))
+		require.NoError(t, err)
+
+		// opReturnTx: spends output 0 of parent, produces only an OP_RETURN (unspendable).
+		// Build manually so the output uses bt.AddOpReturnOutput which produces the correct
+		// OP_FALSE OP_RETURN encoding that HasNoSpendableOutputs recognises.
+		opReturnTx := bt.NewTx()
+		require.NoError(t, opReturnTx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parentTx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parentTx.Outputs[0].LockingScript,
+			Satoshis:      parentTx.Outputs[0].Satoshis,
+		}))
+		require.NoError(t, opReturnTx.AddOpReturnOutput([]byte("skip-unspendable-e2e-test")))
+
+		// spendableTx: spends output 1 of parent, produces a P2PKH output (spendable).
+		spendableTx := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(parentTx, 1),
+			transactions.WithP2PKHOutputs(1, 4000, publicKey),
+		)
+
+		block := &model.Block{
+			Height: blockHeight,
+			ID:     99,
+		}
+
+		// batch: subtree 0 holds opReturnTx; subtree 1 holds spendableTx.
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   []*bt.Tx{opReturnTx, spendableTx},
+			txRanges:   [][2]int{{0, 1}, {1, 2}},
+			batchStart: 0,
+			batchEnd:   2,
+		}
+
+		err = bv.createAndSpendUTXOsForBatch(ctx, block, batch)
+		require.NoError(t, err, "createAndSpendUTXOsForBatch must succeed")
+
+		// 1. OP_RETURN-only tx must NOT be in the store (was skipped).
+		_, getErr := store.Get(ctx, opReturnTx.TxIDChainHash())
+		require.Error(t, getErr, "op_return tx should not be in the store")
+		require.True(t, errors.Is(getErr, errors.ErrTxNotFound),
+			"expected ErrTxNotFound for skipped op_return tx, got: %v", getErr)
+
+		// 2. Spendable tx must be in the store (was not skipped).
+		txMeta, getErr := store.Get(ctx, spendableTx.TxIDChainHash())
+		require.NoError(t, getErr, "spendable tx should be in the store")
+		require.NotNil(t, txMeta)
+
+		// 3. Parent output 0 (the input consumed by the OP_RETURN tx) must be SPENT.
+		spendResp, getErr := store.GetSpend(ctx, &utxo.Spend{
+			TxID: parentTx.TxIDChainHash(),
+			Vout: 0,
+		})
+		require.NoError(t, getErr, "GetSpend for parent output 0 must not error")
+		require.Equal(t, int(utxo.Status_SPENT), spendResp.Status,
+			"parent output 0 (spent by op_return tx input) must be marked SPENT")
+	})
+
+	// Negative case: with QuickValidateSkipUtxoLock=false the skip is gated out;
+	// the OP_RETURN tx IS stored despite SkipUnspendableTxStorageDuringCatchup=true.
+	// This pins the safety invariant: skip is only safe when the unlock pass is also skipped.
+	t.Run("negative: lock on (QuickValidateSkipUtxoLock=false), op_return IS stored", func(t *testing.T) {
+		bv, store, cleanup := newBlockValidationWithRealStore(t)
+		defer cleanup()
+
+		const blockHeight = uint32(100)
+		const checkpointHeight = uint32(1000)
+
+		bv.settings.BlockValidation.QuickValidateSkipUtxoLock = false
+		bv.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup = true
+		setCheckpointsOnBV(t, bv, checkpointHeight)
+
+		ctx := context.Background()
+
+		_, publicKey := bec.PrivateKeyFromBytes([]byte("SKIP_UNSPENDABLE_E2E_TEST_KEY"))
+		parentTx := transactions.Create(t,
+			transactions.WithCoinbaseData(1, "/genesis/"),
+			transactions.WithP2PKHOutputs(1, 5000, publicKey),
+		)
+		_, err := store.Create(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}))
+		require.NoError(t, err)
+
+		opReturnTx := bt.NewTx()
+		require.NoError(t, opReturnTx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parentTx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parentTx.Outputs[0].LockingScript,
+			Satoshis:      parentTx.Outputs[0].Satoshis,
+		}))
+		// Set a non-empty unlocking script so the SQL store's NOT NULL constraint is satisfied.
+		// This tx is never signature-validated by createAndSpendUTXOsForBatch.
+		dummyScript := bscript.NewFromBytes([]byte{0x00})
+		opReturnTx.Inputs[0].UnlockingScript = dummyScript
+		require.NoError(t, opReturnTx.AddOpReturnOutput([]byte("should-be-stored")))
+
+		block := &model.Block{
+			Height: blockHeight,
+			ID:     99,
+		}
+
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   []*bt.Tx{opReturnTx},
+			txRanges:   [][2]int{{0, 1}},
+			batchStart: 0,
+			batchEnd:   1,
+		}
+
+		err = bv.createAndSpendUTXOsForBatch(ctx, block, batch)
+		require.NoError(t, err, "createAndSpendUTXOsForBatch must succeed")
+
+		// With lock on, the skip gate is closed — the op_return tx must be in the store.
+		_, getErr := store.Get(ctx, opReturnTx.TxIDChainHash())
+		require.NoError(t, getErr,
+			"op_return tx must be stored when QuickValidateSkipUtxoLock=false (safety gate)")
 	})
 }
 

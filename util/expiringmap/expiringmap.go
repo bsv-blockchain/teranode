@@ -84,9 +84,9 @@ func (m *ExpiringMap[K, V]) WithEvictionFunction(f func(K, V) bool) *ExpiringMap
 // cap is always honored. A value of 0 (the default) disables the cap and
 // preserves the original unbounded behaviour.
 //
-// Note: cap-eviction's eviction-channel send is non-blocking (the notification
-// is dropped if the channel is full), since cap-eviction runs synchronously
-// inside Set. The TTL clean() path's eviction-channel send remains blocking.
+// Note: the eviction-channel send is non-blocking on both the cap-eviction
+// path (inside Set) and the TTL clean() path (the ticker) — the notification
+// is dropped if the channel is full — so eviction never blocks under m.mu.
 func (m *ExpiringMap[K, V]) WithMaxSize(n int) *ExpiringMap[K, V] {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -258,6 +258,13 @@ func (m *ExpiringMap[K, V]) clean() {
 	}
 
 	if m.evictionCh != nil && len(expiredItems) > 0 {
-		m.evictionCh <- expiredItems
+		// Non-blocking send: clean() holds m.mu, so a blocking send to a full
+		// (or unconsumed) eviction channel would stall the ticker under the
+		// write lock and deadlock all Get/Set/Delete/Len. Drop the notification
+		// if the consumer can't keep up, matching the cap-eviction path.
+		select {
+		case m.evictionCh <- expiredItems:
+		default:
+		}
 	}
 }
