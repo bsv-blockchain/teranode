@@ -120,6 +120,15 @@ const (
 // zeroHash is the zero-value hash (all zeros).  It is defined as a convenience.
 var zeroHash chainhash.Hash
 
+// ErrDuplicateBlockInFlight is the benign sentinel AcquireBlockPrefetch returns
+// when the requested block hash is already admitted (or parked waiting for
+// budget): a duplicate is dropped at admission rather than reserving a second
+// slice of budget. The single production caller (OnBlock) matches it with
+// errors.Is and drops the duplicate without disconnecting — it is the only
+// ServiceError AcquireBlockPrefetch ever returns, so the code-based match is
+// unambiguous there.
+var ErrDuplicateBlockInFlight = errors.NewServiceError("duplicate block already in flight")
+
 // newPeerMsg signifies a newly connected peer to the block handler.
 type newPeerMsg struct {
 	peer  *peerpkg.Peer
@@ -480,6 +489,22 @@ type SyncManager struct {
 	// the budget), preserving full backpressure for huge blocks.
 	blockPrefetchBudget      *semaphore.Weighted
 	blockPrefetchBudgetBytes int64
+
+	// inFlightBlocks is the dedup half of the same block-admission gate whose
+	// byte half is blockPrefetchBudget. It holds the hash of every block that is
+	// currently admitted (has reserved budget) OR parked waiting for budget, so
+	// at most one copy of any given block hash is ever in flight at a time.
+	// AcquireBlockPrefetch inserts the hash BEFORE the (possibly blocking) budget
+	// Acquire and ReleaseBlockPrefetch deletes it alongside the budget release, so
+	// the two halves share exactly one lifetime and can never drift. Without it,
+	// N duplicates of a single requested, near-budget-sized block would each
+	// reserve budget, fill the whole budget, and park every legacy peer's
+	// read-loop in Acquire — the very "a malicious peer cannot outrun the budget"
+	// property this gate exists to guarantee. nil (alongside a nil
+	// blockPrefetchBudget) when prefetch is disabled, so the synchronous/regtest
+	// path skips dedup entirely. inFlightBlocksMu guards the map.
+	inFlightBlocks   map[chainhash.Hash]struct{}
+	inFlightBlocksMu sync.Mutex
 
 	// blockPrefetchWaiters counts read-loops currently blocked acquiring
 	// prefetch budget (i.e. local processing cannot keep up). While > 0 the node
@@ -2477,11 +2502,18 @@ func (sm *SyncManager) BlockRequested(peer *peerpkg.Peer, blockHash *chainhash.H
 // blocks and guarantees Acquire can never deadlock on an oversized block.
 //
 // It returns an error only if ctx is cancelled while waiting (shutdown), in
-// which case nothing was reserved. When prefetch is disabled it is a no-op
-// returning (0, nil). While blocked waiting for budget it increments
-// blockPrefetchWaiters so the stall detector can tell self-backpressure apart
-// from a genuinely stalled peer.
-func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, quit <-chan struct{}, size int64) (int64, error) {
+// which case nothing was reserved, OR the benign ErrDuplicateBlockInFlight
+// sentinel when blockHash is already in flight (dedup — again nothing reserved).
+// When prefetch is disabled it is a no-op returning (0, nil), which also skips
+// dedup (the synchronous path already keeps one block in flight per peer). While
+// blocked waiting for budget it increments blockPrefetchWaiters so the stall
+// detector can tell self-backpressure apart from a genuinely stalled peer.
+//
+// The caller MUST hand blockHash back to ReleaseBlockPrefetch with the returned
+// weight on success: the hash lives in the in-flight set for exactly the same
+// lifetime as the reserved budget (inserted here, deleted on release), so the
+// dedup half and the byte half of this admission gate never drift.
+func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, quit <-chan struct{}, blockHash chainhash.Hash, size int64) (int64, error) {
 	if sm.blockPrefetchBudget == nil {
 		return 0, nil
 	}
@@ -2496,6 +2528,28 @@ func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, quit <-chan str
 	}
 	if weight > sm.blockPrefetchBudgetBytes {
 		weight = sm.blockPrefetchBudgetBytes
+	}
+
+	// Dedup: reserve the hash BEFORE reserving budget. Inserting ahead of the
+	// (possibly blocking) Acquire is deliberate — it bounds duplicates even while
+	// a copy is parked waiting for budget, so N copies of one requested,
+	// near-budget-sized block cannot each grab budget and fill it. A hash already
+	// present is a duplicate: drop it (nothing reserved, nothing inserted).
+	sm.inFlightBlocksMu.Lock()
+	if _, dup := sm.inFlightBlocks[blockHash]; dup {
+		sm.inFlightBlocksMu.Unlock()
+		return 0, ErrDuplicateBlockInFlight
+	}
+	sm.inFlightBlocks[blockHash] = struct{}{}
+	sm.inFlightBlocksMu.Unlock()
+
+	// removeInFlight undoes the reservation above. It runs only when the budget
+	// Acquire fails (ctx/quit cancel): nothing was reserved, so the hash must not
+	// linger. On success the hash stays until ReleaseBlockPrefetch deletes it.
+	removeInFlight := func() {
+		sm.inFlightBlocksMu.Lock()
+		delete(sm.inFlightBlocks, blockHash)
+		sm.inFlightBlocksMu.Unlock()
 	}
 
 	// Fast path: budget available right now, no waiter accounting needed.
@@ -2532,16 +2586,33 @@ func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, quit <-chan str
 	}
 
 	if err := sm.blockPrefetchBudget.Acquire(ctx, weight); err != nil {
+		// Nothing reserved: drop the hash we inserted before parking so a torn-down
+		// or cancelled acquire never leaks a slot in the dedup set.
+		removeInFlight()
 		return 0, err
 	}
 
 	return weight, nil
 }
 
-// ReleaseBlockPrefetch returns budget reserved by AcquireBlockPrefetch. A zero
-// weight (prefetch disabled, or nothing reserved) is a no-op.
-func (sm *SyncManager) ReleaseBlockPrefetch(weight int64) {
-	if sm.blockPrefetchBudget == nil || weight <= 0 {
+// ReleaseBlockPrefetch returns budget reserved by AcquireBlockPrefetch and drops
+// the block's hash from the in-flight dedup set. The two are released together
+// (same lifetime as the reservation) so the dedup and byte halves of the
+// admission gate never drift. A zero weight (nothing reserved) still deletes the
+// hash but skips the budget Release; a nil budget (prefetch disabled) is a no-op.
+// Only ever called for hashes that AcquireBlockPrefetch successfully admitted —
+// the dup/early-return paths never reach here (OnBlock does not spawn
+// awaitBlockResult for them), so no hash is deleted that was not first inserted.
+func (sm *SyncManager) ReleaseBlockPrefetch(blockHash chainhash.Hash, weight int64) {
+	if sm.blockPrefetchBudget == nil {
+		return
+	}
+
+	sm.inFlightBlocksMu.Lock()
+	delete(sm.inFlightBlocks, blockHash)
+	sm.inFlightBlocksMu.Unlock()
+
+	if weight <= 0 {
 		return
 	}
 	sm.blockPrefetchBudget.Release(weight)
@@ -2579,6 +2650,12 @@ func (sm *SyncManager) blockProcessingStallTimeout() time.Duration {
 // reflects our validation speed, not the sync peer's health. With prefetch
 // enabled that is when read-loops are blocked acquiring budget; with prefetch
 // disabled it is the original condition of any block queued or mid-validation.
+// On the kill-switch path (prefetch disabled, budget nil) suppression stays
+// UNCONDITIONAL, exactly as pre-prefetch: the per-message watchdog is still
+// armed for blocks there and owns processing-stall liveness, so timeout-gating
+// would rotate a healthy sync peer on a legitimately slow block. The
+// progress-aware timeout applies only under prefetch, where that watchdog is
+// disarmed for blocks and this is the compensating liveness signal.
 func (sm *SyncManager) localReadBackpressured() bool {
 	// A non-empty local backlog means blocks are queued or mid-validation, so a
 	// stale last-block-time and zero throughput normally reflect our own
@@ -2597,6 +2674,17 @@ func (sm *SyncManager) localReadBackpressured() bool {
 	// backlog is stale: a hung pipeline with a full budget accumulates waiters,
 	// and we WANT rotation then.
 	if sm.blockBacklog.Load() > 0 {
+		// Kill switch (prefetch disabled, budget nil): the per-message processing
+		// watchdog is still armed for blocks and owns processing-stall liveness,
+		// exactly as pre-prefetch. Keep the original UNCONDITIONAL suppression here —
+		// timeout-gating would rotate a healthy sync peer on a legitimately slow
+		// block, churn the "proven synchronous" path never had. The progress-aware
+		// timeout below applies only under prefetch, where the watchdog is disarmed
+		// for blocks and this is the compensating liveness signal.
+		if sm.blockPrefetchBudget == nil {
+			return true
+		}
+
 		return time.Since(time.Unix(0, sm.lastBacklogProgress.Load())) < sm.blockProcessingStallTimeout()
 	}
 
@@ -2861,6 +2949,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if budget := tSettings.Legacy.BlockPrefetchBufferBytes; budget > 0 {
 		sm.blockPrefetchBudgetBytes = budget
 		sm.blockPrefetchBudget = semaphore.NewWeighted(budget)
+		// Dedup half of the same admission gate as the budget semaphore, created
+		// in lockstep with it: paired 1:1 with each budget reservation so at most
+		// one copy of a block hash is ever admitted/queued at a time.
+		sm.inFlightBlocks = make(map[chainhash.Hash]struct{})
 	}
 
 	// create the transaction announcement batcher

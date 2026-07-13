@@ -1222,6 +1222,59 @@ func TestMisbehaviorDisconnectTarget(t *testing.T) {
 	require.Same(t, primary, misbehaviorDisconnectTarget(primary))
 }
 
+// TestDisconnectMisbehaving verifies the shared misbehaviour-eviction helper used
+// at all three disconnect sites: for a stream sub-peer it disconnects BOTH the
+// association primary (whose disconnect drives handleDonePeerMsg's
+// associationMgr.Remove, rotating the sync peer) AND the stream's own connection;
+// for a lone peer it disconnects only that peer, exactly once (idempotent guard).
+// DisconnectWithWarning closes the peer's quit channel, so WaitForDisconnect
+// returning is the observable disconnect signal.
+func TestDisconnectMisbehaving(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	// disconnected reports whether p was disconnected within a short window
+	// (DisconnectWithWarning closes p.quit, which WaitForDisconnect awaits).
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
+
+	t.Run("stream sub-peer evicts both the primary and the stream", func(t *testing.T) {
+		primary := newPeer()
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+
+		dataStream := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
+		dataStream.SetAssociation(assoc)
+
+		disconnectMisbehaving(&serverPeer{Peer: dataStream}, "bad block")
+
+		require.True(t, disconnected(primary), "the association primary must be disconnected to rotate the sync peer")
+		require.True(t, disconnected(dataStream), "the stream sub-peer's own connection must be disconnected too")
+	})
+
+	t.Run("lone peer disconnects only itself", func(t *testing.T) {
+		lone := newPeer()
+
+		require.NotPanics(t, func() { disconnectMisbehaving(&serverPeer{Peer: lone}, "bad block") })
+		require.True(t, disconnected(lone))
+	})
+}
+
 // TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
 // path: awaitBlockResult must hold the reserved budget until the block actually
 // finishes processing — even after the peer is torn down (sp.quit) — because the

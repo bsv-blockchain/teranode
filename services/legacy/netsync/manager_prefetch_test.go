@@ -24,6 +24,7 @@ func newPrefetchManager(budget int64) *SyncManager {
 	if budget > 0 {
 		sm.blockPrefetchBudgetBytes = budget
 		sm.blockPrefetchBudget = semaphore.NewWeighted(budget)
+		sm.inFlightBlocks = make(map[chainhash.Hash]struct{})
 	}
 
 	return sm
@@ -111,12 +112,12 @@ func TestUsePrefetchIngestion(t *testing.T) {
 func TestAcquireBlockPrefetch_Disabled(t *testing.T) {
 	sm := newPrefetchManager(0)
 
-	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, 999)
+	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, chainhash.Hash{0x01}, 999)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), w)
 
 	// Release of a zero reservation must be a no-op, not a panic.
-	require.NotPanics(t, func() { sm.ReleaseBlockPrefetch(w) })
+	require.NotPanics(t, func() { sm.ReleaseBlockPrefetch(chainhash.Hash{0x01}, w) })
 }
 
 // TestAcquireBlockPrefetch_FloorsTinyBlocks proves a block smaller than the
@@ -126,10 +127,10 @@ func TestAcquireBlockPrefetch_Disabled(t *testing.T) {
 func TestAcquireBlockPrefetch_FloorsTinyBlocks(t *testing.T) {
 	sm := newPrefetchManager(4 * minInFlightBlockWeight)
 
-	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, 81) // minimal zero-tx block
+	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, chainhash.Hash{0x01}, 81) // minimal zero-tx block
 	require.NoError(t, err)
 	require.Equal(t, int64(minInFlightBlockWeight), w, "a tiny block must be charged the floor weight")
-	sm.ReleaseBlockPrefetch(w)
+	sm.ReleaseBlockPrefetch(chainhash.Hash{0x01}, w)
 }
 
 // TestAcquireBlockPrefetch_OversizedAdmittedAlone proves a block larger than the
@@ -140,14 +141,14 @@ func TestAcquireBlockPrefetch_OversizedAdmittedAlone(t *testing.T) {
 	const budget = 2 * minInFlightBlockWeight
 	sm := newPrefetchManager(budget)
 
-	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, budget*100)
+	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, chainhash.Hash{0x01}, budget*100)
 	require.NoError(t, err)
 	require.Equal(t, int64(budget), w, "oversized weight must clamp to the budget")
 
 	// Budget is now fully consumed: nothing else can be admitted until release.
 	require.False(t, sm.blockPrefetchBudget.TryAcquire(1))
 
-	sm.ReleaseBlockPrefetch(w)
+	sm.ReleaseBlockPrefetch(chainhash.Hash{0x01}, w)
 	require.True(t, sm.blockPrefetchBudget.TryAcquire(1))
 }
 
@@ -159,13 +160,13 @@ func TestAcquireBlockPrefetch_BlocksUntilReleaseAndCountsWaiter(t *testing.T) {
 	const budget = 2 * minInFlightBlockWeight
 	sm := newPrefetchManager(budget)
 
-	first, err := sm.AcquireBlockPrefetch(context.Background(), nil, budget) // fills the budget
+	first, err := sm.AcquireBlockPrefetch(context.Background(), nil, chainhash.Hash{0x01}, budget) // fills the budget
 	require.NoError(t, err)
 
 	acquired := make(chan int64, 1)
 
 	go func() {
-		w, e := sm.AcquireBlockPrefetch(context.Background(), nil, minInFlightBlockWeight)
+		w, e := sm.AcquireBlockPrefetch(context.Background(), nil, chainhash.Hash{0x02}, minInFlightBlockWeight)
 		if e == nil {
 			acquired <- w
 		}
@@ -182,7 +183,7 @@ func TestAcquireBlockPrefetch_BlocksUntilReleaseAndCountsWaiter(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	sm.ReleaseBlockPrefetch(first)
+	sm.ReleaseBlockPrefetch(chainhash.Hash{0x01}, first)
 
 	select {
 	case w := <-acquired:
@@ -202,14 +203,14 @@ func TestAcquireBlockPrefetch_CtxCancel(t *testing.T) {
 	const budget = 2 * minInFlightBlockWeight
 	sm := newPrefetchManager(budget)
 
-	_, err := sm.AcquireBlockPrefetch(context.Background(), nil, budget) // fills the budget
+	_, err := sm.AcquireBlockPrefetch(context.Background(), nil, chainhash.Hash{0x01}, budget) // fills the budget
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 
 	go func() {
-		_, e := sm.AcquireBlockPrefetch(ctx, nil, minInFlightBlockWeight)
+		_, e := sm.AcquireBlockPrefetch(ctx, nil, chainhash.Hash{0x02}, minInFlightBlockWeight)
 		done <- e
 	}()
 
@@ -227,6 +228,13 @@ func TestAcquireBlockPrefetch_CtxCancel(t *testing.T) {
 
 	require.Eventually(t, func() bool { return sm.blockPrefetchWaiters.Load() == 0 },
 		time.Second, 5*time.Millisecond)
+
+	// A cancelled acquire reserved nothing, so it must not leak its hash in the
+	// dedup set: the two halves of the gate stay paired even on the failure path.
+	sm.inFlightBlocksMu.Lock()
+	_, leaked := sm.inFlightBlocks[chainhash.Hash{0x02}]
+	sm.inFlightBlocksMu.Unlock()
+	require.False(t, leaked, "a cancelled acquire must remove the hash it inserted before parking")
 }
 
 // TestAcquireBlockPrefetch_QuitAbort proves a budget-parked read-loop unblocks on
@@ -237,7 +245,7 @@ func TestAcquireBlockPrefetch_QuitAbort(t *testing.T) {
 	const budget = 2 * minInFlightBlockWeight
 	sm := newPrefetchManager(budget)
 
-	_, err := sm.AcquireBlockPrefetch(context.Background(), nil, budget) // fills the budget
+	_, err := sm.AcquireBlockPrefetch(context.Background(), nil, chainhash.Hash{0x01}, budget) // fills the budget
 	require.NoError(t, err)
 
 	quit := make(chan struct{})
@@ -245,7 +253,7 @@ func TestAcquireBlockPrefetch_QuitAbort(t *testing.T) {
 
 	go func() {
 		// Non-cancellable ctx: only quit can unblock this, proving quit is honored.
-		_, e := sm.AcquireBlockPrefetch(context.Background(), quit, minInFlightBlockWeight)
+		_, e := sm.AcquireBlockPrefetch(context.Background(), quit, chainhash.Hash{0x02}, minInFlightBlockWeight)
 		done <- e
 	}()
 
@@ -265,6 +273,99 @@ func TestAcquireBlockPrefetch_QuitAbort(t *testing.T) {
 		time.Second, 5*time.Millisecond)
 }
 
+// TestAcquireBlockPrefetch_DeduplicatesInFlight proves the in-flight-by-hash set
+// is the dedup half of the admission gate: a second acquire of a hash already in
+// flight is dropped with the benign ErrDuplicateBlockInFlight sentinel WITHOUT
+// reserving budget, the set keeps exactly one copy, and the hash becomes
+// acquirable again only after release (paired 1:1 with the budget weight).
+func TestAcquireBlockPrefetch_DeduplicatesInFlight(t *testing.T) {
+	const budget = 4 * minInFlightBlockWeight
+	sm := newPrefetchManager(budget)
+	h := chainhash.Hash{0x01}
+
+	// First copy of H is admitted and reserves the floor weight.
+	w, err := sm.AcquireBlockPrefetch(context.Background(), nil, h, minInFlightBlockWeight)
+	require.NoError(t, err)
+	require.Equal(t, int64(minInFlightBlockWeight), w)
+
+	// Second copy of H is a duplicate: benign sentinel, nothing reserved.
+	dupW, dupErr := sm.AcquireBlockPrefetch(context.Background(), nil, h, minInFlightBlockWeight)
+	require.ErrorIs(t, dupErr, ErrDuplicateBlockInFlight)
+	require.Equal(t, int64(0), dupW)
+
+	// The duplicate reserved no budget: everything but the single admitted copy is
+	// still free (probe with TryAcquire, then hand it straight back).
+	require.True(t, sm.blockPrefetchBudget.TryAcquire(budget-minInFlightBlockWeight))
+	sm.blockPrefetchBudget.Release(budget - minInFlightBlockWeight)
+
+	// The set still holds exactly one copy of H.
+	sm.inFlightBlocksMu.Lock()
+	_, present := sm.inFlightBlocks[h]
+	require.True(t, present)
+	require.Len(t, sm.inFlightBlocks, 1)
+	sm.inFlightBlocksMu.Unlock()
+
+	// Release H: the hash leaves the set alongside the budget, so a fresh copy of
+	// H is admissible again.
+	sm.ReleaseBlockPrefetch(h, w)
+
+	sm.inFlightBlocksMu.Lock()
+	require.Empty(t, sm.inFlightBlocks)
+	sm.inFlightBlocksMu.Unlock()
+
+	w2, err := sm.AcquireBlockPrefetch(context.Background(), nil, h, minInFlightBlockWeight)
+	require.NoError(t, err)
+	require.Equal(t, int64(minInFlightBlockWeight), w2)
+	sm.ReleaseBlockPrefetch(h, w2)
+}
+
+// TestAcquireBlockPrefetch_DuplicateDoesNotConsumeBudget proves a duplicate does
+// not eat budget: a DIFFERENT hash G can still be admitted for the budget the
+// duplicate of H would have (wrongly) consumed. This is the regression the dedup
+// set exists to prevent — N copies of one requested, near-budget-sized block
+// filling the whole budget and parking every peer's read-loop.
+func TestAcquireBlockPrefetch_DuplicateDoesNotConsumeBudget(t *testing.T) {
+	const budget = 2 * minInFlightBlockWeight
+	sm := newPrefetchManager(budget)
+	h := chainhash.Hash{0x0a}
+	g := chainhash.Hash{0x0b}
+
+	// H takes half the budget.
+	wH, err := sm.AcquireBlockPrefetch(context.Background(), nil, h, minInFlightBlockWeight)
+	require.NoError(t, err)
+
+	// A duplicate of H must not reserve the remaining half.
+	_, dupErr := sm.AcquireBlockPrefetch(context.Background(), nil, h, minInFlightBlockWeight)
+	require.ErrorIs(t, dupErr, ErrDuplicateBlockInFlight)
+
+	// So a different hash G can still be admitted against the remaining budget.
+	wG, err := sm.AcquireBlockPrefetch(context.Background(), nil, g, minInFlightBlockWeight)
+	require.NoError(t, err)
+	require.Equal(t, int64(minInFlightBlockWeight), wG)
+
+	sm.ReleaseBlockPrefetch(h, wH)
+	sm.ReleaseBlockPrefetch(g, wG)
+}
+
+// TestAcquireBlockPrefetch_DisabledSkipsDedup proves the synchronous/kill-switch
+// path (nil budget) neither dedups nor touches the (nil) in-flight set: repeated
+// acquires of the same hash all return (0, nil), matching the one-block-per-peer
+// backpressure the synchronous path already provides.
+func TestAcquireBlockPrefetch_DisabledSkipsDedup(t *testing.T) {
+	sm := newPrefetchManager(0)
+	require.Nil(t, sm.inFlightBlocks)
+	h := chainhash.Hash{0x01}
+
+	for i := 0; i < 3; i++ {
+		w, err := sm.AcquireBlockPrefetch(context.Background(), nil, h, 999)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), w)
+	}
+
+	require.Nil(t, sm.inFlightBlocks)
+	require.NotPanics(t, func() { sm.ReleaseBlockPrefetch(h, 0) })
+}
+
 func TestLocalReadBackpressured(t *testing.T) {
 	// stale backdates the progress stamp well past the stall timeout so a
 	// non-empty backlog reads as a hung pipeline rather than progressing work.
@@ -272,20 +373,23 @@ func TestLocalReadBackpressured(t *testing.T) {
 		sm.lastBacklogProgress.Store(time.Now().Add(-time.Hour).UnixNano())
 	}
 
-	t.Run("disabled: suppresses only while a fresh backlog is progressing", func(t *testing.T) {
+	t.Run("kill switch (budget nil): suppression is unconditional on any backlog", func(t *testing.T) {
 		sm := newPrefetchManager(0)
 		require.False(t, sm.localReadBackpressured())
 
-		// A queued / mid-validation backlog with a fresh progress stamp is
-		// self-backpressure: suppress the stall check.
+		// A queued / mid-validation backlog is self-backpressure: suppress the stall
+		// check. On the kill-switch path the per-message watchdog is still armed for
+		// blocks and owns processing-stall liveness, so suppression here stays
+		// UNCONDITIONAL — exactly as pre-prefetch.
 		sm.blockBacklog.Add(1)
 		sm.noteBacklogProgress()
 		require.True(t, sm.localReadBackpressured())
 
-		// Same backlog, but no progress for longer than the stall timeout: a
-		// genuine hang, so stop suppressing and let the peer rotate.
+		// Even a stale progress stamp must NOT lift suppression on the kill switch:
+		// timeout-gating would rotate a healthy sync peer on a legitimately slow
+		// block, churn the "proven synchronous" path never produced.
 		stale(sm)
-		require.False(t, sm.localReadBackpressured())
+		require.True(t, sm.localReadBackpressured())
 
 		sm.blockBacklog.Add(-1)
 		require.False(t, sm.localReadBackpressured())

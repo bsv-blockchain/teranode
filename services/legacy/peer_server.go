@@ -1005,7 +1005,9 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 				sp.server.logger.Errorf("block processing failed: %v", err)
 
 				if shouldDisconnectOnBlockErr(err) {
-					sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
+					// Evict the whole association so the sync peer actually rotates; see
+					// disconnectMisbehaving (a bare sp disconnect misses the primary).
+					disconnectMisbehaving(sp, fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
 					return
 				}
 			}
@@ -1023,29 +1025,10 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 		// synchronous backpressure) and also spares fabricated blocks the
 		// SerializeSize walk below. Blocks we actually requested take the fast path.
 		if !sm.BlockRequested(sp.Peer, blockHash) {
-			// Disconnect the association PRIMARY, mirroring handleBlockMsg's
-			// unrequested-block eviction (manager.go resolves a stream sub-peer
-			// to its primary and disconnects that). Disconnecting only the
-			// stream sub-peer here would leave the association intact:
-			// handleDonePeerMsg does nothing but assoc.RemoveStream(...) for a
-			// stream peer, so a BlockPriority peer flooding unrequested blocks
-			// over its DATA stream would just re-open the stream and repeat.
-			// Disconnecting the primary instead makes handleDonePeerMsg evict
-			// the whole association (associationMgr.Remove).
-			//
-			// We ALSO disconnect sp itself when it is a distinct stream sub-peer:
-			// handleDonePeerMsg tears down the association's bookkeeping on
-			// primary disconnect but never closes the stream sub-peers' live TCP
-			// connections, so without this the flooding DATA stream keeps reading
-			// off the wire. DisconnectWithWarning is idempotent (atomic guard),
-			// so the sp == primary (non-stream) case disconnects exactly once.
-			target := misbehaviorDisconnectTarget(sp.Peer)
-			target.DisconnectWithWarning(fmt.Sprintf("Got unrequested block %s, disconnecting", blockHash))
-
-			if target != sp.Peer {
-				sp.DisconnectWithWarning(fmt.Sprintf("Got unrequested block %s on stream, disconnecting stream", blockHash))
-			}
-
+			// Unrequested block: evict the whole association (primary drives the
+			// sync-peer rotation, plus the stream sub-peer's own connection), mirroring
+			// handleBlockMsg's downstream eviction. See disconnectMisbehaving.
+			disconnectMisbehaving(sp, fmt.Sprintf("Got unrequested block %s, disconnecting", blockHash))
 			return
 		}
 
@@ -1066,8 +1049,18 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 		// sp.quit lets a budget-parked read-loop unblock on peer teardown; sp.ctx
 		// (the ServiceManager errgroup Init context) is cancelled on daemon
 		// shutdown but not by legacy.Server.Stop() alone. Mirrors awaitBlockResult.
-		weight, err := sm.AcquireBlockPrefetch(sp.ctx, sp.quit, size)
+		weight, err := sm.AcquireBlockPrefetch(sp.ctx, sp.quit, *blockHash, size)
 		if err != nil {
+			if errors.Is(err, netsync.ErrDuplicateBlockInFlight) {
+				// A copy of this requested hash is already admitted or queued. Drop the
+				// duplicate WITHOUT disconnecting or queueing: the first copy will be
+				// processed, and if it is invalid that copy's awaitBlockResult
+				// disconnects the peer. Dropping here bounds duplicates against the
+				// budget (one copy per hash), the dedup half of the admission gate.
+				sp.server.logger.Debugf("dropping duplicate in-flight block %s from %s", blockHash, sp)
+				return
+			}
+
 			// ctx cancelled or peer torn down: nothing reserved, drop the block.
 			return
 		}
@@ -1095,6 +1088,31 @@ func shouldDisconnectOnBlockErr(err error) bool {
 	return err != nil &&
 		!errors.Is(err, errors.ErrServiceError) &&
 		!errors.Is(err, errors.ErrStorageError)
+}
+
+// disconnectMisbehaving evicts a peer's whole association for misbehaviour. It
+// disconnects the association PRIMARY — whose disconnect drives
+// handleDonePeerMsg's associationMgr.Remove(...), rotating the sync peer — and
+// ALSO the stream sub-peer's live TCP connection when it is distinct from the
+// primary. This distinction is load-bearing under the shipped default config
+// (legacy_allowBlockPriority + prefetch): blocks then arrive on the DATA1
+// sub-peer, so sp.Peer is the sub-peer. Disconnecting only sp there would leave
+// the association intact — netsync DonePeer early-returns for a sub-peer and
+// handleDonePeerMsg only does assoc.RemoveStream(...), so openRequiredStreams
+// re-opens DATA1 and the node keeps syncing from a peer serving invalid blocks
+// (IBD stalls). Resolving to the primary is what actually rotates the sync peer.
+// Conversely, handleDonePeerMsg tears down the association bookkeeping on primary
+// disconnect but never closes the sub-peers' connections, so the sub-peer must be
+// disconnected here too or its DATA stream keeps reading off the wire.
+// DisconnectWithWarning is idempotent (atomic guard), so the non-stream case
+// (target == sp.Peer) disconnects exactly once.
+func disconnectMisbehaving(sp *serverPeer, reason string) {
+	target := misbehaviorDisconnectTarget(sp.Peer)
+	target.DisconnectWithWarning(reason)
+
+	if target != sp.Peer {
+		sp.DisconnectWithWarning(reason + " (stream)")
+	}
 }
 
 // misbehaviorDisconnectTarget resolves the peer whose disconnect evicts a
@@ -1142,8 +1160,12 @@ func blockAdmissionWeight(payloadSize int64, buf []byte, msg *wire.MsgBlock) int
 // budget. It deliberately captures only blockHash (not the block or its decode
 // arena) so the block's memory can be released while processing proceeds.
 func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash *chainhash.Hash) {
-	// Release the reserved budget exactly once on every exit path.
-	defer sp.server.syncManager.ReleaseBlockPrefetch(weight)
+	// Release the reserved budget AND drop the in-flight-dedup hash exactly once on
+	// every exit path (normal reply, sp.quit hold-then-drain, sp.ctx backstop).
+	// Pairing the hash removal with the budget release here is what keeps the two
+	// halves of the admission gate on one lifetime: a copy of this hash cannot be
+	// re-admitted until this block has fully left the pipeline.
+	defer sp.server.syncManager.ReleaseBlockPrefetch(*blockHash, weight)
 
 	var err error
 
@@ -1185,7 +1207,9 @@ func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash 
 		sp.server.logger.Errorf("block processing failed: %v", err)
 
 		if shouldDisconnectOnBlockErr(err) {
-			sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
+			// Evict the whole association so the sync peer actually rotates; see
+			// disconnectMisbehaving (a bare sp disconnect misses the primary).
+			disconnectMisbehaving(sp, fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
 		}
 	}
 }
