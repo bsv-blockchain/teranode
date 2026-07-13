@@ -625,3 +625,45 @@ func TestCleanupPeerMaps_EvictsExpiredReputationEntries(t *testing.T) {
 	_, freshStillThere := s.reputationCache.Load("fresh-peer")
 	assert.True(t, freshStillThere, "fresh reputationCache entry must survive cleanup")
 }
+
+func TestServerHelpers_SanitizeAdvertisedTip_ClampsAndOverflow(t *testing.T) {
+	const validHash = "0000000000000000000000000000000000000000000000000000000000000001"
+	pid := mustNewPeerID(t).String()
+
+	t.Run("within lead is returned unchanged", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead = 50
+		height, hash, ok := s.sanitizeAdvertisedTip(pid, 140, validHash, 100)
+		require.True(t, ok)
+		require.NotNil(t, hash)
+		require.Equal(t, uint32(140), height)
+	})
+
+	t.Run("beyond lead is capped to local height plus lead", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead = 10
+		height, hash, ok := s.sanitizeAdvertisedTip(pid, 1000, validHash, 100)
+		require.True(t, ok)
+		require.NotNil(t, hash)
+		require.Equal(t, uint32(110), height, "capped to localHeight+maxLead")
+	})
+
+	t.Run("uint32 overflow clamps the ceiling instead of wrapping", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead = 100
+		localHeight := ^uint32(0) - 5 // localHeight+maxLead overflows uint32
+		height, hash, ok := s.sanitizeAdvertisedTip(pid, ^uint32(0), validHash, localHeight)
+		require.True(t, ok)
+		require.NotNil(t, hash)
+		require.Equal(t, ^uint32(0), height,
+			"ceiling clamps to max uint32 so a near-max advertisement is accepted, not wrapped")
+	})
+
+	t.Run("invalid hash is rejected", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		height, hash, ok := s.sanitizeAdvertisedTip(pid, 100, "not-a-hash", 100)
+		require.False(t, ok)
+		require.Nil(t, hash)
+		require.Equal(t, uint32(0), height)
+	})
+}

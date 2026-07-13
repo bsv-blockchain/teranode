@@ -88,6 +88,17 @@ func setSyncCoordinatorProbeBudget(sc *SyncCoordinator, budget int) {
 	sc.unprovenProbeBudgetRemaining = budget
 }
 
+// filterEligiblePeersForTest resolves the local tip work and delegates to
+// filterEligiblePeersWithTip, mirroring the compact call form previously offered by the
+// (now-removed) production filterEligiblePeers helper, which had no non-test callers.
+func filterEligiblePeersForTest(sc *SyncCoordinator, peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32) []*blockchain.PeerInfo {
+	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	if localWorkOK {
+		localHeight = tipHeight
+	}
+	return sc.filterEligiblePeersWithTip(peers, oldPeer, localHeight, localChainWork, localWorkOK)
+}
+
 func syncCoordinatorProbeBudget(sc *SyncCoordinator) int {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
@@ -289,7 +300,7 @@ func TestSyncCoordinator_FilterEligiblePeers_DropsLowAndOldPeer(t *testing.T) {
 		{ID: "good", DataHubURL: "x", Height: 100, BlockHash: syncCoordinatorTestHash(t), ReputationScore: 80},
 	}
 
-	got := sc.filterEligiblePeers(peers, "old", 50)
+	got := filterEligiblePeersForTest(sc, peers, "old", 50)
 
 	require.Len(t, got, 1)
 	require.Equal(t, "good", got[0].ID)
@@ -552,7 +563,7 @@ func TestSyncCoordinator_UnprovenProbeBudget_NotConsumedByEligibilityChecks(t *t
 	})
 
 	require.False(t, sc.isCaughtUp())
-	require.Len(t, sc.filterEligiblePeers(sc.listAllPeers(), "", 0), 1)
+	require.Len(t, filterEligiblePeersForTest(sc, sc.listAllPeers(), "", 0), 1)
 	sc.checkAllPeersAttempted()
 
 	require.Equal(t, 2, syncCoordinatorProbeBudget(sc))
@@ -635,7 +646,7 @@ func TestSyncCoordinator_FilterEligiblePeers_UsesValidatedWorkBeforeAdvertisedPr
 		},
 	}
 
-	got := sc.filterEligiblePeers(peers, "", 100)
+	got := filterEligiblePeersForTest(sc, peers, "", 100)
 
 	require.Len(t, got, 1)
 	require.Equal(t, "validated", got[0].ID)
@@ -1056,4 +1067,149 @@ func TestSyncCoordinator_CheckAndClearExpiredBackoff_StillInWindow(t *testing.T)
 	sc.enterBackoffMode()
 	require.True(t, sc.checkAndClearExpiredBackoff(),
 		"freshly entered backoff must still be in its window")
+}
+
+// A stalled, still-ahead PROVEN incumbent must be preempted by an unproven candidate with
+// strictly higher validated work. This is the profile the shipped preemption tests miss (they
+// all use an unproven incumbent): before the atomic-swap fix, clear-then-reselect re-pinned the
+// proven incumbent via the proven-first sort and reset its progress clock, defeating eviction.
+func TestSyncCoordinator_EvaluateSyncPeer_PreemptsProvenIncumbentForHigherWorkCandidate(t *testing.T) {
+	tSettings := &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:                   true,
+			MaxUnvalidatedAdvertisedHeightLead:        10_000,
+			MaxUnprovenSyncProbesPerBackoffWindow:     3,
+			FullDeliveryFreshnessWindow:               24 * time.Hour,
+			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+			SyncPeerNoProgressTimeout:                 0, // 5m default → 2.5m guard
+		},
+	}
+	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	// Proven incumbent: recorded full-block delivery inside the freshness window.
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "current",
+		DataHubURL:         "http://current",
+		Height:             200,
+		Storage:            "full",
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+		BlocksReceived:     5,
+		LastBlockTime:      time.Now().Add(-time.Minute),
+	})
+	// Unproven candidate with strictly higher validated work.
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "better",
+		DataHubURL:         "http://better",
+		Height:             201,
+		Storage:            "full",
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05},
+	})
+
+	progressAt := time.Now().Add(-3 * time.Minute) // past 2.5m guard, before 5m hard eviction
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = progressAt
+	sc.lastSyncProgressTime = progressAt
+	sc.lastSyncPeerBlocksReceived = 5
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	sc.evaluateSyncPeer()
+
+	require.Equal(t, "better", sc.GetCurrentSyncPeer(),
+		"unproven higher-work candidate must preempt a stalled proven incumbent")
+
+	// The benched incumbent must be placed on the sync-attempt cooldown so it is not
+	// immediately reselected if the candidate later clears.
+	incumbent, ok := reg.Get("current")
+	require.True(t, ok)
+	require.False(t, incumbent.LastSyncAttempt.IsZero(),
+		"benched incumbent must have a recorded sync attempt (cooldown)")
+	require.WithinDuration(t, time.Now(), incumbent.LastSyncAttempt, 5*time.Second,
+		"benched incumbent's sync-attempt timestamp must be fresh")
+}
+
+// A peer that is ahead by locally-validated work must be activated through the full
+// TriggerSync path even when the unproven-probe budget is exhausted: the filter stage admits
+// validated-ahead peers unconditionally, so the claim stage must not re-gate them.
+func TestSyncCoordinator_TriggerSync_ActivatesValidatedAheadPeerDespiteExhaustedBudget(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "ahead",
+		DataHubURL:         "http://ahead",
+		Height:             200,
+		Storage:            "full",
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05}, // strictly greater than local 0x02
+	})
+
+	sc.mu.Lock()
+	sc.unprovenProbeBudgetRemaining = 0 // exhausted
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	require.NoError(t, sc.TriggerSync())
+	require.Equal(t, "ahead", sc.GetCurrentSyncPeer(),
+		"validated-ahead peer must activate despite an exhausted unproven-probe budget")
+}
+
+// A forced peer (operator override) must be activated through TriggerSync even when it is
+// unproven and the probe budget is exhausted; the "bypasses all safety checks" contract must
+// hold at the claim stage too.
+func TestSyncCoordinator_TriggerSync_ActivatesForcedPeerDespiteExhaustedBudget(t *testing.T) {
+	tSettings := &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:                   true,
+			MaxUnvalidatedAdvertisedHeightLead:        10_000,
+			MaxUnprovenSyncProbesPerBackoffWindow:     3,
+			FullDeliveryFreshnessWindow:               24 * time.Hour,
+			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+			ForceSyncPeer:                             "forced",
+		},
+	}
+	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
+
+	// Unproven peer: no validated work, no recorded full-block delivery.
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "forced",
+		DataHubURL: "http://forced",
+		Height:     200,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	sc.mu.Lock()
+	sc.unprovenProbeBudgetRemaining = 0 // exhausted
+	sc.mu.Unlock()
+
+	require.NoError(t, sc.TriggerSync())
+	require.Equal(t, "forced", sc.GetCurrentSyncPeer(),
+		"forced peer must activate despite an exhausted unproven-probe budget")
+}
+
+func TestSyncCoordinator_MaxUnprovenProbeBudget_Clamp(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured int
+		want       int
+	}{
+		{"negative clamps to zero", -5, 0},
+		{"zero stays zero", 0, 0},
+		{"positive is passed through", 3, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &settings.Settings{P2P: settings.P2PSettings{MaxUnprovenSyncProbesPerBackoffWindow: tc.configured}}
+			require.Equal(t, tc.want, maxUnprovenProbeBudget(s))
+		})
+	}
+
+	require.Equal(t, 0, maxUnprovenProbeBudget(nil), "nil settings must yield a zero budget")
 }

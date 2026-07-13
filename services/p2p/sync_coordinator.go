@@ -180,9 +180,10 @@ func peerInFullStoragePenalty(p *blockchain.PeerInfo, now time.Time) bool {
 
 func chainWorkGreater(a, b []byte) bool {
 	// Delegates to the shared big-endian comparison in services/blockchain/work,
-	// which compares the byte slices as unsigned big integers (empty/nil == zero).
-	// Callers only pass real, positive chainwork (both slices non-empty), so this
-	// matches the original behaviour on every value that actually occurs here.
+	// which compares the byte slices as unsigned big integers, treating empty/nil as
+	// zero work. Most callers pass real, positive chainwork, but some legitimately pass
+	// an empty operand (e.g. resetProbeBudgetIfLocalChainWorkAdvanced on its first call,
+	// where lastLocalChainWork is still empty); the empty==zero handling covers those.
 	return work.CompareChainWork(a, b) > 0
 }
 
@@ -346,6 +347,15 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 // Start begins the coordinator
 func (sc *SyncCoordinator) Start(ctx context.Context) {
 	sc.logger.Infof("[SyncCoordinator] Starting sync coordinator")
+
+	// A zero unproven-probe budget disables cold-start probing entirely. That is a
+	// legitimate "validated-work peers only" choice, but with no forced peer it can
+	// silently wedge bootstrap until a validated-ahead peer appears, so warn rather
+	// than let it fail quietly.
+	if maxUnprovenProbeBudget(sc.settings) == 0 &&
+		(sc.settings == nil || sc.settings.P2P.ForceSyncPeer == "") {
+		sc.logger.Warnf("[SyncCoordinator] p2p_max_unproven_sync_probes_per_backoff_window is 0: unproven peers are never probed; a cold-start node with no validated-work peer and no forced sync peer cannot bootstrap until a validated-ahead peer appears")
+	}
 
 	// Start FSM monitoring
 	sc.wg.Add(1)
@@ -740,7 +750,12 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 		sc.logger.Warnf("[SyncCoordinator] Selected sync peer %s no longer exists", newSyncPeer)
 		return nil
 	}
-	if !sc.claimSelectedSyncPeer(newSyncPeer, selectedPeer, time.Now()) {
+	// A forced peer (operator override) and a peer that is ahead by locally-validated
+	// work are both exempt from the unproven-probe budget: the filter stage already
+	// admits them unconditionally, so the claim stage must not re-gate and reject them.
+	exemptFromProbeBudget := (sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "") ||
+		(localWorkOK && peerAheadByValidatedWork(selectedPeer, localChainWork))
+	if !sc.claimSelectedSyncPeer(newSyncPeer, selectedPeer, time.Now(), exemptFromProbeBudget) {
 		if sc.currentSyncPeerLocked() == "" {
 			sc.logger.Warnf("[SyncCoordinator] Unproven sync probe budget exhausted before activating %s", newSyncPeer)
 			sc.enterBackoffMode()
@@ -759,15 +774,6 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 	}
 	sc.logger.Infof("[SyncCoordinator] Triggered sync with peer %s via Kafka", newSyncPeer)
 	return nil
-}
-
-// filterEligiblePeers filters peers that are eligible for syncing
-func (sc *SyncCoordinator) filterEligiblePeers(peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32) []*blockchain.PeerInfo {
-	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
-	if localWorkOK {
-		localHeight = tipHeight
-	}
-	return sc.filterEligiblePeersWithTip(peers, oldPeer, localHeight, localChainWork, localWorkOK)
 }
 
 func (sc *SyncCoordinator) filterEligiblePeersWithTip(peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32, localChainWork []byte, localWorkOK bool) []*blockchain.PeerInfo {
@@ -803,14 +809,14 @@ func (sc *SyncCoordinator) filterEligiblePeersWithTip(peers []*blockchain.PeerIn
 	return eligiblePeers
 }
 
-func (sc *SyncCoordinator) claimSelectedSyncPeer(newSyncPeer string, peerInfo *blockchain.PeerInfo, now time.Time) bool {
+func (sc *SyncCoordinator) claimSelectedSyncPeer(newSyncPeer string, peerInfo *blockchain.PeerInfo, now time.Time, exemptFromProbeBudget bool) bool {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
 	if sc.currentSyncPeer != "" {
 		return false
 	}
-	if sc.isUnprovenProbeCandidate(peerInfo, now) {
+	if !exemptFromProbeBudget && sc.isUnprovenProbeCandidate(peerInfo, now) {
 		if sc.unprovenProbeBudgetRemaining <= 0 {
 			return false
 		}
@@ -954,15 +960,18 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	}
 
 	// The peer is still ahead by validated work but not timed out. Opportunistically
-	// preempt it toward a materially-higher-work peer so a top-ranked peer that
-	// drips just enough validated blocks to dodge the no-progress deadline cannot
-	// hold the slot and starve faster honest peers. Guards:
+	// preempt it toward a strictly-higher-work peer so a top-ranked peer that drips
+	// just enough validated blocks to dodge the no-progress deadline cannot hold the
+	// slot and starve faster honest peers. Guards:
 	//   - progressAge must exceed preemptionProgressGuard() (a fraction of the
 	//     no-progress timeout), so a peer actively delivering a large block — which
 	//     records no validated progress until the body lands — is not evicted early;
 	//   - the candidate must have strictly greater validated work than the incumbent
-	//     (not merely greater than local), which is inherently non-thrashing since
-	//     equal work never preempts.
+	//     (not merely greater than local); the comparison is a strict zero-margin ">",
+	//     which is inherently non-thrashing since equal work never preempts.
+	// Residual (by design): a sole top-work slow-dripper — one with no higher-work
+	// rival to preempt it — is not caught here and is evicted only by the hard
+	// no-progress timeout (syncPeerNoProgressTimedOut).
 	if progressAge <= sc.preemptionProgressGuard() {
 		return
 	}
@@ -975,11 +984,56 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		return
 	}
 	if chainWorkGreater(candInfo.ValidatedChainWork, peerInfo.ValidatedChainWork) {
-		sc.logger.Infof("[SyncCoordinator] Preempting sync peer %s for higher-work peer %s after %v without validated progress",
+		// Activate the chosen candidate atomically rather than clear-then-reselect. A
+		// clear followed by TriggerSync re-runs selection with oldPeer="", so the
+		// proven-first sort would re-pin the stalled incumbent and reset its progress
+		// clock, defeating eviction; the atomic swap moves the slot to the candidate we
+		// already picked and never leaves the node peerless if state moved on under us.
+		if !sc.preemptSyncPeer(currentPeer, candidate, candInfo, now) {
+			return
+		}
+		sc.logger.Infof("[SyncCoordinator] Preempted sync peer %s for higher-work peer %s after %v without validated progress",
 			currentPeer, candidate, progressAge.Round(time.Second))
-		sc.ClearSyncPeer()
-		_ = sc.TriggerSync()
+		// Bench the incumbent on the sync-attempt cooldown (mirrors clearNoProgressSyncPeer)
+		// so it is not immediately reselected if the candidate later clears; then record
+		// the candidate's attempt exactly as the normal activation path does.
+		if err := sc.registry.RecordSyncAttempt(sc.ctx, currentPeer); err != nil {
+			sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for benched peer %s: %v", currentPeer, err)
+		}
+		if err := sc.registry.RecordSyncAttempt(sc.ctx, candidate); err != nil {
+			sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", candidate, err)
+		}
+		if err := sc.sendSyncMessage(candidate); err != nil {
+			sc.logger.Errorf("[SyncCoordinator] Failed to trigger preemptive sync: %v", err)
+		}
 	}
+}
+
+// preemptSyncPeer atomically moves the sync slot from the stalled incumbent to the
+// already-chosen higher-work candidate. It returns false (leaving the incumbent in
+// place) if the slot moved on under us, so preemption never leaves the node peerless.
+// The candidate has strictly greater validated work than the incumbent, which is
+// itself ahead of local by validated work, so the candidate is validated-ahead and is
+// not an unproven probe (no budget charge — see peerAheadByValidatedWork). The
+// incumbent's progress clock is not touched: the slot moves to the new peer, whose
+// clock starts fresh here.
+func (sc *SyncCoordinator) preemptSyncPeer(incumbent, candidate string, candInfo *blockchain.PeerInfo, now time.Time) bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	if sc.currentSyncPeer != incumbent {
+		return false
+	}
+	sc.currentSyncPeer = candidate
+	sc.syncStartTime = now
+	sc.lastSyncProgressTime = now
+	if candInfo != nil {
+		sc.lastSyncPeerBlocksReceived = candInfo.BlocksReceived
+	} else {
+		sc.lastSyncPeerBlocksReceived = 0
+	}
+	sc.lastSyncTrigger = now
+	return true
 }
 
 // UpdatePeerInfo updates peer information in the centralized registry.
