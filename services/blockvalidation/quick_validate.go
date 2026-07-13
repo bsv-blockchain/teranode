@@ -1256,6 +1256,12 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 		txRange := batch.txRanges[i]
 		for txIdx := txRange[0]; txIdx < txRange[1]; txIdx++ {
 			tx := batch.batchTxs[txIdx]
+
+			if shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
+				// Not written to the store; its inputs are still spent in Phase 2.
+				continue
+			}
+
 			sIdx := globalSubtreeIdx
 			createG.Go(func() error {
 				_, err := u.utxoStore.Create(createCtx, tx, block.Height, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
