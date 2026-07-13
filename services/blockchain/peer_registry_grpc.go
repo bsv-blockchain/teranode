@@ -151,6 +151,24 @@ func (b *Blockchain) RecordCatchupError(_ context.Context, req *blockchain_api.R
 	return &emptypb.Empty{}, nil
 }
 
+// RecordCatchupAttempt increments the peer's catchup-attempt counter and updates sync backoff tracking.
+func (b *Blockchain) RecordCatchupAttempt(_ context.Context, req *blockchain_api.RecordCatchupAttemptRequest) (*emptypb.Empty, error) {
+	b.peerRegistry.RecordCatchupAttempt(req.PeerId)
+	return &emptypb.Empty{}, nil
+}
+
+// RecordCatchupSuccess increments the peer's catchup-success counter and records a successful interaction.
+func (b *Blockchain) RecordCatchupSuccess(_ context.Context, req *blockchain_api.RecordCatchupSuccessRequest) (*emptypb.Empty, error) {
+	b.peerRegistry.RecordCatchupSuccess(req.PeerId, req.ResponseTimeMs)
+	return &emptypb.Empty{}, nil
+}
+
+// RecordCatchupFailure increments the peer's catchup-failure counter and records a failed interaction.
+func (b *Blockchain) RecordCatchupFailure(_ context.Context, req *blockchain_api.RecordCatchupFailureRequest) (*emptypb.Empty, error) {
+	b.peerRegistry.RecordCatchupFailure(req.PeerId)
+	return &emptypb.Empty{}, nil
+}
+
 // ResetReputation resets reputation for a peer (or all peers when peer_id is empty).
 func (b *Blockchain) ResetReputation(_ context.Context, req *blockchain_api.ResetReputationRequest) (*blockchain_api.ResetReputationResponse, error) {
 	reset := b.peerRegistry.ResetReputation(req.PeerId)
@@ -221,6 +239,9 @@ func peerInfoToProto(info *PeerInfo) *blockchain_api.PeerRegistryInfo {
 		LastValidatedAt:           timestamppb.New(info.LastValidatedAt),
 		FullStorageContradictions: info.FullStorageContradictions,
 		FullStoragePenaltyUntil:   timestamppb.New(info.FullStoragePenaltyUntil),
+		CatchupAttempts:           info.CatchupAttempts,
+		CatchupSuccesses:          info.CatchupSuccesses,
+		CatchupFailures:           info.CatchupFailures,
 	}
 }
 
@@ -288,6 +309,9 @@ func protoToPeerInfo(logger ulogger.Logger, p *blockchain_api.PeerRegistryInfo) 
 		LastValidatedAt:           protoTimeToTime(p.LastValidatedAt),
 		FullStorageContradictions: p.FullStorageContradictions,
 		FullStoragePenaltyUntil:   protoTimeToTime(p.FullStoragePenaltyUntil),
+		CatchupAttempts:           p.CatchupAttempts,
+		CatchupSuccesses:          p.CatchupSuccesses,
+		CatchupFailures:           p.CatchupFailures,
 	}
 }
 

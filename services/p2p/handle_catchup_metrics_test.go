@@ -58,6 +58,7 @@ func TestRecordCatchupAttempt_RegistersSyncAttempt(t *testing.T) {
 	got, _ := reg.Get(pid.String())
 	require.Equal(t, int32(1), got.SyncAttemptCount)
 	require.False(t, got.LastSyncAttempt.IsZero())
+	require.Equal(t, int64(1), got.CatchupAttempts)
 }
 
 func TestRecordCatchupAttempt_InvalidPeerID(t *testing.T) {
@@ -81,6 +82,7 @@ func TestRecordCatchupSuccess_UpdatesInteractionMetrics(t *testing.T) {
 	got, _ := reg.Get(pid.String())
 	require.Equal(t, int64(1), got.InteractionSuccesses)
 	require.Equal(t, int64(250), got.AvgResponseTimeMs)
+	require.Equal(t, int64(1), got.CatchupSuccesses)
 }
 
 func TestRecordCatchupFailure_UpdatesInteractionMetrics(t *testing.T) {
@@ -93,6 +95,7 @@ func TestRecordCatchupFailure_UpdatesInteractionMetrics(t *testing.T) {
 
 	got, _ := reg.Get(pid.String())
 	require.Equal(t, int64(1), got.InteractionFailures)
+	require.Equal(t, int64(1), got.CatchupFailures)
 }
 
 func TestRecordCatchupFailure_BlockIncomplete_DowngradesFullPeer(t *testing.T) {
@@ -295,6 +298,38 @@ func TestGetPeersForCatchup_FiltersAndSorts(t *testing.T) {
 	ids := []string{resp.Peers[0].Id, resp.Peers[1].Id}
 	require.ElementsMatch(t, []string{"full", "pruned"}, ids)
 	require.Equal(t, "full", resp.Peers[0].Id, "full must sort ahead of pruned")
+}
+
+func TestGetPeersForCatchup_UsesCatchupSpecificCounters(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String(), DataHubURL: "http://peer", Height: 100})
+
+	ctx := context.Background()
+
+	// Three catchup attempts: one succeeds, one fails, one produces no outcome.
+	for i := 0; i < 3; i++ {
+		_, err := s.RecordCatchupAttempt(ctx, &p2p_api.RecordCatchupAttemptRequest{PeerId: pid.String()})
+		require.NoError(t, err)
+	}
+	_, err := s.RecordCatchupSuccess(ctx, &p2p_api.RecordCatchupSuccessRequest{PeerId: pid.String(), DurationMs: 100})
+	require.NoError(t, err)
+	_, err = s.RecordCatchupFailure(ctx, &p2p_api.RecordCatchupFailureRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	// Non-catchup interactions must not bleed into the catchup counters.
+	_, err = s.ReportValidBlock(ctx, &p2p_api.ReportValidBlockRequest{PeerId: pid.String(), BlockHash: "abc"})
+	require.NoError(t, err)
+	_, err = s.ReportValidSubtree(ctx, &p2p_api.ReportValidSubtreeRequest{PeerId: pid.String(), SubtreeHash: "def"})
+	require.NoError(t, err)
+
+	resp, err := s.GetPeersForCatchup(ctx, &p2p_api.GetPeersForCatchupRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.Peers, 1)
+
+	p := resp.Peers[0]
+	require.Equal(t, int64(3), p.CatchupAttempts, "attempts without an outcome must still be counted")
+	require.Equal(t, int64(1), p.CatchupSuccesses)
+	require.Equal(t, int64(1), p.CatchupFailures)
 }
 
 func TestReportValidSubtree_HappyPath(t *testing.T) {

@@ -25,7 +25,8 @@ const (
 )
 
 // RecordCatchupAttempt records that a catchup attempt was made to a peer.
-// Backed by the centralized peer registry's interaction-attempt counter.
+// Backed by the centralized peer registry's catchup-attempt counter, which
+// also updates the sync backoff tracking fields.
 func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCatchupAttemptRequest) (*p2p_api.RecordCatchupAttemptResponse, error) {
 	if s.peerRegistry == nil {
 		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
@@ -35,10 +36,8 @@ func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCa
 		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
 	}
 
-	// UpdatePeerMetrics with no flags increments LastSeen and BytesReceived; bump
-	// the attempt counter via RecordSyncAttempt which sets LastSyncAttempt.
-	if err := s.peerRegistry.RecordSyncAttempt(ctx, req.PeerId); err != nil {
-		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record sync attempt", err))
+	if err := s.peerRegistry.RecordCatchupAttempt(ctx, req.PeerId); err != nil {
+		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup attempt", err))
 	}
 
 	return &p2p_api.RecordCatchupAttemptResponse{Ok: true}, nil
@@ -54,8 +53,8 @@ func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCa
 		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
 	}
 
-	if err := s.peerRegistry.UpdatePeerMetrics(ctx, req.PeerId, 0, 0, 0, true, false, false, req.DurationMs); err != nil {
-		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("update peer metrics", err))
+	if err := s.peerRegistry.RecordCatchupSuccess(ctx, req.PeerId, req.DurationMs); err != nil {
+		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup success", err))
 	}
 
 	return &p2p_api.RecordCatchupSuccessResponse{Ok: true}, nil
@@ -71,8 +70,8 @@ func (s *Server) RecordCatchupFailure(ctx context.Context, req *p2p_api.RecordCa
 		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
 	}
 
-	if err := s.peerRegistry.UpdatePeerMetrics(ctx, req.PeerId, 0, 0, 0, false, true, false, 0); err != nil {
-		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("update peer metrics", err))
+	if err := s.peerRegistry.RecordCatchupFailure(ctx, req.PeerId); err != nil {
+		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup failure", err))
 	}
 
 	if normalizeCatchupFailureKind(req.FailureKind) == catchupFailureKindBlockIncomplete {
@@ -215,8 +214,6 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 			continue
 		}
 
-		totalAttempts := p.InteractionSuccesses + p.InteractionFailures
-
 		blockHashStr := ""
 		if p.BlockHash != nil {
 			blockHashStr = p.BlockHash.String()
@@ -228,9 +225,9 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 			BlockHash:              blockHashStr,
 			DataHubUrl:             p.DataHubURL,
 			CatchupReputationScore: p.ReputationScore,
-			CatchupAttempts:        totalAttempts,
-			CatchupSuccesses:       p.InteractionSuccesses,
-			CatchupFailures:        p.InteractionFailures,
+			CatchupAttempts:        p.CatchupAttempts,
+			CatchupSuccesses:       p.CatchupSuccesses,
+			CatchupFailures:        p.CatchupFailures,
 		})
 	}
 
