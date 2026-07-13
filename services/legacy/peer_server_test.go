@@ -1172,6 +1172,60 @@ func TestShouldDisconnectOnBlockErr(t *testing.T) {
 	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
 }
 
+// TestCheckBannedBounded verifies the bounded ban-check round-trip extracted from
+// OnBlock's pre-admission phase. Under prefetch the per-message watchdog is
+// disarmed for block messages and the netsync stall detector only watches the
+// sync peer, so a wedged query goroutine must NOT be allowed to park the
+// read-loop: the round-trip returns ok=false (drop the block) when the query send
+// or its reply cannot complete within the context, and (banned, true) when the
+// query goroutine answers.
+func TestCheckBannedBounded(t *testing.T) {
+	t.Run("send times out when nobody services the query", func(t *testing.T) {
+		// Unbuffered query with no reader: the send can never complete, so an
+		// already-cancelled context must make the round-trip bail with ok=false.
+		sp := &serverPeer{server: &server{query: make(chan interface{})}}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
+		require.False(t, ok, "a never-serviced query send must return ok=false")
+		require.False(t, banned)
+	})
+
+	t.Run("reply times out when the query is read but never answered", func(t *testing.T) {
+		s := &server{query: make(chan interface{})}
+		sp := &serverPeer{server: s}
+
+		// Drain the send but never reply, forcing the second select to wait out
+		// the context — the wedged-query-goroutine case this bound exists for.
+		go func() { <-s.query }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
+		require.False(t, ok, "a missing reply must return ok=false")
+		require.False(t, banned)
+	})
+
+	t.Run("returns the ban verdict when the query goroutine answers", func(t *testing.T) {
+		for _, want := range []bool{true, false} {
+			s := &server{query: make(chan interface{})}
+			sp := &serverPeer{server: s}
+
+			go func() {
+				msg := (<-s.query).(*isPeerBannedMsg)
+				msg.reply <- want
+			}()
+
+			banned, ok := sp.checkBannedBounded(context.Background(), "127.0.0.1")
+			require.True(t, ok, "a serviced round-trip must return ok=true")
+			require.Equal(t, want, banned)
+		}
+	})
+}
+
 // TestBlockAdmissionWeight verifies the prefetch-budget weight selection used by
 // OnBlock: the wire-measured payload size is preferred, then the raw buffer
 // length, and only as a last resort the O(all-tx) SerializeSize() walk.

@@ -1354,29 +1354,45 @@ func (sm *SyncManager) current() bool {
 	return true
 }
 
+// peerStateResolvingPrimary returns the sync state for peer, resolving a stream
+// sub-peer (e.g. a BlockPriority DATA1 stream, not itself registered in
+// peerStates) to its association's primary peer. It returns the resolved peer
+// (the primary when a stream peer resolved, otherwise the input peer) and
+// whether a state was found. Centralizes the stream→primary walk previously
+// inlined in handleBlockMsg/handleHeadersMsg/handleInvMsg/BlockRequested; call
+// sites that log the resolution or reassign to the primary compare the returned
+// peer against their input (resolved != input means a stream peer resolved).
+func (sm *SyncManager) peerStateResolvingPrimary(peer *peerpkg.Peer) (*peerSyncState, *peerpkg.Peer, bool) {
+	if state, exists := sm.peerStates.Get(peer); exists {
+		return state, peer, true
+	}
+
+	if assoc := peer.AssociationRef(); assoc != nil {
+		if primary := assoc.PrimaryPeer(); primary != nil {
+			if state, exists := sm.peerStates.Get(primary); exists {
+				return state, primary, true
+			}
+		}
+	}
+
+	return nil, peer, false
+}
+
 // handleBlockMsg handles block messages from all peers.
 func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	sm.logger.Debugf("[handleBlockMsg][%s] received block height %d from %s", bmsg.blockHash, bmsg.blockHeight, bmsg.peer)
 	peer := bmsg.peer
 
-	state, exists := sm.peerStates.Get(peer)
+	state, resolved, exists := sm.peerStateResolvingPrimary(peer)
 	if !exists {
+		sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
+		return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
+	}
+	if resolved != peer {
 		// Stream peers (e.g. BlockPriority) are not registered in peerStates
-		// directly - look up via their association's primary peer instead.
-		if assoc := peer.AssociationRef(); assoc != nil {
-			primary := assoc.PrimaryPeer()
-			if primary != nil {
-				state, exists = sm.peerStates.Get(primary)
-				if exists {
-					sm.logger.Debugf("[handleBlockMsg][%s] resolved stream peer %s to primary peer %s", bmsg.blockHash, peer, primary)
-					peer = primary
-				}
-			}
-		}
-		if !exists {
-			sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
-			return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
-		}
+		// directly - resolved via their association's primary peer instead.
+		sm.logger.Debugf("[handleBlockMsg][%s] resolved stream peer %s to primary peer %s", bmsg.blockHash, peer, resolved)
+		peer = resolved
 	}
 
 	// Under async prefetch, awaitBlockResult disconnects the source peer on its
@@ -1777,24 +1793,16 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	sm.logger.Debugf("[handleHeadersMsg] received headers message with %d headers from %s", len(hmsg.headers.Headers), hmsg.peer)
 	peer := hmsg.peer
 
-	_, exists := sm.peerStates.Get(peer)
+	_, resolved, exists := sm.peerStateResolvingPrimary(peer)
 	if !exists {
+		sm.logger.Warnf("Received headers message from unknown peer %s", peer)
+		return
+	}
+	if resolved != peer {
 		// Stream peers (e.g. BlockPriority DATA1) are not registered in
-		// peerStates directly - resolve via their association's primary peer.
-		if assoc := peer.AssociationRef(); assoc != nil {
-			primary := assoc.PrimaryPeer()
-			if primary != nil {
-				_, exists = sm.peerStates.Get(primary)
-				if exists {
-					sm.logger.Debugf("[handleHeadersMsg] resolved stream peer %s to primary peer %s", peer, primary)
-					peer = primary
-				}
-			}
-		}
-		if !exists {
-			sm.logger.Warnf("Received headers message from unknown peer %s", peer)
-			return
-		}
+		// peerStates directly - resolved via their association's primary peer.
+		sm.logger.Debugf("[handleHeadersMsg] resolved stream peer %s to primary peer %s", peer, resolved)
+		peer = resolved
 	}
 
 	// The remote peer is misbehaving if we didn't request headers.
@@ -1965,24 +1973,16 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	sm.logger.Debugf("[handleInvMsg] received inv message with %d inv vectors from %s", len(imsg.inv.InvList), imsg.peer)
 	peer := imsg.peer
 
-	state, exists := sm.peerStates.Get(peer)
+	state, resolved, exists := sm.peerStateResolvingPrimary(peer)
 	if !exists {
+		sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
+		return
+	}
+	if resolved != peer {
 		// Stream peers (e.g. BlockPriority DATA1) are not registered in
-		// peerStates directly - resolve via their association's primary peer.
-		if assoc := peer.AssociationRef(); assoc != nil {
-			primary := assoc.PrimaryPeer()
-			if primary != nil {
-				state, exists = sm.peerStates.Get(primary)
-				if exists {
-					sm.logger.Debugf("[handleInvMsg] resolved stream peer %s to primary peer %s", peer, primary)
-					peer = primary
-				}
-			}
-		}
-		if !exists {
-			sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
-			return
-		}
+		// peerStates directly - resolved via their association's primary peer.
+		sm.logger.Debugf("[handleInvMsg] resolved stream peer %s to primary peer %s", peer, resolved)
+		peer = resolved
 	}
 
 	// Attempt to find the final block in the inventory list.  There may
@@ -2439,13 +2439,6 @@ func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done
 	sm.msgChan <- &blockMsg{block: block, peer: peer, reply: done}
 }
 
-// BlockPrefetchEnabled reports whether bounded async block prefetch is active
-// (a positive budget was configured). When false, callers must keep the
-// original synchronous one-block-in-flight ingestion path.
-func (sm *SyncManager) BlockPrefetchEnabled() bool {
-	return sm.blockPrefetchBudget != nil
-}
-
 // UsePrefetchIngestion reports whether OnBlock should take the bounded async
 // prefetch path. It requires a configured budget AND that we are not on
 // regression net: the block-acceptance tooling depends on submit-then-query
@@ -2454,8 +2447,8 @@ func (sm *SyncManager) BlockPrefetchEnabled() bool {
 // with, and for the same reason as, the regtest exception in BlockRequested. It
 // shares the peerpkg.UseBlockPrefetchIngestion predicate with the read-loop's
 // shouldArmProcessingTimer so both agree on when prefetch is active (a positive
-// budget matches BlockPrefetchEnabled, since the budget semaphore is created iff
-// the byte budget is positive).
+// budget matches a non-nil budget semaphore, since it is created iff the byte
+// budget is positive).
 func (sm *SyncManager) UsePrefetchIngestion() bool {
 	return peerpkg.UseBlockPrefetchIngestion(sm.blockPrefetchBudgetBytes, sm.chainParams.Net)
 }
@@ -2475,15 +2468,10 @@ func (sm *SyncManager) BlockRequested(peer *peerpkg.Peer, blockHash *chainhash.H
 		return true
 	}
 
-	state, exists := sm.peerStates.Get(peer)
-	if !exists {
-		if assoc := peer.AssociationRef(); assoc != nil {
-			if primary := assoc.PrimaryPeer(); primary != nil {
-				state, exists = sm.peerStates.Get(primary)
-			}
-		}
-	}
-
+	// Resolve stream sub-peers to their association primary, as handleBlockMsg
+	// does; BlockRequested only reads the resolved state, so the primary itself
+	// is not needed here.
+	state, _, exists := sm.peerStateResolvingPrimary(peer)
 	if !exists {
 		return false
 	}

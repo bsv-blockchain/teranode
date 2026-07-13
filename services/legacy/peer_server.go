@@ -920,18 +920,37 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 
 	// Check if this peer is banned
 	host, _, err := net.SplitHostPort(sp.Addr())
-	if err == nil {
-		// Use a channel to get the response from the query
-		respChan := make(chan bool)
 
-		// Create a proper query message to check if the peer is banned
-		sp.server.query <- &isPeerBannedMsg{
-			addr:  host,
-			reply: respChan,
+	// Bound the pre-admission phase (ban-check round-trip + GetBlockHeader) so a
+	// wedged query goroutine or a hung header lookup cannot park the read-loop
+	// indefinitely: under prefetch the per-message watchdog is disarmed for block
+	// messages, and the netsync stall detector only covers the sync peer, so a
+	// non-sync peer would otherwise leak its slot until daemon shutdown. These
+	// calls are sub-ms in a healthy node and budget backpressure is strictly after
+	// them, so PeerProcessingTimeout only ever fires on a genuine hang. Applied on
+	// both ingestion paths (harmless for the synchronous one, where the watchdog
+	// still covers blocks). Fall back to 3m (netsync's
+	// defaultBlockProcessingStallTimeout) when the setting is unset so an operator
+	// zeroing it cannot reintroduce the hang. Only the pre-admission calls read
+	// this context; AcquireBlockPrefetch/QueueBlock keep sp.ctx/sp.quit.
+	preAdmitTimeout := sp.server.settings.Legacy.PeerProcessingTimeout
+	if preAdmitTimeout <= 0 {
+		preAdmitTimeout = 3 * time.Minute
+	}
+
+	preAdmitCtx, cancelPreAdmit := context.WithTimeout(sp.ctx, preAdmitTimeout)
+	defer cancelPreAdmit()
+
+	if err == nil {
+		// Ban-check round-trip bounded by preAdmitCtx. ok=false means the query
+		// send or its reply was cancelled/timed out before an answer arrived, so
+		// drop the block rather than park the read-loop on a wedged query goroutine.
+		isBanned, ok := sp.checkBannedBounded(preAdmitCtx, host)
+		if !ok {
+			sp.server.logger.Warnf("dropping block %s: ban-check timed out/cancelled for peer %s", msg.BlockHash(), sp)
+			return
 		}
 
-		// Wait for the response
-		isBanned := <-respChan
 		if isBanned {
 			sp.server.logger.Warnf("Ignoring block %s from banned legacy peer %s",
 				msg.BlockHash().String(), sp.Addr())
@@ -959,8 +978,11 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 	iv := wire.NewInvVect(wire.InvTypeBlock, blockHash)
 	sp.AddKnownInventory(iv)
 
-	// single round-trip: GetBlockHeader tells us both existence and validity
-	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, blockHash)
+	// single round-trip: GetBlockHeader tells us both existence and validity.
+	// preAdmitCtx bounds this lookup (see the pre-admission timeout above); a
+	// timed-out lookup returns an error → blockIsKnownValid=false, so the block
+	// proceeds as "not known valid" exactly as an errored lookup does today.
+	_, meta, err := sp.server.blockchainClient.GetBlockHeader(preAdmitCtx, blockHash)
 	blockIsKnownValid := err == nil && !meta.Invalid
 
 	if !blockIsKnownValid {
@@ -987,6 +1009,17 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 			// block-acceptance tooling depends on submit-then-query ordering that
 			// only this synchronous path guarantees. Also intentionally limits how
 			// many bad blocks a malicious peer can queue before being disconnected.
+			//
+			// Clear any stale result left in the shared reply channel by a prior
+			// block's shutdown-drain (the buffer is size 1 and reused across
+			// synchronous blocks); without this a stale error could be read as this
+			// block's result. Benign today (only reachable at daemon exit) but keeps
+			// the shared-channel contract robust.
+			select {
+			case <-sp.blockProcessed:
+			default:
+			}
+
 			sm.QueueBlock(block, sp.Peer, sp.blockProcessed)
 
 			// Wait for processing, but also bail on teardown so a lost shutdown
@@ -1077,6 +1110,33 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 		// one is validated; the result (budget release + disconnect-on-failure)
 		// is handled off the read-loop.
 		go sp.awaitBlockResult(done, weight, blockHash)
+	}
+}
+
+// checkBannedBounded runs the ban-check round-trip (server.query send + reply)
+// under ctx so a wedged query goroutine or a never-serviced channel cannot park
+// the read-loop. It returns (banned, ok); ok=false means the round-trip was
+// cancelled/timed out before a reply arrived and the caller must drop the block
+// without proceeding. Extracted from OnBlock so the bounded pre-admission path is
+// unit-testable (a query channel nobody services + a cancelled ctx).
+func (sp *serverPeer) checkBannedBounded(ctx context.Context, host string) (banned bool, ok bool) {
+	// Use a channel to get the response from the query.
+	respChan := make(chan bool)
+
+	// Create a proper query message to check if the peer is banned. Both the send
+	// and the receive select on ctx.Done() so neither can block indefinitely.
+	select {
+	case sp.server.query <- &isPeerBannedMsg{addr: host, reply: respChan}:
+	case <-ctx.Done():
+		return false, false
+	}
+
+	// Wait for the response.
+	select {
+	case banned = <-respChan:
+		return banned, true
+	case <-ctx.Done():
+		return false, false
 	}
 }
 

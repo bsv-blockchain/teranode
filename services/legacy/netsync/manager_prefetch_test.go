@@ -75,9 +75,54 @@ func TestBlockRequested(t *testing.T) {
 	})
 }
 
-func TestBlockPrefetchEnabled(t *testing.T) {
-	require.False(t, newPrefetchManager(0).BlockPrefetchEnabled())
-	require.True(t, newPrefetchManager(100).BlockPrefetchEnabled())
+// TestPeerStateResolvingPrimary covers the stream→primary resolution walk shared
+// by handleBlockMsg/handleHeadersMsg/handleInvMsg/BlockRequested: a registered
+// peer resolves to itself, an unregistered stream sub-peer resolves to its
+// association's registered primary, and an unknown peer resolves to nothing.
+func TestPeerStateResolvingPrimary(t *testing.T) {
+	newSM := func() *SyncManager {
+		return &SyncManager{
+			logger:     ulogger.TestLogger{},
+			peerStates: txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+		}
+	}
+
+	t.Run("registered primary resolves to itself", func(t *testing.T) {
+		sm := newSM()
+		primary := &peerpkg.Peer{}
+		want := &peerSyncState{}
+		sm.peerStates.Set(primary, want)
+
+		state, resolved, exists := sm.peerStateResolvingPrimary(primary)
+		require.True(t, exists)
+		require.Same(t, primary, resolved)
+		require.Same(t, want, state)
+	})
+
+	t.Run("stream sub-peer resolves to its registered primary", func(t *testing.T) {
+		sm := newSM()
+		primary := &peerpkg.Peer{}
+		want := &peerSyncState{}
+		sm.peerStates.Set(primary, want)
+
+		stream := &peerpkg.Peer{}
+		stream.SetAssociation(peerpkg.NewAssociation([]byte{0x01}, primary))
+
+		state, resolved, exists := sm.peerStateResolvingPrimary(stream)
+		require.True(t, exists)
+		require.Same(t, primary, resolved)
+		require.Same(t, want, state)
+	})
+
+	t.Run("unknown peer resolves to nothing", func(t *testing.T) {
+		sm := newSM()
+		peer := &peerpkg.Peer{}
+
+		state, resolved, exists := sm.peerStateResolvingPrimary(peer)
+		require.False(t, exists)
+		require.Same(t, peer, resolved)
+		require.Nil(t, state)
+	})
 }
 
 // TestUsePrefetchIngestion proves OnBlock's gate across the full budget {0,
