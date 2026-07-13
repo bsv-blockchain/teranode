@@ -348,8 +348,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	storeBatcherInst := batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendStoreBatch, batcherBackground, append(batcherOpts("aerospike_store"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.StoreBatcherGreedyAccumulate))...)
-	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.StoreBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
-		storeBatcherInst.SetMaxConcurrent(mc)
+	if batcherMaxConcurrent > 0 {
+		storeBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
 	s.storeBatcher = storeBatcherInst
 
@@ -357,8 +357,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchDurationStr := s.settings.UtxoStore.GetBatcherDurationMillis
 	getBatchDuration := time.Duration(getBatchDurationStr) * time.Millisecond
 	getBatcherInst := batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, batcherBackground, append(batcherOpts("aerospike_get"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.GetBatcherGreedyAccumulate))...)
-	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.GetBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
-		getBatcherInst.SetMaxConcurrent(mc)
+	if batcherMaxConcurrent > 0 {
+		getBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
 	s.getBatcher = getBatcherInst
 
@@ -387,8 +387,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
 	spendBatcherInst := batcher.NewWithPool(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, batcherBackground, append(batcherOpts("aerospike_spend"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.SpendBatcherGreedyAccumulate))...)
-	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.SpendBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
-		spendBatcherInst.SetMaxConcurrent(mc)
+	if batcherMaxConcurrent > 0 {
+		spendBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
 	s.spendBatcher = spendBatcherInst
 
@@ -413,8 +413,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	incrementBatchDurationStr := tSettings.UtxoStore.IncrementBatcherDurationMillis
 	incrementBatchDuration := time.Duration(incrementBatchDurationStr) * time.Millisecond
 	incrementBatcherInst := batcher.NewWithPool(incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, batcherBackground, batcherOpts("aerospike_increment")...)
-	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.IncrementBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
-		incrementBatcherInst.SetMaxConcurrent(mc)
+	if batcherMaxConcurrent > 0 {
+		incrementBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
 	s.incrementBatcher = incrementBatcherInst
 
@@ -422,8 +422,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	setDAHBatchDurationStr := tSettings.UtxoStore.SetDAHBatcherDurationMillis
 	setDAHBatchDuration := time.Duration(setDAHBatchDurationStr) * time.Millisecond
 	setDAHBatcherInst := batcher.NewWithPool(setDAHBatchSize, setDAHBatchDuration, s.sendSetDAHBatch, batcherBackground, batcherOpts("aerospike_set_dah")...)
-	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.SetDAHBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
-		setDAHBatcherInst.SetMaxConcurrent(mc)
+	if batcherMaxConcurrent > 0 {
+		setDAHBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
 	s.setDAHBatcher = setDAHBatcherInst
 
@@ -431,8 +431,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	lockedBatchDurationStr := tSettings.UtxoStore.LockedBatcherDurationMillis
 	lockedBatchDuration := time.Duration(lockedBatchDurationStr) * time.Millisecond
 	lockedBatcherInst := batcher.NewWithPool(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, batcherBackground, append(batcherOpts("aerospike_locked"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.LockedBatcherGreedyAccumulate))...)
-	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.LockedBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
-		lockedBatcherInst.SetMaxConcurrent(mc)
+	if batcherMaxConcurrent > 0 {
+		lockedBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
 	s.lockedBatcher = lockedBatcherInst
 

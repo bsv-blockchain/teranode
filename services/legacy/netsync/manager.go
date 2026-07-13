@@ -1413,16 +1413,28 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// full concurrency. Returning a retryable error (not sleeping) keeps the
 	// single block-processing goroutine free. The block was already removed from
 	// requestedBlocks above, so re-delivery is driven by the existing recovery
-	// plumbing — the next block arrives as an orphan of this un-stored one and
-	// triggers a getblocks, and/or the stall detector rotates the sync peer — not
-	// by a proactive re-request here. Placed before the block-size sampling below
-	// so a block re-delivered repeatedly while backed off does not keep re-sampling
-	// its size into the moving average and biasing calculateMaxInFlightBlocks()
-	// (only actually-processed blocks should feed the tracker). Nil-guarded: tests
-	// build SyncManager as a struct literal that bypasses New().
+	// plumbing — a later block arrives as an orphan of this un-stored one and
+	// triggers a getblocks that re-requests it — not by a proactive re-request
+	// here. Two things keep this from stalling sync (#1187, review): the backoff
+	// cap defaults below the stall-detector window (maxLastBlockTime) so the
+	// window reliably outlasts a transient backoff, and the delivering sync
+	// peer's last-block-time is refreshed on skip (below) so that peer is not
+	// rotated for a fault that is local, not the peer's — rotating it in would
+	// only re-deliver the same still-backed-off block and thrash peers with zero
+	// forward progress. Placed before the block-size sampling below so a block
+	// re-delivered repeatedly while backed off does not keep re-sampling its size
+	// into the moving average and biasing calculateMaxInFlightBlocks() (only
+	// actually-processed blocks should feed the tracker). Nil-guarded: tests build
+	// SyncManager as a struct literal that bypasses New().
 	if sm.blockFailureBackoff != nil {
 		if fs, ok := sm.blockFailureBackoff.Get(bmsg.blockHash); ok && time.Now().Before(fs.nextRetry) {
 			sm.logger.Warnf("[handleBlockMsg][%s] in backoff after %d transient failure(s), skipping until %s", bmsg.blockHash, fs.attempts, fs.nextRetry)
+			// The peer just delivered this block — the fault is our local store,
+			// not the peer — so keep its stall timer fresh. No-op unless peer is
+			// the current sync peer.
+			if sps, ok := sm.syncPeerStateFor(peer); ok {
+				sps.updateLastBlockTime()
+			}
 			return errors.NewServiceUnavailableError("[handleBlockMsg][%s] block in backoff after %d transient failure(s)", bmsg.blockHash, fs.attempts)
 		}
 	}
@@ -1506,14 +1518,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			// returns when a batch (notably the outpoint/decorate batch, the #1187
 			// wedge) does not complete in time (stores/utxo/aerospike/get.go) — and
 			// ErrStorageUnavailable ("no aerospike nodes available"). These must
-			// neither reject the block to the peer nor (below) skip the backoff. The
-			// set mirrors shouldDisconnectOnBlockError in peer_server.go and the
-			// transient codes of errors.IsRetryableError (minus ErrServiceError,
-			// which that helper omits but this path must keep suppressing).
-			serviceError := errors.Is(err, errors.ErrServiceError) ||
-				errors.Is(err, errors.ErrStorageError) ||
-				errors.Is(err, errors.ErrServiceUnavailable) ||
-				errors.Is(err, errors.ErrStorageUnavailable)
+			// neither reject the block to the peer nor (below) skip the backoff.
+			// errors.IsTransientLocalError is the shared classifier, kept in
+			// lock-step with shouldDisconnectOnBlockError in peer_server.go.
+			serviceError := errors.IsTransientLocalError(err)
 			if !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
 			}
@@ -2581,20 +2589,17 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
-	blockFailureBackoff := newBlockFailureBackoffMap(tSettings.Legacy.BlockFailureBackoffBase, tSettings.Legacy.BlockFailureBackoffMaxDuration)
-
 	sm := SyncManager{
 		ctx:          ctx,
 		settings:     tSettings,
 		peerNotifier: config.PeerNotifier,
 		// txMemPool:     config.TxMemPool,
-		orphanTxs:           expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
-		chainParams:         config.ChainParams,
-		rejectedTxns:        txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
-		requestedTxns:       expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
-		requestedBlocks:     expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
-		blockFailureBackoff: blockFailureBackoff,
-		peerStates:          txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
+		chainParams:     config.ChainParams,
+		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
+		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
+		peerStates:      txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
 		msgChan:          make(chan interface{}, maxMsgQueueSize),
 		headerList:       list.New(),
@@ -2663,6 +2668,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if err != nil {
 		return nil, err
 	}
+
+	// Build the per-block backoff map only after the last fallible step above.
+	// newBlockFailureBackoffMap starts a background eviction goroutine that is
+	// only stopped via SyncManager.Stop(); constructing it before an early
+	// error return would leak that goroutine, since the caller receives a nil
+	// SyncManager and can never call Stop() (#1187, review).
+	sm.blockFailureBackoff = newBlockFailureBackoffMap(tSettings.Legacy.BlockFailureBackoffBase, tSettings.Legacy.BlockFailureBackoffMaxDuration)
 
 	if !config.DisableCheckpoints {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)

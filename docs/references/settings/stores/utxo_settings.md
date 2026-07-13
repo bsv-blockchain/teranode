@@ -33,13 +33,7 @@
 | GetBatcherSize | int | 1 | utxostore_getBatcherSize | Get operation batch size |
 | GetBatcherDurationMillis | int | 10 | utxostore_getBatcherDurationMillis | Get batch duration |
 | BatcherMaxConcurrent | int | 64 | utxostore_batcherMaxConcurrent | Max concurrent in-flight batch callbacks per batcher (shared cap; 0 = unlimited) |
-| StoreBatcherMaxConcurrent | int | 0 | utxostore_storeBatcherMaxConcurrent | Per-batcher store concurrency override (0 = inherit utxostore_batcherMaxConcurrent) |
-| GetBatcherMaxConcurrent | int | 0 | utxostore_getBatcherMaxConcurrent | Per-batcher get concurrency override (0 = inherit utxostore_batcherMaxConcurrent) |
-| SpendBatcherMaxConcurrent | int | 0 | utxostore_spendBatcherMaxConcurrent | Per-batcher spend concurrency override (0 = inherit utxostore_batcherMaxConcurrent) |
-| OutpointBatcherMaxConcurrent | int | 0 | utxostore_outpointBatcherMaxConcurrent | Per-batcher outpoint/decorate concurrency override (0 = inherit utxostore_batcherMaxConcurrent) |
-| IncrementBatcherMaxConcurrent | int | 0 | utxostore_incrementBatcherMaxConcurrent | Per-batcher increment concurrency override (0 = inherit utxostore_batcherMaxConcurrent) |
-| SetDAHBatcherMaxConcurrent | int | 0 | utxostore_setDAHBatcherMaxConcurrent | Per-batcher SetDAH concurrency override (0 = inherit utxostore_batcherMaxConcurrent) |
-| LockedBatcherMaxConcurrent | int | 0 | utxostore_lockedBatcherMaxConcurrent | Per-batcher locked concurrency override (0 = inherit utxostore_batcherMaxConcurrent) |
+| OutpointBatcherMaxConcurrent | int | 0 | utxostore_outpointBatcherMaxConcurrent | Per-batcher outpoint/decorate concurrency override, the #1187 read fan-out throttle (0 = inherit utxostore_batcherMaxConcurrent) |
 | DBTimeout | time.Duration | 5s | utxostore_dbTimeoutDuration | **CRITICAL** - Database operation timeout |
 | UseExternalTxCache | bool | true | utxostore_useExternalTxCache | External transaction cache usage |
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |

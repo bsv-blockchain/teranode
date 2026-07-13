@@ -909,25 +909,20 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 
 // shouldDisconnectOnBlockError reports whether a block-processing error is a
 // peer fault worth disconnecting for (to trigger sync-peer rotation), versus a
-// transient local condition that should only be retried. Local conditions —
-// service errors, storage errors, the per-block backoff throttle
-// (ErrServiceUnavailable, #1187), and ErrStorageUnavailable ("no aerospike nodes
+// transient local condition that should only be retried. Transient local
+// conditions — service/storage errors, the per-block backoff throttle
+// (ErrServiceUnavailable, #1187) and ErrStorageUnavailable ("no aerospike nodes
 // available") — must NOT disconnect the delivering peer: a backed-off block is
 // re-delivered repeatedly while it waits out its window, and disconnecting on
-// each re-delivery would churn through sync peers for no reason. The set mirrors
-// the serviceError predicate in netsync/manager.go.
-//
-// Note: errors.IsRetryableError is deliberately NOT reused here — it does not
-// include ErrServiceError, which this guard must continue to suppress.
+// each re-delivery would churn through sync peers for a fault that is ours, not
+// the peer's. errors.IsTransientLocalError is the shared classifier (also used by
+// the netsync backoff path) so the two decisions cannot drift apart.
 func shouldDisconnectOnBlockError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	return !errors.Is(err, errors.ErrServiceError) &&
-		!errors.Is(err, errors.ErrStorageError) &&
-		!errors.Is(err, errors.ErrServiceUnavailable) &&
-		!errors.Is(err, errors.ErrStorageUnavailable)
+	return !errors.IsTransientLocalError(err)
 }
 
 // OnBlock is invoked when a peer receives a block bitcoin message. It

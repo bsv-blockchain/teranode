@@ -1106,6 +1106,45 @@ func TestHandleBlockMsg_BackoffSkipsRetryWithinWindow(t *testing.T) {
 	blockchainClient.AssertNotCalled(t, "GetBlockExists", mock.Anything, mock.Anything)
 }
 
+// TestHandleBlockMsg_BackoffSkipRefreshesSyncPeerLastBlockTime verifies the
+// liveness fix (#1187, review): a skipped (backed-off) block still refreshes the
+// delivering sync peer's last-block-time. The peer did deliver a block — the
+// fault is our local store — so the stall detector must not rotate this healthy
+// peer while it waits out a local backoff, which would only thrash peers with a
+// still-backed-off re-delivery.
+func TestHandleBlockMsg_BackoffSkipRefreshesSyncPeerLastBlockTime(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+
+	// Make p the current sync peer with a stale last-block-time (past the stall
+	// window). Without the refresh-on-skip fix the stall detector would rotate it.
+	stale := time.Now().Add(-10 * time.Minute)
+	sps := &syncPeerState{lastBlockTime: stale}
+	sm.storeSyncPeer(p, sps)
+
+	// Backoff window still open -> the block is skipped.
+	sm.blockFailureBackoff.Set(blockHash, &blockFailureState{attempts: 1, nextRetry: time.Now().Add(time.Minute)})
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "expected a retryable service-unavailable error, got %v", err)
+	require.True(t, sps.getLastBlockTime().After(stale),
+		"the delivering sync peer's last-block-time must be refreshed on a backoff skip")
+}
+
 // TestHandleBlockMsg_BackoffExpiredRetriesNormally verifies that once the backoff
 // window has elapsed the block is processed normally again (GetBlockExists runs).
 func TestHandleBlockMsg_BackoffExpiredRetriesNormally(t *testing.T) {
