@@ -276,6 +276,58 @@ func TestGetUtxoHashes_ValuesUnchanged(t *testing.T) {
 	}
 }
 
+func TestHasNoSpendableOutputs(t *testing.T) {
+	// h is pre-Genesis (genesis = 620538), so bare OP_RETURN and OP_FALSE OP_RETURN
+	// are both provably unspendable here - the era-aware predicate matches the
+	// expectations below.
+	const h = uint32(100)
+	const genesisActivation = uint32(620538)
+
+	t.Run("op_return only returns true", func(t *testing.T) {
+		tx := bt.NewTx()
+		require.NoError(t, tx.AddOpReturnOutput([]byte("data")))
+		assert.True(t, HasNoSpendableOutputs(tx, false, h, genesisActivation))
+	})
+
+	t.Run("spendable output returns false", func(t *testing.T) {
+		tx := bt.NewTx()
+		tx.AddOutput(&bt.Output{Satoshis: 1000, LockingScript: &bscript.Script{}})
+		assert.False(t, HasNoSpendableOutputs(tx, false, h, genesisActivation))
+	})
+
+	t.Run("mixed spendable and op_return returns false", func(t *testing.T) {
+		tx := bt.NewTx()
+		tx.AddOutput(&bt.Output{Satoshis: 1000, LockingScript: &bscript.Script{}})
+		require.NoError(t, tx.AddOpReturnOutput([]byte("data")))
+		assert.False(t, HasNoSpendableOutputs(tx, false, h, genesisActivation))
+	})
+
+	t.Run("coinbase returns false", func(t *testing.T) {
+		tx := bt.NewTx()
+		require.NoError(t, tx.AddOpReturnOutput([]byte("data")))
+		assert.False(t, HasNoSpendableOutputs(tx, true, h, genesisActivation))
+	})
+
+	t.Run("no outputs returns false", func(t *testing.T) {
+		tx := bt.NewTx()
+		assert.False(t, HasNoSpendableOutputs(tx, false, h, genesisActivation))
+	})
+
+	t.Run("nil output slot treated as not spendable", func(t *testing.T) {
+		tx := bt.NewTx()
+		tx.Outputs = []*bt.Output{nil}
+		assert.True(t, HasNoSpendableOutputs(tx, false, h, genesisActivation))
+	})
+
+	t.Run("bare op_return returns true", func(t *testing.T) {
+		s, err := bscript.NewFromASM("OP_RETURN")
+		require.NoError(t, err)
+		tx := bt.NewTx()
+		tx.AddOutput(&bt.Output{Satoshis: 0, LockingScript: s})
+		assert.True(t, HasNoSpendableOutputs(tx, false, h, genesisActivation))
+	})
+}
+
 func BenchmarkGetUtxoHashes(b *testing.B) {
 	txs := make([]*bt.Tx, b.N)
 
