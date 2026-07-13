@@ -212,6 +212,30 @@ func ShouldStoreOutputAsUTXO(output *bt.Output, blockHeight uint32, genesisActiv
 	return !(opReturn || oversized)
 }
 
+// HasNoSpendableOutputs reports whether the transaction has no spendable outputs
+// - i.e. every output is provably unspendable per the era-aware, value-agnostic
+// ShouldStoreOutputAsUTXO rule (OP_FALSE OP_RETURN in any era; also bare OP_RETURN
+// and oversized scripts pre-Genesis). Such a transaction can never be spent, so it
+// never becomes "all spent". Coinbase transactions always have a spendable output
+// and return false, as do transactions with no outputs. A nil output slot is treated
+// as not spendable, consistent with how the stores skip nil outputs when recording
+// UTXOs. blockHeight is the output creation height and genesisActivationHeight the
+// per-network Genesis height (settings.ChainCfgParams.GenesisActivationHeight), both
+// passed straight through to ShouldStoreOutputAsUTXO.
+func HasNoSpendableOutputs(tx *bt.Tx, isCoinbase bool, blockHeight uint32, genesisActivationHeight uint32) bool {
+	if isCoinbase || len(tx.Outputs) == 0 {
+		return false
+	}
+
+	for _, output := range tx.Outputs {
+		if output != nil && ShouldStoreOutputAsUTXO(output, blockHeight, genesisActivationHeight) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // GetSpends creates Spend objects for all inputs of a transaction.
 // Each Spend represents a UTXO being consumed by the transaction.
 //

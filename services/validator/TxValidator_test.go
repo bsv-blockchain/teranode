@@ -20,6 +20,7 @@ Usage:
 package validator
 
 import (
+	"math"
 	"os"
 	"testing"
 
@@ -183,6 +184,316 @@ func TestTxValidator_SkipScriptValidation_AcceptsConfirmedHeightsInConsensus(t *
 	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
 	require.NoError(t, txValidator.ValidateTransaction(aTx, 100, []uint32{99, 99}, validationOptions))
 	require.Equal(t, 0, counter.calls)
+}
+
+// newSkipScriptTxValidator builds a TxValidator whose BDK adapter is a counter,
+// so the SkipScriptValidation path can be exercised without invoking BDK.
+func newSkipScriptTxValidator(t *testing.T) (*TxValidator, *countingBDKValidator) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	counter := &countingBDKValidator{}
+
+	return &TxValidator{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+		bdk:      counter,
+	}, counter
+}
+
+// opFalseReturnScript builds a minimal provably-unspendable OP_FALSE OP_RETURN
+// locking script, used for zero-value outputs.
+func opFalseReturnScript(t *testing.T) *bscript.Script {
+	t.Helper()
+
+	s := &bscript.Script{}
+	require.NoError(t, s.AppendOpcodes(bscript.OpFALSE, bscript.OpRETURN))
+
+	return s
+}
+
+// When BDK is bypassed, a transaction whose outputs exceed its inputs must be
+// rejected as coins-from-nothing rather than silently accepted.
+func TestTxValidator_SkipScriptValidation_RejectsInflation(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	for _, in := range tx.Inputs {
+		in.PreviousTxSatoshis = 1
+	}
+	tx.Outputs[0].Satoshis = 1_000_000
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(tx, 100, []uint32{99, 99}, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-in-belowout")
+	require.Equal(t, 0, counter.calls)
+}
+
+// A uint64 output value with the high bit set deserializes as a negative signed
+// amount, which must be rejected as bad-txns-vout-negative (not too-large).
+func TestTxValidator_SkipScriptValidation_RejectsOutputNegative(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	tx.Outputs[0].Satoshis = uint64(math.MaxInt64) + 1
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(tx, 100, []uint32{99, 99}, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-vout-negative")
+	require.Equal(t, 0, counter.calls)
+}
+
+// A single output above the money limit (but still a positive signed amount)
+// must be rejected as bad-txns-vout-toolarge.
+func TestTxValidator_SkipScriptValidation_RejectsOutputOverMaxMoney(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	tx.Outputs[0].Satoshis = MaxSatoshis + 1
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(tx, 100, []uint32{99, 99}, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-vout-toolarge")
+	require.Equal(t, 0, counter.calls)
+}
+
+// Two individually in-range outputs whose total exceeds the money limit must be
+// rejected as bad-txns-txouttotal-toolarge.
+func TestTxValidator_SkipScriptValidation_RejectsOutputTotalOverMaxMoney(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	tx.Outputs = []*bt.Output{
+		{Satoshis: MaxSatoshis, LockingScript: tx.Outputs[0].LockingScript},
+		{Satoshis: MaxSatoshis, LockingScript: tx.Outputs[0].LockingScript},
+	}
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(tx, 100, []uint32{99, 99}, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-txouttotal-toolarge")
+	require.Equal(t, 0, counter.calls)
+}
+
+// An input value out of the money range must be rejected as
+// bad-txns-inputvalues-outofrange, both above the limit and with the high bit set.
+func TestTxValidator_SkipScriptValidation_RejectsInputOverMaxMoney(t *testing.T) {
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+
+	for name, value := range map[string]uint64{
+		"over-max": MaxSatoshis + 1,
+		"high-bit": uint64(math.MaxInt64) + 1,
+	} {
+		t.Run(name, func(t *testing.T) {
+			txValidator, counter := newSkipScriptTxValidator(t)
+
+			tx := aTx.Clone()
+			tx.Inputs[0].PreviousTxSatoshis = value
+
+			err := txValidator.ValidateTransaction(tx, 100, []uint32{99, 99}, validationOptions)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "bad-txns-inputvalues-outofrange")
+			require.Equal(t, 0, counter.calls)
+		})
+	}
+}
+
+// A zero-fee transaction (sum of inputs equal to sum of outputs) with a
+// zero-value OP_RETURN output must be accepted.
+func TestTxValidator_SkipScriptValidation_AcceptsZeroFeeAndZeroValueOutputs(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	tx.Inputs[0].PreviousTxSatoshis = 500
+	tx.Inputs[1].PreviousTxSatoshis = 500
+	tx.Outputs = []*bt.Output{
+		{Satoshis: 1000, LockingScript: tx.Outputs[0].LockingScript},
+		{Satoshis: 0, LockingScript: opFalseReturnScript(t)},
+	}
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	require.NoError(t, txValidator.ValidateTransaction(tx, 100, []uint32{99, 99}, validationOptions))
+	require.Equal(t, 0, counter.calls)
+}
+
+// The inflation backstop is consensus-level and must fire in policy mode too
+// (SkipPolicyChecks=false), proving it is not wired only to the consensus branch.
+func TestTxValidator_SkipScriptValidation_InflationRejectedInPolicyMode(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	for _, in := range tx.Inputs {
+		in.PreviousTxSatoshis = 1
+	}
+	tx.Outputs[0].Satoshis = 1_000_000
+
+	validationOptions := &Options{SkipPolicyChecks: false, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(tx, 100, []uint32{99, 99}, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-in-belowout")
+	require.Equal(t, 0, counter.calls)
+}
+
+// A value-less (non-extended) transaction violates the extended-tx precondition;
+// the backstop must fail closed (reject as inflation) rather than accept.
+func TestTxValidator_SkipScriptValidation_NonExtendedFailsClosed(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	for _, in := range tx.Inputs {
+		in.PreviousTxScript = nil
+		in.PreviousTxSatoshis = 0
+	}
+	tx.Outputs[0].Satoshis = 1000
+
+	require.False(t, tx.IsExtended())
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(tx, 100, []uint32{99, 99}, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-in-belowout")
+	require.Equal(t, 0, counter.calls)
+}
+
+// For a transaction that is both inflationary and carries an unconfirmed-parent
+// sentinel input, the surfaced error is era-dependent. Pre-Genesis the sentinel
+// is checked before input values, so the unconfirmed-input error wins.
+func TestTxValidator_SkipScriptValidation_MixedDefect_PreGenesis_SentinelWins(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	for _, in := range tx.Inputs {
+		in.PreviousTxSatoshis = 1
+	}
+	tx.Outputs[0].Satoshis = 1_000_000
+
+	blockHeight := txValidator.settings.ChainCfgParams.GenesisActivationHeight - 1
+	utxoHeights := []uint32{unconfirmedParentHeight, 99}
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-unconfirmed-input-in-block")
+	require.Equal(t, 0, counter.calls)
+}
+
+// Post-Genesis the sentinel is only reached after input values, so the inflation
+// error wins for the same doubly-invalid transaction.
+func TestTxValidator_SkipScriptValidation_MixedDefect_PostGenesis_InflationWins(t *testing.T) {
+	txValidator, counter := newSkipScriptTxValidator(t)
+
+	tx := aTx.Clone()
+	for _, in := range tx.Inputs {
+		in.PreviousTxSatoshis = 1
+	}
+	tx.Outputs[0].Satoshis = 1_000_000
+
+	blockHeight := txValidator.settings.ChainCfgParams.GenesisActivationHeight
+	utxoHeights := []uint32{unconfirmedParentHeight, 99}
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-in-belowout")
+	require.Equal(t, 0, counter.calls)
+}
+
+// The Go-side backstop must surface the same reject markers as the real BDK path
+// for each representative value failure — this is the drift guard between the two
+// implementations. For every case the same mutated transaction is run through both
+// the skip path (Go backstop, BDK bypassed) and the real gobdk validator, and both
+// errors must carry the same bad-txns-* marker.
+//
+// The real BDK validator uses the gobdk cgo binding, which is a non-test import of
+// this package (ScriptVerifierGoBDK.go); the package cannot build or run its tests
+// without it, so the BDK assertions below always execute when these tests run
+// (identically to TestScriptVerifierGoBDK). No build tag or conditional skip is
+// used because there is no build of this package in which BDK is absent.
+//
+// The BDK validator runs on the same mainnet configuration where the unmutated
+// fixture validates cleanly (see TestScriptVerifierGoBDK), and BDK evaluates output
+// and input money ranges before script verification, so each mutation surfaces its
+// money error rather than a signature failure.
+func TestSkipPath_MoneyChecks_MatchBDKPath(t *testing.T) {
+	skipOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+
+	mainnetParams, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(t, err)
+
+	bdkValidator := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), mainnetParams)
+
+	const bdkBlockHeight = uint32(110300)
+
+	bdkUTXOHeights := []uint32{631924, 631924}
+
+	tests := []struct {
+		name   string
+		mutate func(tx *bt.Tx)
+		marker string
+	}{
+		{
+			name:   "output high-bit negative",
+			mutate: func(tx *bt.Tx) { tx.Outputs[0].Satoshis = uint64(math.MaxInt64) + 1 },
+			marker: "bad-txns-vout-negative",
+		},
+		{
+			name:   "output over max",
+			mutate: func(tx *bt.Tx) { tx.Outputs[0].Satoshis = MaxSatoshis + 1 },
+			marker: "bad-txns-vout-toolarge",
+		},
+		{
+			name: "output total over max",
+			mutate: func(tx *bt.Tx) {
+				tx.Outputs = []*bt.Output{
+					{Satoshis: MaxSatoshis, LockingScript: tx.Outputs[0].LockingScript},
+					{Satoshis: MaxSatoshis, LockingScript: tx.Outputs[0].LockingScript},
+				}
+			},
+			marker: "bad-txns-txouttotal-toolarge",
+		},
+		{
+			name:   "input over max",
+			mutate: func(tx *bt.Tx) { tx.Inputs[0].PreviousTxSatoshis = MaxSatoshis + 1 },
+			marker: "bad-txns-inputvalues-outofrange",
+		},
+		{
+			name: "inputs below outputs",
+			mutate: func(tx *bt.Tx) {
+				for _, in := range tx.Inputs {
+					in.PreviousTxSatoshis = 1
+				}
+				tx.Outputs[0].Satoshis = 1_000_000
+			},
+			marker: "bad-txns-in-belowout",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Skip path: Go backstop, BDK bypassed. Pins the skip-path marker.
+			txValidator, counter := newSkipScriptTxValidator(t)
+
+			skipTx := aTx.Clone()
+			tt.mutate(skipTx)
+
+			skipErr := txValidator.ValidateTransaction(skipTx, 100, []uint32{99, 99}, skipOptions)
+			require.Error(t, skipErr)
+			require.Contains(t, skipErr.Error(), tt.marker)
+			require.Equal(t, 0, counter.calls)
+
+			// Real BDK path: same mutation, consensus mode. The returned error must
+			// carry the same marker, proving the Go backstop has not drifted.
+			bdkTx := aTx.Clone()
+			tt.mutate(bdkTx)
+
+			bdkErr := bdkValidator.ValidateTransaction(bdkTx, bdkBlockHeight, true, bdkUTXOHeights)
+			require.Error(t, bdkErr)
+			require.Contains(t, bdkErr.Error(), tt.marker)
+		})
+	}
 }
 
 // policy settings tests
