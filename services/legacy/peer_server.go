@@ -1120,8 +1120,13 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 // without proceeding. Extracted from OnBlock so the bounded pre-admission path is
 // unit-testable (a query channel nobody services + a cancelled ctx).
 func (sp *serverPeer) checkBannedBounded(ctx context.Context, host string) (banned bool, ok bool) {
-	// Use a channel to get the response from the query.
-	respChan := make(chan bool)
+	// Use a channel to get the response from the query. Buffered(1) because the
+	// receive below can be abandoned on ctx.Done(): if the deadline fires in the
+	// window after handleQuery dequeues the message but before it sends the reply,
+	// an unbuffered send would have no receiver and would wedge the single
+	// peerHandler/handleQuery goroutine that serializes every peer-state query for
+	// the whole server. The buffer keeps that reply send non-blocking regardless.
+	respChan := make(chan bool, 1)
 
 	// Create a proper query message to check if the peer is banned. Both the send
 	// and the receive select on ctx.Done() so neither can block indefinitely.
