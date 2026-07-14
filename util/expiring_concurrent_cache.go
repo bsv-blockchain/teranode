@@ -11,7 +11,14 @@ import (
 type expiringConcurrentCacheWait[V any] struct {
 	wg     *sync.WaitGroup
 	result *V
+	err    error // leader's fetch error, shared verbatim with waiters on this flight
 }
+
+// testHookWaiterAboutToWait, when non-nil, is invoked by a waiting goroutine immediately after it
+// has captured the in-flight entry and released c.mu, just before it blocks on the flight's
+// WaitGroup. It is nil in production (a single nil check on the already-contended waiter path, no
+// behavior change) and is set only by tests needing deterministic leader/waiter ordering.
+var testHookWaiterAboutToWait func()
 
 type ExpiringConcurrentCache[K comparable, V any] struct {
 	mu        sync.RWMutex
@@ -69,6 +76,11 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, boo
 	// If not, check if there is an ongoing request
 	if wgw, found = c.wg[key]; found {
 		c.mu.Unlock()
+
+		if testHookWaiterAboutToWait != nil {
+			testHookWaiterAboutToWait()
+		}
+
 		wgw.wg.Wait() // Wait for the other goroutine to finish
 
 		if val, found = c.cache.Get(key); found {
@@ -78,6 +90,11 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, boo
 		// check the result in the wait group
 		if wgw.result != nil {
 			return *wgw.result, nil
+		}
+
+		// share the leader's real error with waiters, if the fetch failed
+		if wgw.err != nil {
+			return c.ZeroValue, wgw.err
 		}
 
 		return c.ZeroValue, errors.NewProcessingError("cache: failed to get value after waiting")
@@ -99,13 +116,18 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, boo
 	defer func() {
 		c.mu.Lock()
 
-		if fetchOK && err == nil {
-			// Cache the result
-			if allowCache {
-				c.cache.Set(key, val)
-			}
+		if fetchOK {
+			if err == nil {
+				// Cache the successful result
+				if allowCache {
+					c.cache.Set(key, val)
+				}
 
-			c.wg[key].result = &val
+				c.wg[key].result = &val
+			} else {
+				// Share the leader's real error with any waiters on this flight
+				c.wg[key].err = err
+			}
 		}
 
 		wg.Done()         // after publish so waiters observe result via Done/Wait
