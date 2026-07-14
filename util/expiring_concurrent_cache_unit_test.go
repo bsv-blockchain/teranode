@@ -584,3 +584,112 @@ func TestGetOrSetMultipleKeysConcurrently(t *testing.T) {
 			"Key %d should have been fetched exactly once", i)
 	}
 }
+
+// TestGetOrSetConcurrentDifferentKeysDoNotSerialize verifies that fetches for different keys can
+// be in flight at the same time. Before the fix, fetchFunc ran while holding the global write
+// lock, so the second key's fetch could not start until the first finished — the "started"
+// signal for the second goroutine would never arrive and the bounded select would time out.
+func TestGetOrSetConcurrentDifferentKeysDoNotSerialize(t *testing.T) {
+	cache := NewExpiringConcurrentCache[string, string](time.Minute)
+
+	release := make(chan struct{})
+
+	var releaseOnce sync.Once
+	releaseBarrier := func() { releaseOnce.Do(func() { close(release) }) }
+	// Always release the barrier so blocked fetchFunc goroutines drain, even on the timeout path.
+	defer releaseBarrier()
+
+	var started sync.WaitGroup
+	started.Add(2)
+
+	var done sync.WaitGroup
+	done.Add(2)
+
+	results := make([]string, 2)
+	errs := make([]error, 2)
+
+	fetch := func(index int, key, value string) {
+		go func() {
+			defer done.Done()
+			val, err := cache.GetOrSet(key, func() (string, bool, error) {
+				started.Done() // signal this fetch has started
+				<-release      // block until both fetches are confirmed in flight
+				return value, true, nil
+			})
+			results[index] = val
+			errs[index] = err
+		}()
+	}
+
+	fetch(0, "key-a", "value-a")
+	fetch(1, "key-b", "value-b")
+
+	// Both fetches must be in flight simultaneously.
+	bothStarted := make(chan struct{})
+	go func() {
+		started.Wait()
+		close(bothStarted)
+	}()
+
+	select {
+	case <-bothStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("both fetches did not start concurrently; fetchFunc appears serialized under the lock")
+	}
+
+	// Release the barrier and let both calls return, bounded so a publish/return-path
+	// deadlock fails fast instead of hanging until the go test timeout.
+	releaseBarrier()
+
+	doneAll := make(chan struct{})
+	go func() {
+		done.Wait()
+		close(doneAll)
+	}()
+
+	select {
+	case <-doneAll:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fetches did not complete after the barrier was released")
+	}
+
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+	assert.Equal(t, "value-a", results[0])
+	assert.Equal(t, "value-b", results[1])
+}
+
+// TestGetOrSetReentrantFetchDoesNotDeadlock verifies that a fetchFunc may itself call GetOrSet for
+// a different key. Before the fix, the outer call held the global write lock across fetchFunc, so
+// the inner call blocked on its very first RLock — a deadlock. With the fix, no lock is held during
+// fetchFunc, so the re-entrant call proceeds.
+func TestGetOrSetReentrantFetchDoesNotDeadlock(t *testing.T) {
+	cache := NewExpiringConcurrentCache[string, string](time.Minute)
+
+	done := make(chan struct{})
+
+	var result string
+	var err error
+
+	go func() {
+		defer close(done)
+		result, err = cache.GetOrSet("key-outer", func() (string, bool, error) {
+			inner, innerErr := cache.GetOrSet("key-inner", func() (string, bool, error) {
+				return "inner-value", true, nil
+			})
+			if innerErr != nil {
+				return "", false, innerErr
+			}
+			return "outer+" + inner, true, nil
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("re-entrant GetOrSet deadlocked")
+	}
+
+	require.NoError(t, err)
+	assert.Equal(t, "outer+inner-value", result)
+}
