@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -23,8 +24,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	chainwork "github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -38,6 +41,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestCatchupGetBlockHeaders(t *testing.T) {
@@ -4110,6 +4115,488 @@ func TestFindCommonAncestor_AcceptsHeadersAtOrBelowUTXOHeight(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, catchupCtx.commonAncestorIndex)
 	assert.Equal(t, uint32(99), catchupCtx.commonAncestorMeta.Height)
+}
+
+type validatedProgressReport struct {
+	peerID    string
+	height    uint32
+	blockHash string
+	chainWork []byte
+}
+
+type validBlockReport struct {
+	peerID    string
+	blockHash string
+}
+
+type catchupFailureReport struct {
+	peerID      string
+	failureKind string
+	blockHash   string
+}
+
+type recordingValidatedProgressP2PClient struct {
+	P2PClientI
+
+	mu                 sync.Mutex
+	validatedReports   []validatedProgressReport
+	validBlockReports  []validBlockReport
+	catchupFailures    []catchupFailureReport
+	validatedReportErr error
+	maliciousReports   int
+}
+
+func (r *recordingValidatedProgressP2PClient) RecordCatchupAttempt(_ context.Context, _ string) error {
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) RecordCatchupSuccess(_ context.Context, _ string, _ int64) error {
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) RecordCatchupFailure(_ context.Context, _ string) error {
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) RecordCatchupFailureWithKind(_ context.Context, peerID, failureKind, blockHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.catchupFailures = append(r.catchupFailures, catchupFailureReport{
+		peerID:      peerID,
+		failureKind: failureKind,
+		blockHash:   blockHash,
+	})
+
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) RecordCatchupMalicious(_ context.Context, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.maliciousReports++
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) UpdateCatchupError(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) GetPeer(_ context.Context, _ string) (*p2p.PeerInfo, error) {
+	return nil, nil
+}
+
+func (r *recordingValidatedProgressP2PClient) IsPeerMalicious(_ context.Context, _ string) (bool, string, error) {
+	return false, "", nil
+}
+
+func (r *recordingValidatedProgressP2PClient) ReportValidBlock(_ context.Context, peerID string, blockHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.validBlockReports = append(r.validBlockReports, validBlockReport{
+		peerID:    peerID,
+		blockHash: blockHash,
+	})
+
+	return nil
+}
+
+func (r *recordingValidatedProgressP2PClient) ReportValidatedChainProgress(_ context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.validatedReports = append(r.validatedReports, validatedProgressReport{
+		peerID:    peerID,
+		height:    height,
+		blockHash: blockHash,
+		chainWork: append([]byte(nil), chainWork...),
+	})
+
+	return r.validatedReportErr
+}
+
+func (r *recordingValidatedProgressP2PClient) snapshotValidatedReports() []validatedProgressReport {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	reports := make([]validatedProgressReport, len(r.validatedReports))
+	for i, report := range r.validatedReports {
+		reports[i] = report
+		reports[i].chainWork = append([]byte(nil), report.chainWork...)
+	}
+	return reports
+}
+
+func (r *recordingValidatedProgressP2PClient) snapshotValidBlockReports() []validBlockReport {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	reports := make([]validBlockReport, len(r.validBlockReports))
+	copy(reports, r.validBlockReports)
+	return reports
+}
+
+func (r *recordingValidatedProgressP2PClient) snapshotCatchupFailures() []catchupFailureReport {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	reports := make([]catchupFailureReport, len(r.catchupFailures))
+	copy(reports, r.catchupFailures)
+	return reports
+}
+
+func (r *recordingValidatedProgressP2PClient) maliciousReportCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.maliciousReports
+}
+
+func TestCatchup_IncompleteBlockRecordsTypedCatchupFailure(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{}
+	server.p2pClient = recorder
+
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+	incompleteHash := header.Hash().String()
+	catchupCtx := &CatchupContext{
+		blockUpTo:           &model.Block{Header: header, Height: 1000},
+		baseURL:             "http://peer.example",
+		peerID:              "peer-123",
+		startTime:           time.Now(),
+		incompleteBlockHash: incompleteHash,
+	}
+	require.NoError(t, server.acquireCatchupLock(catchupCtx))
+
+	relErr := error(errors.ErrBlockIncomplete)
+	server.releaseCatchupLock(catchupCtx, &relErr)
+
+	reports := recorder.snapshotCatchupFailures()
+	require.Len(t, reports, 1)
+	require.Equal(t, "peer-123", reports[0].peerID)
+	require.Equal(t, catchupFailureKindBlockIncomplete, reports[0].failureKind)
+	require.Equal(t, incompleteHash, reports[0].blockHash)
+}
+
+func TestCatchup_IncompleteBlockDoesNotReportMalicious(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{}
+	server.p2pClient = recorder
+
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+	catchupCtx := &CatchupContext{
+		blockUpTo:           &model.Block{Header: header, Height: 1000},
+		baseURL:             "http://peer.example",
+		peerID:              "peer-123",
+		startTime:           time.Now(),
+		incompleteBlockHash: header.Hash().String(),
+	}
+	require.NoError(t, server.acquireCatchupLock(catchupCtx))
+
+	relErr := error(errors.ErrBlockIncomplete)
+	server.releaseCatchupLock(catchupCtx, &relErr)
+
+	require.Zero(t, recorder.maliciousReportCount())
+}
+
+func TestCatchup_ReportsValidatedHeaderChainWorkAfterHeaderValidation(t *testing.T) {
+	ctx := context.Background()
+	server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{}
+	server.p2pClient = recorder
+
+	blocks := testhelpers.CreateTestBlockChain(t, 3)
+	targetBlock := blocks[2]
+	commonAncestorWork := big.NewInt(1_000)
+
+	mockUTXOStore.On("GetBlockHeight").Return(uint32(0)).Maybe()
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Header.Hash()).Return(false, nil).Maybe()
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, blocks[0].Header.Hash()).Return(true, nil).Maybe()
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, blocks[1].Header.Hash()).Return(false, nil).Maybe()
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+		blocks[0].Header,
+		&model.BlockHeaderMeta{Height: blocks[0].Height, ID: 0, ChainWork: commonAncestorWork.Bytes()},
+		nil,
+	)
+	mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*chainhash.Hash{blocks[0].Header.Hash()},
+		nil,
+	)
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, blocks[0].Header.Hash()).Return(
+		blocks[0].Header,
+		&model.BlockHeaderMeta{Height: blocks[0].Height, ID: 0, ChainWork: commonAncestorWork.Bytes()},
+		nil,
+	)
+	// findCommonAncestor probes each peer header via GetBlockHeader and treats a
+	// not-found error as "absent from our chain", stopping the walk. blocks[1:] are
+	// the peer's new headers we don't have yet, so report them not found; the walk
+	// stops at the divergence point with blocks[0] as the common ancestor.
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+		(*model.BlockHeader)(nil),
+		(*model.BlockHeaderMeta)(nil),
+		errors.NewBlockNotFoundError("block not found"),
+	).Maybe()
+	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
+	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop after validated progress report"))
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^http://test-peer/headers_from_common_ancestor/.*`,
+		httpmock.NewBytesResponder(200, testhelpers.HeadersToBytes([]*model.BlockHeader{
+			blocks[0].Header,
+			blocks[1].Header,
+			blocks[2].Header,
+		})),
+	)
+
+	err := server.catchup(ctx, targetBlock, "header-serving-peer", "http://test-peer")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stop after validated progress report")
+
+	reports := recorder.snapshotValidatedReports()
+	require.Len(t, reports, 1)
+	require.Equal(t, "header-serving-peer", reports[0].peerID)
+	require.Equal(t, uint32(2), reports[0].height)
+	require.Equal(t, blocks[2].Header.Hash().String(), reports[0].blockHash)
+	require.Equal(t, expectedValidatedHeaderWork(commonAncestorWork, []*model.BlockHeader{blocks[1].Header, blocks[2].Header}), reports[0].chainWork)
+}
+
+func TestCatchup_ValidatedHeaderProgressCreditsHeaderServingPeerOnly(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{}
+	server.p2pClient = recorder
+
+	commonAncestorHash := chainhash.HashH([]byte("validated-progress-ancestor"))
+	headers := makeProgressHeaders(t, 3, &commonAncestorHash)
+	catchupCtx := newValidatedProgressCatchupContext("header-peer", 100, big.NewInt(10), headers)
+
+	server.reportValidatedHeaderProgress(catchupCtx)
+
+	reports := recorder.snapshotValidatedReports()
+	require.Len(t, reports, 1)
+	require.Equal(t, "header-peer", reports[0].peerID)
+	require.Equal(t, uint32(103), reports[0].height)
+	require.Equal(t, headers[2].Hash().String(), reports[0].blockHash)
+}
+
+func TestCatchup_ValidatedHeaderProgressDoesNotCreditContributingPeers(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{}
+	server.p2pClient = recorder
+
+	commonAncestorHash := chainhash.HashH([]byte("validated-progress-secondary-ancestor"))
+	headers := makeProgressHeaders(t, 2, &commonAncestorHash)
+	catchupCtx := newValidatedProgressCatchupContext("header-peer", 200, big.NewInt(20), headers)
+	contributingPeers := map[string]struct{}{
+		"secondary-a": {},
+		"secondary-b": {},
+	}
+
+	server.reportValidatedHeaderProgress(catchupCtx)
+	server.reportValidBlockForPeers(context.Background(), catchupCtx.peerID, headers[len(headers)-1].Hash().String(), contributingPeers)
+
+	validatedReports := recorder.snapshotValidatedReports()
+	require.Len(t, validatedReports, 1)
+	require.Equal(t, "header-peer", validatedReports[0].peerID)
+	for contributingPeer := range contributingPeers {
+		require.NotEqual(t, contributingPeer, validatedReports[0].peerID)
+	}
+
+	blockReports := recorder.snapshotValidBlockReports()
+	require.Len(t, blockReports, 1+len(contributingPeers))
+}
+
+func TestCatchup_NoHeadersDoesNotRecordValidatedProgress(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{}
+	server.p2pClient = recorder
+
+	targetHash := chainhash.HashH([]byte("validated-progress-empty-target"))
+	catchupCtx := &CatchupContext{
+		blockUpTo: &model.Block{
+			Header: &model.BlockHeader{
+				HashPrevBlock:  &targetHash,
+				HashMerkleRoot: testhelpers.GenerateMerkleRoot(50_000),
+			},
+			Height: 300,
+		},
+		peerID: "header-peer",
+		commonAncestorMeta: &model.BlockHeaderMeta{
+			Height:    300,
+			ChainWork: big.NewInt(30).Bytes(),
+		},
+	}
+
+	server.reportValidatedHeaderProgress(catchupCtx)
+
+	require.Empty(t, recorder.snapshotValidatedReports())
+}
+
+func TestCatchup_ValidatedProgressRPCErrorIsNonFatal(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{validatedReportErr: assert.AnError}
+	server.p2pClient = recorder
+
+	commonAncestorHash := chainhash.HashH([]byte("validated-progress-rpc-error-ancestor"))
+	headers := makeProgressHeaders(t, 1, &commonAncestorHash)
+	catchupCtx := newValidatedProgressCatchupContext("header-peer", 400, big.NewInt(40), headers)
+
+	server.reportValidatedHeaderProgress(catchupCtx)
+
+	require.Len(t, recorder.snapshotValidatedReports(), 1)
+}
+
+func TestCatchup_ValidatedProgressUnimplementedIsNonFatal(t *testing.T) {
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := &recordingValidatedProgressP2PClient{validatedReportErr: status.Error(codes.Unimplemented, "not implemented")}
+	server.p2pClient = recorder
+
+	commonAncestorHash := chainhash.HashH([]byte("validated-progress-unimplemented-ancestor"))
+	headers := makeProgressHeaders(t, 1, &commonAncestorHash)
+	catchupCtx := newValidatedProgressCatchupContext("header-peer", 500, big.NewInt(50), headers)
+
+	server.reportValidatedHeaderProgress(catchupCtx)
+
+	require.Len(t, recorder.snapshotValidatedReports(), 1)
+}
+
+func TestCatchup_DeepGapProgressesPastUnvalidatedAdvertisedLeadCap(t *testing.T) {
+	ctx := context.Background()
+	server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	server.settings.P2P.MaxUnvalidatedAdvertisedHeightLead = 10_000
+	unvalidatedAdvertisedLeadCap := server.settings.P2P.MaxUnvalidatedAdvertisedHeightLead
+	headerCount := int(unvalidatedAdvertisedLeadCap) + 5
+	allHeaders := testhelpers.CreateTestHeaders(t, headerCount+1)
+	targetBlock := &model.Block{
+		Header: allHeaders[len(allHeaders)-1],
+		Height: uint32(len(allHeaders) - 1),
+	}
+	bestBlock := &model.Block{
+		Header: allHeaders[0],
+		Height: 0,
+	}
+	commonAncestorWork := big.NewInt(60)
+
+	mockUTXOStore.On("GetBlockHeight").Return(uint32(0)).Maybe()
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Header.Hash()).Return(false, nil)
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+		bestBlock.Header,
+		&model.BlockHeaderMeta{Height: bestBlock.Height, ID: 0, ChainWork: commonAncestorWork.Bytes()},
+		nil,
+	)
+	mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*chainhash.Hash{bestBlock.Header.Hash()},
+		nil,
+	)
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	requestCount := 0
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^http://test-peer/headers_from_common_ancestor/.*`,
+		func(req *http.Request) (*http.Response, error) {
+			requestCount++
+			if requestCount == 1 {
+				return httpmock.NewBytesResponse(200, testhelpers.HeadersToBytes(allHeaders[1:10001])), nil
+			}
+
+			return httpmock.NewBytesResponse(200, testhelpers.HeadersToBytes(allHeaders[10000:])), nil
+		},
+	)
+
+	result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "header-peer", "http://test-peer")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Headers, headerCount)
+	require.Equal(t, 2, requestCount)
+
+	catchupCtx := newValidatedProgressCatchupContext("header-peer", 0, commonAncestorWork, result.Headers)
+	height, blockHash, workBytes, ok := server.computeValidatedHeaderProgress(catchupCtx)
+	require.True(t, ok)
+	require.Equal(t, uint32(headerCount), height)
+	require.Greater(t, height-catchupCtx.commonAncestorMeta.Height, unvalidatedAdvertisedLeadCap)
+	require.Equal(t, result.Headers[len(result.Headers)-1].Hash().String(), blockHash.String())
+	require.Equal(t, expectedValidatedHeaderWork(commonAncestorWork, result.Headers), workBytes)
+}
+
+func makeProgressHeaders(t *testing.T, count int, prevHash *chainhash.Hash) []*model.BlockHeader {
+	t.Helper()
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	headers := make([]*model.BlockHeader, count)
+	for i := 0; i < count; i++ {
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: testhelpers.GenerateMerkleRoot(60_000 + i),
+			Timestamp:      uint32(1_600_000_000 + i),
+			Bits:           *nBits,
+			Nonce:          uint32(i),
+		}
+		headers[i] = header
+		prevHash = header.Hash()
+	}
+
+	return headers
+}
+
+func newValidatedProgressCatchupContext(peerID string, commonAncestorHeight uint32, commonAncestorWork *big.Int, headers []*model.BlockHeader) *CatchupContext {
+	targetHeader := &model.BlockHeader{
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: testhelpers.GenerateMerkleRoot(70_000),
+	}
+	if len(headers) > 0 {
+		targetHeader = headers[len(headers)-1]
+	}
+
+	return &CatchupContext{
+		blockUpTo: &model.Block{
+			Header: targetHeader,
+			Height: commonAncestorHeight + uint32(len(headers)),
+		},
+		peerID: peerID,
+		commonAncestorMeta: &model.BlockHeaderMeta{
+			Height:    commonAncestorHeight,
+			ChainWork: commonAncestorWork.Bytes(),
+		},
+		blockHeaders: headers,
+	}
+}
+
+func expectedValidatedHeaderWork(commonAncestorWork *big.Int, headers []*model.BlockHeader) []byte {
+	totalWork := new(big.Int).Set(commonAncestorWork)
+	for _, header := range headers {
+		bits := binary.LittleEndian.Uint32(header.Bits.CloneBytes())
+		totalWork.Add(totalWork, chainwork.CalcBlockWork(bits))
+	}
+
+	return totalWork.Bytes()
 }
 
 func TestFetchAndValidateBlocks_FSMRejectsWhenNotRunning(t *testing.T) {

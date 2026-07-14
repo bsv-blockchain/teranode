@@ -1,5 +1,7 @@
 package errors
 
+import stderrors "errors"
+
 // Error type usage guidelines:
 //
 //	storage error -> error returned from processing a file on s3, aerospike.
@@ -131,6 +133,40 @@ func NewBlockParentNotMinedError(message string, params ...interface{}) *Error {
 // NewBlockIncompleteError creates a new error for blocks with missing data (e.g. no coinbase from seeded peers).
 func NewBlockIncompleteError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_INCOMPLETE, message, params...)
+}
+
+const (
+	incompleteKindDataKey        = "block_incomplete_kind"
+	incompleteKindTransientLocal = "transient_local"
+)
+
+// NewBlockIncompleteTransientError builds a block-incomplete error attributable to a
+// local, transient missing-data condition (e.g. a not-yet-absorbed parent during catchup
+// ordering), NOT to the serving peer. It keeps the ERR_BLOCK_INCOMPLETE code so existing
+// errors.Is retry/abort checks keep working unchanged, but IsTransientBlockIncomplete
+// reports true so callers can skip peer-reputation penalties for it.
+func NewBlockIncompleteTransientError(message string, params ...interface{}) *Error {
+	e := New(ERR_BLOCK_INCOMPLETE, message, params...)
+	e.SetData(incompleteKindDataKey, incompleteKindTransientLocal)
+	return e
+}
+
+// IsTransientBlockIncomplete reports whether err (or anything it wraps) is a
+// block-incomplete error marked transient-local rather than peer-attributable.
+// stderrors.As locates the next *Error link (walking through any foreign wrappers); Unwrap
+// then advances past each checked link so every *Error in the chain is inspected.
+func IsTransientBlockIncomplete(err error) bool {
+	for cur := err; cur != nil; {
+		var e *Error
+		if !stderrors.As(cur, &e) {
+			return false
+		}
+		if v := e.GetData(incompleteKindDataKey); v == incompleteKindTransientLocal {
+			return true
+		}
+		cur = e.Unwrap()
+	}
+	return false
 }
 
 // NewBlockInvalidError creates a new error with the block invalid error code.

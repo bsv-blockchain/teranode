@@ -371,8 +371,23 @@ func (c *Client) RecordCatchupSuccess(ctx context.Context, peerID string, durati
 // Returns:
 //   - error: Any error encountered during the operation
 func (c *Client) RecordCatchupFailure(ctx context.Context, peerID string) error {
+	return c.RecordCatchupFailureWithKind(ctx, peerID, catchupFailureKindGeneric, "")
+}
+
+// RecordCatchupFailureWithKind records a failed catchup attempt from a peer with optional diagnostic context.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to record the failure for
+//   - failureKind: Optional failure classification
+//   - blockHash: Optional block hash associated with the failure
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) RecordCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) error {
 	req := &p2p_api.RecordCatchupFailureRequest{
-		PeerId: peerID,
+		PeerId:      peerID,
+		FailureKind: failureKind,
+		BlockHash:   blockHash,
 	}
 
 	resp, err := c.client.RecordCatchupFailure(ctx, req)
@@ -560,6 +575,37 @@ func (c *Client) ReportValidBlock(ctx context.Context, peerID string, blockHash 
 
 	if resp != nil && !resp.Success {
 		return errors.NewServiceError("failed to report valid block: %s", resp.Message)
+	}
+
+	return nil
+}
+
+// ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: Peer ID that served the validated headers
+//   - height: Height of the last validated header
+//   - blockHash: Hash of the last validated header
+//   - chainWork: Locally validated cumulative chainwork
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error {
+	req := &p2p_api.ReportValidatedChainProgressRequest{
+		PeerId:    peerID,
+		Height:    height,
+		BlockHash: blockHash,
+		ChainWork: append([]byte(nil), chainWork...),
+	}
+
+	resp, err := c.client.ReportValidatedChainProgress(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report validated chain progress: %s", resp.Message)
 	}
 
 	return nil

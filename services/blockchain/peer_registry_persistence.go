@@ -146,7 +146,8 @@ func loadPeerRegistry(ctx context.Context, logger ulogger.Logger, store blob.Sto
 		// events that refresh LastSeen — using the max of both at load would keep
 		// entries alive slightly longer but adds no correctness benefit.
 		if p.IsBanned || p.LastSeen.After(cutoff) {
-			live = append(live, p)
+			peerCopy := clonePeerInfo(p)
+			live = append(live, &peerCopy)
 		}
 	}
 
@@ -175,15 +176,7 @@ func (r *CentralizedPeerRegistry) Save(ctx context.Context, store blob.Store) er
 	r.mu.RLock()
 	peers := make([]*PeerInfo, 0, len(r.peers))
 	for _, p := range r.peers {
-		peerCopy := *p
-		// Deep-copy BlockHash so the snapshot doesn't share the underlying
-		// [32]byte with the live entry. Mirrors Register's pattern and
-		// guarantees no aliasing even if future code starts mutating the
-		// array in place rather than swapping the pointer.
-		if p.BlockHash != nil {
-			hashCopy := *p.BlockHash
-			peerCopy.BlockHash = &hashCopy
-		}
+		peerCopy := clonePeerInfo(p)
 		peers = append(peers, &peerCopy)
 	}
 	bans := make(map[string]persistedBanEntry, len(r.banScores))
@@ -242,7 +235,7 @@ func (r *CentralizedPeerRegistry) Load(ctx context.Context, store blob.Store, tt
 
 	r.peers = make(map[string]*PeerInfo, len(peers))
 	for _, p := range peers {
-		entry := *p
+		entry := clonePeerInfo(p)
 		r.peers[entry.ID] = &entry
 	}
 

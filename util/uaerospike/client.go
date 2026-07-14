@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -186,6 +187,77 @@ type Client struct {
 	overloadRetry overloadRetryConfig
 	// logger reports overload retries; nil means silent.
 	logger ulogger.Logger
+
+	// drainMu is the close/operation drain guard. BatchOperate holds it for
+	// RLock for its full duration (via beginOp/endOp); Close takes the exclusive
+	// Lock, so it blocks until in-flight batch operations return before closing
+	// the underlying client. This prevents closing the shared per-host client
+	// out from under a live BatchOperate — the race that produced the fatal
+	// "concurrent map read and map write" in the aerospike client's partition
+	// map (fixed defensively in v8.7.1-bsv5, but a client should still not be
+	// closed mid-operation).
+	//
+	// Only BatchOperate is guarded, deliberately: it is the crash path and it is
+	// batched (thousands of records per call, so a handful of calls/sec even at
+	// millions of tx/sec), making the RLock cost negligible. The single-record
+	// hot paths (Get/Put/Delete/Operate/Execute) are called far more frequently
+	// and are left lock-free — a global RLock there contends on one cache line
+	// and would serialise otherwise-parallel calls. bsv5 already makes a close
+	// racing those ops non-fatal; at worst an in-flight single-record op errors
+	// on close, which callers tolerate. The zero value is ready to use.
+	//
+	// The promoted Query is likewise deliberately NOT drained. It is only used by
+	// infrequent background scans (pruner ProcessExpiredPreservations /
+	// QueryOldUnminedTransactions, conflict PendingConflictIntents), and — unlike
+	// BatchOperate — Query merely starts the scan: the partition map is touched
+	// lazily as the returned Recordset streams and on its Close, both outside the
+	// Query() call. Guarding it would therefore require holding the RLock across
+	// the entire recordset lifetime at every call site (or a callback-style API),
+	// not a one-line wrapper. Since bsv5 makes the close-race non-fatal, a scan
+	// racing shutdown at worst errors that background scan, so the extra coupling
+	// isn't warranted here; revisit if a scan is ever added to a shutdown-critical
+	// path.
+	drainMu sync.RWMutex
+}
+
+// beginOp registers an in-flight BatchOperate, blocking a concurrent Close from
+// closing the underlying client until the matching endOp runs. It returns with
+// the drain read-lock held, so every caller MUST pair it with a deferred endOp.
+// The guard wraps the whole operation (including overload-retry backoff), so a
+// retrying operation keeps Close waiting until it finishes or gives up. Only
+// BatchOperate uses it — see drainMu for why the single-record ops don't.
+func (c *Client) beginOp() { c.drainMu.RLock() }
+
+// endOp deregisters an in-flight operation. Always defer it right after beginOp.
+func (c *Client) endOp() { c.drainMu.RUnlock() }
+
+// Close drains in-flight operations, then closes the underlying aerospike
+// client. It overrides the promoted *aerospike.Client.Close so that closing the
+// shared per-host client (util.CloseAerospikeClient, via Store.Close) waits for
+// outstanding operations instead of racing them. The nil check keeps Close safe
+// on a Client whose construction never set an underlying client.
+//
+// Two blocking properties follow from taking the exclusive drain Lock, both
+// benign on the normal shutdown path (batchers are drained before
+// CloseAerospikeClient runs, so the Lock is uncontended) but worth knowing if
+// Close is ever reached with an in-flight overloaded batch op:
+//   - Symmetric to Close waiting on in-flight ops, Go's RWMutex blocks new RLock
+//     acquisitions once a Lock is pending, so once Close is entered every new
+//     BatchOperate blocks in beginOp until Close returns (up to the overload-retry
+//     ceiling). Post-close ops do NOT fail fast; they wait, then run against the
+//     closed client and error.
+//   - util.CloseAerospikeClient invokes this while holding the process-wide
+//     aerospikeConnectionMutex that getAerospikeClient also takes, so a drain that
+//     stalls here serialises client construction/teardown for ALL hosts, not just
+//     the one being closed. If that path ever becomes reachable under load, close
+//     outside the mutex (snapshot+delete under lock, Close after unlock).
+func (c *Client) Close() {
+	c.drainMu.Lock()
+	defer c.drainMu.Unlock()
+
+	if c.Client != nil {
+		c.Client.Close()
+	}
 }
 
 // NewClient creates a new Aerospike client with the specified hostname and port.
@@ -484,6 +556,9 @@ func (c *Client) Execute(policy *aerospike.WritePolicy, key *aerospike.Key, pack
 
 // BatchOperate is a wrapper around aerospike.Client.BatchOperate that uses semaphore to limit concurrent connections.
 func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+	c.beginOp()
+	defer c.endOp()
+
 	if err := c.acquirePermit(policy); err != nil {
 		return err
 	}

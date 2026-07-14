@@ -514,9 +514,14 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BanThreshold: getInt("p2p_ban_threshold", 100, alternativeContext...),
 			BanDuration:  getDuration("p2p_ban_duration", 24*time.Hour),
 			// Sync manager configuration
-			ForceSyncPeer:         getString("p2p_force_sync_peer", "", alternativeContext...),
-			NodeStatusTopic:       getString("p2p_node_status_topic", "", alternativeContext...),
-			SharePrivateAddresses: getBool("p2p_share_private_addresses", true, alternativeContext...),
+			ForceSyncPeer:                         getString("p2p_force_sync_peer", "", alternativeContext...),
+			NodeStatusTopic:                       getString("p2p_node_status_topic", "", alternativeContext...),
+			SharePrivateAddresses:                 getBool("p2p_share_private_addresses", true, alternativeContext...),
+			MaxUnvalidatedAdvertisedHeightLead:    getUint32("p2p_max_unvalidated_advertised_height_lead", 10000, alternativeContext...),
+			MaxUnprovenSyncProbesPerBackoffWindow: getInt("p2p_max_unproven_sync_probes_per_backoff_window", 3, alternativeContext...),
+			FullStoragePenaltyDuration:            getDuration("p2p_full_storage_penalty_duration", time.Hour, alternativeContext...),
+			FullDeliveryFreshnessWindow:           getDuration("p2p_full_delivery_freshness_window", 24*time.Hour, alternativeContext...),
+			SyncPeerNoProgressTimeout:             getDuration("p2p_sync_peer_no_progress_timeout", 5*time.Minute, alternativeContext...),
 			// DHT configuration
 			DHTMode:            getString("p2p_dht_mode", "server", alternativeContext...),
 			DHTCleanupInterval: getDuration("p2p_dht_cleanup_interval", 24*time.Hour, alternativeContext...),

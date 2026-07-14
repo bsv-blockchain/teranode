@@ -4,15 +4,22 @@ import (
 	"context"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
+
+func mustPeerRegistryHash(seed string) *chainhash.Hash {
+	hash := chainhash.HashH([]byte(seed))
+	return &hash
+}
 
 func TestCentralizedPeerRegistry_RegisterAndGet(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
@@ -371,6 +378,352 @@ func TestCentralizedPeerRegistry_RecordCatchupError(t *testing.T) {
 	got, _ := r.Get("p")
 	require.Equal(t, "block 0xdead missing", got.LastCatchupError)
 	require.False(t, got.LastCatchupErrorTime.IsZero())
+}
+
+func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_MonotonicChainWork(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "p", Height: 500, BlockHash: mustPeerRegistryHash("advertised")})
+
+	firstHash := mustPeerRegistryHash("validated-first")
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 100, firstHash, []byte{0x02}))
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+	require.Equal(t, firstHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x02}, got.ValidatedChainWork)
+	require.False(t, got.LastValidatedAt.IsZero())
+	require.Equal(t, uint32(500), got.Height, "advertised height remains separate")
+
+	equalHash := mustPeerRegistryHash("validated-equal")
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 101, equalHash, []byte{0x02}))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+	require.Equal(t, firstHash.String(), got.ValidatedBlockHash.String())
+
+	lowerHash := mustPeerRegistryHash("validated-lower")
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 99, lowerHash, []byte{0x01}))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+	require.Equal(t, firstHash.String(), got.ValidatedBlockHash.String())
+
+	require.Error(t, r.RecordValidatedPeerProgress("p", 200, mustPeerRegistryHash("invalid-empty-work"), nil))
+	require.Error(t, r.RecordValidatedPeerProgress("p", 200, nil, []byte{0x04}))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+	require.Equal(t, firstHash.String(), got.ValidatedBlockHash.String())
+
+	higherHash := mustPeerRegistryHash("validated-higher")
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 120, higherHash, []byte{0x03}))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(120), got.ValidatedHeight)
+	require.Equal(t, higherHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x03}, got.ValidatedChainWork)
+
+	staleRegisterHash := mustPeerRegistryHash("validated-stale-register")
+	r.Register(&PeerInfo{
+		ID:                 "p",
+		ValidatedHeight:    80,
+		ValidatedBlockHash: staleRegisterHash,
+		ValidatedChainWork: []byte{0x02},
+		LastValidatedAt:    time.Now().Add(time.Minute),
+	})
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(120), got.ValidatedHeight)
+	require.Equal(t, higherHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x03}, got.ValidatedChainWork)
+}
+
+func TestCentralizedPeerRegistry_Register_ValidatedChainWorkSizeCap(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// The 128-byte cap is enforced on the merge path (shouldAdvanceValidatedWork),
+	// NOT the new-peer path: Register clones a brand-new entry directly and returns
+	// before the merge. Seed each peer with only its ID first so the subsequent
+	// Register exercises the merge-path cap check.
+
+	// Over the cap (MaxValidatedChainWorkBytes + 1 = 129 bytes): rejected by
+	// shouldAdvanceValidatedWork, so no validated progress is recorded.
+	r.Register(&PeerInfo{ID: "over"})
+
+	overCap := make([]byte, MaxValidatedChainWorkBytes+1)
+	overCap[len(overCap)-1] = 0x01
+	oversizedHash := mustPeerRegistryHash("validated-oversized")
+	r.Register(&PeerInfo{
+		ID:                 "over",
+		ValidatedHeight:    100,
+		ValidatedBlockHash: oversizedHash,
+		ValidatedChainWork: overCap,
+	})
+
+	got, ok := r.Get("over")
+	require.True(t, ok)
+	require.Empty(t, got.ValidatedChainWork, "over-128-byte ChainWork must be rejected")
+	require.Nil(t, got.ValidatedBlockHash, "over-cap ChainWork must not advance validated progress")
+	require.Equal(t, uint32(0), got.ValidatedHeight)
+
+	// Exactly at the cap (128 bytes): accepted, so the test pins the boundary
+	// rather than merely "large is rejected".
+	r.Register(&PeerInfo{ID: "at"})
+
+	atCap := make([]byte, MaxValidatedChainWorkBytes)
+	atCap[len(atCap)-1] = 0x01
+	atCapHash := mustPeerRegistryHash("validated-atcap")
+	r.Register(&PeerInfo{
+		ID:                 "at",
+		ValidatedHeight:    100,
+		ValidatedBlockHash: atCapHash,
+		ValidatedChainWork: atCap,
+	})
+
+	got, ok = r.Get("at")
+	require.True(t, ok)
+	require.Len(t, got.ValidatedChainWork, MaxValidatedChainWorkBytes, "exactly-128-byte ChainWork must be accepted")
+	require.Equal(t, atCap, got.ValidatedChainWork)
+	require.Equal(t, atCapHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+}
+
+// RecordValidatedPeerProgress must not credit validated work while the peer is inside an
+// active delivery-failure penalty window; otherwise a header-only non-deliverer would
+// re-accumulate work and regain top-tier eligibility the moment the window expires without
+// ever delivering a block.
+func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_PenaltyWindowGatesCrediting(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Peer inside an active penalty window: crediting must be refused (no error, advisory).
+	r.Register(&PeerInfo{ID: "penalized", FullStoragePenaltyUntil: time.Now().Add(time.Hour)})
+	require.NoError(t, r.RecordValidatedPeerProgress("penalized", 100, mustPeerRegistryHash("penalized-work"), []byte{0x05}))
+
+	got, ok := r.Get("penalized")
+	require.True(t, ok)
+	require.Empty(t, got.ValidatedChainWork, "validated work must not be credited during an active penalty window")
+	require.Nil(t, got.ValidatedBlockHash)
+	require.Equal(t, uint32(0), got.ValidatedHeight)
+
+	// Peer whose penalty window has just expired: crediting resumes.
+	r.Register(&PeerInfo{ID: "expired", FullStoragePenaltyUntil: time.Now().Add(-time.Millisecond)})
+	require.NoError(t, r.RecordValidatedPeerProgress("expired", 100, mustPeerRegistryHash("expired-work"), []byte{0x05}))
+
+	got, ok = r.Get("expired")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x05}, got.ValidatedChainWork, "crediting resumes once the penalty window has expired")
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+}
+
+// RecordValidatedPeerProgress rejects chainwork over the 128-byte cap on its own validation
+// path (distinct from the Register/merge path covered above).
+func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_RejectsOverCapChainWork(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.Register(&PeerInfo{ID: "p"})
+
+	overCap := make([]byte, MaxValidatedChainWorkBytes+1)
+	overCap[len(overCap)-1] = 0x01
+	require.Error(t, r.RecordValidatedPeerProgress("p", 100, mustPeerRegistryHash("over"), overCap),
+		"chainwork over the cap must be rejected")
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Empty(t, got.ValidatedChainWork, "over-cap input must not advance validated progress")
+	require.Nil(t, got.ValidatedBlockHash)
+	require.Equal(t, uint32(0), got.ValidatedHeight)
+
+	// Exactly at the cap is accepted, pinning the boundary.
+	atCap := make([]byte, MaxValidatedChainWorkBytes)
+	atCap[len(atCap)-1] = 0x01
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 100, mustPeerRegistryHash("at"), atCap))
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Len(t, got.ValidatedChainWork, MaxValidatedChainWorkBytes, "exactly-128-byte chainwork must be accepted")
+	require.Equal(t, uint32(100), got.ValidatedHeight)
+}
+
+func TestCentralizedPeerRegistry_Register_PenaltyAdvanceDecaysValidatedWork(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Seed then merge so validated work is actually stored (the new-peer path
+	// clones directly and would bypass the merge under test).
+	r.Register(&PeerInfo{ID: "p"})
+	workHash := mustPeerRegistryHash("validated-before-penalty")
+	r.Register(&PeerInfo{
+		ID:                 "p",
+		ValidatedHeight:    100,
+		ValidatedBlockHash: workHash,
+		ValidatedChainWork: []byte{0x05},
+	})
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x05}, got.ValidatedChainWork, "precondition: validated work is stored")
+
+	// A penalty that advances the window decays the credited validated work.
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: time.Now().Add(time.Hour)})
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.True(t, got.FullStoragePenaltyUntil.After(time.Now()))
+	require.Empty(t, got.ValidatedChainWork, "advancing penalty must decay validated work")
+	require.Nil(t, got.ValidatedBlockHash)
+	require.Equal(t, uint32(0), got.ValidatedHeight)
+
+	// Idempotency: re-earn work, then re-send the SAME penalty timestamp — a
+	// duplicate/late penalty must NOT re-wipe freshly re-earned work.
+	penaltyTime := time.Now().Add(2 * time.Hour)
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: penaltyTime})
+
+	reHash := mustPeerRegistryHash("validated-after-penalty")
+	r.Register(&PeerInfo{
+		ID:                 "p",
+		ValidatedHeight:    120,
+		ValidatedBlockHash: reHash,
+		ValidatedChainWork: []byte{0x06},
+	})
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x06}, got.ValidatedChainWork, "precondition: work re-earned")
+
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: penaltyTime})
+
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x06}, got.ValidatedChainWork, "same-timestamp penalty must not re-wipe re-earned work")
+	require.Equal(t, reHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, uint32(120), got.ValidatedHeight)
+}
+
+func TestCentralizedPeerRegistry_Register_ConcurrentFullStorageContradictionsAreNotLost(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Seed the peer so subsequent Registers hit the merge path (the new-peer
+	// path clones directly and would not exercise the additive merge).
+	r.Register(&PeerInfo{ID: "p"})
+
+	const n = 200
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			// Each caller sends a delta of 1; the registry adds it under r.mu.
+			r.Register(&PeerInfo{ID: "p", FullStorageContradictions: 1})
+		}()
+	}
+	wg.Wait()
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, int64(n), got.FullStorageContradictions, "concurrent increments must not be lost")
+}
+
+func TestCentralizedPeerRegistry_RecordValidatedPeerProgress_DeepCopiesInputs(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "p"})
+
+	blockHash := mustPeerRegistryHash("validated-copy")
+	chainWork := []byte{0x01, 0x02, 0x03}
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 10, blockHash, chainWork))
+
+	blockHash[0] ^= 0xff
+	chainWork[0] = 0xff
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.NotEqual(t, blockHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x01, 0x02, 0x03}, got.ValidatedChainWork)
+
+	got.ValidatedBlockHash[1] ^= 0xff
+	got.ValidatedChainWork[1] = 0xee
+
+	again, ok := r.Get("p")
+	require.True(t, ok)
+	require.NotEqual(t, got.ValidatedBlockHash.String(), again.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x01, 0x02, 0x03}, again.ValidatedChainWork)
+}
+
+func TestCentralizedPeerRegistry_StoragePenalty_BlocksFullRepromotion(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	penaltyUntil := time.Now().Add(time.Hour)
+
+	r.Register(&PeerInfo{
+		ID:                        "p",
+		Storage:                   "pruned",
+		FullStorageContradictions: 1,
+		FullStoragePenaltyUntil:   penaltyUntil,
+	})
+
+	r.UpdateStorage("p", "full")
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "pruned", got.Storage)
+	require.Equal(t, int64(1), got.FullStorageContradictions)
+	require.True(t, got.FullStoragePenaltyUntil.Equal(penaltyUntil))
+
+	earlierPenalty := penaltyUntil.Add(-30 * time.Minute)
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: earlierPenalty})
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.True(t, got.FullStoragePenaltyUntil.Equal(penaltyUntil), "stale re-registration must not shorten an active penalty")
+
+	laterPenalty := penaltyUntil.Add(30 * time.Minute)
+	r.Register(&PeerInfo{ID: "p", FullStoragePenaltyUntil: laterPenalty})
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.True(t, got.FullStoragePenaltyUntil.Equal(laterPenalty), "re-registration may extend a penalty")
+
+	r.Register(&PeerInfo{ID: "p", Storage: "full"})
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "pruned", got.Storage)
+
+	r.Register(&PeerInfo{ID: "new-p", Storage: "full", FullStoragePenaltyUntil: penaltyUntil})
+	newPeer, ok := r.Get("new-p")
+	require.True(t, ok)
+	require.NotEqual(t, "full", newPeer.Storage)
+
+	r.mu.Lock()
+	r.peers["p"].FullStoragePenaltyUntil = time.Now().Add(-time.Hour)
+	r.mu.Unlock()
+
+	r.UpdateStorage("p", "full")
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "full", got.Storage)
+}
+
+func TestCentralizedPeerRegistry_UpdateStorage_FullClaimBlockedDuringPenalty(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	penaltyUntil := time.Now().Add(time.Hour)
+
+	r.Register(&PeerInfo{ID: "p", Storage: "pruned", FullStoragePenaltyUntil: penaltyUntil})
+	r.UpdateStorage("p", "full")
+
+	got, ok := r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "pruned", got.Storage)
+
+	r.mu.Lock()
+	r.peers["p"].FullStoragePenaltyUntil = time.Now().Add(-time.Minute)
+	r.mu.Unlock()
+
+	r.UpdateStorage("p", "full")
+	got, ok = r.Get("p")
+	require.True(t, ok)
+	require.Equal(t, "full", got.Storage)
 }
 
 func TestCentralizedPeerRegistry_ResetReputation(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -19,30 +20,31 @@ type MockGRPCClientConn struct {
 
 // MockPeerServiceClient is a mock implementation of p2p_api.PeerServiceClient
 type MockPeerServiceClient struct {
-	GetPeersFunc                func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error)
-	BanPeerFunc                 func(ctx context.Context, in *p2p_api.BanPeerRequest, opts ...grpc.CallOption) (*p2p_api.BanPeerResponse, error)
-	UnbanPeerFunc               func(ctx context.Context, in *p2p_api.UnbanPeerRequest, opts ...grpc.CallOption) (*p2p_api.UnbanPeerResponse, error)
-	IsBannedFunc                func(ctx context.Context, in *p2p_api.IsBannedRequest, opts ...grpc.CallOption) (*p2p_api.IsBannedResponse, error)
-	ListBannedFunc              func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.ListBannedResponse, error)
-	ClearBannedFunc             func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.ClearBannedResponse, error)
-	AddBanScoreFunc             func(ctx context.Context, in *p2p_api.AddBanScoreRequest, opts ...grpc.CallOption) (*p2p_api.AddBanScoreResponse, error)
-	ConnectPeerFunc             func(ctx context.Context, in *p2p_api.ConnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.ConnectPeerResponse, error)
-	DisconnectPeerFunc          func(ctx context.Context, in *p2p_api.DisconnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.DisconnectPeerResponse, error)
-	RecordCatchupAttemptFunc    func(ctx context.Context, in *p2p_api.RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupAttemptResponse, error)
-	RecordCatchupSuccessFunc    func(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error)
-	RecordCatchupFailureFunc    func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error)
-	RecordCatchupMaliciousFunc  func(ctx context.Context, in *p2p_api.RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupMaliciousResponse, error)
-	UpdateCatchupReputationFunc func(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error)
-	UpdateCatchupErrorFunc      func(ctx context.Context, in *p2p_api.UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupErrorResponse, error)
-	ResetReputationFunc         func(ctx context.Context, in *p2p_api.ResetReputationRequest, opts ...grpc.CallOption) (*p2p_api.ResetReputationResponse, error)
-	GetPeersForCatchupFunc      func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error)
-	ReportValidSubtreeFunc      func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error)
-	ReportValidBlockFunc        func(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error)
-	IsPeerMaliciousFunc         func(ctx context.Context, in *p2p_api.IsPeerMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerMaliciousResponse, error)
-	IsPeerUnhealthyFunc         func(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error)
-	GetPeerRegistryFunc         func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeerRegistryResponse, error)
-	GetPeerFunc                 func(ctx context.Context, in *p2p_api.GetPeerRequest, opts ...grpc.CallOption) (*p2p_api.GetPeerResponse, error)
-	RecordBytesDownloadedFunc   func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error)
+	GetPeersFunc                     func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error)
+	BanPeerFunc                      func(ctx context.Context, in *p2p_api.BanPeerRequest, opts ...grpc.CallOption) (*p2p_api.BanPeerResponse, error)
+	UnbanPeerFunc                    func(ctx context.Context, in *p2p_api.UnbanPeerRequest, opts ...grpc.CallOption) (*p2p_api.UnbanPeerResponse, error)
+	IsBannedFunc                     func(ctx context.Context, in *p2p_api.IsBannedRequest, opts ...grpc.CallOption) (*p2p_api.IsBannedResponse, error)
+	ListBannedFunc                   func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.ListBannedResponse, error)
+	ClearBannedFunc                  func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.ClearBannedResponse, error)
+	AddBanScoreFunc                  func(ctx context.Context, in *p2p_api.AddBanScoreRequest, opts ...grpc.CallOption) (*p2p_api.AddBanScoreResponse, error)
+	ConnectPeerFunc                  func(ctx context.Context, in *p2p_api.ConnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.ConnectPeerResponse, error)
+	DisconnectPeerFunc               func(ctx context.Context, in *p2p_api.DisconnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.DisconnectPeerResponse, error)
+	RecordCatchupAttemptFunc         func(ctx context.Context, in *p2p_api.RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupAttemptResponse, error)
+	RecordCatchupSuccessFunc         func(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error)
+	RecordCatchupFailureFunc         func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error)
+	RecordCatchupMaliciousFunc       func(ctx context.Context, in *p2p_api.RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupMaliciousResponse, error)
+	UpdateCatchupReputationFunc      func(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error)
+	UpdateCatchupErrorFunc           func(ctx context.Context, in *p2p_api.UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupErrorResponse, error)
+	ResetReputationFunc              func(ctx context.Context, in *p2p_api.ResetReputationRequest, opts ...grpc.CallOption) (*p2p_api.ResetReputationResponse, error)
+	GetPeersForCatchupFunc           func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error)
+	ReportValidSubtreeFunc           func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error)
+	ReportValidBlockFunc             func(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error)
+	ReportValidatedChainProgressFunc func(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error)
+	IsPeerMaliciousFunc              func(ctx context.Context, in *p2p_api.IsPeerMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerMaliciousResponse, error)
+	IsPeerUnhealthyFunc              func(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error)
+	GetPeerRegistryFunc              func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeerRegistryResponse, error)
+	GetPeerFunc                      func(ctx context.Context, in *p2p_api.GetPeerRequest, opts ...grpc.CallOption) (*p2p_api.GetPeerResponse, error)
+	RecordBytesDownloadedFunc        func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error)
 }
 
 func (m *MockPeerServiceClient) GetPeers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
@@ -178,6 +180,13 @@ func (m *MockPeerServiceClient) ReportValidBlock(ctx context.Context, in *p2p_ap
 	return &p2p_api.ReportValidBlockResponse{Success: true}, nil
 }
 
+func (m *MockPeerServiceClient) ReportValidatedChainProgress(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error) {
+	if m.ReportValidatedChainProgressFunc != nil {
+		return m.ReportValidatedChainProgressFunc(ctx, in, opts...)
+	}
+	return &p2p_api.ReportValidatedChainProgressResponse{Success: true}, nil
+}
+
 func (m *MockPeerServiceClient) IsPeerMalicious(ctx context.Context, in *p2p_api.IsPeerMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerMaliciousResponse, error) {
 	if m.IsPeerMaliciousFunc != nil {
 		return m.IsPeerMaliciousFunc(ctx, in, opts...)
@@ -236,17 +245,17 @@ func TestSimpleClientGetPeers(t *testing.T) {
 
 	ctx := context.Background()
 	resp, err := client.GetPeers(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, resp)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
 	// GetPeers now returns empty slice as it uses legacy format
-	assert.Len(t, resp, 0)
+	require.Len(t, resp, 0)
 }
 
 func TestSimpleClientBanPeer(t *testing.T) {
 	mockClient := &MockPeerServiceClient{
 		BanPeerFunc: func(ctx context.Context, in *p2p_api.BanPeerRequest, opts ...grpc.CallOption) (*p2p_api.BanPeerResponse, error) {
-			assert.Equal(t, "192.168.1.1", in.Addr)
-			assert.Equal(t, int64(3600), in.Until)
+			require.Equal(t, "192.168.1.1", in.Addr)
+			require.Equal(t, int64(3600), in.Until)
 			return &p2p_api.BanPeerResponse{Ok: true}, nil
 		},
 	}
@@ -258,13 +267,13 @@ func TestSimpleClientBanPeer(t *testing.T) {
 
 	ctx := context.Background()
 	err := client.BanPeer(ctx, "192.168.1.1", 3600)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func TestSimpleClientUnbanPeer(t *testing.T) {
 	mockClient := &MockPeerServiceClient{
 		UnbanPeerFunc: func(ctx context.Context, in *p2p_api.UnbanPeerRequest, opts ...grpc.CallOption) (*p2p_api.UnbanPeerResponse, error) {
-			assert.Equal(t, "192.168.1.1", in.Addr)
+			require.Equal(t, "192.168.1.1", in.Addr)
 			return &p2p_api.UnbanPeerResponse{Ok: true}, nil
 		},
 	}
@@ -276,13 +285,13 @@ func TestSimpleClientUnbanPeer(t *testing.T) {
 
 	ctx := context.Background()
 	err := client.UnbanPeer(ctx, "192.168.1.1")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func TestSimpleClientIsBanned(t *testing.T) {
 	mockClient := &MockPeerServiceClient{
 		IsBannedFunc: func(ctx context.Context, in *p2p_api.IsBannedRequest, opts ...grpc.CallOption) (*p2p_api.IsBannedResponse, error) {
-			assert.Equal(t, "192.168.1.1", in.IpOrSubnet)
+			require.Equal(t, "192.168.1.1", in.IpOrSubnet)
 			return &p2p_api.IsBannedResponse{IsBanned: true}, nil
 		},
 	}
@@ -294,8 +303,8 @@ func TestSimpleClientIsBanned(t *testing.T) {
 
 	ctx := context.Background()
 	isBanned, err := client.IsBanned(ctx, "192.168.1.1")
-	assert.NoError(t, err)
-	assert.True(t, isBanned)
+	require.NoError(t, err)
+	require.True(t, isBanned)
 }
 
 func TestSimpleClientListBanned(t *testing.T) {
@@ -314,10 +323,10 @@ func TestSimpleClientListBanned(t *testing.T) {
 
 	ctx := context.Background()
 	banned, err := client.ListBanned(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, banned)
-	assert.Len(t, banned, 2)
-	assert.Contains(t, banned, "192.168.1.1")
+	require.NoError(t, err)
+	require.NotNil(t, banned)
+	require.Len(t, banned, 2)
+	require.Contains(t, banned, "192.168.1.1")
 }
 
 func TestSimpleClientClearBanned(t *testing.T) {
@@ -334,14 +343,14 @@ func TestSimpleClientClearBanned(t *testing.T) {
 
 	ctx := context.Background()
 	err := client.ClearBanned(ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func TestSimpleClientAddBanScore(t *testing.T) {
 	mockClient := &MockPeerServiceClient{
 		AddBanScoreFunc: func(ctx context.Context, in *p2p_api.AddBanScoreRequest, opts ...grpc.CallOption) (*p2p_api.AddBanScoreResponse, error) {
-			assert.Equal(t, "peer1", in.PeerId)
-			assert.Equal(t, "spam", in.Reason)
+			require.Equal(t, "peer1", in.PeerId)
+			require.Equal(t, "spam", in.Reason)
 			return &p2p_api.AddBanScoreResponse{Ok: true}, nil
 		},
 	}
@@ -353,14 +362,14 @@ func TestSimpleClientAddBanScore(t *testing.T) {
 
 	ctx := context.Background()
 	err := client.AddBanScore(ctx, "peer1", "spam")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func TestSimpleClientConnectPeer(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		mockClient := &MockPeerServiceClient{
 			ConnectPeerFunc: func(ctx context.Context, in *p2p_api.ConnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.ConnectPeerResponse, error) {
-				assert.Equal(t, "/ip4/127.0.0.1/tcp/9905", in.PeerAddress)
+				require.Equal(t, "/ip4/127.0.0.1/tcp/9905", in.PeerAddress)
 				return &p2p_api.ConnectPeerResponse{Success: true}, nil
 			},
 		}
@@ -372,7 +381,7 @@ func TestSimpleClientConnectPeer(t *testing.T) {
 
 		ctx := context.Background()
 		err := client.ConnectPeer(ctx, "/ip4/127.0.0.1/tcp/9905")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("Failure", func(t *testing.T) {
@@ -389,8 +398,8 @@ func TestSimpleClientConnectPeer(t *testing.T) {
 
 		ctx := context.Background()
 		err := client.ConnectPeer(ctx, "/ip4/127.0.0.1/tcp/9905")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "connection refused")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "connection refused")
 	})
 }
 
@@ -398,7 +407,7 @@ func TestSimpleClientDisconnectPeer(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		mockClient := &MockPeerServiceClient{
 			DisconnectPeerFunc: func(ctx context.Context, in *p2p_api.DisconnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.DisconnectPeerResponse, error) {
-				assert.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, "peer1", in.PeerId)
 				return &p2p_api.DisconnectPeerResponse{Success: true}, nil
 			},
 		}
@@ -410,7 +419,7 @@ func TestSimpleClientDisconnectPeer(t *testing.T) {
 
 		ctx := context.Background()
 		err := client.DisconnectPeer(ctx, "peer1")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("Failure", func(t *testing.T) {
@@ -428,8 +437,8 @@ func TestSimpleClientDisconnectPeer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 		err := client.DisconnectPeer(ctx, "peer1")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "peer not found")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "peer not found")
 	})
 }
 
@@ -452,11 +461,11 @@ func TestSimpleClientRecordCatchupAttempt(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			RecordCatchupAttemptFunc: func(ctx context.Context, in *p2p_api.RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupAttemptResponse, error) {
-				assert.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, "peer1", in.PeerId)
 				return &p2p_api.RecordCatchupAttemptResponse{Ok: true}, nil
 			},
 		})
-		assert.NoError(t, client.RecordCatchupAttempt(context.Background(), "peer1"))
+		require.NoError(t, client.RecordCatchupAttempt(context.Background(), "peer1"))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -464,7 +473,7 @@ func TestSimpleClientRecordCatchupAttempt(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.ErrorIs(t, client.RecordCatchupAttempt(context.Background(), "peer1"), assert.AnError)
+		require.ErrorIs(t, client.RecordCatchupAttempt(context.Background(), "peer1"), assert.AnError)
 	})
 	t.Run("not_ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -473,8 +482,8 @@ func TestSimpleClientRecordCatchupAttempt(t *testing.T) {
 			},
 		})
 		err := client.RecordCatchupAttempt(context.Background(), "peer1")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to record catchup attempt")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to record catchup attempt")
 	})
 }
 
@@ -482,12 +491,12 @@ func TestSimpleClientRecordCatchupSuccess(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			RecordCatchupSuccessFunc: func(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error) {
-				assert.Equal(t, "peer1", in.PeerId)
-				assert.Equal(t, int64(1500), in.DurationMs)
+				require.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, int64(1500), in.DurationMs)
 				return &p2p_api.RecordCatchupSuccessResponse{Ok: true}, nil
 			},
 		})
-		assert.NoError(t, client.RecordCatchupSuccess(context.Background(), "peer1", 1500))
+		require.NoError(t, client.RecordCatchupSuccess(context.Background(), "peer1", 1500))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -495,7 +504,7 @@ func TestSimpleClientRecordCatchupSuccess(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.Error(t, client.RecordCatchupSuccess(context.Background(), "peer1", 0))
+		require.Error(t, client.RecordCatchupSuccess(context.Background(), "peer1", 0))
 	})
 	t.Run("not_ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -504,7 +513,7 @@ func TestSimpleClientRecordCatchupSuccess(t *testing.T) {
 			},
 		})
 		err := client.RecordCatchupSuccess(context.Background(), "peer1", 0)
-		assert.Contains(t, err.Error(), "failed to record catchup success")
+		require.Contains(t, err.Error(), "failed to record catchup success")
 	})
 }
 
@@ -515,7 +524,18 @@ func TestSimpleClientRecordCatchupFailure(t *testing.T) {
 				return &p2p_api.RecordCatchupFailureResponse{Ok: true}, nil
 			},
 		})
-		assert.NoError(t, client.RecordCatchupFailure(context.Background(), "peer1"))
+		require.NoError(t, client.RecordCatchupFailure(context.Background(), "peer1"))
+	})
+	t.Run("typed_request_mapping", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordCatchupFailureFunc: func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error) {
+				require.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, catchupFailureKindBlockIncomplete, in.FailureKind)
+				require.Equal(t, "hash1", in.BlockHash)
+				return &p2p_api.RecordCatchupFailureResponse{Ok: true}, nil
+			},
+		})
+		require.NoError(t, client.RecordCatchupFailureWithKind(context.Background(), "peer1", catchupFailureKindBlockIncomplete, "hash1"))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -523,7 +543,7 @@ func TestSimpleClientRecordCatchupFailure(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.Error(t, client.RecordCatchupFailure(context.Background(), "peer1"))
+		require.Error(t, client.RecordCatchupFailure(context.Background(), "peer1"))
 	})
 	t.Run("not_ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -532,7 +552,7 @@ func TestSimpleClientRecordCatchupFailure(t *testing.T) {
 			},
 		})
 		err := client.RecordCatchupFailure(context.Background(), "peer1")
-		assert.Contains(t, err.Error(), "failed to record catchup failure")
+		require.Contains(t, err.Error(), "failed to record catchup failure")
 	})
 }
 
@@ -543,7 +563,7 @@ func TestSimpleClientRecordCatchupMalicious(t *testing.T) {
 				return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
 			},
 		})
-		assert.NoError(t, client.RecordCatchupMalicious(context.Background(), "peer1"))
+		require.NoError(t, client.RecordCatchupMalicious(context.Background(), "peer1"))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -551,7 +571,7 @@ func TestSimpleClientRecordCatchupMalicious(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.Error(t, client.RecordCatchupMalicious(context.Background(), "peer1"))
+		require.Error(t, client.RecordCatchupMalicious(context.Background(), "peer1"))
 	})
 	t.Run("not_ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -560,7 +580,7 @@ func TestSimpleClientRecordCatchupMalicious(t *testing.T) {
 			},
 		})
 		err := client.RecordCatchupMalicious(context.Background(), "peer1")
-		assert.Contains(t, err.Error(), "failed to record catchup malicious")
+		require.Contains(t, err.Error(), "failed to record catchup malicious")
 	})
 }
 
@@ -568,12 +588,12 @@ func TestSimpleClientUpdateCatchupError(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			UpdateCatchupErrorFunc: func(ctx context.Context, in *p2p_api.UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupErrorResponse, error) {
-				assert.Equal(t, "peer1", in.PeerId)
-				assert.Equal(t, "boom", in.ErrorMsg)
+				require.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, "boom", in.ErrorMsg)
 				return &p2p_api.UpdateCatchupErrorResponse{Ok: true}, nil
 			},
 		})
-		assert.NoError(t, client.UpdateCatchupError(context.Background(), "peer1", "boom"))
+		require.NoError(t, client.UpdateCatchupError(context.Background(), "peer1", "boom"))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -581,7 +601,7 @@ func TestSimpleClientUpdateCatchupError(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.Error(t, client.UpdateCatchupError(context.Background(), "peer1", "boom"))
+		require.Error(t, client.UpdateCatchupError(context.Background(), "peer1", "boom"))
 	})
 	t.Run("not_ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -590,7 +610,7 @@ func TestSimpleClientUpdateCatchupError(t *testing.T) {
 			},
 		})
 		err := client.UpdateCatchupError(context.Background(), "peer1", "boom")
-		assert.Contains(t, err.Error(), "failed to update catchup error")
+		require.Contains(t, err.Error(), "failed to update catchup error")
 	})
 }
 
@@ -598,11 +618,11 @@ func TestSimpleClientUpdateCatchupReputation(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			UpdateCatchupReputationFunc: func(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error) {
-				assert.InDelta(t, 75.0, in.Score, 0.001)
+				require.InDelta(t, 75.0, in.Score, 0.001)
 				return &p2p_api.UpdateCatchupReputationResponse{Ok: true}, nil
 			},
 		})
-		assert.NoError(t, client.UpdateCatchupReputation(context.Background(), "peer1", 75.0))
+		require.NoError(t, client.UpdateCatchupReputation(context.Background(), "peer1", 75.0))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -610,7 +630,7 @@ func TestSimpleClientUpdateCatchupReputation(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.Error(t, client.UpdateCatchupReputation(context.Background(), "peer1", 75.0))
+		require.Error(t, client.UpdateCatchupReputation(context.Background(), "peer1", 75.0))
 	})
 	t.Run("not_ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -619,7 +639,7 @@ func TestSimpleClientUpdateCatchupReputation(t *testing.T) {
 			},
 		})
 		err := client.UpdateCatchupReputation(context.Background(), "peer1", 75.0)
-		assert.Contains(t, err.Error(), "failed to update catchup reputation")
+		require.Contains(t, err.Error(), "failed to update catchup reputation")
 	})
 }
 
@@ -627,13 +647,13 @@ func TestSimpleClientResetReputation(t *testing.T) {
 	t.Run("ok_specific_peer", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			ResetReputationFunc: func(ctx context.Context, in *p2p_api.ResetReputationRequest, opts ...grpc.CallOption) (*p2p_api.ResetReputationResponse, error) {
-				assert.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, "peer1", in.PeerId)
 				return &p2p_api.ResetReputationResponse{Ok: true, PeersReset: 1}, nil
 			},
 		})
 		n, err := client.ResetReputation(context.Background(), "peer1")
-		assert.NoError(t, err)
-		assert.Equal(t, 1, n)
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
 	})
 	t.Run("ok_all_peers", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -642,8 +662,8 @@ func TestSimpleClientResetReputation(t *testing.T) {
 			},
 		})
 		n, err := client.ResetReputation(context.Background(), "")
-		assert.NoError(t, err)
-		assert.Equal(t, 7, n)
+		require.NoError(t, err)
+		require.Equal(t, 7, n)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -652,7 +672,7 @@ func TestSimpleClientResetReputation(t *testing.T) {
 			},
 		})
 		_, err := client.ResetReputation(context.Background(), "peer1")
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 	t.Run("not_ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -661,7 +681,7 @@ func TestSimpleClientResetReputation(t *testing.T) {
 			},
 		})
 		_, err := client.ResetReputation(context.Background(), "peer1")
-		assert.Contains(t, err.Error(), "failed to reset reputation")
+		require.Contains(t, err.Error(), "failed to reset reputation")
 	})
 }
 
@@ -684,11 +704,11 @@ func TestSimpleClientGetPeersForCatchup(t *testing.T) {
 			},
 		})
 		peers, err := client.GetPeersForCatchup(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, peers, 1)
-		assert.Equal(t, uint32(42), peers[0].Height)
-		assert.InDelta(t, 88.5, peers[0].ReputationScore, 0.001)
-		assert.Equal(t, int64(3), peers[0].InteractionAttempts)
+		require.NoError(t, err)
+		require.Len(t, peers, 1)
+		require.Equal(t, uint32(42), peers[0].Height)
+		require.InDelta(t, 88.5, peers[0].ReputationScore, 0.001)
+		require.Equal(t, int64(3), peers[0].InteractionAttempts)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -697,7 +717,7 @@ func TestSimpleClientGetPeersForCatchup(t *testing.T) {
 			},
 		})
 		_, err := client.GetPeersForCatchup(context.Background())
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 }
 
@@ -705,12 +725,12 @@ func TestSimpleClientReportValidSubtree(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			ReportValidSubtreeFunc: func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error) {
-				assert.Equal(t, "peer1", in.PeerId)
-				assert.Equal(t, "subtreehash", in.SubtreeHash)
+				require.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, "subtreehash", in.SubtreeHash)
 				return &p2p_api.ReportValidSubtreeResponse{Success: true}, nil
 			},
 		})
-		assert.NoError(t, client.ReportValidSubtree(context.Background(), "peer1", "subtreehash"))
+		require.NoError(t, client.ReportValidSubtree(context.Background(), "peer1", "subtreehash"))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -718,7 +738,7 @@ func TestSimpleClientReportValidSubtree(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.Error(t, client.ReportValidSubtree(context.Background(), "peer1", "h"))
+		require.Error(t, client.ReportValidSubtree(context.Background(), "peer1", "h"))
 	})
 	t.Run("not_success", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -727,7 +747,7 @@ func TestSimpleClientReportValidSubtree(t *testing.T) {
 			},
 		})
 		err := client.ReportValidSubtree(context.Background(), "peer1", "h")
-		assert.Contains(t, err.Error(), "rejected")
+		require.Contains(t, err.Error(), "rejected")
 	})
 }
 
@@ -738,7 +758,7 @@ func TestSimpleClientReportValidBlock(t *testing.T) {
 				return &p2p_api.ReportValidBlockResponse{Success: true}, nil
 			},
 		})
-		assert.NoError(t, client.ReportValidBlock(context.Background(), "peer1", "blockhash"))
+		require.NoError(t, client.ReportValidBlock(context.Background(), "peer1", "blockhash"))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -746,7 +766,7 @@ func TestSimpleClientReportValidBlock(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.Error(t, client.ReportValidBlock(context.Background(), "peer1", "h"))
+		require.Error(t, client.ReportValidBlock(context.Background(), "peer1", "h"))
 	})
 	t.Run("not_success", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -755,7 +775,40 @@ func TestSimpleClientReportValidBlock(t *testing.T) {
 			},
 		})
 		err := client.ReportValidBlock(context.Background(), "peer1", "h")
-		assert.Contains(t, err.Error(), "stale")
+		require.Contains(t, err.Error(), "stale")
+	})
+}
+
+func TestSimpleClientReportValidatedChainProgress(t *testing.T) {
+	t.Run("ok_maps_request", func(t *testing.T) {
+		chainWork := []byte{0x01, 0x02, 0x03}
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidatedChainProgressFunc: func(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error) {
+				require.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, uint32(123), in.Height)
+				require.Equal(t, "blockhash", in.BlockHash)
+				require.Equal(t, chainWork, in.ChainWork)
+				return &p2p_api.ReportValidatedChainProgressResponse{Success: true}, nil
+			},
+		})
+		require.NoError(t, client.ReportValidatedChainProgress(context.Background(), "peer1", 123, "blockhash", chainWork))
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidatedChainProgressFunc: func(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		require.Error(t, client.ReportValidatedChainProgress(context.Background(), "peer1", 123, "blockhash", []byte{0x01}))
+	})
+	t.Run("not_success", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidatedChainProgressFunc: func(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error) {
+				return &p2p_api.ReportValidatedChainProgressResponse{Success: false, Message: "rejected"}, nil
+			},
+		})
+		err := client.ReportValidatedChainProgress(context.Background(), "peer1", 123, "blockhash", []byte{0x01})
+		require.Contains(t, err.Error(), "rejected")
 	})
 }
 
@@ -767,9 +820,9 @@ func TestSimpleClientIsPeerMalicious(t *testing.T) {
 			},
 		})
 		mal, reason, err := client.IsPeerMalicious(context.Background(), "peer1")
-		assert.NoError(t, err)
-		assert.True(t, mal)
-		assert.Equal(t, "spam", reason)
+		require.NoError(t, err)
+		require.True(t, mal)
+		require.Equal(t, "spam", reason)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -778,7 +831,7 @@ func TestSimpleClientIsPeerMalicious(t *testing.T) {
 			},
 		})
 		_, _, err := client.IsPeerMalicious(context.Background(), "peer1")
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 }
 
@@ -790,10 +843,10 @@ func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
 			},
 		})
 		unhealthy, reason, score, err := client.IsPeerUnhealthy(context.Background(), "peer1")
-		assert.NoError(t, err)
-		assert.True(t, unhealthy)
-		assert.Equal(t, "low rep", reason)
-		assert.InDelta(t, 12.5, score, 0.001)
+		require.NoError(t, err)
+		require.True(t, unhealthy)
+		require.Equal(t, "low rep", reason)
+		require.InDelta(t, 12.5, score, 0.001)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -802,7 +855,7 @@ func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
 			},
 		})
 		_, _, _, err := client.IsPeerUnhealthy(context.Background(), "peer1")
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 }
 
@@ -818,9 +871,9 @@ func TestSimpleClientGetPeerRegistry(t *testing.T) {
 			},
 		})
 		peers, err := client.GetPeerRegistry(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, peers, 1)
-		assert.Equal(t, uint32(99), peers[0].Height)
+		require.NoError(t, err)
+		require.Len(t, peers, 1)
+		require.Equal(t, uint32(99), peers[0].Height)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -829,7 +882,7 @@ func TestSimpleClientGetPeerRegistry(t *testing.T) {
 			},
 		})
 		_, err := client.GetPeerRegistry(context.Background())
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 }
 
@@ -837,11 +890,11 @@ func TestSimpleClientRecordBytesDownloaded(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			RecordBytesDownloadedFunc: func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error) {
-				assert.Equal(t, uint64(2048), in.BytesDownloaded)
+				require.Equal(t, uint64(2048), in.BytesDownloaded)
 				return &p2p_api.RecordBytesDownloadedResponse{Ok: true}, nil
 			},
 		})
-		assert.NoError(t, client.RecordBytesDownloaded(context.Background(), "peer1", 2048))
+		require.NoError(t, client.RecordBytesDownloaded(context.Background(), "peer1", 2048))
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -849,7 +902,7 @@ func TestSimpleClientRecordBytesDownloaded(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		assert.Error(t, client.RecordBytesDownloaded(context.Background(), "peer1", 0))
+		require.Error(t, client.RecordBytesDownloaded(context.Background(), "peer1", 0))
 	})
 	t.Run("not_ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -858,7 +911,7 @@ func TestSimpleClientRecordBytesDownloaded(t *testing.T) {
 			},
 		})
 		err := client.RecordBytesDownloaded(context.Background(), "peer1", 0)
-		assert.Contains(t, err.Error(), "failed to record bytes downloaded")
+		require.Contains(t, err.Error(), "failed to record bytes downloaded")
 	})
 }
 
@@ -866,7 +919,7 @@ func TestSimpleClientGetPeer(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			GetPeerFunc: func(ctx context.Context, in *p2p_api.GetPeerRequest, opts ...grpc.CallOption) (*p2p_api.GetPeerResponse, error) {
-				assert.Equal(t, "peer1", in.PeerId)
+				require.Equal(t, "peer1", in.PeerId)
 				return &p2p_api.GetPeerResponse{
 					Found: true,
 					Peer: &p2p_api.PeerRegistryInfo{
@@ -877,9 +930,9 @@ func TestSimpleClientGetPeer(t *testing.T) {
 			},
 		})
 		info, err := client.GetPeer(context.Background(), "peer1")
-		assert.NoError(t, err)
-		assert.NotNil(t, info)
-		assert.Equal(t, uint32(17), info.Height)
+		require.NoError(t, err)
+		require.NotNil(t, info)
+		require.Equal(t, uint32(17), info.Height)
 	})
 	t.Run("not_found", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -888,8 +941,8 @@ func TestSimpleClientGetPeer(t *testing.T) {
 			},
 		})
 		info, err := client.GetPeer(context.Background(), "peer1")
-		assert.NoError(t, err)
-		assert.Nil(t, info, "not-found should return nil PeerInfo with no error")
+		require.NoError(t, err)
+		require.Nil(t, info, "not-found should return nil PeerInfo with no error")
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -898,6 +951,6 @@ func TestSimpleClientGetPeer(t *testing.T) {
 			},
 		})
 		_, err := client.GetPeer(context.Background(), "peer1")
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 }

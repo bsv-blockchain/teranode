@@ -63,6 +63,17 @@ func CalculateWork(prevWork *chainhash.Hash, nBits model.NBit) (*chainhash.Hash,
 	return hash, nil
 }
 
+// CompareChainWork compares two cumulative chainwork values encoded as big-endian
+// byte slices and returns -1, 0, or +1 as a is less than, equal to, or greater than b.
+//
+// The comparison is a raw big.Int magnitude comparison: empty or nil inputs are
+// treated as zero, and inputs of differing lengths compare by numeric value (leading
+// zero bytes are insignificant). This is the single source of truth for chainwork
+// ordering so the zero- and length-handling semantics cannot drift between callers.
+func CompareChainWork(a, b []byte) int {
+	return new(big.Int).SetBytes(a).Cmp(new(big.Int).SetBytes(b))
+}
+
 // CalcBlockWork calculates the work value for a single block from its difficulty bits.
 // This is equivalent to bitcoin-sv's GetBlockProof function.
 //

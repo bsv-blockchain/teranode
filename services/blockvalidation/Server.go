@@ -1800,8 +1800,8 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			return
 		}
 
-		// Report catchup failure to P2P service
-		u.reportCatchupFailure(ctx, c.peerID)
+		// Report catchup failure to P2P service.
+		u.reportCatchupFailureForError(ctx, c.peerID, err)
 
 		u.logger.Errorf("[Init] failed to process catchup signal for block [%s] from peer %s: %v", c.block.Hash().String(), c.peerID, err)
 
@@ -1871,7 +1871,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 					break
 				} else {
 					u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
-					u.reportCatchupFailure(ctx, alt.peerID)
+					u.reportCatchupFailureForError(ctx, alt.peerID, altErr)
 				}
 			}
 		} else {
