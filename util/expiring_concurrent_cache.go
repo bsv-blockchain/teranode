@@ -90,31 +90,37 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, boo
 		wg: wg,
 	}
 
-	// Release the global lock, for others to wait on the wait group
+	// Release the global lock, for others to wait on the wait group.
 	c.mu.Unlock()
 
-	// Perform the fetch, with a lock on the cache
-	c.mu.Lock()
+	// Publish the result and clean up under the lock, but run fetchFunc() WITHOUT the lock.
+	fetchOK := false
 
 	defer func() {
-		wg.Done()         // Mark the wait group as done
-		delete(c.wg, key) // Remove it from the map
+		c.mu.Lock()
+
+		if fetchOK && err == nil {
+			// Cache the result
+			if allowCache {
+				c.cache.Set(key, val)
+			}
+
+			c.wg[key].result = &val
+		}
+
+		wg.Done()         // after publish so waiters observe result via Done/Wait
+		delete(c.wg, key) // remove in-flight entry, still under c.mu
 
 		c.mu.Unlock()
 	}()
 
-	// Perform the fetch
+	// Perform the fetch WITHOUT holding c.mu.
 	val, allowCache, err = fetchFunc()
+	fetchOK = true // reached only if fetchFunc returned (did not panic)
+
 	if err != nil {
 		return c.ZeroValue, err
 	}
-
-	// Cache the result
-	if allowCache {
-		c.cache.Set(key, val)
-	}
-
-	c.wg[key].result = &val
 
 	return val, nil
 }
