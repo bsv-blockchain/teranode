@@ -640,13 +640,23 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
-	s.logger.Infof("[Legacy Server] Starting internal server...")
-	go s.server.Start()
-	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress)
+	if s.settings.Legacy.DiskSyncDir != "" {
+		s.logger.Infof("[Legacy Server] Disk-sync mode: ingesting from %s (stopAtHeight=%d), P2P networking disabled",
+			s.settings.Legacy.DiskSyncDir, s.settings.Legacy.DiskSyncStopAtHeight)
+		go func() {
+			if err := s.server.syncManager.RunDiskSync(ctx, s.settings.Legacy.DiskSyncDir, s.settings.Legacy.DiskSyncStopAtHeight); err != nil {
+				s.logger.Errorf("[Legacy Server] Disk sync failed: %s", err)
+			}
+		}()
+	} else {
+		s.logger.Infof("[Legacy Server] Starting internal server...")
+		go s.server.Start()
+		s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress)
 
-	// Start periodic peer statistics logging
-	go s.logPeerStats(ctx)
-	s.logger.Infof("[Legacy Server] Started peer statistics logging")
+		// Start periodic peer statistics logging
+		go s.logPeerStats(ctx)
+		s.logger.Infof("[Legacy Server] Started peer statistics logging")
+	}
 
 	apiKey := s.settings.GRPCAdminAPIKey
 	if apiKey == "" {
