@@ -1899,6 +1899,13 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 		}
 	})
 
+	// Dynamic sizing is driven by observed utilization. With no utilization samples
+	// the timing signal alone must not change the size (per the spec decision flow:
+	// "have utilization data? no -> skip").
+	if count == 0 {
+		return
+	}
+
 	if count > 0 {
 		avgNodesPerSubtree := float64(totalNodes) / float64(count)
 
@@ -1940,11 +1947,15 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 			// Subtrees are nearly full, might need to increase size
 			// But only if we're also creating them too fast AND we have significant volume
 
-			// Don't increase size if average nodes per subtree is small (< 50)
-			// This prevents size creep with low transaction volumes
-			if avgNodesPerSubtree < 50 {
-				stp.logger.Debugf("[adjustSubtreeSize] High utilization (%.2f%%) but low volume (%.1f nodes/subtree), keeping size at %d\n",
-					utilization*100, avgNodesPerSubtree, currentSize)
+			// BA-SUBTREE-024: the anti-creep threshold must be a function of
+			// MinimumMerkleItemsPerSubtree (not a hardcoded literal) so the gate scales
+			// with deployment configuration. We use twice the minimum subtree capacity:
+			// below this average fill the high-utilization signal is treated as trivial
+			// volume rather than sustained demand, and the size is held.
+			antiCreepThreshold := float64(2 * stp.settings.BlockAssembly.MinimumMerkleItemsPerSubtree)
+			if avgNodesPerSubtree < antiCreepThreshold {
+				stp.logger.Debugf("[adjustSubtreeSize] High utilization (%.2f%%) but low volume (%.1f nodes/subtree < %.1f threshold), keeping size at %d\n",
+					utilization*100, avgNodesPerSubtree, antiCreepThreshold, currentSize)
 				// Reset counters but don't change size
 				stp.blockIntervals = make([]time.Duration, 0)
 				return
@@ -2004,6 +2015,14 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 	newSize = int(math.Pow(2, math.Ceil(math.Log2(float64(newSize)))))
 	stp.logger.Debugf("[adjustSubtreeSize] newSize after rounding=%d\n", newSize)
 
+	// This timing branch is the increase path (only reached under high utilization).
+	// A slow inter-subtree interval produces ratio < 1 and a smaller target; that must
+	// not shrink the size here - decreases are driven solely by the low-utilization
+	// branch above.
+	if newSize < currentSize {
+		newSize = currentSize
+	}
+
 	// Cap the increase to 2x per block to avoid wild swings
 	if newSize > currentSize*2 {
 		newSize = currentSize * 2
@@ -2013,8 +2032,12 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 	// never go over maximum size
 	maxSubtreeSize := stp.settings.BlockAssembly.MaximumMerkleItemsPerSubtree
 	if newSize > maxSubtreeSize {
-		newSize = maxSubtreeSize
-		stp.logger.Debugf("[adjustSubtreeSize] newSize capped at maxSubtreeSize=%d\n", newSize)
+		// MaximumMerkleItemsPerSubtree is not required to be a power of two (only
+		// Initial/Minimum are validated as such), so round the capped value down to
+		// the nearest power of two. This preserves the power-of-two invariant
+		// (spec BA-SUBTREE-025a) while staying within the configured maximum.
+		newSize = int(math.Pow(2, math.Floor(math.Log2(float64(maxSubtreeSize)))))
+		stp.logger.Debugf("[adjustSubtreeSize] newSize capped at maxSubtreeSize=%d (rounded down to power of two %d)\n", maxSubtreeSize, newSize)
 	}
 
 	// Never go below minimum size
@@ -4569,6 +4592,13 @@ func (stp *SubtreeProcessor) finalizeBlockProcessing(ctx context.Context, block 
 			}
 		}
 	}
+
+	// Reset the per-block accumulators so the next block's interval sample reflects
+	// only that block's duration and subtree count, not a cumulative lifetime average.
+	// blockStartTime/subtreesInBlock have no other readers, and this runs strictly
+	// after moveForwardBlock in the same handler goroutine, so the reset is race-free.
+	stp.blockStartTime = time.Now()
+	stp.subtreesInBlock = 0
 
 	stp.adjustSubtreeSize()
 

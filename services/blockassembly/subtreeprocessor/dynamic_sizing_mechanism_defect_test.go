@@ -59,7 +59,7 @@ func TestDynamicSizing_Mechanism_HighUtilizationDoesNotDecreaseOnSlowIntervals(t
 	stp := newDynamicSizingProcessor(t, 64, 4, 32768)
 	stp.currentItemsPerFile.Store(64)
 	setSubtreeNodeSamples(stp, []int{60, 60, 60, 60, 60, 60, 60, 60, 60, 60}) // >80% utilization
-	stp.blockIntervals = repeatInterval(2*time.Second, 3)                       // slower than target interval
+	stp.blockIntervals = repeatInterval(2*time.Second, 3)                     // slower than target interval
 
 	before := stp.currentItemsPerFile.Load()
 	stp.adjustSubtreeSize()
