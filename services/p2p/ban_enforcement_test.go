@@ -205,6 +205,40 @@ func TestServer_ConnectPeer_RefusesBannedAddress(t *testing.T) {
 	client.AssertNotCalled(t, "Connect", mock.Anything, mock.Anything)
 }
 
+func TestServer_ConnectPeer_RefusesBannedDNSAddress(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = &recordingBanList{banned: map[string]bool{"127.0.0.1": true, "::1": true}}
+
+	client := &MockServerP2PClient{}
+	s.P2PClient = client
+
+	resp, err := s.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
+		PeerAddress: "/dns4/localhost/tcp/9905/p2p/12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw",
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Success, "a DNS multiaddr resolving to a banned IP must be refused")
+	client.AssertNotCalled(t, "Connect", mock.Anything, mock.Anything)
+}
+
+func TestServer_ConnectPeer_FailsClosedOnUnresolvableDNS(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = &recordingBanList{banned: map[string]bool{"198.51.100.9": true}}
+
+	client := &MockServerP2PClient{}
+	s.P2PClient = client
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := s.ConnectPeer(ctx, &p2p_api.ConnectPeerRequest{
+		PeerAddress: "/dns4/does-not-exist.invalid/tcp/9905/p2p/12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw",
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Success, "an unresolvable DNS multiaddr must be refused (fail closed)")
+	require.NotEmpty(t, resp.Error)
+	client.AssertNotCalled(t, "Connect", mock.Anything, mock.Anything)
+}
+
 func TestServer_ConnectPeer_ConnectsViaClient(t *testing.T) {
 	s, _ := newServerWithLocalRegistry(t)
 	s.banList = &recordingBanList{}
@@ -218,6 +252,49 @@ func TestServer_ConnectPeer_ConnectsViaClient(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Success)
 	client.AssertExpectations(t)
+}
+
+func TestShouldSkipBannedPeer_IPBanWithoutRegistryBan(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	pid := mustNewPeerID(t)
+
+	s.banList = &recordingBanList{banned: map[string]bool{"198.51.100.9": true}}
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{{
+		ID:    pid.String(),
+		Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", pid)},
+	}}}
+
+	require.False(t, reg.IsBannedPeer(pid.String()), "peer intentionally not banned in the registry")
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"),
+		"an operator IP ban must drop gossip even without a registry score ban")
+}
+
+func TestHandleBlockTopic_IPBannedPeerDropped(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	banned := mustNewPeerID(t)
+	self := mustNewPeerID(t)
+
+	s.notificationCh = make(chan *notificationMsg, 10)
+	s.banList = &recordingBanList{banned: map[string]bool{"198.51.100.9": true}}
+	client := &MockServerP2PClient{peerID: self}
+	client.peers = []p2pMessageBus.PeerInfo{{
+		ID:    banned.String(),
+		Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", banned)},
+	}}
+	s.P2PClient = client
+
+	msg, err := json.Marshal(BlockMessage{
+		PeerID:     banned.String(),
+		Hash:       "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+		Height:     1,
+		DataHubURL: "http://203.0.113.5:8090",
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msg, banned.String())
+
+	require.Empty(t, s.notificationCh, "IP-banned peer's block must not reach WebSocket clients")
+	require.Equal(t, 0, reg.Count(), "IP-banned peer must not be re-registered by its gossip")
 }
 
 // banPeerInRegistry pushes a peer over the score-based ban threshold.

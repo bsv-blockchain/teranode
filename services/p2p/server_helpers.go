@@ -406,15 +406,13 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
-	// Drop messages from banned peers before any registration or further
-	// processing. Own messages skip the registry round-trip; they return at
-	// the isOwnMessage check below.
-	if !s.isOwnMessage(fromID, rejectedTxMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
+	if s.isOwnMessage(fromID, rejectedTxMessage.PeerID) {
+		s.logger.Debugf("[handleRejectedTxTopic] ignoring own rejected tx message for %s", rejectedTxMessage.TxID)
 		return
 	}
 
-	if s.isOwnMessage(fromID, rejectedTxMessage.PeerID) {
-		s.logger.Debugf("[handleRejectedTxTopic] ignoring own rejected tx message for %s", rejectedTxMessage.TxID)
+	// Drop messages from banned peers before any registration or further processing.
+	if s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
 		return
 	}
 	s.logger.Debugf("[handleRejectedTxTopic] received rejected tx %s fromID %s (reason: %s)",
@@ -916,23 +914,69 @@ func (s *Server) isOwnMessage(from string, peerID string) bool {
 	return from == s.P2PClient.GetID() || peerID == s.P2PClient.GetID()
 }
 
-// shouldSkipBannedPeer checks if we should skip a message from a banned peer.
-// Banning lives in the centralized peer registry now; failures are tolerated
-// (return false) so a transient registry blip doesn't drop traffic silently.
+// shouldSkipBannedPeer checks if we should skip a message from a banned peer:
+// score-based bans live in the centralized peer registry, operator IP/subnet
+// bans in the local ban list. Registry failures are tolerated (return false)
+// so a transient registry blip doesn't drop traffic silently.
 func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
-	if s.peerRegistry == nil {
-		return false
+	if s.peerRegistry != nil {
+		banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
+		if err != nil {
+			s.logger.Warnf("[%s] IsPeerBanned %s failed: %v", messageType, from, err)
+		} else if banned {
+			s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+			return true
+		}
 	}
-	banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
-	if err != nil {
-		s.logger.Warnf("[%s] IsPeerBanned %s failed: %v", messageType, from, err)
-		return false
-	}
-	if banned {
-		s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+
+	if s.isPeerIPBanned(from) {
+		s.logger.Debugf("[%s] ignoring notification from IP-banned peer %s", messageType, from)
 		return true
 	}
+
 	return false
+}
+
+type ipBanCacheEntry struct {
+	banned    bool
+	expiresAt time.Time
+}
+
+// isPeerIPBanned reports whether any of the peer's connected addresses match
+// an entry in the IP/subnet ban list. This is what keeps operator IP bans
+// effective for gossip: the current P2P client cannot sever the libp2p
+// connection, so a banned peer stays connected and must be filtered here.
+// Results are cached briefly to avoid a GetPeers scan per gossip message.
+func (s *Server) isPeerIPBanned(peerID string) bool {
+	if s.banList == nil || s.P2PClient == nil {
+		return false
+	}
+
+	now := time.Now()
+	if v, ok := s.ipBanCache.Load(peerID); ok {
+		entry := v.(ipBanCacheEntry)
+		if now.Before(entry.expiresAt) {
+			return entry.banned
+		}
+	}
+
+	banned := false
+	for _, p := range s.P2PClient.GetPeers() {
+		if p.ID != peerID {
+			continue
+		}
+		for _, addr := range p.Addrs {
+			if ip := extractIPFromMultiaddr(addr); ip != "" && s.banList.IsBanned(ip) {
+				banned = true
+				break
+			}
+		}
+		break
+	}
+
+	s.ipBanCache.Store(peerID, ipBanCacheEntry{banned: banned, expiresAt: now.Add(reputationCacheTTL)})
+
+	return banned
 }
 
 // shouldSkipUnhealthyPeer checks if we should skip a message from an unhealthy
@@ -1149,6 +1193,51 @@ func extractIPFromMultiaddr(addrStr string) string {
 	}
 
 	return ""
+}
+
+// checkMultiaddrBanned reports whether the dial target of a multiaddr is on
+// the IP/subnet ban list. Literal IPs are checked directly; DNS components
+// (/dns, /dns4, /dns6, /dnsaddr) are resolved and every returned address is
+// checked. A parse or resolution failure returns an error so callers can fail
+// closed. Multiaddrs with neither an IP nor a DNS name (e.g. relay circuits)
+// have nothing to check and pass; peer-ID bans cover those.
+func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool, error) {
+	if s.banList == nil {
+		return false, nil
+	}
+
+	if ip := extractIPFromMultiaddr(addrStr); ip != "" {
+		return s.banList.IsBanned(ip), nil
+	}
+
+	maddr, err := ma.NewMultiaddr(addrStr)
+	if err != nil {
+		return false, errors.NewInvalidArgumentError("invalid multiaddr %s: %v", addrStr, err)
+	}
+
+	host := ""
+	for _, proto := range []int{ma.P_DNS, ma.P_DNS4, ma.P_DNS6, ma.P_DNSADDR} {
+		if v, verr := maddr.ValueForProtocol(proto); verr == nil {
+			host = v
+			break
+		}
+	}
+	if host == "" {
+		return false, nil
+	}
+
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return false, errors.NewServiceError("cannot resolve %s for ban check: %v", host, err)
+	}
+
+	for _, ip := range ips {
+		if s.banList.IsBanned(ip.String()) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // disconnectPeersOnBanList disconnects every connected peer whose multiaddr IP

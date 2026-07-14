@@ -146,6 +146,9 @@ type Server struct {
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
+	// ipBanCache is a short-lived cache of "is this peer's IP banned" lookups
+	// used by shouldSkipBannedPeer, avoiding a GetPeers scan per gossip message.
+	ipBanCache sync.Map // peerID string -> ipBanCacheEntry
 	// reputationCache is a short-lived cache of peer reputation scores used by
 	// shouldSkipUnhealthyPeer to avoid a gRPC round-trip per pubsub message.
 	// Entries expire after reputationCacheTTL; misses fall back to the registry.
@@ -1817,10 +1820,14 @@ func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerReques
 		return &p2p_api.ConnectPeerResponse{Success: false, Error: "P2P client is not initialised"}, nil
 	}
 
-	if s.banList != nil {
-		if ip := extractIPFromMultiaddr(req.PeerAddress); ip != "" && s.banList.IsBanned(ip) {
-			return &p2p_api.ConnectPeerResponse{Success: false, Error: "address is banned"}, nil
-		}
+	// Fail closed: if the ban status of the target cannot be determined (bad
+	// multiaddr, DNS resolution failure), refuse the dial.
+	banned, err := s.checkMultiaddrBanned(ctx, req.PeerAddress)
+	if err != nil {
+		return &p2p_api.ConnectPeerResponse{Success: false, Error: err.Error()}, nil
+	}
+	if banned {
+		return &p2p_api.ConnectPeerResponse{Success: false, Error: "address is banned"}, nil
 	}
 
 	if err := s.P2PClient.Connect(ctx, req.PeerAddress); err != nil {
