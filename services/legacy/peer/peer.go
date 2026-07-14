@@ -141,8 +141,13 @@ type MessageListeners struct {
 	// OnTx is invoked when a peer receives a tx bitcoin message.
 	OnTx func(p *Peer, msg *wire.MsgTx)
 
-	// OnBlock is invoked when a peer receives a block bitcoin message.
-	OnBlock func(p *Peer, msg *wire.MsgBlock, buf []byte)
+	// OnBlock is invoked when a peer receives a block bitcoin message. buf is
+	// the raw serialized payload on the buffered read path and nil on the
+	// streaming path (the only live caller). payloadSize is the block's
+	// serialized size measured off the wire (message bytes minus the wire
+	// header), 0 when the size was not measured; it lets the handler weight the
+	// block without an O(all-tx) SerializeSize() walk on the read-loop.
+	OnBlock func(p *Peer, msg *wire.MsgBlock, buf []byte, payloadSize int64)
 
 	// OnCFilter is invoked when a peer receives a cfilter bitcoin message.
 	OnCFilter func(p *Peer, msg *wire.MsgCFilter)
@@ -1254,14 +1259,19 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 // streaming entry point added in go-wire v1.2.5. The payload is consumed
 // directly off the wire — no full-payload allocation — and the DoubleHash
 // checksum is verified incrementally. The raw payload bytes are NOT returned
-// (the second return is always nil).
+// (the payload is never buffered).
+//
+// It returns the total number of bytes read for the message (the 24-byte wire
+// header plus the payload); the read-loop uses this to weight a block against
+// the prefetch budget without walking its tx set. The count is reported even on
+// error, mirroring ReadMessageStreamingN, so bytesReceived stays accurate.
 //
 // This is the right entry point for the main post-handshake message loop,
 // where fat blocks would otherwise force a multi-GB payload buffer. It is
 // NOT safe to use for handshake messages: MsgVersion.Bsvdecode type-asserts
 // its reader to *bytes.Buffer; go-wire rejects CmdVersion explicitly with a
 // *wire.MessageError.
-func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (wire.Message, error) {
+func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (int, wire.Message, error) {
 	n, msg, err := wire.ReadMessageStreamingN(p.conn,
 		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
@@ -1271,11 +1281,11 @@ func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (wire.Message
 	}
 
 	if err != nil {
-		return nil, err
+		return n, nil, err
 	}
 
 	p.logReadMessage(msg, nil)
-	return msg, nil
+	return n, msg, nil
 }
 
 // logReadMessage emits the debug logging that readMessage / readMessageStreaming
@@ -1827,6 +1837,34 @@ cleanup:
 	p.logger.Debugf("Peer stall handler done for %s", p)
 }
 
+// UseBlockPrefetchIngestion reports whether bounded async block prefetch
+// ingestion is active for the given budget and network: a positive budget AND
+// off regression net. regtest always takes the synchronous submit-then-query
+// path the block-acceptance tooling depends on, so it is excluded regardless of
+// budget. This is the single source of truth for the prefetch-mode predicate,
+// shared by the read-loop (shouldArmProcessingTimer) and the sync manager
+// (netsync.SyncManager.UsePrefetchIngestion) so both agree on when prefetch is
+// active — netsync imports this package, so it calls this directly rather than
+// re-implementing the rule.
+func UseBlockPrefetchIngestion(budgetBytes int64, net wire.BitcoinNet) bool {
+	return budgetBytes > 0 && net != wire.RegTestNet
+}
+
+// shouldArmProcessingTimer reports whether the per-message processing watchdog
+// should run for this command. With block prefetch ingestion active, OnBlock
+// legitimately blocks in AcquireBlockPrefetch under budget backpressure for
+// longer than PeerProcessingTimeout; block-stall detection is owned by the
+// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
+// watchdog is not armed for block messages in that mode. It shares the
+// UseBlockPrefetchIngestion predicate with netsync.SyncManager.UsePrefetchIngestion
+// so the read-loop and sync manager agree on when prefetch is active — regtest
+// always takes the synchronous path and keeps the watchdog for blocks. It still
+// arms for all other commands, and for every command (including blocks) when
+// ingestion is not active.
+func shouldArmProcessingTimer(cmd string, prefetchBudgetBytes int64, net wire.BitcoinNet) bool {
+	return !UseBlockPrefetchIngestion(prefetchBudgetBytes, net) || cmd != wire.CmdBlock
+}
+
 // inHandler handles all incoming messages for the peer.  It must be run as a goroutine.
 func (p *Peer) inHandler() {
 	// The timer is stopped when a new message is received and reset after it is processed.
@@ -1882,7 +1920,7 @@ out:
 		// rejected by the streaming path, but a version message here would
 		// already be a protocol error (duplicate version), so the rejection
 		// surfaces as a peer-disconnect rather than a silent failure.
-		rmsg, err := p.readMessageStreaming(p.wireEncoding)
+		n, rmsg, err := p.readMessageStreaming(p.wireEncoding)
 		idleTimer.Stop()
 
 		if err != nil {
@@ -1931,7 +1969,15 @@ out:
 		p.processingCmdMtx.Lock()
 		p.currentProcessingMsgCmd = rmsg.Command()
 		p.processingCmdMtx.Unlock()
-		processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
+
+		// With block prefetch enabled, OnBlock legitimately parks in
+		// AcquireBlockPrefetch under budget backpressure for longer than
+		// PeerProcessingTimeout; block-stall detection is then owned by the
+		// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
+		// per-message watchdog must not fire for block messages in that mode.
+		if shouldArmProcessingTimer(rmsg.Command(), p.settings.Legacy.BlockPrefetchBufferBytes, p.cfg.ChainParams.Net) {
+			processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
+		}
 
 		atomic.StoreInt64(&p.lastRecv, time.Now().Unix())
 		p.signalReceived(rmsg)
@@ -2001,9 +2047,16 @@ out:
 
 		case *wire.MsgBlock:
 			if p.cfg.Listeners.OnBlock != nil {
-				// Streaming path does not return the raw payload bytes.
-				// bsvutil.Block.Bytes() lazy-serializes from msg on demand.
-				p.cfg.Listeners.OnBlock(p, msg, nil)
+				// The streaming path does not buffer the raw payload bytes (buf
+				// is nil; bsvutil.Block.Bytes() lazy-serializes from msg on
+				// demand). Pass the serialized block size measured off the wire
+				// instead: n counts the whole message (24-byte header +
+				// payload), so n-MessageHeaderSize is the serialized block
+				// payload. This lets OnBlock weight the block against the
+				// prefetch budget without the O(all-tx) SerializeSize() walk on
+				// the read-loop — the largest blocks are exactly where that walk
+				// hurt the download/processing overlap this feature exists for.
+				p.cfg.Listeners.OnBlock(p, msg, nil, int64(n-wire.MessageHeaderSize))
 			}
 
 		case *wire.MsgInv:

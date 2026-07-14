@@ -13,7 +13,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
+	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1152,4 +1155,306 @@ func TestMergeCheckpointsFunc(t *testing.T) {
 	assert.Equal(t, int32(200), merged[1].Height)
 	assert.Equal(t, int32(300), merged[2].Height)
 	assert.Equal(t, int32(400), merged[3].Height)
+}
+
+// TestShouldDisconnectOnBlockErr verifies the block-processing error policy that
+// both the synchronous and the async-prefetch ingestion paths in OnBlock share:
+// validation failures rotate the sync peer, local infrastructure errors do not.
+func TestShouldDisconnectOnBlockErr(t *testing.T) {
+	// No error: nothing to disconnect for.
+	require.False(t, shouldDisconnectOnBlockErr(nil))
+
+	// Local infrastructure problems must NOT churn the sync peer.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("grpc down")))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageError("db unavailable")))
+
+	// A genuine block validation failure rotates the peer.
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
+}
+
+// TestCheckBannedBounded verifies the bounded ban-check round-trip extracted from
+// OnBlock's pre-admission phase. Under prefetch the per-message watchdog is
+// disarmed for block messages and the netsync stall detector only watches the
+// sync peer, so a wedged query goroutine must NOT be allowed to park the
+// read-loop: the round-trip returns ok=false (drop the block) when the query send
+// or its reply cannot complete within the context, and (banned, true) when the
+// query goroutine answers.
+func TestCheckBannedBounded(t *testing.T) {
+	t.Run("send times out when nobody services the query", func(t *testing.T) {
+		// Unbuffered query with no reader: the send can never complete, so an
+		// already-cancelled context must make the round-trip bail with ok=false.
+		sp := &serverPeer{server: &server{query: make(chan interface{})}}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
+		require.False(t, ok, "a never-serviced query send must return ok=false")
+		require.False(t, banned)
+	})
+
+	t.Run("reply times out when the query is read but never answered", func(t *testing.T) {
+		s := &server{query: make(chan interface{})}
+		sp := &serverPeer{server: s}
+
+		// Drain the send but never reply, forcing the second select to wait out
+		// the context — the wedged-query-goroutine case this bound exists for.
+		go func() { <-s.query }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
+		require.False(t, ok, "a missing reply must return ok=false")
+		require.False(t, banned)
+	})
+
+	t.Run("returns the ban verdict when the query goroutine answers", func(t *testing.T) {
+		for _, want := range []bool{true, false} {
+			s := &server{query: make(chan interface{})}
+			sp := &serverPeer{server: s}
+
+			go func() {
+				msg := (<-s.query).(*isPeerBannedMsg)
+				msg.reply <- want
+			}()
+
+			banned, ok := sp.checkBannedBounded(context.Background(), "127.0.0.1")
+			require.True(t, ok, "a serviced round-trip must return ok=true")
+			require.Equal(t, want, banned)
+		}
+	})
+}
+
+// TestBlockAdmissionWeight verifies the prefetch-budget weight selection used by
+// OnBlock: the wire-measured payload size is preferred, then the raw buffer
+// length, and only as a last resort the O(all-tx) SerializeSize() walk.
+func TestBlockAdmissionWeight(t *testing.T) {
+	msg := wire.NewMsgBlock(wire.NewBlockHeader(1, &chainhash.Hash{}, &chainhash.Hash{}, 1, 1))
+	fallback := int64(msg.SerializeSize())
+	require.Positive(t, fallback, "empty block must still serialize to a positive size")
+
+	// Wire measurement present: used even when buf is also non-nil.
+	require.Equal(t, int64(1000), blockAdmissionWeight(1000, make([]byte, 200), msg))
+
+	// No wire measurement, but the raw buffer is available: use its length.
+	require.Equal(t, int64(200), blockAdmissionWeight(0, make([]byte, 200), msg))
+
+	// Neither available: fall back to SerializeSize().
+	require.Equal(t, fallback, blockAdmissionWeight(0, nil, msg))
+
+	// A non-positive wire measurement must not be trusted; fall through.
+	require.Equal(t, fallback, blockAdmissionWeight(-1, nil, msg))
+}
+
+// TestMisbehaviorDisconnectTarget verifies the unrequested-block eviction
+// resolves a stream sub-peer to its association primary (so the whole
+// association is torn down), while a peer with no association disconnects
+// itself. This mirrors handleBlockMsg's stream-peer → primary resolution.
+func TestMisbehaviorDisconnectTarget(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	// A peer with no association is its own disconnect target.
+	lone := newPeer()
+	require.Same(t, lone, misbehaviorDisconnectTarget(lone))
+
+	// A stream sub-peer resolves to the association primary.
+	primary := newPeer()
+	assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+	primary.SetAssociation(assoc)
+
+	dataStream := newPeer()
+	require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
+	dataStream.SetAssociation(assoc)
+
+	require.Same(t, primary, misbehaviorDisconnectTarget(dataStream))
+
+	// The primary itself resolves to itself.
+	require.Same(t, primary, misbehaviorDisconnectTarget(primary))
+}
+
+// TestDisconnectMisbehaving verifies the shared misbehaviour-eviction helper used
+// at all three disconnect sites: for a stream sub-peer it disconnects BOTH the
+// association primary (whose disconnect drives handleDonePeerMsg's
+// associationMgr.Remove, rotating the sync peer) AND the stream's own connection;
+// for a lone peer it disconnects only that peer, exactly once (idempotent guard).
+// DisconnectWithWarning closes the peer's quit channel, so WaitForDisconnect
+// returning is the observable disconnect signal.
+func TestDisconnectMisbehaving(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	// disconnected reports whether p was disconnected within a short window
+	// (DisconnectWithWarning closes p.quit, which WaitForDisconnect awaits).
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
+
+	t.Run("stream sub-peer evicts both the primary and the stream", func(t *testing.T) {
+		primary := newPeer()
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+
+		dataStream := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
+		dataStream.SetAssociation(assoc)
+
+		disconnectMisbehaving(&serverPeer{Peer: dataStream}, "bad block")
+
+		require.True(t, disconnected(primary), "the association primary must be disconnected to rotate the sync peer")
+		require.True(t, disconnected(dataStream), "the stream sub-peer's own connection must be disconnected too")
+	})
+
+	t.Run("lone peer disconnects only itself", func(t *testing.T) {
+		lone := newPeer()
+
+		require.NotPanics(t, func() { disconnectMisbehaving(&serverPeer{Peer: lone}, "bad block") })
+		require.True(t, disconnected(lone))
+	})
+}
+
+// TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
+// path: awaitBlockResult must hold the reserved budget until the block actually
+// finishes processing — even after the peer is torn down (sp.quit) — because the
+// block's memory is still live in the netsync pipeline. It releases (via defer)
+// only when done arrives, or, as a shutdown-race backstop, when sp.ctx (the
+// ServiceManager errgroup Init context, cancelled on daemon shutdown) fires. A
+// nil prefetch budget makes ReleaseBlockPrefetch a no-op, so this exercises the
+// control flow without standing up a full SyncManager.
+func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
+	newPeer := func(ctx context.Context) *serverPeer {
+		return &serverPeer{
+			server: &server{syncManager: &netsync.SyncManager{}, logger: ulogger.TestLogger{}},
+			ctx:    ctx,
+			quit:   make(chan struct{}),
+		}
+	}
+
+	t.Run("holds after sp.quit until the block completes", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		// Peer torn down, but the block is still queued: must NOT return yet
+		// (that would release the budget while the block's memory is still live).
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult released on sp.quit instead of holding until the block completed")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		// Block finishes processing: now it releases and exits.
+		done <- nil
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not exit after the block completed")
+		}
+	})
+
+	t.Run("sp.ctx is the shutdown-race backstop after sp.quit", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		sp := newPeer(ctx)
+		done := make(chan error, 1) // reply never arrives (shutdown drain race)
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before the block completed or ctx cancelled")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		cancel() // daemon shutdown cancels the errgroup ctx
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not exit on sp.ctx cancellation")
+		}
+	})
+
+	t.Run("completes when the reply arrives", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+		done <- nil // successful processing, no disconnect
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not return after the reply arrived")
+		}
+	})
+
+	t.Run("validation failure after sp.quit does not disconnect", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+
+		// Recover in the goroutine and assert on the test goroutine: a
+		// disconnect-worthy validation error arriving after teardown must be
+		// logged but NOT disconnect the already-gone peer. The embedded
+		// *peer.Peer is nil, so reaching DisconnectWithWarning would panic —
+		// a nil recovered value therefore proves the disconnect path is skipped.
+		panicked := make(chan any, 1)
+		finished := make(chan struct{})
+		go func() {
+			defer func() {
+				panicked <- recover()
+				close(finished)
+			}()
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+		}()
+
+		// Tear down with done still empty so the goroutine must take the sp.quit
+		// branch and park in its inner wait (rather than racing the outer <-done).
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before the late reply arrived")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		// The late validation failure now arrives: logged, but must not disconnect.
+		done <- errors.NewBlockInvalidError("bad block after teardown")
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not return after the late reply")
+		}
+
+		require.Nil(t, <-panicked, "awaitBlockResult must not disconnect (panic) a torn-down peer")
+	})
 }
