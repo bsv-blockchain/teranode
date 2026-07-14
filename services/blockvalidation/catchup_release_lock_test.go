@@ -172,3 +172,82 @@ func TestReleaseCatchupLock_LocalErrorSkipsReputationRPC(t *testing.T) {
 	require.False(t, blocker.maliciousCalled, "local error must not report malicious")
 	require.False(t, blocker.errorCalled, "local error must not report peer error")
 }
+
+// incompleteBlockP2PClient records whether the peer-attributable incomplete-block penalty
+// path (RecordCatchupFailureWithKind) fires. Only that method is overridden; any other call
+// hits the nil embedded interface and panics, which would flag an unexpected penalty path.
+type incompleteBlockP2PClient struct {
+	P2PClientI
+
+	mu            sync.Mutex
+	failureCalled bool
+	failureKind   string
+}
+
+func (c *incompleteBlockP2PClient) RecordCatchupFailureWithKind(_ context.Context, _ string, failureKind, _ string) error {
+	c.mu.Lock()
+	c.failureCalled = true
+	c.failureKind = failureKind
+	c.mu.Unlock()
+	return nil
+}
+
+// TestReleaseCatchupLock_IncompleteBlockPenaltyAttribution verifies that a transient-local
+// incomplete block (an unabsorbed-parent ordering gap, not the peer's fault) does NOT open a
+// full-storage penalty, while a genuinely peer-attributable incomplete block DOES.
+func TestReleaseCatchupLock_IncompleteBlockPenaltyAttribution(t *testing.T) {
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+
+	newCtx := func() *CatchupContext {
+		return &CatchupContext{
+			blockUpTo:           &model.Block{Header: header, Height: 1000},
+			baseURL:             "http://peer1",
+			peerID:              "peer-123",
+			startTime:           time.Now(),
+			incompleteBlockHash: "0000000000000000000000000000000000000000000000000000000000000001",
+		}
+	}
+
+	t.Run("transient-local incomplete does not penalize", func(t *testing.T) {
+		server, _, _, cleanup := setupTestCatchupServer(t)
+		defer cleanup()
+
+		rec := &incompleteBlockP2PClient{}
+		server.p2pClient = rec
+
+		ctx := newCtx()
+		require.NoError(t, server.acquireCatchupLock(ctx))
+
+		relErr := error(errors.NewBlockIncompleteTransientError("transient missing-data state"))
+		server.releaseCatchupLock(ctx, &relErr)
+
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		require.False(t, rec.failureCalled,
+			"transient-local incomplete must not report a catchup failure / open a penalty window")
+		require.NotNil(t, server.previousCatchupAttempt)
+		require.Equal(t, "block_incomplete_transient", server.previousCatchupAttempt.ErrorType)
+	})
+
+	t.Run("peer-attributable incomplete penalizes", func(t *testing.T) {
+		server, _, _, cleanup := setupTestCatchupServer(t)
+		defer cleanup()
+
+		rec := &incompleteBlockP2PClient{}
+		server.p2pClient = rec
+
+		ctx := newCtx()
+		require.NoError(t, server.acquireCatchupLock(ctx))
+
+		relErr := error(errors.NewBlockIncompleteError("no coinbase from seeded peer"))
+		server.releaseCatchupLock(ctx, &relErr)
+
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		require.True(t, rec.failureCalled,
+			"peer-attributable incomplete must report a catchup failure (penalty)")
+		require.Equal(t, catchupFailureKindBlockIncomplete, rec.failureKind)
+		require.NotNil(t, server.previousCatchupAttempt)
+		require.Equal(t, "block_incomplete", server.previousCatchupAttempt.ErrorType)
+	})
+}

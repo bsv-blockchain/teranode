@@ -20,7 +20,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -68,12 +67,27 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 
 	s.logger.Infof("[handleBlockTopic] received block %s fromID %s", blockMessage.Hash, blockMessage.PeerID)
 
+	isSelf := s.isOwnMessage(fromID, blockMessage.PeerID)
+	advertisedHeight := blockMessage.Height
+	if isSelf {
+		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
+		if err != nil {
+			return
+		}
+	} else {
+		var ok bool
+		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight())
+		if !ok {
+			return
+		}
+	}
+
 	select {
 	case s.notificationCh <- &notificationMsg{
 		Timestamp:  time.Now().UTC().Format(isoFormat),
 		Type:       "block",
-		Hash:       blockMessage.Hash,
-		Height:     blockMessage.Height,
+		Hash:       hash.String(),
+		Height:     advertisedHeight,
 		BaseURL:    blockMessage.DataHubURL,
 		PeerID:     blockMessage.PeerID,
 		ClientName: blockMessage.ClientName,
@@ -83,7 +97,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	}
 
 	// Ignore our own messages
-	if s.isOwnMessage(fromID, blockMessage.PeerID) {
+	if isSelf {
 		s.logger.Debugf("[handleBlockTopic] ignoring own block message for %s", blockMessage.Hash)
 		return
 	}
@@ -97,7 +111,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 
 	// Store using the originator's peer ID
 	if peerID, err := peer.Decode(blockMessage.PeerID); err == nil {
-		s.addPeer(peerID, blockMessage.ClientName, blockMessage.Height, hash, blockMessage.DataHubURL)
+		s.addPeer(peerID, blockMessage.ClientName, advertisedHeight, hash, blockMessage.DataHubURL)
 		s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for peer %s", blockMessage.Hash, peerID)
 	}
 
@@ -119,11 +133,6 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	// Block validation handles bad blocks safely, and catchup fetches blocks and
 	// their subtrees directly over HTTP (not via the gossip subtree handler), so
 	// the reputation filter retained in handleSubtreeTopic does not affect catchup.
-
-	hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
-	if err != nil {
-		return
-	}
 
 	// Always send block to kafka - let block validation service decide what to do based on sync state
 	// send block to kafka, if configured
@@ -449,27 +458,6 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 	return ""
 }
 
-// contains checks if a slice of strings contains a specific string.
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		bootstrapAddr, err := ma.NewMultiaddr(s)
-		if err != nil {
-			continue
-		}
-
-		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
-		if err != nil {
-			continue
-		}
-
-		if peerInfo.ID.String() == item {
-			return true
-		}
-	}
-
-	return false
-}
-
 // startInvalidBlockConsumer initializes and starts the Kafka consumer for invalid blocks
 func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
 	var kafkaURL *url.URL
@@ -584,6 +572,32 @@ func (s *Server) getLocalHeight() uint32 {
 	}
 
 	return bhMeta.Height
+}
+
+func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
+	hash, err := chainhash.NewHashFromStr(advertisedHash)
+	if err != nil {
+		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash %q: %v", peerID, advertisedHash, err)
+		return 0, nil, false
+	}
+
+	maxLead := uint32(0)
+	if s.settings != nil {
+		maxLead = s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead
+	}
+
+	maxAcceptedHeight := uint64(localHeight) + uint64(maxLead)
+	if maxAcceptedHeight > uint64(^uint32(0)) {
+		maxAcceptedHeight = uint64(^uint32(0))
+	}
+
+	if uint64(advertisedHeight) > maxAcceptedHeight {
+		cappedHeight := uint32(maxAcceptedHeight)
+		s.logger.Warnf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, cappedHeight, localHeight, maxLead)
+		return cappedHeight, hash, true
+	}
+
+	return advertisedHeight, hash, true
 }
 
 // registerPeer is a fire-and-forget shorthand for the centralized registry's
@@ -1014,41 +1028,6 @@ func (s *Server) parseHash(hashStr string, context string) (*chainhash.Hash, err
 	}
 
 	return hash, nil
-}
-
-// shouldSkipDuringSync checks if we should skip processing during sync
-func (s *Server) shouldSkipDuringSync(from string, originatorPeerID string, messageHeight uint32, messageType string) bool {
-	syncPeer := s.getSyncPeer()
-	if syncPeer == "" {
-		return false
-	}
-
-	syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx)
-	if err != nil || !syncing {
-		return false
-	}
-
-	// Get sync peer's height from registry
-	syncPeerHeight := int32(0)
-	if peerInfo, exists := s.getPeer(syncPeer); exists {
-		syncPeerHeight = int32(peerInfo.Height)
-	}
-
-	// Discard announcements from peers that are behind our sync peer
-	if messageHeight < uint32(syncPeerHeight) {
-		s.logger.Debugf("[%s] Discarding announcement at height %d from %s (below sync peer height %d)",
-			messageType, messageHeight, from, syncPeerHeight)
-		return true
-	}
-
-	// Skip if it's not from our sync peer
-	peerID, err := peer.Decode(originatorPeerID)
-	if err != nil || peerID != syncPeer {
-		s.logger.Debugf("[%s] Skipping announcement during sync (not from sync peer)", messageType)
-		return true
-	}
-
-	return false
 }
 
 func (s *Server) startPeerMapCleanup(ctx context.Context) {

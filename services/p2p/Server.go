@@ -946,6 +946,12 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 
+	notificationBestHeight := nodeStatusMessage.BestHeight
+	notificationBestBlockHash := nodeStatusMessage.BestBlockHash
+	sanitizedBestHeight := nodeStatusMessage.BestHeight
+	var sanitizedBestBlockHash *chainhash.Hash
+	sanitizedTipOK := false
+
 	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
@@ -959,6 +965,19 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
 			s.applyBanScore(peerID, ReasonProtocolViolation)
 			return
+		}
+	}
+
+	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
+		var ok bool
+		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight())
+		if ok {
+			sanitizedTipOK = true
+			notificationBestHeight = sanitizedBestHeight
+			notificationBestBlockHash = sanitizedBestBlockHash.String()
+		} else {
+			notificationBestHeight = 0
+			notificationBestBlockHash = ""
 		}
 	}
 
@@ -992,8 +1011,8 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 		PeerID:              nodeStatusMessage.PeerID,
 		Version:             nodeStatusMessage.Version,
 		CommitHash:          nodeStatusMessage.CommitHash,
-		BestBlockHash:       nodeStatusMessage.BestBlockHash,
-		BestHeight:          nodeStatusMessage.BestHeight,
+		BestBlockHash:       notificationBestBlockHash,
+		BestHeight:          notificationBestHeight,
 		TxCount:             nodeStatusMessage.TxCount,
 		SubtreeCount:        nodeStatusMessage.SubtreeCount,
 		FSMState:            nodeStatusMessage.FSMState,
@@ -1018,20 +1037,18 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 
 	// Update peer height if provided (but not for our own messages)
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
+		if !sanitizedTipOK {
+			return
+		}
+
 		peerID, err := peer.Decode(nodeStatusMessage.PeerID)
 		if err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] failed to decode peer ID %s: %v", nodeStatusMessage.PeerID, err)
 			return
 		}
 
-		hash, err := chainhash.NewHashFromStr(nodeStatusMessage.BestBlockHash)
-		if err != nil {
-			s.logger.Warnf("[handleNodeStatusTopic] failed to create hash from best block hash %s: %v", nodeStatusMessage.BestBlockHash, err)
-			return
-		}
-
-		s.addPeer(peerID, nodeStatusMessage.ClientName, nodeStatusMessage.BestHeight, hash, nodeStatusMessage.BaseURL)
-		s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", nodeStatusMessage.BestBlockHash, peerID)
+		s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedBestHeight, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
+		s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", notificationBestBlockHash, peerID)
 
 		// Update storage mode if provided
 		// Store whether the peer is a full node or pruned node
@@ -2030,45 +2047,6 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 	s.subtreePeerMap.Delete(subtreeHash)
 
 	return nil
-}
-
-// myBanEventHandler implements BanEventHandler for the Server.
-type myBanEventHandler struct {
-	server *Server
-}
-
-// OnPeerBanned is called when a peer is banned.
-func (h *myBanEventHandler) OnPeerBanned(peerID string, until time.Time, reason string) {
-	h.server.logger.Infof("Peer %s banned until %s for reason: %s", peerID, until.Format(time.RFC3339), reason)
-	// get the ip for the peer id
-	pid, err := peer.Decode(peerID)
-	if err != nil {
-		h.server.logger.Errorf("Failed to decode peer ID %s: %v", peerID, err)
-		return
-	}
-
-	var ids []string
-	allPeers := h.server.P2PClient.GetPeers()
-	for _, p := range allPeers {
-		if p.ID == pid.String() {
-			h.server.logger.Infof("Found connected peer %s for banning", peerID)
-			ids = append(ids, p.Addrs...)
-			break
-		}
-	}
-
-	// add to ban list
-	for _, id := range ids {
-		if h.server.banList != nil {
-			if err := h.server.banList.Add(context.Background(), id, until); err != nil {
-				h.server.logger.Errorf("Failed to add peer %s to ban list: %v", id, err)
-			}
-		}
-	}
-
-	// Remove peer from SyncCoordinator before disconnecting
-	// Remove peer from registry
-	h.server.removePeer(pid)
 }
 
 // peerInfoToP2PProto converts a centralized blockchain.PeerInfo into the

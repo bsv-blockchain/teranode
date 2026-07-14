@@ -1,4 +1,9 @@
 name: Teranode PR tests
+# The run-name carries the tested PR/merge/base identity to the downstream
+# sonar-pr-analyze.yaml workflow, which validates every field before trusting
+# it. Base retargets do not rerun this workflow (default trigger types), so the
+# Sonar gate keeps the same staleness contract as every other required check.
+run-name: sonar-pr/${{ github.event.pull_request.number }}/merge/${{ github.sha }}/base/${{ github.event.pull_request.base.sha }}/ref/${{ github.event.pull_request.base.ref }}
 
 on:
   pull_request:
@@ -54,6 +59,7 @@ jobs:
         with:
           name: golangci-lint-report
           path: golangci-lint-report.xml
+          if-no-files-found: error
           retention-days: 1
 
   test-teraslab:
@@ -169,55 +175,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          # Renamed from coverage-report. The coverage-report artifact that
-          # sonar-pr-analyze consumes is now assembled by the coverage-report
-          # job below, which unions this untagged profile with the tagged
-          # TeraSlab profile. Sonar runs from main's workflow copy (workflow_run
-          # → default branch) and fetches only the coverage-report artifact, so
-          # the union has to be delivered under that name.
-          name: coverage-report-untagged
+          name: coverage-report
           path: coverage.out
+          if-no-files-found: error
           retention-days: 1
 
       # - name: Publish Test Summary Results
       #   if: always()
       #   run: npx github-actions-ctrf ctrf-report.json
-
-  # Assemble the coverage-report artifact that sonar-pr-analyze downloads. Sonar
-  # runs from main's copy of that workflow (workflow_run → default branch), which
-  # fetches only the coverage-report artifact — so the union of the untagged
-  # profile (test job) and the tagged TeraSlab profile (test-teraslab job) must
-  # be delivered under that one name. Kept separate so test and test-teraslab
-  # still run in parallel; a fast download-then-reupload adds negligible time.
-  coverage-report:
-    name: bundle coverage report
-    runs-on: ubuntu-latest
-    needs: [test, test-teraslab]
-    if: always()
-    steps:
-      - name: Download untagged coverage
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: coverage-report-untagged
-
-      - name: Download TeraSlab coverage
-        # Defensive: if test-teraslab skipped/failed, still publish the untagged
-        # profile so Sonar has coverage.out (the whole workflow fails first in
-        # that case, but this keeps the bundle job robust).
-        continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: coverage-teraslab-report
-
-      - name: Upload combined coverage report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage-report
-          path: |
-            coverage.out
-            coverage-teraslab.out
-          if-no-files-found: warn
-          retention-days: 1
 
   filename-check-report:
     name: filename check report
@@ -234,4 +199,75 @@ jobs:
         with:
           name: sonar-filename-report
           path: sonar_filename_report.json
+          if-no-files-found: error
+          retention-days: 1
+  # Fixed producer names keep the legacy downstream compatible during rollout.
+  # Failed-job reruns also rerun dependents, so this job reselects each newest
+  # producer artifact and seals the effective set into the current-attempt bundle.
+  sonar-inputs:
+    name: Aggregate Sonar inputs
+    needs:
+      - golangci-lint
+      - test
+      - test-teraslab
+      - filename-check-report
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Download golangci-lint report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: golangci-lint-report
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download coverage report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-report
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # TeraSlab integration coverage (test-teraslab job) is the only coverage for
+      # the client-coupled TeraSlab store code. Seal it into the bundle alongside
+      # coverage.out; sonar-project.properties lists both in reportPaths so Sonar
+      # unions them (a line covered by either counts as covered).
+      - name: Download TeraSlab coverage report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-teraslab-report
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download filename check report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sonar-filename-report
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Presence-only validation: never execute or parse artifact contents.
+      - name: Validate required Sonar inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in coverage.out coverage-teraslab.out golangci-lint-report.xml sonar_filename_report.json; do
+            [ -f "$file" ] || {
+              echo "::error::Missing required Sonar input file: $file"
+              exit 1
+            }
+          done
+
+      - name: Upload Sonar input bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sonar-inputs-${{ github.run_attempt }}
+          path: |
+            coverage.out
+            coverage-teraslab.out
+            golangci-lint-report.xml
+            sonar_filename_report.json
+          if-no-files-found: error
           retention-days: 1

@@ -121,6 +121,8 @@ message AddBanScoreRequest {
 
   message RecordCatchupFailureRequest {
     string peer_id = 1;
+    string failure_kind = 2;
+    string block_hash = 3;
   }
 
   message RecordCatchupFailureResponse {
@@ -199,6 +201,19 @@ message AddBanScoreRequest {
   }
 
   message ReportValidBlockResponse {
+    bool success = 1;
+    string message = 2;
+  }
+
+  // Report locally validated peer chain progress
+  message ReportValidatedChainProgressRequest {
+    string peer_id = 1;
+    uint32 height = 2;
+    string block_hash = 3;
+    bytes chain_work = 4;
+  }
+
+  message ReportValidatedChainProgressResponse {
     bool success = 1;
     string message = 2;
   }
@@ -301,6 +316,7 @@ message AddBanScoreRequest {
     // Subtree and block validation reporting
     rpc ReportValidSubtree(ReportValidSubtreeRequest) returns (ReportValidSubtreeResponse) {}
     rpc ReportValidBlock(ReportValidBlockRequest) returns (ReportValidBlockResponse) {}
+    rpc ReportValidatedChainProgress(ReportValidatedChainProgressRequest) returns (ReportValidatedChainProgressResponse) {}
 
     // Peer status checking
     rpc IsPeerMalicious(IsPeerMaliciousRequest) returns (IsPeerMaliciousResponse) {}

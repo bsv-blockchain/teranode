@@ -135,6 +135,61 @@ func TestCentralizedPeerRegistry_Persistence_MultiplePeersRoundTrip(t *testing.T
 	require.Equal(t, "aerospike", got.Storage)
 }
 
+func TestCentralizedPeerRegistry_Persistence_ValidatedProgressRoundTrip(t *testing.T) {
+	store := newTestBlobStore(t)
+	ctx := context.Background()
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	validatedHash := mustPeerRegistryHash("persisted-validated")
+
+	// Validated work is credited (and the delivery-failure decay leaves it intact) only
+	// outside an active penalty window, so the validated-progress round-trip and the
+	// penalty-window round-trip are exercised on separate peers in mutually compatible
+	// states rather than on one peer where they cannot coexist.
+
+	// Peer "p": no penalty → validated progress is credited and must survive the round-trip.
+	r.Register(&PeerInfo{
+		ID:        "p",
+		Height:    500,
+		BlockHash: mustPeerRegistryHash("persisted-advertised"),
+		Storage:   "pruned",
+	})
+	require.NoError(t, r.RecordValidatedPeerProgress("p", 250, validatedHash, []byte{0x01, 0x02, 0x03}))
+
+	// Peer "penalized": an active penalty window and its contradiction count must survive
+	// the round-trip. Validated work is intentionally not credited here — the penalty gate
+	// (and decay) keep a penalized non-deliverer from retaining validated-work eligibility.
+	penaltyUntil := time.Now().Add(time.Hour).Truncate(time.Microsecond)
+	r.Register(&PeerInfo{
+		ID:                        "penalized",
+		Height:                    600,
+		BlockHash:                 mustPeerRegistryHash("penalized-advertised"),
+		Storage:                   "pruned",
+		FullStorageContradictions: 2,
+		FullStoragePenaltyUntil:   penaltyUntil,
+	})
+
+	require.NoError(t, r.Save(ctx, store))
+
+	r2 := NewCentralizedPeerRegistry(DefaultBanConfig())
+	require.NoError(t, r2.Load(ctx, store, 24*time.Hour))
+
+	got, ok := r2.Get("p")
+	require.True(t, ok)
+	require.Equal(t, uint32(500), got.Height)
+	require.NotNil(t, got.BlockHash)
+	require.Equal(t, uint32(250), got.ValidatedHeight)
+	require.NotNil(t, got.ValidatedBlockHash)
+	require.Equal(t, validatedHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x01, 0x02, 0x03}, got.ValidatedChainWork)
+	require.False(t, got.LastValidatedAt.IsZero())
+
+	penalized, ok := r2.Get("penalized")
+	require.True(t, ok)
+	require.Equal(t, int64(2), penalized.FullStorageContradictions)
+	require.True(t, penalized.FullStoragePenaltyUntil.Equal(penaltyUntil))
+}
+
 func TestCentralizedPeerRegistry_Persistence_EmptyRegistrySave(t *testing.T) {
 	store := newTestBlobStore(t)
 	ctx := context.Background()
