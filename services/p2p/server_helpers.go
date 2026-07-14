@@ -862,10 +862,25 @@ func (s *Server) cleanupPeerMaps() {
 		s.reputationCache.Delete(key)
 	}
 
+	// Evict expired ipBanCache entries for the same reason: isPeerIPBanned
+	// only ever inserts, one entry per unique peer ID gossip is seen from.
+	var ipBanKeysToDelete []string
+	s.ipBanCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(ipBanCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				ipBanKeysToDelete = append(ipBanKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range ipBanKeysToDelete {
+		s.ipBanCache.Delete(key)
+	}
+
 	// Log cleanup stats
-	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 {
-		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries",
-			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete))
+	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 || len(ipBanKeysToDelete) > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries, %d expired IP-ban entries",
+			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete), len(ipBanKeysToDelete))
 	}
 
 	// Second pass: enforce size limits if needed
