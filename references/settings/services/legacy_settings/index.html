@@ -6033,6 +6033,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#block-prefetch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Prefetch
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6869,6 +6880,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#block-prefetch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Prefetch
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7198,6 +7220,13 @@
 <td><strong>CRITICAL</strong> - Message processing timeout</td>
 </tr>
 <tr>
+<td>BlockPrefetchBufferBytes</td>
+<td>int64</td>
+<td>268435456</td>
+<td>legacy_blockPrefetchBufferBytes</td>
+<td>Byte budget for blocks downloaded ahead of processing during sync (0 disables prefetch)</td>
+</tr>
+<tr>
 <td>Upnp</td>
 <td>bool</td>
 <td>false</td>
@@ -7234,6 +7263,11 @@
 <ul>
 <li><code>AllowBlockPriority = true</code>: Enables block priority messages via connection streaming</li>
 <li>Sent via Protoconf message during peer handshake</li>
+</ul>
+<h3 id="block-prefetch">Block Prefetch<a class="headerlink" href="#block-prefetch" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>BlockPrefetchBufferBytes</code> bounds the bytes of received-but-not-yet-processed blocks so download overlaps validation during sync; <code>0</code> disables prefetch (synchronous ingestion).</li>
+<li>Big-block era: a block at least as large as the whole budget is admitted alone (weight clamped), giving zero overlap — identical to pre-prefetch behaviour. To get overlap on large blocks, set the budget to at least ~2× the typical block size.</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies<a class="headerlink" href="#service-dependencies" title="Permanent link">&para;</a></h2>
 <table>
