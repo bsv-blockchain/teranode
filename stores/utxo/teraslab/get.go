@@ -93,8 +93,14 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 		return &utxo.SpendResponse{Status: int(utxo.Status_NOT_FOUND)}, nil
 	}
 
+	// A vout past the stored output count is reachable via the asset HTTP
+	// /api/v1/utxo and /api/v1/utxos endpoints (which no longer pre-validate
+	// vout). Report it as NOT_FOUND with a nil error, matching the Aerospike
+	// reference (aerospike/get.go): returning a Go error here can crash the asset
+	// process when it surfaces in an errgroup goroutine outside echo's recover
+	// middleware.
 	if int(sp.Vout) >= len(records[0].Slots) {
-		return nil, errors.NewUtxoError("vout out of range")
+		return &utxo.SpendResponse{Status: int(utxo.Status_NOT_FOUND)}, nil
 	}
 
 	slot := records[0].Slots[sp.Vout]

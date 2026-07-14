@@ -428,8 +428,14 @@ func TestSpendAndGetSpendErrorPaths(t *testing.T) {
 		require.Equal(t, int(utxo.Status_NOT_FOUND), resp.Status)
 	})
 
-	t.Run("GetSpend with vout out of range errors", func(t *testing.T) {
-		_, err := store.GetSpend(ctx, &utxo.Spend{TxID: tx.TxIDChainHash(), Vout: 999})
-		require.Error(t, err)
+	t.Run("GetSpend with vout out of range returns NOT_FOUND status", func(t *testing.T) {
+		// Out-of-range vout is a status, not an error — matching Aerospike
+		// (aerospike/get.go). Returning a Go error here can crash the asset
+		// process when it surfaces in an errgroup goroutine outside echo's
+		// recover middleware.
+		resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: tx.TxIDChainHash(), Vout: 999})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, int(utxo.Status_NOT_FOUND), resp.Status)
 	})
 }

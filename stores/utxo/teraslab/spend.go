@@ -164,8 +164,13 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		return err
 	}
 
-	// If flagAsLocked is true, lock the transactions after unspending
-	if len(flagAsLocked) > 0 && flagAsLocked[0] {
+	// When flagAsLocked is provided, set the lock state on the transactions after
+	// unspending — honoring the value symmetrically (true locks, false unlocks),
+	// matching the SQL reference contract (sql/sql.go Unspend). ProcessConflicting
+	// locks affected parents (true) and ReverseProcessConflicting unlocks them
+	// (false); ignoring the false case stranded those parents locked=true after a
+	// reversed conflict, making their outputs unspendable to normal spends.
+	if len(flagAsLocked) > 0 {
 		txHashes := make([]chainhash.Hash, 0, len(spends))
 		seen := make(map[chainhash.Hash]bool)
 		for _, sp := range spends {
@@ -175,7 +180,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 			}
 		}
 		if len(txHashes) > 0 {
-			return s.SetLocked(ctx, txHashes, true)
+			return s.SetLocked(ctx, txHashes, flagAsLocked[0])
 		}
 	}
 
