@@ -43,7 +43,8 @@ func OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 //   - p: The peer that sent the message.
 //   - msg: The block message received.
 //   - buf: The raw block data.
-func OnBlock(_ *peer.Peer, msg *wire.MsgBlock, _ []byte) {
+//   - payloadSize: The block's serialized size measured off the wire.
+func OnBlock(_ *peer.Peer, msg *wire.MsgBlock, _ []byte, _ int64) {
 	fmt.Printf("Received block message: %v\n", msg.BlockHash().String())
 }
 

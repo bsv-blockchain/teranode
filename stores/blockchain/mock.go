@@ -619,7 +619,7 @@ func (m *MockStore) GetForkedBlockHeaders(ctx context.Context, blockHash *chainh
 }
 
 func (m *MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic(implementMe)
+	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
 }
 
 // GetBlockHeadersByHeight retrieves block headers within a specified height range.

@@ -312,6 +312,8 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 		CandidateBlockTime:                  candidateBlockTimePtr(opts),
 		CandidateParentMedianTime:           candidateParentMedianTimePtr(opts),
 		UnconfirmedParentsAtCandidateHeight: unconfirmedParentsAtCandidateHeightPtr(opts),
+		SkipScriptValidation:                &opts.SkipScriptValidation,
+		OutpointOnlySpend:                   &opts.OutpointOnlySpend,
 	}
 }
 
@@ -357,6 +359,14 @@ func buildValidateTxHTTPQuery(opts *Options, blockHeight uint32) url.Values {
 
 	if opts.UnconfirmedParentsAtCandidateHeight {
 		queryParams.Add("unconfirmedParentsAtCandidateHeight", "true")
+	}
+
+	if opts.SkipScriptValidation {
+		queryParams.Add("skipScriptValidation", "true")
+	}
+
+	if opts.OutpointOnlySpend {
+		queryParams.Add("outpointOnlySpend", "true")
 	}
 
 	if blockHeight > 0 {

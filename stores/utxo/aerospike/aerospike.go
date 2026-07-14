@@ -669,6 +669,12 @@ func (s *Store) Close(ctx context.Context) error {
 	}
 }
 
+// SupportsOutpointOnlySpend reports false: the Aerospike store does not yet honour the
+// below-checkpoint outpoint-only fast path (it ignores SkipExtendedInputs /
+// SkipUTXOHashCheck and would hard-error on un-decorated inputs). Deferred to Stage B;
+// until then callers keep the fast path OFF on Aerospike.
+func (s *Store) SupportsOutpointOnlySpend() bool { return false }
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/* As written by one of the Aerospike developers, Go contexts are not supported:
 

@@ -216,6 +216,17 @@ type BlockValidation struct {
 	// (uint64 stored as any). Reset on success / MinedSet shortcut.
 	setMinedRetries sync.Map
 
+	// setMinedRetryPending marks blocks whose setTxMined retry is currently waiting
+	// out its backoff in a scheduleSetMinedRetry goroutine. Keyed by chainhash.Hash,
+	// value is struct{}. While an entry is present the setMinedChan worker skips
+	// re-processing that hash, so re-triggers arriving during the backoff window
+	// (e.g. a child re-triggering its not-yet-mined parent) do not race a second
+	// setTxMinedStatus and inflate setMinedRetries toward a premature drop. Set when
+	// a retry is scheduled, cleared when it fires (just before the re-enqueue) or on
+	// shutdown. Distinct from blockHashesCurrentlyValidated so the parent-finalization
+	// wait in checkParentProcessingComplete is unaffected by the backoff window.
+	setMinedRetryPending sync.Map
+
 	// revalidateBlockChan receives blocks that need revalidation
 	revalidateBlockChan chan revalidateBlockData
 
@@ -492,6 +503,16 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		}()
 	}
 
+	// Register the setMinedChan worker in backgroundTasks here - synchronously, before
+	// start() is launched - so Wait() can never observe a zero counter during the startup
+	// window. start() runs asynchronously and only reaches the worker launch after the
+	// (potentially long) mined-not-set recovery g.Wait(); registering there would leave a
+	// window in which Server.Stop() -> Wait() sees zero, returns without waiting for the
+	// worker, and races the later Add from zero (illegal WaitGroup use, can panic). start()
+	// balances this Add: the worker goroutine defers Done(), and the single early-return
+	// path that never launches the worker calls Done() itself.
+	bv.backgroundTasks.Add(1)
+
 	go func() {
 		if err := bv.start(ctx); err != nil {
 			// Check if context is done before logging
@@ -538,6 +559,11 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 		// wait for all blocks to be processed
 		if err := g.Wait(); err != nil {
+			// The setMinedChan worker (registered in backgroundTasks by NewBlockValidation
+			// before start() was launched) never starts on this early-return path, so
+			// release its registration here to keep Wait() balanced.
+			u.backgroundTasks.Done()
+
 			// we cannot start the block validation, we are in a bad state
 			return errors.NewServiceError("[BlockValidation:start] failed to start, process old block mined/subtrees sets", err)
 		}
@@ -569,7 +595,13 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	// start a worker to process the setMinedChan
 	u.logger.Infof("[BlockValidation:start] starting setMined goroutine")
 
+	// This worker is registered in backgroundTasks by NewBlockValidation (before start()
+	// was launched, so shutdown cannot race the registration on a zero counter); this
+	// goroutine owns the matching Done(). scheduleSetMinedRetry does its own Add(1)/Done()
+	// from inside this worker, always while this registration keeps the counter positive,
+	// so those never transition the counter from zero either.
 	go func() {
+		defer u.backgroundTasks.Done()
 		defer u.logger.Infof("[BlockValidation:start] setMinedChan worker stopped")
 
 		for {
@@ -604,6 +636,15 @@ func (u *BlockValidation) start(ctx context.Context) error {
 			if blockHeaderMeta.MinedSet {
 				u.logger.Infof("[BlockValidation:start][%s] block already has mined_set true, skipping setTxMined", blockHash.String())
 				u.setMinedRetries.Delete(*blockHash)
+				continue
+			}
+
+			// A retry for this block is already waiting out its backoff; the scheduled
+			// goroutine will re-enqueue it when it fires. Skip re-processing so re-triggers
+			// during the backoff window don't race a second setTxMinedStatus and inflate
+			// the retry counter (tripping the manual_intervention_required drop early).
+			if _, retryPending := u.setMinedRetryPending.Load(*blockHash); retryPending {
+				u.logger.Debugf("[BlockValidation:start][%s] setTxMined retry already pending, skipping", blockHash.String())
 				continue
 			}
 
@@ -659,21 +700,12 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 					backoff := setMinedRetryBackoff(int(attempt))
 					u.logger.Warnf("[BlockValidation:start][%s] setTxMined retry %d/%d in %s", blockHash.String(), attempt, setMinedMaxRetries, backoff)
-					time.Sleep(backoff)
 
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-
-					// put the block back in the setMinedChan for retry — non-blocking,
-					// because this runs on the worker goroutine that is the sole drainer
-					// of setMinedChan; a blocking self-send into a full channel wedges it.
-					// Re-queue order is best-effort (an overflow entry is only delivered
-					// after the channel drains); correctness relies on the worker's
-					// idempotent MinedSet/tryClaim guards, not on FIFO delivery.
-					u.enqueueSetMined(blockHash)
+					// Off-load the backoff wait + re-enqueue to a dedicated goroutine so this
+					// worker keeps draining setMinedChan (and its overflow) during the backoff
+					// instead of sleeping inline. The re-enqueue still goes through the
+					// non-blocking, overflow-backed enqueueSetMined.
+					u.scheduleSetMinedRetry(ctx, blockHash, backoff)
 					return
 				}
 
@@ -876,6 +908,66 @@ func (u *BlockValidation) popSetMinedOverflow() *chainhash.Hash {
 	}
 
 	return nil
+}
+
+// scheduleSetMinedRetry waits out backoff in a dedicated goroutine and then re-enqueues
+// blockHash for the setMinedChan worker, rather than sleeping on the worker itself.
+//
+// The worker is the sole drainer of setMinedChan (and its overflow set); sleeping there
+// stops it draining for the whole backoff, so mined-status notifications back up behind a
+// single failing block. Off-loading keeps the worker draining while the retry waits. The
+// re-enqueue goes through enqueueSetMined, which never blocks (it falls back to the
+// overflow set), so only the timer is a cancellable wait.
+//
+// The goroutine is registered with backgroundTasks and cancellable via ctx so it can
+// never outlive shutdown. The block is marked retry-pending (setMinedRetryPending) for
+// the whole backoff window: while a retry is pending the worker skips re-processing the
+// same hash, so a re-trigger arriving during the backoff (e.g. a child re-triggering its
+// not-yet-mined parent) does not race a second setTxMinedStatus and inflate the retry
+// counter toward a premature manual_intervention_required drop. This restores the dedup
+// the old inline time.Sleep provided implicitly.
+func (u *BlockValidation) scheduleSetMinedRetry(ctx context.Context, blockHash *chainhash.Hash, backoff time.Duration) {
+	u.setMinedRetryPending.Store(*blockHash, struct{}{})
+
+	u.backgroundTasks.Add(1)
+
+	go func() {
+		defer u.backgroundTasks.Done()
+
+		t := time.NewTimer(backoff)
+		defer t.Stop()
+
+		select {
+		case <-t.C:
+			// Clear the pending marker before re-enqueueing so the worker re-claims and
+			// re-processes this hash; the tiny window between clear and re-pickup can at
+			// most let one already-queued duplicate through, which is equivalent to the
+			// retry itself (same hash) and still advances the counter by exactly one.
+			u.setMinedRetryPending.Delete(*blockHash)
+			u.enqueueSetMined(blockHash)
+		case <-ctx.Done():
+			u.setMinedRetryPending.Delete(*blockHash)
+		}
+	}()
+}
+
+// isParentFinalizing reports whether blockHash is still going through setTxMined
+// finalization: either actively being processed by the setMinedChan worker
+// (blockHashesCurrentlyValidated) or waiting out a retry backoff in a
+// scheduleSetMinedRetry goroutine (setMinedRetryPending). checkParentProcessingComplete
+// uses this so a child keeps waiting across its parent's whole retry window - the
+// backoff is now off-loaded and releases the blockHashesCurrentlyValidated claim
+// immediately, so without also consulting setMinedRetryPending a child would fall
+// straight through to the bounded parent-mined wait and give up (block-found churn)
+// while a transiently-failing parent is still retrying.
+func (u *BlockValidation) isParentFinalizing(blockHash *chainhash.Hash) bool {
+	if u.blockHashesCurrentlyValidated.Exists(*blockHash) {
+		return true
+	}
+
+	_, retryPending := u.setMinedRetryPending.Load(*blockHash)
+
+	return retryPending
 }
 
 func (u *BlockValidation) processSubtreesNotSet(ctx context.Context, g *errgroup.Group) {
@@ -1579,7 +1671,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// retries another peer. See issue #1031.
 			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxNotFound) {
 				ctxLogger.Warnf("[ValidateBlock][%s] transient missing-data during subtree validation, will retry: %s", block.Hash().String(), err)
-				return errors.NewBlockIncompleteError("[ValidateBlock][%s] transient missing-data during subtree validation: %s", block.Hash().String(), err)
+				// Transient LOCAL ordering gap, not the serving peer's fault: mark it so the
+				// catchup penalty path does not demote an honest (possibly sole-source) peer.
+				return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] transient missing-data during subtree validation: %s", block.Hash().String(), err)
 			}
 
 			return err
@@ -1645,6 +1739,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				// Create meta regenerator with peer URL for potential meta file recovery
 				metaRegenerator := u.createMetaRegenerator([]string{baseURL})
+				block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(decoupledCtx, block))
 				if ok, err := block.Valid(decoupledCtx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 					u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
@@ -1743,6 +1838,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			// Create meta regenerator with peer URL for potential meta file recovery
 			metaRegenerator := u.createMetaRegenerator([]string{baseURL})
+			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block))
 			if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 				reason := "unknown"
 				if err != nil {
@@ -1779,7 +1875,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains a floater (unconfirmed parent not in block): %s", block.Hash().String(), err)
 					}
 
-					return errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err)
+					// Transient LOCAL catchup-ordering gap (unabsorbed parent, issue 1031), not
+					// the serving peer's fault: mark it so the catchup penalty path does not
+					// demote an honest (possibly sole-source) ahead peer.
+					return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err)
 				}
 
 				if !opts.IsRevalidation {
@@ -2051,6 +2150,55 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	}
 }
 
+// checkpointConfirmedAncestor reports whether block b is provably part of the main
+// chain that has already reached and matched the highest hardcoded checkpoint hash. It
+// is the ancestry predicate gating the below-checkpoint coinbase no-inflation skip in
+// model.checkBlockRewardAndFees (threaded via Block.SetCheckpointConfirmedAncestor):
+// only a confirmed checkpoint ancestor may skip, because the pinned checkpoint then
+// transitively commits its coinbase.
+//
+// It returns false — forcing full no-inflation enforcement — for any block above the
+// checkpoint (the skip cannot fire there anyway), while the main chain has not yet
+// reached the checkpoint (the forward/optimistic-checkpoint window), or when b is not
+// the main-chain block at its own height (a detached fork reconsidered via
+// reconsiderblock). Fail-safe: any lookup error or ambiguity yields false, so the
+// no-inflation check runs — correct, because non-fast-path blocks carry real fees.
+func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block) bool {
+	// The below-checkpoint no-inflation skip requires store fast-path support too, so the
+	// ancestry predicate cannot change the outcome on a store that never produces fee=0
+	// blocks. Short-circuit before any blockchain lookup on such stores (Aerospike, the
+	// unconfigured default, and most unit-test mocks).
+	if u.utxoStore == nil || !u.utxoStore.SupportsOutpointOnlySpend() {
+		return false
+	}
+
+	checkpoints := u.settings.ChainCfgParams.Checkpoints
+
+	highest := model.HighestCheckpointHeight(checkpoints)
+	if highest == 0 || b.Height > highest {
+		return false
+	}
+
+	pinned := model.HighestCheckpointHash(checkpoints)
+	if pinned == nil {
+		return false
+	}
+
+	// 1. The main chain must have reached the highest checkpoint height with the pinned hash.
+	cpHeaders, _, err := u.blockchainClient.GetBlockHeadersFromHeight(ctx, highest, 1)
+	if err != nil || len(cpHeaders) == 0 || !cpHeaders[0].Hash().IsEqual(pinned) {
+		return false
+	}
+
+	// 2. b must be the main-chain block at its own height (i.e. an ancestor of the checkpoint).
+	bHeaders, _, err := u.blockchainClient.GetBlockHeadersFromHeight(ctx, b.Height, 1)
+	if err != nil || len(bHeaders) == 0 {
+		return false
+	}
+
+	return bHeaders[0].Hash().IsEqual(b.Header.Hash())
+}
+
 // reValidateBlock performs a full block revalidation.
 // This method handles blocks that failed initial validation or need reverification.
 //
@@ -2129,6 +2277,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	// Create meta regenerator with peer URL for potential meta file recovery during revalidation
 	metaRegenerator := u.createMetaRegenerator([]string{blockData.baseURL})
+	blockData.block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, blockData.block))
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
@@ -2157,6 +2306,24 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 // real checkpoint. See issue #1103.
 func (u *BlockValidation) quickValidateSkipsUtxoLock(block *model.Block) bool {
 	if !u.settings.BlockValidation.QuickValidateSkipUtxoLock {
+		return false
+	}
+	return block.Height <= blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+}
+
+// quickValidateOutpointOnly reports whether this block may use the below-checkpoint
+// outpoint-only fast path: skip decorate, zero fees, minimal create, and spend with
+// the UTXO-hash checksum disabled. Gated by the BlockValidation.OutpointOnlyBelowCheckpoint
+// setting (default off), restricted to stores that honour the fast path (u.utxoStore
+// .SupportsOutpointOnlySpend() — SQL today; Aerospike deferred to Stage B), and restricted
+// to blocks at or below the highest HARDCODED checkpoint. Uses the standard chain-config
+// checkpoints (not the catchup override) so it fails safe — never engaging above the real
+// checkpoint (spec §2.2, invariant I2).
+func (u *BlockValidation) quickValidateOutpointOnly(block *model.Block) bool {
+	if !u.settings.BlockValidation.OutpointOnlyBelowCheckpoint {
+		return false
+	}
+	if !u.utxoStore.SupportsOutpointOnlySpend() { // Stage A is SQL-only; Aerospike deferred to Stage B
 		return false
 	}
 	return block.Height <= blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
@@ -2554,10 +2721,36 @@ func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 	return
 }
 
-// Wait waits for all background tasks to complete.
-// This should be called during shutdown to ensure graceful termination.
-func (u *BlockValidation) Wait() {
-	u.backgroundTasks.Wait()
+// Wait blocks until all background tasks complete or ctx is cancelled, whichever
+// happens first. It must honour ctx: the setMinedChan worker is now tracked in
+// backgroundTasks and only exits when its own (Init-scoped) ctx is cancelled. The
+// daemon cancels that shared ctx before Server.Stop() runs, so tasks drain promptly
+// there; but embedded/test shutdown paths may tear the server down without cancelling
+// it first. Returning on ctx.Done() bounds Wait() to the caller's stop deadline in
+// those cases (the still-running worker is reaped at process exit) instead of hanging
+// forever and silently discarding the deadline.
+//
+// Two accepted costs on those abnormal paths (ctx fires before the tasks drain),
+// deliberately traded for not hanging shutdown:
+//   - Wait() now blocks for the full stop budget rather than returning promptly (it did
+//     before the worker was tracked).
+//   - the inner backgroundTasks.Wait() goroutine and its done channel leak until the
+//     worker eventually exits. sync.WaitGroup has no cancellable wait, and on these paths
+//     the worker itself is already leaking (its ctx was never cancelled), so this adds
+//     nothing that outlives the worker. The daemon path never hits this.
+func (u *BlockValidation) Wait(ctx context.Context) {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		u.backgroundTasks.Wait()
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		u.logger.Warnf("[BlockValidation] Wait aborted before background tasks drained: %s", ctx.Err())
+	}
 }
 
 // StopCaches stops the background cleanup goroutines for all expiring caches.

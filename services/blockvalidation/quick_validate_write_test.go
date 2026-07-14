@@ -94,7 +94,7 @@ func TestWriteSubtreeFilesFromTxs_ReusesPrecomputedExists(t *testing.T) {
 		block := makeWriteTestBlock(t, 2)
 		nodeSubtree := buildNodeSubtree(t, txHashes)
 
-		err := bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), false)
+		err := bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), false, false)
 		require.NoError(t, err)
 
 		// No existence lookup should have been issued on the write path.
@@ -120,7 +120,7 @@ func TestWriteSubtreeFilesFromTxs_ReusesPrecomputedExists(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, store.Store.Set(ctx, nodeSubtree.RootHash()[:], fileformat.FileTypeSubtree, fullBytes))
 
-		err = bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), true)
+		err = bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), true, false)
 		require.NoError(t, err)
 
 		require.Equal(t, int64(0), store.existsCalls.Load())
@@ -136,7 +136,7 @@ func TestWriteSubtreeFilesFromTxs_ReusesPrecomputedExists(t *testing.T) {
 		block := makeWriteTestBlock(t, 2)
 		nodeSubtree := buildNodeSubtree(t, txHashes)
 
-		err := bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), true)
+		err := bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), true, false)
 		require.Error(t, err)
 		require.Equal(t, int64(0), store.existsCalls.Load())
 	})

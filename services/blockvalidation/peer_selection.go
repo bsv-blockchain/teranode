@@ -129,7 +129,7 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 		}
 
 		u.logger.Warnf("[catchup] Peer %s failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
-		u.reportCatchupFailure(ctx, bestPeer.ID)
+		u.reportCatchupFailureForError(ctx, bestPeer.ID, altErr)
 	}
 
 	return false

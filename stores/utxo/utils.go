@@ -212,6 +212,30 @@ func ShouldStoreOutputAsUTXO(output *bt.Output, blockHeight uint32, genesisActiv
 	return !(opReturn || oversized)
 }
 
+// HasNoSpendableOutputs reports whether the transaction has no spendable outputs
+// - i.e. every output is provably unspendable per the era-aware, value-agnostic
+// ShouldStoreOutputAsUTXO rule (OP_FALSE OP_RETURN in any era; also bare OP_RETURN
+// and oversized scripts pre-Genesis). Such a transaction can never be spent, so it
+// never becomes "all spent". Coinbase transactions always have a spendable output
+// and return false, as do transactions with no outputs. A nil output slot is treated
+// as not spendable, consistent with how the stores skip nil outputs when recording
+// UTXOs. blockHeight is the output creation height and genesisActivationHeight the
+// per-network Genesis height (settings.ChainCfgParams.GenesisActivationHeight), both
+// passed straight through to ShouldStoreOutputAsUTXO.
+func HasNoSpendableOutputs(tx *bt.Tx, isCoinbase bool, blockHeight uint32, genesisActivationHeight uint32) bool {
+	if isCoinbase || len(tx.Outputs) == 0 {
+		return false
+	}
+
+	for _, output := range tx.Outputs {
+		if output != nil && ShouldStoreOutputAsUTXO(output, blockHeight, genesisActivationHeight) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // GetSpends creates Spend objects for all inputs of a transaction.
 // Each Spend represents a UTXO being consumed by the transaction.
 //
@@ -241,6 +265,27 @@ func GetSpends(tx *bt.Tx) (spends []*Spend, err error) {
 			Vout:         input.PreviousTxOutIndex,
 			UTXOHash:     hash,
 			SpendingData: spend.NewSpendingData(txIDChainHash, i), // Use the current index as the Vin
+		})
+	}
+
+	return spends, nil
+}
+
+// GetSpendsOutpointOnly creates Spend objects addressed solely by outpoint (parent txid + vout),
+// without computing the per-input UTXO hash. Used by the below-checkpoint outpoint-only fast path
+// where the integrity checksum is intentionally skipped (spec §3.2 Seam 1). UTXOHash is set to a
+// non-nil pointer to the zero hash so existing store dereferences (spend.UTXOHash[:]) never panic;
+// the store must skip the hash comparison via IgnoreFlags.SkipUTXOHashCheck, never on the zero hash alone.
+func GetSpendsOutpointOnly(tx *bt.Tx) ([]*Spend, error) {
+	txIDChainHash := tx.TxIDChainHash()
+	spends := make([]*Spend, 0, len(tx.Inputs))
+
+	for i, input := range tx.Inputs {
+		spends = append(spends, &Spend{
+			TxID:         input.PreviousTxIDChainHash(),
+			Vout:         input.PreviousTxOutIndex,
+			UTXOHash:     &chainhash.Hash{},
+			SpendingData: spend.NewSpendingData(txIDChainHash, i),
 		})
 	}
 

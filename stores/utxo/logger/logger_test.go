@@ -23,6 +23,10 @@ import (
 // MockStore implements utxo.Store interface for testing
 type MockStore struct {
 	mock.Mock
+
+	// SupportsOutpointOnlySpendResult is returned by SupportsOutpointOnlySpend so a
+	// delegation test can assert the logger decorator forwards the wrapped value.
+	SupportsOutpointOnlySpendResult bool
 }
 
 func (m *MockStore) SetBlockHeight(blockHeight uint32) error {
@@ -60,6 +64,19 @@ func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string
 func (m *MockStore) Close(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
+}
+
+func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
+
+// TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
+// wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
+// logger still reports true, and the gates that query through the decorator engage).
+func TestSupportsOutpointOnlySpend_Delegates(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		inner := &MockStore{SupportsOutpointOnlySpendResult: want}
+		s := New(context.Background(), ulogger.TestLogger{}, inner)
+		require.Equal(t, want, s.SupportsOutpointOnlySpend(), "logger must delegate SupportsOutpointOnlySpend to the wrapped store")
+	}
 }
 
 func (m *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {

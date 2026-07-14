@@ -35,6 +35,8 @@ type errOnCreateUtxoStore struct {
 	err error
 }
 
+func (e *errOnCreateUtxoStore) SupportsOutpointOnlySpend() bool { return false }
+
 func (e *errOnCreateUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, error) {
 	return nil, e.err
 }

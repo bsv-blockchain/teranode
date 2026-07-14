@@ -1,12 +1,18 @@
 package blockvalidation
 
 import (
+	"context"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -14,7 +20,12 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
+	testutil "github.com/bsv-blockchain/teranode/util/test"
+	prometheustestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -186,8 +197,8 @@ func TestProcessBlockSubtrees(t *testing.T) {
 			Subtrees:         []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		// Execute processBlockSubtrees
-		_, err := suite.Server.blockValidation.processBlockSubtrees(suite.Ctx, block)
+		// Execute processBlockSubtrees (outpointOnly irrelevant here — errors on no subtrees)
+		_, err := suite.Server.blockValidation.processBlockSubtrees(suite.Ctx, block, false)
 
 		// Verify error
 		assert.Error(t, err, "Should fail when block has no subtrees")
@@ -196,65 +207,11 @@ func TestProcessBlockSubtrees(t *testing.T) {
 }
 
 // TestQuickValidationDecisionLogic tests the core validation decision logic
-func TestQuickValidationDecisionLogic(t *testing.T) {
-	t.Run("HeightBasedValidation", func(t *testing.T) {
-		// Test the simplified logic: useQuickValidation && block.Height <= highestCheckpointHeight
-
-		testCases := []struct {
-			name                    string
-			blockHeight             uint32
-			highestCheckpointHeight uint32
-			useQuickValidation      bool
-			expected                bool
-		}{
-			{
-				name:                    "BlockBelowCheckpoint",
-				blockHeight:             50,
-				highestCheckpointHeight: 100,
-				useQuickValidation:      true,
-				expected:                true,
-			},
-			{
-				name:                    "BlockAtCheckpoint",
-				blockHeight:             100,
-				highestCheckpointHeight: 100,
-				useQuickValidation:      true,
-				expected:                true,
-			},
-			{
-				name:                    "BlockAboveCheckpoint",
-				blockHeight:             150,
-				highestCheckpointHeight: 100,
-				useQuickValidation:      true,
-				expected:                false,
-			},
-			{
-				name:                    "QuickValidationDisabled",
-				blockHeight:             50,
-				highestCheckpointHeight: 100,
-				useQuickValidation:      false,
-				expected:                false,
-			},
-			{
-				name:                    "NoCheckpoints",
-				blockHeight:             50,
-				highestCheckpointHeight: 0,
-				useQuickValidation:      true,
-				expected:                false,
-			},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				// This is the exact logic from validateBlocksOnChannel
-				canUseQuickValidation := tc.useQuickValidation && tc.blockHeight <= tc.highestCheckpointHeight
-
-				assert.Equal(t, tc.expected, canUseQuickValidation,
-					"Quick validation decision should match expected result for %s", tc.name)
-			})
-		}
-	})
-}
+// (Removed TestQuickValidationDecisionLogic/HeightBasedValidation: it recomputed the gate
+// expression inline and asserted it against hand-authored constants, invoking no production
+// code. The real gate — useQuickValidation && height <= highestCheckpointHeight in
+// tryQuickValidation — is exercised through production calls in
+// catchup_quickvalidation_test.go:TestTryQuickValidation.)
 
 // TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions tests that existing transactions
 // have their mined info updated when ErrTxExists is returned during quick validation.
@@ -501,6 +458,47 @@ func assertCreatedLocked(t *testing.T, m *utxo.MockUtxostore, wantLocked bool) {
 	require.True(t, found, "expected at least one Create call")
 }
 
+// assertCreatedSkipExtended asserts every Create call carried WithSkipExtendedInputs(want).
+// Pins the outpoint-only mode threaded into createAndSpendUTXOsForBatch's Create so a
+// refactor that drops the flag (re-triggering GetFees on un-decorated txs) fails here.
+func assertCreatedSkipExtended(t *testing.T, m *utxo.MockUtxostore, want bool) {
+	t.Helper()
+	found := false
+	for _, c := range m.Calls {
+		if c.Method != "Create" {
+			continue
+		}
+		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
+		require.True(t, ok, "Create 4th arg should be []utxo.CreateOption")
+		o := &utxo.CreateOptions{}
+		for _, opt := range opts {
+			opt(o)
+		}
+		require.Equal(t, want, o.SkipExtendedInputs, "Create WithSkipExtendedInputs flag mismatch")
+		found = true
+	}
+	require.True(t, found, "expected at least one Create call")
+}
+
+// assertSpentSkipUTXOHashCheck asserts every Spend call carried IgnoreFlags.SkipUTXOHashCheck(want).
+// Pins the outpoint-only mode threaded into createAndSpendUTXOsForBatch's Spend so a refactor
+// that drops the flag (re-enabling the hash check on un-decorated spends) fails here.
+func assertSpentSkipUTXOHashCheck(t *testing.T, m *utxo.MockUtxostore, want bool) {
+	t.Helper()
+	found := false
+	for _, c := range m.Calls {
+		if c.Method != "Spend" {
+			continue
+		}
+		flags, ok := c.Arguments.Get(3).([]utxo.IgnoreFlags)
+		require.True(t, ok, "Spend 4th arg should be []utxo.IgnoreFlags")
+		require.NotEmpty(t, flags, "Spend should carry an IgnoreFlags")
+		require.Equal(t, want, flags[0].SkipUTXOHashCheck, "Spend SkipUTXOHashCheck flag mismatch")
+		found = true
+	}
+	require.True(t, found, "expected at least one Spend call")
+}
+
 // buildOneSubtreeBlock builds a block with one subtree (coinbase + 2 txs) and stores its
 // subtree + subtree-data files in the suite's subtree store. Mirrors the existing
 // "block with 1 subtree and 2 txs" setup in TestQuickValidateBlock.
@@ -539,8 +537,14 @@ func buildOneSubtreeBlock(t *testing.T, s *CatchupTestSuite, height uint32) *mod
 	return block
 }
 
-// setupQuickValidateMocks registers the common UTXO/blockchain/validator mock
-// expectations needed to run quickValidateBlock for a one-subtree block.
+// enableOutpointOnlyFastPath makes the suite's mock UTXO store report fast-path
+// support, so quickValidateOutpointOnly's store-capability guard is satisfied. Call
+// this on any test suite where OutpointOnlyBelowCheckpoint=true is expected to engage.
+func enableOutpointOnlyFastPath(t *testing.T, s *CatchupTestSuite) {
+	t.Helper()
+	s.MockUTXOStore.SupportsOutpointOnlySpendResult = true
+}
+
 func setupQuickValidateMocks(s *CatchupTestSuite) {
 	s.MockBlockchain.On("AssignBlockID", mock.Anything, mock.Anything).Return(uint64(1), nil).Maybe()
 	s.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -597,6 +601,140 @@ func TestQuickValidateBlock_UtxoLockGating(t *testing.T) {
 
 		assertCreatedLocked(t, suite.MockUTXOStore, true)
 		suite.MockUTXOStore.AssertCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
+}
+
+// buildOneSubtreeBlockWithExternalParentTx builds a one-subtree block that contains a tx
+// (externalParentTx) whose input references a parent NOT in the block and whose
+// PreviousTxScript is nil. That tx therefore lands in txsNeedingExtension, making any
+// assertion on BatchPreviousOutputsDecorate load-bearing — it will be called when the
+// outpoint-only gate is OFF and suppressed when it is ON.
+func buildOneSubtreeBlockWithExternalParentTx(t *testing.T, s *CatchupTestSuite, height uint32) *model.Block {
+	t.Helper()
+	txs := transactions.CreateTestTransactionChainWithCount(t, 4)
+	coinbaseTx := txs[0]
+	regularTxs := txs[1:]
+
+	// Build an un-extended tx: its input points to an external parent hash (not in this
+	// block) with PreviousTxScript left nil, so IsExtended() returns false and the code
+	// cannot resolve the parent from extendedTxsFromPrevBatches → lands in txsNeedingExtension.
+	externalParentHash := chainhash.HashH([]byte("external-parent-not-in-block"))
+	rawInput := &bt.Input{
+		SequenceNumber:     0xFFFFFFFF,
+		PreviousTxOutIndex: 0,
+		PreviousTxSatoshis: 0,
+		PreviousTxScript:   nil, // nil → IsExtended() == false
+	}
+	require.NoError(t, rawInput.PreviousTxIDAdd(&externalParentHash))
+
+	externalParentTx := bt.NewTx()
+	externalParentTx.Inputs = append(externalParentTx.Inputs, rawInput)
+	// Add a minimal output so Create/Spend can operate on this tx.
+	externalParentTx.AddOutput(&bt.Output{
+		Satoshis:      0,
+		LockingScript: bscript.NewFromBytes([]byte{0x51}), // OP_1 (trivially valid script)
+	})
+
+	block := testhelpers.CreateTestBlocks(t, 1)[0]
+	block.Height = height
+	block.CoinbaseTx = coinbaseTx
+
+	// Subtree: coinbase + 2 regular extended txs + 1 external-parent (unextended) tx.
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*regularTxs[0].TxIDChainHash(), 1, 1))
+	require.NoError(t, subtree.AddNode(*regularTxs[1].TxIDChainHash(), 2, 2))
+	require.NoError(t, subtree.AddNode(*externalParentTx.TxIDChainHash(), 3, 3))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, s.Server.subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes))
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, subtreeData.AddTx(coinbaseTx, 0))
+	require.NoError(t, subtreeData.AddTx(regularTxs[0], 1))
+	require.NoError(t, subtreeData.AddTx(regularTxs[1], 2))
+	require.NoError(t, subtreeData.AddTx(externalParentTx, 3))
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, s.Server.subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes))
+
+	block.Subtrees = []*chainhash.Hash{subtree.RootHash()}
+	block.TransactionCount = 4
+	block.Header.HashMerkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, 0)
+	require.NoError(t, err)
+	return block
+}
+
+// TestQuickValidate_OutpointOnly_NoDecorate_ZeroFees verifies the outpoint-only fast path
+// with a load-bearing ON/OFF polarity check.
+//
+// The block contains an un-extended tx (PreviousTxScript=nil, external parent) that lands
+// in txsNeedingExtension. When the gate is OFF, BatchPreviousOutputsDecorate IS called for
+// that tx; when it is ON the call is suppressed — proving the gate is what makes the
+// difference, not simply that there are no txs needing extension.
+func TestQuickValidate_OutpointOnly_NoDecorate_ZeroFees(t *testing.T) {
+	// sub-test helper: builds common mock state shared by both polarities.
+	setupSuite := func(t *testing.T) *CatchupTestSuite {
+		t.Helper()
+		suite := NewCatchupTestSuite(t)
+		// Skip UTXO locking so SetLocked expectations don't complicate the assertion.
+		suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		// Place a high checkpoint so height 500 is firmly below it.
+		setCheckpoints(t, suite, 1_000_000)
+		setupQuickValidateMocks(suite)
+		// Replace the 3-arg Spend default from setupQuickValidateMocks with a 4-arg one.
+		suite.MockUTXOStore.ExpectedCalls = filterCalls(suite.MockUTXOStore.ExpectedCalls, "Spend")
+		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
+		// The block has coinbase + 3 regular txs; validator needs 4 nil errors.
+		suite.MockValidator.Errors = []error{nil, nil, nil, nil}
+		return suite
+	}
+
+	t.Run("gate on: BatchPreviousOutputsDecorate not called, fees zero", func(t *testing.T) {
+		suite := setupSuite(t)
+		defer suite.Cleanup()
+
+		suite.Server.blockValidation.settings.BlockValidation.OutpointOnlyBelowCheckpoint = true
+		enableOutpointOnlyFastPath(t, suite) // make the mock store report fast-path support
+		block := buildOneSubtreeBlockWithExternalParentTx(t, suite, 500)
+
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test-peer", "")
+		require.NoError(t, err)
+
+		// Gate suppresses the call — no expectation registered, any call would panic.
+		suite.MockUTXOStore.AssertNotCalled(t, "BatchPreviousOutputsDecorate", mock.Anything, mock.Anything)
+
+		// All four seams must agree for one block: decorate skipped (above), fees zero
+		// (below), AND Create/Spend carry the outpoint-only flags (the threaded mode).
+		assertCreatedSkipExtended(t, suite.MockUTXOStore, true)
+		assertSpentSkipUTXOHashCheck(t, suite.MockUTXOStore, true)
+
+		for i, st := range block.SubtreeSlices {
+			if st == nil {
+				continue
+			}
+			require.Equal(t, uint64(0), st.Fees, "subtree %d: expected zero fees on outpoint-only path", i)
+		}
+	})
+
+	t.Run("gate off: BatchPreviousOutputsDecorate IS called for unextended tx", func(t *testing.T) {
+		suite := setupSuite(t)
+		defer suite.Cleanup()
+
+		suite.Server.blockValidation.settings.BlockValidation.OutpointOnlyBelowCheckpoint = false
+		block := buildOneSubtreeBlockWithExternalParentTx(t, suite, 500)
+
+		// Register expectation: decorate must be called with the unextended tx.
+		suite.MockUTXOStore.On("BatchPreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil).Once()
+
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test-peer", "")
+		require.NoError(t, err)
+
+		// Without the gate, decorate IS called — proving the un-extended tx genuinely
+		// reached txsNeedingExtension and that only the gate suppresses the call.
+		suite.MockUTXOStore.AssertCalled(t, "BatchPreviousOutputsDecorate", mock.Anything, mock.Anything)
 	})
 }
 
@@ -660,5 +798,255 @@ func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 
 		assertCreatedLocked(t, suite.MockUTXOStore, true)
 		suite.MockUTXOStore.AssertCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
+}
+
+// newBlockValidationWithRealStore creates a BlockValidation backed by a real
+// sqlitememory UTXO store. It is used for end-to-end tests that need to assert
+// on actual store contents rather than on mock call expectations.
+//
+// The returned cleanup function must be deferred to release background goroutines.
+func newBlockValidationWithRealStore(t *testing.T) (*BlockValidation, utxo.Store, func()) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+	logger := ulogger.TestLogger{}
+	tSettings := testutil.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///skip_unspendable_test")
+	require.NoError(t, err)
+
+	realStore, err := sql.New(ctx, logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	bv := &BlockValidation{
+		logger:                        logger,
+		settings:                      tSettings,
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		utxoStore:                     realStore,
+		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
+	}
+
+	cleanup := func() {
+		bv.blockExistsCache.Stop()
+		bv.lastValidatedBlocks.Stop()
+		cancel()
+	}
+
+	return bv, realStore, cleanup
+}
+
+// setCheckpointsOnBV sets ChainCfgParams checkpoints on a BlockValidation to a
+// single checkpoint at the given height. It copies ChainCfgParams so it never
+// mutates the shared global instance.
+func setCheckpointsOnBV(t *testing.T, bv *BlockValidation, height uint32) {
+	t.Helper()
+	require.NotNil(t, bv.settings.ChainCfgParams)
+	params := *bv.settings.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: int32(height)}}
+	bv.settings.ChainCfgParams = &params
+}
+
+// TestSkipUnspendableTxStorageDuringCatchup_EndToEnd verifies that when both
+// QuickValidateSkipUtxoLock and SkipUnspendableTxStorageDuringCatchup are
+// enabled and the block is at/below the highest checkpoint:
+//   - An OP_RETURN-only tx is NOT written to the UTXO store (skipped).
+//   - A normal spendable tx IS written to the UTXO store.
+//   - The parent UTXO consumed by the OP_RETURN tx's input IS marked spent.
+//   - Processing returns no error.
+//
+// A negative case pins the safety invariant: with QuickValidateSkipUtxoLock=false
+// the skip does not fire, so the OP_RETURN tx IS stored.
+func TestSkipUnspendableTxStorageDuringCatchup_EndToEnd(t *testing.T) {
+	t.Run("both settings on, height below checkpoint: op_return skipped, spendable stored, parent spent", func(t *testing.T) {
+		bv, store, cleanup := newBlockValidationWithRealStore(t)
+		defer cleanup()
+
+		const blockHeight = uint32(100)
+		const checkpointHeight = uint32(1000)
+
+		bv.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		bv.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup = true
+		setCheckpointsOnBV(t, bv, checkpointHeight)
+
+		ctx := context.Background()
+
+		// Build a parent tx with 2 outputs and pre-seed it in the store.
+		// opReturnTx spends output 0; spendableTx spends output 1.
+		privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("SKIP_UNSPENDABLE_E2E_TEST_KEY"))
+		parentTx := transactions.Create(t,
+			transactions.WithCoinbaseData(1, "/genesis/"),
+			transactions.WithP2PKHOutputs(2, 5000, publicKey),
+		)
+		_, err := store.Create(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}))
+		require.NoError(t, err)
+
+		// opReturnTx: spends output 0 of parent, produces only an OP_RETURN (unspendable).
+		// Build manually so the output uses bt.AddOpReturnOutput which produces the correct
+		// OP_FALSE OP_RETURN encoding that HasNoSpendableOutputs recognises.
+		opReturnTx := bt.NewTx()
+		require.NoError(t, opReturnTx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parentTx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parentTx.Outputs[0].LockingScript,
+			Satoshis:      parentTx.Outputs[0].Satoshis,
+		}))
+		require.NoError(t, opReturnTx.AddOpReturnOutput([]byte("skip-unspendable-e2e-test")))
+
+		// spendableTx: spends output 1 of parent, produces a P2PKH output (spendable).
+		spendableTx := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(parentTx, 1),
+			transactions.WithP2PKHOutputs(1, 4000, publicKey),
+		)
+
+		block := &model.Block{
+			Height: blockHeight,
+			ID:     99,
+		}
+
+		// batch: subtree 0 holds opReturnTx; subtree 1 holds spendableTx.
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   []*bt.Tx{opReturnTx, spendableTx},
+			txRanges:   [][2]int{{0, 1}, {1, 2}},
+			batchStart: 0,
+			batchEnd:   2,
+		}
+
+		err = bv.createAndSpendUTXOsForBatch(ctx, block, batch)
+		require.NoError(t, err, "createAndSpendUTXOsForBatch must succeed")
+
+		// 1. OP_RETURN-only tx must NOT be in the store (was skipped).
+		_, getErr := store.Get(ctx, opReturnTx.TxIDChainHash())
+		require.Error(t, getErr, "op_return tx should not be in the store")
+		require.True(t, errors.Is(getErr, errors.ErrTxNotFound),
+			"expected ErrTxNotFound for skipped op_return tx, got: %v", getErr)
+
+		// 2. Spendable tx must be in the store (was not skipped).
+		txMeta, getErr := store.Get(ctx, spendableTx.TxIDChainHash())
+		require.NoError(t, getErr, "spendable tx should be in the store")
+		require.NotNil(t, txMeta)
+
+		// 3. Parent output 0 (the input consumed by the OP_RETURN tx) must be SPENT.
+		spendResp, getErr := store.GetSpend(ctx, &utxo.Spend{
+			TxID: parentTx.TxIDChainHash(),
+			Vout: 0,
+		})
+		require.NoError(t, getErr, "GetSpend for parent output 0 must not error")
+		require.Equal(t, int(utxo.Status_SPENT), spendResp.Status,
+			"parent output 0 (spent by op_return tx input) must be marked SPENT")
+	})
+
+	// Negative case: with QuickValidateSkipUtxoLock=false the skip is gated out;
+	// the OP_RETURN tx IS stored despite SkipUnspendableTxStorageDuringCatchup=true.
+	// This pins the safety invariant: skip is only safe when the unlock pass is also skipped.
+	t.Run("negative: lock on (QuickValidateSkipUtxoLock=false), op_return IS stored", func(t *testing.T) {
+		bv, store, cleanup := newBlockValidationWithRealStore(t)
+		defer cleanup()
+
+		const blockHeight = uint32(100)
+		const checkpointHeight = uint32(1000)
+
+		bv.settings.BlockValidation.QuickValidateSkipUtxoLock = false
+		bv.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup = true
+		setCheckpointsOnBV(t, bv, checkpointHeight)
+
+		ctx := context.Background()
+
+		_, publicKey := bec.PrivateKeyFromBytes([]byte("SKIP_UNSPENDABLE_E2E_TEST_KEY"))
+		parentTx := transactions.Create(t,
+			transactions.WithCoinbaseData(1, "/genesis/"),
+			transactions.WithP2PKHOutputs(1, 5000, publicKey),
+		)
+		_, err := store.Create(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}))
+		require.NoError(t, err)
+
+		opReturnTx := bt.NewTx()
+		require.NoError(t, opReturnTx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parentTx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parentTx.Outputs[0].LockingScript,
+			Satoshis:      parentTx.Outputs[0].Satoshis,
+		}))
+		// Set a non-empty unlocking script so the SQL store's NOT NULL constraint is satisfied.
+		// This tx is never signature-validated by createAndSpendUTXOsForBatch.
+		dummyScript := bscript.NewFromBytes([]byte{0x00})
+		opReturnTx.Inputs[0].UnlockingScript = dummyScript
+		require.NoError(t, opReturnTx.AddOpReturnOutput([]byte("should-be-stored")))
+
+		block := &model.Block{
+			Height: blockHeight,
+			ID:     99,
+		}
+
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   []*bt.Tx{opReturnTx},
+			txRanges:   [][2]int{{0, 1}},
+			batchStart: 0,
+			batchEnd:   1,
+		}
+
+		err = bv.createAndSpendUTXOsForBatch(ctx, block, batch)
+		require.NoError(t, err, "createAndSpendUTXOsForBatch must succeed")
+
+		// With lock on, the skip gate is closed — the op_return tx must be in the store.
+		_, getErr := store.Get(ctx, opReturnTx.TxIDChainHash())
+		require.NoError(t, getErr,
+			"op_return tx must be stored when QuickValidateSkipUtxoLock=false (safety gate)")
+	})
+}
+
+// TestOutpointOnly_MetricIncrementsBelowOnly verifies that the
+// prometheusBlockValidationOutpointOnlyBlocks counter increments by exactly 1
+// per block (not per subtree batch) when quickValidateBlock processes a
+// below-checkpoint block with OutpointOnlyBelowCheckpoint on, and does NOT
+// increment when the setting is off.
+//
+// Per-block counting is guaranteed by the Inc() placement at the top of
+// quickValidateBlock (and quickValidateBlockAsync), before any batch loop.
+// A multi-subtree block cannot be constructed with the current CatchupTestSuite
+// harness without rewriting subtree+merkle wiring, so the per-block assertion
+// relies on the code relocation: the counter is no longer inside
+// createAndSpendUTXOsForBatch, which runs once per batch.
+func TestOutpointOnly_MetricIncrementsBelowOnly(t *testing.T) {
+	initPrometheusMetrics()
+
+	t.Run("setting on, below checkpoint: counter increments by 1", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		suite.Server.blockValidation.settings.BlockValidation.OutpointOnlyBelowCheckpoint = true
+		enableOutpointOnlyFastPath(t, suite) // make the mock store report fast-path support
+		suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		setCheckpoints(t, suite, 1000)
+		setupQuickValidateMocks(suite)
+		suite.MockUTXOStore.ExpectedCalls = filterCalls(suite.MockUTXOStore.ExpectedCalls, "Spend")
+		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
+
+		block := buildOneSubtreeBlock(t, suite, 500)
+
+		before := prometheustestutil.ToFloat64(prometheusBlockValidationOutpointOnlyBlocks)
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test-peer", "")
+		require.NoError(t, err)
+		require.Equal(t, before+1, prometheustestutil.ToFloat64(prometheusBlockValidationOutpointOnlyBlocks))
+	})
+
+	t.Run("setting off: counter does not increment", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		suite.Server.blockValidation.settings.BlockValidation.OutpointOnlyBelowCheckpoint = false
+		setCheckpoints(t, suite, 1000)
+		setupQuickValidateMocks(suite)
+
+		block := buildOneSubtreeBlock(t, suite, 500)
+
+		before := prometheustestutil.ToFloat64(prometheusBlockValidationOutpointOnlyBlocks)
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test-peer", "")
+		require.NoError(t, err)
+		require.Equal(t, before, prometheustestutil.ToFloat64(prometheusBlockValidationOutpointOnlyBlocks))
 	})
 }

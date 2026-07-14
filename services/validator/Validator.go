@@ -702,6 +702,39 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	if validationOptions.OutpointOnlySpend && !validationOptions.SkipScriptValidation {
+		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend requires SkipScriptValidation", txID)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	// Defence-in-depth: OutpointOnlySpend is only ever legitimate at or below the
+	// highest hardcoded checkpoint (the callers gate on this). Reject it above the
+	// checkpoint independently of the caller so a buggy or misconfigured caller
+	// cannot spend-by-outpoint (hash check off, BIP68 skipped) on a steady-state
+	// block. Mirrors the blockvalidation I4 guard; uses the same single-source
+	// HighestCheckpointHeight so the bound cannot drift.
+	if validationOptions.OutpointOnlySpend && blockHeight > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend must not be used above the highest checkpoint (height %d)", txID, blockHeight)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	// Fail closed on a store that does not support the fast path: OutpointOnlySpend
+	// relies on SkipUTXOHashCheck / SkipExtendedInputs, which such a store ignores —
+	// it would then derive the UTXO hash from absent parent data and hard-error on the
+	// un-decorated inputs, stalling IBD. Ask the store directly (the capability lives on
+	// the store, not a settings scheme guess) so a misconfigured caller cannot reach an
+	// unsupported store on the fast path.
+	if validationOptions.OutpointOnlySpend && !v.utxoStore.SupportsOutpointOnlySpend() {
+		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend requires a UTXO store that supports it", txID)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	comparisonTime, skipFinality, finalityErr := selectFinalityComparisonTime(validationOptions, blockHeight, uint32(v.settings.ChainCfgParams.CSVHeight), blockState)
 	if finalityErr != nil {
 		err = finalityErr
@@ -722,29 +755,35 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	var utxoHeights []uint32
 
-	// check whether the transaction is extended, extend it if not
-	// we also get the block heights of the inputs of the transaction since we are doing a DB lookup
-	if !tx.IsExtended() {
-		// get the block heights of all inputs of the transaction and extend the inputs of not extended transaction.
-		// utxoHeights is a slice of block heights for each input
-		// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
-		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
-			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
-			span.RecordError(err)
+	// OutpointOnlySpend: skip parent reads entirely. utxoHeights stays nil.
+	// Safe because (a) SkipScriptValidation short-circuits BDK before it indexes
+	// utxoHeights, and (b) the OutpointOnlySpend guard in validateTransaction's
+	// phase-2 explicitly skips BIP68 (the only remaining utxoHeights consumer).
+	if !validationOptions.OutpointOnlySpend {
+		// check whether the transaction is extended, extend it if not
+		// we also get the block heights of the inputs of the transaction since we are doing a DB lookup
+		if !tx.IsExtended() {
+			// get the block heights of all inputs of the transaction and extend the inputs of not extended transaction.
+			// utxoHeights is a slice of block heights for each input
+			// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
+			if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
+				err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
+				span.RecordError(err)
 
-			return nil, err
+				return nil, err
+			}
 		}
-	}
 
-	// if the transaction was extended, we still need to get the block heights of the inputs
-	// since that processing did not happen before extending the transaction
-	// This must be done BEFORE validateTransaction to ensure BIP68 sequence lock validation has the required heights
-	if len(utxoHeights) == 0 {
-		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
-			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
-			span.RecordError(err)
+		// if the transaction was extended, we still need to get the block heights of the inputs
+		// since that processing did not happen before extending the transaction
+		// This must be done BEFORE validateTransaction to ensure BIP68 sequence lock validation has the required heights
+		if len(utxoHeights) == 0 {
+			if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
+				err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
+				span.RecordError(err)
 
-			return nil, err
+				return nil, err
+			}
 		}
 	}
 
@@ -776,7 +815,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	)
 
 	// this will reverse the spends if there is an error
-	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, blockHeight, validationOptions.IgnoreLocked); err != nil {
+	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, blockHeight, validationOptions.IgnoreLocked, validationOptions.OutpointOnlySpend); err != nil {
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
 
@@ -803,7 +842,18 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 
 			if saveAsConflicting {
-				if txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false); utxoMapErr != nil {
+				// On the outpoint-only fast path the tx is deliberately un-decorated, so a full
+				// create would call GetFees on zero parent satoshis and error. Thread the same
+				// minimal-create option the primary create below uses, so the conflicting
+				// fallback (reached during legacy below-checkpoint catchup on a stale/double
+				// spend — see handle_block.go PreValidateTransactions, which sets both
+				// CreateConflicting and OutpointOnlySpend) does not hard-fail the block.
+				var conflictingCreateOpts []utxo.CreateOption
+				if validationOptions.OutpointOnlySpend {
+					conflictingCreateOpts = append(conflictingCreateOpts, utxo.WithSkipExtendedInputs(true))
+				}
+
+				if txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false, conflictingCreateOpts...); utxoMapErr != nil {
 					if errors.Is(utxoMapErr, errors.ErrTxExists) {
 						txMetaData = &meta.Data{}
 						if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
@@ -874,7 +924,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	if !validationOptions.SkipUtxoCreation {
 		// store the transaction in the UTXO store, marking it as locked if we are going to add it to the block assembly
-		txMetaData, err = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, false, addToBlockAssembly)
+		//
+		// CONTRACT (below-checkpoint outpoint-only fast path): when OutpointOnlySpend is
+		// set the tx is deliberately un-decorated (no parent satoshis/scripts), so EVERY
+		// UTXO-store Create reachable on this path MUST thread WithSkipExtendedInputs(true)
+		// — otherwise store.Create runs GetFees over zero parent satoshis and hard-fails the
+		// block. This coupling is NOT enforced by a runtime guard (unlike the
+		// OutpointOnlySpend => SkipScriptValidation precondition checked earlier), so any new
+		// create seam added on this path must repeat it. The conflicting-fallback create
+		// above threads the same option for this reason.
+		var createExtraOpts []utxo.CreateOption
+		if validationOptions.OutpointOnlySpend {
+			createExtraOpts = append(createExtraOpts, utxo.WithSkipExtendedInputs(true))
+		}
+		txMetaData, err = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, false, addToBlockAssembly, createExtraOpts...)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) {
 				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
@@ -897,7 +960,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	} else {
 		// create the tx meta needed for the block assembly
-		txMetaData, err = util.TxMetaDataFromTx(tx)
+		if validationOptions.OutpointOnlySpend {
+			txMetaData, err = util.TxMetaDataFromTxNoFee(tx)
+		} else {
+			txMetaData, err = util.TxMetaDataFromTx(tx)
+		}
 		if err != nil {
 			return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data", txID, err)
 		}
@@ -1063,6 +1130,19 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 //     height in policy mode.
 func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int,
 	utxoHeights []uint32, tx *bt.Tx, extend bool, prefetched map[chainhash.Hash]*meta.Data) error {
+	// Validate every target index up front, before any utxoHeights[idx] (the
+	// height loops below) or tx.Inputs[idx] (the extend loop) dereference. idxs
+	// are positions in tx.Inputs, and the caller sizes utxoHeights to
+	// len(tx.Inputs), so an out-of-range index would otherwise panic in the
+	// height loop before reaching the extend path. Unreachable today (idxs
+	// derive from range tx.Inputs), so this is purely defensive hardening.
+	for _, idx := range idxs {
+		if idx < 0 || idx >= len(tx.Inputs) || idx >= len(utxoHeights) {
+			return errors.NewProcessingError("[Validate][%s] input index %d out of bounds (%d inputs, %d height slots)",
+				tx.TxIDChainHash().String(), idx, len(tx.Inputs), len(utxoHeights))
+		}
+	}
+
 	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
 
 	if extend {
@@ -1103,21 +1183,25 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 	}
 
 	if extend {
-		// extend the transaction inputs with the parent tx outputs
+		// extend the transaction inputs with the parent tx outputs (idx bounds
+		// already validated at the top of the function)
 		for _, idx := range idxs {
-			if idx > len(tx.Inputs) {
-				return errors.NewProcessingError("[Validate][%s] input index %d out of bounds for transaction with %d inputs",
-					tx.TxIDChainHash().String(), idx, len(tx.Inputs))
-			}
-
-			if txMeta.Tx == nil || txMeta.Tx.Outputs == nil || txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex] == nil {
-				return errors.NewProcessingError("[Validate][%s] parent transaction %s does not have outputs for input index %d",
-					tx.TxIDChainHash().String(), parentTxHash.String(), idx)
+			// PreviousTxOutIndex comes from the (untrusted) child transaction, so
+			// bound it against the parent's output count before indexing.
+			// Otherwise a tx referencing a real parent but a non-existent vout
+			// (e.g. vout 99 on a 2-output parent) panics here with index out of
+			// range and crashes the validator. Mirrors the guard in
+			// stores/utxo/aerospike/get.go.
+			vout := tx.Inputs[idx].PreviousTxOutIndex
+			if txMeta.Tx == nil || txMeta.Tx.Outputs == nil ||
+				int(vout) >= len(txMeta.Tx.Outputs) || txMeta.Tx.Outputs[vout] == nil {
+				return errors.NewProcessingError("[Validate][%s] parent transaction %s has no output for index %d",
+					tx.TxIDChainHash().String(), parentTxHash.String(), vout)
 			}
 
 			// extend the input with the parent tx outputs
-			tx.Inputs[idx].PreviousTxSatoshis = txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex].Satoshis
-			tx.Inputs[idx].PreviousTxScript = txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex].LockingScript
+			tx.Inputs[idx].PreviousTxSatoshis = txMeta.Tx.Outputs[vout].Satoshis
+			tx.Inputs[idx].PreviousTxScript = txMeta.Tx.Outputs[vout].LockingScript
 		}
 	}
 
@@ -1130,8 +1214,10 @@ func (v *Validator) TriggerBatcher() {
 
 // CreateInUtxoStore stores transaction metadata in the UTXO store.
 // Returns transaction metadata and error if storage fails.
+// Extra create options (e.g. utxo.WithSkipExtendedInputs) may be passed via extraOpts
+// for specialised call sites; the zero-arg call is byte-identical to the original.
 func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeight uint32, markAsConflicting bool,
-	markAsLocked bool) (*meta.Data, error) {
+	markAsLocked bool, extraOpts ...utxo.CreateOption) (*meta.Data, error) {
 	ctx, _, deferFn := tracing.Tracer("validator").Start(ctx, "storeTxInUtxoMap",
 		tracing.WithHistogram(prometheusValidatorSetTxMeta),
 	)
@@ -1144,6 +1230,8 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 	if markAsLocked {
 		createOptions = append(createOptions, utxo.WithLocked(true))
 	}
+
+	createOptions = append(createOptions, extraOpts...)
 
 	txMetaData, err := v.utxoStore.Create(ctx, tx, blockHeight, createOptions...)
 	if err != nil {
@@ -1435,7 +1523,9 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
 // Returns the spent UTXOs and error if spending fails.
-func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool) ([]*utxo.Spend, error) {
+// skipUTXOHashCheck must be true on the outpoint-only below-checkpoint path so
+// the store resolves spends via outpoint lookup without a UTXO-hash comparison.
+func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool, skipUTXOHashCheck bool) ([]*utxo.Spend, error) {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "spendUtxos",
 		tracing.WithHistogram(prometheusTransactionSpendUtxos),
 	)
@@ -1448,6 +1538,7 @@ func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	spends, err := v.utxoStore.Spend(ctx, tx, blockHeight, utxo.IgnoreFlags{
 		IgnoreConflicting: false,
 		IgnoreLocked:      ignoreLocked,
+		SkipUTXOHashCheck: skipUTXOHashCheck,
 	})
 	if err != nil {
 		span.RecordError(err)
@@ -1647,7 +1738,14 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
-	if !tx.IsExtended() {
+	//
+	// OutpointOnlySpend (below-checkpoint fast path): the tx is intentionally left
+	// un-extended — validateInternal deliberately skipped the parent read (see ~735).
+	// Do NOT re-extend here: OutpointOnlySpend requires SkipScriptValidation, so BDK
+	// never consumes the extension, BIP68 reads parent heights (not scripts), and the
+	// spend is outpoint-only. Without this guard validateTransaction re-issues the exact
+	// per-parent PreviousOutputsDecorate reads the fast path exists to eliminate.
+	if !validationOptions.OutpointOnlySpend && !tx.IsExtended() {
 		if err := v.extendTransaction(ctx, tx); err != nil {
 			// error is already wrapped in our errors package
 			span.RecordError(err)
@@ -1716,7 +1814,11 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	//    EnsureMTPLoaded call across an entire block of txs validated
 	//    concurrently; policy mode would have to either pay that cost
 	//    per-tx or keep the MTP cache always warm regardless of need.
-	if !validationOptions.SkipPolicyChecks || v.blockchainClient == nil || blockHeight < uint32(v.settings.ChainCfgParams.CSVHeight) {
+	// OutpointOnlySpend (below-checkpoint fast path): BIP68 is a consensus validity
+	// check already certified by the pinned hardcoded checkpoint, and validateInternal
+	// intentionally left utxoHeights empty — so skip BIP68 here (its only consumer of
+	// utxoHeights). Same basis as skipping script validation below checkpoint.
+	if validationOptions.OutpointOnlySpend || !validationOptions.SkipPolicyChecks || v.blockchainClient == nil || blockHeight < uint32(v.settings.ChainCfgParams.CSVHeight) {
 		return nil
 	}
 

@@ -2119,7 +2119,15 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	var peerBanned bool
 
 	if isIP && s.legacyP2PClient != nil {
-		isBannedLegacy, err := s.legacyP2PClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+		// Bound the call: the legacy peer client is lazily dialed and non-nil
+		// whenever legacy_grpcAddress is configured, so on a node without a
+		// running legacy service this would otherwise block on the parent
+		// context until the RPC's own deadline (see #591).
+		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+		isBannedLegacy, err := s.legacyP2PClient.IsBanned(legacyCtx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+
+		cancel()
+
 		if err != nil {
 			s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
 		} else {
@@ -2279,7 +2287,13 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	}
 	// check if legacy peer service is available
 	if s.legacyP2PClient != nil {
-		_, err := s.legacyP2PClient.ClearBanned(ctx, &emptypb.Empty{})
+		// Bound the call so an absent-but-configured legacy service can't stall
+		// the RPC on the parent context (#591).
+		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+		_, err := s.legacyP2PClient.ClearBanned(legacyCtx, &emptypb.Empty{})
+
+		cancel()
+
 		if err != nil {
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
 		}
@@ -2343,11 +2357,15 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 	}
 
+	// success tracks whether at least one applicable ban leg actually applied
+	// the ban; checked after the switch so the outcome no longer depends on
+	// which legs ran (previously a failed p2p ban was only surfaced when the
+	// legacy leg also ran and failed).
+	var success bool
+
 	// Handle the command
 	switch c.Command {
 	case "add":
-		var success bool
-
 		var expirationTime time.Time
 
 		// If BanTime is nil or 0, use a default ban time (e.g., 24 hours)
@@ -2380,36 +2398,27 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 		// and ban legacy peers
 		if s.legacyP2PClient != nil {
-			until := expirationTimeInt64
+			// Bound the call so an absent-but-configured legacy service can't
+			// stall the RPC on the parent context (#591).
+			legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 
-			resp, err := s.legacyP2PClient.BanPeer(ctx, &peer_api.BanPeerRequest{
+			resp, err := s.legacyP2PClient.BanPeer(legacyCtx, &peer_api.BanPeerRequest{
 				Addr:  c.IPOrSubnet,
-				Until: until,
+				Until: expirationTimeInt64,
 			})
+
+			cancel()
 
 			if err != nil {
 				s.logger.Warnf("Error while trying to ban legacy peer: %v", err)
-
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to add ban",
-					}
-				}
 			} else if resp == nil || !resp.Ok {
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to ban peer",
-					}
-				}
+				s.logger.Warnf("Legacy peer service did not apply ban for %s", c.IPOrSubnet)
 			} else {
+				success = true
 				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 			}
 		}
 	case "remove":
-		var success bool
-
 		if s.p2pClient != nil {
 			err := s.p2pClient.UnbanPeer(ctx, c.IPOrSubnet)
 			if err == nil {
@@ -2421,26 +2430,22 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 		// unban legacy peer
 		if s.legacyP2PClient != nil {
-			resp, err := s.legacyP2PClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
+			// Bound the call so an absent-but-configured legacy service can't
+			// stall the RPC on the parent context (#591).
+			legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+
+			resp, err := s.legacyP2PClient.UnbanPeer(legacyCtx, &peer_api.UnbanPeerRequest{
 				Addr: c.IPOrSubnet,
 			})
+
+			cancel()
+
 			if err != nil {
 				s.logger.Errorf("Error while trying to unban legacy peer: %v", err)
-
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Error while trying to unban peer",
-					}
-				}
 			} else if resp == nil || !resp.Ok {
-				if !success {
-					return nil, &bsvjson.RPCError{
-						Code:    bsvjson.ErrRPCInvalidParameter,
-						Message: "Failed to unban peer",
-					}
-				}
+				s.logger.Warnf("Legacy peer service did not remove ban for %s", c.IPOrSubnet)
 			} else {
+				success = true
 				s.logger.Debugf("Removed ban for %s", c.IPOrSubnet)
 			}
 		}
@@ -2448,6 +2453,21 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInvalidParameter,
 			Message: "Invalid command. Must be 'add' or 'remove'.",
+		}
+	}
+
+	// No applicable ban leg succeeded (every attempted leg failed, or none was
+	// available). setban is an administrative control, so report the failure
+	// rather than silently returning success.
+	if !success {
+		msg := "Failed to apply ban"
+		if c.Command == "remove" {
+			msg = "Failed to remove ban"
+		}
+
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: msg,
 		}
 	}
 

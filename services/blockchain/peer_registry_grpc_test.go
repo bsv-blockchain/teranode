@@ -91,6 +91,34 @@ func TestGRPC_UpdatePeerMetrics(t *testing.T) {
 	require.Equal(t, int64(200), got.AvgResponseTimeMs)
 }
 
+func TestGRPC_RecordValidatedPeerProgress(t *testing.T) {
+	b := newTestBlockchain()
+	ctx := context.Background()
+
+	_, err := b.RegisterPeer(ctx, &blockchain_api.RegisterPeerRequest{
+		Peer: &blockchain_api.PeerRegistryInfo{PeerId: "peer-1", Height: 500},
+	})
+	require.NoError(t, err)
+
+	validatedHash := mustPeerRegistryHash("grpc-validated")
+	_, err = b.RecordValidatedPeerProgress(ctx, &blockchain_api.RecordValidatedPeerProgressRequest{
+		PeerId:    "peer-1",
+		Height:    200,
+		BlockHash: validatedHash.CloneBytes(),
+		ChainWork: []byte{0x01, 0x02},
+	})
+	require.NoError(t, err)
+
+	got, ok := b.peerRegistry.Get("peer-1")
+	require.True(t, ok)
+	require.Equal(t, uint32(500), got.Height)
+	require.Equal(t, uint32(200), got.ValidatedHeight)
+	require.NotNil(t, got.ValidatedBlockHash)
+	require.Equal(t, validatedHash.String(), got.ValidatedBlockHash.String())
+	require.Equal(t, []byte{0x01, 0x02}, got.ValidatedChainWork)
+	require.False(t, got.LastValidatedAt.IsZero())
+}
+
 // ---------------------------------------------------------------------------
 // RemovePeer
 // ---------------------------------------------------------------------------
@@ -381,34 +409,41 @@ func TestGRPC_ClearBannedPeers(t *testing.T) {
 func TestGRPC_PeerInfoProtoRoundTrip(t *testing.T) {
 	hash, err := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 	require.NoError(t, err)
+	validatedHash := mustPeerRegistryHash("proto-validated")
 
 	now := time.Now().Truncate(time.Microsecond) // proto timestamps have microsecond precision at best
 
 	original := &PeerInfo{
-		ID:                     "round-trip-peer",
-		TransportType:          blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL,
-		ClientName:             "test-client/1.0",
-		Height:                 654321,
-		DataHubURL:             "http://data.example.com",
-		NetworkAddress:         "192.168.1.100:8333",
-		IsBanned:               true,
-		BanScore:               42,
-		Storage:                "aerospike",
-		BytesSent:              999999,
-		BytesReceived:          888888,
-		InteractionAttempts:    100,
-		InteractionSuccesses:   90,
-		InteractionFailures:    8,
-		MaliciousCount:         2,
-		ReputationScore:        73.5,
-		AvgResponseTimeMs:      150,
-		ConnectedAt:            now.Add(-1 * time.Hour),
-		LastMessageTime:        now.Add(-30 * time.Second),
-		LastInteractionAttempt: now.Add(-10 * time.Second),
-		LastInteractionSuccess: now.Add(-10 * time.Second),
-		LastInteractionFailure: now.Add(-5 * time.Minute),
-		LastSeen:               now,
-		BlockHash:              hash,
+		ID:                        "round-trip-peer",
+		TransportType:             blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL,
+		ClientName:                "test-client/1.0",
+		Height:                    654321,
+		DataHubURL:                "http://data.example.com",
+		NetworkAddress:            "192.168.1.100:8333",
+		IsBanned:                  true,
+		BanScore:                  42,
+		Storage:                   "aerospike",
+		BytesSent:                 999999,
+		BytesReceived:             888888,
+		InteractionAttempts:       100,
+		InteractionSuccesses:      90,
+		InteractionFailures:       8,
+		MaliciousCount:            2,
+		ReputationScore:           73.5,
+		AvgResponseTimeMs:         150,
+		ConnectedAt:               now.Add(-1 * time.Hour),
+		LastMessageTime:           now.Add(-30 * time.Second),
+		LastInteractionAttempt:    now.Add(-10 * time.Second),
+		LastInteractionSuccess:    now.Add(-10 * time.Second),
+		LastInteractionFailure:    now.Add(-5 * time.Minute),
+		LastSeen:                  now,
+		BlockHash:                 hash,
+		ValidatedHeight:           650000,
+		ValidatedBlockHash:        validatedHash,
+		ValidatedChainWork:        []byte{0x01, 0x02, 0x03},
+		LastValidatedAt:           now.Add(-2 * time.Minute),
+		FullStorageContradictions: 3,
+		FullStoragePenaltyUntil:   now.Add(30 * time.Minute),
 	}
 
 	proto := peerInfoToProto(original)
@@ -440,10 +475,17 @@ func TestGRPC_PeerInfoProtoRoundTrip(t *testing.T) {
 	require.WithinDuration(t, original.LastInteractionSuccess, roundTripped.LastInteractionSuccess, time.Microsecond)
 	require.WithinDuration(t, original.LastInteractionFailure, roundTripped.LastInteractionFailure, time.Microsecond)
 	require.WithinDuration(t, original.LastSeen, roundTripped.LastSeen, time.Microsecond)
+	require.WithinDuration(t, original.LastValidatedAt, roundTripped.LastValidatedAt, time.Microsecond)
 
 	// BlockHash should survive the round-trip.
 	require.NotNil(t, roundTripped.BlockHash)
 	require.Equal(t, original.BlockHash.String(), roundTripped.BlockHash.String())
+	require.Equal(t, original.ValidatedHeight, roundTripped.ValidatedHeight)
+	require.NotNil(t, roundTripped.ValidatedBlockHash)
+	require.Equal(t, original.ValidatedBlockHash.String(), roundTripped.ValidatedBlockHash.String())
+	require.Equal(t, original.ValidatedChainWork, roundTripped.ValidatedChainWork)
+	require.Equal(t, original.FullStorageContradictions, roundTripped.FullStorageContradictions)
+	require.WithinDuration(t, original.FullStoragePenaltyUntil, roundTripped.FullStoragePenaltyUntil, time.Microsecond)
 }
 
 func TestGRPC_PeerInfoProtoRoundTrip_NilBlockHash(t *testing.T) {

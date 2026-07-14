@@ -841,21 +841,17 @@ func TestAerospikeBufferSize(t *testing.T) {
 	u, err := url.Parse("aerospike://localhost:9999/test?Timeout=100ms&LoginTimeout=100ms")
 	require.NoError(t, err)
 
-	// Store original buffer size
-	originalBufferSize := aerospike.MaxBufferSize
+	// MaxBufferSize is set exactly once in this package's init (not per
+	// GetAerospikeClient call, which raced with in-flight batch reads on already
+	// running clients). So by the time any test runs it must already be 512MB.
+	const expectedBufferSize = 1024 * 1024 * 512 // 512MB
+	require.Equal(t, 536870912, expectedBufferSize, "Buffer size constant should be 512MB")
+	require.Equal(t, expectedBufferSize, aerospike.MaxBufferSize, "init must set MaxBufferSize to 512MB")
 
-	// The GetAerospikeClient will fail to connect but that's expected
-	// The buffer size is only set upon successful client creation
+	// A GetAerospikeClient that fails to connect must not touch MaxBufferSize.
 	_, err = GetAerospikeClient(logger, u, testSettings)
-	assert.Error(t, err, "Expected connection error since no Aerospike server running")
-
-	// Since connection failed, buffer size should remain unchanged
-	// This tests that the function doesn't crash and handles connection failures gracefully
-	assert.Equal(t, originalBufferSize, aerospike.MaxBufferSize, "Buffer size should remain unchanged on connection failure")
-
-	// Test that we can at least validate the buffer size constant value
-	expectedBufferSize := 1024 * 1024 * 512 // 512MB
-	assert.Equal(t, 536870912, expectedBufferSize, "Buffer size constant should be 512MB")
+	require.Error(t, err, "Expected connection error since no Aerospike server running")
+	require.Equal(t, expectedBufferSize, aerospike.MaxBufferSize, "Buffer size must stay 512MB after a failed connection")
 }
 
 // Test initStats function with minimal testing to improve coverage

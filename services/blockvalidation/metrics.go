@@ -80,6 +80,11 @@ var (
 	prometheusBlockValidationSetMinedRetries         prometheus.Counter
 	prometheusBlockValidationSetMinedDrops           prometheus.Counter
 	prometheusBlockValidationSetMinedEnqueueOverflow prometheus.Counter
+
+	// outpoint-only fast-path counter: incremented once per block when the
+	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
+	// checkpoint). A rising rate indicates the fast path is in use during IBD.
+	prometheusBlockValidationOutpointOnlyBlocks prometheus.Counter
 )
 
 var (
@@ -234,6 +239,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "setmined_drops_total",
 			Help:      "Total number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention; the specific block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusBlockValidationOutpointOnlyBlocks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "outpoint_only_blocks_total",
+			Help:      "Total number of blocks that entered the below-checkpoint outpoint-only fast path (OutpointOnlyBelowCheckpoint setting on, height at or below highest checkpoint). Counted once on entry; a block that later falls back to normal validation is still counted. A rising rate during IBD indicates the fast path is active.",
 		},
 	)
 

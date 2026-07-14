@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -99,7 +100,7 @@ func (u *BlockValidation) subtreeWriteWorker(ctx context.Context, writeJobsChan 
 // Returns:
 //   - *SubtreeWriteJob: Job to be processed by async writer (nil if no write needed)
 //   - error: If building the subtree fails
-func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *model.Block, subtreeIdx int, subtree *subtreepkg.Subtree, txs []*bt.Tx, subtreeHash chainhash.Hash, fullSubtreeExists bool) (*SubtreeWriteJob, error) {
+func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *model.Block, subtreeIdx int, subtree *subtreepkg.Subtree, txs []*bt.Tx, subtreeHash chainhash.Hash, fullSubtreeExists, outpointOnly bool) (*SubtreeWriteJob, error) {
 	// If we already know the full subtree exists (checked during prefetch), load it
 	// This avoids redundant disk I/O during the build phase
 	if fullSubtreeExists {
@@ -138,14 +139,18 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 	}
 
 	for _, tx := range txs {
-		fee, err := util.GetFees(tx)
-		if err != nil {
-			return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to get fee for tx %s in subtree %s", block.Hash().String(), tx.TxIDChainHash().String(), subtreeHash.String(), err)
+		var fee uint64
+		if !outpointOnly {
+			var err error
+			fee, err = util.GetFees(tx)
+			if err != nil {
+				return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to get fee for tx %s in subtree %s", block.Hash().String(), tx.TxIDChainHash().String(), subtreeHash.String(), err)
+			}
 		}
 
 		sizeInBytes := uint64(tx.Size())
 
-		if err = fullSubtree.AddNode(*tx.TxIDChainHash(), fee, sizeInBytes); err != nil {
+		if err := fullSubtree.AddNode(*tx.TxIDChainHash(), fee, sizeInBytes); err != nil {
 			return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to add tx node %s to full subtree %s", block.Hash().String(), tx.TxIDChainHash().String(), subtreeHash.String(), err)
 		}
 	}
@@ -198,6 +203,13 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
 	}
 
+	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it through
+	// the pipeline (rather than re-deriving it at each seam) so every phase agrees.
+	outpointOnly := u.quickValidateOutpointOnly(block)
+	if outpointOnly {
+		prometheusBlockValidationOutpointOnlyBlocks.Inc()
+	}
+
 	var (
 		err error
 		id  uint64
@@ -206,7 +218,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	if len(block.Subtrees) > 0 {
 		// Process all subtrees in streaming fashion - creates UTXOs, spends, writes files
 		// This function waits for all processing to complete before returning, ensuring block.ID is set
-		_, err = u.processBlockSubtrees(ctx, block)
+		_, err = u.processBlockSubtrees(ctx, block, outpointOnly)
 		if err != nil {
 			return errors.NewProcessingError("[quickValidateBlock][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
@@ -287,6 +299,13 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		return errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
 	}
 
+	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it through
+	// the pipeline (rather than re-deriving it at each seam) so every phase agrees.
+	outpointOnly := u.quickValidateOutpointOnly(block)
+	if outpointOnly {
+		prometheusBlockValidationOutpointOnlyBlocks.Inc()
+	}
+
 	var (
 		err error
 		id  uint64
@@ -298,7 +317,7 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		if prefetchDepth <= 0 {
 			prefetchDepth = 2 // Default for async mode
 		}
-		_, err = u.processBlockSubtreesPipelineAsync(ctx, block, prefetchDepth, writeJobsChan)
+		_, err = u.processBlockSubtreesPipelineAsync(ctx, block, prefetchDepth, writeJobsChan, outpointOnly)
 		if err != nil {
 			return errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
@@ -364,7 +383,7 @@ type subtreeResult struct {
 // Returns:
 //   - uint64: Existing BlockID if retry detected, 0 otherwise
 //   - error: If processing fails
-func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block) (uint64, error) {
+func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockSubtrees",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processBlockSubtrees][%s] processing %d subtrees in batches of %d", block.Hash().String(), len(block.Subtrees), u.settings.BlockValidation.SubtreeBatchSize),
@@ -377,14 +396,14 @@ func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model
 
 	prefetchDepth := u.settings.BlockValidation.SubtreeBatchPrefetchDepth
 	if prefetchDepth <= 0 {
-		return u.processBlockSubtreesSequential(ctx, block)
+		return u.processBlockSubtreesSequential(ctx, block, outpointOnly)
 	}
-	return u.processBlockSubtreesPipeline(ctx, block, prefetchDepth)
+	return u.processBlockSubtreesPipeline(ctx, block, prefetchDepth, outpointOnly)
 }
 
 // processBlockSubtreesSequential processes subtrees sequentially, one batch at a time.
 // This is the fallback when SubtreeBatchPrefetchDepth is 0.
-func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 	var existingBlockID uint64
@@ -404,7 +423,7 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 		}
 
 		// Phase 1-3: Read subtrees and extend transactions (shared with normal validation)
-		batch, err := u.processSubtreeBatch(ctx, block, batchStart, batchEnd, extendedTxs)
+		batch, err := u.processSubtreeBatch(ctx, block, batchStart, batchEnd, extendedTxs, outpointOnly)
 		if err != nil {
 			return 0, err
 		}
@@ -468,7 +487,7 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 //     created unlocked, so this lock-based rollback barrier does not apply; recovery instead relies on
 //     retry convergence below.
 //   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID.
-func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 	var existingBlockID uint64
@@ -504,7 +523,7 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 			}
 
 			start := time.Now()
-			batch, err := u.prefetchSubtreeBatch(gCtx, block, batchStart, batchEnd)
+			batch, err := u.prefetchSubtreeBatch(gCtx, block, batchStart, batchEnd, outpointOnly)
 			if err != nil {
 				return err
 			}
@@ -610,7 +629,7 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 // Returns:
 //   - uint64: Existing BlockID if retry detected, 0 otherwise
 //   - error: If processing fails or context is cancelled
-func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob, outpointOnly bool) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 	var existingBlockID uint64
@@ -635,7 +654,7 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 			}
 
 			start := time.Now()
-			batch, err := u.prefetchSubtreeBatch(gCtx, block, batchStart, batchEnd)
+			batch, err := u.prefetchSubtreeBatch(gCtx, block, batchStart, batchEnd, outpointOnly)
 			if err != nil {
 				return err
 			}
@@ -865,7 +884,7 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 // Takes transactions directly (without coinbase nil entry).
 // Note: Subtree meta files (.subtreemeta) are intentionally skipped during quick validation
 // for performance. They will be generated on-demand if needed later.
-func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *model.Block, subtreeIdx int, subtree *subtreepkg.Subtree, txs []*bt.Tx, subtreeHash chainhash.Hash, fullSubtreeExists bool) error {
+func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *model.Block, subtreeIdx int, subtree *subtreepkg.Subtree, txs []*bt.Tx, subtreeHash chainhash.Hash, fullSubtreeExists, outpointOnly bool) error {
 	// fullSubtreeExists was already computed during prefetch (readSubtree); reuse it
 	// instead of issuing another subtreeStore.Exists round-trip here.
 	if !fullSubtreeExists {
@@ -883,15 +902,20 @@ func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *m
 
 		for _, tx := range txs {
 			// Get fee and size directly instead of using TxMetaDataFromTx which also
-			// computes TxInpoints (only needed for subtreeMeta, which we skip during quick validation)
-			fee, err := util.GetFees(tx)
-			if err != nil {
-				return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to get fee for tx %s in subtree %s", block.Hash().String(), tx.TxIDChainHash().String(), subtreeHash.String(), err)
+			// computes TxInpoints (only needed for subtreeMeta, which we skip during quick validation).
+			// On the outpoint-only fast path, skip GetFees (inputs are un-decorated; fee is 0).
+			var fee uint64
+			if !outpointOnly {
+				var err error
+				fee, err = util.GetFees(tx)
+				if err != nil {
+					return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to get fee for tx %s in subtree %s", block.Hash().String(), tx.TxIDChainHash().String(), subtreeHash.String(), err)
+				}
 			}
 
 			sizeInBytes := uint64(tx.Size())
 
-			if err = fullSubtree.AddNode(*tx.TxIDChainHash(), fee, sizeInBytes); err != nil {
+			if err := fullSubtree.AddNode(*tx.TxIDChainHash(), fee, sizeInBytes); err != nil {
 				return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to add tx node %s to full subtree %s", block.Hash().String(), tx.TxIDChainHash().String(), subtreeHash.String(), err)
 			}
 		}
@@ -1027,6 +1051,12 @@ type SubtreeProcessingBatch struct {
 
 	// batchEnd is the global ending index (exclusive) in block.Subtrees
 	batchEnd int
+
+	// outpointOnly is the below-checkpoint fast-path mode for this block, computed ONCE
+	// per block in the quickValidate entry point and threaded down (never re-derived per
+	// seam). Consumers read this field so every phase — decorate, fee, create, spend —
+	// sees a single consistent decision and cannot drift. See quickValidateOutpointOnly.
+	outpointOnly bool
 }
 
 // Close releases mmap-backed subtree resources in this batch.
@@ -1061,6 +1091,7 @@ func (u *BlockValidation) processSubtreeBatch(
 	block *model.Block,
 	batchStart, batchEnd int,
 	extendedTxsFromPrevBatches map[chainhash.Hash]*bt.Tx,
+	outpointOnly bool,
 ) (*SubtreeProcessingBatch, error) {
 	batchSize := batchEnd - batchStart
 
@@ -1072,6 +1103,7 @@ func (u *BlockValidation) processSubtreeBatch(
 		batchTxs:      make([]*bt.Tx, 0),
 		batchStart:    batchStart,
 		batchEnd:      batchEnd,
+		outpointOnly:  outpointOnly,
 	}
 
 	// Phase 1: Read subtrees in parallel
@@ -1155,8 +1187,10 @@ func (u *BlockValidation) processSubtreeBatch(
 		batch.txRanges[i] = [2]int{startIdx, len(batch.batchTxs)}
 	}
 
-	// Phase 3: Extend remaining transactions using bulk UTXO store lookup
-	if len(txsNeedingExtension) > 0 {
+	// Phase 3: Extend remaining transactions using bulk UTXO store lookup.
+	// Skipped on the outpoint-only fast path: below-checkpoint blocks are certified
+	// valid and parent satoshis/scripts are not needed for UTXO create/spend.
+	if !outpointOnly && len(txsNeedingExtension) > 0 {
 		if err := u.utxoStore.BatchPreviousOutputsDecorate(ctx, txsNeedingExtension); err != nil {
 			cancelReaders()
 			return nil, errors.NewProcessingError("[processSubtreeBatch][%s] failed to extend transactions: %v", block.Hash().String(), err)
@@ -1180,6 +1214,22 @@ func (u *BlockValidation) processSubtreeBatch(
 func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch) error {
 	if len(batch.batchTxs) == 0 {
 		return nil
+	}
+
+	outpointOnly := batch.outpointOnly
+
+	// Invariant I4 (fail-closed): outpoint-only create+spend must never run above the highest
+	// hardcoded checkpoint. Key the guard on the ACTUAL per-block mode (batch.outpointOnly, the
+	// same value that drives create/spend below) rather than on the raw setting+store: under a
+	// catchup-checkpoint override, blocks in (hardcodedCheckpoint, overrideHeight] legitimately
+	// enter quick validation in NORMAL mode (batch.outpointOnly == false, no fast-path op), and
+	// gating on setting+store alone would wrongly trip on them. This is not a tautology: if a
+	// future change makes quickValidateOutpointOnly return true above the hardcoded checkpoint,
+	// batch.outpointOnly would be true there and this guard fires — catching exactly that bug,
+	// while never rejecting a valid normal-mode block. HighestCheckpointHeight uses the hardcoded
+	// checkpoints (never the operator override).
+	if outpointOnly && block.Height > blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints) {
+		return errors.NewProcessingError("[createAndSpendUTXOsForBatch] invariant I4 violated: outpoint-only mode active above checkpoint at height %d", block.Height)
 	}
 
 	lockUTXOs := !u.quickValidateSkipsUtxoLock(block)
@@ -1206,13 +1256,19 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 		txRange := batch.txRanges[i]
 		for txIdx := txRange[0]; txIdx < txRange[1]; txIdx++ {
 			tx := batch.batchTxs[txIdx]
+
+			if shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
+				// Not written to the store; its inputs are still spent in Phase 2.
+				continue
+			}
+
 			sIdx := globalSubtreeIdx
 			createG.Go(func() error {
 				_, err := u.utxoStore.Create(createCtx, tx, block.Height, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
 					BlockID:     block.ID,
 					BlockHeight: block.Height,
 					SubtreeIdx:  sIdx,
-				}), utxo.WithLocked(lockUTXOs))
+				}), utxo.WithLocked(lockUTXOs), utxo.WithSkipExtendedInputs(outpointOnly))
 				if err != nil {
 					if errors.Is(err, errors.ErrTxExists) {
 						// Transaction already exists - collect it for mined info update
@@ -1248,7 +1304,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	for _, tx := range batch.batchTxs {
 		tx := tx
 		spendG.Go(func() error {
-			if _, err := u.utxoStore.Spend(spendCtx, tx, block.Height, utxo.IgnoreFlags{IgnoreLocked: true}); err != nil {
+			if _, err := u.utxoStore.Spend(spendCtx, tx, block.Height, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: outpointOnly}); err != nil {
 				return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 			}
 			return nil
@@ -1284,7 +1340,7 @@ func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *
 		fullSubtreeExists := batch.fullSubtreeExists[localIdx]
 
 		writeG.Go(func() error {
-			return u.writeSubtreeFilesFromTxs(writeCtx, block, globalIdx, subtree, subtreeTxs, subtreeHash, fullSubtreeExists)
+			return u.writeSubtreeFilesFromTxs(writeCtx, block, globalIdx, subtree, subtreeTxs, subtreeHash, fullSubtreeExists, batch.outpointOnly)
 		})
 	}
 
@@ -1324,7 +1380,7 @@ func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *m
 		fullSubtreeExists := batch.fullSubtreeExists[localIdx]
 
 		buildG.Go(func() error {
-			job, err := u.buildSubtreeAndQueueWrite(buildCtx, block, globalIdx, subtree, subtreeTxs, subtreeHash, fullSubtreeExists)
+			job, err := u.buildSubtreeAndQueueWrite(buildCtx, block, globalIdx, subtree, subtreeTxs, subtreeHash, fullSubtreeExists, batch.outpointOnly)
 			if err != nil {
 				return err
 			}
@@ -1373,6 +1429,7 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 	ctx context.Context,
 	block *model.Block,
 	batchStart, batchEnd int,
+	outpointOnly bool,
 ) (*SubtreeProcessingBatch, error) {
 	batchSize := batchEnd - batchStart
 
@@ -1385,6 +1442,7 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 		fullSubtreeExists: make([]bool, batchSize),
 		batchStart:        batchStart,
 		batchEnd:          batchEnd,
+		outpointOnly:      outpointOnly,
 	}
 
 	// Read subtrees in parallel
@@ -1495,8 +1553,9 @@ func (u *BlockValidation) extendBatch(
 		batch.txRanges[i] = [2]int{startIdx, len(batch.batchTxs)}
 	}
 
-	// Extend remaining transactions using bulk UTXO store lookup
-	if len(txsNeedingExtension) > 0 {
+	// Extend remaining transactions using bulk UTXO store lookup.
+	// Skipped on the outpoint-only fast path (see processSubtreeBatch Phase 3 comment).
+	if !batch.outpointOnly && len(txsNeedingExtension) > 0 {
 		if err := u.utxoStore.BatchPreviousOutputsDecorate(ctx, txsNeedingExtension); err != nil {
 			return errors.NewProcessingError("[extendBatch][%s] failed to extend transactions: %v", block.Hash().String(), err)
 		}
