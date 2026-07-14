@@ -733,6 +733,9 @@ service PeerRegistryService {
   // ReconsiderBadPeers resets reputation for peers whose last failure is older than the cooldown
   // and returns the count of peers reconsidered.
   rpc ReconsiderBadPeers(ReconsiderBadPeersRequest) returns (ReconsiderBadPeersResponse) {}
+
+  // RecordValidatedPeerProgress stores locally validated peer chain progress.
+  rpc RecordValidatedPeerProgress(RecordValidatedPeerProgressRequest) returns (google.protobuf.Empty) {}
 }
 
 // PeerRegistryInfo holds all information about a peer in the centralized registry.
@@ -781,11 +784,25 @@ message PeerRegistryInfo {
   int32 reputation_reset_count = 34;
   string last_catchup_error = 35;
   google.protobuf.Timestamp last_catchup_error_time = 36;
+  uint32 validated_height = 37;               // Highest locally validated height attributed to this peer
+  bytes validated_block_hash = 38;            // Block hash for validated_height
+  bytes validated_chain_work = 39;            // Locally validated cumulative chain work
+  google.protobuf.Timestamp last_validated_at = 40;
+  int64 full_storage_contradictions = 41;     // Count of observed contradictions to full-storage claims
+  google.protobuf.Timestamp full_storage_penalty_until = 42;
 }
 
 // RegisterPeerRequest registers or updates a peer in the centralized registry.
 message RegisterPeerRequest {
   PeerRegistryInfo peer = 1;
+}
+
+// RecordValidatedPeerProgressRequest records locally validated progress for a peer.
+message RecordValidatedPeerProgressRequest {
+  string peer_id = 1;
+  uint32 height = 2;
+  bytes block_hash = 3;
+  bytes chain_work = 4;
 }
 
 // UpdatePeerMetricsRequest updates runtime metrics for an existing peer.

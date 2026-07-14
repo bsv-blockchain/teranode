@@ -2,11 +2,14 @@ package p2p
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -14,6 +17,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,10 +31,23 @@ func newServerWithLocalRegistry(t *testing.T) (*Server, *blockchain.CentralizedP
 		gCtx:         context.Background(),
 		settings: &settings.Settings{
 			P2P: settings.P2PSettings{
-				AllowPrunedNodeFallback: true,
+				AllowPrunedNodeFallback:            true,
+				MaxUnvalidatedAdvertisedHeightLead: 10_000,
 			},
 		},
 	}, reg
+}
+
+func setServerLocalHeight(t *testing.T, s *Server, height uint32) {
+	t.Helper()
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(
+		model.GenesisBlockHeader,
+		&model.BlockHeaderMeta{Height: height},
+		nil,
+	).Maybe()
+	s.blockchainClient = mockBlockchain
 }
 
 func mustNewPeerID(t *testing.T) peer.ID {
@@ -205,6 +222,162 @@ func TestServerHelpers_HandleBlockTopic_LowReputationPeerStillForwarded(t *testi
 	default:
 		t.Fatal("block from low-reputation peer was not published to Kafka (filtered?)")
 	}
+}
+
+func TestHandleNodeStatusTopic_BoundsInflatedAdvertisedHeight(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	const blockHash = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remote.String(),
+		ClientName:    "client/1.0",
+		BaseURL:       "http://peer.example",
+		BestHeight:    1_000_000,
+		BestBlockHash: blockHash,
+	})
+	require.NoError(t, err)
+
+	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
+
+	expectedHeight := uint32(10_100)
+	got, ok := reg.Get(remote.String())
+	require.True(t, ok)
+	require.Equal(t, expectedHeight, got.Height)
+	require.NotNil(t, got.BlockHash)
+	require.Equal(t, blockHash, got.BlockHash.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		require.Equal(t, expectedHeight, notification.BestHeight)
+		require.Equal(t, blockHash, notification.BestBlockHash)
+	default:
+		t.Fatal("expected node_status notification")
+	}
+}
+
+func TestHandleBlockTopic_BoundsInflatedAdvertisedHeight(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	blockHash := chainhash.HashH([]byte("inflated advertised block")).String()
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       blockHash,
+		Height:     1_000_000,
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+
+	expectedHeight := uint32(10_100)
+	got, ok := reg.Get(remote.String())
+	require.True(t, ok)
+	require.Equal(t, expectedHeight, got.Height)
+	require.NotNil(t, got.BlockHash)
+	require.Equal(t, blockHash, got.BlockHash.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		require.Equal(t, expectedHeight, notification.Height)
+		require.Equal(t, blockHash, notification.Hash)
+	default:
+		t.Fatal("expected block notification")
+	}
+}
+
+func TestHandleBlockTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	s.blocksKafkaProducerClient = producer
+
+	remote := mustNewPeerID(t)
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       "not-a-block-hash",
+		Height:     1_000_000,
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+
+	_, ok := reg.Get(remote.String())
+	require.False(t, ok)
+
+	select {
+	case notification := <-s.notificationCh:
+		t.Fatalf("unexpected block notification for malformed hash: %+v", notification)
+	default:
+	}
+
+	select {
+	case published := <-producer.PublishChannel():
+		t.Fatalf("unexpected Kafka publish for malformed hash: %+v", published)
+	default:
+	}
+}
+
+func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remote.String(),
+		ClientName:    "client/1.0",
+		BaseURL:       "http://peer.example",
+		BestHeight:    1_000_000,
+		BestBlockHash: "not-a-block-hash",
+	})
+	require.NoError(t, err)
+
+	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		require.Equal(t, uint32(0), notification.BestHeight)
+		require.Empty(t, notification.BestBlockHash)
+	default:
+		t.Fatal("expected node_status notification")
+	}
+
+	got, ok := reg.Get(remote.String())
+	require.True(t, ok)
+	require.Equal(t, uint32(0), got.Height)
+	require.Nil(t, got.BlockHash)
+	require.Empty(t, got.ClientName)
+	require.Empty(t, got.DataHubURL)
 }
 
 func TestServerHelpers_AddProtocolViolation_AccumulatesScore(t *testing.T) {
@@ -451,4 +624,46 @@ func TestCleanupPeerMaps_EvictsExpiredReputationEntries(t *testing.T) {
 	assert.False(t, expiredStillThere, "expired reputationCache entry must be evicted")
 	_, freshStillThere := s.reputationCache.Load("fresh-peer")
 	assert.True(t, freshStillThere, "fresh reputationCache entry must survive cleanup")
+}
+
+func TestServerHelpers_SanitizeAdvertisedTip_ClampsAndOverflow(t *testing.T) {
+	const validHash = "0000000000000000000000000000000000000000000000000000000000000001"
+	pid := mustNewPeerID(t).String()
+
+	t.Run("within lead is returned unchanged", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead = 50
+		height, hash, ok := s.sanitizeAdvertisedTip(pid, 140, validHash, 100)
+		require.True(t, ok)
+		require.NotNil(t, hash)
+		require.Equal(t, uint32(140), height)
+	})
+
+	t.Run("beyond lead is capped to local height plus lead", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead = 10
+		height, hash, ok := s.sanitizeAdvertisedTip(pid, 1000, validHash, 100)
+		require.True(t, ok)
+		require.NotNil(t, hash)
+		require.Equal(t, uint32(110), height, "capped to localHeight+maxLead")
+	})
+
+	t.Run("uint32 overflow clamps the ceiling instead of wrapping", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead = 100
+		localHeight := ^uint32(0) - 5 // localHeight+maxLead overflows uint32
+		height, hash, ok := s.sanitizeAdvertisedTip(pid, ^uint32(0), validHash, localHeight)
+		require.True(t, ok)
+		require.NotNil(t, hash)
+		require.Equal(t, ^uint32(0), height,
+			"ceiling clamps to max uint32 so a near-max advertisement is accepted, not wrapped")
+	})
+
+	t.Run("invalid hash is rejected", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		height, hash, ok := s.sanitizeAdvertisedTip(pid, 100, "not-a-hash", 100)
+		require.False(t, ok)
+		require.Nil(t, hash)
+		require.Equal(t, uint32(0), height)
+	})
 }

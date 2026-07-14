@@ -973,6 +973,7 @@ func TestHandleBlockMsg_OrphanDuringCatchup(t *testing.T) {
 	sm := &SyncManager{
 		ctx:              context.Background(),
 		logger:           ulogger.TestLogger{},
+		chainParams:      &chaincfg.MainNetParams,
 		blockchainClient: blockchainClient,
 		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
 		requestedBlocks:  expiringmap.New[chainhash.Hash, struct{}](time.Minute),
@@ -1031,7 +1032,8 @@ func TestHandleCheckSyncPeer_LocalBacklog(t *testing.T) {
 		sps := newStalledState()
 		sm := newSyncManager(sp, sps)
 
-		sm.blockBacklog.Add(1) // a block is queued or mid-validation locally
+		sm.blockBacklog.Add(1)   // a block is queued or mid-validation locally
+		sm.noteBacklogProgress() // fresh progress: backlog is advancing, not hung
 
 		// Rotation would panic in this minimal SyncManager (no blockchain
 		// client), so NotPanics proves the peer was kept.

@@ -3,6 +3,13 @@ package blockvalidation
 import (
 	"context"
 	"time"
+
+	"github.com/bsv-blockchain/teranode/errors"
+)
+
+const (
+	catchupFailureKindGeneric         = "generic"
+	catchupFailureKindBlockIncomplete = "block_incomplete"
 )
 
 // reportCatchupAttempt reports a catchup attempt to the P2P service.
@@ -64,13 +71,24 @@ func (u *Server) reportCatchupSuccess(ctx context.Context, peerID string, durati
 //   - ctx: Context for the gRPC call
 //   - peerID: Peer identifier
 func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
+	u.reportCatchupFailureWithKind(ctx, peerID, catchupFailureKindGeneric, "")
+}
+
+func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
+	if errors.Is(err, errors.ErrBlockIncomplete) {
+		return
+	}
+	u.reportCatchupFailure(ctx, peerID)
+}
+
+func (u *Server) reportCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) {
 	if peerID == "" {
 		return
 	}
 
 	// Report to P2P service if client is available
 	if u.p2pClient != nil {
-		if err := u.p2pClient.RecordCatchupFailure(ctx, peerID); err != nil {
+		if err := u.p2pClient.RecordCatchupFailureWithKind(ctx, peerID, failureKind, blockHash); err != nil {
 			u.logger.Warnf("[peer_metrics] Failed to report catchup failure to P2P service for peer %s: %v", peerID, err)
 		}
 	}
@@ -93,6 +111,22 @@ func (u *Server) reportCatchupError(ctx context.Context, peerID string, errorMsg
 		if err := u.p2pClient.UpdateCatchupError(ctx, peerID, errorMsg); err != nil {
 			u.logger.Warnf("[peer_metrics] Failed to update catchup error for peer %s: %v", peerID, err)
 		}
+	}
+}
+
+// reportValidatedChainProgress reports locally validated header-chain progress
+// to P2P. Reporting is advisory and must not affect catchup or block validation.
+func (u *Server) reportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) {
+	if peerID == "" || height == 0 || blockHash == "" || len(chainWork) == 0 {
+		return
+	}
+
+	if u.p2pClient == nil {
+		return
+	}
+
+	if err := u.p2pClient.ReportValidatedChainProgress(ctx, peerID, height, blockHash, chainWork); err != nil {
+		u.logger.Warnf("[peer_metrics] Failed to report validated chain progress for peer %s at height %d: %v", peerID, height, err)
 	}
 }
 

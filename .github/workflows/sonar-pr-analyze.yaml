@@ -7,9 +7,31 @@ name: SonarQube Analysis for PRs
 # - workflow_run always runs in the base repository context with access to secrets
 #
 # How it works:
-# 1. teranode_pr_tests.yaml runs on PR (fork or internal) and generates artifacts
+# 1. teranode_pr_tests.yaml runs on the PR (fork or internal), encodes the tested
+#    PR/merge/base identity in its run-name, and uploads an attempt-qualified
+#    Sonar input bundle
 # 2. When that completes, this workflow triggers with access to SONAR_TOKEN
-# 3. Downloads artifacts and runs SonarQube scan with proper PR decoration
+# 3. The identity is validated, the tested synthetic merge tree is scanned, and
+#    the Quality Gate result is posted as a commit status on the PR *head*
+#    commit — the commit branch protection evaluates required checks on — under
+#    the context "SonarQube Quality Gate"
+#
+# Trust model: pull_request runs execute the PR's own copy of the producer
+# workflow, so the run-name (and everything derived from it) is untrusted input.
+# Every parsed field is cross-checked against trusted sources before use:
+# - the live PR via the API (head repo/branch/SHA and base ref must match)
+# - the claimed base must be an ancestor of the PR's current target branch
+# - the claimed merge must be a GitHub-signed synthetic merge whose parents are
+#   exactly (claimed base, workflow_run.head_sha)
+# Scanner settings are read from the trusted base commit and the Sonar host,
+# project key, and organization are pinned as scanner args, so a malicious PR
+# cannot redirect the scanner at another host to exfiltrate SONAR_TOKEN.
+# Validation failures fail the run WITHOUT posting a status, so a hostile or
+# malformed run leaves the required gate pending — the safe default.
+#
+# Base retargets and target-branch advancement do not rerun the analysis; the
+# status on the head commit describes the merge that was tested at run time,
+# the same staleness contract as every other required PR check.
 
 on:
   workflow_run:
@@ -17,115 +39,315 @@ on:
     types:
       - completed
 
+# One consumer at a time per PR head (repo + branch): a newer producer
+# completion cancels a superseded in-flight analysis, and the cancelled run's
+# status step is guarded by !cancelled() so it never posts a partial result.
 concurrency:
-  group: sonar-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch }}
+  group: sonar-pr-${{ github.event.workflow_run.head_repository.full_name || 'unknown' }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  pull-requests: write
-  id-token: write
-
-env:
-  GO_VERSION: "1.26.0"
-
 jobs:
-  sonarqube:
-    name: SonarQube Analysis
-    # arm64-safe: only downloads coverage artifacts + runs the sonar scanner CLI
-    # (arm64-available); no Go build, no containers.
-    runs-on: teranode-runner-4-core-arm
-    # Only run if:
-    # 1. The triggering workflow succeeded (ensures all artifacts were generated)
-    # 2. It was triggered by a pull_request event (not push to main)
-    if: |
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success'
-
+  resolve-pr:
+    name: Resolve tested PR identity
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      active: ${{ steps.resolve.outputs.active }}
+      number: ${{ steps.resolve.outputs.number }}
+      head_ref: ${{ steps.resolve.outputs.head_ref }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_ref: ${{ steps.resolve.outputs.base_ref }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      merge_sha: ${{ steps.resolve.outputs.merge_sha }}
     steps:
-      - name: Get PR number and metadata
-        id: pr
+      - name: Parse and validate tested PR identity
+        id: resolve
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
-            // Try to get PR number from workflow_run.pull_requests first
-            let prNumber;
-            if (context.payload.workflow_run.pull_requests && context.payload.workflow_run.pull_requests.length > 0) {
-              prNumber = context.payload.workflow_run.pull_requests[0].number;
-            } else {
-              // Fallback: search for PR by head SHA (needed for fork PRs where pull_requests array is empty)
-              const headSha = context.payload.workflow_run.head_sha;
-              core.info(`pull_requests array is empty, searching for PR by head SHA: ${headSha}`);
+            const run = context.payload.workflow_run;
+            const title = run.display_title || '';
+            const pattern = /^sonar-pr\/([1-9][0-9]*)\/merge\/([0-9a-f]{40})\/base\/([0-9a-f]{40})\/ref\/(.+)$/;
+            const match = pattern.exec(title);
 
-              const { data: prs } = await github.rest.pulls.list({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: 'open',
-                sort: 'updated',
-                direction: 'desc',
-                per_page: 100
-              });
-
-              const pr = prs.find(p => p.head.sha === headSha);
-              if (!pr) {
-                core.setFailed(`Could not find PR for head SHA: ${headSha}`);
-                return;
-              }
-              prNumber = pr.number;
+            if (!match) {
+              core.setFailed(`Invalid Teranode PR tests run-name: ${title || '<empty>'}`);
+              return;
             }
 
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
+            const [, numberText, mergeSha, baseSha, baseRef] = match;
+            const prNumber = Number(numberText);
+            const runHeadRepo = run.head_repository?.full_name || '';
 
-            core.setOutput('number', prNumber);
-            core.setOutput('base', pr.data.base.ref);
-            core.setOutput('head', pr.data.head.ref);
-            core.setOutput('head_sha', pr.data.head.sha);
+            if (!runHeadRepo) {
+              core.setFailed('workflow_run has no head repository; refusing unbound PR identity.');
+              return;
+            }
 
+            let pr;
+            try {
+              ({ data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              }));
+            } catch (error) {
+              core.setFailed(`Could not load PR ${prNumber}: ${error.message}`);
+              return;
+            }
+
+            if (pr.state !== 'open') {
+              core.info(`PR ${prNumber} is ${pr.state}; no current gate status required.`);
+              core.setOutput('active', 'false');
+              return;
+            }
+
+            const prHeadRepo = pr.head.repo?.full_name || '';
+            if (prHeadRepo !== runHeadRepo) {
+              core.setFailed(`PR ${prNumber} head repository does not match workflow_run.`);
+              return;
+            }
+            if (pr.head.ref !== run.head_branch) {
+              core.setFailed(`PR ${prNumber} head branch does not match workflow_run.`);
+              return;
+            }
+
+            if (pr.head.sha !== run.head_sha) {
+              core.info(`PR ${prNumber} head moved; successor source run owns the current status.`);
+              core.setOutput('active', 'false');
+              return;
+            }
+            if (pr.base.ref !== baseRef) {
+              core.info(`PR ${prNumber} was retargeted; successor run owns the current status.`);
+              core.setOutput('active', 'false');
+              return;
+            }
+            const currentBaseSha = pr.base.sha;
+            if (typeof currentBaseSha !== 'string' || !/^[0-9a-f]{40}$/.test(currentBaseSha)) {
+              core.setFailed(`PR ${prNumber} has invalid current base SHA.`);
+              return;
+            }
+
+            // The claimed base must sit on the current target branch's history,
+            // otherwise the "trusted" sonar-project.properties below could be
+            // read from an attacker-supplied commit.
+            let baseComparison;
+            try {
+              ({ data: baseComparison } = await github.rest.repos.compareCommitsWithBasehead({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                basehead: `${baseSha}...${currentBaseSha}`,
+              }));
+            } catch (error) {
+              core.setFailed(`Could not validate tested base ${baseSha} against current target: ${error.message}`);
+              return;
+            }
+
+            const mergeBaseSha = baseComparison?.merge_base_commit?.sha;
+            if (mergeBaseSha !== baseSha ||
+                (baseComparison?.status !== 'identical' && baseComparison?.status !== 'ahead')) {
+              core.setFailed(`Tested base ${baseSha} is not an ancestor of the current PR target.`);
+              return;
+            }
+
+            let mergeCommit;
+            try {
+              ({ data: mergeCommit } = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: mergeSha,
+              }));
+            } catch (error) {
+              core.setFailed(`Could not load tested merge ${mergeSha}: ${error.message}`);
+              return;
+            }
+
+            const verification = mergeCommit?.commit?.verification;
+            const signedCommitter = mergeCommit?.commit?.committer;
+            if (verification?.verified !== true ||
+                verification.reason !== 'valid' ||
+                mergeCommit?.committer?.login !== 'web-flow' ||
+                signedCommitter?.name !== 'GitHub' ||
+                signedCommitter?.email !== 'noreply@github.com' ||
+                mergeCommit?.commit?.message !== `Merge ${run.head_sha} into ${baseSha}`) {
+              core.setFailed(`Tested merge ${mergeSha} is not a verified GitHub synthetic merge.`);
+              return;
+            }
+
+            const parents = mergeCommit?.parents || [];
+            if (parents.length !== 2 || parents[0].sha !== baseSha || parents[1].sha !== run.head_sha) {
+              core.setFailed(`Tested merge ${mergeSha} does not match base ${baseSha} and head ${run.head_sha}.`);
+              return;
+            }
+
+            core.setOutput('active', 'true');
+            core.setOutput('number', String(prNumber));
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_sha', run.head_sha);
+            core.setOutput('base_ref', baseRef);
+            core.setOutput('base_sha', baseSha);
+            core.setOutput('merge_sha', mergeSha);
+
+  sonarqube:
+    name: SonarQube Analysis
+    needs: resolve-pr
+    if: needs.resolve-pr.outputs.active == 'true'
+    # arm64-safe: only downloads aggregate Sonar inputs + runs the scanner CLI
+    # (arm64-available); no Go build, no containers.
+    runs-on: teranode-runner-4-core-arm
+    permissions:
+      actions: read
+      contents: read
+      statuses: write
+
+    steps:
       - name: Checkout base branch
+        if: github.event.workflow_run.conclusion == 'success'
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          ref: ${{ steps.pr.outputs.base }}
+          ref: ${{ needs.resolve-pr.outputs.base_ref }}
           fetch-depth: 0
 
-      - name: Checkout PR head
+      - name: Checkout tested merge commit
+        if: github.event.workflow_run.conclusion == 'success'
+        env:
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+          MERGE_SHA: ${{ needs.resolve-pr.outputs.merge_sha }}
+          BASE_SHA: ${{ needs.resolve-pr.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
         run: |
-          git fetch origin pull/${{ steps.pr.outputs.number }}/head:pr-${{ steps.pr.outputs.number }}
-          git checkout pr-${{ steps.pr.outputs.number }}
+          git fetch --no-tags origin "pull/${PR_NUMBER}/merge" || true
+          if ! git cat-file -e "${MERGE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "${MERGE_SHA}" || true
+          fi
+          if ! git cat-file -e "${MERGE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Tested merge ${MERGE_SHA} is unreachable; refusing to scan another tree."
+            exit 1
+          fi
 
-      - name: Download coverage artifact
+          PARENT_COUNT="$(git rev-list --parents -n 1 "${MERGE_SHA}" | awk '{print NF - 1}')"
+          ACTUAL_BASE_SHA="$(git rev-parse "${MERGE_SHA}^1")"
+          ACTUAL_HEAD_SHA="$(git rev-parse "${MERGE_SHA}^2")"
+          if [ "${PARENT_COUNT}" -ne 2 ] || [ "${ACTUAL_BASE_SHA}" != "${BASE_SHA}" ] || [ "${ACTUAL_HEAD_SHA}" != "${HEAD_SHA}" ]; then
+            echo "::error::Tested merge ${MERGE_SHA} parents do not match base ${BASE_SHA} and head ${HEAD_SHA}."
+            exit 1
+          fi
+
+          git checkout --detach "${MERGE_SHA}"
+          git show "${BASE_SHA}:sonar-project.properties" > "${RUNNER_TEMP}/sonar-project.properties"
+
+      # The bundle is additive to fixed producer artifacts. After rollout, only
+      # producer runs already in flight across the merge can lack this bundle.
+      - name: Download Sonar input bundle
+        if: github.event.workflow_run.conclusion == 'success'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: coverage-report
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download golangci-lint report
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: golangci-lint-report
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download filename check report
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sonar-filename-report
+          name: sonar-inputs-${{ github.event.workflow_run.run_attempt }}
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: SonarQube Scan
+        if: github.event.workflow_run.conclusion == 'success'
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
         env:
+          SONAR_HOST_URL: https://sonarcloud.io
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
-          args: "-Dsonar.pullrequest.key=${{ steps.pr.outputs.number }} -Dsonar.pullrequest.branch=${{ steps.pr.outputs.head }} -Dsonar.pullrequest.base=${{ steps.pr.outputs.base }}"
+          args: >-
+            -Dproject.settings=${{ runner.temp }}/sonar-project.properties
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.projectKey=bsv-blockchain_teranode
+            -Dsonar.organization=bsv
+            -Dsonar.pullrequest.key=${{ needs.resolve-pr.outputs.number }}
+            -Dsonar.pullrequest.branch=${{ needs.resolve-pr.outputs.head_ref }}
+            -Dsonar.pullrequest.base=${{ needs.resolve-pr.outputs.base_ref }}
 
       - name: SonarQube Quality Gate check
+        id: qg
+        if: github.event.workflow_run.conclusion == 'success'
         uses: sonarsource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b # v1.2.0
         timeout-minutes: 10
         env:
+          SONAR_HOST_URL: https://sonarcloud.io
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      # Post the Quality Gate result as a commit status on the tested PR *head*
+      # commit (workflow_run.head_sha) — the commit branch protection evaluates
+      # required checks on. The scanned tree is the synthetic merge of that head
+      # and the validated base; the merge short-SHA is recorded in the status
+      # description for traceability.
+      #
+      # Posting to the tested head is harmless-by-construction when the head has
+      # since moved: the status lands on the old commit, which branch protection
+      # no longer consults, and resolve-pr skips such runs anyway.
+      #
+      # Upstream cancellation needs no job-level exclusion: a run superseded by
+      # a new push fails resolve-pr's head check and goes inactive, while a
+      # manual cancel on the current head posts 'failure' below so a required
+      # gate resolves instead of hanging pending.
+      #
+      # if: !cancelled() refers to this downstream job, not the source result.
+      # PASSED/WARN -> success, FAILED -> failure, scan/checkout failure ->
+      # error, and failed or canceled upstream tests -> failure.
+      - name: Report Quality Gate as commit status
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          QG_STATUS: ${{ steps.qg.outputs.quality-gate-status }}
+          TESTS_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
+          MERGE_SHA: ${{ needs.resolve-pr.outputs.merge_sha }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+        with:
+          script: |
+            const qg = process.env.QG_STATUS || '';
+            const testsConclusion = process.env.TESTS_CONCLUSION || '';
+            const sha = process.env.HEAD_SHA;
+            const mergeSha = process.env.MERGE_SHA || '';
+            const pr = process.env.PR_NUMBER;
+            // Keep in sync with sonar.projectKey in sonar-project.properties.
+            const projectKey = 'bsv-blockchain_teranode';
+
+            if (!sha) {
+              core.setFailed('No validated tested head SHA; cannot post commit status.');
+              return;
+            }
+
+            let state, description;
+            if (testsConclusion !== 'success') {
+              // Upstream "Teranode PR tests" did not pass, so the analysis steps
+              // were skipped and no Quality Gate ran. Post failure so the
+              // required check resolves instead of hanging "pending".
+              state = 'failure';
+              description = `Upstream tests ${testsConclusion || 'did not succeed'} — Sonar not run`;
+            } else if (qg === 'PASSED') {
+              state = 'success';
+              description = 'Quality Gate passed';
+            } else if (qg === 'WARN') {
+              state = 'success';
+              description = 'Quality Gate passed with warnings';
+            } else if (qg === 'FAILED') {
+              state = 'failure';
+              description = 'Quality Gate failed';
+            } else {
+              state = 'error';
+              description = 'Quality Gate did not complete (analysis failed)';
+            }
+            if (mergeSha) {
+              description = `${description} — tested merge ${mergeSha.slice(0, 7)}`;
+            }
+
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              state,
+              context: 'SonarQube Quality Gate',
+              description,
+              target_url: `https://sonarcloud.io/summary/new_code?id=${projectKey}&pullRequest=${pr}`,
+            });
+
+            core.info(`Posted commit status '${state}' (tests=${testsConclusion || 'none'}, qg=${qg || 'none'}, merge=${mergeSha || 'none'}) to ${sha}`);
