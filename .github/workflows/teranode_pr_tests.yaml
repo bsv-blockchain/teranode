@@ -231,9 +231,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # TeraSlab integration coverage (test-teraslab job) is the only coverage for
-      # the client-coupled TeraSlab store code. Seal it into the bundle alongside
-      # coverage.out; sonar-project.properties lists both in reportPaths so Sonar
-      # unions them (a line covered by either counts as covered).
+      # the client-coupled TeraSlab store code. It is merged into coverage.out in
+      # the step below rather than shipped as a separate report: the Sonar scan
+      # reads sonar.go.coverage.reportPaths from the *trusted base* copy of
+      # sonar-project.properties (coverage.out only), so a PR-side second report
+      # path is never honored.
       - name: Download TeraSlab coverage report
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -248,12 +250,32 @@ jobs:
           run-id: ${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Union the tagged TeraSlab profile into coverage.out (max hit-count per
+      # block). Because the scanner reads reportPaths from the trusted base
+      # (coverage.out only), the TeraSlab coverage must live inside coverage.out
+      # to count — the client-coupled store methods are ~0% in the untagged
+      # profile and would otherwise sink new-code coverage. Go coverage profiles
+      # share the block "file:start,end" key, so max-count is a correct union.
+      - name: Merge TeraSlab coverage into coverage.out
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in coverage.out coverage-teraslab.out; do
+            [ -f "$f" ] || { echo "::error::Missing coverage input: $f"; exit 1; }
+          done
+          awk '
+            FNR==1 && $1=="mode:" { mode=$2; next }
+            { v=$3+0; if (!($1 in c) || v > c[$1]) c[$1]=v; s[$1]=$2 }
+            END { print "mode: " (mode=="" ? "set" : mode); for (k in c) print k, s[k], c[k] }
+          ' coverage.out coverage-teraslab.out > coverage.merged.out
+          mv coverage.merged.out coverage.out
+
       # Presence-only validation: never execute or parse artifact contents.
       - name: Validate required Sonar inputs
         shell: bash
         run: |
           set -euo pipefail
-          for file in coverage.out coverage-teraslab.out golangci-lint-report.xml sonar_filename_report.json; do
+          for file in coverage.out golangci-lint-report.xml sonar_filename_report.json; do
             [ -f "$file" ] || {
               echo "::error::Missing required Sonar input file: $file"
               exit 1
@@ -266,7 +288,6 @@ jobs:
           name: sonar-inputs-${{ github.run_attempt }}
           path: |
             coverage.out
-            coverage-teraslab.out
             golangci-lint-report.xml
             sonar_filename_report.json
           if-no-files-found: error
