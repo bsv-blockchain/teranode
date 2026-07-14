@@ -9,12 +9,11 @@ import (
 // Close drains every in-flight batched write and releases the backing TeraSlab
 // client (connection pools, cluster connections).
 //
-// The three batchers (store, get, spend) each own a background worker goroutine.
-// Their Close() drains all queued items through the flush fn and blocks until the
-// worker has fully unwound, so callers that already received a successful
-// response for a queued Create/Spend are guaranteed the write reached the server
-// before Close returns. (SetLocked and the other mutations call the client
-// directly and are not batched.)
+// The five batchers — store, get, spend, setLocked, and decorate (BatchDecorate)
+// — each own a background worker goroutine. Their Close() drains all queued items
+// through the flush fn and blocks until the worker has fully unwound, so callers
+// that already received a successful response for a queued Create/Spend/SetLocked
+// are guaranteed the write reached the server before Close returns.
 //
 // Unlike the Aerospike backend there is no inter-batcher drain dependency here:
 // each send*Batch writes directly to the client and replies on per-item done
