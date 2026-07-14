@@ -1,6 +1,11 @@
 package util
 
 import (
+	"bufio"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -816,4 +821,89 @@ func TestGetOrSetErrorNotCachedRetriesNextCall(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ok", val)
 	require.False(t, fetchCalled)
+}
+
+// TestGetOrSetReentrantSameKeyDeadlocks exercises the documented, unsupported same-key re-entry:
+// a fetchFunc that calls GetOrSet for the key it is fetching deadlocks on the in-flight waitgroup.
+// Reproducing that in-process would leak a permanently-blocked goroutine, so the deadlock is run in
+// a re-exec child of this test binary that the parent bounds and kills — nothing leaks in the
+// parent. It requires the standard `go test` execution model (os.Args[0] is the re-runnable test
+// binary) and must not use t.Parallel().
+func TestGetOrSetReentrantSameKeyDeadlocks(t *testing.T) {
+	if os.Getenv("GO_TEST_REENTRANT_SAMEKEY") == "1" {
+		cache := NewExpiringConcurrentCache[string, string](time.Minute)
+		returned := make(chan struct{})
+		go func() {
+			_, _ = cache.GetOrSet("k", func() (string, bool, error) {
+				// Marker at the ACTUAL re-entry point. os.Stdout is an unbuffered *os.File, so this
+				// Fprintln is a direct write syscall — flushed before the inner call blocks below.
+				fmt.Fprintln(os.Stdout, "reentrant-call-started")
+
+				v, e := cache.GetOrSet("k", func() (string, bool, error) { // same key -> deadlock by contract
+					return "inner", true, nil
+				})
+				return v, true, e
+			})
+			close(returned) // reached ONLY if the unsupported call did NOT deadlock (contract broke)
+		}()
+		select {
+		case <-returned:
+			os.Exit(42) // distinct code => "same-key re-entry returned instead of deadlocking"
+		case <-time.After(30 * time.Second): // armed timer keeps the runtime deadlock detector quiet
+			os.Exit(0) // unreached in practice; the parent kills the child first
+		}
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestGetOrSetReentrantSameKeyDeadlocks$")
+	cmd.Env = append(os.Environ(), "GO_TEST_REENTRANT_SAMEKEY=1")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }() // single reaper; buffered so it never blocks
+
+	reaped := false
+	t.Cleanup(func() { // runs on EVERY exit path, incl. an early t.Fatal or a missing marker
+		_ = cmd.Process.Kill() // idempotent/harmless if already dead
+		if !reaped {
+			<-waitErr // reap so no orphan/zombie child remains
+		}
+	})
+
+	// 1. Wait until the child PROVES it reached the re-entrant call.
+	markerSeen := make(chan struct{})
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			if strings.Contains(sc.Text(), "reentrant-call-started") {
+				close(markerSeen)
+				return
+			}
+		}
+	}()
+	select {
+	case <-markerSeen:
+	case err := <-waitErr:
+		reaped = true
+		t.Fatalf("child exited (%v) before reaching the re-entrant call", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("child never reached the re-entrant GetOrSet call")
+	}
+
+	// 2. Decision rule: past the marker, the child must NOT exit within the bound — proving the
+	//    documented same-key deadlock.
+	select {
+	case err := <-waitErr:
+		reaped = true
+		t.Fatalf("child exited (%v) instead of deadlocking; the same-key contract may have changed", err)
+	case <-time.After(1 * time.Second):
+		// Still blocked after the bound => deadlock confirmed.
+	}
+
+	// 3. Kill and reap.
+	require.NoError(t, cmd.Process.Kill())
+	<-waitErr
+	reaped = true
 }

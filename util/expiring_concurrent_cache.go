@@ -44,6 +44,12 @@ func (c *ExpiringConcurrentCache[K, V]) Stop() {
 // GetOrSet retrieves a value from the cache or fetches it using the provided function.
 // If multiple goroutines request the same key simultaneously, only one fetch operation occurs.
 // The fetchFunc returns (value, shouldCache, error) where shouldCache determines if the result is cached.
+//
+// fetchFunc must not call GetOrSet for the SAME key it is fetching — neither directly nor from a
+// goroutine it then waits on. That key's fetch is already in flight, so the nested call would block
+// until the outer fetch completes, which cannot happen while the outer fetch is waiting on it: a
+// deadlock. This is unsupported by design and is not detected at runtime. Re-entrancy for DIFFERENT
+// keys is fully supported (see TestGetOrSetReentrantFetchDoesNotDeadlock).
 func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, bool, error)) (V, error) {
 	var (
 		val        V
