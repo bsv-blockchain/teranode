@@ -109,9 +109,10 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, boo
 	// Create a new WaitGroup for the key
 	wg = &sync.WaitGroup{}
 	wg.Add(1)
-	c.wg[key] = &expiringConcurrentCacheWait[V]{
+	wgw = &expiringConcurrentCacheWait[V]{
 		wg: wg,
 	}
+	c.wg[key] = wgw
 
 	// Release the global lock, for others to wait on the wait group.
 	c.mu.Unlock()
@@ -129,10 +130,10 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, boo
 					c.cache.Set(key, val)
 				}
 
-				c.wg[key].result = &val
+				wgw.result = &val
 			} else {
 				// Share the leader's real error with any waiters on this flight
-				c.wg[key].err = err
+				wgw.err = err
 			}
 		}
 
