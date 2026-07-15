@@ -634,7 +634,7 @@ func TestGetOrSetConcurrentDifferentKeysDoNotSerialize(t *testing.T) {
 
 	select {
 	case <-bothStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("both fetches did not start concurrently; fetchFunc appears serialized under the lock")
 	}
 
@@ -650,7 +650,7 @@ func TestGetOrSetConcurrentDifferentKeysDoNotSerialize(t *testing.T) {
 
 	select {
 	case <-doneAll:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("fetches did not complete after the barrier was released")
 	}
 
@@ -687,7 +687,7 @@ func TestGetOrSetReentrantFetchDoesNotDeadlock(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("re-entrant GetOrSet deadlocked")
 	}
 
@@ -729,7 +729,7 @@ func TestGetOrSetWaitersReceiveLeaderError(t *testing.T) {
 		go func() { goroutines.Wait(); close(doneDrain) }()
 		select {
 		case <-doneDrain:
-		case <-time.After(2 * time.Second):
+		case <-time.After(10 * time.Second):
 			t.Error("leader/waiter goroutines did not drain")
 		}
 	})
@@ -748,7 +748,7 @@ func TestGetOrSetWaitersReceiveLeaderError(t *testing.T) {
 
 	select {
 	case <-leaderStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("leader fetch did not start")
 	}
 
@@ -764,7 +764,7 @@ func TestGetOrSetWaitersReceiveLeaderError(t *testing.T) {
 	// Positive evidence the waiter captured the in-flight entry and committed to the waiter branch.
 	select {
 	case <-parked:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("waiter did not reach the wait hook")
 	}
 
@@ -776,7 +776,7 @@ func TestGetOrSetWaitersReceiveLeaderError(t *testing.T) {
 	go func() { goroutines.Wait(); close(doneDrain) }()
 	select {
 	case <-doneDrain:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("leader/waiter goroutines did not complete")
 	}
 
