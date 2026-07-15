@@ -241,6 +241,10 @@ type BlockValidation struct {
 
 	// mmapDir, when non-empty, enables mmap-backed subtree loading.
 	mmapDir string
+
+	// spendRetryBackoff overrides the pause between quick-validate spend retry
+	// attempts; zero means spendRetryBackoffDefault. Settable in tests.
+	spendRetryBackoff time.Duration
 }
 
 // subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.
@@ -2304,11 +2308,18 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 // blocks at or below the highest checkpoint. Uses the standard chain-config checkpoints
 // (not the catchup override) so it fails safe — keeping the lock for any block above the
 // real checkpoint. See issue #1103.
+//
+// Nil chain params and missing checkpoints now fail closed, and height 0 is excluded — via the shared model.BelowCheckpoint boundary.
 func (u *BlockValidation) quickValidateSkipsUtxoLock(block *model.Block) bool {
 	if !u.settings.BlockValidation.QuickValidateSkipUtxoLock {
 		return false
 	}
-	return block.Height <= blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+
+	if u.settings.ChainCfgParams == nil {
+		return false
+	}
+
+	return model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height)
 }
 
 // quickValidateOutpointOnly reports whether this block may use the below-checkpoint
@@ -2319,14 +2330,10 @@ func (u *BlockValidation) quickValidateSkipsUtxoLock(block *model.Block) bool {
 // to blocks at or below the highest HARDCODED checkpoint. Uses the standard chain-config
 // checkpoints (not the catchup override) so it fails safe — never engaging above the real
 // checkpoint (spec §2.2, invariant I2).
+//
+// Nil chain params and missing checkpoints now fail closed, and height 0 is excluded — via the shared model.BelowCheckpoint boundary.
 func (u *BlockValidation) quickValidateOutpointOnly(block *model.Block) bool {
-	if !u.settings.BlockValidation.OutpointOnlyBelowCheckpoint {
-		return false
-	}
-	if !u.utxoStore.SupportsOutpointOnlySpend() { // Stage A is SQL-only; Aerospike deferred to Stage B
-		return false
-	}
-	return block.Height <= blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+	return model.OutpointOnlyEligible(u.settings, u.utxoStore, u.settings.ChainCfgParams, block.Height)
 }
 
 // updateSubtreesDAH marks block subtrees as properly set in the blockchain.

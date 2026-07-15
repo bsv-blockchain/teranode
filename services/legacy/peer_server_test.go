@@ -1226,6 +1226,50 @@ func TestCheckBannedBounded(t *testing.T) {
 	})
 }
 
+// TestPreAdmitTimedOut verifies the deadline-vs-cancel policy OnBlock uses to
+// decide whether a failed pre-admission call (ban-check ok=false, or a
+// GetBlockHeader that erred under preAdmitCtx) should rotate the sync peer.
+// Only a genuine deadline (the wedged-local-round-trip case that strands a
+// requested block) returns true; a parent or direct cancel — daemon shutdown /
+// peer teardown — returns false so the block is dropped without a disconnect
+// storm across every peer that happens to be inside OnBlock.
+func TestPreAdmitTimedOut(t *testing.T) {
+	t.Run("deadline exceeded → rotate", func(t *testing.T) {
+		// Already-past deadline: Err() latches context.DeadlineExceeded.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		defer cancel()
+
+		<-ctx.Done()
+		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+		require.True(t, preAdmitTimedOut(ctx))
+	})
+
+	t.Run("parent cancelled → drop, no rotate", func(t *testing.T) {
+		// The daemon-shutdown shape: sp.ctx (parent) is cancelled, so the
+		// derived preAdmitCtx reports Canceled, not DeadlineExceeded.
+		parent, cancelParent := context.WithCancel(context.Background())
+		child, cancelChild := context.WithTimeout(parent, time.Hour)
+		defer cancelChild()
+
+		cancelParent()
+
+		<-child.Done()
+		require.ErrorIs(t, child.Err(), context.Canceled)
+		require.False(t, preAdmitTimedOut(child))
+	})
+
+	t.Run("direct cancel → drop, no rotate", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		require.False(t, preAdmitTimedOut(ctx))
+	})
+
+	t.Run("live context → no rotate (defensive; callers gate on failure)", func(t *testing.T) {
+		require.False(t, preAdmitTimedOut(context.Background()))
+	})
+}
+
 // TestBlockAdmissionWeight verifies the prefetch-budget weight selection used by
 // OnBlock: the wire-measured payload size is preferred, then the raw buffer
 // length, and only as a last resort the O(all-tx) SerializeSize() walk.

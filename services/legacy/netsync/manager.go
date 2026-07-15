@@ -2943,6 +2943,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		sm.inFlightBlocks = make(map[chainhash.Hash]struct{})
 	}
 
+	// The fail-closed inline lever is a no-op unless the outpoint-only below-checkpoint
+	// path is also enabled (legacyFailClosed depends on legacyOutpointOnly). Warn so an
+	// operator A/B-testing the new flag alone is not silently getting nothing.
+	if tSettings.BlockValidation.LegacyBelowCheckpointFailClosed && !tSettings.BlockValidation.OutpointOnlyBelowCheckpoint {
+		logger.Warnf("[netsync] blockvalidation_legacy_below_checkpoint_fail_closed is set but has no effect without blockvalidation_outpoint_only_below_checkpoint")
+	}
+
 	// create the transaction announcement batcher
 	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
 		sm.logger.Debugf("announcing %d transactions to peers", len(batch))

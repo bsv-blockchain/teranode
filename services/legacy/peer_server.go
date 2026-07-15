@@ -943,11 +943,25 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 
 	if err == nil {
 		// Ban-check round-trip bounded by preAdmitCtx. ok=false means the query
-		// send or its reply was cancelled/timed out before an answer arrived, so
-		// drop the block rather than park the read-loop on a wedged query goroutine.
+		// send or its reply was cancelled/timed out before an answer arrived.
 		isBanned, ok := sp.checkBannedBounded(preAdmitCtx, host)
 		if !ok {
-			sp.server.logger.Warnf("dropping block %s: ban-check timed out/cancelled for peer %s", msg.BlockHash(), sp)
+			// A pre-admission DEADLINE means the query path is wedged: the block
+			// was solicited (netsync marked it requested and fetchHeaderBlocks
+			// already advanced startHeader past it), so silently dropping it
+			// strands the hash — nothing re-requests it and IBD stalls on this
+			// single block. Rotate the sync peer instead: the primary disconnect
+			// drives handleDonePeerMsg → updateSyncPeer → startSync, which clears
+			// requestedBlocks and re-drives the fetch from a fresh locator
+			// (restoring the pre-prefetch watchdog behaviour). On parent cancel
+			// (daemon shutdown / peer teardown) just drop the block.
+			if preAdmitTimedOut(preAdmitCtx) {
+				disconnectMisbehaving(sp, fmt.Sprintf("pre-admission ban-check timed out for block %s, disconnecting to trigger sync peer rotation", msg.BlockHash()))
+				return
+			}
+
+			sp.server.logger.Warnf("dropping block %s: ban-check cancelled by teardown for peer %s", msg.BlockHash(), sp)
+
 			return
 		}
 
@@ -979,10 +993,23 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 	sp.AddKnownInventory(iv)
 
 	// single round-trip: GetBlockHeader tells us both existence and validity.
-	// preAdmitCtx bounds this lookup (see the pre-admission timeout above); a
-	// timed-out lookup returns an error → blockIsKnownValid=false, so the block
-	// proceeds as "not known valid" exactly as an errored lookup does today.
+	// preAdmitCtx bounds this lookup (see the pre-admission timeout above).
 	_, meta, err := sp.server.blockchainClient.GetBlockHeader(preAdmitCtx, blockHash)
+	if err != nil && preAdmitCtx.Err() != nil {
+		// The lookup was cut short by the pre-admission context, so the error
+		// says nothing about whether we already have the block. Proceeding as
+		// "not known valid" would charge a possibly known-valid block against
+		// the prefetch budget and fully re-validate it. On a genuine deadline,
+		// treat the wedged lookup like the wedged ban-check above: rotate the
+		// sync peer so netsync re-drives the fetch. On parent cancel (daemon
+		// shutdown / peer teardown) just drop the block.
+		if preAdmitTimedOut(preAdmitCtx) {
+			disconnectMisbehaving(sp, fmt.Sprintf("pre-admission header lookup timed out for block %s, disconnecting to trigger sync peer rotation", blockHash))
+		}
+
+		return
+	}
+
 	blockIsKnownValid := err == nil && !meta.Invalid
 
 	if !blockIsKnownValid {
@@ -1143,6 +1170,16 @@ func (sp *serverPeer) checkBannedBounded(ctx context.Context, host string) (bann
 	case <-ctx.Done():
 		return false, false
 	}
+}
+
+// preAdmitTimedOut reports whether a failed pre-admission call should rotate
+// the sync peer: true only when the pre-admission context hit its own deadline
+// (a wedged local round-trip that stranded a requested block), not when the
+// parent context was cancelled (daemon shutdown / peer teardown), where the
+// block is simply dropped. Callers must only consult this after the
+// pre-admission call has actually failed.
+func preAdmitTimedOut(preAdmitCtx context.Context) bool {
+	return errors.Is(preAdmitCtx.Err(), context.DeadlineExceeded)
 }
 
 // shouldDisconnectOnBlockErr reports whether a block-processing error should

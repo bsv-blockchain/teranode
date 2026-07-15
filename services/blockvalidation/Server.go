@@ -1485,6 +1485,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return err
 	}
 
+	// Unified below-checkpoint route: legacy blocks go through the same
+	// quick-validation machinery as native catchup (default off).
+	if u.legacyUnifiedRoute(block, baseURL) {
+		u.logger.Debugf("[processBlockFound][%s] unified route: quick-validating legacy block at height %d", block.Hash().String(), block.Height)
+		return u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
+	}
+
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseURL)
 
@@ -1501,6 +1508,28 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	}
 
 	return nil
+}
+
+// legacyUnifiedRoute reports whether this block should take the unified
+// below-checkpoint route: legacy-sourced, operator opted into both the
+// outpoint-only fast path and the unified route, and the shared eligibility
+// gate holds (store capability + hardcoded checkpoint boundary via
+// model.OutpointOnlyEligible — never the operator catchup override). When true,
+// processBlockFound hands the block to quickValidateBlock — the same machinery
+// the native catchup path uses below checkpoints — instead of full validation.
+// Netsync has already written the subtree files, verified PoW and the merkle
+// root, and waited for block assembly; quickValidateBlock does UTXO
+// create+spend, AddBlock(MinedSet+SubtreesSet) and DAH.
+func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string) bool {
+	if !u.settings.BlockValidation.LegacyUnifiedBelowCheckpoint {
+		return false
+	}
+
+	if baseURL != "legacy" {
+		return false
+	}
+
+	return model.OutpointOnlyEligible(u.settings, u.utxoStore, u.settings.ChainCfgParams, block.Height)
 }
 
 // checkParentProcessingComplete ensures that a block's parent has completed validation

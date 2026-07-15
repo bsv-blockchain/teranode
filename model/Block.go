@@ -583,6 +583,13 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 	}
 
+	// merkleRootChecked records that CheckMerkleRoot (step 8) actually ran and bound
+	// the block body to the header. Block.Valid enforces this as a precondition for
+	// skipping validOrderAndBlessed below the checkpoint (step 12): the skip's safety
+	// rests entirely on that binding, so a caller that did not run it (nil
+	// subtreeStore, or no subtrees) must never take the skip.
+	merkleRootChecked := false
+
 	// only do the subtree checks if we have a subtree store
 	// missing the subtreeStore should only happen when we are validating an internal block
 	if subtreeStore != nil && len(b.Subtrees) > 0 {
@@ -606,6 +613,8 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		if err = b.CheckMerkleRoot(ctx); err != nil {
 			return false, err
 		}
+
+		merkleRootChecked = true
 	}
 
 	// 9. Check that the total fees of the block are less than or equal to the block reward.
@@ -669,18 +678,33 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
+	//     Skipped for a confirmed-ancestor block below the hardcoded checkpoint on
+	//     the outpoint-only fast path: the checkpoint-anchored chain already
+	//     certifies order/blessing. The integrity floor still runs earlier in this
+	//     function (steps 1-11): PoW and checkDuplicateTransactions unconditionally.
+	//     The skip additionally REQUIRES merkleRootChecked — CheckMerkleRoot (step 8)
+	//     must have run and bound the body to the checkpoint-certified header — so it
+	//     is never taken on a nil-subtreeStore / no-subtree caller where that binding
+	//     is absent (see skipOrderAndBlessedBelowCheckpoint, which shares the fee
+	//     skip's safety contract but additionally requires the
+	//     OutpointOnlyBelowCheckpoint opt-in, so it engages on a subset of the
+	//     fee-skip blocks).
 	if txMetaStore != nil {
-		deps := &validationDependencies{
-			txMetaStore:           txMetaStore,
-			subtreeStore:          subtreeStore,
-			currentChain:          currentChain,
-			currentBlockHeaderIDs: currentBlockHeaderIDs,
-			oldBlockIDsMap:        oldBlockIDsMap,
-			metaRegenerator:       metaRegenerator,
-		}
-		err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency, settings.Block.DiskMapDirs, settings.Block.ParentSpendsCapacityMultiplier)
-		if err != nil {
-			return false, err
+		if merkleRootChecked && b.skipOrderAndBlessedBelowCheckpoint(settings, txMetaStore) {
+			logger.Debugf("[Block:Valid][%s] skipping validOrderAndBlessed for block at height %d at or below hardcoded checkpoint (outpoint-only fast path)", b.String(), b.Height)
+		} else {
+			deps := &validationDependencies{
+				txMetaStore:           txMetaStore,
+				subtreeStore:          subtreeStore,
+				currentChain:          currentChain,
+				currentBlockHeaderIDs: currentBlockHeaderIDs,
+				oldBlockIDsMap:        oldBlockIDsMap,
+				metaRegenerator:       metaRegenerator,
+			}
+			err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency, settings.Block.DiskMapDirs, settings.Block.ParentSpendsCapacityMultiplier)
+			if err != nil {
+				return false, err
+			}
 		}
 	}
 
@@ -714,6 +738,55 @@ func (b *Block) releaseTxMap() {
 	}
 
 	b.txMap = nil
+}
+
+// skipOrderAndBlessedBelowCheckpoint reports whether validOrderAndBlessed may be
+// skipped for this block. It shares the same checkpoint safety contract as the
+// below-checkpoint fee skip in checkBlockRewardAndFees, but adds one conjunct the
+// fee skip deliberately omits — the OutpointOnlyBelowCheckpoint opt-in — so this
+// skip engages on a strict subset of the fee-skip blocks (flag-on only). The fee
+// skip cannot depend on the flag because a fast-path block persists fee=0 and would
+// be wrongly rejected on flag-off revalidation; validOrderAndBlessed has no such
+// hazard (it reads persisted subtree meta and parent existence, not fees), so
+// gating it on the opt-in is safe and strictly more conservative. True only when
+// ALL of the following hold:
+//
+//   - the operator has opted into the below-checkpoint outpoint-only fast path
+//     (OutpointOnlyBelowCheckpoint);
+//   - the UTXO store can actually run that fast path
+//     (txMetaStore.SupportsOutpointOnlySpend()) — the capability check that
+//     replaced the old SQL-store restriction;
+//   - the block is a confirmed ancestor of the pinned checkpoint
+//     (b.checkpointConfirmedAncestor, set only by the blockvalidation service via
+//     SetCheckpointConfirmedAncestor; defaults false). This closes the forward /
+//     optimistic-checkpoint window and the detached-fork-reconsider window that a
+//     height-only gate would leave open;
+//   - the network defines a hardcoded checkpoint and 0 < b.Height <= that
+//     checkpoint.
+//
+// On a confirmed-ancestor block below a hardcoded checkpoint the pinned block
+// hash already certifies transaction order, uniqueness and blessing: a block
+// whose transactions differed in any way would produce a different merkle root
+// and could not carry the checkpoint-anchored header chain. PoW and
+// checkDuplicateTransactions (CVE-2012-2459) run unconditionally. CheckMerkleRoot
+// (step 8) runs only when a subtree store and subtrees are present, so it is NOT
+// unconditional — Block.Valid therefore enforces "CheckMerkleRoot ran"
+// (merkleRootChecked) as a precondition of taking this skip, and never skips
+// validOrderAndBlessed unless the local bytes have been bound to the certified
+// chain. This mirrors the native catchup path (quickValidateBlock), which never
+// runs Valid() below the checkpoint at all. All below-checkpoint gates now share
+// OutpointOnlyEligible/BelowCheckpoint, which excludes height 0 everywhere.
+func (b *Block) skipOrderAndBlessedBelowCheckpoint(tSettings *settings.Settings, txMetaStore utxo.Store) bool {
+	if !b.checkpointConfirmedAncestor {
+		return false
+	}
+
+	var params *chaincfg.Params
+	if tSettings != nil {
+		params = tSettings.ChainCfgParams
+	}
+
+	return OutpointOnlyEligible(tSettings, txMetaStore, params, b.Height)
 }
 
 // https://en.bitcoin.it/wiki/BIP_0034
