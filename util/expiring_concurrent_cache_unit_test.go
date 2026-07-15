@@ -656,8 +656,8 @@ func TestGetOrSetConcurrentDifferentKeysDoNotSerialize(t *testing.T) {
 
 	require.NoError(t, errs[0])
 	require.NoError(t, errs[1])
-	assert.Equal(t, "value-a", results[0])
-	assert.Equal(t, "value-b", results[1])
+	require.Equal(t, "value-a", results[0])
+	require.Equal(t, "value-b", results[1])
 }
 
 // TestGetOrSetReentrantFetchDoesNotDeadlock verifies that a fetchFunc may itself call GetOrSet for
@@ -692,7 +692,7 @@ func TestGetOrSetReentrantFetchDoesNotDeadlock(t *testing.T) {
 	}
 
 	require.NoError(t, err)
-	assert.Equal(t, "outer+inner-value", result)
+	require.Equal(t, "outer+inner-value", result)
 }
 
 // TestGetOrSetWaitersReceiveLeaderError verifies that when the leader's fetchFunc fails, a waiter on
