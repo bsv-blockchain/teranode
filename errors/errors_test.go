@@ -2261,6 +2261,121 @@ func TestPublicError(t *testing.T) {
 	})
 }
 
+// lockTimeMsg mirrors the actionable non-final message produced by util/lock_time.go.
+const lockTimeMsg = "lock time (1783806110) as timestamp is not less than median block time (1783805456)"
+
+// TestDeepestPublicCause verifies the innermost allowlisted cause is selected and
+// that a non-allowlisted inner code yields no public cause.
+func TestDeepestPublicCause(t *testing.T) {
+	t.Run("innermost allowlisted cause wins", func(t *testing.T) {
+		lockErr := NewTxLockTimeError(lockTimeMsg)
+		nonFinalErr := NewUtxoNonFinalError("transaction is not final", lockErr)
+		procErr := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", "abc123", nonFinalErr)
+
+		cause := DeepestPublicCause(procErr)
+		require.NotNil(t, cause)
+		require.Equal(t, ERR_TX_LOCK_TIME, cause.Code())
+		require.Equal(t, lockTimeMsg, cause.Message())
+	})
+
+	t.Run("nil for non-allowlisted chain", func(t *testing.T) {
+		innerErr := New(ERR_STORAGE_ERROR, "db lookup failed")
+		procErr := NewProcessingError("failed to validate transaction", innerErr)
+
+		require.Nil(t, DeepestPublicCause(procErr))
+	})
+
+	t.Run("nil error returns nil", func(t *testing.T) {
+		require.Nil(t, DeepestPublicCause(nil))
+	})
+}
+
+// TestPublicCauseSurfacing proves the allowlisted verdict code+message survives every
+// public error boundary (UserMessage/PublicError/WrapGRPCPublic/WrapPublic) while a
+// non-allowlisted inner code still collapses to the outermost generic message, and no
+// file/line/data leaks.
+func TestPublicCauseSurfacing(t *testing.T) {
+	lockErr := NewTxLockTimeError(lockTimeMsg)
+	nonFinalErr := NewUtxoNonFinalError("transaction is not final", lockErr)
+	allowlistedChain := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", "abc123", nonFinalErr)
+
+	storageErr := New(ERR_STORAGE_ERROR, "internal db error at /var/db/internal.db")
+	collapsedChain := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", "abc123", storageErr)
+
+	tests := []struct {
+		name        string
+		err         *Error
+		wantCode    ERR
+		wantMessage string
+	}{
+		{
+			name:        "allowlisted inner cause is surfaced",
+			err:         allowlistedChain,
+			wantCode:    ERR_TX_LOCK_TIME,
+			wantMessage: lockTimeMsg,
+		},
+		{
+			name:        "non-allowlisted inner code collapses to top-level",
+			err:         collapsedChain,
+			wantCode:    ERR_PROCESSING,
+			wantMessage: "[ProcessTransaction][abc123] failed to validate transaction",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// UserMessage renders the selected code+message.
+			require.Equal(t,
+				fmt.Sprintf(errCodeMsgFmt, tc.wantCode.String(), tc.wantCode, tc.wantMessage),
+				UserMessage(tc.err))
+
+			// PublicError carries the selected code+message and nothing else.
+			pub := PublicError(tc.err)
+			require.NotNil(t, pub)
+			require.Equal(t, tc.wantCode, pub.Code())
+			require.Equal(t, tc.wantMessage, pub.Message())
+			require.Empty(t, pub.file)
+			require.Zero(t, pub.line)
+			require.Empty(t, pub.function)
+			require.Nil(t, pub.WrappedErr())
+			require.Nil(t, pub.Data())
+		})
+	}
+
+	t.Run("WrapGRPCPublic surfaces the allowlisted cause without internal details", func(t *testing.T) {
+		result := WrapGRPCPublic(allowlistedChain)
+		require.NotNil(t, result)
+
+		st, ok := status.FromError(result)
+		require.True(t, ok)
+		// Status message carries the allowlisted cause, not the outer PROCESSING message.
+		require.Equal(t, lockTimeMsg, st.Message())
+
+		// The attached TError detail carries the same allowlisted cause and no internals.
+		unwrapped := UnwrapGRPC(result)
+		require.NotNil(t, unwrapped)
+		require.Equal(t, ERR_TX_LOCK_TIME, unwrapped.code)
+		require.Equal(t, lockTimeMsg, unwrapped.message)
+		require.Empty(t, unwrapped.file)
+		require.Zero(t, unwrapped.line)
+		require.Empty(t, unwrapped.function)
+		require.Nil(t, unwrapped.wrappedErr)
+		require.Nil(t, unwrapped.data)
+	})
+
+	t.Run("WrapPublic surfaces the allowlisted cause without internal details", func(t *testing.T) {
+		detail := WrapPublic(allowlistedChain)
+		require.NotNil(t, detail)
+		require.Equal(t, ERR_TX_LOCK_TIME, detail.Code)
+		require.Equal(t, lockTimeMsg, detail.Message)
+		require.Empty(t, detail.File)
+		require.Zero(t, detail.Line)
+		require.Empty(t, detail.Function)
+		require.Nil(t, detail.Data)
+		require.Nil(t, detail.WrappedError)
+	})
+}
+
 // TestWrapGRPCPublic tests the WrapGRPCPublic function for proper gRPC wrapping without internal details.
 func TestWrapGRPCPublic(t *testing.T) {
 	t.Run("nil error returns nil", func(t *testing.T) {

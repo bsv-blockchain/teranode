@@ -696,6 +696,68 @@ func WrapGRPC(err error) error {
 	}
 }
 
+// publicCauseCodes is the allowlist of client-safe verdict codes whose inner
+// code+message may be surfaced through the public error boundary. Each names a
+// verdict about the submitted transaction, carries no node-internal state, and
+// is actionable by the submitter; everything else collapses to the outermost code.
+var publicCauseCodes = map[ERR]struct{}{
+	ERR_UTXO_NON_FINAL:          {},
+	ERR_TX_LOCK_TIME:            {},
+	ERR_TX_POLICY:               {},
+	ERR_TX_INVALID:              {},
+	ERR_TX_INVALID_DOUBLE_SPEND: {},
+	ERR_TX_CONFLICTING:          {},
+	ERR_UTXO_SPENT:              {},
+	ERR_TX_LOCKED:               {},
+}
+
+// isPublicCause reports whether code is on the client-safe allowlist.
+func isPublicCause(code ERR) bool {
+	_, ok := publicCauseCodes[code]
+	return ok
+}
+
+// DeepestPublicCause walks err's wrapped chain and returns the innermost error
+// whose code is on the client-safe allowlist (publicCauseCodes), or nil if none
+// is present. The walk is bounded like (*Error).Is to stay safe on pathological
+// chains. Only code+message are meaningful on the returned error; callers must
+// never surface its file/line/function, data, or the rest of the chain.
+func DeepestPublicCause(err error) *Error {
+	if err == nil {
+		return nil
+	}
+
+	var cur *Error
+	if !errors.As(err, &cur) || cur == nil {
+		return nil
+	}
+
+	var deepest *Error
+
+	for depth := 0; cur != nil && depth < maxIsChainDepth; depth++ {
+		if isPublicCause(cur.code) {
+			deepest = cur
+		}
+
+		if cur.wrappedErr == nil {
+			break
+		}
+
+		next, ok := cur.wrappedErr.(*Error)
+		if !ok {
+			// Non-*Error link: let errors.As dig through foreign wrappers to
+			// the next *Error, mirroring (*Error).Is.
+			if !errors.As(cur.wrappedErr, &next) {
+				break
+			}
+		}
+
+		cur = next
+	}
+
+	return deepest
+}
+
 // UserMessage returns a concise, user-facing error message without wrapped error chains or data.
 // It is intended for external surfaces (HTTP/gRPC) where internal details should not be exposed.
 func UserMessage(err error) string {
@@ -705,6 +767,12 @@ func UserMessage(err error) string {
 
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// Prefer an allowlisted verdict cause so actionable tx-rejection reasons
+	// survive the boundary instead of collapsing to the outermost generic code.
+	if cause := DeepestPublicCause(err); cause != nil {
+		return fmt.Sprintf(errCodeMsgFmt, cause.code.String(), cause.code, cause.message)
 	}
 
 	var tErr *Error
@@ -729,6 +797,14 @@ func PublicError(err error) *Error {
 
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// Prefer an allowlisted verdict cause when present; still emit code+message only.
+	if cause := DeepestPublicCause(err); cause != nil {
+		return &Error{
+			code:    cause.code,
+			message: cause.message,
+		}
 	}
 
 	var tErr *Error
