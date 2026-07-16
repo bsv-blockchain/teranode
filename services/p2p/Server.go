@@ -990,13 +990,11 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 		return
 	}
 
-	// Validate BaseURL to prevent SSRF attacks
-	if nodeStatusMessage.BaseURL != "" {
-		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
-			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
-			s.applyBanScore(peerID, ReasonProtocolViolation)
-			return
-		}
+	// Validate BaseURL (SSRF + operator blacklist) — it is stored in the peer
+	// registry as the peer's DataHub URL, so it must pass the same trust checks
+	// as block/subtree announcements.
+	if nodeStatusMessage.BaseURL != "" && !s.checkDataHubURL(nodeStatusMessage.BaseURL, peerID, "handleNodeStatusTopic") {
+		return
 	}
 
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {

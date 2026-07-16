@@ -683,3 +683,131 @@ func TestServerHelpers_SanitizeAdvertisedTip_ClampsAndOverflow(t *testing.T) {
 		require.Equal(t, uint32(0), height)
 	})
 }
+
+// TestHandleBlockTopic_RejectsBlacklistedDataHubURL guards the fix for block
+// announcements bypassing the DataHub URL blacklist that subtree announcements
+// enforce: a blacklisted host must be dropped before any WebSocket forwarding,
+// peer registration, or Kafka publish (which would otherwise trigger catchup
+// from the blacklisted host).
+func TestHandleBlockTopic_RejectsBlacklistedDataHubURL(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	s.blocksKafkaProducerClient = producer
+
+	remote := mustNewPeerID(t)
+	blockHash := chainhash.HashH([]byte("blacklisted block")).String()
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://evil.example:8080/path", // same host as blacklist entry
+		Hash:       blockHash,
+		Height:     1,
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		t.Fatalf("unexpected block notification for blacklisted DataHubURL: %+v", notification)
+	default:
+	}
+
+	_, ok := reg.Get(remote.String())
+	require.False(t, ok, "peer with blacklisted DataHubURL must not be registered")
+
+	select {
+	case published := <-producer.PublishChannel():
+		t.Fatalf("unexpected Kafka publish for blacklisted DataHubURL: %+v", published)
+	default:
+	}
+
+	require.False(t, s.shouldSkipBannedPeer(remote.String(), "test"),
+		"blacklist match is an operator choice, not a peer protocol violation")
+}
+
+// TestHandleSubtreeTopic_RejectsBlacklistedDataHubURL is a regression test:
+// the subtree handler enforced the blacklist before the checks were factored
+// into checkDataHubURL and must keep doing so.
+func TestHandleSubtreeTopic_RejectsBlacklistedDataHubURL(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	s.subtreeKafkaProducerClient = producer
+
+	remote := mustNewPeerID(t)
+	subtreeHash := chainhash.HashH([]byte("blacklisted subtree")).String()
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://evil.example",
+		Hash:       subtreeHash,
+	})
+	require.NoError(t, err)
+
+	s.handleSubtreeTopic(context.Background(), msgBytes, remote.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		t.Fatalf("unexpected subtree notification for blacklisted DataHubURL: %+v", notification)
+	default:
+	}
+
+	select {
+	case published := <-producer.PublishChannel():
+		t.Fatalf("unexpected Kafka publish for blacklisted DataHubURL: %+v", published)
+	default:
+	}
+}
+
+// TestHandleNodeStatusTopic_RejectsBlacklistedBaseURL: node_status stores the
+// announced BaseURL in the peer registry as the peer's DataHub URL (used by
+// catchup), so it must enforce the same blacklist as block/subtree handlers.
+func TestHandleNodeStatusTopic_RejectsBlacklistedBaseURL(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	blockHash := chainhash.HashH([]byte("blacklisted node status")).String()
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remote.String(),
+		ClientName:    "client/1.0",
+		BaseURL:       "http://evil.example",
+		BestHeight:    101,
+		BestBlockHash: blockHash,
+	})
+	require.NoError(t, err)
+
+	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		t.Fatalf("unexpected node_status notification for blacklisted BaseURL: %+v", notification)
+	default:
+	}
+
+	_, ok := reg.Get(remote.String())
+	require.False(t, ok, "peer with blacklisted BaseURL must not be registered")
+}

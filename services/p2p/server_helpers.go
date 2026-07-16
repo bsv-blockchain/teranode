@@ -66,10 +66,8 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		return
 	}
 
-	// Validate DataHubURL to prevent SSRF attacks
-	if err = s.validateDataHubURL(blockMessage.DataHubURL); err != nil {
-		s.logger.Errorf("[handleBlockTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		s.addProtocolViolation(fromID)
+	// Validate DataHubURL (SSRF + operator blacklist)
+	if !s.checkDataHubURL(blockMessage.DataHubURL, fromID, "handleBlockTopic") {
 		return
 	}
 
@@ -196,19 +194,12 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	// Validate DataHubURL to prevent SSRF attacks
-	if err = s.validateDataHubURL(subtreeMessage.DataHubURL); err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		s.addProtocolViolation(fromID)
+	// Validate DataHubURL (SSRF + operator blacklist)
+	if !s.checkDataHubURL(subtreeMessage.DataHubURL, fromID, "handleSubtreeTopic") {
 		return
 	}
 
 	s.logger.Debugf("[handleSubtreeTopic] received subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
-
-	if s.isBlacklistedBaseURL(subtreeMessage.DataHubURL) {
-		s.logger.Errorf("[handleSubtreeTopic] Blocked subtree notification from blacklisted baseURL: %s", subtreeMessage.DataHubURL)
-		return
-	}
 
 	now := time.Now().UTC()
 
@@ -387,6 +378,25 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	}
 
 	return nil
+}
+
+// checkDataHubURL runs the trust checks shared by every gossip handler that
+// receives a DataHub URL: SSRF validation (a failure counts as a protocol
+// violation) and the operator-configured blacklist (a match drops the message
+// without penalising the peer). Returns false when the message must be dropped.
+func (s *Server) checkDataHubURL(dataHubURL, fromID, handlerName string) bool {
+	if err := s.validateDataHubURL(dataHubURL); err != nil {
+		s.logger.Errorf("[%s] invalid DataHubURL from peer %s: %v", handlerName, fromID, err)
+		s.addProtocolViolation(fromID)
+		return false
+	}
+
+	if s.isBlacklistedBaseURL(dataHubURL) {
+		s.logger.Errorf("[%s] blocked notification from blacklisted DataHubURL %s (peer %s)", handlerName, dataHubURL, fromID)
+		return false
+	}
+
+	return true
 }
 
 func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID string) {
