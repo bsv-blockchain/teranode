@@ -839,6 +839,25 @@ func (sm *SyncManager) IsHeadersFirstMode() bool {
 	return sm.headersFirstMode.Load()
 }
 
+// isRegtest reports whether the active chain params are regression net by
+// network magic rather than pointer identity with chaincfg.RegressionNetParams,
+// so a copied Params value (as some tests construct) is still recognized, and a
+// nil chainParams is safely not-regtest. It exists to give BlockRequested the
+// SAME value semantics as peerpkg.UseBlockPrefetchIngestion (.Net != RegTestNet)
+// so those two prefetch-path siblings cannot drift on a copied-params manager.
+//
+// It deliberately does NOT replace the pointer-equality regtest checks
+// elsewhere in this file (startSync's headers-first gate, isSyncCandidate,
+// handleBlockMsg's unrequested-block disconnect). Those run on the synchronous
+// (non-prefetch) path that regtest always takes, and the E2E harness builds
+// chainParams as a *copy* of RegressionNetParams — so switching them to value
+// semantics flips real behavior (e.g. isSyncCandidate would apply the regtest
+// localhost restriction, and startSync would drop headers-first) and breaks
+// legacy-sync/smoketest. Pointer equality there is load-bearing; leave it.
+func (sm *SyncManager) isRegtest() bool {
+	return sm.chainParams != nil && sm.chainParams.Net == wire.RegTestNet
+}
+
 // isSyncCandidate returns whether or not the peer is a candidate to consider
 // syncing from.
 func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
@@ -2448,8 +2467,16 @@ func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done
 // shares the peerpkg.UseBlockPrefetchIngestion predicate with the read-loop's
 // shouldArmProcessingTimer so both agree on when prefetch is active (a positive
 // budget matches a non-nil budget semaphore, since it is created iff the byte
-// budget is positive).
+// budget is positive). A nil chainParams fails closed to the synchronous path.
 func (sm *SyncManager) UsePrefetchIngestion() bool {
+	if sm.chainParams == nil {
+		// Fail closed to the synchronous path: without params we cannot rule out
+		// regtest, and sync ingestion is the conservative default. Guarding here
+		// matters because sm.chainParams.Net is evaluated as a call argument,
+		// before UseBlockPrefetchIngestion's budget short-circuit could guard it.
+		return false
+	}
+
 	return peerpkg.UseBlockPrefetchIngestion(sm.blockPrefetchBudgetBytes, sm.chainParams.Net)
 }
 
@@ -2464,7 +2491,7 @@ func (sm *SyncManager) UsePrefetchIngestion() bool {
 // per-block disconnect fires. On regtest it always returns true; the regression
 // harness intentionally feeds unrequested/duplicate blocks.
 func (sm *SyncManager) BlockRequested(peer *peerpkg.Peer, blockHash *chainhash.Hash) bool {
-	if sm.chainParams == &chaincfg.RegressionNetParams {
+	if sm.isRegtest() {
 		return true
 	}
 

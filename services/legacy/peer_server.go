@@ -1192,6 +1192,35 @@ func shouldDisconnectOnBlockErr(err error) bool {
 		!errors.Is(err, errors.ErrStorageError)
 }
 
+// tearDownAssociationStreams closes the live connection of every stream
+// sub-peer in assoc except the given peer. It is the primary-disconnect
+// counterpart to disconnectMisbehaving: when an association's PRIMARY goes away
+// (misbehaviour eviction, sync-peer rotation, remote hang-up), handleDonePeerMsg
+// removes only the association BOOKKEEPING, which left the DATA1 sub-peer's TCP
+// connection open reading blocks off the wire for a dead association, and left a
+// budget-parked sub-peer read-loop parked forever — AcquireBlockPrefetch waits
+// on the sub-peer's own serverPeer.quit, which only closes when the sub-peer's
+// own connection drops. Disconnecting the sub-peer closes its peer.Peer.quit,
+// unblocking its peerDoneHandler, which closes its serverPeer.quit and unparks
+// the waiter. StreamPeers() includes the primary (registered as the GENERAL
+// stream at construction), so callers pass it as except — it is already
+// disconnecting. DisconnectWithInfo is idempotent (atomic guard), so overlap
+// with disconnectMisbehaving's explicit stream disconnect, or a sub-peer already
+// mid-teardown, is safe.
+func tearDownAssociationStreams(assoc *peer.Association, except *peer.Peer) {
+	if assoc == nil {
+		return
+	}
+
+	for _, p := range assoc.StreamPeers() {
+		if p == nil || p == except {
+			continue
+		}
+
+		p.DisconnectWithInfo("association primary disconnected")
+	}
+}
+
 // disconnectMisbehaving evicts a peer's whole association for misbehaviour. It
 // disconnects the association PRIMARY — whose disconnect drives
 // handleDonePeerMsg's associationMgr.Remove(...), rotating the sync peer — and
@@ -1203,11 +1232,13 @@ func shouldDisconnectOnBlockErr(err error) bool {
 // handleDonePeerMsg only does assoc.RemoveStream(...), so openRequiredStreams
 // re-opens DATA1 and the node keeps syncing from a peer serving invalid blocks
 // (IBD stalls). Resolving to the primary is what actually rotates the sync peer.
-// Conversely, handleDonePeerMsg tears down the association bookkeeping on primary
-// disconnect but never closes the sub-peers' connections, so the sub-peer must be
-// disconnected here too or its DATA stream keeps reading off the wire.
-// DisconnectWithWarning is idempotent (atomic guard), so the non-stream case
-// (target == sp.Peer) disconnects exactly once.
+// handleDonePeerMsg now also tears down the association's sub-peer connections on
+// primary disconnect (via tearDownAssociationStreams), so eviction of the whole
+// association is covered even when the bad block arrives on the primary; the
+// explicit stream disconnect here is kept as the fast path (it fires immediately,
+// not one peerHandler round-trip later). DisconnectWithWarning is idempotent
+// (atomic guard), so the non-stream case (target == sp.Peer) disconnects exactly
+// once and the overlap with the centralized teardown is harmless.
 func disconnectMisbehaving(sp *serverPeer, reason string) {
 	target := misbehaviorDisconnectTarget(sp.Peer)
 	target.DisconnectWithWarning(reason)
@@ -2306,7 +2337,14 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 			s.logger.Debugf("Removed stream type %d from association %s",
 				sp.Peer.StreamType(), assoc.ID())
 		} else {
-			// Primary peer disconnected - remove the entire association.
+			// Primary peer disconnected - tear down the whole association:
+			// close every sub-peer's live connection, then remove the
+			// bookkeeping. Removing only the bookkeeping left the DATA1 sub-peer
+			// reading off the wire (or parked forever in AcquireBlockPrefetch) on
+			// a connection nothing would ever close. Teardown runs before Remove
+			// so stale sub-peer connections are already dropping by the time the
+			// association ID becomes free for a reconnecting peer to re-register.
+			tearDownAssociationStreams(assoc, sp.Peer)
 			s.associationMgr.Remove(assoc.RawID())
 			s.logger.Debugf("Removed association %s (primary peer disconnected)", assoc.ID())
 		}

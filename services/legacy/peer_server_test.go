@@ -1373,6 +1373,80 @@ func TestDisconnectMisbehaving(t *testing.T) {
 	})
 }
 
+// TestTearDownAssociationStreams verifies the primary-disconnect teardown that
+// handleDonePeerMsg now performs: when an association's primary goes away, every
+// sub-peer stream connection is closed (fixing the DATA1 stream leak and the
+// budget-parked sub-peer read-loop), while the primary itself — passed as
+// except, since it is already disconnecting — is left untouched.
+// DisconnectWithInfo closes the peer's quit channel, so WaitForDisconnect
+// returning is the observable disconnect signal.
+func TestTearDownAssociationStreams(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
+
+	buildAssoc := func() (*peer.Association, *peer.Peer, *peer.Peer, *peer.Peer) {
+		primary := newPeer()
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+
+		data1 := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, data1))
+		data1.SetAssociation(assoc)
+		data1.SetStreamType(wire.StreamTypeData1)
+
+		data2 := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData2, data2))
+		data2.SetAssociation(assoc)
+		data2.SetStreamType(wire.StreamTypeData2)
+
+		return assoc, primary, data1, data2
+	}
+
+	t.Run("closes every sub-peer stream, leaves the primary", func(t *testing.T) {
+		assoc, primary, data1, data2 := buildAssoc()
+
+		tearDownAssociationStreams(assoc, primary)
+
+		require.False(t, disconnected(primary), "the primary is passed as except and must not be disconnected here")
+		require.True(t, disconnected(data1), "the DATA1 sub-peer connection must be closed")
+		require.True(t, disconnected(data2), "the DATA2 sub-peer connection must be closed")
+	})
+
+	t.Run("nil association is a no-op", func(t *testing.T) {
+		require.NotPanics(t, func() { tearDownAssociationStreams(nil, newPeer()) })
+	})
+
+	t.Run("idempotent when a sub-peer is already tearing down", func(t *testing.T) {
+		assoc, primary, data1, data2 := buildAssoc()
+
+		// Pre-disconnect one sub-peer: the helper must not panic (atomic guard)
+		// and must still close the remaining sub-peer.
+		data1.DisconnectWithWarning("already gone")
+
+		require.NotPanics(t, func() { tearDownAssociationStreams(assoc, primary) })
+		require.True(t, disconnected(data1))
+		require.True(t, disconnected(data2))
+		require.False(t, disconnected(primary))
+	})
+}
+
 // TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
 // path: awaitBlockResult must hold the reserved budget until the block actually
 // finishes processing — even after the peer is torn down (sp.quit) — because the
