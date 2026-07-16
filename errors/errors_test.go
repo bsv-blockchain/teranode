@@ -1426,9 +1426,44 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 			expected: codes.ResourceExhausted,
 		},
 		{
-			name:     "unmapped code TX_INVALID defaults to codes.Internal",
+			name:     "maps ERR_TX_INVALID to codes.InvalidArgument",
 			errCode:  ERR_TX_INVALID,
-			expected: codes.Internal,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_TX_LOCK_TIME to codes.InvalidArgument",
+			errCode:  ERR_TX_LOCK_TIME,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_UTXO_NON_FINAL to codes.InvalidArgument",
+			errCode:  ERR_UTXO_NON_FINAL,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_TX_POLICY to codes.InvalidArgument",
+			errCode:  ERR_TX_POLICY,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_TX_INVALID_DOUBLE_SPEND to codes.FailedPrecondition",
+			errCode:  ERR_TX_INVALID_DOUBLE_SPEND,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			name:     "maps ERR_TX_CONFLICTING to codes.FailedPrecondition",
+			errCode:  ERR_TX_CONFLICTING,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			name:     "maps ERR_UTXO_SPENT to codes.FailedPrecondition",
+			errCode:  ERR_UTXO_SPENT,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			name:     "maps ERR_TX_LOCKED to codes.FailedPrecondition",
+			errCode:  ERR_TX_LOCKED,
+			expected: codes.FailedPrecondition,
 		},
 		{
 			name:     "unmapped code BLOCK_NOT_FOUND defaults to codes.Internal",

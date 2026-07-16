@@ -951,6 +951,13 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 		return codes.InvalidArgument
 	case ERR_THRESHOLD_EXCEEDED:
 		return codes.ResourceExhausted
+	// Tx-rejection verdicts: the submitted tx is not acceptable — a client error,
+	// not a server fault. Surfaced only because commit 1 made these eligible public causes.
+	case ERR_TX_INVALID, ERR_TX_LOCK_TIME, ERR_UTXO_NON_FINAL, ERR_TX_POLICY:
+		return codes.InvalidArgument
+	// Conflict/locked family: valid request, chain-state conflict.
+	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED:
+		return codes.FailedPrecondition
 	default:
 		return codes.Internal
 	}
