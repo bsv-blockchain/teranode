@@ -820,7 +820,9 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 	c.SetPath("/txs")
 
 	require.NoError(t, handler(c))
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	// orderedErrValidator rejects every tx with ERR_TX_INVALID, which the batch
+	// aggregation now classifies (via httpStatusForTxError) as a client error.
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 
 	responseBody, err := io.ReadAll(rec.Body)
 	require.NoError(t, err)
@@ -834,6 +836,215 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 		idx := strings.Index(body[prev:], txid)
 		require.GreaterOrEqualf(t, idx, 0, "txid for submission %d (%s) not found in response after position %d; body=%q", i, txid, prev, body)
 		prev += idx + len(txid)
+	}
+}
+
+// nonFinalMsg mirrors the actionable non-final reason produced by util/lock_time.go.
+const nonFinalMsg = "lock time (1783806110) as timestamp is not less than median block time (1783805456)"
+
+// nonFinalValidator rejects every tx as non-final (UTXO_NON_FINAL -> TX_LOCK_TIME),
+// the exact chain the validator produces for a BIP113 non-final transaction.
+type nonFinalValidator struct {
+	validator.MockValidator
+}
+
+func (m *nonFinalValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	return nil, errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError(nonFinalMsg))
+}
+
+// verdictValidator returns a caller-supplied error per txid, so a batch can mix a
+// non-final rejection with a genuine storage fault and exercise the aggregate
+// HTTP status rule in handleMultipleTx.
+type verdictValidator struct {
+	validator.MockValidator
+	errByTxID map[string]error
+}
+
+func (m *verdictValidator) Validate(_ context.Context, tx *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	if err, ok := m.errByTxID[tx.TxIDChainHash().String()]; ok {
+		return nil, err
+	}
+
+	return nil, errors.NewStorageError("unexpected tx in batch")
+}
+
+// batchSiblings builds n sibling txs each spending a distinct output of a single
+// coinbase (honouring the no-parent-and-child-in-a-batch contract), returning the
+// concatenated extended bytes and the txids in submission order.
+func batchSiblings(t *testing.T, n uint32) ([]byte, []string) {
+	t.Helper()
+
+	_, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	privKey, _ := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(int(n), 50e6, pubKey),
+	)
+
+	txBytes := make([]byte, 0, 1024)
+	txids := make([]string, 0, n)
+
+	for i := uint32(0); i < n; i++ {
+		tx := transactions.Create(t,
+			transactions.WithPrivateKey(privKey),
+			transactions.WithInput(coinbaseTx, i),
+			transactions.WithP2PKHOutputs(1, 1000),
+		)
+		txids = append(txids, tx.TxIDChainHash().String())
+		txBytes = append(txBytes, tx.ExtendedBytes()...)
+	}
+
+	return txBytes, txids
+}
+
+// Test_handleMultipleTx_NonFinalReturns400 verifies that a batch whose txs are
+// rejected as non-final reports HTTP 400 (a client error) — not the previous
+// hardcoded 500 — with the actionable per-tx reason in the aggregated body.
+func Test_handleMultipleTx_NonFinalReturns400(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	ps := &PropagationServer{
+		logger:    logger,
+		validator: &nonFinalValidator{},
+		txStore:   txStore,
+		settings:  tSettings,
+	}
+
+	handler := ps.handleMultipleTx(t.Context())
+
+	txBytes, _ := batchSiblings(t, 4)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(txBytes))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/txs")
+
+	require.NoError(t, handler(c))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	body, err := io.ReadAll(rec.Body)
+	require.NoError(t, err)
+	// The actionable reason surfaces (commit 1) instead of a bare PROCESSING message.
+	require.Contains(t, string(body), "TX_LOCK_TIME")
+	require.Contains(t, string(body), nonFinalMsg)
+}
+
+// Test_handleMultipleTx_StorageErrorReturns500 verifies that when a batch mixes a
+// client-side tx rejection (non-final -> 400) with a genuine storage fault, the
+// server fault dominates and the aggregate status is 500.
+func Test_handleMultipleTx_StorageErrorReturns500(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	txBytes, txids := batchSiblings(t, 2)
+	require.Len(t, txids, 2)
+
+	ps := &PropagationServer{
+		logger: logger,
+		validator: &verdictValidator{
+			errByTxID: map[string]error{
+				txids[0]: errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError(nonFinalMsg)),
+				txids[1]: errors.NewStorageError("simulated store failure"),
+			},
+		},
+		txStore:  txStore,
+		settings: tSettings,
+	}
+
+	handler := ps.handleMultipleTx(t.Context())
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(txBytes))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/txs")
+
+	require.NoError(t, handler(c))
+	// A genuine server fault in the batch dominates the client-side rejection.
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	body, err := io.ReadAll(rec.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "Failed to process transactions")
+	// The client-side rejection reason is still reported alongside.
+	require.Contains(t, string(body), nonFinalMsg)
+}
+
+// Test_handleMultipleTx_FirstClientErrorStatusWins pins the aggregation rule:
+// absent any server fault, the first client-error (4xx) status in submission
+// order determines the batch status, even when the rejection classes differ
+// (e.g. a 409 conflict and a 400 non-final rejection).
+func Test_handleMultipleTx_FirstClientErrorStatusWins(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	conflictErr := func() error { return errors.NewTxLockedError("transaction is locked") }
+	nonFinalErr := func() error {
+		return errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError(nonFinalMsg))
+	}
+
+	tests := []struct {
+		name       string
+		firstErr   error // returned for the first tx in submission order
+		secondErr  error // returned for the second tx in submission order
+		wantStatus int
+	}{
+		{"conflict first yields 409", conflictErr(), nonFinalErr(), http.StatusConflict},
+		{"non-final first yields 400", nonFinalErr(), conflictErr(), http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			txBytes, txids := batchSiblings(t, 2)
+			require.Len(t, txids, 2)
+
+			ps := &PropagationServer{
+				logger: logger,
+				validator: &verdictValidator{
+					errByTxID: map[string]error{
+						txids[0]: tc.firstErr,
+						txids[1]: tc.secondErr,
+					},
+				},
+				txStore:  txStore,
+				settings: tSettings,
+			}
+
+			handler := ps.handleMultipleTx(t.Context())
+
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(txBytes))
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/txs")
+
+			require.NoError(t, handler(c))
+			require.Equal(t, tc.wantStatus, rec.Code)
+		})
 	}
 }
 

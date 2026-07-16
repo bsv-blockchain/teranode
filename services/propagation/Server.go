@@ -903,20 +903,47 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 
 		var errMsgs []string
 
+		// Derive the aggregate HTTP status from the per-tx errors using the same
+		// classifier as the single-tx path (httpStatusForTxError). A per-tx
+		// outcome that classifies as success (e.g. a duplicate submission ->
+		// StatusOK) is not a failure: skip it from both the body and the status,
+		// mirroring handleSingleTx which returns OK for those. Among the genuine
+		// failures the precedence is: a server fault (5xx, e.g. a storage error)
+		// dominates and forces 500 — the client cannot fix it by resubmitting;
+		// otherwise the first client-error (4xx) status in submission order wins,
+		// so a batch of pure tx rejections is a client error (e.g. 400) rather
+		// than a misleading 500.
+		aggStatus := http.StatusOK
+
 		for _, err := range errSlots[:nextSlot] {
 			if err == nil {
 				continue
 			}
 
+			txStatus := httpStatusForTxError(err)
+			if txStatus < http.StatusBadRequest {
+				// Success-classified outcome (e.g. duplicate submission): not a
+				// failure, so it does not enter the body or raise the status.
+				continue
+			}
+
 			errMsgs = append(errMsgs, errors.UserMessage(err))
+
+			switch {
+			case txStatus >= http.StatusInternalServerError:
+				aggStatus = http.StatusInternalServerError
+			case aggStatus < http.StatusBadRequest:
+				aggStatus = txStatus
+			}
 		}
 
 		if earlyExitMsg != "" {
 			return c.String(http.StatusBadRequest, earlyExitMsg)
 		}
 
+		// errMsgs only holds genuine failures now, so aggStatus is always >= 400 here.
 		if len(errMsgs) > 0 {
-			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
+			return c.String(aggStatus, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
 		}
 
 		return c.String(http.StatusOK, "OK")
