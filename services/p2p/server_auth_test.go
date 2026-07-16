@@ -29,15 +29,16 @@ var publicPeerServiceMethods = map[string]bool{
 	"/p2p_api.PeerService/GetPeerRegistry":    true,
 	"/p2p_api.PeerService/GetPeer":            true,
 	// Internal data-plane reporting
-	"/p2p_api.PeerService/RecordCatchupAttempt":    true,
-	"/p2p_api.PeerService/RecordCatchupSuccess":    true,
-	"/p2p_api.PeerService/RecordCatchupFailure":    true,
-	"/p2p_api.PeerService/RecordCatchupMalicious":  true,
-	"/p2p_api.PeerService/UpdateCatchupReputation": true,
-	"/p2p_api.PeerService/UpdateCatchupError":      true,
-	"/p2p_api.PeerService/ReportValidSubtree":      true,
-	"/p2p_api.PeerService/ReportValidBlock":        true,
-	"/p2p_api.PeerService/RecordBytesDownloaded":   true,
+	"/p2p_api.PeerService/RecordCatchupAttempt":         true,
+	"/p2p_api.PeerService/RecordCatchupSuccess":         true,
+	"/p2p_api.PeerService/RecordCatchupFailure":         true,
+	"/p2p_api.PeerService/RecordCatchupMalicious":       true,
+	"/p2p_api.PeerService/UpdateCatchupReputation":      true,
+	"/p2p_api.PeerService/UpdateCatchupError":           true,
+	"/p2p_api.PeerService/ReportValidSubtree":           true,
+	"/p2p_api.PeerService/ReportValidBlock":             true,
+	"/p2p_api.PeerService/ReportValidatedChainProgress": true,
+	"/p2p_api.PeerService/RecordBytesDownloaded":        true,
 }
 
 // TestAdminProtectedMethodsCoverAllRPCs forces every PeerService RPC to be
