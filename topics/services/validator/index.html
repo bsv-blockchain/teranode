@@ -7763,7 +7763,12 @@ However, the Validator can also be started as a service, allowing to interact wi
 <li>
 <p>&lt;500000000 and smaller than block height, or &gt;=500000000 and SMALLER THAN TIMESTAMP</p>
 <ul>
-<li>Note: This means that Teranode will deem non-final transactions invalid and REJECT these transactions. It is up to the user to create proper non-final transactions to ensure that Teranode is aware of them. For clarity, if a transaction has a locktime in the future, the Tx Validator will reject it.</li>
+<li>
+<p>Note: This means that Teranode will deem non-final transactions invalid and REJECT these transactions. It is up to the user to create proper non-final transactions to ensure that Teranode is aware of them. For clarity, if a transaction has a locktime in the future, the Tx Validator will reject it.</p>
+</li>
+<li>
+<p>Design note (mempool-less rejection): Teranode has no mempool — neither a main mempool nor a non-final holding pool — so a non-final transaction is <strong>terminally rejected</strong> rather than retained. This differs from svnode, whose <code>CTimeLockedMempool</code> holds a non-final transaction and re-enqueues it once it becomes final. In Teranode this is expected behaviour, not a defect: the client is responsible for resubmitting once the chain tip's median-time-past (BIP113) passes the transaction's locktime. The rejection now carries the actionable reason (<code>UTXO_NON_FINAL</code> → <code>TX_LOCK_TIME</code>, including the locktime and the compared median block time) through to the public HTTP and gRPC surfaces, so the submitter can see why the transaction was rejected and when it is worth resubmitting.</p>
+</li>
 </ul>
 </li>
 <li>
