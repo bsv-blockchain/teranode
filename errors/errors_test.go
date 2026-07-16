@@ -1485,6 +1485,38 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 	}
 }
 
+// TestWrapGRPCTxVerdictStatus pins that the tx-verdict gRPC-code mapping reaches
+// the generic WrapGRPC wrapper — the path the single-tx ValidateTransaction RPC
+// uses — and not only WrapGRPCPublic. A verdict code wrapped by WrapGRPC must
+// carry the mapped status (client-error family) rather than the codes.Internal
+// default, so callers see the tx rejection as their fault, not a server fault.
+func TestWrapGRPCTxVerdictStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected codes.Code
+	}{
+		{
+			name:     "invalid-family verdict maps to InvalidArgument",
+			err:      New(ERR_TX_INVALID, "tx failed validation"),
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "conflict-family verdict maps to FailedPrecondition",
+			err:      New(ERR_TX_CONFLICTING, "tx conflicts with chain state"),
+			expected: codes.FailedPrecondition,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st, ok := status.FromError(WrapGRPC(tc.err))
+			require.True(t, ok)
+			require.Equal(t, tc.expected, st.Code())
+		})
+	}
+}
+
 // TestJoin tests the Join function to ensure it correctly combines multiple errors into a single error message.
 func TestJoin(t *testing.T) {
 	t.Run("no errors passed returns nil", func(t *testing.T) {
