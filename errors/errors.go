@@ -700,6 +700,14 @@ func WrapGRPC(err error) error {
 // code+message may be surfaced through the public error boundary. Each names a
 // verdict about the submitted transaction, carries no node-internal state, and
 // is actionable by the submitter; everything else collapses to the outermost code.
+//
+// This allowlist is intentionally narrower than the set of codes an HTTP handler
+// may classify as client errors: some codes earn a specific 4xx status yet are
+// deliberately absent here and from ErrorCodeToGRPCCode. An HTTP status only sorts
+// the request into a coarse client-error category and exposes neither the detailed
+// ERR code nor its message; surfacing a message is held to the stricter bar of a
+// client-safe, actionable verdict. Widening this set therefore needs the same
+// safety review — it is not kept in sync with the HTTP classifier by design.
 var publicCauseCodes = map[ERR]struct{}{
 	ERR_UTXO_NON_FINAL:          {},
 	ERR_TX_LOCK_TIME:            {},
@@ -722,6 +730,13 @@ func isPublicCause(code ERR) bool {
 // is present. The walk is bounded like (*Error).Is to stay safe on pathological
 // chains. Only code+message are meaningful on the returned error; callers must
 // never surface its file/line/function, data, or the rest of the chain.
+//
+// This helper backs the shared public error boundary — UserMessage, PublicError,
+// and thus WrapGRPCPublic — consumed by all external surfaces (propagation /tx and
+// /txs, the asset HTTP error boundary, p2p), so preferring the deepest allowlisted
+// cause is a global boundary behaviour, not scoped to a single service. It is safe
+// by construction: only codes on publicCauseCodes are ever surfaced, and any other
+// cause collapses to the outermost code.
 func DeepestPublicCause(err error) *Error {
 	if err == nil {
 		return nil
@@ -952,7 +967,12 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	case ERR_THRESHOLD_EXCEEDED:
 		return codes.ResourceExhausted
 	// Tx-rejection verdicts: the submitted tx is not acceptable — a client error,
-	// not a server fault. Surfaced only because commit 1 made these eligible public causes.
+	// not a server fault. This is a pure ERR->codes.Code lookup consumed by BOTH
+	// WrapGRPC (outermost code) and WrapGRPCPublic (public cause), so these rows
+	// change the gRPC status for every WrapGRPC caller, not only the public tx
+	// surfaces. That reach is intentional and benign: no caller branches on
+	// codes.Internal, the retry gate keys only on Unavailable/DeadlineExceeded, and
+	// application control-flow keys on the reconstructed ERR code, not the gRPC code.
 	case ERR_TX_INVALID, ERR_TX_LOCK_TIME, ERR_UTXO_NON_FINAL, ERR_TX_POLICY:
 		return codes.InvalidArgument
 	// Conflict/locked family: valid request, chain-state conflict.
