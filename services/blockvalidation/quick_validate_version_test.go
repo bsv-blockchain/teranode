@@ -8,7 +8,7 @@ import (
 )
 
 // TestQuickValidateBlockRejectsOutdatedVersion proves that the quick-validation catchup path
-// enforces the BIP34/66/65 version floor (§3.2). A below-floor block that reaches the checkpoint
+// enforces the BIP34/66/65 version floor. A below-floor block that reaches the checkpoint
 // fast path must be rejected with bad-version before any body/coinbase inspection, matching svnode
 // ContextualCheckBlockHeader. Height 200_000_000 is at/after BIP34 on every network, so a v1 block
 // there is always below the floor regardless of the test network's chaincfg params.

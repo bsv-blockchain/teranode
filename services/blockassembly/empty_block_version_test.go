@@ -7,7 +7,7 @@ import (
 )
 
 // TestGenerateEmptyBlockCandidateUsesSafeVersion proves that the empty mining candidate does not
-// inherit the tip's block version (§3.5). Inheriting an old version at an activation boundary would
+// inherit the tip's block version. Inheriting an old version at an activation boundary would
 // make Teranode mine a block below the new floor that it (and the network) must reject. The tip
 // here is genesis (v1); the candidate must nevertheless carry the safe 0x20000000 version, matching
 // the main mining candidate path.

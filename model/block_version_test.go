@@ -69,6 +69,21 @@ func TestCheckBlockVersion(t *testing.T) {
 	}
 }
 
+// TestCheckBlockVersionErrorToken pins the exact svnode-style reject token, so the formatted
+// message stays byte-compatible with bitcoin-sv's bad-version(0x%08x) / rejected nVersion=0x%08x
+// text (the unsigned version is used for both hex fields).
+func TestCheckBlockVersionErrorToken(t *testing.T) {
+	mainParams := chaincfg.MainNetParams
+
+	err := CheckBlockVersion(1, 227931, &mainParams) // v1 at BIP34
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-version(0x00000001) rejected nVersion=0x00000001 block")
+
+	err = CheckBlockVersion(0xffffffff, 300000, &mainParams) // signed -1, below the floor
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-version(0xffffffff) rejected nVersion=0xffffffff block")
+}
+
 // TestCheckBlockVersionGenesisExemptTeraTestNet checks that a v1 genesis on a network whose
 // BIP0034Height is 0 (teratestnet/tstn) is not rejected, matching svnode which never runs the
 // header-version check on the genesis block.
@@ -80,7 +95,7 @@ func TestCheckBlockVersionGenesisExemptTeraTestNet(t *testing.T) {
 }
 
 // TestBlockValidRejectsOutdatedVersion drives the full Block.Valid path and asserts that the
-// version floor is enforced there (§3.1) and that a v1 block at/after BIP34 no longer bypasses
+// version floor is enforced there and that a v1 block at/after BIP34 no longer bypasses
 // validation but is rejected earlier with bad-version.
 func TestBlockValidRejectsOutdatedVersion(t *testing.T) {
 	blockHeaderBytes, err := hex.DecodeString(block1Header)
@@ -131,8 +146,8 @@ func TestBlockValidRejectsOutdatedVersion(t *testing.T) {
 }
 
 // TestBlockValidGenesisExemption drives the full Block.Valid path for a height-0 block on a network
-// whose BIP0034Height is 0 (teratestnet). It proves both the version exemption (§3.1/§3.3) and the
-// mandatory b.Height > 0 guard on the coinbase-height gate (§3.4): without that guard,
+// whose BIP0034Height is 0 (teratestnet). It proves both the version exemption and the
+// mandatory b.Height > 0 guard on the coinbase-height gate: without that guard,
 // heightAtOrAfterActivation(0, 0) would be true and Block.Valid would attempt ExtractCoinbaseHeight
 // and reject the genesis block.
 func TestBlockValidGenesisExemption(t *testing.T) {

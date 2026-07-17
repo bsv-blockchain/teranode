@@ -802,7 +802,7 @@ func TestValidateCoinbaseHeight_PostBIP34InvalidHeight(t *testing.T) {
 
 // TestValidateCoinbaseHeight_ChainCfgDriven proves the coinbase-height gate is now driven by the
 // network's chaincfg BIP34 activation height rather than the old hardcoded 227835, and that the
-// version sub-condition has been dropped (§3.6). Uses mainnet params (BIP34=227931).
+// version sub-condition has been dropped. Uses mainnet params (BIP34=227931).
 func TestValidateCoinbaseHeight_ChainCfgDriven(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	mainParams := chaincfg.MainNetParams
