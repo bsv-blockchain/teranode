@@ -230,6 +230,11 @@ type BlockValidation struct {
 	// revalidateBlockChan receives blocks that need revalidation
 	revalidateBlockChan chan revalidateBlockData
 
+	// revalidateWorkerStopped is closed when the single revalidateBlockChan
+	// consumer (started in start) exits, so producers can select on it and avoid
+	// blocking forever on a full channel after the worker is gone at shutdown.
+	revalidateWorkerStopped chan struct{}
+
 	// stats tracks operational metrics for monitoring
 	stats *gocore.Stat
 
@@ -377,6 +382,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		setMinedOverflow:              make(map[chainhash.Hash]struct{}),
 		setMinedOverflowSignal:        make(chan struct{}, 1),
 		revalidateBlockChan:           make(chan revalidateBlockData, 2),
+		revalidateWorkerStopped:       make(chan struct{}),
 		stats:                         gocore.NewStat("blockvalidation"),
 		mmapDir:                       tSettings.BlockValidation.SubtreeMmapDir,
 	}
@@ -726,6 +732,9 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	u.logger.Infof("[BlockValidation:start] starting reValidation goroutine")
 
 	go func() {
+		// Signal producers (site 1's re-enqueue and ReValidateBlock) that this sole
+		// consumer is gone, so they don't block forever on a full channel at shutdown.
+		defer close(u.revalidateWorkerStopped)
 		defer u.logger.Infof("[BlockValidation:start] revalidateBlockChan worker stopped")
 
 		for {
@@ -755,7 +764,13 @@ func (u *BlockValidation) start(ctx context.Context) error {
 					if blockData.retries < 3 {
 						blockData.retries++
 						go func() {
-							u.revalidateBlockChan <- blockData
+							// Guard the re-enqueue: on shutdown the consumer (this
+							// worker) exits, so an unguarded send would leak this
+							// goroutine forever on the full channel.
+							select {
+							case u.revalidateBlockChan <- blockData:
+							case <-ctx.Done():
+							}
 						}()
 					} else {
 						u.logger.Errorf("[BlockValidation:start][%s] failed block revalidation, retries exhausted: %s", blockData.block.String(), err)
@@ -2148,9 +2163,21 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 // No return value is provided as the operation is asynchronous.
 func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
-	u.revalidateBlockChan <- revalidateBlockData{
-		block:   block,
-		baseURL: baseURL,
+
+	data := revalidateBlockData{block: block, baseURL: baseURL}
+
+	// Prefer an immediate enqueue whenever the channel has space (this also lets a
+	// stopped-worker test observe the routing decision). Only when the channel is
+	// full do we guard the blocking send: if the sole consumer has stopped
+	// (shutdown), drop rather than block the caller forever.
+	select {
+	case u.revalidateBlockChan <- data:
+	default:
+		select {
+		case u.revalidateBlockChan <- data:
+		case <-u.revalidateWorkerStopped:
+			u.logger.Warnf("[ReValidateBlock][%s] dropped: revalidation worker stopped", block.String())
+		}
 	}
 }
 
