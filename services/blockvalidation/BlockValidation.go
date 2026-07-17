@@ -1514,19 +1514,15 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 		}
 
-		// Reject outdated block versions before any coinbase/body inspection, mirroring bitcoin-sv
-		// ContextualCheckBlockHeader error priority: bad-version is rejected ahead of body checks.
-		// block.Height is already trusted at this point (it drives the checkpoint/difficulty decision
-		// below). block.Valid enforces the same floor authoritatively; this outer check only ensures a
-		// below-floor block surfaces as bad-version rather than as an incomplete/bad-coinbase error.
-		if err := model.CheckBlockVersion(block.Header.Version, block.Height, u.settings.ChainCfgParams); err != nil {
-			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, "bad block version")
-			}
-
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] outdated block version", block.Header.Hash().String(), err)
-		}
-
+		// NOTE on block-version (BIP34/66/65) enforcement and error ordering:
+		// The mandatory version floor is enforced authoritatively by model.CheckBlockVersion inside
+		// block.Valid (and on the quick-validation catchup path), which runs with the block's settled
+		// height. We deliberately do NOT also run it as an outer prefilter here. svnode rejects
+		// bad-version in ContextualCheckBlockHeader ahead of the body/coinbase checks; teranode does not
+		// replicate that exact error ordering at this outer stage, so a below-floor block that ALSO lacks
+		// coinbase data can surface as block-incomplete or bad-coinbase-length here rather than
+		// bad-version. This is a deliberate non-parity in error priority only: such a block is still
+		// rejected — by block.Valid — and the reject carries the bad-version token.
 		if block.CoinbaseTx == nil || block.CoinbaseTx.Inputs == nil || len(block.CoinbaseTx.Inputs) == 0 {
 			// Use BlockIncomplete rather than BlockInvalid — a missing coinbase likely means the peer
 			// doesn't have full block data (e.g. seeded peer). Don't store as invalid so we can
