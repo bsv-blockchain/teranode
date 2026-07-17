@@ -1602,7 +1602,10 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(bestBlockHeader *model.Bloc
 		Id:                  id[:],
 		PreviousHash:        bestBlockHeader.Hash()[:],
 		CoinbaseValue:       blockSubsidy,
-		Version:             bestBlockHeader.Version,
+		// Use the same safe version as the main mining candidate (0x20000000, >= 4) rather than
+		// inheriting the tip's version: at an activation boundary the tip can validly carry the old
+		// floor while the next block requires the new one, so an inherited version could be rejected.
+		Version:             0x20000000,
 		NBits:               nBits[:],
 		Time:                timeNowUint32,
 		Height:              nextBlockHeight,
