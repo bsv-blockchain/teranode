@@ -1398,15 +1398,30 @@ func (sm *SyncManager) current() bool {
 // (#1187), or returns nil when the backoff is disabled (either knob <= 0). A nil
 // map is a clean no-op via the nil-guards in handleBlockMsg; returning nil when
 // disabled also avoids constructing an expiringmap with a zero TTL, which spawns
-// no cleanup goroutine and would leak entries. WithMaxSize bounds the map when
-// enabled; the TTL (= max backoff window) forgets a failed hash not re-delivered
-// within the window, resetting its failure count.
-func newBlockFailureBackoffMap(base, window time.Duration) *expiringmap.ExpiringMap[chainhash.Hash, *blockFailureState] {
+// no cleanup goroutine and would leak entries. WithMaxSize bounds the map.
+//
+// The map TTL is deliberately DECOUPLED from the backoff cap (window): it is
+// window + maxAttempt, not window. window caps the retry SPACING and must stay
+// below the 180s sync-peer stall window; but the failure COUNT that drives the
+// linear ramp only survives while the entry is live, and the gap between two
+// consecutive recordBlockFailureBackoff calls is (retry spacing ≤ window) + (one
+// full failing HandleBlockDirect attempt). On the exact #1187 overload path that
+// attempt rides the Aerospike overload-retry budget and can reach ~2.5min — well
+// over window alone — so a TTL of just window would expire the entry mid-attempt
+// and reset the count to 1 every time, pinning the backoff at its base and
+// defeating the ramp. Adding maxAttempt (the per-attempt processing bound) keeps
+// the entry alive across one slow attempt so the count ramps as intended.
+func newBlockFailureBackoffMap(base, window, maxAttempt time.Duration) *expiringmap.ExpiringMap[chainhash.Hash, *blockFailureState] {
 	if base <= 0 || window <= 0 {
 		return nil
 	}
 
-	return expiringmap.New[chainhash.Hash, *blockFailureState](window).WithMaxSize(blockFailureBackoffMaxTracked)
+	retention := window
+	if maxAttempt > 0 {
+		retention += maxAttempt
+	}
+
+	return expiringmap.New[chainhash.Hash, *blockFailureState](retention).WithMaxSize(blockFailureBackoffMaxTracked)
 }
 
 // recordBlockFailureBackoff records or extends the transient-failure backoff for
@@ -3164,7 +3179,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// only stopped via SyncManager.Stop(); constructing it before an early
 	// error return would leak that goroutine, since the caller receives a nil
 	// SyncManager and can never call Stop() (#1187, review).
-	sm.blockFailureBackoff = newBlockFailureBackoffMap(tSettings.Legacy.BlockFailureBackoffBase, tSettings.Legacy.BlockFailureBackoffMaxDuration)
+	sm.blockFailureBackoff = newBlockFailureBackoffMap(tSettings.Legacy.BlockFailureBackoffBase, tSettings.Legacy.BlockFailureBackoffMaxDuration, tSettings.Legacy.PeerProcessingTimeout)
 
 	if !config.DisableCheckpoints {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)

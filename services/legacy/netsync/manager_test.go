@@ -1034,14 +1034,59 @@ func newBackoffTestManager(t *testing.T, blockchainClient *blockchain2.Mock, blo
 // TestNewBlockFailureBackoffMap verifies the per-block backoff map is built only
 // when both knobs are positive, and is nil (disabled, no zero-TTL leak) otherwise.
 func TestNewBlockFailureBackoffMap(t *testing.T) {
-	require.Nil(t, newBlockFailureBackoffMap(0, time.Minute), "base 0 must disable")
-	require.Nil(t, newBlockFailureBackoffMap(5*time.Second, 0), "window 0 must disable")
-	require.Nil(t, newBlockFailureBackoffMap(-1, time.Minute), "negative base must disable")
-	require.Nil(t, newBlockFailureBackoffMap(5*time.Second, -1), "negative window must disable")
+	require.Nil(t, newBlockFailureBackoffMap(0, time.Minute, time.Minute), "base 0 must disable")
+	require.Nil(t, newBlockFailureBackoffMap(5*time.Second, 0, time.Minute), "window 0 must disable")
+	require.Nil(t, newBlockFailureBackoffMap(-1, time.Minute, time.Minute), "negative base must disable")
+	require.Nil(t, newBlockFailureBackoffMap(5*time.Second, -1, time.Minute), "negative window must disable")
 
-	m := newBlockFailureBackoffMap(5*time.Second, 5*time.Minute)
+	m := newBlockFailureBackoffMap(5*time.Second, 5*time.Minute, 3*time.Minute)
 	require.NotNil(t, m, "both knobs positive must enable")
 	m.Stop()
+
+	// maxAttempt <= 0 still builds (TTL falls back to window alone).
+	m2 := newBlockFailureBackoffMap(5*time.Second, 5*time.Minute, 0)
+	require.NotNil(t, m2, "non-positive maxAttempt must still build")
+	m2.Stop()
+}
+
+// TestBlockFailureBackoffRampSurvivesSlowAttempt guards the #1187 review P1: the
+// failure-tracking map TTL must outlast one slow failing attempt so the linear
+// ramp actually engages. recordBlockFailureBackoff reads the prior count from the
+// map; when the TTL equalled the backoff cap (window) and a single overload
+// attempt outlasted it, the entry expired between two consecutive failures and
+// the count reset to 1 every time, pinning the backoff at its base. Here the two
+// records are spaced beyond the backoff cap but well within the decoupled
+// retention (window + maxAttempt), so the count must ramp to 2 rather than reset.
+func TestBlockFailureBackoffRampSurvivesSlowAttempt(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	base := 10 * time.Millisecond
+	window := 100 * time.Millisecond // backoff cap
+	maxAttempt := 2 * time.Second    // per-attempt bound -> map TTL = 2.1s
+	tSettings.Legacy.BlockFailureBackoffBase = base
+	tSettings.Legacy.BlockFailureBackoffMaxDuration = window
+
+	sm := &SyncManager{
+		settings:            tSettings,
+		blockFailureBackoff: newBlockFailureBackoffMap(base, window, maxAttempt),
+	}
+	require.NotNil(t, sm.blockFailureBackoff)
+	t.Cleanup(func() { sm.blockFailureBackoff.Stop() })
+
+	h := chainhash.Hash{0xCD}
+
+	sm.recordBlockFailureBackoff(h)
+	fs, ok := sm.blockFailureBackoff.Get(h)
+	require.True(t, ok)
+	require.Equal(t, 1, fs.attempts)
+
+	// Simulate a failing attempt that outlasts the backoff cap (window) but not
+	// the map TTL. A TTL of only `window` would have expired the entry by now.
+	time.Sleep(window + 50*time.Millisecond)
+
+	sm.recordBlockFailureBackoff(h)
+	fs, ok = sm.blockFailureBackoff.Get(h)
+	require.True(t, ok, "entry must survive a slow attempt so the count ramps")
+	require.Equal(t, 2, fs.attempts, "consecutive-failure count must ramp, not reset")
 }
 
 // TestRecordBlockFailureBackoff verifies the per-block backoff grows linearly
