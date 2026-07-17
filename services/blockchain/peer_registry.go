@@ -10,7 +10,9 @@ import (
 	"unicode"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -18,6 +20,12 @@ import (
 // maxPeerNameLength caps untrusted peer-supplied client names to prevent
 // resource exhaustion and oversized log lines.
 const maxPeerNameLength = 128
+
+// MaxValidatedChainWorkBytes bounds advisory peer-progress chainwork input before it
+// is converted into a big.Int for monotonic comparison. It is the single source of
+// truth for this cap; the p2p service's inbound ReportValidatedChainProgress guard
+// (maxReportedChainWorkBytes) aliases this value.
+const MaxValidatedChainWorkBytes = 128
 
 // sanitizeClientName scrubs an untrusted peer-supplied client name string.
 // Control characters and high-Unicode are dropped; XSS-flavoured ASCII
@@ -52,31 +60,37 @@ func sanitizeClientName(name string) string {
 // PeerInfo holds transport-agnostic information about a peer known to the node.
 // It is used across all transport types (HTTP DataHub, wire protocol, etc.).
 type PeerInfo struct {
-	ID                     string
-	TransportType          blockchain_api.TransportType
-	TransportTypeSet       bool // When true, TransportType was explicitly set by the caller
-	ClientName             string
-	Height                 uint32
-	DataHubURL             string
-	NetworkAddress         string
-	IsBanned               bool
-	BanScore               int32
-	Storage                string
-	BytesSent              uint64
-	BytesReceived          uint64
-	InteractionAttempts    int64
-	InteractionSuccesses   int64
-	InteractionFailures    int64
-	MaliciousCount         int64
-	ReputationScore        float64
-	AvgResponseTimeMs      int64
-	ConnectedAt            time.Time
-	LastMessageTime        time.Time
-	LastInteractionAttempt time.Time
-	LastInteractionSuccess time.Time
-	LastInteractionFailure time.Time
-	LastSeen               time.Time
-	BlockHash              *chainhash.Hash
+	ID                        string
+	TransportType             blockchain_api.TransportType
+	TransportTypeSet          bool // When true, TransportType was explicitly set by the caller
+	ClientName                string
+	Height                    uint32
+	DataHubURL                string
+	NetworkAddress            string
+	IsBanned                  bool
+	BanScore                  int32
+	Storage                   string
+	BytesSent                 uint64
+	BytesReceived             uint64
+	InteractionAttempts       int64
+	InteractionSuccesses      int64
+	InteractionFailures       int64
+	MaliciousCount            int64
+	ReputationScore           float64
+	AvgResponseTimeMs         int64
+	ConnectedAt               time.Time
+	LastMessageTime           time.Time
+	LastInteractionAttempt    time.Time
+	LastInteractionSuccess    time.Time
+	LastInteractionFailure    time.Time
+	LastSeen                  time.Time
+	BlockHash                 *chainhash.Hash
+	ValidatedHeight           uint32
+	ValidatedBlockHash        *chainhash.Hash
+	ValidatedChainWork        []byte
+	LastValidatedAt           time.Time
+	FullStorageContradictions int64
+	FullStoragePenaltyUntil   time.Time
 
 	// P2P-domain fields. Migrated from services/p2p so the blockchain registry is
 	// the single source of truth for peer state across libp2p connections.
@@ -92,6 +106,22 @@ type PeerInfo struct {
 	ReputationResetCount int32
 	LastCatchupError     string
 	LastCatchupErrorTime time.Time
+}
+
+func clonePeerInfo(info *PeerInfo) PeerInfo {
+	peerCopy := *info
+	peerCopy.BlockHash = cloneHash(info.BlockHash)
+	peerCopy.ValidatedBlockHash = cloneHash(info.ValidatedBlockHash)
+	peerCopy.ValidatedChainWork = append([]byte(nil), info.ValidatedChainWork...)
+	return peerCopy
+}
+
+func cloneHash(hash *chainhash.Hash) *chainhash.Hash {
+	if hash == nil {
+		return nil
+	}
+	hashCopy := *hash
+	return &hashCopy
 }
 
 // banEntry tracks ban scoring state for a single peer.
@@ -241,14 +271,13 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 
 	existing, exists := r.peers[info.ID]
 	if !exists {
-		entry := *info
-		if info.BlockHash != nil {
-			hashCopy := *info.BlockHash
-			entry.BlockHash = &hashCopy
-		}
+		entry := clonePeerInfo(info)
 		// Strip dangerous characters out of the peer-supplied client name so
 		// it can't break logs / dashboards / JSON consumers.
 		entry.ClientName = sanitizeClientName(entry.ClientName)
+		if storagePromotionBlocked(entry.Storage, entry.FullStoragePenaltyUntil, now) {
+			entry.Storage = ""
+		}
 		entry.ConnectedAt = now
 		entry.LastSeen = now
 		entry.LastMessageTime = now
@@ -283,11 +312,47 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 		existing.NetworkAddress = info.NetworkAddress
 	}
 	if info.Storage != "" {
-		existing.Storage = info.Storage
+		if !storagePromotionBlocked(info.Storage, effectiveFullStoragePenaltyUntil(existing, info), now) {
+			existing.Storage = info.Storage
+		}
 	}
 	if info.BlockHash != nil {
-		hashCopy := *info.BlockHash
-		existing.BlockHash = &hashCopy
+		existing.BlockHash = cloneHash(info.BlockHash)
+	}
+	if shouldAdvanceValidatedWork(existing.ValidatedChainWork, info.ValidatedBlockHash, info.ValidatedChainWork) {
+		existing.ValidatedHeight = info.ValidatedHeight
+		existing.ValidatedBlockHash = cloneHash(info.ValidatedBlockHash)
+		existing.ValidatedChainWork = append([]byte(nil), info.ValidatedChainWork...)
+		if !info.LastValidatedAt.IsZero() {
+			existing.LastValidatedAt = info.LastValidatedAt
+		} else {
+			existing.LastValidatedAt = now
+		}
+	}
+	// Additive so callers pass a delta (e.g. +1 per observed contradiction)
+	// rather than a read-modify-write off a stale snapshot. Applied under
+	// r.mu, so concurrent increments for the same peer are not lost.
+	if info.FullStorageContradictions != 0 {
+		existing.FullStorageContradictions += info.FullStorageContradictions
+	}
+	if !info.FullStoragePenaltyUntil.IsZero() {
+		prevPenalty := existing.FullStoragePenaltyUntil
+		existing.FullStoragePenaltyUntil = maxFullStoragePenaltyUntil(existing.FullStoragePenaltyUntil, info.FullStoragePenaltyUntil)
+		if existing.Storage == "full" && now.Before(existing.FullStoragePenaltyUntil) {
+			existing.Storage = ""
+		}
+		// A delivery-failure penalty that advances the window decays any credited
+		// validated work. Header work is credited before a block body is delivered,
+		// so stale never-delivered credit must not re-confer top-tier ranking once
+		// the penalty window expires; the peer must re-earn work via fresh delivery.
+		// Gated on advancing the window (strictly later than the prior penalty) so a
+		// duplicate or late penalty with the same/earlier timestamp does not re-wipe
+		// freshly re-earned work.
+		if info.FullStoragePenaltyUntil.After(prevPenalty) && now.Before(existing.FullStoragePenaltyUntil) {
+			existing.ValidatedChainWork = nil
+			existing.ValidatedBlockHash = nil
+			existing.ValidatedHeight = 0
+		}
 	}
 	// Only update TransportType when the caller explicitly set it.
 	if info.TransportTypeSet {
@@ -386,11 +451,7 @@ func (r *CentralizedPeerRegistry) Get(peerID string) (*PeerInfo, bool) {
 	// Fast path: no ban expiry needed for this peer. Copy under the read lock.
 	needsExpiry := info.IsBanned && r.isBanExpiredLocked(peerID)
 	if !needsExpiry {
-		peerCopy := *info
-		if info.BlockHash != nil {
-			hashCopy := *info.BlockHash
-			peerCopy.BlockHash = &hashCopy
-		}
+		peerCopy := clonePeerInfo(info)
 		r.mu.RUnlock()
 		return &peerCopy, true
 	}
@@ -406,11 +467,7 @@ func (r *CentralizedPeerRegistry) Get(peerID string) (*PeerInfo, bool) {
 	if !exists {
 		return nil, false
 	}
-	peerCopy := *info
-	if info.BlockHash != nil {
-		hashCopy := *info.BlockHash
-		peerCopy.BlockHash = &hashCopy
-	}
+	peerCopy := clonePeerInfo(info)
 	return &peerCopy, true
 }
 
@@ -461,11 +518,7 @@ func (r *CentralizedPeerRegistry) List(
 			continue
 		}
 
-		peerCopy := *info
-		if info.BlockHash != nil {
-			hashCopy := *info.BlockHash
-			peerCopy.BlockHash = &hashCopy
-		}
+		peerCopy := clonePeerInfo(info)
 		result = append(result, &peerCopy)
 	}
 
@@ -497,6 +550,39 @@ func storagePreference(mode string) int {
 	default:
 		return 1
 	}
+}
+
+func storagePromotionBlocked(storage string, penaltyUntil time.Time, now time.Time) bool {
+	return storage == "full" && !penaltyUntil.IsZero() && now.Before(penaltyUntil)
+}
+
+func effectiveFullStoragePenaltyUntil(existing, incoming *PeerInfo) time.Time {
+	var existingPenalty time.Time
+	var incomingPenalty time.Time
+	if existing != nil {
+		existingPenalty = existing.FullStoragePenaltyUntil
+	}
+	if incoming != nil && !incoming.FullStoragePenaltyUntil.IsZero() {
+		incomingPenalty = incoming.FullStoragePenaltyUntil
+	}
+	return maxFullStoragePenaltyUntil(existingPenalty, incomingPenalty)
+}
+
+func maxFullStoragePenaltyUntil(existing, incoming time.Time) time.Time {
+	if incoming.After(existing) {
+		return incoming
+	}
+	return existing
+}
+
+func shouldAdvanceValidatedWork(storedChainWork []byte, incomingBlockHash *chainhash.Hash, incomingChainWork []byte) bool {
+	if incomingBlockHash == nil || len(incomingChainWork) == 0 || len(incomingChainWork) > MaxValidatedChainWorkBytes {
+		return false
+	}
+	if len(storedChainWork) == 0 {
+		return true
+	}
+	return work.CompareChainWork(incomingChainWork, storedChainWork) > 0
 }
 
 // Count returns the number of peers currently in the registry.
@@ -1012,8 +1098,63 @@ func (r *CentralizedPeerRegistry) UpdateStorage(peerID string, storage string) {
 	defer r.mu.Unlock()
 
 	if info, ok := r.peers[peerID]; ok {
+		if storagePromotionBlocked(storage, info.FullStoragePenaltyUntil, time.Now()) {
+			return
+		}
 		info.Storage = storage
 	}
+}
+
+// RecordValidatedPeerProgress stores locally validated peer chain progress.
+// Peer-advertised tips remain separate discovery metadata until header work is
+// validated locally.
+func (r *CentralizedPeerRegistry) RecordValidatedPeerProgress(peerID string, height uint32, blockHash *chainhash.Hash, chainWork []byte) error {
+	if peerID == "" {
+		return errors.NewInvalidArgumentError("peer ID is required")
+	}
+	if blockHash == nil {
+		return errors.NewInvalidArgumentError("validated block hash is required")
+	}
+	if len(chainWork) == 0 {
+		return errors.NewInvalidArgumentError("validated chainwork is required")
+	}
+	if len(chainWork) > MaxValidatedChainWorkBytes {
+		return errors.NewInvalidArgumentError("validated chainwork is too large: %d bytes", len(chainWork))
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	info, ok := r.peers[peerID]
+	if !ok {
+		return nil
+	}
+
+	// Do not credit validated header work while the peer is inside an active
+	// delivery-failure penalty window. Header work is credited before a block body is
+	// delivered, so a penalized header-only non-deliverer that keeps serving headers
+	// would otherwise re-accumulate work and regain top-tier eligibility the instant the
+	// window expired, without ever delivering a block. The one-time work wipe at penalty
+	// onset is handled separately in Register; this guard only prevents fresh crediting
+	// during the window, so the two are complementary rather than double-handling.
+	if !info.FullStoragePenaltyUntil.IsZero() && time.Now().Before(info.FullStoragePenaltyUntil) {
+		return nil
+	}
+
+	if len(info.ValidatedChainWork) > 0 {
+		if work.CompareChainWork(chainWork, info.ValidatedChainWork) <= 0 {
+			return nil
+		}
+	}
+
+	info.ValidatedHeight = height
+	info.ValidatedBlockHash = cloneHash(blockHash)
+	info.ValidatedChainWork = append([]byte(nil), chainWork...)
+	info.LastValidatedAt = time.Now()
+	// The peer served headers that advanced locally validated work, so it is
+	// demonstrably live for registry TTL purposes.
+	info.LastSeen = info.LastValidatedAt
+	return nil
 }
 
 // RecordSyncAttempt notes that we attempted to sync with the peer for backoff tracking.

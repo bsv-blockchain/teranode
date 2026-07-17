@@ -14,6 +14,7 @@ const (
 	FileTypeUtxoDeletions  FileType = "utxo-deletions"
 	FileTypeUtxoHeaders    FileType = "utxo-headers"
 	FileTypeUtxoSet        FileType = "utxo-set"
+	FileTypeUtxoSetHash    FileType = "utxo-set-hash"
 	FileTypeBlock          FileType = "block"
 	FileTypeSubtree        FileType = "subtree"
 	FileTypeSubtreeToCheck FileType = "subtreeToCheck"
@@ -29,6 +30,9 @@ const (
 	FileTypeBatchKeys      FileType = "batch-keys"
 	FileTypePreserveUntil  FileType = "preserveUntil"
 	FileTypePeerRegistry   FileType = "peer-registry"
+	FileTypeSeedChunk      FileType = "seed-chunk"
+	FileTypeSeedManifest   FileType = "seed-manifest"
+	FileTypeSeedCheckpoint FileType = "seed-checkpoint"
 	FileTypeUnknown        FileType = ""
 )
 
@@ -47,6 +51,7 @@ var (
 	magicUtxoHeaders    = [8]byte{'U', '-', 'H', '-', '1', '.', '0', ' '} // U-H-1.0 (legacy, without coinbase)
 	magicUtxoHeadersV2  = [8]byte{'U', '-', 'H', '-', '2', '.', '0', ' '} // U-H-2.0 (with coinbase tx)
 	magicUtxoSet        = [8]byte{'U', '-', 'S', '-', '1', '.', '0', ' '} // U-S-1.0
+	magicUtxoSetHash    = [8]byte{'U', 'S', 'H', '-', '1', '.', '0', ' '} // USH-1.0
 	magicBlock          = [8]byte{'B', '-', '1', '.', '0', ' ', ' ', ' '} // B-1.0
 	magicSubtree        = [8]byte{'S', '-', '1', '.', '0', ' ', ' ', ' '} // S-1.0
 	magicSubtreeToCheck = [8]byte{'S', 'C', '-', '1', '.', '0', ' ', ' '} // SC-1.0
@@ -62,6 +67,9 @@ var (
 	magicBatchKeys      = [8]byte{'B', 'K', '-', '1', '.', '0', ' ', ' '} // BK-1.0
 	magicPreserveUntil  = [8]byte{'P', 'U', '-', '1', '.', '0', ' ', ' '} // PU-1.0
 	magicPeerRegistry   = [8]byte{'P', 'R', '-', '1', '.', '0', ' ', ' '} // PR-1.0
+	magicSeedChunk      = [8]byte{'S', 'C', 'K', '-', '1', '.', '0', ' '} // SCK-1.0
+	magicSeedManifest   = [8]byte{'S', 'M', 'F', '-', '1', '.', '0', ' '} // SMF-1.0
+	magicSeedCheckpoint = [8]byte{'S', 'C', 'P', '-', '1', '.', '0', ' '} // SCP-1.0
 )
 
 var fileTypeToMagic = map[FileType][8]byte{
@@ -69,6 +77,7 @@ var fileTypeToMagic = map[FileType][8]byte{
 	FileTypeUtxoDeletions:  magicUtxoDeletions,
 	FileTypeUtxoHeaders:    magicUtxoHeadersV2, // Default to V2 (with coinbase)
 	FileTypeUtxoSet:        magicUtxoSet,
+	FileTypeUtxoSetHash:    magicUtxoSetHash,
 	FileTypeBlock:          magicBlock,
 	FileTypeSubtree:        magicSubtree,
 	FileTypeSubtreeToCheck: magicSubtreeToCheck,
@@ -84,6 +93,9 @@ var fileTypeToMagic = map[FileType][8]byte{
 	FileTypeBatchKeys:      magicBatchKeys,
 	FileTypePreserveUntil:  magicPreserveUntil,
 	FileTypePeerRegistry:   magicPeerRegistry,
+	FileTypeSeedChunk:      magicSeedChunk,
+	FileTypeSeedManifest:   magicSeedManifest,
+	FileTypeSeedCheckpoint: magicSeedCheckpoint,
 }
 
 var magicToFileType = map[[8]byte]FileType{
@@ -92,6 +104,7 @@ var magicToFileType = map[[8]byte]FileType{
 	magicUtxoHeaders:    FileTypeUtxoHeaders,
 	magicUtxoHeadersV2:  FileTypeUtxoHeaders, // V2 also maps to same FileType
 	magicUtxoSet:        FileTypeUtxoSet,
+	magicUtxoSetHash:    FileTypeUtxoSetHash,
 	magicBlock:          FileTypeBlock,
 	magicSubtree:        FileTypeSubtree,
 	magicSubtreeToCheck: FileTypeSubtreeToCheck,
@@ -107,6 +120,9 @@ var magicToFileType = map[[8]byte]FileType{
 	magicBatchKeys:      FileTypeBatchKeys,
 	magicPreserveUntil:  FileTypePreserveUntil,
 	magicPeerRegistry:   FileTypePeerRegistry,
+	magicSeedChunk:      FileTypeSeedChunk,
+	magicSeedManifest:   FileTypeSeedManifest,
+	magicSeedCheckpoint: FileTypeSeedCheckpoint,
 }
 
 type Header struct {

@@ -907,45 +907,64 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	sp.server.syncManager.QueueTx(tx, sp.Peer, nil)
 }
 
-// shouldDisconnectOnBlockError reports whether a block-processing error is a
-// peer fault worth disconnecting for (to trigger sync-peer rotation), versus a
-// transient local condition that should only be retried. Transient local
-// conditions — service/storage errors, the per-block backoff throttle
-// (ErrServiceUnavailable, #1187) and ErrStorageUnavailable ("no aerospike nodes
-// available") — must NOT disconnect the delivering peer: a backed-off block is
-// re-delivered repeatedly while it waits out its window, and disconnecting on
-// each re-delivery would churn through sync peers for a fault that is ours, not
-// the peer's. errors.IsTransientLocalError is the shared classifier (also used by
-// the netsync backoff path) so the two decisions cannot drift apart.
-func shouldDisconnectOnBlockError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	return !errors.IsTransientLocalError(err)
-}
-
-// OnBlock is invoked when a peer receives a block bitcoin message. It
-// blocks until the bitcoin block has been fully processed.
-func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+// OnBlock is invoked when a peer receives a block bitcoin message. With block
+// prefetch enabled (the default) it admits the block against the prefetch budget
+// and returns, leaving validation to run in the background (see awaitBlockResult)
+// so the read-loop can download the next block while this one is processed; with
+// prefetch disabled (budget 0) it blocks until the block has been fully processed.
+// Either way blocks are handed to the sync manager in order.
+func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payloadSize int64) {
 	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnBlock",
 		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
 	)
 
 	// Check if this peer is banned
 	host, _, err := net.SplitHostPort(sp.Addr())
-	if err == nil {
-		// Use a channel to get the response from the query
-		respChan := make(chan bool)
 
-		// Create a proper query message to check if the peer is banned
-		sp.server.query <- &isPeerBannedMsg{
-			addr:  host,
-			reply: respChan,
+	// Bound the pre-admission phase (ban-check round-trip + GetBlockHeader) so a
+	// wedged query goroutine or a hung header lookup cannot park the read-loop
+	// indefinitely: under prefetch the per-message watchdog is disarmed for block
+	// messages, and the netsync stall detector only covers the sync peer, so a
+	// non-sync peer would otherwise leak its slot until daemon shutdown. These
+	// calls are sub-ms in a healthy node and budget backpressure is strictly after
+	// them, so PeerProcessingTimeout only ever fires on a genuine hang. Applied on
+	// both ingestion paths (harmless for the synchronous one, where the watchdog
+	// still covers blocks). Fall back to 3m (netsync's
+	// defaultBlockProcessingStallTimeout) when the setting is unset so an operator
+	// zeroing it cannot reintroduce the hang. Only the pre-admission calls read
+	// this context; AcquireBlockPrefetch/QueueBlock keep sp.ctx/sp.quit.
+	preAdmitTimeout := sp.server.settings.Legacy.PeerProcessingTimeout
+	if preAdmitTimeout <= 0 {
+		preAdmitTimeout = 3 * time.Minute
+	}
+
+	preAdmitCtx, cancelPreAdmit := context.WithTimeout(sp.ctx, preAdmitTimeout)
+	defer cancelPreAdmit()
+
+	if err == nil {
+		// Ban-check round-trip bounded by preAdmitCtx. ok=false means the query
+		// send or its reply was cancelled/timed out before an answer arrived.
+		isBanned, ok := sp.checkBannedBounded(preAdmitCtx, host)
+		if !ok {
+			// A pre-admission DEADLINE means the query path is wedged: the block
+			// was solicited (netsync marked it requested and fetchHeaderBlocks
+			// already advanced startHeader past it), so silently dropping it
+			// strands the hash — nothing re-requests it and IBD stalls on this
+			// single block. Rotate the sync peer instead: the primary disconnect
+			// drives handleDonePeerMsg → updateSyncPeer → startSync, which clears
+			// requestedBlocks and re-drives the fetch from a fresh locator
+			// (restoring the pre-prefetch watchdog behaviour). On parent cancel
+			// (daemon shutdown / peer teardown) just drop the block.
+			if preAdmitTimedOut(preAdmitCtx) {
+				disconnectMisbehaving(sp, fmt.Sprintf("pre-admission ban-check timed out for block %s, disconnecting to trigger sync peer rotation", msg.BlockHash()))
+				return
+			}
+
+			sp.server.logger.Warnf("dropping block %s: ban-check cancelled by teardown for peer %s", msg.BlockHash(), sp)
+
+			return
 		}
 
-		// Wait for the response
-		isBanned := <-respChan
 		if isBanned {
 			sp.server.logger.Warnf("Ignoring block %s from banned legacy peer %s",
 				msg.BlockHash().String(), sp.Addr())
@@ -973,41 +992,365 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	iv := wire.NewInvVect(wire.InvTypeBlock, blockHash)
 	sp.AddKnownInventory(iv)
 
-	// single round-trip: GetBlockHeader tells us both existence and validity
-	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, blockHash)
+	// single round-trip: GetBlockHeader tells us both existence and validity.
+	// preAdmitCtx bounds this lookup (see the pre-admission timeout above).
+	_, meta, err := sp.server.blockchainClient.GetBlockHeader(preAdmitCtx, blockHash)
+	if err != nil && preAdmitCtx.Err() != nil {
+		// The lookup was cut short by the pre-admission context, so the error
+		// says nothing about whether we already have the block. Proceeding as
+		// "not known valid" would charge a possibly known-valid block against
+		// the prefetch budget and fully re-validate it. On a genuine deadline,
+		// treat the wedged lookup like the wedged ban-check above: rotate the
+		// sync peer so netsync re-drives the fetch. On parent cancel (daemon
+		// shutdown / peer teardown) just drop the block.
+		if preAdmitTimedOut(preAdmitCtx) {
+			disconnectMisbehaving(sp, fmt.Sprintf("pre-admission header lookup timed out for block %s, disconnecting to trigger sync peer rotation", blockHash))
+		}
+
+		return
+	}
+
 	blockIsKnownValid := err == nil && !meta.Invalid
 
 	if !blockIsKnownValid {
-		// Queue the block up to be handled by the block
-		// manager and intentionally block further receives
-		// until the bitcoin block is fully processed and known
-		// good or bad.  This helps prevent a malicious peer
-		// from queuing up a bunch of bad blocks before
-		// disconnecting (or being disconnected) and wasting
-		// memory.  Additionally, this behavior is depended on
-		// by at least the block acceptance test tool as the
-		// reference implementation processes blocks in the same
-		// thread and therefore blocks further messages until
-		// the bitcoin block has been fully processed.
+		// Queue the block up to be handled by the block manager. The reference
+		// implementation processes blocks on the read thread, blocking further
+		// messages until each block is fully processed; at least the block
+		// acceptance test tool depends on that ordering. We keep blocks strictly
+		// ordered (the sync manager's single block-queue goroutine is FIFO) but
+		// decouple download from processing so the next block can be fetched
+		// while this one validates.
 		//
-		// QueueBlock is the last use of `block`: the sync manager extracts the
-		// *wire.MsgBlock into its own queue message and the netsync pipeline owns
-		// it from there (releasing the arena mid-processing). Referencing only
-		// blockHash past this point lets the wrapper and the raw bytes be
-		// collected while we wait.
-		sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
+		// QueueBlock is the last use of `block` here: the sync manager extracts
+		// the *wire.MsgBlock into its own queue message and the netsync pipeline
+		// owns it from there (releasing the arena mid-processing). Referencing
+		// only blockHash past this point lets the wrapper and the raw bytes be
+		// collected once processing is done.
+		sm := sp.server.syncManager
 
-		err = <-sp.blockProcessed
-		if err != nil {
-			sp.server.logger.Errorf("block processing failed: %v", err)
+		if !sm.UsePrefetchIngestion() {
+			// Synchronous ingestion: block the read-loop until the block is fully
+			// processed. One block in flight per peer with full TCP backpressure —
+			// the original behaviour. Taken when prefetch is disabled (kill switch
+			// legacy_blockPrefetchBufferBytes=0) OR on regression net, where the
+			// block-acceptance tooling depends on submit-then-query ordering that
+			// only this synchronous path guarantees. Also intentionally limits how
+			// many bad blocks a malicious peer can queue before being disconnected.
+			//
+			// Clear any stale result left in the shared reply channel by a prior
+			// block's shutdown-drain (the buffer is size 1 and reused across
+			// synchronous blocks); without this a stale error could be read as this
+			// block's result. Benign today (only reachable at daemon exit) but keeps
+			// the shared-channel contract robust.
+			select {
+			case <-sp.blockProcessed:
+			default:
+			}
 
-			// Only disconnect on block validation failures, not on local
-			// infrastructure issues (database, Kafka, etc.) which would
-			// just cause unnecessary sync peer rotation.
-			if shouldDisconnectOnBlockError(err) {
-				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
+			sm.QueueBlock(block, sp.Peer, sp.blockProcessed)
+
+			// Wait for processing, but also bail on teardown so a lost shutdown
+			// race on the block-queue drain can't block the read-loop forever.
+			// sp.quit closes on individual disconnect and shutdown; sp.ctx (the
+			// ServiceManager errgroup Init context) is cancelled on daemon shutdown.
+			select {
+			case err = <-sp.blockProcessed:
+			case <-sp.quit:
+				return
+			case <-sp.ctx.Done():
 				return
 			}
+
+			if err != nil {
+				sp.server.logger.Errorf("block processing failed: %v", err)
+
+				if shouldDisconnectOnBlockErr(err) {
+					// Evict the whole association so the sync peer actually rotates; see
+					// disconnectMisbehaving (a bare sp disconnect misses the primary).
+					disconnectMisbehaving(sp, fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
+					return
+				}
+			}
+
+			return
+		}
+
+		// Reject unrequested blocks before they can consume prefetch budget.
+		// handleBlockMsg makes the same check after queueing and disconnects the
+		// peer, but under async prefetch a misbehaving peer could otherwise admit
+		// a flood of unrequested blocks against the shared budget before that
+		// downstream disconnect fires — starving the real sync peer's read-loop
+		// and inflating buffered-block memory. Gating here keeps a malicious peer
+		// to at most one unrequested block in flight (matching the original
+		// synchronous backpressure) and also spares fabricated blocks the
+		// SerializeSize walk below. Blocks we actually requested take the fast path.
+		if !sm.BlockRequested(sp.Peer, blockHash) {
+			// Unrequested block: evict the whole association (primary drives the
+			// sync-peer rotation, plus the stream sub-peer's own connection), mirroring
+			// handleBlockMsg's downstream eviction. See disconnectMisbehaving.
+			disconnectMisbehaving(sp, fmt.Sprintf("Got unrequested block %s, disconnecting", blockHash))
+			return
+		}
+
+		// Weight the block by its serialized size. The live read-loop uses the
+		// streaming reader, which measures the payload off the wire for free and
+		// hands it in as payloadSize — so the SerializeSize() walk below is only
+		// a belt-and-braces fallback for callers that supply neither the wire
+		// measurement nor the raw bytes.
+		size := blockAdmissionWeight(payloadSize, buf, msg)
+
+		// Bounded async prefetch. Admit the block against the global byte budget
+		// FIRST — this blocks the read-loop only when in-flight blocks already
+		// fill the budget, which is the backpressure that bounds the memory
+		// pinned by buffered blocks (a malicious peer cannot outrun it, and an
+		// oversized block is admitted alone). Admitting before QueueBlock is
+		// essential: otherwise the block would sit in the deep msgChan/blockQueue
+		// pinning its decode arena without being counted against the budget.
+		// sp.quit lets a budget-parked read-loop unblock on peer teardown; sp.ctx
+		// (the ServiceManager errgroup Init context) is cancelled on daemon
+		// shutdown but not by legacy.Server.Stop() alone. Mirrors awaitBlockResult.
+		weight, err := sm.AcquireBlockPrefetch(sp.ctx, sp.quit, *blockHash, size)
+		if err != nil {
+			if errors.Is(err, netsync.ErrDuplicateBlockInFlight) {
+				// A copy of this requested hash is already admitted or queued. Drop the
+				// duplicate WITHOUT disconnecting or queueing: the first copy will be
+				// processed, and if it is invalid that copy's awaitBlockResult
+				// disconnects the peer. Dropping here bounds duplicates against the
+				// budget (one copy per hash), the dedup half of the admission gate.
+				sp.server.logger.Debugf("dropping duplicate in-flight block %s from %s", blockHash, sp)
+				return
+			}
+
+			// ctx cancelled or peer torn down: nothing reserved, drop the block.
+			return
+		}
+
+		// Per-block buffered(1) reply channel. handleBlockMsg always sends
+		// exactly one result; the buffer guarantees that send never blocks even
+		// if this peer has since disconnected and no goroutine is waiting. That
+		// is what stops a disconnected peer from wedging the single shared
+		// block-processing goroutine — and through it every other peer.
+		done := make(chan error, 1)
+		sm.QueueBlock(block, sp.Peer, done)
+
+		// Return immediately so the read-loop downloads the next block while this
+		// one is validated; the result (budget release + disconnect-on-failure)
+		// is handled off the read-loop.
+		go sp.awaitBlockResult(done, weight, blockHash)
+	}
+}
+
+// checkBannedBounded runs the ban-check round-trip (server.query send + reply)
+// under ctx so a wedged query goroutine or a never-serviced channel cannot park
+// the read-loop. It returns (banned, ok); ok=false means the round-trip was
+// cancelled/timed out before a reply arrived and the caller must drop the block
+// without proceeding. Extracted from OnBlock so the bounded pre-admission path is
+// unit-testable (a query channel nobody services + a cancelled ctx).
+func (sp *serverPeer) checkBannedBounded(ctx context.Context, host string) (banned bool, ok bool) {
+	// Use a channel to get the response from the query. Buffered(1) because the
+	// receive below can be abandoned on ctx.Done(): if the deadline fires in the
+	// window after handleQuery dequeues the message but before it sends the reply,
+	// an unbuffered send would have no receiver and would wedge the single
+	// peerHandler/handleQuery goroutine that serializes every peer-state query for
+	// the whole server. The buffer keeps that reply send non-blocking regardless.
+	respChan := make(chan bool, 1)
+
+	// Create a proper query message to check if the peer is banned. Both the send
+	// and the receive select on ctx.Done() so neither can block indefinitely.
+	select {
+	case sp.server.query <- &isPeerBannedMsg{addr: host, reply: respChan}:
+	case <-ctx.Done():
+		return false, false
+	}
+
+	// Wait for the response.
+	select {
+	case banned = <-respChan:
+		return banned, true
+	case <-ctx.Done():
+		return false, false
+	}
+}
+
+// preAdmitTimedOut reports whether a failed pre-admission call should rotate
+// the sync peer: true only when the pre-admission context hit its own deadline
+// (a wedged local round-trip that stranded a requested block), not when the
+// parent context was cancelled (daemon shutdown / peer teardown), where the
+// block is simply dropped. Callers must only consult this after the
+// pre-admission call has actually failed.
+func preAdmitTimedOut(preAdmitCtx context.Context) bool {
+	return errors.Is(preAdmitCtx.Err(), context.DeadlineExceeded)
+}
+
+// shouldDisconnectOnBlockErr reports whether a block-processing error should
+// rotate the sync peer. Block validation failures disconnect the peer; transient
+// LOCAL conditions must not, since they would only cause unnecessary sync-peer
+// churn. The suppressed set is service/storage errors plus the per-block backoff
+// throttle (ErrServiceUnavailable, #1187) and ErrStorageUnavailable ("no
+// aerospike nodes available") — the backoff skip returns ErrServiceUnavailable
+// on every re-delivery, so disconnecting on it would churn through sync peers for
+// a fault that is ours, not the peer's. errors.IsTransientLocalError is the
+// shared classifier (also used by the netsync backoff path) so the two decisions
+// cannot drift apart.
+func shouldDisconnectOnBlockErr(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return !errors.IsTransientLocalError(err)
+}
+
+// tearDownAssociationStreams closes the live connection of every stream
+// sub-peer in assoc except the given peer. It is the primary-disconnect
+// counterpart to disconnectMisbehaving: when an association's PRIMARY goes away
+// (misbehaviour eviction, sync-peer rotation, remote hang-up), handleDonePeerMsg
+// removes only the association BOOKKEEPING, which left the DATA1 sub-peer's TCP
+// connection open reading blocks off the wire for a dead association, and left a
+// budget-parked sub-peer read-loop parked forever — AcquireBlockPrefetch waits
+// on the sub-peer's own serverPeer.quit, which only closes when the sub-peer's
+// own connection drops. Disconnecting the sub-peer closes its peer.Peer.quit,
+// unblocking its peerDoneHandler, which closes its serverPeer.quit and unparks
+// the waiter. StreamPeers() includes the primary (registered as the GENERAL
+// stream at construction), so callers pass it as except — it is already
+// disconnecting. DisconnectWithInfo is idempotent (atomic guard), so overlap
+// with disconnectMisbehaving's explicit stream disconnect, or a sub-peer already
+// mid-teardown, is safe.
+func tearDownAssociationStreams(assoc *peer.Association, except *peer.Peer) {
+	if assoc == nil {
+		return
+	}
+
+	for _, p := range assoc.StreamPeers() {
+		if p == nil || p == except {
+			continue
+		}
+
+		p.DisconnectWithInfo("association primary disconnected")
+	}
+}
+
+// disconnectMisbehaving evicts a peer's whole association for misbehaviour. It
+// disconnects the association PRIMARY — whose disconnect drives
+// handleDonePeerMsg's associationMgr.Remove(...), rotating the sync peer — and
+// ALSO the stream sub-peer's live TCP connection when it is distinct from the
+// primary. This distinction is load-bearing under the shipped default config
+// (legacy_allowBlockPriority + prefetch): blocks then arrive on the DATA1
+// sub-peer, so sp.Peer is the sub-peer. Disconnecting only sp there would leave
+// the association intact — netsync DonePeer early-returns for a sub-peer and
+// handleDonePeerMsg only does assoc.RemoveStream(...), so openRequiredStreams
+// re-opens DATA1 and the node keeps syncing from a peer serving invalid blocks
+// (IBD stalls). Resolving to the primary is what actually rotates the sync peer.
+// handleDonePeerMsg now also tears down the association's sub-peer connections on
+// primary disconnect (via tearDownAssociationStreams), so eviction of the whole
+// association is covered even when the bad block arrives on the primary; the
+// explicit stream disconnect here is kept as the fast path (it fires immediately,
+// not one peerHandler round-trip later). DisconnectWithWarning is idempotent
+// (atomic guard), so the non-stream case (target == sp.Peer) disconnects exactly
+// once and the overlap with the centralized teardown is harmless.
+func disconnectMisbehaving(sp *serverPeer, reason string) {
+	target := misbehaviorDisconnectTarget(sp.Peer)
+	target.DisconnectWithWarning(reason)
+
+	if target != sp.Peer {
+		sp.DisconnectWithWarning(reason + " (stream)")
+	}
+}
+
+// misbehaviorDisconnectTarget resolves the peer whose disconnect evicts a
+// misbehaving peer's entire association. For a stream sub-peer (e.g. a
+// BlockPriority DATA stream) it returns the association's primary peer, so
+// disconnecting the returned target drives handleDonePeerMsg's
+// associationMgr.Remove(...) eviction rather than the RemoveStream(...) that
+// leaves the primary/association intact. For a peer with no association — or a
+// primary peer — it returns the peer itself. This mirrors handleBlockMsg's
+// stream-peer → primary resolution for unrequested blocks.
+func misbehaviorDisconnectTarget(p *peer.Peer) *peer.Peer {
+	if assoc := p.AssociationRef(); assoc != nil {
+		if primary := assoc.PrimaryPeer(); primary != nil {
+			return primary
+		}
+	}
+
+	return p
+}
+
+// blockAdmissionWeight returns the byte weight a block should be charged against
+// the prefetch budget. payloadSize is the exact serialized block size the
+// streaming read-loop measures off the wire (message bytes minus the wire
+// header); it is the cheap, allocation-free measurement and is preferred when
+// positive. buf, when non-nil, is the raw serialized payload from a buffered
+// read path, so len(buf) is its size for free. Only when neither is available
+// does it fall back to msg.SerializeSize(), which walks the entire tx set — the
+// O(all-tx) cost the wire measurement exists to keep off the read-loop.
+func blockAdmissionWeight(payloadSize int64, buf []byte, msg *wire.MsgBlock) int64 {
+	if payloadSize > 0 {
+		return payloadSize
+	}
+
+	if len(buf) > 0 {
+		return int64(len(buf))
+	}
+
+	return int64(msg.SerializeSize())
+}
+
+// awaitBlockResult releases the prefetch budget reserved for an asynchronously
+// queued block once its background processing completes, and disconnects the
+// peer on a validation failure. It runs as a short-lived goroutine per in-flight
+// prefetched block; the number of live instances is bounded by the prefetch
+// budget. It deliberately captures only blockHash (not the block or its decode
+// arena) so the block's memory can be released while processing proceeds.
+func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash *chainhash.Hash) {
+	// Release the reserved budget AND drop the in-flight-dedup hash exactly once on
+	// every exit path (normal reply, sp.quit hold-then-drain, sp.ctx backstop).
+	// Pairing the hash removal with the budget release here is what keeps the two
+	// halves of the admission gate on one lifetime: a copy of this hash cannot be
+	// re-admitted until this block has fully left the pipeline.
+	defer sp.server.syncManager.ReleaseBlockPrefetch(*blockHash, weight)
+
+	var err error
+
+	select {
+	case err = <-done:
+	case <-sp.quit:
+		// The peer is being torn down (individual disconnect or shutdown;
+		// peerDoneHandler closes sp.quit in both), but the block is still
+		// queued/validating in the netsync pipeline — its decoded memory stays
+		// live. Hold the reserved budget until the block actually leaves the
+		// pipeline; releasing it now (on peer lifetime rather than block
+		// completion) would let the semaphore under-count and over-admit, so
+		// buffered-block memory could exceed the budget under churny disconnects.
+		//
+		// While the SyncManager runs, handleBlockMsg always replies on the
+		// buffered(1) done channel; on shutdown the sm.quit drain replies with an
+		// error. The one narrow exception is a shutdown race where the feeder
+		// enqueues after that drain returned and no reply is ever sent — then we
+		// fall back to sp.ctx. sp.ctx is the ServiceManager's errgroup-derived Init
+		// context: it IS cancelled on daemon shutdown (signal / ForceShutdown /
+		// errgroup), though legacy.Server.Stop() alone does not cancel it. Only the
+		// disconnect action below is skipped here — the peer is already gone.
+		select {
+		case e := <-done:
+			// Log a late validation failure for observability parity with the
+			// connected path; the peer is already gone, so do not disconnect.
+			if e != nil {
+				sp.server.logger.Errorf("block %s processing failed after peer teardown: %v", blockHash, e)
+			}
+		case <-sp.ctx.Done():
+		}
+
+		return
+	case <-sp.ctx.Done():
+		return
+	}
+
+	if err != nil {
+		sp.server.logger.Errorf("block processing failed: %v", err)
+
+		if shouldDisconnectOnBlockErr(err) {
+			// Evict the whole association so the sync peer actually rotates; see
+			// disconnectMisbehaving (a bare sp disconnect misses the primary).
+			disconnectMisbehaving(sp, fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
 		}
 	}
 }
@@ -2002,7 +2345,14 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 			s.logger.Debugf("Removed stream type %d from association %s",
 				sp.Peer.StreamType(), assoc.ID())
 		} else {
-			// Primary peer disconnected - remove the entire association.
+			// Primary peer disconnected - tear down the whole association:
+			// close every sub-peer's live connection, then remove the
+			// bookkeeping. Removing only the bookkeeping left the DATA1 sub-peer
+			// reading off the wire (or parked forever in AcquireBlockPrefetch) on
+			// a connection nothing would ever close. Teardown runs before Remove
+			// so stale sub-peer connections are already dropping by the time the
+			// association ID becomes free for a reconnecting peer to re-register.
+			tearDownAssociationStreams(assoc, sp.Peer)
 			s.associationMgr.Remove(assoc.RawID())
 			s.logger.Debugf("Removed association %s (primary peer disconnected)", assoc.ID())
 		}

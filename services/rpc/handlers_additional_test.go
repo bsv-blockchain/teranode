@@ -5466,6 +5466,10 @@ func (m *mockP2PClient) RecordCatchupFailure(ctx context.Context, peerID string)
 	return nil
 }
 
+func (m *mockP2PClient) RecordCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) error {
+	return nil
+}
+
 func (m *mockP2PClient) RecordCatchupMalicious(ctx context.Context, peerID string) error {
 	return nil
 }
@@ -5487,6 +5491,10 @@ func (m *mockP2PClient) ReportValidSubtree(ctx context.Context, peerID string, s
 }
 
 func (m *mockP2PClient) ReportValidBlock(ctx context.Context, peerID string, blockHash string) error {
+	return nil
+}
+
+func (m *mockP2PClient) ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error {
 	return nil
 }
 

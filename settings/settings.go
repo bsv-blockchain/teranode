@@ -376,6 +376,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipUnspendableTxStorageDuringCatchup: getBool("blockvalidation_skipUnspendableTxStorageDuringCatchup", false, alternativeContext...),
 			CatchupAllowQuickValidation:           getBool("blockvalidation_catchup_allow_quick_validation", true, alternativeContext...),
 			OutpointOnlyBelowCheckpoint:           getBool("blockvalidation_outpoint_only_below_checkpoint", false, alternativeContext...),
+			LegacyUnifiedBelowCheckpoint:          getBool("blockvalidation_legacy_unified_below_checkpoint", false, alternativeContext...),
+			LegacyBelowCheckpointFailClosed:       getBool("blockvalidation_legacy_below_checkpoint_fail_closed", false, alternativeContext...),
 			// Catchup circuit breaker configuration
 			CircuitBreakerFailureThreshold: getInt("blockvalidation_circuit_breaker_failure_threshold", 5, alternativeContext...),
 			CircuitBreakerSuccessThreshold: getInt("blockvalidation_circuit_breaker_success_threshold", 2, alternativeContext...),
@@ -515,9 +517,14 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BanThreshold: getInt("p2p_ban_threshold", 100, alternativeContext...),
 			BanDuration:  getDuration("p2p_ban_duration", 24*time.Hour),
 			// Sync manager configuration
-			ForceSyncPeer:         getString("p2p_force_sync_peer", "", alternativeContext...),
-			NodeStatusTopic:       getString("p2p_node_status_topic", "", alternativeContext...),
-			SharePrivateAddresses: getBool("p2p_share_private_addresses", true, alternativeContext...),
+			ForceSyncPeer:                         getString("p2p_force_sync_peer", "", alternativeContext...),
+			NodeStatusTopic:                       getString("p2p_node_status_topic", "", alternativeContext...),
+			SharePrivateAddresses:                 getBool("p2p_share_private_addresses", true, alternativeContext...),
+			MaxUnvalidatedAdvertisedHeightLead:    getUint32("p2p_max_unvalidated_advertised_height_lead", 10000, alternativeContext...),
+			MaxUnprovenSyncProbesPerBackoffWindow: getInt("p2p_max_unproven_sync_probes_per_backoff_window", 3, alternativeContext...),
+			FullStoragePenaltyDuration:            getDuration("p2p_full_storage_penalty_duration", time.Hour, alternativeContext...),
+			FullDeliveryFreshnessWindow:           getDuration("p2p_full_delivery_freshness_window", 24*time.Hour, alternativeContext...),
+			SyncPeerNoProgressTimeout:             getDuration("p2p_sync_peer_no_progress_timeout", 5*time.Minute, alternativeContext...),
 			// DHT configuration
 			DHTMode:            getString("p2p_dht_mode", "server", alternativeContext...),
 			DHTCleanupInterval: getDuration("p2p_dht_cleanup_interval", 24*time.Hour, alternativeContext...),
@@ -653,6 +660,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
 			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
 			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),
+			BlockPrefetchBufferBytes:         getInt64("legacy_blockPrefetchBufferBytes", 256*1024*1024, alternativeContext...),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:         getString("ipv6_addresses", "", alternativeContext...),

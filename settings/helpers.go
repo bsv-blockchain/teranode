@@ -44,6 +44,12 @@ func getInt32(key string, defaultValue int32, alternativeContext ...string) int3
 	return value
 }
 
+func getInt64(key string, defaultValue int64, alternativeContext ...string) int64 {
+	value, _ := gocore.Config(alternativeContext...).GetInt64(key, defaultValue)
+
+	return value
+}
+
 func getUint32(key string, defaultValue uint32, alternativeContext ...string) uint32 {
 	value, _ := gocore.Config(alternativeContext...).GetUint32(key, defaultValue)
 
