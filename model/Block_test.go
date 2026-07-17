@@ -372,8 +372,9 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		// Set height higher than LastV1Block to trigger height validation
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, LastV1Block+100, 0)
+		// Set a height at which the coinbase-height validation path is exercised
+		const testHeight = 300000
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, testHeight, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
