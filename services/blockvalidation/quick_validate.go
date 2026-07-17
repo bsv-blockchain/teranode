@@ -1049,6 +1049,37 @@ func (b *SubtreeProcessingBatch) Close() {
 	}
 }
 
+// extendTxFromSameBlockParents extends tx's inputs whose parents are present in
+// parents (same-block parents already decoded in this batch), returning whether
+// any input still needs an external (store) lookup.
+//
+// PreviousTxOutIndex comes from the untrusted child tx, so the parent's output
+// count is bounds-checked before indexing: an out-of-range reference returns an
+// error instead of panicking the node with index-out-of-range (issue 1283). This
+// mirrors the guard in services/validator/Validator.go extendTransaction.
+func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) (needsExternalLookup bool, err error) {
+	for j, input := range tx.Inputs {
+		parentHash := input.PreviousTxIDChainHash()
+
+		parentTx, ok := parents[*parentHash]
+		if !ok {
+			needsExternalLookup = true
+			continue
+		}
+
+		vout := input.PreviousTxOutIndex
+		if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) {
+			return false, errors.NewProcessingError("tx %s input %d references non-existent output %d of same-block parent %s",
+				tx.TxIDChainHash().String(), j, vout, parentHash.String())
+		}
+
+		tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[vout].Satoshis
+		tx.Inputs[j].PreviousTxScript = parentTx.Outputs[vout].LockingScript
+	}
+
+	return needsExternalLookup, nil
+}
+
 // processSubtreeBatch reads and extends a batch of subtrees.
 // This is the shared first phase of both quick and normal validation.
 //
@@ -1146,27 +1177,12 @@ func (u *BlockValidation) processSubtreeBatch(
 
 			// Try to extend from same-block parents first
 			if !tx.IsExtended() {
-				needsExternalLookup := false
-				for j, input := range tx.Inputs {
-					parentHash := input.PreviousTxIDChainHash()
-					if parentTx, ok := extendedTxsFromPrevBatches[*parentHash]; ok {
-						// PreviousTxOutIndex comes from the (untrusted) child tx; bound it
-						// against the same-block parent's output count before indexing, else a
-						// crafted block panics the node with index-out-of-range (issue 1283).
-						// Mirrors the guard in services/validator/Validator.go extendTransaction.
-						vout := input.PreviousTxOutIndex
-						if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) {
-							cancelReaders()
-							return nil, errors.NewProcessingError("[processSubtreeBatch][%s] tx %s input %d references non-existent output %d of same-block parent %s",
-								block.Hash().String(), tx.TxIDChainHash().String(), j, vout, parentHash.String())
-						}
-
-						tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[vout].Satoshis
-						tx.Inputs[j].PreviousTxScript = parentTx.Outputs[vout].LockingScript
-					} else {
-						needsExternalLookup = true
-					}
+				needsExternalLookup, extendErr := extendTxFromSameBlockParents(tx, extendedTxsFromPrevBatches)
+				if extendErr != nil {
+					cancelReaders()
+					return nil, errors.NewProcessingError("[processSubtreeBatch][%s] same-block parent extension failed", block.Hash().String(), extendErr)
 				}
+
 				if needsExternalLookup {
 					txsNeedingExtension = append(txsNeedingExtension, tx)
 				}
@@ -1607,26 +1623,11 @@ func (u *BlockValidation) extendBatch(
 
 			// Try to extend from same-block parents first
 			if !tx.IsExtended() {
-				needsExternalLookup := false
-				for j, input := range tx.Inputs {
-					parentHash := input.PreviousTxIDChainHash()
-					if parentTx, ok := extendedTxs[*parentHash]; ok {
-						// PreviousTxOutIndex comes from the (untrusted) child tx; bound it
-						// against the same-block parent's output count before indexing, else a
-						// crafted block panics the node with index-out-of-range (issue 1283).
-						// Mirrors the guard in services/validator/Validator.go extendTransaction.
-						vout := input.PreviousTxOutIndex
-						if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) {
-							return errors.NewProcessingError("[extendBatch][%s] tx %s input %d references non-existent output %d of same-block parent %s",
-								block.Hash().String(), tx.TxIDChainHash().String(), j, vout, parentHash.String())
-						}
-
-						tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[vout].Satoshis
-						tx.Inputs[j].PreviousTxScript = parentTx.Outputs[vout].LockingScript
-					} else {
-						needsExternalLookup = true
-					}
+				needsExternalLookup, extendErr := extendTxFromSameBlockParents(tx, extendedTxs)
+				if extendErr != nil {
+					return errors.NewProcessingError("[extendBatch][%s] same-block parent extension failed", block.Hash().String(), extendErr)
 				}
+
 				if needsExternalLookup {
 					txsNeedingExtension = append(txsNeedingExtension, tx)
 				}
