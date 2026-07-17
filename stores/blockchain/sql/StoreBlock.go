@@ -852,12 +852,12 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 
 // validateCoinbaseHeight ensures that blocks comply with BIP34 requirements.
 // BIP34 requires that the coinbase transaction must include the correct block height
-// in its first input script for all blocks version 2 or higher after the activation height.
+// in its first input script for all blocks at or after the network's BIP34 activation height.
 //
 // This function implements an important Bitcoin consensus rule defined in BIP34
-// (Bitcoin Improvement Proposal 34), which was activated at block height 227,836 on
-// the main Bitcoin network. The rule requires miners to include the block height in
-// the coinbase transaction's input script, providing several important benefits:
+// (Bitcoin Improvement Proposal 34), which activates per network at the height carried on the
+// chain parameters (s.chainParams.BIP0034Height). The rule requires miners to include the block
+// height in the coinbase transaction's input script, providing several important benefits:
 //
 //  1. Prevents coinbase transaction hash collisions that could occur when miners
 //     used identical coinbase transactions in different blocks
@@ -869,8 +869,9 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 // The implementation performs a systematic validation process:
 //
 // 1. Applicability Check:
-//   - Determines if BIP34 validation applies based on block version and height
-//   - For blocks before the activation height or with version < 2, validation is skipped
+//   - Determines if BIP34 validation applies based on the block height
+//   - For blocks before the network's BIP34 activation height, validation is skipped
+//     (below-floor versions are already rejected by the block-version check)
 //
 // 2. Height Extraction:
 //   - Accesses the coinbase transaction (first transaction in the block)

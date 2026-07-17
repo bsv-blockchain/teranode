@@ -597,15 +597,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		return false, errors.NewBlockInvalidError("[BLOCK][%s] bad coinbase length", b.String())
 	}
 
-	// We can only calculate the height from coinbase transactions in block versions 2 and higher
-
 	// https://en.bitcoin.it/wiki/BIP_0034
-	// BIP-34 was created to force miners to add the block height to the coinbase tx.
-	// This BIP came into effect at block 227,835, which is after the first halving
-	// at block 210,000.  Therefore, until this happened, we do not know the actual
-	// height of the block we are checking for.
-
-	// TODO - do this another way, if necessary
+	// BIP-34 forces miners to encode the block height in the coinbase tx. It activates per network
+	// at ChainCfgParams.BIP0034Height; before that height the coinbase need not encode the height, so
+	// the check below is skipped. Enforcement is height-driven and version-independent — blocks below
+	// the mandatory version floor are already rejected above by CheckBlockVersion.
 
 	// 5. Check that the coinbase transaction includes the correct block height (BIP34).
 	// Parity with bitcoin-sv ContextualCheckBlock: enforced for every block at/after BIP34Height.
