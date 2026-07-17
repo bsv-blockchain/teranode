@@ -873,7 +873,7 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 //   - For blocks before the network's BIP34 activation height, validation is skipped
 //     (below-floor versions are already rejected by the block-version check)
 //
-// 2. Height Extraction:
+// 2. Height Extraction (only performed at or after BIP34 activation):
 //   - Accesses the coinbase transaction (first transaction in the block)
 //   - Examines the first input's script for the encoded height value
 //   - Uses Bitcoin's script parsing rules to extract the height as a number
@@ -904,24 +904,23 @@ func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) e
 
 	bip34Height := s.chainParams.BIP0034Height
 	postBIP34 := bip34Height >= 0 && currentHeight >= uint32(bip34Height)
+	if !postBIP34 {
+		// Below BIP34 activation the coinbase need not encode the height, and svnode never
+		// inspects it here (ContextualCheckBlock, validation.cpp:6039). Skip extraction to avoid
+		// ~227k wasted parses and warnings during a mainnet IBD.
+		return nil
+	}
 
 	blockHeight, err := block.ExtractCoinbaseHeight()
 	if err != nil {
-		if !postBIP34 {
-			// Log warning for pre-BIP34 blocks where extraction might fail legitimately
-			s.logger.Warnf("failed to extract coinbase height for block %s (height %d), pre-BIP34 activation: %v", block.Hash(), currentHeight, err)
-			return nil // Don't fail validation for pre-BIP34 blocks
-		}
-		// Fail for post-BIP34 blocks if extraction fails
 		return errors.NewStorageError("failed to extract coinbase height for block %s (height %d): %w", block.Hash().String(), currentHeight, err)
 	}
 
-	// Check height match only if extraction succeeded and after BIP34 activation
-	if postBIP34 && blockHeight != currentHeight {
+	if blockHeight != currentHeight {
 		return errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d) for block %s", blockHeight, currentHeight, block.Hash().String())
 	}
 
-	return nil // No validation needed or validation passed
+	return nil
 }
 
 // calculateMedianTimePastForHeight calculates the Median Time Past (MTP) for a given block height.
