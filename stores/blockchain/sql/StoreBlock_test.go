@@ -516,7 +516,7 @@ func TestValidateCoinbaseHeight_PreBIP34(t *testing.T) {
 
 	// Test with block height before the network's BIP34 activation height (from chaincfg)
 	err = s.validateCoinbaseHeight(block1, 100) // height < BIP0034Height
-	require.NoError(t, err)                      // Should not fail for pre-BIP34 blocks
+	require.NoError(t, err)                     // Should not fail for pre-BIP34 blocks
 }
 
 func TestGetCumulativeChainWork_Success(t *testing.T) {
