@@ -7220,6 +7220,20 @@
 <td><strong>CRITICAL</strong> - Message processing timeout</td>
 </tr>
 <tr>
+<td>BlockFailureBackoffBase</td>
+<td>time.Duration</td>
+<td>5s</td>
+<td>legacy_blockFailureBackoffBase</td>
+<td>Base per-block backoff after a transient storage/service failure (0 disables)</td>
+</tr>
+<tr>
+<td>BlockFailureBackoffMaxDuration</td>
+<td>time.Duration</td>
+<td>150s</td>
+<td>legacy_blockFailureBackoffMaxDuration</td>
+<td>Cap on the per-block backoff window and the failure-tracking map TTL, kept below the 180s sync-peer stall window (0 disables)</td>
+</tr>
+<tr>
 <td>BlockPrefetchBufferBytes</td>
 <td>int64</td>
 <td>268435456</td>

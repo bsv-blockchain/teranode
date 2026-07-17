@@ -7291,6 +7291,20 @@
 <td>Get batch duration</td>
 </tr>
 <tr>
+<td>BatcherMaxConcurrent</td>
+<td>int</td>
+<td>64</td>
+<td>utxostore_batcherMaxConcurrent</td>
+<td>Max concurrent in-flight batch callbacks per batcher (shared cap; 0 = unlimited)</td>
+</tr>
+<tr>
+<td>OutpointBatcherMaxConcurrent</td>
+<td>int</td>
+<td>0</td>
+<td>utxostore_outpointBatcherMaxConcurrent</td>
+<td>Per-batcher outpoint/decorate concurrency override, the #1187 read fan-out throttle (0 = inherit utxostore_batcherMaxConcurrent)</td>
+</tr>
+<tr>
 <td>DBTimeout</td>
 <td>time.Duration</td>
 <td>5s</td>
