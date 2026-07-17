@@ -893,29 +893,31 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 //   - error: ValidationError if the coinbase height doesn't match or can't be extracted,
 //     or nil if validation passes or isn't required for this block
 func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) error {
-	// Check that the coinbase transaction includes the correct block height for all
-	// blocks that are version 2 or higher. BIP34 activation height is 227835.
-	// Also check if CoinbaseTx exists.
-	if block.CoinbaseTx != nil && block.Header.Version > 1 {
-		blockHeight, err := block.ExtractCoinbaseHeight()
-		if err != nil {
-			// Define BIP34 activation height (consider getting from chainParams)
-			bip34ActivationHeight := uint32(227835)
-			if currentHeight < bip34ActivationHeight {
-				// Log warning for pre-BIP34 blocks where extraction might fail legitimately
-				s.logger.Warnf("failed to extract coinbase height for block %s (height %d), pre-BIP34 activation: %v", block.Hash(), currentHeight, err)
-				return nil // Don't fail validation for pre-BIP34 blocks
-			}
-			// Fail for post-BIP34 blocks if extraction fails
-			return errors.NewStorageError("failed to extract coinbase height for block %s (height %d): %w", block.Hash().String(), currentHeight, err)
-		}
+	// Enforce the BIP34 coinbase-height rule for every block at or after the network's BIP34
+	// activation height, taken from chaincfg (mirroring bitcoin-sv ContextualCheckBlock). Below-floor
+	// versions are rejected earlier by the block-version floor, so there is no version sub-condition
+	// here. A negative activation height (should not occur) is treated as "never active".
+	if block.CoinbaseTx == nil {
+		return nil
+	}
 
-		// Define BIP34 activation height again (or use variable from above)
-		bip34ActivationHeight := uint32(227835)
-		// Check height match only if extraction succeeded and after BIP34 activation
-		if currentHeight >= bip34ActivationHeight && blockHeight != currentHeight {
-			return errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d) for block %s", blockHeight, currentHeight, block.Hash().String())
+	bip34Height := s.chainParams.BIP0034Height
+	postBIP34 := bip34Height >= 0 && currentHeight >= uint32(bip34Height)
+
+	blockHeight, err := block.ExtractCoinbaseHeight()
+	if err != nil {
+		if !postBIP34 {
+			// Log warning for pre-BIP34 blocks where extraction might fail legitimately
+			s.logger.Warnf("failed to extract coinbase height for block %s (height %d), pre-BIP34 activation: %v", block.Hash(), currentHeight, err)
+			return nil // Don't fail validation for pre-BIP34 blocks
 		}
+		// Fail for post-BIP34 blocks if extraction fails
+		return errors.NewStorageError("failed to extract coinbase height for block %s (height %d): %w", block.Hash().String(), currentHeight, err)
+	}
+
+	// Check height match only if extraction succeeded and after BIP34 activation
+	if postBIP34 && blockHeight != currentHeight {
+		return errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d) for block %s", blockHeight, currentHeight, block.Hash().String())
 	}
 
 	return nil // No validation needed or validation passed
