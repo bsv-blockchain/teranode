@@ -53,6 +53,15 @@ func (q *LockFreeQueue) length() int64 {
 // It uses atomic operations to ensure thread safety during concurrent enqueue operations.
 // The entire batch receives a single timestamp when enqueued.
 //
+// Ordering note (issue 1158): this is a multi-producer enqueue — batch order is
+// decided by whichever producer wins the tail.Swap below, so parent-before-child
+// ordering is NOT guaranteed at the producer, and the single consumer appends nodes
+// in dequeue order without topological reordering. This is safe on the live chain:
+// post-Genesis any within-block transaction order is valid as long as every parent is
+// present and there is no double-spend, both of which the validator already enforces
+// before a tx reaches this queue. A parent-presence hold would be a hot-path cost with
+// no benefit on a post-Genesis chain.
+//
 // Parameters:
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
