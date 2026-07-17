@@ -338,6 +338,47 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 	})
 }
 
+// TestExtendBatch_SameBlockParentVoutBounds is the regression guard for issue 1283:
+// a same-block-parent input whose PreviousTxOutIndex is out of range must fail the
+// block cleanly instead of panicking with index-out-of-range.
+func TestExtendBatch_SameBlockParentVoutBounds(t *testing.T) {
+	// Parent with a single output: vout 0 is valid, anything >= 1 is out of range.
+	parent := bt.NewTx()
+	parent.Outputs = append(parent.Outputs, &bt.Output{Satoshis: 1000, LockingScript: &bscript.Script{}})
+	parentHash := *parent.TxIDChainHash()
+
+	// newChild builds a non-extended child (nil PreviousTxScript) referencing the
+	// same-block parent at the given vout.
+	newChild := func(t *testing.T, vout uint32) *bt.Tx {
+		t.Helper()
+		child := bt.NewTx()
+		in := &bt.Input{PreviousTxOutIndex: vout}
+		require.NoError(t, in.PreviousTxIDAdd(&parentHash))
+		child.Inputs = append(child.Inputs, in)
+		require.False(t, child.IsExtended(), "child must be non-extended to exercise the extend path")
+		return child
+	}
+
+	extendedTxs := map[chainhash.Hash]*bt.Tx{parentHash: parent}
+
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	block := testhelpers.CreateTestBlocks(t, 1)[0]
+
+	batch := &SubtreeProcessingBatch{
+		subtreeData: []*subtreepkg.Data{{Txs: []*bt.Tx{newChild(t, 5)}}}, // vout 5 on a 1-output parent
+		batchStart:  0,
+		batchEnd:    1,
+	}
+
+	// Before the fix this panicked with index-out-of-range; now it must return a
+	// clean per-block error.
+	err := suite.Server.blockValidation.extendBatch(suite.Ctx, block, batch, extendedTxs)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "non-existent output")
+}
+
 func TestQuickValidateBlock_IncompleteBlockNilCoinbase(t *testing.T) {
 	t.Run("nil coinbase returns ErrBlockIncomplete", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)

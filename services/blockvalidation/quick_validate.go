@@ -1150,8 +1150,19 @@ func (u *BlockValidation) processSubtreeBatch(
 				for j, input := range tx.Inputs {
 					parentHash := input.PreviousTxIDChainHash()
 					if parentTx, ok := extendedTxsFromPrevBatches[*parentHash]; ok {
-						tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[input.PreviousTxOutIndex].Satoshis
-						tx.Inputs[j].PreviousTxScript = parentTx.Outputs[input.PreviousTxOutIndex].LockingScript
+						// PreviousTxOutIndex comes from the (untrusted) child tx; bound it
+						// against the same-block parent's output count before indexing, else a
+						// crafted block panics the node with index-out-of-range (issue 1283).
+						// Mirrors the guard in services/validator/Validator.go extendTransaction.
+						vout := input.PreviousTxOutIndex
+						if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) {
+							cancelReaders()
+							return nil, errors.NewProcessingError("[processSubtreeBatch][%s] tx %s input %d references non-existent output %d of same-block parent %s",
+								block.Hash().String(), tx.TxIDChainHash().String(), j, vout, parentHash.String())
+						}
+
+						tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[vout].Satoshis
+						tx.Inputs[j].PreviousTxScript = parentTx.Outputs[vout].LockingScript
 					} else {
 						needsExternalLookup = true
 					}
@@ -1600,8 +1611,18 @@ func (u *BlockValidation) extendBatch(
 				for j, input := range tx.Inputs {
 					parentHash := input.PreviousTxIDChainHash()
 					if parentTx, ok := extendedTxs[*parentHash]; ok {
-						tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[input.PreviousTxOutIndex].Satoshis
-						tx.Inputs[j].PreviousTxScript = parentTx.Outputs[input.PreviousTxOutIndex].LockingScript
+						// PreviousTxOutIndex comes from the (untrusted) child tx; bound it
+						// against the same-block parent's output count before indexing, else a
+						// crafted block panics the node with index-out-of-range (issue 1283).
+						// Mirrors the guard in services/validator/Validator.go extendTransaction.
+						vout := input.PreviousTxOutIndex
+						if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) {
+							return errors.NewProcessingError("[extendBatch][%s] tx %s input %d references non-existent output %d of same-block parent %s",
+								block.Hash().String(), tx.TxIDChainHash().String(), j, vout, parentHash.String())
+						}
+
+						tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[vout].Satoshis
+						tx.Inputs[j].PreviousTxScript = parentTx.Outputs[vout].LockingScript
 					} else {
 						needsExternalLookup = true
 					}
