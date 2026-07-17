@@ -198,6 +198,12 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	)
 	defer deferFn()
 
+	// Enforce the block-version floor before any body/coinbase inspection (header-first parity
+	// with svnode ContextualCheckBlockHeader). Needs only header version, height, and params.
+	if err := model.CheckBlockVersion(block.Header.Version, block.Height, u.settings.ChainCfgParams); err != nil {
+		return errors.NewBlockInvalidError("[quickValidateBlock][%s] outdated block version", block.Hash().String(), err)
+	}
+
 	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
 	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
 		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
@@ -263,6 +269,12 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		tracing.WithLogMessage(u.logger, "[quickValidateBlockAsync][%s] performing async quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
+
+	// Enforce the block-version floor before any body/coinbase inspection (header-first parity
+	// with svnode ContextualCheckBlockHeader). Needs only header version, height, and params.
+	if err := model.CheckBlockVersion(block.Header.Version, block.Height, u.settings.ChainCfgParams); err != nil {
+		return errors.NewBlockInvalidError("[quickValidateBlockAsync][%s] outdated block version", block.Hash().String(), err)
+	}
 
 	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
 	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
