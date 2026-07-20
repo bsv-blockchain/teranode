@@ -361,9 +361,10 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 		return errors.NewInvalidArgumentError("DataHubURL has invalid scheme: %s (only http/https allowed)", parsed.Scheme)
 	}
 
-	// Strip the trailing dot of a rooted FQDN so "localhost." or "127.0.0.1."
-	// cannot slip past the checks below.
-	hostname := strings.TrimSuffix(parsed.Hostname(), ".")
+	// Canonicalize before checking: strip the trailing dot of a rooted FQDN and
+	// lowercase, so "localhost.", "LOCALHOST" or "127.0.0.1." cannot slip past
+	// the checks below (DNS resolution is case-insensitive).
+	hostname := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
 	}
