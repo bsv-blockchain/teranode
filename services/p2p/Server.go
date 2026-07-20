@@ -1240,40 +1240,46 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Get current sync peer
 	syncPeer := s.getSyncPeer()
 	if syncPeer != "" {
-		if syncPeer != "" {
-			syncPeerID = syncPeer.String()
+		syncPeerID = syncPeer.String()
 
-			// Track when we first connected to this sync peer
-			if existingTime, ok := s.syncConnectionTimes.Load(syncPeerID); ok {
-				syncConnectedAt = existingTime.(int64)
-			} else {
-				// First time connecting to this sync peer
-				syncConnectedAt = time.Now().Unix()
-				s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
-				s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
-			}
-
-			// Get sync peer's height and block hash
-			for _, peerInfo := range s.P2PClient.GetPeers() {
-				if peerInfo.ID == syncPeer.String() {
-					// Get the peer's best block hash from registry
-					if pInfo, exists := s.getPeer(syncPeer); exists {
-						if pInfo.BlockHash != nil {
-							syncPeerBlockHash = pInfo.BlockHash.String()
-						}
-
-						syncPeerHeight = pInfo.Height
-					}
-					break
-				}
-			}
+		// Track when we first connected to this sync peer
+		if existingTime, ok := s.syncConnectionTimes.Load(syncPeerID); ok {
+			syncConnectedAt = existingTime.(int64)
 		} else {
-			// No sync peer - clear any old connection time tracking
-			s.syncConnectionTimes.Range(func(key, value interface{}) bool {
-				s.syncConnectionTimes.Delete(key)
-				return true
-			})
+			// First time connecting to this sync peer
+			syncConnectedAt = time.Now().Unix()
+			s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
+			s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
 		}
+
+		// Drop entries for previous sync peers so the map only tracks the current one
+		s.syncConnectionTimes.Range(func(key, value any) bool {
+			if key != syncPeerID {
+				s.syncConnectionTimes.Delete(key)
+			}
+			return true
+		})
+
+		// Get sync peer's height and block hash
+		for _, peerInfo := range s.P2PClient.GetPeers() {
+			if peerInfo.ID == syncPeer.String() {
+				// Get the peer's best block hash from registry
+				if pInfo, exists := s.getPeer(syncPeer); exists {
+					if pInfo.BlockHash != nil {
+						syncPeerBlockHash = pInfo.BlockHash.String()
+					}
+
+					syncPeerHeight = pInfo.Height
+				}
+				break
+			}
+		}
+	} else {
+		// No sync peer - clear any old connection time tracking
+		s.syncConnectionTimes.Range(func(key, value any) bool {
+			s.syncConnectionTimes.Delete(key)
+			return true
+		})
 	}
 
 	// Get peer ID safely
