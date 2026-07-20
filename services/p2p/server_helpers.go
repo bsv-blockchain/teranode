@@ -309,7 +309,9 @@ func (s *Server) extractHost(urlStr string) string {
 		return ""
 	}
 
-	host := parsedURL.Hostname()
+	// Strip the trailing dot of a rooted FQDN so "evil.example." matches a
+	// blacklist entry for "evil.example".
+	host := strings.TrimSuffix(parsedURL.Hostname(), ".")
 	if host == "" {
 		return ""
 	}
@@ -359,7 +361,9 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 		return errors.NewInvalidArgumentError("DataHubURL has invalid scheme: %s (only http/https allowed)", parsed.Scheme)
 	}
 
-	hostname := parsed.Hostname()
+	// Strip the trailing dot of a rooted FQDN so "localhost." or "127.0.0.1."
+	// cannot slip past the checks below.
+	hostname := strings.TrimSuffix(parsed.Hostname(), ".")
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
 	}
@@ -380,10 +384,12 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	return nil
 }
 
-// checkDataHubURL runs the trust checks shared by every gossip handler that
-// receives a DataHub URL: SSRF validation (a failure counts as a protocol
+// checkDataHubURL runs the trust checks shared by the block and subtree
+// announcement handlers: SSRF validation (a failure counts as a protocol
 // violation) and the operator-configured blacklist (a match drops the message
 // without penalising the peer). Returns false when the message must be dropped.
+// handleNodeStatusTopic runs the same two checks inline because a blacklist
+// match there only strips the BaseURL instead of dropping the telemetry.
 func (s *Server) checkDataHubURL(dataHubURL, fromID, handlerName string) bool {
 	if err := s.validateDataHubURL(dataHubURL); err != nil {
 		s.logger.Errorf("[%s] invalid DataHubURL from peer %s: %v", handlerName, fromID, err)

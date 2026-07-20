@@ -599,6 +599,10 @@ func TestValidateDataHubURL(t *testing.T) {
 		{"localhost", "http://localhost/api", true, "localhost"},
 		{"localhost_port", "http://localhost:8080/api", true, "localhost"},
 		{"sub_localhost", "http://sub.localhost/api", true, "localhost"},
+
+		// Rooted FQDN (trailing dot) must not bypass the checks
+		{"localhost_trailing_dot", "http://localhost./api", true, "localhost"},
+		{"loopback_trailing_dot", "http://127.0.0.1./api", true, "loopback"},
 	}
 
 	for _, tt := range tests {
@@ -702,36 +706,41 @@ func TestHandleBlockTopic_RejectsBlacklistedDataHubURL(t *testing.T) {
 	producer := kafka.NewKafkaAsyncProducerMock()
 	s.blocksKafkaProducerClient = producer
 
-	remote := mustNewPeerID(t)
-	blockHash := chainhash.HashH([]byte("blacklisted block")).String()
-	msgBytes, err := json.Marshal(BlockMessage{
-		PeerID:     remote.String(),
-		ClientName: "client/1.0",
-		DataHubURL: "http://evil.example:8080/path", // same host as blacklist entry
-		Hash:       blockHash,
-		Height:     1,
-	})
-	require.NoError(t, err)
+	for _, dataHubURL := range []string{
+		"http://evil.example:8080/path", // same host as blacklist entry, different port/path
+		"http://evil.example./path",     // rooted FQDN (trailing dot) must not bypass the blacklist
+	} {
+		remote := mustNewPeerID(t)
+		blockHash := chainhash.HashH([]byte("blacklisted block " + dataHubURL)).String()
+		msgBytes, err := json.Marshal(BlockMessage{
+			PeerID:     remote.String(),
+			ClientName: "client/1.0",
+			DataHubURL: dataHubURL,
+			Hash:       blockHash,
+			Height:     1,
+		})
+		require.NoError(t, err)
 
-	s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+		s.handleBlockTopic(context.Background(), msgBytes, remote.String())
 
-	select {
-	case notification := <-s.notificationCh:
-		t.Fatalf("unexpected block notification for blacklisted DataHubURL: %+v", notification)
-	default:
+		select {
+		case notification := <-s.notificationCh:
+			t.Fatalf("unexpected block notification for blacklisted DataHubURL %s: %+v", dataHubURL, notification)
+		default:
+		}
+
+		_, ok := reg.Get(remote.String())
+		require.False(t, ok, "peer with blacklisted DataHubURL %s must not be registered", dataHubURL)
+
+		select {
+		case published := <-producer.PublishChannel():
+			t.Fatalf("unexpected Kafka publish for blacklisted DataHubURL %s: %+v", dataHubURL, published)
+		default:
+		}
+
+		require.False(t, s.shouldSkipBannedPeer(remote.String(), "test"),
+			"blacklist match is an operator choice, not a peer protocol violation")
 	}
-
-	_, ok := reg.Get(remote.String())
-	require.False(t, ok, "peer with blacklisted DataHubURL must not be registered")
-
-	select {
-	case published := <-producer.PublishChannel():
-		t.Fatalf("unexpected Kafka publish for blacklisted DataHubURL: %+v", published)
-	default:
-	}
-
-	require.False(t, s.shouldSkipBannedPeer(remote.String(), "test"),
-		"blacklist match is an operator choice, not a peer protocol violation")
 }
 
 // TestHandleSubtreeTopic_RejectsBlacklistedDataHubURL is a regression test:
@@ -750,35 +759,42 @@ func TestHandleSubtreeTopic_RejectsBlacklistedDataHubURL(t *testing.T) {
 	producer := kafka.NewKafkaAsyncProducerMock()
 	s.subtreeKafkaProducerClient = producer
 
-	remote := mustNewPeerID(t)
-	subtreeHash := chainhash.HashH([]byte("blacklisted subtree")).String()
-	msgBytes, err := json.Marshal(SubtreeMessage{
-		PeerID:     remote.String(),
-		ClientName: "client/1.0",
-		DataHubURL: "http://evil.example",
-		Hash:       subtreeHash,
-	})
-	require.NoError(t, err)
+	for _, dataHubURL := range []string{
+		"http://evil.example",    // exact match
+		"http://evil.example./x", // rooted FQDN (trailing dot) must not bypass the blacklist
+	} {
+		remote := mustNewPeerID(t)
+		subtreeHash := chainhash.HashH([]byte("blacklisted subtree " + dataHubURL)).String()
+		msgBytes, err := json.Marshal(SubtreeMessage{
+			PeerID:     remote.String(),
+			ClientName: "client/1.0",
+			DataHubURL: dataHubURL,
+			Hash:       subtreeHash,
+		})
+		require.NoError(t, err)
 
-	s.handleSubtreeTopic(context.Background(), msgBytes, remote.String())
+		s.handleSubtreeTopic(context.Background(), msgBytes, remote.String())
 
-	select {
-	case notification := <-s.notificationCh:
-		t.Fatalf("unexpected subtree notification for blacklisted DataHubURL: %+v", notification)
-	default:
-	}
+		select {
+		case notification := <-s.notificationCh:
+			t.Fatalf("unexpected subtree notification for blacklisted DataHubURL %s: %+v", dataHubURL, notification)
+		default:
+		}
 
-	select {
-	case published := <-producer.PublishChannel():
-		t.Fatalf("unexpected Kafka publish for blacklisted DataHubURL: %+v", published)
-	default:
+		select {
+		case published := <-producer.PublishChannel():
+			t.Fatalf("unexpected Kafka publish for blacklisted DataHubURL %s: %+v", dataHubURL, published)
+		default:
+		}
 	}
 }
 
-// TestHandleNodeStatusTopic_RejectsBlacklistedBaseURL: node_status stores the
+// TestHandleNodeStatusTopic_StripsBlacklistedBaseURL: node_status stores the
 // announced BaseURL in the peer registry as the peer's DataHub URL (used by
-// catchup), so it must enforce the same blacklist as block/subtree handlers.
-func TestHandleNodeStatusTopic_RejectsBlacklistedBaseURL(t *testing.T) {
+// catchup), so a blacklisted BaseURL must never be persisted. Unlike the
+// block/subtree handlers the message itself is telemetry and is kept: it is
+// still forwarded to WebSocket clients, just with the URL removed.
+func TestHandleNodeStatusTopic_StripsBlacklistedBaseURL(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
 	setServerLocalHeight(t, s, 100)
@@ -794,7 +810,7 @@ func TestHandleNodeStatusTopic_RejectsBlacklistedBaseURL(t *testing.T) {
 	msgBytes, err := json.Marshal(NodeStatusMessage{
 		PeerID:        remote.String(),
 		ClientName:    "client/1.0",
-		BaseURL:       "http://evil.example",
+		BaseURL:       "http://evil.example./api", // rooted FQDN (trailing dot) must not bypass the blacklist
 		BestHeight:    101,
 		BestBlockHash: blockHash,
 	})
@@ -804,10 +820,16 @@ func TestHandleNodeStatusTopic_RejectsBlacklistedBaseURL(t *testing.T) {
 
 	select {
 	case notification := <-s.notificationCh:
-		t.Fatalf("unexpected node_status notification for blacklisted BaseURL: %+v", notification)
+		require.Empty(t, notification.BaseURL, "blacklisted BaseURL must be stripped from the WebSocket notification")
+		require.Equal(t, remote.String(), notification.PeerID)
 	default:
+		t.Fatal("node_status telemetry must still be forwarded to WebSocket clients")
 	}
 
-	_, ok := reg.Get(remote.String())
-	require.False(t, ok, "peer with blacklisted BaseURL must not be registered")
+	got, ok := reg.Get(remote.String())
+	require.True(t, ok, "peer telemetry must still be processed")
+	require.Empty(t, got.DataHubURL, "blacklisted BaseURL must not be stored in the peer registry")
+
+	require.False(t, s.shouldSkipBannedPeer(remote.String(), "test"),
+		"blacklist match is an operator choice, not a peer protocol violation")
 }
