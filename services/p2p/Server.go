@@ -573,10 +573,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	s.rejectedTxKafkaConsumerClient.Start(ctx, s.rejectedTxHandler(ctx), kafka.WithLogErrorAndMoveOn())
 
 	// Handler for invalid blocks Kafka messages
-	if s.invalidBlocksKafkaConsumerClient != nil {
-		s.logger.Infof("[Start] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
-		s.invalidBlocksKafkaConsumerClient.Start(ctx, s.processInvalidBlockMessage, kafka.WithLogErrorAndMoveOn())
-	}
+	s.startInvalidBlocksConsumer(ctx)
 
 	// Handler for invalid subtrees Kafka messages
 	if s.invalidSubtreeKafkaConsumerClient != nil {

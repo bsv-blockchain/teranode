@@ -612,6 +612,18 @@ func (s *Server) updateStorage(peerID peer.ID, mode string) {
 	}
 }
 
+// startInvalidBlocksConsumer starts the injected invalid-blocks Kafka consumer
+// with processInvalidBlockMessage. The consumer field is never reassigned after
+// this, so Stop() closes the consumer that is actually running.
+func (s *Server) startInvalidBlocksConsumer(ctx context.Context) {
+	if s.invalidBlocksKafkaConsumerClient == nil {
+		return
+	}
+
+	s.logger.Infof("[startInvalidBlocksConsumer] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
+	s.invalidBlocksKafkaConsumerClient.Start(ctx, s.processInvalidBlockMessage, kafka.WithLogErrorAndMoveOn())
+}
+
 func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 	ctx := context.Background()
 
