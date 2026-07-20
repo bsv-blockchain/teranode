@@ -519,6 +519,33 @@ func TestValidateCoinbaseHeight_PreBIP34(t *testing.T) {
 	require.NoError(t, err)                     // Should not fail for pre-BIP34 blocks
 }
 
+func TestValidateCoinbaseHeight_GenesisExemptOnZeroBIP34(t *testing.T) {
+	// On networks with BIP0034Height == 0 (teratestnet/tstn), height 0 is at/after activation, so
+	// without the currentHeight > 0 guard the genesis block would attempt coinbase-height extraction
+	// and mismatch. The guard (mirroring model/Block.go Block.Valid) must keep genesis exempt.
+	tSettings := test.CreateBaseTestSettings(t)
+	teraParams := chaincfg.TeraTestNetParams // BIP0034Height == 0
+	tSettings.ChainCfgParams = &teraParams
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	// block1's coinbase does not encode height 0, so extraction would mismatch if it ran.
+	genesisLikeBlock := &model.Block{
+		Header: &model.BlockHeader{
+			Version: 1,
+		},
+		CoinbaseTx: block1.CoinbaseTx,
+	}
+
+	err = s.validateCoinbaseHeight(genesisLikeBlock, 0)
+	require.NoError(t, err)
+}
+
 func TestGetCumulativeChainWork_Success(t *testing.T) {
 	// Test cumulative chain work calculation
 	zeroHash := &chainhash.Hash{}

@@ -898,16 +898,22 @@ func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) e
 	// activation height, taken from chaincfg (mirroring bitcoin-sv ContextualCheckBlock). Below-floor
 	// versions are rejected earlier by the block-version floor, so there is no version sub-condition
 	// here. A negative activation height (should not occur) is treated as "never active".
+	//
+	// The currentHeight > 0 guard mirrors model/Block.go Block.Valid and is MANDATORY on networks
+	// with BIP0034Height == 0 (teratestnet/tstn): there height 0 is at/after activation, so without
+	// the guard a genesis (height-0) block routed here would attempt extraction, contradicting the
+	// genesis exemption. svnode never runs this check on genesis.
 	if block.CoinbaseTx == nil {
 		return nil
 	}
 
 	bip34Height := s.chainParams.BIP0034Height
-	postBIP34 := bip34Height >= 0 && currentHeight >= uint32(bip34Height)
+	postBIP34 := currentHeight > 0 && bip34Height >= 0 && currentHeight >= uint32(bip34Height)
 	if !postBIP34 {
-		// Below BIP34 activation the coinbase need not encode the height, and svnode never
-		// inspects it here (ContextualCheckBlock, validation.cpp:6039). Skip extraction to avoid
-		// ~227k wasted parses and warnings during a mainnet IBD.
+		// Below BIP34 activation the coinbase need not encode the height, and svnode never inspects it
+		// here (ContextualCheckBlock, validation.cpp:6039). Skip the per-block extraction that would
+		// otherwise run for every pre-activation block during a from-genesis IBD (most well-formed early
+		// coinbases succeed silently; warnings came from first byte > 8 or empty/too-short scripts).
 		return nil
 	}
 
