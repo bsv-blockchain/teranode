@@ -1360,14 +1360,19 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		s.logger.Debugf("[getNodeStatusMessage] Policy settings not available, using default MinMiningTxFee: %f", defaultFee)
 	}
 
-	// Get connected peers count from the registry
+	// Get connected peers count from the registry. The registry also holds
+	// gossiped/disconnected peers, so count only directly connected ones.
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
 		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
 		if err != nil {
 			s.logger.Warnf("[getNodeStatusMessage] ListPeers failed: %v", err)
 		} else {
-			connectedPeersCount = len(allPeers)
+			for _, p := range allPeers {
+				if p.IsConnected {
+					connectedPeersCount++
+				}
+			}
 		}
 	}
 

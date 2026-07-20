@@ -538,6 +538,21 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		return 0, err
 	}
 
+	// Persist the set-hash sidecar. This is deliberately non-fatal: the utxo-set
+	// blob is already committed above, and CreateUTXOSet is not idempotent — a
+	// retry re-enters it and NewFileStorer fails with ErrBlobAlreadyExists on the
+	// existing blob. Returning an error here would therefore wedge the persister
+	// on this block permanently after a single transient sidecar-write failure.
+	// The sidecar is auxiliary (it only feeds the optional signed-checkpoint seed
+	// feature and can be backfilled), so a failure is logged and the pipeline
+	// advances, mirroring the headers-file write below.
+	setHash := c.acc.Digest()
+	if err := persistSetHash(ctx, s.blockStore, c.lastBlockHash, setHash); err != nil {
+		s.logger.Warnf("[UTXOPersister] failed to write utxo-set-hash for block %s at height %d; checkpoint unavailable for this block until backfilled: %v", c.lastBlockHash.String(), c.lastBlockHeight, err)
+	} else {
+		s.logger.Infof("[UTXOPersister] wrote utxo-set-hash %x for block %s at height %d", setHash, c.lastBlockHash.String(), c.lastBlockHeight)
+	}
+
 	s.lastHeight = c.lastBlockHeight
 
 	// Write the headers file for the UTXO set
@@ -553,6 +568,10 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.BlockPersister.SkipUTXODelete {
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
+		}
+
+		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSetHash); err != nil {
+			s.logger.Warnf("[UTXOPersister] failed to delete previous utxo-set-hash for %s: %v", lastWrittenUTXOSetHash.String(), err)
 		}
 
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet+".sha256"); err != nil {

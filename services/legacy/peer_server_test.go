@@ -1168,6 +1168,16 @@ func TestShouldDisconnectOnBlockErr(t *testing.T) {
 	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("grpc down")))
 	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageError("db unavailable")))
 
+	// #1187: the per-block backoff skip returns ErrServiceUnavailable on every
+	// in-window re-delivery, and ErrStorageUnavailable is "no aerospike nodes
+	// available" — both are our local fault, not the peer's, so they must NOT
+	// disconnect the delivering peer (this is the regression that churned peers).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceUnavailableError("in backoff")))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageUnavailableError("no aerospike nodes available")))
+
+	// Wrapped transient-local errors are still suppressed (chain is walked).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("wrap", errors.NewStorageError("inner"))))
+
 	// A genuine block validation failure rotates the peer.
 	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
 }

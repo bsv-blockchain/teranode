@@ -134,6 +134,22 @@ func TestServerHelpers_InjectPeerForTesting_MarksFull(t *testing.T) {
 	require.Equal(t, uint32(99), got.Height)
 }
 
+// TestGetNodeStatusMessage_CountsOnlyConnectedPeers is a regression test:
+// ConnectedPeersCount in the node_status message must count only directly
+// connected peers, not every peer known to the registry (gossiped peers stay
+// registered with IsConnected=false).
+func TestGetNodeStatusMessage_CountsOnlyConnectedPeers(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 10, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 20, nil, "")
+	s.addPeer(mustNewPeerID(t), "client/1.0", 30, nil, "") // gossiped, not connected
+
+	msg := s.getNodeStatusMessage(context.Background())
+	require.NotNil(t, msg)
+	require.Equal(t, 2, msg.ConnectedPeersCount, "gossiped/disconnected registry peers must not be counted")
+}
+
 func TestServerHelpers_GetSyncPeer_NoCoordinator(t *testing.T) {
 	s, _ := newServerWithLocalRegistry(t)
 	require.Empty(t, s.getSyncPeer())

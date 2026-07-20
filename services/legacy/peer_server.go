@@ -1183,13 +1183,21 @@ func preAdmitTimedOut(preAdmitCtx context.Context) bool {
 }
 
 // shouldDisconnectOnBlockErr reports whether a block-processing error should
-// rotate the sync peer. Block validation failures disconnect the peer; local
-// infrastructure errors (database, Kafka, etc.) must not, since they would only
-// cause unnecessary sync-peer churn.
+// rotate the sync peer. Block validation failures disconnect the peer; transient
+// LOCAL conditions must not, since they would only cause unnecessary sync-peer
+// churn. The suppressed set is service/storage errors plus the per-block backoff
+// throttle (ErrServiceUnavailable, #1187) and ErrStorageUnavailable ("no
+// aerospike nodes available") — the backoff skip returns ErrServiceUnavailable
+// on every re-delivery, so disconnecting on it would churn through sync peers for
+// a fault that is ours, not the peer's. errors.IsTransientLocalError is the
+// shared classifier (also used by the netsync backoff path) so the two decisions
+// cannot drift apart.
 func shouldDisconnectOnBlockErr(err error) bool {
-	return err != nil &&
-		!errors.Is(err, errors.ErrServiceError) &&
-		!errors.Is(err, errors.ErrStorageError)
+	if err == nil {
+		return false
+	}
+
+	return !errors.IsTransientLocalError(err)
 }
 
 // tearDownAssociationStreams closes the live connection of every stream

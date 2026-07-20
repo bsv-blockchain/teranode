@@ -3,6 +3,7 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -417,7 +418,9 @@ func TestHandleMultipleTx(t *testing.T) {
 				buf.Write(tx1.ExtendedBytes())
 				return &buf
 			},
-			expectedStatusCode:  http.StatusInternalServerError,
+			// A tx-level validation rejection (ERR_TX_INVALID) now yields the
+			// derived client-error status, not the old hardcoded 500.
+			expectedStatusCode:  http.StatusBadRequest,
 			expectedResponse:    "Failed to process transaction",
 			mockValidationError: errors.NewTxInvalidError("test validation error"),
 		},
@@ -459,6 +462,14 @@ func TestHandleMultipleTx(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.expectedStatusCode, rec.Code)
 			assert.Contains(t, rec.Body.String(), tc.expectedResponse)
+
+			// The batch must surface the per-tx public reason, not collapse to a
+			// generic PROCESSING message: assert the derived UserMessage for the
+			// tx-rejection case is present in the aggregated body.
+			if tc.name == "Transaction validation error" {
+				require.Contains(t, rec.Body.String(),
+					fmt.Sprintf("%s (%d): %s", errors.ERR_TX_INVALID.String(), errors.ERR_TX_INVALID, "test validation error"))
+			}
 
 			// Verify validation and storage behaviors for non-error cases
 			if tc.name == "Multiple valid transactions" {

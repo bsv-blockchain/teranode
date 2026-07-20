@@ -997,6 +997,329 @@ func TestHandleBlockMsg_OrphanDuringCatchup(t *testing.T) {
 	blockchainClient.AssertCalled(t, "GetBlockLocator", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// newBackoffTestManager builds the minimal SyncManager + peer state used by the
+// block-failure backoff tests (#1187). It mirrors TestHandleBlockMsg_OrphanDuringCatchup:
+// the struct literal bypasses New(), so blockFailureBackoff is initialised explicitly.
+func newBackoffTestManager(t *testing.T, blockchainClient *blockchain2.Mock, blockHash chainhash.Hash) (*SyncManager, *peer.Peer) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	p := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+
+	state := &peerSyncState{
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
+		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+	}
+	t.Cleanup(func() { state.requestedTxns.Stop(); state.requestedBlocks.Stop() })
+	state.requestedBlocks.Set(blockHash, struct{}{})
+
+	sm := &SyncManager{
+		ctx:                 context.Background(),
+		logger:              ulogger.TestLogger{},
+		settings:            tSettings,
+		chainParams:         &chaincfg.MainNetParams,
+		blockchainClient:    blockchainClient,
+		peerStates:          txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+		requestedBlocks:     expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		blockFailureBackoff: expiringmap.New[chainhash.Hash, *blockFailureState](time.Minute),
+	}
+	t.Cleanup(func() { sm.requestedBlocks.Stop(); sm.blockFailureBackoff.Stop() })
+	sm.peerStates.Set(p, state)
+	sm.requestedBlocks.Set(blockHash, struct{}{})
+
+	return sm, p
+}
+
+// TestNewBlockFailureBackoffMap verifies the per-block backoff map is built only
+// when both knobs are positive, and is nil (disabled, no zero-TTL leak) otherwise.
+func TestNewBlockFailureBackoffMap(t *testing.T) {
+	require.Nil(t, newBlockFailureBackoffMap(0, time.Minute, time.Minute), "base 0 must disable")
+	require.Nil(t, newBlockFailureBackoffMap(5*time.Second, 0, time.Minute), "window 0 must disable")
+	require.Nil(t, newBlockFailureBackoffMap(-1, time.Minute, time.Minute), "negative base must disable")
+	require.Nil(t, newBlockFailureBackoffMap(5*time.Second, -1, time.Minute), "negative window must disable")
+
+	m := newBlockFailureBackoffMap(5*time.Second, 5*time.Minute, 3*time.Minute)
+	require.NotNil(t, m, "both knobs positive must enable")
+	m.Stop()
+
+	// maxAttempt <= 0 still builds (TTL falls back to window alone).
+	m2 := newBlockFailureBackoffMap(5*time.Second, 5*time.Minute, 0)
+	require.NotNil(t, m2, "non-positive maxAttempt must still build")
+	m2.Stop()
+}
+
+// TestBlockFailureBackoffRampSurvivesSlowAttempt guards the #1187 review P1: the
+// failure-tracking map TTL must outlast one slow failing attempt so the linear
+// ramp actually engages. recordBlockFailureBackoff reads the prior count from the
+// map; when the TTL equalled the backoff cap (window) and a single overload
+// attempt outlasted it, the entry expired between two consecutive failures and
+// the count reset to 1 every time, pinning the backoff at its base. Here the two
+// records are spaced beyond the backoff cap but well within the decoupled
+// retention (window + maxAttempt), so the count must ramp to 2 rather than reset.
+func TestBlockFailureBackoffRampSurvivesSlowAttempt(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	base := 10 * time.Millisecond
+	window := 100 * time.Millisecond // backoff cap
+	maxAttempt := 2 * time.Second    // per-attempt bound -> map TTL = 2.1s
+	tSettings.Legacy.BlockFailureBackoffBase = base
+	tSettings.Legacy.BlockFailureBackoffMaxDuration = window
+
+	sm := &SyncManager{
+		settings:            tSettings,
+		blockFailureBackoff: newBlockFailureBackoffMap(base, window, maxAttempt),
+	}
+	require.NotNil(t, sm.blockFailureBackoff)
+	t.Cleanup(func() { sm.blockFailureBackoff.Stop() })
+
+	h := chainhash.Hash{0xCD}
+
+	sm.recordBlockFailureBackoff(h)
+	fs, ok := sm.blockFailureBackoff.Get(h)
+	require.True(t, ok)
+	require.Equal(t, 1, fs.attempts)
+
+	// Simulate a failing attempt that outlasts the backoff cap (window) but not
+	// the map TTL. A TTL of only `window` would have expired the entry by now.
+	time.Sleep(window + 50*time.Millisecond)
+
+	sm.recordBlockFailureBackoff(h)
+	fs, ok = sm.blockFailureBackoff.Get(h)
+	require.True(t, ok, "entry must survive a slow attempt so the count ramps")
+	require.Equal(t, 2, fs.attempts, "consecutive-failure count must ramp, not reset")
+}
+
+// TestRecordBlockFailureBackoff verifies the per-block backoff grows linearly
+// with the consecutive failure count and is capped at the configured maximum.
+func TestRecordBlockFailureBackoff(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Legacy.BlockFailureBackoffBase = 2 * time.Second
+	tSettings.Legacy.BlockFailureBackoffMaxDuration = 5 * time.Second
+
+	sm := &SyncManager{
+		settings:            tSettings,
+		blockFailureBackoff: expiringmap.New[chainhash.Hash, *blockFailureState](time.Minute),
+	}
+	t.Cleanup(func() { sm.blockFailureBackoff.Stop() })
+
+	h := chainhash.Hash{0xAB}
+
+	sm.recordBlockFailureBackoff(h)
+	fs, ok := sm.blockFailureBackoff.Get(h)
+	require.True(t, ok)
+	require.Equal(t, 1, fs.attempts)
+	require.WithinDuration(t, time.Now().Add(2*time.Second), fs.nextRetry, time.Second)
+
+	sm.recordBlockFailureBackoff(h)
+	fs, ok = sm.blockFailureBackoff.Get(h)
+	require.True(t, ok)
+	require.Equal(t, 2, fs.attempts)
+	require.WithinDuration(t, time.Now().Add(4*time.Second), fs.nextRetry, time.Second)
+
+	// Third failure would be 3*2s=6s but is capped at the 5s maximum.
+	sm.recordBlockFailureBackoff(h)
+	fs, ok = sm.blockFailureBackoff.Get(h)
+	require.True(t, ok)
+	require.Equal(t, 3, fs.attempts)
+	require.WithinDuration(t, time.Now().Add(5*time.Second), fs.nextRetry, time.Second)
+}
+
+// TestHandleBlockMsg_BackoffSkipsRetryWithinWindow verifies a block still inside
+// its backoff window is skipped before the expensive HandleBlockDirect path
+// (GetBlockExists, its first blockchain call, must not run) and returns a
+// retryable error.
+func TestHandleBlockMsg_BackoffSkipsRetryWithinWindow(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+	sm.blockFailureBackoff.Set(blockHash, &blockFailureState{attempts: 1, nextRetry: time.Now().Add(time.Minute)})
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "expected a retryable service-unavailable error, got %v", err)
+	blockchainClient.AssertNotCalled(t, "GetBlockExists", mock.Anything, mock.Anything)
+}
+
+// TestHandleBlockMsg_BackoffSkipRefreshesSyncPeerLastBlockTime verifies the
+// liveness fix (#1187, review): a skipped (backed-off) block still refreshes the
+// delivering sync peer's last-block-time. The peer did deliver a block — the
+// fault is our local store — so the stall detector must not rotate this healthy
+// peer while it waits out a local backoff, which would only thrash peers with a
+// still-backed-off re-delivery.
+func TestHandleBlockMsg_BackoffSkipRefreshesSyncPeerLastBlockTime(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+
+	// Make p the current sync peer with a stale last-block-time (past the stall
+	// window). Without the refresh-on-skip fix the stall detector would rotate it.
+	stale := time.Now().Add(-10 * time.Minute)
+	sps := &syncPeerState{lastBlockTime: stale}
+	sm.storeSyncPeer(p, sps)
+
+	// Backoff window still open -> the block is skipped.
+	sm.blockFailureBackoff.Set(blockHash, &blockFailureState{attempts: 1, nextRetry: time.Now().Add(time.Minute)})
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "expected a retryable service-unavailable error, got %v", err)
+	require.True(t, sps.getLastBlockTime().After(stale),
+		"the delivering sync peer's last-block-time must be refreshed on a backoff skip")
+}
+
+// TestHandleBlockMsg_BackoffExpiredRetriesNormally verifies that once the backoff
+// window has elapsed the block is processed normally again (GetBlockExists runs).
+func TestHandleBlockMsg_BackoffExpiredRetriesNormally(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	bestHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	blockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.NewBlockNotFoundError("not found"))
+	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestHeader, &model.BlockHeaderMeta{Height: 100}, nil)
+	blockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return([]*chainhash.Hash{bestHeader.Hash()}, nil)
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+	// nextRetry already in the past: the window has elapsed.
+	sm.blockFailureBackoff.Set(blockHash, &blockFailureState{attempts: 1, nextRetry: time.Now().Add(-time.Second)})
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.NoError(t, err)
+	blockchainClient.AssertCalled(t, "GetBlockExists", mock.Anything, mock.Anything)
+}
+
+// TestHandleBlockMsg_BackoffRecordedOnStorageError verifies that a transient
+// storage failure records a backoff entry (attempts=1, future nextRetry).
+func TestHandleBlockMsg_BackoffRecordedOnStorageError(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	// HandleBlockDirect's first call fails with a storage error, which it wraps in
+	// a ProcessingError; handleBlockMsg's serviceError predicate sees it via errors.Is.
+	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, errors.NewStorageError("boom"))
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrStorageError), "expected the storage error to bubble up, got %v", err)
+
+	fs, ok := sm.blockFailureBackoff.Get(blockHash)
+	require.True(t, ok, "a backoff entry should be recorded after a storage failure")
+	require.Equal(t, 1, fs.attempts)
+	require.True(t, fs.nextRetry.After(time.Now()), "nextRetry should be in the future")
+}
+
+// TestHandleBlockMsg_BackoffRecordedOnServiceUnavailable verifies the outpoint/
+// decorate batch-timeout class — the UTXO store returns ErrServiceUnavailable
+// (the #1187 wedge, stores/utxo/aerospike/get.go) — also records a backoff entry,
+// not just ErrStorageError.
+func TestHandleBlockMsg_BackoffRecordedOnServiceUnavailable(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, errors.NewServiceUnavailableError("aerospike outpoint batch did not complete"))
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "expected the service-unavailable error to bubble up, got %v", err)
+
+	fs, ok := sm.blockFailureBackoff.Get(blockHash)
+	require.True(t, ok, "a backoff entry should be recorded after a service-unavailable failure")
+	require.Equal(t, 1, fs.attempts)
+}
+
+// TestHandleBlockMsg_BackoffClearedOnSuccess verifies a successful block clears
+// any prior backoff entry so a future failure starts a fresh count.
+func TestHandleBlockMsg_BackoffClearedOnSuccess(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	bestHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	// Block already exists -> HandleBlockDirect returns nil immediately (cheap success path).
+	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(true, nil)
+	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestHeader, &model.BlockHeaderMeta{Height: 100}, nil)
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+	// success-path tail bookkeeping touches these.
+	sm.rejectedTxns = txmap.NewSyncedMap[chainhash.Hash, struct{}](100)
+	sm.blockSizeTracker = newBlockSizeTracker(10)
+	// pre-existing backoff entry (window elapsed so the skip-check does not fire).
+	sm.blockFailureBackoff.Set(blockHash, &blockFailureState{attempts: 2, nextRetry: time.Now().Add(-time.Second)})
+
+	_ = sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	_, ok := sm.blockFailureBackoff.Get(blockHash)
+	require.False(t, ok, "backoff entry should be cleared after a successful block")
+}
+
 // TestHandleCheckSyncPeer_LocalBacklog verifies the stall detector does not
 // blame the sync peer for backpressure the node inflicts on itself: while
 // blocks are queued or mid-validation locally, OnBlock stops reading from the

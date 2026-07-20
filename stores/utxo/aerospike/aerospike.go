@@ -179,6 +179,19 @@ func (s *Store) batchOperate(policy *aerospike.BatchPolicy, records []aerospike.
 	return s.client.BatchOperate(policy, records)
 }
 
+// resolveBatcherMaxConcurrent returns the effective per-batcher concurrency cap.
+// A per-batcher override > 0 takes precedence; otherwise the shared
+// BatcherMaxConcurrent is used. A non-positive perBatcher value is treated as
+// "unset" so the shared knob still governs (and the caller's `> 0` guard keeps
+// the "both 0 = leave uncapped" path byte-identical to the pre-split behaviour).
+func resolveBatcherMaxConcurrent(perBatcher, shared int) int {
+	if perBatcher > 0 {
+		return perBatcher
+	}
+
+	return shared
+}
+
 // New creates a new Aerospike-based UTXO store.
 // The URL format is: aerospike://host:port/namespace?set=setname&
 // URL parameters:
@@ -391,8 +404,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
 	outpointBatcherInst := batcher.NewWithPool(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, batcherBackground, append(batcherOpts("aerospike_outpoint"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.OutpointBatcherGreedyAccumulate))...)
-	if batcherMaxConcurrent > 0 {
-		outpointBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.OutpointBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		outpointBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.outpointBatcher = outpointBatcherInst
 
