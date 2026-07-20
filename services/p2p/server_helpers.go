@@ -3,11 +3,9 @@ package p2p
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -463,108 +461,6 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 	return ""
 }
 
-// startInvalidBlockConsumer initializes and starts the Kafka consumer for invalid blocks
-func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
-	var kafkaURL *url.URL
-
-	var brokerURLs []string
-
-	// Use InvalidBlocksConfig URL if available, otherwise construct one
-	if s.settings.Kafka.InvalidBlocksConfig != nil {
-		s.logger.Infof("Using InvalidBlocksConfig URL: %s", s.settings.Kafka.InvalidBlocksConfig.String())
-		kafkaURL = s.settings.Kafka.InvalidBlocksConfig
-
-		// For non-memory schemes, we need to extract broker URLs from the host
-		if kafkaURL.Scheme != "memory" {
-			brokerURLs = strings.Split(kafkaURL.Host, ",")
-		}
-	} else {
-		// Fall back to the old way of constructing the URL
-		host := s.settings.Kafka.Hosts
-
-		s.logger.Infof("Starting invalid block consumer on topic: %s", s.settings.Kafka.InvalidBlocks)
-		s.logger.Infof("Raw Kafka host from settings: %s", host)
-
-		// Split the host string in case it contains multiple hosts
-		hosts := strings.Split(host, ",")
-		brokerURLs = make([]string, 0, len(hosts))
-
-		// Process each host to ensure it has a port
-		for _, h := range hosts {
-			// Trim any whitespace
-			h = strings.TrimSpace(h)
-
-			// Skip empty hosts
-			if h == "" {
-				continue
-			}
-
-			// Check if the host string contains a port
-			if !strings.Contains(h, ":") {
-				// If no port is specified, use the default Kafka port from settings
-				h = h + ":" + strconv.Itoa(s.settings.Kafka.Port)
-				s.logger.Infof("Added default port to Kafka host: %s", h)
-			}
-
-			brokerURLs = append(brokerURLs, h)
-		}
-
-		if len(brokerURLs) == 0 {
-			return errors.NewConfigurationError("no valid Kafka hosts found")
-		}
-
-		s.logger.Infof("Using Kafka brokers: %v", brokerURLs)
-
-		// Create a valid URL for the Kafka consumer
-		kafkaURLString := fmt.Sprintf("kafka://%s/%s?partitions=%d",
-			brokerURLs[0], // Use the first broker for the URL
-			s.settings.Kafka.InvalidBlocks,
-			s.settings.Kafka.Partitions)
-
-		s.logger.Infof("Kafka URL: %s", kafkaURLString)
-
-		var err error
-
-		kafkaURL, err = url.Parse(kafkaURLString)
-		if err != nil {
-			return errors.NewConfigurationError("invalid Kafka URL: %w", err)
-		}
-	}
-
-	// Create the Kafka consumer config
-	cfg := kafka.KafkaConsumerConfig{
-		Logger:            s.logger,
-		URL:               kafkaURL,
-		BrokersURL:        brokerURLs,
-		Topic:             s.settings.Kafka.InvalidBlocks,
-		Partitions:        s.settings.Kafka.Partitions,
-		ConsumerGroupID:   s.settings.Kafka.InvalidBlocks + "-consumer",
-		AutoCommitEnabled: true,
-		Replay:            false,
-		// TLS/Auth configuration
-		EnableTLS:          s.settings.Kafka.EnableTLS,
-		TLSSkipVerify:      s.settings.Kafka.TLSSkipVerify,
-		TLSCAFile:          s.settings.Kafka.TLSCAFile,
-		TLSCertFile:        s.settings.Kafka.TLSCertFile,
-		TLSKeyFile:         s.settings.Kafka.TLSKeyFile,
-		EnableDebugLogging: s.settings.Kafka.EnableDebugLogging,
-	}
-
-	// Create the Kafka consumer group - this will handle the memory scheme correctly
-	consumer, err := kafka.NewKafkaConsumerGroup(cfg)
-	if err != nil {
-		return errors.NewServiceError("failed to create Kafka consumer", err)
-	}
-
-	// Store the consumer for cleanup
-	s.invalidBlocksKafkaConsumerClient = consumer
-
-	// Start the consumer
-	consumer.Start(ctx, s.processInvalidBlockMessage)
-
-	return nil
-}
-
 // getLocalHeight returns the current local blockchain height.
 func (s *Server) getLocalHeight() uint32 {
 	if s.blockchainClient == nil {
@@ -728,17 +624,17 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 	blockHash := invalidBlockMsg.GetBlockHash()
 	reason := invalidBlockMsg.GetReason()
 
-	s.logger.Infof("[handleInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
+	s.logger.Infof("[processInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
 
 	// Look up the peer ID that sent this block
 	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
 	if err != nil {
-		s.logger.Warnf("[handleInvalidBlockMessage] %v", err)
+		s.logger.Warnf("[processInvalidBlockMessage] %v", err)
 		return nil // Not an error, just no peer to ban
 	}
 
 	// Add ban score to the peer
-	s.logger.Infof("[handleInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
+	s.logger.Infof("[processInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
 		peerID, blockHash, reason)
 
 	req := &p2p_api.AddBanScoreRequest{
@@ -747,7 +643,7 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 	}
 
 	if _, err := s.AddBanScore(ctx, req); err != nil {
-		s.logger.Errorf("[handleInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
+		s.logger.Errorf("[processInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
 		return err
 	}
 

@@ -480,7 +480,7 @@ Records bytes downloaded from a peer via HTTP (typically from their DataHub).
 - `handleSubtreeTopic`: Handles incoming subtree messages and processes subtree data.
 - `handleRejectedTxTopic`: Handles rejected transaction notifications from peers.
 - `handleNodeStatusTopic`: Handles incoming node status update messages.
-- `invalidBlockHandler`: Processes notifications about invalid blocks from Kafka.
+- `processInvalidBlockMessage`: Processes notifications about invalid blocks from Kafka and bans the sending peer.
 - `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
 - `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
 
