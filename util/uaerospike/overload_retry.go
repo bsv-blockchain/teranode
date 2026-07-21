@@ -121,6 +121,19 @@ func isOverloadError(err aerospike.Error) bool {
 // each backoff sleep and re-acquired before the retry: the server isn't
 // seeing the op while we sleep, so holding the slot would only starve other
 // callers (see the loop body and reacquirePermit).
+// sleepOrAbort waits for d, or returns true early if the client is being closed.
+// A true return tells the overload-retry loop to stop retrying so shutdown is not
+// stalled for the remaining retry budget. A nil closed channel (zero-value Client
+// that is never Close()d) makes the select fall through to the full wait.
+func (c *Client) sleepOrAbort(d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return false
+	case <-c.closed:
+		return true
+	}
+}
+
 func (c *Client) retryOnOverload(do func() aerospike.Error) aerospike.Error {
 	err := do()
 	if err == nil || !isOverloadError(err) || !c.overloadRetry.enabled() {
@@ -154,8 +167,15 @@ func (c *Client) retryOnOverload(do func() aerospike.Error) aerospike.Error {
 		// other callers (turning sustained overload into an ErrTimeout storm).
 		// Re-take it (blocking, never timing out) before the retry.
 		c.releasePermit()
-		time.Sleep(wait)
+		aborted := c.sleepOrAbort(wait)
 		c.reacquirePermit()
+
+		// Stop retrying if Close fired during the backoff: keep the permit
+		// balanced (release/reacquire stay paired) and surface the last error.
+		if aborted {
+			c.logOverloadGiveUp(attempt, err)
+			return err
+		}
 
 		backoff = retry.CappedExponentialBackoff(backoff, overloadRetryBackoffFactor, c.overloadRetry.maxBackoff)
 
@@ -232,8 +252,15 @@ func (c *Client) retryBatchOnOverload(records []aerospike.BatchRecordIfc, do fun
 		// holding it during the sleep only starves other callers. Re-take it
 		// (blocking, never timing out) before the retry.
 		c.releasePermit()
-		time.Sleep(wait)
+		aborted := c.sleepOrAbort(wait)
 		c.reacquirePermit()
+
+		// Stop retrying if Close fired during the backoff: keep the permit
+		// balanced (release/reacquire stay paired) and surface the last error.
+		if aborted {
+			c.logOverloadGiveUp(attempt, logErr)
+			return batchOverloadError(err, failed)
+		}
 
 		backoff = retry.CappedExponentialBackoff(backoff, overloadRetryBackoffFactor, c.overloadRetry.maxBackoff)
 

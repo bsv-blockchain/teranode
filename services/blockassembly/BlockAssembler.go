@@ -40,6 +40,13 @@ const (
 	// pendingBlocksPollInterval is the interval at which the block assembler
 	// polls for pending blocks during startup
 	pendingBlocksPollInterval = 1 * time.Second
+
+	// miningCandidateVersion is the block version advertised in mining candidates: 0x20000000 is
+	// the BIP9/versionbits base (top three bits 001, no deployment bits) and clears the BIP34/66/65
+	// mandatory floor (>= 4). Used for both the normal and empty-block candidates rather than
+	// inheriting the tip's version: at an activation boundary the tip can validly carry the old
+	// floor while the next block requires the new one, so an inherited version could be rejected.
+	miningCandidateVersion uint32 = 0x20000000
 )
 
 // create state strings for the processor
@@ -1530,7 +1537,7 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		Id:                  id,
 		PreviousHash:        previousHash[:],
 		CoinbaseValue:       totalFees + blockSubsidy,
-		Version:             0x20000000,
+		Version:             miningCandidateVersion,
 		NBits:               nBits.CloneBytes(),
 		Height:              baBestBlockHeight + 1, // next block height
 		Time:                timeNowUint32,
@@ -1598,11 +1605,12 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(bestBlockHeader *model.Bloc
 	copy(id[:], bestBlockHeader.Hash()[:])
 	id[0] ^= 0xFF
 
+	// Version uses miningCandidateVersion (same as the main candidate) rather than the tip's version.
 	miningCandidate := &model.MiningCandidate{
 		Id:                  id[:],
 		PreviousHash:        bestBlockHeader.Hash()[:],
 		CoinbaseValue:       blockSubsidy,
-		Version:             bestBlockHeader.Version,
+		Version:             miningCandidateVersion,
 		NBits:               nBits[:],
 		Time:                timeNowUint32,
 		Height:              nextBlockHeight,

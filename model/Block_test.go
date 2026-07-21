@@ -372,16 +372,18 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		// Set height higher than LastV1Block to trigger height validation
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, LastV1Block+100, 0)
+		// With regtest params (CreateBaseTestSettings) BIP34 activates at 1e8, so height 300000 is
+		// below it and the coinbase-height check is not reached.
+		const testHeight = 300000
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, testHeight, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
 		logger := ulogger.TestLogger{}
 
-		// This should hit the coinbase height validation path
+		// Exercises Block.Valid past the version floor (a v2 header is not below any active floor)
+		// without reaching the coinbase-height check. No assertions — this is a code-path smoke case.
 		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
-		// Will likely fail due to height mismatch, but we're testing the code path
 		_ = valid
 		_ = err
 	})
