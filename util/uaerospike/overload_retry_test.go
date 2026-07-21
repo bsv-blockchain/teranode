@@ -481,3 +481,67 @@ func TestRetryBatchOnOverload(t *testing.T) {
 		require.Equal(t, 1, calls)
 	})
 }
+
+// TestRetryOnOverload_AbortsOnClose is the regression guard for issue 1270: a
+// retry loop parked in overload backoff must return promptly when Close signals
+// shutdown, rather than running out the full maxElapsed budget.
+func TestRetryOnOverload_AbortsOnClose(t *testing.T) {
+	t.Run("single-record retry aborts", func(t *testing.T) {
+		// Long budget so a non-cancellable loop would run for ~2 minutes.
+		c := newOverloadTestClient(2*time.Minute, 100*time.Millisecond, 500*time.Millisecond)
+		c.closed = make(chan struct{})
+
+		done := make(chan aerospike.Error, 1)
+		start := time.Now()
+
+		go func() {
+			done <- c.retryOnOverload(func() aerospike.Error {
+				return overloadErr(types.DEVICE_OVERLOAD) // never recovers
+			})
+		}()
+
+		time.Sleep(30 * time.Millisecond) // let it enter backoff
+		c.Close()
+
+		select {
+		case err := <-done:
+			require.True(t, err.Matches(types.DEVICE_OVERLOAD))
+			require.Less(t, time.Since(start), 5*time.Second,
+				"retry must abort on Close, not run the full maxElapsed budget")
+		case <-time.After(10 * time.Second):
+			t.Fatal("retryOnOverload did not return after Close")
+		}
+	})
+
+	t.Run("batch retry aborts", func(t *testing.T) {
+		c := newOverloadTestClient(2*time.Minute, 100*time.Millisecond, 500*time.Millisecond)
+		c.closed = make(chan struct{})
+
+		records := newTestBatchRecords(t, 2)
+		done := make(chan aerospike.Error, 1)
+		start := time.Now()
+
+		go func() {
+			done <- c.retryBatchOnOverload(records, func(recs []aerospike.BatchRecordIfc) aerospike.Error {
+				for _, rec := range recs {
+					// Mark every record overloaded so the loop never converges.
+					br := rec.BatchRec()
+					br.ResultCode = types.DEVICE_OVERLOAD
+					br.Err = overloadErr(types.DEVICE_OVERLOAD)
+				}
+				return overloadErr(types.DEVICE_OVERLOAD)
+			})
+		}()
+
+		time.Sleep(30 * time.Millisecond)
+		c.Close()
+
+		select {
+		case <-done:
+			require.Less(t, time.Since(start), 5*time.Second,
+				"batch retry must abort on Close, not run the full maxElapsed budget")
+		case <-time.After(10 * time.Second):
+			t.Fatal("retryBatchOnOverload did not return after Close")
+		}
+	})
+}

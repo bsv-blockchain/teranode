@@ -46,8 +46,37 @@ var bufioReaderPool = sync.Pool{
 
 const GenesisBlockID = 0
 
-// LastV1Block https://github.com/bitcoin/bips/blob/master/bip-0034.mediawiki
-const LastV1Block = 227_835
+// heightAtOrAfterActivation reports whether block height h is at or after an activation height
+// taken from chaincfg. chaincfg activation heights are int32 and non-negative for BIP34/65/66; a
+// negative value (should not occur) is treated as "never active" so it can never wrongly reject.
+func heightAtOrAfterActivation(h uint32, activation int32) bool {
+	if activation < 0 {
+		return false
+	}
+
+	return h >= uint32(activation)
+}
+
+// CheckBlockVersion enforces the BIP34/66/65 mandatory version floors, mirroring bitcoin-sv
+// ContextualCheckBlockHeader (validation.cpp:5918-5924). version is compared as a SIGNED int32
+// exactly as svnode compares CBlockHeader::nVersion, so a high-bit version (e.g. 0xffffffff -> -1)
+// is treated as below the floor. Genesis (height 0) is exempt, matching svnode which never runs
+// this check on the genesis block. Returns a BlockInvalidError carrying the bad-version token.
+func CheckBlockVersion(version uint32, height uint32, params *chaincfg.Params) error {
+	if height == 0 {
+		return nil
+	}
+
+	v := int32(version)
+	if (v < 2 && heightAtOrAfterActivation(height, params.BIP0034Height)) ||
+		(v < 3 && heightAtOrAfterActivation(height, params.BIP0066Height)) ||
+		(v < 4 && heightAtOrAfterActivation(height, params.BIP0065Height)) {
+		return errors.NewBlockInvalidError(
+			"bad-version(0x%08x) rejected nVersion=0x%08x block", version, version)
+	}
+
+	return nil
+}
 
 var (
 	emptyTX = &bt.Tx{}
@@ -539,6 +568,13 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 	}
 
+	// 3b. Reject outdated block versions once the matching upgrade has activated (BIP34/66/65).
+	// Parity with bitcoin-sv ContextualCheckBlockHeader; must run before body/coinbase checks to
+	// match svnode's bad-version error priority.
+	if err := CheckBlockVersion(b.Header.Version, b.Height, settings.ChainCfgParams); err != nil {
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] outdated block version", b.String(), err)
+	}
+
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
 		return false, errors.NewBlockInvalidError("[BLOCK][%s] block has no coinbase tx", b.String())
@@ -561,18 +597,20 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		return false, errors.NewBlockInvalidError("[BLOCK][%s] bad coinbase length", b.String())
 	}
 
-	// We can only calculate the height from coinbase transactions in block versions 2 and higher
-
 	// https://en.bitcoin.it/wiki/BIP_0034
-	// BIP-34 was created to force miners to add the block height to the coinbase tx.
-	// This BIP came into effect at block 227,835, which is after the first halving
-	// at block 210,000.  Therefore, until this happened, we do not know the actual
-	// height of the block we are checking for.
+	// BIP-34 forces miners to encode the block height in the coinbase tx. It activates per network
+	// at ChainCfgParams.BIP0034Height; before that height the coinbase need not encode the height, so
+	// the check below is skipped. Enforcement is height-driven and version-independent — blocks below
+	// the mandatory version floor are already rejected above by CheckBlockVersion.
 
-	// TODO - do this another way, if necessary
-
-	// 5. Check that the coinbase transaction includes the correct block height.
-	if b.Header.Version > 1 && b.Height > LastV1Block {
+	// 5. Check that the coinbase transaction includes the correct block height (BIP34).
+	// Parity with bitcoin-sv ContextualCheckBlock: enforced for every block at/after BIP34Height.
+	// Version < 2 blocks are already rejected above (bad-version), so no version sub-condition here.
+	// The explicit b.Height > 0 guard is MANDATORY: on teratestnet/tstn BIP0034Height == 0, so
+	// heightAtOrAfterActivation(0, 0) is true and a height-0 (genesis-like) block driven through
+	// Valid() would otherwise attempt ExtractCoinbaseHeight — contradicting the genesis exemption
+	// that CheckBlockVersion already applies. svnode never runs this check on genesis.
+	if b.Height > 0 && heightAtOrAfterActivation(b.Height, settings.ChainCfgParams.BIP0034Height) {
 		height, err := b.ExtractCoinbaseHeight()
 		if err != nil {
 			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height", b.String(), err)
