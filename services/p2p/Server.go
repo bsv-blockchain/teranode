@@ -69,6 +69,14 @@ const (
 	defaultPeerMapCleanupInterval = 1 * time.Minute  // Cleanup interval (reduced from 5min)
 	protocolIDVersion             = "1.0.0"          // Protocol version identifier
 
+	// syncCoordinatorStopTimeout is the sync coordinator's drain sub-budget
+	// inside Server.Stop. Coordinator RPCs are bounded at defaultRPCTimeout
+	// (5s), so a healthy drain completes well within it; the cap only bites
+	// when a goroutine is wedged in a non-context-aware call, and it must be
+	// well under the service manager's per-service stop budget so the Kafka
+	// producer flushes later in Server.Stop still get usable time.
+	syncCoordinatorStopTimeout = 10 * time.Second
+
 	// maxP2PMessageSize is the absolute upper bound on a pubsub message payload.
 	// Anything larger is dropped before parsing. Per-topic limits below should
 	// always be tighter than this; this is the safety net.
@@ -947,7 +955,7 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 	}
 }
 
-func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
+func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID string) {
 	// Check message size before parsing to prevent memory exhaustion
 	if len(m) > maxNodeStatusMessageSize {
 		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxNodeStatusMessageSize, peerID)
@@ -1005,7 +1013,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
 		var ok bool
-		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight())
+		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
 		if ok {
 			sanitizedTipOK = true
 			notificationBestHeight = sanitizedBestHeight
@@ -1712,6 +1720,19 @@ func (s *Server) Stop(ctx context.Context) error {
 			s.logger.Errorf("[Stop] failed to %s: %v", action, err)
 			errs = append(errs, err)
 		}
+	}
+
+	// Stop the sync coordinator first: its monitor goroutines call into the
+	// registry and publish to the blocks Kafka producer, both of which are torn
+	// down below. The drain gets a sub-budget of the shutdown context rather
+	// than ctx itself: coordinator RPCs are bounded at defaultRPCTimeout, so a
+	// healthy drain finishes well within it, and a goroutine wedged in a
+	// non-context-aware call must not burn the whole per-service stop budget
+	// and hand the DC11 producer flushes below an already-expired ctx.
+	if s.syncCoordinator != nil {
+		coordCtx, coordCancel := context.WithTimeout(ctx, syncCoordinatorStopTimeout)
+		s.syncCoordinator.Stop(coordCtx)
+		coordCancel()
 	}
 
 	// Stop the underlying P2P node

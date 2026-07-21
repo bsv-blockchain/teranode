@@ -28,9 +28,16 @@ type SyncCoordinator struct {
 	selector         *PeerSelector
 	blockchainClient blockchain.ClientI
 
-	// Coordinator-scoped context used for the gRPC calls into the registry.
-	// Per-RPC contexts are derived from this when needed.
-	ctx context.Context
+	// Coordinator-scoped context used for the gRPC calls into the registry and
+	// the blockchain client. Per-RPC contexts are derived from this via
+	// boundedRPCContext; ctxCancel is invoked by Stop so in-flight RPCs abort
+	// immediately instead of running out their timeout.
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+
+	// rpcTimeout bounds each registry/blockchain RPC so a slow or hung service
+	// cannot wedge the monitor loops. Defaults to defaultRPCTimeout.
+	rpcTimeout time.Duration
 
 	// decisionMu serialises compound sync decisions (clear -> select -> activate)
 	// so only one decision is in flight at a time. Without it, concurrent triggers
@@ -60,11 +67,16 @@ type SyncCoordinator struct {
 
 	// Dependencies for sync operations
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI // Kafka producer for blocks
-	getLocalHeight            func() uint32
+	// getLocalHeight resolves the local blockchain height. It receives a
+	// bounded per-call context (see getLocalHeightSafe) because the callback
+	// performs a blockchain RPC on the monitor hot path.
+	getLocalHeight func(ctx context.Context) uint32
 
 	// Control
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	drained  chan struct{} // closed by Stop's single watcher once wg fully drains
+	wg       sync.WaitGroup
 }
 
 // NewSyncCoordinator creates a new sync coordinator
@@ -77,6 +89,7 @@ func NewSyncCoordinator(
 	blockchainClient blockchain.ClientI,
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) *SyncCoordinator {
+	ctx, cancel := context.WithCancel(ctx)
 	return &SyncCoordinator{
 		logger:                       logger,
 		settings:                     settings,
@@ -85,15 +98,21 @@ func NewSyncCoordinator(
 		blockchainClient:             blockchainClient,
 		blocksKafkaProducerClient:    blocksKafkaProducerClient,
 		ctx:                          ctx,
+		ctxCancel:                    cancel,
+		rpcTimeout:                   defaultRPCTimeout,
 		stopCh:                       make(chan struct{}),
+		drained:                      make(chan struct{}),
 		backoffMultiplier:            1,
 		maxBackoffMultiplier:         32, // Max backoff of 64 seconds (32 * 2s)
 		unprovenProbeBudgetRemaining: maxUnprovenProbeBudget(settings),
 	}
 }
 
-// SetGetLocalHeightCallback sets the local height callback
-func (sc *SyncCoordinator) SetGetLocalHeightCallback(getLocalHeight func() uint32) {
+// SetGetLocalHeightCallback sets the local height callback. The callback is
+// invoked with a bounded per-call context derived from the coordinator
+// context, so its RPC times out and aborts on Stop like every other
+// coordinator RPC.
+func (sc *SyncCoordinator) SetGetLocalHeightCallback(getLocalHeight func(ctx context.Context) uint32) {
 	sc.getLocalHeight = getLocalHeight
 }
 
@@ -102,6 +121,13 @@ const (
 	fastMonitorInterval            = 2 * time.Second  // When actively syncing
 	slowMonitorInterval            = 15 * time.Second // When caught up
 	defaultSyncPeerNoProgressLimit = 5 * time.Minute  // Fallback when p2p_sync_peer_no_progress_timeout is unset
+
+	// defaultRPCTimeout bounds each coordinator RPC (peer registry and
+	// blockchain client, both served by the blockchain service). Calls normally
+	// complete in milliseconds; the bound exists so a hung blockchain service
+	// surfaces as a logged error instead of wedging
+	// monitorFSM/periodicEvaluation forever.
+	defaultRPCTimeout = 5 * time.Second
 
 	// syncPeerPreemptionGuardDivisor sets the opportunistic-preemption anti-flap
 	// guard to half the no-progress timeout: the incumbent must go this long
@@ -247,10 +273,73 @@ func (sc *SyncCoordinator) isUnprovenProbeCandidate(p *blockchain.PeerInfo, now 
 	return !sc.peerHasRecentFullBlockDelivery(p, now)
 }
 
+// boundedRPCContext derives a bounded per-RPC context from the coordinator
+// lifetime context. Every registry and blockchain-client call must go through
+// this (via the registry* wrappers below and getLocalTipWorkSafe /
+// checkFSMState) so a slow or hung blockchain service cannot block the monitor
+// loops indefinitely, and so Stop's cancellation aborts in-flight RPCs.
+func (sc *SyncCoordinator) boundedRPCContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(sc.ctx, sc.rpcTimeout)
+}
+
+func (sc *SyncCoordinator) registryListPeers() ([]*blockchain.PeerInfo, error) {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.ListPeers(ctx, nil, 0, 0, false, false)
+}
+
+func (sc *SyncCoordinator) registryGetPeer(peerID string) (*blockchain.PeerInfo, bool, error) {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.GetPeer(ctx, peerID)
+}
+
+func (sc *SyncCoordinator) registryRecordSyncAttempt(peerID string) error {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.RecordSyncAttempt(ctx, peerID)
+}
+
+func (sc *SyncCoordinator) registryRemovePeer(peerID string) error {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.RemovePeer(ctx, peerID)
+}
+
+func (sc *SyncCoordinator) registryRecordSyncFailure(peerID string) error {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, false, true, false, 0)
+}
+
+func (sc *SyncCoordinator) registryRegisterPeer(info *blockchain.PeerInfo) error {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.RegisterPeer(ctx, info)
+}
+
+func (sc *SyncCoordinator) registryIsPeerBanned(peerID string) (bool, error) {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.IsPeerBanned(ctx, peerID)
+}
+
+func (sc *SyncCoordinator) registryClearAllSyncAttempts() (int32, error) {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.ClearAllSyncAttempts(ctx)
+}
+
+func (sc *SyncCoordinator) registryReconsiderBadPeers(cooldown time.Duration) (int32, error) {
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	return sc.registry.ReconsiderBadPeers(ctx, cooldown)
+}
+
 // listAllPeers returns every peer known to the centralized registry. Errors
 // are logged and treated as "no peers" so callers can keep their structure.
 func (sc *SyncCoordinator) listAllPeers() []*blockchain.PeerInfo {
-	peers, err := sc.registry.ListPeers(sc.ctx, nil, 0, 0, false, false)
+	peers, err := sc.registryListPeers()
 	if err != nil {
 		sc.logger.Warnf("[SyncCoordinator] ListPeers failed: %v", err)
 		return nil
@@ -260,7 +349,7 @@ func (sc *SyncCoordinator) listAllPeers() []*blockchain.PeerInfo {
 
 // getPeer fetches a single peer by libp2p ID from the centralized registry.
 func (sc *SyncCoordinator) getPeer(id peer.ID) (*blockchain.PeerInfo, bool) {
-	info, found, err := sc.registry.GetPeer(sc.ctx, id.String())
+	info, found, err := sc.registryGetPeer(id.String())
 	if err != nil {
 		sc.logger.Warnf("[SyncCoordinator] GetPeer failed for %s: %v", id, err)
 		return nil, false
@@ -268,10 +357,12 @@ func (sc *SyncCoordinator) getPeer(id peer.ID) (*blockchain.PeerInfo, bool) {
 	return info, found
 }
 
-func (sc *SyncCoordinator) getLocalTipWorkSafe(ctx context.Context) (uint32, []byte, bool) {
+func (sc *SyncCoordinator) getLocalTipWorkSafe() (uint32, []byte, bool) {
 	if sc.blockchainClient == nil {
 		return sc.getLocalHeightSafe(), nil, false
 	}
+	ctx, cancel := sc.boundedRPCContext()
+	defer cancel()
 	_, meta, err := sc.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		sc.logger.Warnf("[SyncCoordinator] GetBestBlockHeader failed: %v", err)
@@ -284,8 +375,8 @@ func (sc *SyncCoordinator) getLocalTipWorkSafe(ctx context.Context) (uint32, []b
 	return meta.Height, chainWork, true
 }
 
-func (sc *SyncCoordinator) refreshProbeBudgetFromLocalTip(ctx context.Context) {
-	_, chainWork, ok := sc.getLocalTipWorkSafe(ctx)
+func (sc *SyncCoordinator) refreshProbeBudgetFromLocalTip() {
+	_, chainWork, ok := sc.getLocalTipWorkSafe()
 	if ok {
 		sc.resetProbeBudgetIfLocalChainWorkAdvanced(chainWork)
 	}
@@ -329,7 +420,7 @@ func (sc *SyncCoordinator) currentSyncPeerLocked() string {
 // isCaughtUp determines if we're caught up with the network
 func (sc *SyncCoordinator) isCaughtUp() bool {
 	localHeight := sc.getLocalHeightSafe()
-	if tipHeight, chainWork, ok := sc.getLocalTipWorkSafe(sc.ctx); ok {
+	if tipHeight, chainWork, ok := sc.getLocalTipWorkSafe(); ok {
 		localHeight = tipHeight
 		peers := sc.listAllPeers()
 		for _, p := range peers {
@@ -397,10 +488,38 @@ func (sc *SyncCoordinator) Start(ctx context.Context) {
 	sc.logger.Infof("[SyncCoordinator] Sync coordinator started")
 }
 
-// Stop stops the coordinator
-func (sc *SyncCoordinator) Stop() {
-	close(sc.stopCh)
-	sc.wg.Wait()
+// Stop stops the coordinator and waits for its monitor goroutines to drain.
+// It cancels the coordinator context so any in-flight registry/blockchain RPC
+// aborts immediately rather than running out its timeout. The wait itself is
+// bounded by ctx: a goroutine can still be parked in a non-context-aware
+// blocking call (e.g. a wedged Kafka producer Publish), and shutdown must not
+// hang on it — on ctx expiry Stop logs and returns, leaking that goroutine
+// exactly as pre-Stop-wiring shutdown did. The wg watcher is spawned once
+// inside stopOnce, so repeated Stop calls share it instead of leaking one
+// goroutine per call. Safe to call multiple times and before Start.
+//
+// Cancelling the coordinator context also fails any registry update issued by
+// a late libp2p callback (UpdatePeerInfo, HandlePeerDisconnected,
+// UpdateBanStatus) in the window between Stop and P2PClient.Close. That drop
+// is deliberate: those calls are best-effort peer bookkeeping with no value on
+// a node that is shutting down, they already degrade to a logged warning, and
+// waiting on them (they are not wg-tracked) would block the drain this method
+// exists to bound.
+func (sc *SyncCoordinator) Stop(ctx context.Context) {
+	sc.stopOnce.Do(func() {
+		close(sc.stopCh)
+		sc.ctxCancel()
+		go func() {
+			sc.wg.Wait()
+			close(sc.drained)
+		}()
+	})
+
+	select {
+	case <-sc.drained:
+	case <-ctx.Done():
+		sc.logger.Warnf("[SyncCoordinator] Stop returned before coordinator goroutines drained: %v", ctx.Err())
+	}
 }
 
 // GetCurrentSyncPeer returns the current sync peer (canonical libp2p ID string).
@@ -478,7 +597,7 @@ func (sc *SyncCoordinator) syncPeerNoProgressTimedOut(now time.Time) (string, ti
 // clearNoProgressSyncPeer requires decisionMu to be held by the caller.
 func (sc *SyncCoordinator) clearNoProgressSyncPeer(peerID string, progressAge time.Duration) bool {
 	sc.logger.Warnf("[SyncCoordinator] Sync peer %s made no validated progress for %v", peerID, progressAge.Round(time.Second))
-	if err := sc.registry.RecordSyncAttempt(sc.ctx, peerID); err != nil {
+	if err := sc.registryRecordSyncAttempt(peerID); err != nil {
 		sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt(no-progress) failed for %s: %v", peerID, err)
 	}
 	if !sc.clearSyncPeerIfCurrent(peerID) {
@@ -512,7 +631,7 @@ func (sc *SyncCoordinator) triggerSyncLocked() error {
 // HandlePeerDisconnected handles peer disconnection. peerID is the libp2p peer.ID.
 func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
 	idStr := peerID.String()
-	if err := sc.registry.RemovePeer(sc.ctx, idStr); err != nil {
+	if err := sc.registryRemovePeer(idStr); err != nil {
 		sc.logger.Warnf("[SyncCoordinator] RemovePeer %s failed: %v", idStr, err)
 	}
 
@@ -552,7 +671,7 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 	// This ensures reputation is updated so the peer selector won't re-select the same peer
 	if failedPeer != "" {
 		sc.logger.Infof("[SyncCoordinator] Recording failure for failed peer %s", failedPeer)
-		if err := sc.registry.UpdatePeerMetrics(sc.ctx, failedPeer, 0, 0, 0, false, true, false, 0); err != nil {
+		if err := sc.registryRecordSyncFailure(failedPeer); err != nil {
 			sc.logger.Warnf("[SyncCoordinator] UpdatePeerMetrics(failure) for %s: %v", failedPeer, err)
 		}
 	}
@@ -569,7 +688,7 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 // selectNewSyncPeer selects a new sync peer based on current criteria.
 // The returned ID is a canonical libp2p ID string.
 func (sc *SyncCoordinator) selectNewSyncPeer() string {
-	localHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	localHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
 	previousPeer := sc.currentSyncPeerLocked()
 
 	peers := sc.listAllPeers()
@@ -629,12 +748,12 @@ func (sc *SyncCoordinator) monitorFSM(ctx context.Context) {
 			sc.logger.Infof("[SyncCoordinator] FSM monitor stopping (stop requested)")
 			return
 		case <-timer.C:
-			sc.refreshProbeBudgetFromLocalTip(ctx)
+			sc.refreshProbeBudgetFromLocalTip()
 			if sc.isCaughtUp() {
 				timer.Reset(slowMonitorInterval)
 			} else {
 				timer.Reset(fastMonitorInterval)
-				sc.checkFSMState(ctx)
+				sc.checkFSMState()
 			}
 		}
 	}
@@ -643,7 +762,7 @@ func (sc *SyncCoordinator) monitorFSM(ctx context.Context) {
 // checkFSMState checks FSM state and triggers sync if needed. It holds
 // decisionMu for the whole check so the transition handling and the RUNNING-state
 // activation below run as one serialised sync decision.
-func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
+func (sc *SyncCoordinator) checkFSMState() {
 	if sc.blockchainClient == nil {
 		sc.logger.Warnf("[SyncCoordinator] No blockchain client available for FSM monitoring")
 		return
@@ -652,14 +771,16 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 	sc.decisionMu.Lock()
 	defer sc.decisionMu.Unlock()
 
-	sc.refreshProbeBudgetFromLocalTip(ctx)
+	sc.refreshProbeBudgetFromLocalTip()
 
 	// Check if we're in backoff mode
 	if sc.checkAndClearExpiredBackoff() {
 		return
 	}
 
-	currentState, err := sc.blockchainClient.GetFSMCurrentState(ctx)
+	fsmCtx, cancel := sc.boundedRPCContext()
+	defer cancel()
+	currentState, err := sc.blockchainClient.GetFSMCurrentState(fsmCtx)
 	if err != nil {
 		sc.logger.Errorf("[SyncCoordinator] Failed to get FSM state: %v", err)
 		return
@@ -678,7 +799,7 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 		// Check if we should attempt reputation recovery
 		sc.considerReputationRecovery()
 
-		sc.handleRunningState(ctx)
+		sc.handleRunningState()
 	}
 }
 
@@ -692,11 +813,11 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 		sc.mu.RUnlock()
 
 		if currentPeer != "" {
-			_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+			_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
 			if localWorkOK {
 				sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
 			}
-			peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, currentPeer)
+			peerInfo, exists, err := sc.registryGetPeer(currentPeer)
 			if err != nil {
 				sc.logger.Warnf("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
 				return false
@@ -741,7 +862,7 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 
 // handleRunningState handles the FSM RUNNING state logic.
 // It requires decisionMu to be held by the caller.
-func (sc *SyncCoordinator) handleRunningState(_ context.Context) {
+func (sc *SyncCoordinator) handleRunningState() {
 	localHeight := sc.getLocalHeightSafe()
 
 	sc.mu.RLock()
@@ -753,10 +874,16 @@ func (sc *SyncCoordinator) handleRunningState(_ context.Context) {
 	}
 }
 
-// getLocalHeightSafe safely gets the local blockchain height
+// getLocalHeightSafe safely gets the local blockchain height. The callback
+// performs a blockchain RPC, so it gets a bounded per-call context: without
+// it, a hung blockchain service would wedge the monitor loops through this
+// path (reached on every tick via isCaughtUp) despite every direct RPC being
+// bounded, and Stop's cancellation could not release it.
 func (sc *SyncCoordinator) getLocalHeightSafe() uint32 {
 	if sc.getLocalHeight != nil {
-		return sc.getLocalHeight()
+		ctx, cancel := sc.boundedRPCContext()
+		defer cancel()
+		return sc.getLocalHeight(ctx)
 	}
 	return 0
 }
@@ -770,8 +897,8 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 		sc.logger.Debugf("[SyncCoordinator] Sync peer %s already active; skipping new activation", oldPeer)
 		return nil
 	}
-	sc.refreshProbeBudgetFromLocalTip(sc.ctx)
-	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	sc.refreshProbeBudgetFromLocalTip()
+	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
 	if localWorkOK {
 		localHeight = tipHeight
 	}
@@ -824,7 +951,7 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 		}
 		return nil
 	}
-	if err := sc.registry.RecordSyncAttempt(sc.ctx, newSyncPeer); err != nil {
+	if err := sc.registryRecordSyncAttempt(newSyncPeer); err != nil {
 		sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", newSyncPeer, err)
 	}
 
@@ -977,7 +1104,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	}
 
 	// Get peer info
-	peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, currentPeer)
+	peerInfo, exists, err := sc.registryGetPeer(currentPeer)
 	if err != nil {
 		sc.logger.Warnf("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
 		return
@@ -997,7 +1124,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		return
 	}
 
-	_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
 	if localWorkOK {
 		sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
 	}
@@ -1044,7 +1171,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	if candidate == "" || candidate == currentPeer {
 		return
 	}
-	candInfo, exists, err := sc.registry.GetPeer(sc.ctx, candidate)
+	candInfo, exists, err := sc.registryGetPeer(candidate)
 	if err != nil || !exists {
 		return
 	}
@@ -1062,10 +1189,10 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		// Bench the incumbent on the sync-attempt cooldown (mirrors clearNoProgressSyncPeer)
 		// so it is not immediately reselected if the candidate later clears; then record
 		// the candidate's attempt exactly as the normal activation path does.
-		if err := sc.registry.RecordSyncAttempt(sc.ctx, currentPeer); err != nil {
+		if err := sc.registryRecordSyncAttempt(currentPeer); err != nil {
 			sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for benched peer %s: %v", currentPeer, err)
 		}
-		if err := sc.registry.RecordSyncAttempt(sc.ctx, candidate); err != nil {
+		if err := sc.registryRecordSyncAttempt(candidate); err != nil {
 			sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", candidate, err)
 		}
 		if err := sc.sendSyncMessage(candidate); err != nil {
@@ -1111,7 +1238,7 @@ func (sc *SyncCoordinator) UpdatePeerInfo(peerID peer.ID, height uint32, blockHa
 		BlockHash:        blockHash,
 		DataHubURL:       dataHubURL,
 	}
-	if err := sc.registry.RegisterPeer(sc.ctx, info); err != nil {
+	if err := sc.registryRegisterPeer(info); err != nil {
 		sc.logger.Warnf("[SyncCoordinator] RegisterPeer %s failed: %v", info.ID, err)
 	}
 }
@@ -1123,7 +1250,7 @@ func (sc *SyncCoordinator) UpdatePeerInfo(peerID peer.ID, height uint32, blockHa
 func (sc *SyncCoordinator) UpdateBanStatus(peerID peer.ID) {
 	idStr := peerID.String()
 
-	banned, err := sc.registry.IsPeerBanned(sc.ctx, idStr)
+	banned, err := sc.registryIsPeerBanned(idStr)
 	if err != nil {
 		sc.logger.Warnf("[SyncCoordinator] IsPeerBanned %s failed: %v", idStr, err)
 		return
@@ -1209,7 +1336,7 @@ func (sc *SyncCoordinator) enterBackoffMode() {
 
 	sc.mu.Unlock()
 
-	peersCleared, err := sc.registry.ClearAllSyncAttempts(sc.ctx)
+	peersCleared, err := sc.registryClearAllSyncAttempts()
 	if err != nil {
 		sc.logger.Warnf("[SyncCoordinator] ClearAllSyncAttempts failed: %v", err)
 	}
@@ -1221,7 +1348,7 @@ func (sc *SyncCoordinator) enterBackoffMode() {
 func (sc *SyncCoordinator) checkAllPeersAttempted() {
 	// Get all peers and check how many were attempted recently
 	peers := sc.listAllPeers()
-	localHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	localHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
 	probeBudgetAvailable := sc.hasUnprovenProbeBudget()
 
 	eligibleCount := 0
@@ -1270,7 +1397,7 @@ func (sc *SyncCoordinator) considerReputationRecovery() {
 		baseCooldown *= time.Duration(cooldownMultiplier)
 	}
 
-	peersRecovered, err := sc.registry.ReconsiderBadPeers(sc.ctx, baseCooldown)
+	peersRecovered, err := sc.registryReconsiderBadPeers(baseCooldown)
 	if err != nil {
 		sc.logger.Warnf("[SyncCoordinator] ReconsiderBadPeers failed: %v", err)
 		return
@@ -1292,7 +1419,7 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash stri
 
 	// Get the peer's DataHub URL if available
 	dataHubURL := ""
-	if peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, syncPeer); err == nil && exists {
+	if peerInfo, exists, err := sc.registryGetPeer(syncPeer); err == nil && exists {
 		dataHubURL = peerInfo.DataHubURL
 	}
 
@@ -1331,7 +1458,7 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash stri
 func (sc *SyncCoordinator) sendSyncMessage(peerID string) error {
 	sc.logger.Infof("[sendSyncMessage] Preparing to send sync message to peer %s", peerID)
 
-	peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, peerID)
+	peerInfo, exists, err := sc.registryGetPeer(peerID)
 	if err != nil {
 		sc.logger.Errorf("[sendSyncMessage] GetPeer %s failed: %v", peerID, err)
 		return errors.NewServiceError(fmt.Sprintf("get peer %s: %v", peerID, err))

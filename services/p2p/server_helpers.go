@@ -29,7 +29,7 @@ type reputationCacheEntry struct {
 	expiresAt time.Time
 }
 
-func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
+func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) {
 	var (
 		blockMessage BlockMessage
 		hash         *chainhash.Hash
@@ -80,7 +80,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		}
 	} else {
 		var ok bool
-		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight())
+		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
 		if !ok {
 			return
 		}
@@ -503,13 +503,19 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 	return ""
 }
 
-// getLocalHeight returns the current local blockchain height.
-func (s *Server) getLocalHeight() uint32 {
+// getLocalHeight returns the current local blockchain height. The RPC is
+// bounded by defaultRPCTimeout derived from the caller's ctx so a hung
+// blockchain service cannot stall the caller (the sync coordinator's monitor
+// loops reach this on every tick via its local-height callback).
+func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 	if s.blockchainClient == nil {
 		return 0
 	}
 
-	_, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx)
+	ctx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
+	defer cancel()
+
+	_, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil || bhMeta == nil {
 		return 0
 	}
