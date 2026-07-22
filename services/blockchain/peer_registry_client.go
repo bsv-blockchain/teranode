@@ -11,6 +11,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -324,24 +326,40 @@ func (c *PeerRegistryClient) RecordCatchupError(ctx context.Context, peerID, err
 	return err
 }
 
-// RecordCatchupAttempt implements PeerRegistryClientI.
+// RecordCatchupAttempt implements PeerRegistryClientI. During a rolling upgrade
+// the blockchain service may predate this RPC; fall back to the legacy
+// RecordSyncAttempt call so sync backoff tracking keeps working (only the new
+// catchup-attempt counter is lost until the server is upgraded).
 func (c *PeerRegistryClient) RecordCatchupAttempt(ctx context.Context, peerID string) error {
 	_, err := c.client.RecordCatchupAttempt(ctx, &blockchain_api.RecordCatchupAttemptRequest{PeerId: peerID})
+	if status.Code(err) == codes.Unimplemented {
+		_, err = c.client.RecordSyncAttempt(ctx, &blockchain_api.RecordSyncAttemptRequest{PeerId: peerID})
+	}
 	return err
 }
 
-// RecordCatchupSuccess implements PeerRegistryClientI.
+// RecordCatchupSuccess implements PeerRegistryClientI. Falls back to the legacy
+// UpdatePeerMetrics(success) call when the blockchain service predates this RPC,
+// so reputation credit keeps flowing during a rolling upgrade.
 func (c *PeerRegistryClient) RecordCatchupSuccess(ctx context.Context, peerID string, responseTimeMs int64) error {
 	_, err := c.client.RecordCatchupSuccess(ctx, &blockchain_api.RecordCatchupSuccessRequest{
 		PeerId:         peerID,
 		ResponseTimeMs: responseTimeMs,
 	})
+	if status.Code(err) == codes.Unimplemented {
+		return c.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, true, false, false, responseTimeMs)
+	}
 	return err
 }
 
-// RecordCatchupFailure implements PeerRegistryClientI.
+// RecordCatchupFailure implements PeerRegistryClientI. Falls back to the legacy
+// UpdatePeerMetrics(failure) call when the blockchain service predates this RPC,
+// so reputation penalties keep applying during a rolling upgrade.
 func (c *PeerRegistryClient) RecordCatchupFailure(ctx context.Context, peerID string) error {
 	_, err := c.client.RecordCatchupFailure(ctx, &blockchain_api.RecordCatchupFailureRequest{PeerId: peerID})
+	if status.Code(err) == codes.Unimplemented {
+		return c.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, false, true, false, 0)
+	}
 	return err
 }
 

@@ -266,6 +266,12 @@ message AddBanScoreRequest {
     string client_name = 24;  // Human-readable name of the client
     string last_catchup_error = 25;  // Last error message from catchup attempt
     int64 last_catchup_error_time = 26;  // Unix timestamp of last catchup error
+
+    // Catchup-specific counters (recorded via RecordCatchupAttempt/Success/Failure),
+    // distinct from the generic interaction counters above.
+    int64 catchup_attempts = 27;
+    int64 catchup_successes = 28;
+    int64 catchup_failures = 29;
   }
 
   message GetPeerRegistryResponse {

@@ -732,14 +732,14 @@ func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
 		}
 
 		return &PeerInfo{
-			ID:                   peerID,
-			Height:               p.Height,
-			BlockHash:            blockHash,
-			DataHubURL:           p.DataHubUrl,
-			ReputationScore:      p.CatchupReputationScore,
-			InteractionAttempts:  p.CatchupAttempts,
-			InteractionSuccesses: p.CatchupSuccesses,
-			InteractionFailures:  p.CatchupFailures,
+			ID:               peerID,
+			Height:           p.Height,
+			BlockHash:        blockHash,
+			DataHubURL:       p.DataHubUrl,
+			ReputationScore:  p.CatchupReputationScore,
+			CatchupAttempts:  p.CatchupAttempts,
+			CatchupSuccesses: p.CatchupSuccesses,
+			CatchupFailures:  p.CatchupFailures,
 		}
 
 	case *p2p_api.PeerRegistryInfo:
@@ -775,6 +775,9 @@ func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
 			AvgResponseTime:        time.Duration(p.AvgResponseTimeMs) * time.Millisecond,
 			LastCatchupError:       p.LastCatchupError,
 			LastCatchupErrorTime:   time.Unix(p.LastCatchupErrorTime, 0),
+			CatchupAttempts:        p.CatchupAttempts,
+			CatchupSuccesses:       p.CatchupSuccesses,
+			CatchupFailures:        p.CatchupFailures,
 		}
 
 	default:

@@ -448,11 +448,11 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		u.logger.Warnf("[catchup][%s] stopped after %d iterations without reaching target", chainTipHash.String(), iteration)
 	}
 
-	// Report successful catchup to P2P service (if we got any headers)
-	if totalHeadersFetched > 0 {
-		responseTime := time.Since(startTime)
-		u.reportCatchupSuccess(ctx, identifier, responseTime)
-	}
+	// Do NOT report catchup success here: fetching headers is only one stage of a
+	// catchup, and the whole operation records exactly one attempt (doCatchup).
+	// Reporting a second success would let CatchupSuccesses exceed CatchupAttempts;
+	// the single success is reported by doCatchup once blocks are fetched and
+	// validated. Header-fetch failures above still count as catchup failures.
 
 	// Set default stop reason if none was set
 	if stopReason == "" {

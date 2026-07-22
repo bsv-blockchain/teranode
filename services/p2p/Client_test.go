@@ -708,7 +708,9 @@ func TestSimpleClientGetPeersForCatchup(t *testing.T) {
 		require.Len(t, peers, 1)
 		require.Equal(t, uint32(42), peers[0].Height)
 		require.InDelta(t, 88.5, peers[0].ReputationScore, 0.001)
-		require.Equal(t, int64(3), peers[0].InteractionAttempts)
+		require.Equal(t, int64(3), peers[0].CatchupAttempts)
+		require.Equal(t, int64(2), peers[0].CatchupSuccesses)
+		require.Equal(t, int64(1), peers[0].CatchupFailures)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{

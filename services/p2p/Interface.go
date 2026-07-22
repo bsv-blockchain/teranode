@@ -45,6 +45,12 @@ type PeerInfo struct {
 	TransactionsReceived int64 // Number of transactions received from this peer
 	CatchupBlocks        int64 // Number of blocks received during catchup
 
+	// Catchup-specific counters (recorded via RecordCatchupAttempt/Success/Failure),
+	// distinct from the generic interaction counters above.
+	CatchupAttempts  int64 // Catchup attempts made to this peer (including unresolved ones)
+	CatchupSuccesses int64 // Catchup operations that completed successfully
+	CatchupFailures  int64 // Catchup operations that failed
+
 	// Sync attempt tracking for backoff and recovery
 	LastSyncAttempt      time.Time // When we last attempted to sync with this peer
 	SyncAttemptCount     int       // Number of sync attempts with this peer

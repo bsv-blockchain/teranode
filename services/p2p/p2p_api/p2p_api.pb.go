@@ -2371,8 +2371,13 @@ type PeerRegistryInfo struct {
 	ClientName             string  `protobuf:"bytes,24,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`                                    // Human-readable name of the client
 	LastCatchupError       string  `protobuf:"bytes,25,opt,name=last_catchup_error,json=lastCatchupError,proto3" json:"last_catchup_error,omitempty"`                // Last error message from catchup attempt
 	LastCatchupErrorTime   int64   `protobuf:"varint,26,opt,name=last_catchup_error_time,json=lastCatchupErrorTime,proto3" json:"last_catchup_error_time,omitempty"` // Unix timestamp of last catchup error
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Catchup-specific counters (recorded via RecordCatchupAttempt/Success/Failure),
+	// distinct from the generic interaction counters above.
+	CatchupAttempts  int64 `protobuf:"varint,27,opt,name=catchup_attempts,json=catchupAttempts,proto3" json:"catchup_attempts,omitempty"`
+	CatchupSuccesses int64 `protobuf:"varint,28,opt,name=catchup_successes,json=catchupSuccesses,proto3" json:"catchup_successes,omitempty"`
+	CatchupFailures  int64 `protobuf:"varint,29,opt,name=catchup_failures,json=catchupFailures,proto3" json:"catchup_failures,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PeerRegistryInfo) Reset() {
@@ -2569,6 +2574,27 @@ func (x *PeerRegistryInfo) GetLastCatchupError() string {
 func (x *PeerRegistryInfo) GetLastCatchupErrorTime() int64 {
 	if x != nil {
 		return x.LastCatchupErrorTime
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetCatchupAttempts() int64 {
+	if x != nil {
+		return x.CatchupAttempts
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetCatchupSuccesses() int64 {
+	if x != nil {
+		return x.CatchupSuccesses
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetCatchupFailures() int64 {
+	if x != nil {
+		return x.CatchupFailures
 	}
 	return 0
 }
@@ -2968,7 +2994,7 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x17IsPeerUnhealthyResponse\x12!\n" +
 	"\fis_unhealthy\x18\x01 \x01(\bR\visUnhealthy\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
-	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore\"\xe4\a\n" +
+	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore\"\xe7\b\n" +
 	"\x10PeerRegistryInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x1d\n" +
@@ -2997,7 +3023,10 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\vclient_name\x18\x18 \x01(\tR\n" +
 	"clientName\x12,\n" +
 	"\x12last_catchup_error\x18\x19 \x01(\tR\x10lastCatchupError\x125\n" +
-	"\x17last_catchup_error_time\x18\x1a \x01(\x03R\x14lastCatchupErrorTime\"J\n" +
+	"\x17last_catchup_error_time\x18\x1a \x01(\x03R\x14lastCatchupErrorTime\x12)\n" +
+	"\x10catchup_attempts\x18\x1b \x01(\x03R\x0fcatchupAttempts\x12+\n" +
+	"\x11catchup_successes\x18\x1c \x01(\x03R\x10catchupSuccesses\x12)\n" +
+	"\x10catchup_failures\x18\x1d \x01(\x03R\x0fcatchupFailures\"J\n" +
 	"\x17GetPeerRegistryResponse\x12/\n" +
 	"\x05peers\x18\x01 \x03(\v2\x19.p2p_api.PeerRegistryInfoR\x05peers\"b\n" +
 	"\x1cRecordBytesDownloadedRequest\x12\x17\n" +
