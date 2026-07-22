@@ -1213,3 +1213,129 @@ func TestSyncCoordinator_MaxUnprovenProbeBudget_Clamp(t *testing.T) {
 
 	require.Equal(t, 0, maxUnprovenProbeBudget(nil), "nil settings must yield a zero budget")
 }
+
+// HandleCatchupFailure must not clear the sync peer while another sync decision is
+// in flight: pre-serialisation, its unconditional clear could evict a peer that a
+// concurrent decision path was still working with, producing duplicate/conflicting
+// activations. The blocked GetBestBlockHeader holds evaluateSyncPeer mid-decision
+// (under decisionMu); HandleCatchupFailure must wait for it rather than clearing.
+func TestSyncCoordinator_HandleCatchupFailure_WaitsForInFlightDecision(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "peer-a",
+		DataHubURL:         "http://peer-a",
+		Height:             200,
+		ReputationScore:    50,
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05},
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "peer-a"
+	sc.mu.Unlock()
+
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 16)
+	client := &blockchain.Mock{}
+	client.On("GetBestBlockHeader", mock.Anything).Run(func(mock.Arguments) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-gate
+	}).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, ChainWork: []byte{0x02}}, nil)
+	sc.blockchainClient = client
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sc.evaluateSyncPeer() // blocks in GetBestBlockHeader while holding decisionMu
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("evaluateSyncPeer never reached GetBestBlockHeader")
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sc.HandleCatchupFailure("test failure")
+	}()
+
+	// Give HandleCatchupFailure ample time to (wrongly) run its clear if it is not
+	// serialised behind the in-flight decision.
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, "peer-a", sc.GetCurrentSyncPeer(),
+		"HandleCatchupFailure must not clear the sync peer while another decision is in flight")
+
+	close(gate)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("sync decisions deadlocked")
+	}
+}
+
+// Hammers every decision entry point concurrently under -race to guard the
+// decisionMu lock ordering: a regression that acquires decisionMu while holding
+// mu (or re-enters it) hangs this test.
+func TestSyncCoordinator_ConcurrentSyncDecisions_NoDeadlock(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	pid := mustNewPeerID(t)
+	for _, id := range []string{"peer-a", "peer-b", pid.String()} {
+		reg.Register(&blockchain.PeerInfo{
+			ID:                 id,
+			DataHubURL:         "http://" + id,
+			Height:             200,
+			ReputationScore:    50,
+			BlockHash:          syncCoordinatorTestHash(t),
+			ValidatedBlockHash: syncCoordinatorTestHash(t),
+			ValidatedChainWork: []byte{0x05},
+		})
+	}
+
+	var wg sync.WaitGroup
+	for w := 0; w < 6; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 25; i++ {
+				_ = sc.TriggerSync()
+				sc.evaluateSyncPeer()
+				sc.HandleCatchupFailure("stress")
+				sc.UpdateBanStatus(pid)
+				sc.ClearSyncPeer()
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("concurrent sync decisions deadlocked")
+	}
+
+	current := sc.GetCurrentSyncPeer()
+	if current != "" {
+		_, found := reg.Get(current)
+		require.True(t, found, "current sync peer %s must be a registered peer", current)
+	}
+}
