@@ -245,6 +245,37 @@ func TestSyncCoordinator_ConsiderReputationRecovery_NoCandidatesIsNoOp(t *testin
 	require.GreaterOrEqual(t, got.ReputationScore, 50.0, "healthy peer reputation untouched")
 }
 
+// Exercises concurrent backoff writers against considerReputationRecovery's read of
+// backoffMultiplier; fails under -race if the read is not synchronized.
+func TestSyncCoordinator_ConsiderReputationRecovery_ConcurrentWithBackoffWriters(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			sc.enterBackoffMode()
+			sc.mu.Lock()
+			sc.lastAllPeersAttemptTime = time.Now().Add(-time.Hour) // force backoff expiry
+			sc.mu.Unlock()
+			sc.checkAndClearExpiredBackoff() // doubles backoffMultiplier
+			sc.enterBackoffMode()            // re-enter so resetBackoff writes backoffMultiplier
+			sc.resetBackoff()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			sc.considerReputationRecovery()
+		}
+	}()
+
+	wg.Wait()
+}
+
 func TestSyncCoordinator_UpdatePeerInfo_RegistersPeer(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	pid := mustNewPeerID(t)
