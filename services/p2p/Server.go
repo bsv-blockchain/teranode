@@ -462,6 +462,14 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		// Add liveness checks here. Don't include dependency checks.
 		// If the service is stuck return http.StatusServiceUnavailable
 		// to indicate a restart is needed
+		//
+		// A dead HTTP serve goroutine is deliberately a liveness failure, not
+		// just a readiness one: once Serve/ServeTLS returns, the goroutine is
+		// gone and the listener may be closed, so the HTTP/websocket surface
+		// cannot recover in-process. Restarting the whole P2P process (and
+		// dropping healthy libp2p/gRPC state with it) is the only way to get
+		// the endpoint back; readiness-only would leave the node running
+		// permanently without it.
 		if err := s.httpServeError(); err != nil {
 			return http.StatusServiceUnavailable, "HTTP server not serving", err
 		}
