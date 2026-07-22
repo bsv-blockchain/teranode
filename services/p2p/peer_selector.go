@@ -196,6 +196,14 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCri
 		return false
 	}
 
+	// Enforce the operator blacklist at the point of use: a URL stored in the
+	// registry before its host was blacklisted must never be selected for
+	// sync/catchup (gossip-time checks cannot evict already-stored URLs).
+	if ps.settings != nil && isBaseURLBlacklisted(p.DataHubURL, ps.settings.SubtreeValidation.BlacklistedBaseURLs) {
+		ps.logger.Debugf("[PeerSelector] Peer %s has blacklisted DataHub URL %s", p.ID, p.DataHubURL)
+		return false
+	}
+
 	// Check reputation threshold - peers with very low reputation should not be selected
 	if p.ReputationScore < 20.0 {
 		ps.logger.Debugf("[PeerSelector] Peer %s has very low reputation %.2f (below threshold 20.0)", p.ID, p.ReputationScore)

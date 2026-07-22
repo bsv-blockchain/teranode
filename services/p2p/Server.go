@@ -998,9 +998,12 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 			return
 		}
 
-		// A blacklisted BaseURL must never reach the peer registry (catchup
-		// would fetch from it), but node_status is telemetry: keep the message
-		// with the URL removed instead of hiding the peer from monitoring.
+		// A blacklisted BaseURL must not reach the peer registry, but
+		// node_status is telemetry: keep the message with the URL removed
+		// instead of hiding the peer from monitoring. This only stops fresh
+		// registrations; a URL stored before its host was blacklisted stays in
+		// the registry and is filtered at the point of use instead
+		// (GetPeersForCatchup and PeerSelector.isEligible).
 		if s.isBlacklistedBaseURL(nodeStatusMessage.BaseURL) {
 			s.logger.Warnf("[handleNodeStatusTopic] removed blacklisted BaseURL %s from node_status of peer %s", nodeStatusMessage.BaseURL, peerID)
 			nodeStatusMessage.BaseURL = ""

@@ -268,12 +268,24 @@ func (s *Server) addProtocolViolation(peerID string) {
 	s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
-// isBlacklistedBaseURL checks if the given baseURL matches any entry in the blacklist.
+// isBlacklistedBaseURL checks the given baseURL against the operator-configured
+// blacklist (settings.SubtreeValidation.BlacklistedBaseURLs).
 func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
-	inputHost := s.extractHost(baseURL)
+	if s.settings == nil {
+		return false
+	}
+
+	return isBaseURLBlacklisted(baseURL, s.settings.SubtreeValidation.BlacklistedBaseURLs)
+}
+
+// isBaseURLBlacklisted checks if the given baseURL matches any entry in the
+// blacklist. Package-level so both the gossip handlers (via the Server wrapper
+// above) and the sync PeerSelector can enforce the same blacklist.
+func isBaseURLBlacklisted(baseURL string, blacklist map[string]struct{}) bool {
+	inputHost := extractHost(baseURL)
 	if inputHost == "" {
 		// Fall back to exact string matching for invalid URLs
-		for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
+		for blocked := range blacklist {
 			if baseURL == blocked {
 				return true
 			}
@@ -283,8 +295,8 @@ func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 	}
 
 	// Check each blacklisted URL
-	for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
-		blockedHost := s.extractHost(blocked)
+	for blocked := range blacklist {
+		blockedHost := extractHost(blocked)
 		if blockedHost == "" {
 			// Fall back to exact string matching for invalid blacklisted URLs
 			if baseURL == blocked {
@@ -303,7 +315,7 @@ func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 }
 
 // extractHost extracts and normalizes the host component from a URL
-func (s *Server) extractHost(urlStr string) string {
+func extractHost(urlStr string) string {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return ""

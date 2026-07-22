@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -837,4 +838,54 @@ func TestHandleNodeStatusTopic_StripsBlacklistedBaseURL(t *testing.T) {
 
 	require.False(t, s.shouldSkipBannedPeer(remote.String(), "test"),
 		"blacklist match is an operator choice, not a peer protocol violation")
+}
+
+// TestBlacklistedDataHubURL_StoredBeforeBlacklist_NotUsedForCatchup is the
+// regression for the primary operational case: a peer registers its DataHub
+// URL while the host is not yet blacklisted, the operator then blacklists it.
+// The node_status strip cannot evict the already-stored URL (the registry
+// ignores empty-URL updates), so the blacklist must be enforced at the point
+// of use - GetPeersForCatchup must stop surfacing the peer.
+func TestBlacklistedDataHubURL_StoredBeforeBlacklist_NotUsedForCatchup(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 4)
+
+	// Register the peer's URL BEFORE the host is blacklisted.
+	remote := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: remote.String(), DataHubURL: "http://evil.example", Storage: "full", Height: 100})
+
+	resp, err := s.GetPeersForCatchup(context.Background(), &p2p_api.GetPeersForCatchupRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.Peers, 1, "precondition: peer must be a catchup candidate before the blacklist entry")
+
+	// Operator blacklists the host.
+	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	// A subsequent node_status strips the URL but cannot clear the stored one.
+	blockHash := chainhash.HashH([]byte("stored before blacklist")).String()
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remote.String(),
+		ClientName:    "client/1.0",
+		BaseURL:       "http://evil.example",
+		BestHeight:    102,
+		BestBlockHash: blockHash,
+	})
+	require.NoError(t, err)
+	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
+
+	got, ok := reg.Get(remote.String())
+	require.True(t, ok)
+	require.Equal(t, "http://evil.example", got.DataHubURL,
+		"documented limitation: the stored URL survives the strip, which is why point-of-use filtering exists")
+
+	// Point of use: the peer must no longer be handed to catchup.
+	resp, err = s.GetPeersForCatchup(context.Background(), &p2p_api.GetPeersForCatchupRequest{})
+	require.NoError(t, err)
+	require.Empty(t, resp.Peers, "peer whose stored DataHubURL is now blacklisted must not be a catchup candidate")
 }
