@@ -1383,6 +1383,113 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
+// TestBlockValid_AcceptsP2SHCoinbaseOutput pins accept-side parity with bitcoin-sv:
+// CheckBlock/CheckCoinbase never runs the P2SH output scan on the coinbase (the
+// bad-txns-vout-p2sh rule in CheckRegularTransaction applies to non-coinbase
+// transactions only), so a peer block whose coinbase pays to a P2SH-shaped output is
+// consensus-valid and Block.Valid must accept it. Rejecting it here would make the
+// node reject blocks the rest of the network accepts. The mining-side guard against
+// *originating* such a coinbase lives in blockassembly SubmitMiningSolution and must
+// never be mirrored into this validation path.
+func TestBlockValid_AcceptsP2SHCoinbaseOutput(t *testing.T) {
+	validateWithCoinbase := func(t *testing.T, coinbase *bt.Tx) (bool, error) {
+		t.Helper()
+
+		tSettings := test.CreateBaseTestSettings(t)
+
+		// The pin must hold at a POST-Genesis height: a (wrong) Genesis-gated
+		// P2SH rejection added to Block.Valid would not fire at height 0.
+		// Regression params: GenesisActivationHeight=10000, BIP0034Height is
+		// unreachable (BIP34 coinbase-height check stays off), BIP65/66 floors
+		// require header version 4 at this height.
+		height := tSettings.ChainCfgParams.GenesisActivationHeight + 1
+
+		// The coinbase may claim at most fees+subsidy at this height (all outputs count).
+		for _, out := range coinbase.Outputs {
+			out.Satoshis = 0
+		}
+		coinbase.Outputs[0].Satoshis = util.GetBlockSubsidyForHeight(height, tSettings.ChainCfgParams)
+
+		// Easy-difficulty header bound to this coinbase (merkle root of a
+		// coinbase-only block is the coinbase txid).
+		bits, err := NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blockHeader := &BlockHeader{
+			Version:        4,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: coinbase.TxIDChainHash(),
+			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
+			Bits:           *bits,
+			Nonce:          0,
+		}
+
+		// Grind the nonce until the easy target is met; HasMetTargetDifficulty
+		// returns an error (not just false) for a miss, so only `ok` matters here.
+		for {
+			ok, _, _ := blockHeader.HasMetTargetDifficulty()
+			if ok {
+				break
+			}
+
+			require.Less(t, blockHeader.Nonce, uint32(1_000_000), "could not grind a nonce meeting the easy target")
+			blockHeader.Nonce++
+		}
+
+		b, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, height, 0)
+		require.NoError(t, err)
+
+		subtreeStore, err := null.New(ulogger.TestLogger{})
+		require.NoError(t, err)
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		currentChain := make([]*BlockHeader, 11)
+		currentChainIDs := make([]uint32, 11)
+
+		for i := 0; i < 11; i++ {
+			currentChain[i] = &BlockHeader{
+				HashPrevBlock:  &chainhash.Hash{},
+				HashMerkleRoot: &chainhash.Hash{},
+				Timestamp:      blockHeader.Timestamp - 100 - uint32(i), // nolint:gosec
+			}
+			currentChainIDs[i] = uint32(i) // nolint:gosec
+		}
+
+		oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+
+		return b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
+	}
+
+	t.Run("control: unmodified coinbase is accepted", func(t *testing.T) {
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		v, err := validateWithCoinbase(t, coinbase)
+		require.NoError(t, err)
+		require.True(t, v)
+	})
+
+	t.Run("P2SH coinbase output is accepted", func(t *testing.T) {
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		// Redirect the payout to the exact P2SH shape svnode's IsP2SH tests:
+		// OP_HASH160 <20-byte push> OP_EQUAL.
+		p2shScript, err := bscript.NewFromHexString("a914000000000000000000000000000000000000000087")
+		require.NoError(t, err)
+		coinbase.Outputs[0].LockingScript = p2shScript
+
+		v, err := validateWithCoinbase(t, coinbase)
+		require.NoError(t, err)
+		require.True(t, v)
+	})
+}
+
 func TestGetAndValidateSubtrees(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockHeaderBytes, _ := hex.DecodeString(block1Header)

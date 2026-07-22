@@ -1415,6 +1415,52 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}, err
 }
 
+// validateCoinbaseForSubmission runs the final coinbase checks shared by both
+// submitMiningSolution branches (pool-supplied req.CoinbaseTx and the recreated
+// candidate coinbase). Both branches MUST converge on this single call so a
+// future refactor cannot leave one branch unguarded.
+func validateCoinbaseForSubmission(jobID string, coinbaseTx *bt.Tx) error {
+	if coinbaseTx == nil {
+		return errors.NewProcessingError("[BlockAssembly][%s] coinbase transaction is nil", jobID)
+	}
+
+	if len(coinbaseTx.Inputs) != 1 {
+		return errors.NewProcessingError("[BlockAssembly][%s] coinbase transaction must have exactly one input after processing, got %d", jobID, len(coinbaseTx.Inputs))
+	}
+
+	// Parity with bitcoin-sv's mining RPCs (HasP2SHOutput in rpc/mining.cpp): refuse to
+	// originate a block whose coinbase pays to a P2SH output. This is a local mining
+	// guard, NOT a consensus rule — peer blocks with a P2SH coinbase are valid on the
+	// network and must never be rejected in Block.Valid or block validation.
+	if coinbaseHasP2SHOutput(coinbaseTx) {
+		return errors.NewProcessingError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", jobID)
+	}
+
+	return nil
+}
+
+// coinbaseHasP2SHOutput reports whether any output locking script matches the exact
+// pay-to-script-hash shape bitcoin-sv's IsP2SH tests (script.cpp): 23 bytes,
+// OP_HASH160 (0xa9), a 20-byte push (0x14), OP_EQUAL (0x87).
+func coinbaseHasP2SHOutput(tx *bt.Tx) bool {
+	if tx == nil {
+		return false
+	}
+
+	for _, out := range tx.Outputs {
+		if out == nil || out.LockingScript == nil {
+			continue
+		}
+
+		s := out.LockingScript.Bytes()
+		if len(s) == 23 && s[0] == 0xa9 && s[1] == 0x14 && s[22] == 0x87 {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSubmissionRequest) (*blockassembly_api.OKResponse, error) {
 	jobID := util.ReverseAndHexEncodeSlice(req.SubmitMiningSolutionRequest.Id)
 
@@ -1486,8 +1532,8 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	}
 
 	// Final validation: ensure coinbase is valid (defense-in-depth)
-	if len(coinbaseTx.Inputs) != 1 {
-		return nil, errors.NewProcessingError("[BlockAssembly][%s] coinbase transaction must have exactly one input after processing, got %d", jobID, len(coinbaseTx.Inputs))
+	if err = validateCoinbaseForSubmission(jobID, coinbaseTx); err != nil {
+		return nil, err
 	}
 
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
