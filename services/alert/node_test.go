@@ -12,10 +12,12 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -385,4 +387,124 @@ func TestNode_AddToConfiscationTransactionWhitelist_OutOfRangeInputIndex(t *test
 
 	require.Equal(t, 1, len(response.NotProcessed))
 	require.Contains(t, response.NotProcessed[0].Reason, "output 99 not found")
+}
+
+// TestNode_AddToConsensusBlacklist_NilParentOutput covers the two defensive
+// branches the sqlitememory store cannot produce: a parent meta.Data with a nil
+// Tx, and a parent Tx whose Outputs slice has an in-range nil element (as built
+// by the external outputs-only fetch path in aerospike get.go, which pads the
+// slice and leaves spent/unstored indices nil). Both must degrade to a
+// NotProcessed entry rather than a nil-pointer panic. A testify MockUtxostore is
+// used because the real store always returns a fully-populated, non-nil Tx.
+func TestNode_AddToConsensusBlacklist_NilParentOutput(t *testing.T) {
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	enforce := []models.Enforce{{Start: 101, Stop: 999999999}}
+
+	t.Run("nil Tx", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
+			Return(&meta.Data{Tx: nil}, nil)
+
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, mockStore, nil, nil, nil, tSettings)
+
+		funds := []models.Fund{{
+			TxOut:           models.TxOut{TxId: tx.TxIDChainHash().String(), Vout: 0},
+			EnforceAtHeight: enforce,
+		}}
+
+		response, err := node.AddToConsensusBlacklist(ctx, funds)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(response.NotProcessed))
+		require.Contains(t, response.NotProcessed[0].Reason, "output 0 not found")
+	})
+
+	t.Run("in-range nil output element", func(t *testing.T) {
+		holeTx := tx.Clone()
+		holeTx.Outputs[1] = nil // in-range index, nil element
+
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
+			Return(&meta.Data{Tx: holeTx}, nil)
+
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, mockStore, nil, nil, nil, tSettings)
+
+		funds := []models.Fund{{
+			TxOut:           models.TxOut{TxId: tx.TxIDChainHash().String(), Vout: 1},
+			EnforceAtHeight: enforce,
+		}}
+
+		response, err := node.AddToConsensusBlacklist(ctx, funds)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(response.NotProcessed))
+		require.Contains(t, response.NotProcessed[0].Reason, "output 1 not found")
+	})
+}
+
+// TestNode_AddToConfiscationTransactionWhitelist_NilParentOutput mirrors the
+// nil-Tx and in-range-nil-element coverage for the confiscation handler, whose
+// guard dominates three downstream Outputs[...] dereferences.
+func TestNode_AddToConfiscationTransactionWhitelist_NilParentOutput(t *testing.T) {
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// build a confiscation tx whose only input spends parent vout 1
+	buildConfiscation := func(t *testing.T) []models.ConfiscationTransactionDetails {
+		t.Helper()
+
+		privateKey, err := bec.NewPrivateKey()
+		require.NoError(t, err)
+
+		lockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().Compressed())
+		require.NoError(t, err)
+
+		confiscationTransaction := bt.Tx{}
+		err = confiscationTransaction.FromUTXOs([]*bt.UTXO{{
+			TxIDHash:       tx.TxIDChainHash(),
+			Vout:           1,
+			LockingScript:  lockingScript,
+			Satoshis:       tx.Outputs[1].Satoshis,
+			SequenceNumber: bt.DefaultSequenceNumber,
+		}}...)
+		require.NoError(t, err)
+
+		_ = confiscationTransaction.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", tx.Outputs[1].Satoshis)
+
+		return []models.ConfiscationTransactionDetails{{
+			ConfiscationTransaction: models.ConfiscationTransaction{
+				EnforceAtHeight: 102,
+				Hex:             confiscationTransaction.String(),
+			},
+		}}
+	}
+
+	t.Run("nil Tx", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
+			Return(&meta.Data{Tx: nil}, nil)
+
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, mockStore, nil, nil, nil, tSettings)
+
+		response, err := node.AddToConfiscationTransactionWhitelist(ctx, buildConfiscation(t))
+		require.NoError(t, err)
+		require.Equal(t, 1, len(response.NotProcessed))
+		require.Contains(t, response.NotProcessed[0].Reason, "output 1 not found")
+	})
+
+	t.Run("in-range nil output element", func(t *testing.T) {
+		holeTx := tx.Clone()
+		holeTx.Outputs[1] = nil // in-range index, nil element
+
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
+			Return(&meta.Data{Tx: holeTx}, nil)
+
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, mockStore, nil, nil, nil, tSettings)
+
+		response, err := node.AddToConfiscationTransactionWhitelist(ctx, buildConfiscation(t))
+		require.NoError(t, err)
+		require.Equal(t, 1, len(response.NotProcessed))
+		require.Contains(t, response.NotProcessed[0].Reason, "output 1 not found")
+	})
 }

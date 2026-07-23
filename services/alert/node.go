@@ -305,8 +305,11 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
-		// guard against a nil parent tx or an out-of-range vout before indexing the outputs
-		if parentTxMeta.Tx == nil || int(vout) >= len(parentTxMeta.Tx.Outputs) {
+		// guard against a nil parent tx, an out-of-range vout, or a nil output element before
+		// indexing the outputs (external outputs-only parents can have nil holes at in-range indices)
+		if parentTxMeta.Tx == nil ||
+			uint64(vout) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
+			parentTxMeta.Tx.Outputs[vout] == nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, errors.NewError("parent tx output %d not found", vout))...)
 			continue
 		}
@@ -414,8 +417,11 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 				continue
 			}
 
-			// guard against a nil parent tx or an out-of-range input index before indexing the outputs
-			if parentTxMeta.Tx == nil || int(txIn.PreviousTxOutIndex) >= len(parentTxMeta.Tx.Outputs) {
+			// guard against a nil parent tx, an out-of-range input index, or a nil output element before
+			// indexing the outputs (external outputs-only parents can have nil holes at in-range indices)
+			if parentTxMeta.Tx == nil ||
+				uint64(txIn.PreviousTxOutIndex) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
+				parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex] == nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("parent tx output %d not found", txIn.PreviousTxOutIndex))...)
 				continue
 			}
