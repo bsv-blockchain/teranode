@@ -1432,6 +1432,11 @@ func validateCoinbaseForSubmission(jobID string, coinbaseTx *bt.Tx) error {
 	// originate a block whose coinbase pays to a P2SH output. This is a local mining
 	// guard, NOT a consensus rule — peer blocks with a P2SH coinbase are valid on the
 	// network and must never be rejected in Block.Valid or block validation.
+	//
+	// This is placed at the shared submission convergence deliberately, not only on the
+	// pool branch: bitcoin-sv's generateBlocks carries the identical guard on the
+	// generate/generatetoaddress path (rpc/mining.cpp:199), so guarding here keeps
+	// GenerateBlocks in parity with upstream rather than making Teranode stricter.
 	if coinbaseHasP2SHOutput(coinbaseTx) {
 		return errors.NewProcessingError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", jobID)
 	}

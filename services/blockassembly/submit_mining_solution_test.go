@@ -356,3 +356,43 @@ func TestSubmitMiningSolution_RejectsP2SHCoinbaseOutput(t *testing.T) {
 		}
 	})
 }
+
+// TestGenerateBlock_RejectsP2SHCoinbaseOutput exercises the generate path end to end
+// (generateBlock -> Mine(address) -> CreateCoinbaseTxCandidateForAddress ->
+// AddressToScript -> submitMiningSolution -> validateCoinbaseForSubmission). Because the
+// P2SH guard lives at the shared submission convergence, mining to a P2SH payout address
+// must be rejected with bad-txns-vout-p2sh, matching bitcoin-sv's generateBlocks guard
+// (rpc/mining.cpp:199).
+func TestGenerateBlock_RejectsP2SHCoinbaseOutput(t *testing.T) {
+	server, _ := setupServer(t)
+	require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+	// Testnet P2SH address (base58 script-hash version byte 0xc4, leading '2').
+	// AddressToScript switches on the decoded version byte and accepts this regardless of
+	// the configured network, emitting the 23-byte OP_HASH160 <20-byte hash> OP_EQUAL
+	// coinbase output script that the guard detects.
+	p2shAddress := "2N2JD6wb56AfK4tfmM6PwdVmoYk2dCKf4Br"
+
+	err := server.generateBlock(t.Context(), &p2shAddress)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-vout-p2sh")
+}
+
+// TestGenerateBlock_AllowsP2PKHCoinbaseOutput is the non-P2SH companion: a standard P2PKH
+// payout address produces an ordinary coinbase output that the guard must NOT reject. The
+// generate path may still fail deeper in the pipeline (block assembly/submission) or wait
+// up to ~5s in waitForBestBlockHeaderUpdate on the success path; either is acceptable —
+// the assertion is only that the P2SH guard specifically does not fire.
+func TestGenerateBlock_AllowsP2PKHCoinbaseOutput(t *testing.T) {
+	server, _ := setupServer(t)
+	require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+	// Testnet P2PKH address (base58 pubkey-hash version byte 0x6f, leading 'n'); produces
+	// a standard OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG coinbase output.
+	p2pkhAddress := "n2ZNV88uQbede7C5M5jzi6SyG4GVVr5JTt"
+
+	err := server.generateBlock(t.Context(), &p2pkhAddress)
+	if err != nil {
+		require.NotContains(t, err.Error(), "bad-txns-vout-p2sh")
+	}
+}
