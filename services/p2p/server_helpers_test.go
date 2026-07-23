@@ -891,3 +891,35 @@ func TestBlacklistedDataHubURL_StoredBeforeBlacklist_NotUsedForCatchup(t *testin
 	require.NoError(t, err)
 	require.Empty(t, resp.Peers, "peer whose stored DataHubURL is now blacklisted must not be a catchup candidate")
 }
+
+// TestIsBaseURLBlacklisted covers the matcher directly, in particular the two
+// bypasses fixed after review: scheme-less blacklist entries ("evil.example"
+// parses as a URL path, so the entry silently never matched a real full-URL
+// announcement) and hostnames with multiple trailing dots.
+func TestIsBaseURLBlacklisted(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		entry   string
+		want    bool
+	}{
+		{"full_url_entry_exact", "http://evil.example", "http://evil.example", true},
+		{"full_url_entry_other_port_path", "http://evil.example:8080/path", "http://evil.example", true},
+		{"scheme_less_entry_full_url_announcement", "http://evil.example:8080/path", "evil.example", true},
+		{"scheme_less_entry_with_port", "https://evil.example/x", "evil.example:9000", true},
+		{"trailing_dot_announcement", "http://evil.example./x", "http://evil.example", true},
+		{"double_trailing_dot_announcement", "http://evil.example../x", "http://evil.example", true},
+		{"case_insensitive_host", "http://EVIL.example/x", "evil.example", true},
+		{"different_host_not_matched", "http://good.example/x", "evil.example", false},
+		{"unparseable_entry_exact_match_fallback", "http://[bad", "http://[bad", true},
+		{"unparseable_entry_no_match", "http://good.example", "http://[bad", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blacklist := map[string]struct{}{tt.entry: {}}
+			require.Equal(t, tt.want, isBaseURLBlacklisted(tt.baseURL, blacklist),
+				"baseURL %q vs blacklist entry %q", tt.baseURL, tt.entry)
+		})
+	}
+}
