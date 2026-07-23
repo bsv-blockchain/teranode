@@ -1495,6 +1495,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	}
 
 	bestBlockHeader, _ := ba.blockAssembler.CurrentBlock()
+	if bestBlockHeader == nil {
+		// CurrentBlock() returns (nil, 0) before the best block is loaded (early
+		// startup / post-reset). Fail cleanly instead of dereferencing nil below.
+		return nil, errors.NewProcessingError("[BlockAssembly][%s] no current best block yet", jobID)
+	}
+
 	if bestBlockHeader.HashPrevBlock.IsEqual(hashPrevBlock) {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] candidate is stale: chain has already advanced past its parent", jobID)
 	}
@@ -2299,6 +2305,12 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 
 	// Store the current best block hash before submission
 	previousBestHeader, _ := ba.blockAssembler.CurrentBlock()
+	if previousBestHeader == nil {
+		// CurrentBlock() returns (nil, 0) before the best block is loaded; return a
+		// clean error rather than panicking on previousBestHeader.Hash() below.
+		return errors.NewProcessingError("[generateBlock] no current best block yet")
+	}
+
 	previousBestHash := previousBestHeader.Hash()
 
 	resp, err := ba.submitMiningSolution(ctx, req)
@@ -2332,6 +2344,13 @@ func (ba *BlockAssembly) waitForBestBlockHeaderUpdate(ctx context.Context, previ
 			return nil
 		case <-ticker.C:
 			currentBestHeader, _ := ba.blockAssembler.CurrentBlock()
+			if currentBestHeader == nil {
+				// Best block not loaded yet (CurrentBlock() returns nil); treat this
+				// tick as "not ready" and keep polling until it loads or waitCtx times
+				// out. Do not error — a nil header is exactly what this loop waits for.
+				continue
+			}
+
 			currentBestHash := currentBestHeader.Hash()
 			if !currentBestHash.IsEqual(previousBestHash) {
 				// Best block has been updated

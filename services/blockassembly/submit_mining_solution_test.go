@@ -8,7 +8,10 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -394,5 +397,65 @@ func TestGenerateBlock_AllowsP2PKHCoinbaseOutput(t *testing.T) {
 	err := server.generateBlock(t.Context(), &p2pkhAddress)
 	if err != nil {
 		require.NotContains(t, err.Error(), "bad-txns-vout-p2sh")
+	}
+}
+
+// TestSubmitMiningSolution_NoCurrentBlock verifies that the stale-candidate check no
+// longer panics when the block assembler has not loaded a best block yet
+// (CurrentBlock() returns nil, e.g. early startup / post-reset). newServerForChanTest
+// wires a zero-value BlockAssembler (bestBlock unset), and a job is preloaded so the
+// call gets past the jobStore lookup and PreviousHash decode and reaches the guard.
+func TestSubmitMiningSolution_NoCurrentBlock(t *testing.T) {
+	s, _ := newServerForChanTest(t)
+
+	// 32-byte job id (chainhash requires exactly 32 bytes).
+	idBytes := make([]byte, 32)
+	idBytes[0] = 0x01
+
+	id, err := chainhash.NewHash(idBytes)
+	require.NoError(t, err)
+
+	// Preload a job keyed by the same id, with a valid 32-byte PreviousHash so the
+	// decode at the top of submitMiningSolution succeeds and execution reaches the
+	// CurrentBlock() guard.
+	s.jobStore.Set(*id, &subtreeprocessor.Job{
+		ID: id,
+		MiningCandidate: &model.MiningCandidate{
+			Id:           idBytes,
+			PreviousHash: make([]byte, 32),
+		},
+	}, time.Minute)
+
+	resp, err := s.submitMiningSolution(context.Background(), &BlockSubmissionRequest{
+		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{Id: idBytes},
+	})
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Contains(t, err.Error(), "no current best block")
+}
+
+// TestWaitForBestBlockHeaderUpdate_ToleratesNilCurrentBlock verifies that the polling
+// loop skips ticks where CurrentBlock() returns nil (best block not loaded) without
+// panicking, and returns cleanly once the context times out. newServerForChanTest's
+// zero-value BlockAssembler returns nil on every tick, so the loop only exits via the
+// context deadline.
+func TestWaitForBestBlockHeaderUpdate_ToleratesNilCurrentBlock(t *testing.T) {
+	s, _ := newServerForChanTest(t)
+
+	// Short deadline so waitCtx (derived from this ctx) fires quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	prevHash, err := chainhash.NewHash(make([]byte, 32))
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() { done <- s.waitForBestBlockHeaderUpdate(ctx, prevHash) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitForBestBlockHeaderUpdate did not return after context timeout")
 	}
 }
