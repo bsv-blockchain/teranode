@@ -617,11 +617,15 @@ func (s *Server) updateStorage(peerID peer.ID, mode string) {
 // this, so Stop() closes the consumer that is actually running.
 func (s *Server) startInvalidBlocksConsumer(ctx context.Context) {
 	if s.invalidBlocksKafkaConsumerClient == nil {
+		s.logger.Warnf("[startInvalidBlocksConsumer] invalid-blocks Kafka consumer not configured (kafka_invalidBlocksConfig unset), peers will not be banned for invalid blocks")
 		return
 	}
 
-	s.logger.Infof("[startInvalidBlocksConsumer] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
-	s.invalidBlocksKafkaConsumerClient.Start(ctx, s.processInvalidBlockMessage, kafka.WithLogErrorAndMoveOn())
+	s.logger.Infof("[startInvalidBlocksConsumer] starting invalid blocks Kafka consumer")
+	// Transient handler failures (e.g. peer registry unavailable) are retried
+	// in process with backoff before the offset is committed; after the retries
+	// are exhausted the message is skipped so it cannot stall the partition.
+	s.invalidBlocksKafkaConsumerClient.Start(ctx, s.processInvalidBlockMessage, kafka.WithRetryAndMoveOn(3, 2, time.Second))
 }
 
 func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
@@ -629,8 +633,9 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 
 	var invalidBlockMsg kafkamessage.KafkaInvalidBlockTopicMessage
 	if err := proto.Unmarshal(message.Value, &invalidBlockMsg); err != nil {
-		s.logger.Errorf("failed to unmarshal invalid block message: %v", err)
-		return err
+		// A malformed message can never succeed on retry: log and skip it.
+		s.logger.Errorf("[processInvalidBlockMessage] failed to unmarshal invalid block message: %v", err)
+		return nil
 	}
 
 	blockHash := invalidBlockMsg.GetBlockHash()

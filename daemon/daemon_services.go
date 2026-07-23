@@ -315,9 +315,16 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
-	invalidBlocksKafkaConsumerClient, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
+	invalidBlocksKafkaConsumerGroup, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
 	if err != nil {
 		return err
+	}
+
+	// Assign only a non-nil consumer group to the interface: a typed nil would
+	// make the server's nil checks pass and silently disable consumption.
+	var invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI
+	if invalidBlocksKafkaConsumerGroup != nil {
+		invalidBlocksKafkaConsumerClient = invalidBlocksKafkaConsumerGroup
 	}
 
 	invalidSubtreeKafkaConsumerClient, err := getKafkaInvalidSubtreeConsumerGroup(createLogger("kpis"), appSettings, serviceNameP2P+"."+appSettings.ClientName)

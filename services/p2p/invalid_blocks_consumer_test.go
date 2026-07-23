@@ -52,7 +52,6 @@ func TestStartInvalidBlocksConsumer_BansPeer(t *testing.T) {
 	require.NoError(t, err)
 
 	s.invalidBlocksKafkaConsumerClient = consumer
-	s.invalidBlocksTopicName = topic
 
 	defer func() {
 		require.NoError(t, s.invalidBlocksKafkaConsumerClient.Close())
@@ -105,11 +104,13 @@ func TestProcessInvalidBlockMessage_UnknownBlockIsNotAnError(t *testing.T) {
 	require.Zero(t, info.BanScore, "no ban score must be added when no peer sent the block")
 }
 
-func TestProcessInvalidBlockMessage_UnmarshalErrorIsReturned(t *testing.T) {
+func TestProcessInvalidBlockMessage_MalformedMessageIsSkipped(t *testing.T) {
 	s, _ := newServerWithLocalRegistry(t)
 
+	// A malformed message can never succeed on retry: it must be logged and
+	// skipped, not returned as an error the consumer would retry.
 	err := s.processInvalidBlockMessage(&kafka.KafkaMessage{Value: []byte("not a protobuf message")})
-	require.Error(t, err)
+	require.NoError(t, err)
 }
 
 type failingBanScoreRegistry struct {
@@ -135,5 +136,5 @@ func TestProcessInvalidBlockMessage_AddBanScoreErrorIsReturned(t *testing.T) {
 	require.Error(t, err)
 
 	_, stillThere := s.blockPeerMap.Load(blockHash)
-	require.True(t, stillThere, "entry must be kept so a retry can still ban the peer")
+	require.True(t, stillThere, "entry must be kept so the consumer's in-process retries can still ban the peer")
 }

@@ -35,7 +35,6 @@ type Server struct {
     blockTopicName                    string
     subtreeTopicName                  string
     rejectedTxTopicName               string
-    invalidBlocksTopicName            string             // Kafka topic for invalid blocks
     invalidSubtreeTopicName           string             // Kafka topic for invalid subtrees
     nodeStatusTopicName               string             // pubsub topic for node status messages
     topicPrefix                       string             // Chain identifier prefix for topic validation
