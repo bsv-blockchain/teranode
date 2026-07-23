@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	stderrors "errors"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -97,7 +98,41 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 	if errors.Is(err, errors.ErrBlockIncomplete) {
 		return
 	}
+	if catchupFailureAlreadyReported(err) {
+		// The layer where the failure occurred (e.g. the header-fetch stage)
+		// already recorded it; reporting again would let CatchupFailures exceed
+		// CatchupAttempts and double the reputation penalty for one attempt.
+		return
+	}
 	u.reportCatchupFailure(ctx, peerID)
+}
+
+// catchupFailureReportedError marks an error chain whose catchup failure has
+// already been recorded against the peer by the layer where it occurred, so
+// upper layers that report failures for propagated errors can skip
+// re-reporting. It is transparent to error-code matching: teranode errors.Is
+// digs through foreign links via Unwrap.
+type catchupFailureReportedError struct{ err error }
+
+func (e *catchupFailureReportedError) Error() string { return e.err.Error() }
+func (e *catchupFailureReportedError) Unwrap() error { return e.err }
+
+// markCatchupFailureReported wraps err to signal that its catchup failure has
+// already been reported to the P2P service. Nil-safe.
+func markCatchupFailureReported(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &catchupFailureReportedError{err: err}
+}
+
+// catchupFailureAlreadyReported reports whether err carries the
+// markCatchupFailureReported marker anywhere in its chain. Uses the stdlib
+// errors.As because it walks every Unwrap link uniformly, regardless of where
+// foreign wrappers sit relative to teranode *Error links.
+func catchupFailureAlreadyReported(err error) bool {
+	var marker *catchupFailureReportedError
+	return stderrors.As(err, &marker)
 }
 
 func (u *Server) reportCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) {
