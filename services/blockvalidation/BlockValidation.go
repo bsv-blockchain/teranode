@@ -1726,6 +1726,24 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// NOTE: We do NOT cache the block here as subtrees are not yet loaded.
 			// The block will be cached after subtrees are validated in the background goroutine.
 
+			// Run the contextual header checks (2h-future timestamp, median-time-past, block-version
+			// floor) synchronously at receipt time BEFORE optimistically adding the block. The full
+			// block.Valid() runs later in the background goroutine below, where a drifted time.Now()
+			// would evaluate the 2-hours-in-the-future bound against background-execution time and
+			// let a too-far-future block be transiently accepted then reverted (issue #1149). These
+			// checks use the same blockHeaders snapshot the background Valid() consumes.
+			if err = block.CheckHeaderContextual(blockHeaders, u.settings, ctxLogger); err != nil {
+				if errors.Is(err, errors.ErrBlockInvalid) {
+					if !opts.IsRevalidation {
+						u.storeInvalidBlock(ctx, block, opts.PeerID, err.Error())
+					}
+
+					return errors.NewBlockInvalidError("[ValidateBlock][%s] block header failed contextual validation", block.Header.Hash().String(), err)
+				}
+
+				return err
+			}
+
 			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
 
 			if err := u.computeAndSetCoinbaseBUMP(ctx, block); err != nil {
