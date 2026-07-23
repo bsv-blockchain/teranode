@@ -287,3 +287,102 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 		require.Nil(t, utxoSpend.SpendingData)
 	})
 }
+
+// TestNode_AddToConsensusBlacklist_OutOfRangeVout ensures a fund referencing a
+// vout beyond the parent tx's output count is rejected gracefully rather than
+// panicking with an index-out-of-range on parentTxMeta.Tx.Outputs.
+func TestNode_AddToConsensusBlacklist_OutOfRangeVout(t *testing.T) {
+	ctx := context.Background()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	logger := ulogger.NewErrorTestLogger(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(101)
+
+	_, err = utxoStore.Create(ctx, tx, 101)
+	require.NoError(t, err)
+
+	node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
+
+	// tx has 10 outputs; vout 99 is out of range
+	funds := []models.Fund{{
+		TxOut: models.TxOut{
+			TxId: tx.TxIDChainHash().String(),
+			Vout: 99,
+		},
+		EnforceAtHeight: []models.Enforce{
+			{
+				Start: 101,
+				Stop:  999999999,
+			},
+		},
+	}}
+
+	response, err := node.AddToConsensusBlacklist(ctx, funds)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, len(response.NotProcessed))
+	require.Contains(t, response.NotProcessed[0].Reason, "output 99 not found")
+}
+
+// TestNode_AddToConfiscationTransactionWhitelist_OutOfRangeInputIndex ensures a
+// confiscation transaction whose input references a vout beyond the parent tx's
+// output count is rejected gracefully rather than panicking on
+// parentTxMeta.Tx.Outputs.
+func TestNode_AddToConfiscationTransactionWhitelist_OutOfRangeInputIndex(t *testing.T) {
+	ctx := context.Background()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	logger := ulogger.NewErrorTestLogger(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(101)
+
+	_, err = utxoStore.Create(ctx, tx, 101)
+	require.NoError(t, err)
+
+	node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
+
+	privateKey, err := bec.NewPrivateKey()
+	require.NoError(t, err)
+
+	lockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().Compressed())
+	require.NoError(t, err)
+
+	// build a confiscation tx whose only input spends parent vout 99 (out of range)
+	confiscationTransaction := bt.Tx{}
+	err = confiscationTransaction.FromUTXOs([]*bt.UTXO{{
+		TxIDHash:       tx.TxIDChainHash(),
+		Vout:           99,
+		LockingScript:  lockingScript,
+		Satoshis:       tx.Outputs[0].Satoshis,
+		SequenceNumber: bt.DefaultSequenceNumber,
+	}}...)
+	require.NoError(t, err)
+
+	_ = confiscationTransaction.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", tx.Outputs[0].Satoshis)
+
+	confiscation := []models.ConfiscationTransactionDetails{{
+		ConfiscationTransaction: models.ConfiscationTransaction{
+			EnforceAtHeight: 102,
+			Hex:             confiscationTransaction.String(),
+		},
+	}}
+
+	response, err := node.AddToConfiscationTransactionWhitelist(ctx, confiscation)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, len(response.NotProcessed))
+	require.Contains(t, response.NotProcessed[0].Reason, "output 99 not found")
+}

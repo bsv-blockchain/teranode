@@ -305,8 +305,14 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
+		// guard against a nil parent tx or an out-of-range vout before indexing the outputs
+		if parentTxMeta.Tx == nil || int(vout) >= len(parentTxMeta.Tx.Outputs) {
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, errors.NewError("parent tx output %d not found", vout))...)
+			continue
+		}
+
 		// calculate the utxo hash from the output script
-		utxoHash, err := util.UTXOHashFromOutput(parentTxMeta.Tx.TxIDChainHash(), parentTxMeta.Tx.Outputs[fund.TxOut.Vout], vout)
+		utxoHash, err := util.UTXOHashFromOutput(parentTxMeta.Tx.TxIDChainHash(), parentTxMeta.Tx.Outputs[vout], vout)
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
@@ -405,6 +411,12 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 			parentTxMeta, err := n.utxoStore.Get(ctx, txIn.PreviousTxIDChainHash(), fields.Tx)
 			if err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
+				continue
+			}
+
+			// guard against a nil parent tx or an out-of-range input index before indexing the outputs
+			if parentTxMeta.Tx == nil || int(txIn.PreviousTxOutIndex) >= len(parentTxMeta.Tx.Outputs) {
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("parent tx output %d not found", txIn.PreviousTxOutIndex))...)
 				continue
 			}
 
