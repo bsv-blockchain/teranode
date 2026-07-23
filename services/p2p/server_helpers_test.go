@@ -601,9 +601,11 @@ func TestValidateDataHubURL(t *testing.T) {
 		{"localhost_port", "http://localhost:8080/api", true, "localhost"},
 		{"sub_localhost", "http://sub.localhost/api", true, "localhost"},
 
-		// Rooted FQDN (trailing dot) must not bypass the checks
+		// Rooted FQDN (trailing dots, even multiple) must not bypass the checks
 		{"localhost_trailing_dot", "http://localhost./api", true, "localhost"},
 		{"loopback_trailing_dot", "http://127.0.0.1./api", true, "loopback"},
+		{"localhost_double_trailing_dot", "http://localhost../api", true, "localhost"},
+		{"loopback_double_trailing_dot", "http://127.0.0.1../api", true, "loopback"},
 
 		// Hostname case must not bypass the checks (DNS is case-insensitive)
 		{"localhost_uppercase", "http://LOCALHOST/api", true, "localhost"},

@@ -296,9 +296,9 @@ func isBaseURLBlacklisted(baseURL string, blacklist map[string]struct{}) bool {
 
 	// Check each blacklisted URL
 	for blocked := range blacklist {
-		blockedHost := extractHost(blocked)
+		blockedHost := blacklistEntryHost(blocked)
 		if blockedHost == "" {
-			// Fall back to exact string matching for invalid blacklisted URLs
+			// Fall back to exact string matching for unparseable blacklisted entries
 			if baseURL == blocked {
 				return true
 			}
@@ -314,6 +314,18 @@ func isBaseURLBlacklisted(baseURL string, blacklist map[string]struct{}) bool {
 	return false
 }
 
+// blacklistEntryHost extracts the normalized host of a blacklist entry.
+// Operators commonly configure bare hosts ("evil.example"), which url.Parse
+// reads as a path (empty host), so scheme-less entries are retried in
+// protocol-relative form. Returns "" only for entries with no parseable host.
+func blacklistEntryHost(blocked string) string {
+	if host := extractHost(blocked); host != "" {
+		return host
+	}
+
+	return extractHost("//" + blocked)
+}
+
 // extractHost extracts and normalizes the host component from a URL
 func extractHost(urlStr string) string {
 	parsedURL, err := url.Parse(urlStr)
@@ -321,9 +333,10 @@ func extractHost(urlStr string) string {
 		return ""
 	}
 
-	// Strip the trailing dot of a rooted FQDN so "evil.example." matches a
-	// blacklist entry for "evil.example".
-	host := strings.TrimSuffix(parsedURL.Hostname(), ".")
+	// Strip trailing dots of a rooted FQDN so "evil.example." (or the
+	// non-resolvable "evil.example..") matches a blacklist entry for
+	// "evil.example".
+	host := strings.TrimRight(parsedURL.Hostname(), ".")
 	if host == "" {
 		return ""
 	}
@@ -373,10 +386,10 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 		return errors.NewInvalidArgumentError("DataHubURL has invalid scheme: %s (only http/https allowed)", parsed.Scheme)
 	}
 
-	// Canonicalize before checking: strip the trailing dot of a rooted FQDN and
+	// Canonicalize before checking: strip trailing dots of a rooted FQDN and
 	// lowercase, so "localhost.", "LOCALHOST" or "127.0.0.1." cannot slip past
 	// the checks below (DNS resolution is case-insensitive).
-	hostname := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	hostname := strings.ToLower(strings.TrimRight(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
 	}

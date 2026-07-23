@@ -240,6 +240,15 @@ func NewServer(
 		return nil, errors.NewConfigurationError("listen_mode must be one of '%s', '%s', or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, settings.ListenModeSilent, listenMode)
 	}
 
+	// Surface blacklist entries with no parseable host: they can only ever
+	// match an announcement byte-for-byte, so the operator almost certainly
+	// misconfigured them. Warn loudly instead of leaving the entry silently inert.
+	for blocked := range tSettings.SubtreeValidation.BlacklistedBaseURLs {
+		if blacklistEntryHost(blocked) == "" {
+			logger.Warnf("[P2P] blacklisted base URL %q has no parseable host and will only match announcements exactly equal to it", blocked)
+		}
+	}
+
 	banlist, banChan, err := GetBanList(ctx, logger, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("error getting banlist", err)
