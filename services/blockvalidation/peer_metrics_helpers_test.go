@@ -9,14 +9,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// failureCountingP2PClient counts RecordCatchupFailure calls; every other
+// failureCountingP2PClient counts recorded catchup failures; every other
 // P2PClientI method is inherited as a no-op from maliciousAbortP2PClient.
+// reportCatchupFailure routes through RecordCatchupFailureWithKind, so both
+// entry points are counted.
 type failureCountingP2PClient struct {
 	maliciousAbortP2PClient
 	failures int
 }
 
 func (f *failureCountingP2PClient) RecordCatchupFailure(_ context.Context, _ string) error {
+	f.failures++
+	return nil
+}
+
+func (f *failureCountingP2PClient) RecordCatchupFailureWithKind(_ context.Context, _, _, _ string) error {
 	f.failures++
 	return nil
 }

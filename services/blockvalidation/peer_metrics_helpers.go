@@ -2,7 +2,6 @@ package blockvalidation
 
 import (
 	"context"
-	stderrors "errors"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -107,32 +106,54 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 	u.reportCatchupFailure(ctx, peerID)
 }
 
-// catchupFailureReportedError marks an error chain whose catchup failure has
-// already been recorded against the peer by the layer where it occurred, so
-// upper layers that report failures for propagated errors can skip
-// re-reporting. It is transparent to error-code matching: teranode errors.Is
-// digs through foreign links via Unwrap.
-type catchupFailureReportedError struct{ err error }
-
-func (e *catchupFailureReportedError) Error() string { return e.err.Error() }
-func (e *catchupFailureReportedError) Unwrap() error { return e.err }
+// catchupFailureReportedKey is the error-data key that marks an error chain
+// whose catchup failure has already been recorded against the peer by the
+// layer where it occurred, so upper layers that report failures for propagated
+// errors can skip re-reporting.
+const catchupFailureReportedKey = "catchup_failure_reported"
 
 // markCatchupFailureReported wraps err to signal that its catchup failure has
-// already been reported to the P2P service. Nil-safe.
+// already been reported to the P2P service. The wrapper is a native *Error
+// carrying a data-key marker: the errors package flattens foreign wrapper
+// types into message-only links (breaking code matching downstream), so the
+// marker must live in error data on a native link, which keeps the wrapped
+// chain fully intact for errors.Is dispatch. Nil-safe.
 func markCatchupFailureReported(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &catchupFailureReportedError{err: err}
+	wrapped := errors.NewProcessingError("catchup failure reported at source: %w", err)
+	wrapped.SetData(catchupFailureReportedKey, true)
+	return wrapped
 }
 
 // catchupFailureAlreadyReported reports whether err carries the
-// markCatchupFailureReported marker anywhere in its chain. Uses the stdlib
-// errors.As because it walks every Unwrap link uniformly, regardless of where
-// foreign wrappers sit relative to teranode *Error links.
+// markCatchupFailureReported marker anywhere in its wrapped chain. The walk is
+// depth-bounded defensively, mirroring the errors package's own chain walks.
 func catchupFailureAlreadyReported(err error) bool {
-	var marker *catchupFailureReportedError
-	return stderrors.As(err, &marker)
+	var e *errors.Error
+	if !errors.As(err, &e) {
+		return false
+	}
+
+	for depth := 0; e != nil && depth < 32; depth++ {
+		if v, ok := e.GetData(catchupFailureReportedKey).(bool); ok && v {
+			return true
+		}
+
+		next := e.WrappedErr()
+		if next == nil {
+			return false
+		}
+
+		var nextErr *errors.Error
+		if !errors.As(next, &nextErr) {
+			return false
+		}
+		e = nextErr
+	}
+
+	return false
 }
 
 func (u *Server) reportCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) {
