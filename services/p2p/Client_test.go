@@ -39,6 +39,7 @@ type MockPeerServiceClient struct {
 	GetPeersForCatchupFunc           func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error)
 	ReportValidSubtreeFunc           func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error)
 	ReportValidBlockFunc             func(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error)
+	ReportValidBlockHeadersFunc      func(ctx context.Context, in *p2p_api.ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockHeadersResponse, error)
 	ReportValidatedChainProgressFunc func(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error)
 	IsPeerMaliciousFunc              func(ctx context.Context, in *p2p_api.IsPeerMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerMaliciousResponse, error)
 	IsPeerUnhealthyFunc              func(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error)
@@ -178,6 +179,13 @@ func (m *MockPeerServiceClient) ReportValidBlock(ctx context.Context, in *p2p_ap
 		return m.ReportValidBlockFunc(ctx, in, opts...)
 	}
 	return &p2p_api.ReportValidBlockResponse{Success: true}, nil
+}
+
+func (m *MockPeerServiceClient) ReportValidBlockHeaders(ctx context.Context, in *p2p_api.ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockHeadersResponse, error) {
+	if m.ReportValidBlockHeadersFunc != nil {
+		return m.ReportValidBlockHeadersFunc(ctx, in, opts...)
+	}
+	return &p2p_api.ReportValidBlockHeadersResponse{Success: true}, nil
 }
 
 func (m *MockPeerServiceClient) ReportValidatedChainProgress(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error) {

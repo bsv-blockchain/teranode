@@ -332,6 +332,59 @@ func TestGetPeersForCatchup_UsesCatchupSpecificCounters(t *testing.T) {
 	require.Equal(t, int64(1), p.CatchupFailures)
 }
 
+func TestReportValidBlockHeaders_CreditsReputationNotCatchupCounters(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.ReportValidBlockHeaders(context.Background(), &p2p_api.ReportValidBlockHeadersRequest{
+		PeerId:     pid.String(),
+		DurationMs: 120,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+
+	got, _ := reg.Get(pid.String())
+	require.Equal(t, int64(1), got.InteractionSuccesses)
+	require.Equal(t, int64(120), got.AvgResponseTimeMs)
+	require.Equal(t, int64(0), got.CatchupSuccesses, "headers batch must not count as a completed catchup")
+	require.Equal(t, int64(0), got.CatchupAttempts)
+}
+
+// TestReportValidBlockHeaders_KeepsFailingPeerHealthy guards the catchup
+// recovery dynamics: a peer that serves headers fine but keeps failing at the
+// block-fetch stage (e.g. it rate-limits subtree requests) must not collapse to
+// an unhealthy reputation, or catchup would exclude the only peer that has the
+// blocks and never recover.
+func TestReportValidBlockHeaders_KeepsFailingPeerHealthy(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	ctx := context.Background()
+
+	// Three catchup cycles: headers served ok, then the catchup fails.
+	for i := 0; i < 3; i++ {
+		_, err := s.RecordCatchupAttempt(ctx, &p2p_api.RecordCatchupAttemptRequest{PeerId: pid.String()})
+		require.NoError(t, err)
+		_, err = s.ReportValidBlockHeaders(ctx, &p2p_api.ReportValidBlockHeadersRequest{PeerId: pid.String(), DurationMs: 100})
+		require.NoError(t, err)
+		_, err = s.RecordCatchupFailure(ctx, &p2p_api.RecordCatchupFailureRequest{PeerId: pid.String()})
+		require.NoError(t, err)
+	}
+
+	unhealthy, err := s.IsPeerUnhealthy(ctx, &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.False(t, unhealthy.IsUnhealthy, "peer serving headers must stay healthy despite catchup failures (reputation: %.2f, reason: %s)", unhealthy.ReputationScore, unhealthy.Reason)
+}
+
+func TestReportValidBlockHeaders_InvalidPeerID(t *testing.T) {
+	s, _, _ := freshTestServer(t)
+	_, err := s.ReportValidBlockHeaders(context.Background(), &p2p_api.ReportValidBlockHeadersRequest{PeerId: "not-a-peer"})
+	require.Error(t, err)
+
+	_, err = s.ReportValidBlockHeaders(context.Background(), &p2p_api.ReportValidBlockHeadersRequest{})
+	require.Error(t, err)
+}
+
 func TestReportValidSubtree_HappyPath(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})

@@ -399,6 +399,49 @@ func (s *Server) ReportValidatedChainProgress(ctx context.Context, req *p2p_api.
 	}, nil
 }
 
+// ReportValidBlockHeaders records that a peer successfully served a batch of
+// block headers during catchup. This credits the peer with a generic
+// interaction success (reputation and response time) WITHOUT incrementing the
+// catchup-operation counters: a headers batch is one stage of a catchup, not a
+// completed catchup. Keeping this credit matters — during a catchup that keeps
+// failing at the block-fetch stage (e.g. the serving peer rate-limits subtree
+// requests), it offsets the recorded failures so the peer's reputation does not
+// collapse below the unhealthy threshold and get the only viable peer excluded.
+func (s *Server) ReportValidBlockHeaders(ctx context.Context, req *p2p_api.ReportValidBlockHeadersRequest) (*p2p_api.ReportValidBlockHeadersResponse, error) {
+	if s.peerRegistry == nil {
+		return &p2p_api.ReportValidBlockHeadersResponse{
+			Success: false,
+			Message: "peer registry not initialized",
+		}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+	}
+
+	if req.PeerId == "" {
+		return &p2p_api.ReportValidBlockHeadersResponse{
+			Success: false,
+			Message: "peer ID is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("peer ID is required"))
+	}
+
+	if _, err := peer.Decode(req.PeerId); err != nil {
+		return &p2p_api.ReportValidBlockHeadersResponse{
+			Success: false,
+			Message: "invalid peer ID",
+		}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
+	}
+
+	if err := s.peerRegistry.UpdatePeerMetrics(ctx, req.PeerId, 0, 0, 0, true, false, false, req.DurationMs); err != nil {
+		return &p2p_api.ReportValidBlockHeadersResponse{
+			Success: false,
+			Message: "failed to record headers success",
+		}, errors.WrapGRPC(errors.NewServiceError("update peer metrics", err))
+	}
+
+	return &p2p_api.ReportValidBlockHeadersResponse{
+		Success: true,
+		Message: "headers success recorded",
+	}, nil
+}
+
 // IsPeerMalicious returns whether a peer is currently considered malicious
 // (banned in the centralized registry).
 func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMaliciousRequest) (*p2p_api.IsPeerMaliciousResponse, error) {

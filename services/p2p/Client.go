@@ -580,6 +580,35 @@ func (c *Client) ReportValidBlock(ctx context.Context, peerID string, blockHash 
 	return nil
 }
 
+// ReportValidBlockHeaders reports that a peer successfully served a batch of block
+// headers during catchup. Credits a generic interaction success (reputation and
+// response time) without touching the catchup-operation counters.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: Peer ID that served the headers
+//   - durationMs: Time taken to serve the headers (0 = not applicable)
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error {
+	req := &p2p_api.ReportValidBlockHeadersRequest{
+		PeerId:     peerID,
+		DurationMs: durationMs,
+	}
+
+	resp, err := c.client.ReportValidBlockHeaders(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report valid block headers: %s", resp.Message)
+	}
+
+	return nil
+}
+
 // ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
 //
 // Parameters:

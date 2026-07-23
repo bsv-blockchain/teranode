@@ -64,6 +64,25 @@ func (u *Server) reportCatchupSuccess(ctx context.Context, peerID string, durati
 	// Fallback: No local metrics needed since we're using P2P service for all peer tracking
 }
 
+// reportValidBlockHeaders credits a peer for successfully serving a batch of
+// block headers during catchup. This is a generic interaction success
+// (reputation and response time) and does NOT count as a completed catchup —
+// the catchup-operation outcome is reported separately by doCatchup. Keeping
+// this credit prevents a peer that serves headers fine but keeps failing at the
+// block-fetch stage from having its reputation collapse to the point where the
+// only viable catchup peer is excluded as unhealthy.
+func (u *Server) reportValidBlockHeaders(ctx context.Context, peerID string, duration time.Duration) {
+	if peerID == "" {
+		return
+	}
+
+	if u.p2pClient != nil {
+		if err := u.p2pClient.ReportValidBlockHeaders(ctx, peerID, duration.Milliseconds()); err != nil {
+			u.logger.Warnf("[peer_metrics] Failed to report valid block headers to P2P service for peer %s: %v", peerID, err)
+		}
+	}
+}
+
 // reportCatchupFailure reports a failed catchup to the P2P service.
 // Falls back to local metrics if P2P client is unavailable.
 //
