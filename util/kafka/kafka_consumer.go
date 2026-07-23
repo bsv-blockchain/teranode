@@ -720,7 +720,13 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 				}
 				backoff := time.Duration(options.backoffMultiplier*(i+1)) * options.backoffDurationType
 				logger.Warnf("[kafka_consumer] retrying processing kafka message... attempt %d/%d, backoff %v", i+1, options.maxRetries, backoff)
-				time.Sleep(backoff)
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					// Shutdown mid-backoff: return the error without committing
+					// so the message is redelivered after restart.
+					return err
+				}
 			}
 
 			key := ""
@@ -743,7 +749,13 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 				}
 				backoff := time.Duration(options.backoffMultiplier*(i+1)) * options.backoffDurationType
 				logger.Warnf("[kafka_consumer] retrying processing kafka message... attempt %d/%d, backoff %v", i+1, options.maxRetries, backoff)
-				time.Sleep(backoff)
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					// Shutdown mid-backoff: return the error without committing
+					// so the message is redelivered after restart.
+					return err
+				}
 			}
 
 			key := ""

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -308,4 +309,35 @@ func TestNewKafkaConsumerGroup_AppliesDefaultTimeouts(t *testing.T) {
 			_ = consumer.Close()
 		})
 	}
+}
+
+func TestWrapConsumerFnRetryBackoffIsCancellable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	options := &consumerOptions{
+		withRetryAndMoveOn:  true,
+		maxRetries:          3,
+		backoffMultiplier:   10,
+		backoffDurationType: time.Second, // 10s+20s+30s if the backoff were uninterruptible
+	}
+
+	failErr := errors.NewProcessingError("handler always fails")
+	calls := 0
+	wrapped := wrapConsumerFn(ctx, ulogger.TestLogger{}, "test-topic", func(*KafkaMessage) error {
+		calls++
+		return failErr
+	}, options)
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := wrapped(&KafkaMessage{})
+
+	require.Error(t, err, "cancellation mid-backoff must surface the handler error, not swallow it")
+	require.Less(t, time.Since(start), 5*time.Second, "backoff must abort promptly on context cancellation")
+	require.Equal(t, 1, calls, "no further attempts after the context is cancelled")
 }
