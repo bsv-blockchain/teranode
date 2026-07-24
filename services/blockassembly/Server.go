@@ -1659,6 +1659,11 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	ba.logger.Debugf("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	ba.logger.Debugf("[BlockAssembly][%s][%s] block difficulty: %s", jobID, block.Header.Hash(), block.Header.Bits.CalculateDifficulty().String())
+	// Safe without a nil check: the guard at the top of this function already established a
+	// non-nil best block, and no production path clears bestBlock back to nil once loaded
+	// (every writer stores a fresh non-nil BestBlockInfo), so CurrentBlock() cannot return
+	// nil here — the .Timestamp deref below (evaluated eagerly as a Debugf arg regardless
+	// of log level) therefore cannot panic.
 	bestBlockHeader, _ = ba.blockAssembler.CurrentBlock()
 	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(bestBlockHeader.Timestamp), 0)).String())
 
@@ -2306,8 +2311,13 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	// Store the current best block hash before submission
 	previousBestHeader, _ := ba.blockAssembler.CurrentBlock()
 	if previousBestHeader == nil {
-		// CurrentBlock() returns (nil, 0) before the best block is loaded; return a
-		// clean error rather than panicking on previousBestHeader.Hash() below.
+		// Defensive: GetMiningCandidate and Mine above have already succeeded here, which
+		// implies a loaded best block, so this branch is not reached in normal operation
+		// (and is not exercised by the test suite, which always starts the assembler —
+		// Start sets bestBlock synchronously). Without it, previousBestHeader.Hash() below
+		// — which is nil-safe, so this is a bogus-hash logic bug, not a panic — would
+		// derive previousBestHash from a nil header and compare against a garbage value.
+		// Return a clean error instead.
 		return errors.NewProcessingError("[generateBlock] no current best block yet")
 	}
 
@@ -2345,9 +2355,11 @@ func (ba *BlockAssembly) waitForBestBlockHeaderUpdate(ctx context.Context, previ
 		case <-ticker.C:
 			currentBestHeader, _ := ba.blockAssembler.CurrentBlock()
 			if currentBestHeader == nil {
-				// Best block not loaded yet (CurrentBlock() returns nil); treat this
-				// tick as "not ready" and keep polling until it loads or waitCtx times
-				// out. Do not error — a nil header is exactly what this loop waits for.
+				// Best block not loaded yet (CurrentBlock() returns nil). Skip this tick
+				// and keep polling until it loads or waitCtx times out. Without this,
+				// Hash() below — nil-safe, so no panic — would derive a bogus hash from
+				// the nil header that spuriously fails the "changed" check and returns
+				// early. Do not error — a nil header is exactly what this loop waits for.
 				continue
 			}
 

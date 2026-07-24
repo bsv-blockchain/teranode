@@ -1386,7 +1386,10 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 // TestBlockValid_AcceptsP2SHCoinbaseOutput pins accept-side parity with bitcoin-sv:
 // CheckBlock/CheckCoinbase never runs the P2SH output scan on the coinbase (the
 // bad-txns-vout-p2sh rule in CheckRegularTransaction applies to non-coinbase
-// transactions only), so a peer block whose coinbase pays to a P2SH-shaped output is
+// transactions only — svnode validation.cpp:611-623, DoS 100, on both the mempool and
+// block-consensus paths; the mining RPCs reuse the same bad-txns-vout-p2sh string via
+// HasP2SHOutput, but that is a separate mining-side emitter, not the consensus rule), so
+// a peer block whose coinbase pays to a P2SH-shaped output is
 // consensus-valid and Block.Valid must accept it. Rejecting it here would make the
 // node reject blocks the rest of the network accepts. The mining-side guard against
 // *originating* such a coinbase lives in blockassembly SubmitMiningSolution and must
