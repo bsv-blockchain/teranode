@@ -19,6 +19,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+const aerospikeInvalidValueMsg = "[Aerospike] Invalid value %s=%v"
+
 var aerospikeConnectionMutex sync.Mutex
 var aerospikeConnections map[string]*uaerospike.Client
 
@@ -736,7 +738,7 @@ func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Lo
 
 	valueBool, err := strconv.ParseBool(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%t", key, valueBool)
@@ -753,7 +755,7 @@ func getQueryInt(url *url.URL, key string, defaultValue int, logger ulogger.Logg
 
 	valueInt, err := strconv.Atoi(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%d", key, valueInt)
@@ -770,7 +772,7 @@ func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logg
 
 	valueDuration, err := time.ParseDuration(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%s", key, valueDuration.String())
@@ -787,7 +789,7 @@ func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger ulog
 
 	valueFloat64, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%f", key, valueFloat64)

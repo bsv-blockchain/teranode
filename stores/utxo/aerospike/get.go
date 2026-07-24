@@ -89,6 +89,8 @@ var (
 	previousOutputsDecorateStat = gocoreStat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
+const errCouldNotReadInput = "could not read input"
+
 // batchGetItemData holds the result of a batch get operation
 type batchGetItemData struct {
 	Data *meta.Data // Retrieved data
@@ -498,7 +500,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 
 			_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
-				return nil, errors.NewTxInvalidError("could not read input", err)
+				return nil, errors.NewTxInvalidError(errCouldNotReadInput, err)
 			}
 		}
 	}
@@ -779,7 +781,7 @@ NEXT_BATCH_RECORD:
 
 							_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 							if err != nil {
-								return errors.NewTxInvalidError("could not read input", err)
+								return errors.NewTxInvalidError(errCouldNotReadInput, err)
 							}
 						}
 					}
@@ -986,7 +988,7 @@ func processInputsToTxInpoints(bins aerospike.BinMap) (txInpoints subtree.TxInpo
 
 		_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 		if err != nil {
-			return txInpoints, errors.NewProcessingError("could not read input", err)
+			return txInpoints, errors.NewProcessingError(errCouldNotReadInput, err)
 		}
 	}
 

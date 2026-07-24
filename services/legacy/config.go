@@ -52,6 +52,11 @@ const (
 	defaultMinRelayTxFee           = bsvutil.Amount(1)
 )
 
+const (
+	// unableToParsePrefix is the shared prefix for checkpoint parse errors.
+	unableToParsePrefix = "unable to parse "
+)
+
 // Config provides a unified interface for accessing configuration values from various sources.
 // It supports type-safe retrieval of configuration parameters with optional default values
 // and handles common data types used in legacy protocol configuration.
@@ -275,25 +280,25 @@ func normalizeAddresses(addrs []string, defaultPort string) []string {
 func newCheckpointFromStr(checkpoint string) (chaincfg.Checkpoint, error) {
 	parts := strings.Split(checkpoint, ":")
 	if len(parts) != 2 {
-		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
+		return chaincfg.Checkpoint{}, fmt.Errorf(unableToParsePrefix+
 			"checkpoint %q -- use the syntax <height>:<hash>",
 			checkpoint)
 	}
 
 	height, err := strconv.ParseInt(parts[0], 10, 32)
 	if err != nil {
-		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
+		return chaincfg.Checkpoint{}, fmt.Errorf(unableToParsePrefix+
 			"checkpoint %q due to malformed height", checkpoint)
 	}
 
 	if len(parts[1]) == 0 {
-		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
+		return chaincfg.Checkpoint{}, fmt.Errorf(unableToParsePrefix+
 			"checkpoint %q due to missing hash", checkpoint)
 	}
 
 	hash, err := chainhash.NewHashFromStr(parts[1])
 	if err != nil {
-		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
+		return chaincfg.Checkpoint{}, fmt.Errorf(unableToParsePrefix+
 			"checkpoint %q due to malformed hash", checkpoint)
 	}
 

@@ -20,6 +20,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const errProcessTxMetaContextDone = "[processTxMetaUsingStore] context done"
+
 var TxMetaFieldsForDecorate = []fields.FieldName{fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating}
 
 // unresolvedMetaDataSlicePool reduces allocation pressure by reusing
@@ -105,7 +107,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						// Return the error that caused the cancellation
-						return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
+						return errors.NewContextCanceledError(errProcessTxMetaContextDone, gCtx.Err())
 
 					default:
 						if txHashes[i+j].Equal(*subtree.CoinbasePlaceholderHash) {
@@ -129,7 +131,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 				select {
 				case <-gCtx.Done(): // Listen for cancellation signal
 					// Return the error that caused the cancellation
-					return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
+					return errors.NewContextCanceledError(errProcessTxMetaContextDone, gCtx.Err())
 				default:
 					missingTxThresholdInt32, err := safeconversion.IntToInt32(missingTxThreshold)
 					if err != nil {
@@ -197,7 +199,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						// Return the error that caused the cancellation
-						return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
+						return errors.NewContextCanceledError(errProcessTxMetaContextDone, gCtx.Err())
 
 					default:
 						txHash := txHashes[i+j]
@@ -248,7 +250,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.NewContextCanceledError("[processTxMetaUsingStore] context done", err)
+			return int(missed.Load()), errors.NewContextCanceledError(errProcessTxMetaContextDone, err)
 		}
 
 		return int(missed.Load()), nil

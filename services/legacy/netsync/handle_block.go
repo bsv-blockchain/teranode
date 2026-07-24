@@ -34,6 +34,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	// txNotFoundInTxMapMsg is the error message used when a transaction hash
+	// cannot be located in the block's txMap.
+	txNotFoundInTxMapMsg = "transaction %s not found in txMap"
+)
+
 func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock) (err error) {
 	sm.logger.Debugf("[HandleBlockDirect][%s] starting handling block", blockHash.String())
 
@@ -1128,7 +1134,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 		g.Go(func() error {
 			txWrapper, ok := txMap.Get(txHash)
 			if !ok {
-				return errors.NewProcessingError("transaction %s not found in txMap", txHash.String())
+				return errors.NewProcessingError(txNotFoundInTxMapMsg, txHash.String())
 			}
 
 			createOpts := append(baseOpts[:len(baseOpts):len(baseOpts)], utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
@@ -1300,7 +1306,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 				if !ok {
 					// Not found in txMap — non-recoverable, fail immediately
 					mu.Lock()
-					hardFail = errors.NewProcessingError("transaction %s not found in txMap", txHash.String())
+					hardFail = errors.NewProcessingError(txNotFoundInTxMapMsg, txHash.String())
 					mu.Unlock()
 					return nil
 				}
@@ -1550,7 +1556,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, bi blockIdent, tx
 		// the coinbase transaction is not part of the txMap
 		txWrapper, found := txMap.Get(txHash)
 		if !found {
-			return errors.NewTxError("transaction %s not found in txMap", txHash.String())
+			return errors.NewTxError(txNotFoundInTxMapMsg, txHash.String())
 		}
 
 		tx := txWrapper.Tx

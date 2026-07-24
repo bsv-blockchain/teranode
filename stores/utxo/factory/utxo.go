@@ -76,6 +76,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
+const errGettingBestHeightAndTime = "[UTXOStore] error getting best height and time for %s: %v"
+
 var availableDatabases = map[string]func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error){}
 
 // NewStore creates a new UTXO store implementation based on the settings.
@@ -137,9 +139,9 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 			blockHeight, medianBlockTime, err := blockchainClient.GetBestHeightAndTime(ctx)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					logger.Infof("[UTXOStore] error getting best height and time for %s: %v", source, err)
+					logger.Infof(errGettingBestHeightAndTime, source, err)
 				} else {
-					logger.Warnf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+					logger.Warnf(errGettingBestHeightAndTime, source, err)
 				}
 			} else if blockHeight > 0 {
 				logger.Debugf("[UTXOStore] setting block height to %d", blockHeight)
@@ -170,9 +172,9 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 							blockHeight, medianBlockTime, err = blockchainClient.GetBestHeightAndTime(ctx)
 							if err != nil {
 								if errors.Is(err, context.Canceled) {
-									logger.Infof("[UTXOStore] error getting best height and time for %s: %v", source, err)
+									logger.Infof(errGettingBestHeightAndTime, source, err)
 								} else {
-									logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+									logger.Errorf(errGettingBestHeightAndTime, source, err)
 								}
 							} else if blockHeight > 0 {
 								logger.Debugf("[UTXOStore] updated block height to %d and median time to %d for %s", blockHeight, medianBlockTime, source)

@@ -53,6 +53,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+const logProcessingNotification = "[processBlockchainNotification] Processing %s notification: %s"
+
 const (
 	banActionAdd = "add" // Action constant for adding a ban
 
@@ -1585,15 +1587,15 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 
 	switch notification.Type {
 	case model.NotificationType_Block:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handleBlockNotification(ctx, hash) // These handlers return wrapped errors
 
 	case model.NotificationType_Subtree:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handleSubtreeNotification(ctx, hash)
 
 	case model.NotificationType_PeerFailure:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handlePeerFailureNotification(ctx, notification)
 
 	default:

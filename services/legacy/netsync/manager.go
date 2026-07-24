@@ -132,6 +132,18 @@ const (
 	// syncPeerTickerInterval is how often we check the current
 	// syncPeer. Set to 30 seconds.
 	syncPeerTickerInterval = 30 * time.Second
+
+	// failedToGetBestBlockHeaderMsg is logged when the best block header
+	// cannot be retrieved from the blockchain client.
+	failedToGetBestBlockHeaderMsg = "Failed to get best block header: %v"
+
+	// failedToConvertBlockHeightInt32Msg is logged when a block height cannot
+	// be safely converted to an int32.
+	failedToConvertBlockHeightInt32Msg = "failed to convert block height to int32: %v"
+
+	// unexpectedFailureAddingInventoryMsg is logged when adding an inventory
+	// vector to a getdata message fails unexpectedly.
+	unexpectedFailureAddingInventoryMsg = "Unexpected failure when adding inventory to getdata message: %v"
 )
 
 // zeroHash is the zero-value hash (all zeros).  It is defined as a convenience.
@@ -672,7 +684,7 @@ func (sm *SyncManager) startSync() {
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
-		sm.logger.Errorf("Failed to get best block header: %v", err)
+		sm.logger.Errorf(failedToGetBestBlockHeaderMsg, err)
 		return
 	}
 
@@ -1158,13 +1170,13 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
 		// TODO we should return an error here to the caller
-		sm.logger.Errorf("Failed to get best block header: %v", err)
+		sm.logger.Errorf(failedToGetBestBlockHeaderMsg, err)
 		return
 	}
 
 	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
-		sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 		return // add return to prevent continuing with invalid height
 	}
 
@@ -1359,7 +1371,7 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	if len(sm.chainParams.Checkpoints) > 0 {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
-			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+			sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 		}
 
 		checkpoint := &sm.chainParams.Checkpoints[len(sm.chainParams.Checkpoints)-1]
@@ -1400,7 +1412,7 @@ func (sm *SyncManager) current() bool {
 
 	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
-		sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 	}
 
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
@@ -1499,7 +1511,7 @@ func (sm *SyncManager) peerStateResolvingPrimary(peer *peerpkg.Peer) (*peerSyncS
 func (sm *SyncManager) requestMissingBlocks(peer *peerpkg.Peer, blockHash chainhash.Hash) {
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
-		sm.logger.Errorf("Failed to get best block header: %v", err)
+		sm.logger.Errorf(failedToGetBestBlockHeaderMsg, err)
 		return
 	}
 
@@ -1830,7 +1842,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		} else {
 			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeaderMeta.Height)
 			if err != nil {
-				sm.logger.Errorf("failed to convert block height to int32: %v", err)
+				sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 			}
 
 			heightUpdate = blockHeightInt32
@@ -1993,7 +2005,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 
 		if !haveInv {
 			if err = getDataMessage.AddInvVect(iv); err != nil {
-				sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+				sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
 				break
 			}
 
@@ -2058,7 +2070,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 
 		bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 		if err != nil {
-			peer.DisconnectWithWarning(fmt.Sprintf("Failed to get best block header: %v", err))
+			peer.DisconnectWithWarning(fmt.Sprintf(failedToGetBestBlockHeaderMsg, err))
 			return
 		}
 
@@ -2250,7 +2262,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		if err == nil {
 			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeaderMeta.Height)
 			if err != nil {
-				sm.logger.Errorf("failed to convert block height to int32: %v", err)
+				sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 			}
 
 			peer.UpdateLastBlockHeight(blockHeightInt32)
@@ -2313,7 +2325,7 @@ outside:
 			// Request the block if there is not already a pending request.
 			if _, exists = sm.requestedBlocks.Get(iv.Hash); !exists {
 				if err = gdmsg.AddInvVect(iv); err != nil {
-					sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+					sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
 					break outside
 				}
 
@@ -2327,7 +2339,7 @@ outside:
 			// Request the transaction if there is not already a pending request.
 			if _, exists = sm.requestedTxns.Get(iv.Hash); !exists {
 				if err = gdmsg.AddInvVect(iv); err != nil {
-					sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+					sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
 					break outside
 				}
 
@@ -3262,7 +3274,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if !config.DisableCheckpoints {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
-			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+			sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 		}
 
 		// Initialize the next checkpoint based on the current height.

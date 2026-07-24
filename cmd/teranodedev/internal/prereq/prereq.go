@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const labelPythonPyYAML = "Python + PyYAML"
+
 // Result represents one prerequisite check.
 type Result struct {
 	Name    string
@@ -28,7 +30,7 @@ func CheckAll() []Result {
 // HasFailures returns true if any required check failed (Python is optional).
 func HasFailures(results []Result) bool {
 	for _, r := range results {
-		if !r.OK && r.Name != "Python + PyYAML" {
+		if !r.OK && r.Name != labelPythonPyYAML {
 			return true
 		}
 	}
@@ -100,11 +102,11 @@ func checkPython() Result {
 	err := exec.Command("python3", "-c", "import yaml").Run()
 	if err != nil {
 		return Result{
-			Name:    "Python + PyYAML",
+			Name:    labelPythonPyYAML,
 			OK:      false,
 			Message: "not found (optional, needed for some build scripts)",
 		}
 	}
 
-	return Result{Name: "Python + PyYAML", OK: true, Message: "available"}
+	return Result{Name: labelPythonPyYAML, OK: true, Message: "available"}
 }

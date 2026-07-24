@@ -33,6 +33,13 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
+const (
+	flagCPUProfile        = "cpu-profile"
+	flagMemProfile        = "mem-profile"
+	usageCPUProfileOutput = "CPU profile output"
+	usageMemProfileOutput = "Memory profile output"
+)
+
 // commandHelp stores the command descriptions
 var commandHelp = map[string]string{
 	"filereader":              "File Reader",
@@ -484,8 +491,8 @@ func Start(args []string, version, commit string) {
 		subtreeSize := cmd.FlagSet.Int("subtree-size", 1_048_576, "Size of subtree")
 		producers := cmd.FlagSet.Int("producers", 16, "Number of producer goroutines")
 		iterations := cmd.FlagSet.Int("iterations", 10_000_000, "Number of transactions to process")
-		cpuProfile := cmd.FlagSet.String("cpu-profile", "cpu.prof", "Output file for CPU profile")
-		memProfile := cmd.FlagSet.String("mem-profile", "mem.prof", "Output file for memory profile")
+		cpuProfile := cmd.FlagSet.String(flagCPUProfile, "cpu.prof", "Output file for CPU profile")
+		memProfile := cmd.FlagSet.String(flagMemProfile, "mem.prof", "Output file for memory profile")
 		duration := cmd.FlagSet.Int("duration", 0, "Duration to run benchmark in seconds (0 for iteration-based, processes all items)")
 
 		cmd.Execute = func(args []string) error {
@@ -493,8 +500,8 @@ func Start(args []string, version, commit string) {
 		}
 	case "loadunminedbench":
 		txCount := cmd.FlagSet.Int("tx-count", 1_000_000, "Number of transactions")
-		cpuProfile := cmd.FlagSet.String("cpu-profile", "loadunmined_cpu.prof", "CPU profile output")
-		memProfile := cmd.FlagSet.String("mem-profile", "loadunmined_mem.prof", "Memory profile output")
+		cpuProfile := cmd.FlagSet.String(flagCPUProfile, "loadunmined_cpu.prof", usageCPUProfileOutput)
+		memProfile := cmd.FlagSet.String(flagMemProfile, "loadunmined_mem.prof", usageMemProfileOutput)
 		aerospikeURL := cmd.FlagSet.String("aerospike-url", "", "Aerospike URL (empty=testcontainer)")
 
 		cmd.Execute = func(args []string) error {
@@ -503,8 +510,8 @@ func Start(args []string, version, commit string) {
 	case "txmapbench":
 		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
 		txsPerSubtree := cmd.FlagSet.Int("txs-per-subtree", 1_048_576, "Transactions per subtree")
-		cpuProfile := cmd.FlagSet.String("cpu-profile", "createtransactionmap_cpu.prof", "CPU profile output")
-		memProfile := cmd.FlagSet.String("mem-profile", "createtransactionmap_mem.prof", "Memory profile output")
+		cpuProfile := cmd.FlagSet.String(flagCPUProfile, "createtransactionmap_cpu.prof", usageCPUProfileOutput)
+		memProfile := cmd.FlagSet.String(flagMemProfile, "createtransactionmap_mem.prof", usageMemProfileOutput)
 
 		cmd.Execute = func(args []string) error {
 			return runCreateTxMapBenchmark(*numSubtrees, *txsPerSubtree, *cpuProfile, *memProfile)
@@ -512,8 +519,8 @@ func Start(args []string, version, commit string) {
 	case "remainderbench":
 		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
 		txsPerSubtree := cmd.FlagSet.Int("txs-per-subtree", 1_048_576, "Transactions per subtree")
-		cpuProfile := cmd.FlagSet.String("cpu-profile", "processremaindertxanddequeue_cpu.prof", "CPU profile output")
-		memProfile := cmd.FlagSet.String("mem-profile", "processremaindertxanddequeue_mem.prof", "Memory profile output")
+		cpuProfile := cmd.FlagSet.String(flagCPUProfile, "processremaindertxanddequeue_cpu.prof", usageCPUProfileOutput)
+		memProfile := cmd.FlagSet.String(flagMemProfile, "processremaindertxanddequeue_mem.prof", usageMemProfileOutput)
 
 		cmd.Execute = func(args []string) error {
 			return runProcessRemainderBenchmark(*numSubtrees, *txsPerSubtree, *cpuProfile, *memProfile)

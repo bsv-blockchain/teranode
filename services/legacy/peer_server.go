@@ -95,6 +95,10 @@ const (
 	// AddRebroadcastInventory drops on full rather than blocking the
 	// hot relay path, so this is best-effort, not lossless.
 	modifyRebroadcastInvBuffer = 1024
+
+	// cantSplitBanPeerMsg is logged when a peer address cannot be split into
+	// host and port during ban handling.
+	cantSplitBanPeerMsg = "can't split ban peer %s %v"
 )
 
 var (
@@ -2415,7 +2419,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		sp.server.logger.Debugf(cantSplitBanPeerMsg, sp.Addr(), err)
 		return
 	}
 
@@ -2440,7 +2444,7 @@ func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, banUntil int64) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		sp.server.logger.Debugf(cantSplitBanPeerMsg, sp.Addr(), err)
 		return
 	}
 
@@ -2468,7 +2472,7 @@ func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, b
 func (s *server) handleUnbanPeerMsg(state *peerState, spAddr bannedPeerAddr) {
 	host, _, err := net.SplitHostPort(string(spAddr))
 	if err != nil {
-		s.logger.Errorf("can't split ban peer %s %v", spAddr, err)
+		s.logger.Errorf(cantSplitBanPeerMsg, spAddr, err)
 		return
 	}
 

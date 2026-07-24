@@ -12,15 +12,23 @@ import (
 	"text/tabwriter"
 )
 
+// Help description map keys reused across help generation.
+const (
+	helpArgumentsKey     = "help-arguments"
+	helpResultKey        = "help-result"
+	helpResultNothingKey = "help-result-nothing"
+	jsonTypeObjectKey    = "json-type-object"
+)
+
 // baseHelpDescs house the various help labels, types, and example values used
 // when generating help.  The per-command synopsis, field descriptions,
 // conditions, and result descriptions are to be provided by the caller.
 var baseHelpDescs = map[string]string{
 	// Misc help labels and output.
-	"help-arguments":      "Arguments",
+	helpArgumentsKey:      "Arguments",
 	"help-arguments-none": "None",
-	"help-result":         "Result",
-	"help-result-nothing": "Nothing",
+	helpResultKey:         "Result",
+	helpResultNothingKey:  "Nothing",
 	"help-default":        "default",
 	"help-optional":       "optional",
 	"help-required":       "required",
@@ -30,7 +38,7 @@ var baseHelpDescs = map[string]string{
 	"json-type-string":  "string",
 	"json-type-bool":    "boolean",
 	"json-type-array":   "array of ",
-	"json-type-object":  "object",
+	jsonTypeObjectKey:   "object",
 	"json-type-value":   "value",
 
 	// JSON examples.
@@ -64,10 +72,10 @@ func reflectTypeToJSONType(xT descLookupFunc, rt reflect.Type) string {
 			rt.Elem())
 
 	case reflect.Struct:
-		return xT("json-type-object")
+		return xT(jsonTypeObjectKey)
 
 	case reflect.Map:
-		return xT("json-type-object")
+		return xT(jsonTypeObjectKey)
 	}
 
 	return xT("json-type-value")
@@ -436,10 +444,10 @@ func methodHelp(xT descLookupFunc, rtp reflect.Type, defaults map[int]reflect.Va
 
 	// Generate the help for each argument in the command.
 	if argText := argHelp(xT, rtp, defaults, method); argText != "" {
-		help += fmt.Sprintf("\n%s:\n%s", xT("help-arguments"),
+		help += fmt.Sprintf("\n%s:\n%s", xT(helpArgumentsKey),
 			argText)
 	} else {
-		help += fmt.Sprintf("\n%s:\n%s\n", xT("help-arguments"),
+		help += fmt.Sprintf("\n%s:\n%s\n", xT(helpArgumentsKey),
 			xT("help-arguments-none"))
 	}
 
@@ -451,7 +459,7 @@ func methodHelp(xT descLookupFunc, rtp reflect.Type, defaults map[int]reflect.Va
 		fieldDescKey := fmt.Sprintf("%s--result%d", method, i)
 
 		if resultTypes[i] == nil {
-			resultText := xT("help-result-nothing")
+			resultText := xT(helpResultNothingKey)
 			resultTexts = append(resultTexts, resultText)
 
 			continue
@@ -465,14 +473,14 @@ func methodHelp(xT descLookupFunc, rtp reflect.Type, defaults map[int]reflect.Va
 	// result type, also add the condition which triggers it.
 	switch len(resultTexts) {
 	case 0:
-		help += fmt.Sprintf("\n%s:\n%s\n", xT("help-result"), xT("help-result-nothing"))
+		help += fmt.Sprintf("\n%s:\n%s\n", xT(helpResultKey), xT(helpResultNothingKey))
 	case 1:
-		help += fmt.Sprintf("\n%s:\n%s\n", xT("help-result"), resultTexts[0])
+		help += fmt.Sprintf("\n%s:\n%s\n", xT(helpResultKey), resultTexts[0])
 	default:
 		for i, resultText := range resultTexts {
 			condKey := fmt.Sprintf("%s--condition%d", method, i)
 			help += fmt.Sprintf("\n%s (%s):\n%s\n",
-				xT("help-result"), xT(condKey), resultText)
+				xT(helpResultKey), xT(condKey), resultText)
 		}
 	}
 
