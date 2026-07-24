@@ -346,14 +346,23 @@ func TestSubmitMiningSolution_RejectsP2SHCoinbaseOutput(t *testing.T) {
 		coinbaseTx, err := candidate.CreateCoinbaseTxCandidate(server.settings)
 		require.NoError(t, err)
 
+		// Pin the fixture as a genuine non-P2SH coinbase, so the NotContains assertion
+		// below is not vacuous on the input side.
+		require.False(t, coinbaseHasP2SHOutput(coinbaseTx))
+
 		_, err = server.submitMiningSolution(t.Context(), &BlockSubmissionRequest{
 			SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{
 				Id:         candidate.Id,
 				CoinbaseTx: coinbaseTx.Bytes(),
 			},
 		})
-		// The submission may still fail deeper in the pipeline (e.g. proof of
-		// work); the guard specifically must not fire.
+		// What this proves: the guard does NOT fire on a genuine non-P2SH coinbase (an
+		// over-broad guard that wrongly matched a standard output would surface
+		// bad-txns-vout-p2sh here). What it does NOT prove: that the guard is present —
+		// deleting it only removes rejections, so this stays green either way. Guard
+		// removal is covered by TestCoinbaseHasP2SHOutput and TestValidateCoinbaseForSubmission.
+		// The submission may still fail deeper in the pipeline (e.g. proof of work); only
+		// the absence of the P2SH rejection is asserted.
 		if err != nil {
 			require.NotContains(t, err.Error(), "bad-txns-vout-p2sh")
 		}
@@ -382,10 +391,15 @@ func TestGenerateBlock_RejectsP2SHCoinbaseOutput(t *testing.T) {
 }
 
 // TestGenerateBlock_AllowsP2PKHCoinbaseOutput is the non-P2SH companion: a standard P2PKH
-// payout address produces an ordinary coinbase output that the guard must NOT reject. The
-// generate path may still fail deeper in the pipeline (block assembly/submission) or wait
-// up to ~5s in waitForBestBlockHeaderUpdate on the success path; either is acceptable —
-// the assertion is only that the P2SH guard specifically does not fire.
+// payout address produces an ordinary coinbase output that the guard must NOT reject.
+//
+// What this proves: the guard does NOT fire for a genuine non-P2SH coinbase (asserted
+// directly on the coinbase built from this address along generateBlock's own path). What
+// it does NOT prove: that the guard is present — deleting it only removes rejections, so
+// the NotContains below stays green either way; guard removal is covered by
+// TestCoinbaseHasP2SHOutput and TestValidateCoinbaseForSubmission. The generate path may
+// also fail deeper in the pipeline (block assembly/submission) or wait up to ~5s in
+// waitForBestBlockHeaderUpdate on the success path; either is acceptable.
 func TestGenerateBlock_AllowsP2PKHCoinbaseOutput(t *testing.T) {
 	server, _ := setupServer(t)
 	require.NoError(t, server.blockAssembler.Start(t.Context()))
@@ -394,7 +408,19 @@ func TestGenerateBlock_AllowsP2PKHCoinbaseOutput(t *testing.T) {
 	// a standard OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG coinbase output.
 	p2pkhAddress := "n2ZNV88uQbede7C5M5jzi6SyG4GVVr5JTt"
 
-	err := server.generateBlock(t.Context(), &p2pkhAddress)
+	// Reconstruct the coinbase along the same path generateBlock uses (Mine ->
+	// CreateCoinbaseTxCandidateForAddress) to confirm this address yields a genuine
+	// non-P2SH coinbase, so the NotContains assertion below is not vacuous on the input
+	// side. Only the random extranonce varies between builds; the output-script shape is
+	// deterministic for a given address, so this matches the coinbase generateBlock builds.
+	candidate, err := server.GetMiningCandidate(t.Context(), &blockassembly_api.GetMiningCandidateRequest{})
+	require.NoError(t, err)
+
+	coinbaseTx, err := candidate.CreateCoinbaseTxCandidateForAddress(server.settings, &p2pkhAddress)
+	require.NoError(t, err)
+	require.False(t, coinbaseHasP2SHOutput(coinbaseTx))
+
+	err = server.generateBlock(t.Context(), &p2pkhAddress)
 	if err != nil {
 		require.NotContains(t, err.Error(), "bad-txns-vout-p2sh")
 	}
@@ -450,11 +476,20 @@ func TestWaitForBestBlockHeaderUpdate_ToleratesNilCurrentBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	done := make(chan error, 1)
+	start := time.Now()
+
 	go func() { done <- s.waitForBestBlockHeaderUpdate(ctx, prevHash) }()
 
 	select {
 	case err := <-done:
 		require.NoError(t, err)
+		// Regression guard: with the nil-header check present, every 10ms tick is skipped
+		// and the loop only exits when waitCtx (~200ms) fires. If the check were dropped,
+		// the first tick (~10ms) would derive a bogus (non-matching) hash from the nil
+		// header — Hash() is nil-safe, so no panic — and return almost immediately. Both
+		// exit paths return nil, so only this elapsed floor distinguishes the two: 150ms
+		// sits well below the 200ms deadline yet far above the ~10ms early-exit.
+		require.GreaterOrEqual(t, time.Since(start), 150*time.Millisecond)
 	case <-time.After(2 * time.Second):
 		t.Fatal("waitForBestBlockHeaderUpdate did not return after context timeout")
 	}
