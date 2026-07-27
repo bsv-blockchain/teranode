@@ -136,7 +136,7 @@ func TestPeerSelector_HealthChecks_CacheExpires(t *testing.T) {
 func TestPeerSelector_HealthChecks_RunConcurrently(t *testing.T) {
 	ps := newHealthCheckSelectorForTest()
 
-	const numPeers = 8
+	const numPeers = 3 * peerHealthCheckConcurrency
 	const probeDelay = 100 * time.Millisecond
 
 	peers := make([]*blockchain.PeerInfo, 0, numPeers)
@@ -167,6 +167,7 @@ func TestPeerSelector_HealthChecks_RunConcurrently(t *testing.T) {
 
 	require.NotEqual(t, "", got)
 	require.Greater(t, maxInFlight.Load(), int32(1), "probes must overlap, not run serially")
+	require.LessOrEqual(t, maxInFlight.Load(), int32(peerHealthCheckConcurrency), "in-flight probes must respect the concurrency bound")
 	require.Less(t, elapsed, time.Duration(numPeers)*probeDelay, "selection must be faster than serial probing")
 }
 
@@ -192,21 +193,28 @@ func TestPeerSelector_HealthChecks_HonorCallerContext(t *testing.T) {
 
 func TestPeerSelector_HealthChecks_BudgetExpiryNotCached(t *testing.T) {
 	ps := newHealthCheckSelectorForTest()
+	ps.healthCheckBudget = 50 * time.Millisecond
 	peerA := newPeer("peer-a", 100, "full", 50, 0)
 	peers := []*blockchain.PeerInfo{peerA}
 
+	// The probe outlives the overall budget; the derived probe context must
+	// cut it short and the peer must count as unhealthy for this selection.
 	ps.checkHealth = func(ctx context.Context, _ string) (bool, error) {
-		<-ctx.Done()
-		return false, ctx.Err()
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(10 * time.Second):
+			return true, nil
+		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	got := ps.SelectSyncPeer(ctx, peers, advertisedProbeCriteria(50))
+	start := time.Now()
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
 	require.Equal(t, "", got)
+	require.Less(t, time.Since(start), 5*time.Second, "budget expiry must bound the probe phase")
 
-	// The aborted probe must not have been recorded as an unhealthy result.
+	// The budget-aborted probe must not have been cached as unhealthy.
+	ps.healthCheckBudget = peerHealthCheckBudget
 	stub := newCountingHealthStub()
 	ps.checkHealth = stub.check
 

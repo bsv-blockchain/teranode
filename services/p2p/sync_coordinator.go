@@ -28,9 +28,12 @@ type SyncCoordinator struct {
 	selector         *PeerSelector
 	blockchainClient blockchain.ClientI
 
-	// Coordinator-scoped context used for the gRPC calls into the registry.
-	// Per-RPC contexts are derived from this when needed.
-	ctx context.Context
+	// Coordinator-scoped context used for the gRPC calls into the registry and
+	// for peer availability probes during selection. Per-RPC contexts are
+	// derived from this when needed. Cancelled by Stop so in-flight probes
+	// abort instead of stalling shutdown.
+	ctx       context.Context
+	ctxCancel context.CancelFunc
 
 	// decisionMu serialises compound sync decisions (clear -> select -> activate)
 	// so only one decision is in flight at a time. Without it, concurrent triggers
@@ -77,6 +80,8 @@ func NewSyncCoordinator(
 	blockchainClient blockchain.ClientI,
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) *SyncCoordinator {
+	ctx, cancel := context.WithCancel(ctx)
+
 	return &SyncCoordinator{
 		logger:                       logger,
 		settings:                     settings,
@@ -85,6 +90,7 @@ func NewSyncCoordinator(
 		blockchainClient:             blockchainClient,
 		blocksKafkaProducerClient:    blocksKafkaProducerClient,
 		ctx:                          ctx,
+		ctxCancel:                    cancel,
 		stopCh:                       make(chan struct{}),
 		backoffMultiplier:            1,
 		maxBackoffMultiplier:         32, // Max backoff of 64 seconds (32 * 2s)
@@ -379,6 +385,7 @@ func (sc *SyncCoordinator) Start(ctx context.Context) {
 // Stop stops the coordinator
 func (sc *SyncCoordinator) Stop() {
 	close(sc.stopCh)
+	sc.ctxCancel() // abort in-flight registry calls and availability probes
 	sc.wg.Wait()
 }
 

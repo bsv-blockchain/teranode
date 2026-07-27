@@ -58,6 +58,10 @@ type PeerSelector struct {
 	// checkHealth probes a peer's DataHub URL; overridable in tests.
 	checkHealth func(ctx context.Context, dataHubURL string) (bool, error)
 
+	// healthCheckBudget caps the total wall-clock time one selection spends on
+	// availability probes; peerHealthCheckBudget by default, overridable in tests.
+	healthCheckBudget time.Duration
+
 	healthMu    sync.Mutex
 	healthCache map[string]peerHealthCacheEntry
 }
@@ -65,10 +69,11 @@ type PeerSelector struct {
 // NewPeerSelector creates a new peer selector
 func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSelector {
 	return &PeerSelector{
-		logger:      logger,
-		settings:    settings,
-		checkHealth: checkPeerAvailability,
-		healthCache: make(map[string]peerHealthCacheEntry),
+		logger:            logger,
+		settings:          settings,
+		checkHealth:       checkPeerAvailability,
+		healthCheckBudget: peerHealthCheckBudget,
+		healthCache:       make(map[string]peerHealthCacheEntry),
 	}
 }
 
@@ -95,7 +100,7 @@ func (ps *PeerSelector) SelectSyncPeer(ctx context.Context, peers []*blockchain.
 	}
 
 	// Probe availability of every basic-eligible candidate once, up front, so
-	// eligibility checks below are pure map lookups.
+	// the eligibility checks below do no network I/O.
 	healthByURL := ps.checkCandidatesHealth(ctx, peers, criteria)
 
 	// PHASE 1: Try to select from full nodes
@@ -272,7 +277,17 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCri
 	// Note: Health check failures are NOT recorded as sync attempts - they're filtered out early.
 	// The caller (SyncCoordinator) will record sync attempt after selecting the peer.
 	if healthByURL != nil {
-		if healthy, ok := healthByURL[p.DataHubURL]; !ok || !healthy {
+		healthy, probed := healthByURL[p.DataHubURL]
+
+		// A peer can be absent from the map when it became basic-eligible only
+		// after the pre-pass ran (e.g. a cooldown expired during the probes);
+		// treat it as unavailable this round rather than probing serially.
+		if !probed {
+			ps.logger.Debugf("[PeerSelector] Peer %s was not probed this selection, skipping", p.ID)
+			return false
+		}
+
+		if !healthy {
 			ps.logger.Debugf("[PeerSelector] Peer %s is unhealthy", p.ID)
 			return false
 		}
@@ -283,40 +298,48 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCri
 
 // checkCandidatesHealth probes the DataHub URL of every basic-eligible peer and
 // returns availability keyed by URL, or nil when health checking is disabled.
-// URLs are deduplicated, probes run concurrently (at most
-// peerHealthCheckConcurrency in flight) under ctx plus an overall
-// peerHealthCheckBudget deadline, and results are cached for
-// peerHealthCacheTTL. A probe cut short by the overall deadline counts as
-// unhealthy for this selection but is not cached, so a slow peer is not
-// remembered as down.
+// URLs are deduplicated, probes run on a worker pool of at most
+// peerHealthCheckConcurrency goroutines under ctx plus the overall
+// healthCheckBudget deadline, and results are cached for peerHealthCacheTTL.
+// A probe cut short by ctx or the budget counts as unhealthy for this
+// selection but is not cached, so a slow peer is not remembered as down.
+// Concurrent calls may probe the same URL twice (the cache only dedupes
+// completed probes); today every caller serialises behind
+// SyncCoordinator.decisionMu.
 func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*blockchain.PeerInfo, criteria SelectionCriteria) map[string]bool {
 	if ps.settings == nil || !ps.settings.P2P.HealthCheckEnabled {
 		return nil
 	}
 
-	results := make(map[string]bool, len(peers))
+	// Collect the distinct DataHub URLs of basic-eligible peers.
+	urls := make([]string, 0, len(peers))
+	seen := make(map[string]struct{}, len(peers))
 
-	var pending []string
-
-	now := time.Now()
-
-	ps.healthMu.Lock()
 	for _, p := range peers {
+		if _, dup := seen[p.DataHubURL]; dup {
+			continue
+		}
+
 		if !ps.isEligibleBasic(p, criteria) {
 			continue
 		}
 
-		if _, done := results[p.DataHubURL]; done {
+		seen[p.DataHubURL] = struct{}{}
+		urls = append(urls, p.DataHubURL)
+	}
+
+	results := make(map[string]bool, len(urls))
+	pending := make([]string, 0, len(urls))
+	now := time.Now()
+
+	ps.healthMu.Lock()
+	for _, url := range urls {
+		if entry, ok := ps.healthCache[url]; ok && now.Sub(entry.checkedAt) < peerHealthCacheTTL {
+			results[url] = entry.healthy
 			continue
 		}
 
-		if entry, ok := ps.healthCache[p.DataHubURL]; ok && now.Sub(entry.checkedAt) < peerHealthCacheTTL {
-			results[p.DataHubURL] = entry.healthy
-			continue
-		}
-
-		results[p.DataHubURL] = false // placeholder so the URL is deduped; overwritten by the probe
-		pending = append(pending, p.DataHubURL)
+		pending = append(pending, url)
 	}
 	ps.healthMu.Unlock()
 
@@ -324,38 +347,43 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 		return results
 	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, peerHealthCheckBudget)
+	probeCtx, cancel := context.WithTimeout(ctx, ps.healthCheckBudget)
 	defer cancel()
 
 	type probeResult struct {
-		url       string
 		healthy   bool
 		cacheable bool
 	}
 
 	probeResults := make([]probeResult, len(pending))
-	sem := make(chan struct{}, peerHealthCheckConcurrency)
+
+	work := make(chan int, len(pending))
+	for i := range pending {
+		work <- i
+	}
+	close(work)
 
 	var wg sync.WaitGroup
 
-	for i, url := range pending {
-		wg.Add(1)
+	for range min(peerHealthCheckConcurrency, len(pending)) {
+		wg.Go(func() {
+			for i := range work {
+				url := pending[i]
 
-		go func(i int, url string) {
-			defer wg.Done()
+				healthy, err := ps.checkHealth(probeCtx, url)
+				if err != nil {
+					if probeCtx.Err() != nil {
+						ps.logger.Debugf("[PeerSelector] Availability probe for %s aborted: %v", url, err)
+					} else {
+						ps.logger.Debugf("[PeerSelector] Availability probe for %s failed: %v", url, err)
+					}
+				}
 
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			healthy, err := ps.checkHealth(probeCtx, url)
-			if err != nil {
-				ps.logger.Debugf("[PeerSelector] availability probe for %s failed: %v", url, err)
+				// Don't cache a negative result caused by ctx or the budget expiring:
+				// the peer wasn't actually probed to completion.
+				probeResults[i] = probeResult{healthy: healthy, cacheable: healthy || probeCtx.Err() == nil}
 			}
-
-			// Don't cache a negative result caused by the overall budget expiring:
-			// the peer wasn't actually probed to completion.
-			probeResults[i] = probeResult{url: url, healthy: healthy, cacheable: healthy || probeCtx.Err() == nil}
-		}(i, url)
+		})
 	}
 
 	wg.Wait()
@@ -363,10 +391,10 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 	checkedAt := time.Now()
 
 	ps.healthMu.Lock()
-	for _, r := range probeResults {
-		results[r.url] = r.healthy
+	for i, r := range probeResults {
+		results[pending[i]] = r.healthy
 		if r.cacheable {
-			ps.healthCache[r.url] = peerHealthCacheEntry{healthy: r.healthy, checkedAt: checkedAt}
+			ps.healthCache[pending[i]] = peerHealthCacheEntry{healthy: r.healthy, checkedAt: checkedAt}
 		}
 	}
 	// Drop expired entries so churning peer URLs don't grow the cache unboundedly.
