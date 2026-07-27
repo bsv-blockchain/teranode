@@ -1415,6 +1415,57 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	}, err
 }
 
+// validateCoinbaseForSubmission runs the final coinbase checks shared by both
+// submitMiningSolution branches (pool-supplied req.CoinbaseTx and the recreated
+// candidate coinbase). Both branches MUST converge on this single call so a
+// future refactor cannot leave one branch unguarded.
+func validateCoinbaseForSubmission(jobID string, coinbaseTx *bt.Tx) error {
+	if coinbaseTx == nil {
+		return errors.NewProcessingError("[BlockAssembly][%s] coinbase transaction is nil", jobID)
+	}
+
+	if len(coinbaseTx.Inputs) != 1 {
+		return errors.NewProcessingError("[BlockAssembly][%s] coinbase transaction must have exactly one input after processing, got %d", jobID, len(coinbaseTx.Inputs))
+	}
+
+	// Parity with bitcoin-sv's mining RPCs (HasP2SHOutput in rpc/mining.cpp): refuse to
+	// originate a block whose coinbase pays to a P2SH output. This is a local mining
+	// guard, NOT a consensus rule — peer blocks with a P2SH coinbase are valid on the
+	// network and must never be rejected in Block.Valid or block validation.
+	//
+	// This is placed at the shared submission convergence deliberately, not only on the
+	// pool branch: bitcoin-sv's generateBlocks carries the identical guard on the
+	// generate/generatetoaddress path (rpc/mining.cpp:199), so guarding here keeps
+	// GenerateBlocks in parity with upstream rather than making Teranode stricter.
+	if coinbaseHasP2SHOutput(coinbaseTx) {
+		return errors.NewProcessingError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", jobID)
+	}
+
+	return nil
+}
+
+// coinbaseHasP2SHOutput reports whether any output locking script matches the exact
+// pay-to-script-hash shape bitcoin-sv's IsP2SH tests (script.cpp): 23 bytes,
+// OP_HASH160 (0xa9), a 20-byte push (0x14), OP_EQUAL (0x87).
+func coinbaseHasP2SHOutput(tx *bt.Tx) bool {
+	if tx == nil {
+		return false
+	}
+
+	for _, out := range tx.Outputs {
+		if out == nil || out.LockingScript == nil {
+			continue
+		}
+
+		s := out.LockingScript.Bytes()
+		if len(s) == 23 && s[0] == 0xa9 && s[1] == 0x14 && s[22] == 0x87 {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSubmissionRequest) (*blockassembly_api.OKResponse, error) {
 	jobID := util.ReverseAndHexEncodeSlice(req.SubmitMiningSolutionRequest.Id)
 
@@ -1444,6 +1495,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	}
 
 	bestBlockHeader, _ := ba.blockAssembler.CurrentBlock()
+	if bestBlockHeader == nil {
+		// CurrentBlock() returns (nil, 0) before the best block is loaded (early
+		// startup / post-reset). Fail cleanly instead of dereferencing nil below.
+		return nil, errors.NewProcessingError("[BlockAssembly][%s] no current best block yet", jobID)
+	}
+
 	if bestBlockHeader.HashPrevBlock.IsEqual(hashPrevBlock) {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] candidate is stale: chain has already advanced past its parent", jobID)
 	}
@@ -1486,8 +1543,8 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	}
 
 	// Final validation: ensure coinbase is valid (defense-in-depth)
-	if len(coinbaseTx.Inputs) != 1 {
-		return nil, errors.NewProcessingError("[BlockAssembly][%s] coinbase transaction must have exactly one input after processing, got %d", jobID, len(coinbaseTx.Inputs))
+	if err = validateCoinbaseForSubmission(jobID, coinbaseTx); err != nil {
+		return nil, err
 	}
 
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
@@ -1602,6 +1659,11 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	ba.logger.Debugf("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	ba.logger.Debugf("[BlockAssembly][%s][%s] block difficulty: %s", jobID, block.Header.Hash(), block.Header.Bits.CalculateDifficulty().String())
+	// Safe without a nil check: the guard at the top of this function already established a
+	// non-nil best block, and no production path clears bestBlock back to nil once loaded
+	// (every writer stores a fresh non-nil BestBlockInfo), so CurrentBlock() cannot return
+	// nil here — the .Timestamp deref below (evaluated eagerly as a Debugf arg regardless
+	// of log level) therefore cannot panic.
 	bestBlockHeader, _ = ba.blockAssembler.CurrentBlock()
 	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(bestBlockHeader.Timestamp), 0)).String())
 
@@ -2248,6 +2310,17 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 
 	// Store the current best block hash before submission
 	previousBestHeader, _ := ba.blockAssembler.CurrentBlock()
+	if previousBestHeader == nil {
+		// Defensive: GetMiningCandidate and Mine above have already succeeded here, which
+		// implies a loaded best block, so this branch is not reached in normal operation
+		// (and is not exercised by the test suite, which always starts the assembler —
+		// Start sets bestBlock synchronously). Without it, previousBestHeader.Hash() below
+		// — which is nil-safe, so this is a bogus-hash logic bug, not a panic — would
+		// derive previousBestHash from a nil header and compare against a garbage value.
+		// Return a clean error instead.
+		return errors.NewProcessingError("[generateBlock] no current best block yet")
+	}
+
 	previousBestHash := previousBestHeader.Hash()
 
 	resp, err := ba.submitMiningSolution(ctx, req)
@@ -2281,6 +2354,15 @@ func (ba *BlockAssembly) waitForBestBlockHeaderUpdate(ctx context.Context, previ
 			return nil
 		case <-ticker.C:
 			currentBestHeader, _ := ba.blockAssembler.CurrentBlock()
+			if currentBestHeader == nil {
+				// Best block not loaded yet (CurrentBlock() returns nil). Skip this tick
+				// and keep polling until it loads or waitCtx times out. Without this,
+				// Hash() below — nil-safe, so no panic — would derive a bogus hash from
+				// the nil header that spuriously fails the "changed" check and returns
+				// early. Do not error — a nil header is exactly what this loop waits for.
+				continue
+			}
+
 			currentBestHash := currentBestHeader.Hash()
 			if !currentBestHash.IsEqual(previousBestHash) {
 				// Best block has been updated

@@ -64,6 +64,25 @@ func (u *Server) reportCatchupSuccess(ctx context.Context, peerID string, durati
 	// Fallback: No local metrics needed since we're using P2P service for all peer tracking
 }
 
+// reportValidBlockHeaders credits a peer for successfully serving a batch of
+// block headers during catchup. This is a generic interaction success
+// (reputation and response time) and does NOT count as a completed catchup —
+// the catchup-operation outcome is reported separately by doCatchup. Keeping
+// this credit prevents a peer that serves headers fine but keeps failing at the
+// block-fetch stage from having its reputation collapse to the point where the
+// only viable catchup peer is excluded as unhealthy.
+func (u *Server) reportValidBlockHeaders(ctx context.Context, peerID string, duration time.Duration) {
+	if peerID == "" {
+		return
+	}
+
+	if u.p2pClient != nil {
+		if err := u.p2pClient.ReportValidBlockHeaders(ctx, peerID, duration.Milliseconds()); err != nil {
+			u.logger.Warnf("[peer_metrics] Failed to report valid block headers to P2P service for peer %s: %v", peerID, err)
+		}
+	}
+}
+
 // reportCatchupFailure reports a failed catchup to the P2P service.
 // Falls back to local metrics if P2P client is unavailable.
 //
@@ -78,7 +97,63 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 	if errors.Is(err, errors.ErrBlockIncomplete) {
 		return
 	}
+	if catchupFailureAlreadyReported(err) {
+		// The layer where the failure occurred (e.g. the header-fetch stage)
+		// already recorded it; reporting again would let CatchupFailures exceed
+		// CatchupAttempts and double the reputation penalty for one attempt.
+		return
+	}
 	u.reportCatchupFailure(ctx, peerID)
+}
+
+// catchupFailureReportedKey is the error-data key that marks an error chain
+// whose catchup failure has already been recorded against the peer by the
+// layer where it occurred, so upper layers that report failures for propagated
+// errors can skip re-reporting.
+const catchupFailureReportedKey = "catchup_failure_reported"
+
+// markCatchupFailureReported wraps err to signal that its catchup failure has
+// already been reported to the P2P service. The wrapper is a native *Error
+// carrying a data-key marker: the errors package flattens foreign wrapper
+// types into message-only links (breaking code matching downstream), so the
+// marker must live in error data on a native link, which keeps the wrapped
+// chain fully intact for errors.Is dispatch. Nil-safe.
+func markCatchupFailureReported(err error) error {
+	if err == nil {
+		return nil
+	}
+	wrapped := errors.NewProcessingError("catchup failure reported at source", err)
+	wrapped.SetData(catchupFailureReportedKey, true)
+	return wrapped
+}
+
+// catchupFailureAlreadyReported reports whether err carries the
+// markCatchupFailureReported marker anywhere in its wrapped chain. The walk is
+// depth-bounded defensively, mirroring the errors package's own chain walks.
+func catchupFailureAlreadyReported(err error) bool {
+	var e *errors.Error
+	if !errors.As(err, &e) {
+		return false
+	}
+
+	for depth := 0; e != nil && depth < 32; depth++ {
+		if v, ok := e.GetData(catchupFailureReportedKey).(bool); ok && v {
+			return true
+		}
+
+		next := e.WrappedErr()
+		if next == nil {
+			return false
+		}
+
+		var nextErr *errors.Error
+		if !errors.As(next, &nextErr) {
+			return false
+		}
+		e = nextErr
+	}
+
+	return false
 }
 
 func (u *Server) reportCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) {

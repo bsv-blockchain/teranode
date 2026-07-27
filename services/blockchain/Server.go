@@ -2301,6 +2301,13 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[Blockchain][InvalidateBlock] request's hash is not valid", err))
 	}
 
+	// Refuse to invalidate the genesis block. The store's recursive CTE would flip the
+	// whole chain invalid in one statement and it could not be undone via reconsiderblock.
+	// Guarded in the store too (defense in depth); reject early here with a clear error.
+	if b.settings != nil && b.settings.ChainCfgParams != nil && blockHash.IsEqual(b.settings.ChainCfgParams.GenesisHash) {
+		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[Blockchain][InvalidateBlock] cannot invalidate the genesis block"))
+	}
+
 	// invalidate block will also invalidate all child blocks
 	invalidatedHashes, err := b.store.InvalidateBlock(ctx, blockHash)
 	if err != nil {

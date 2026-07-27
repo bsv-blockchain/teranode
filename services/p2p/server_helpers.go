@@ -569,7 +569,7 @@ func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
 
 		kafkaURL, err = url.Parse(kafkaURLString)
 		if err != nil {
-			return errors.NewConfigurationError("invalid Kafka URL: %w", err)
+			return errors.NewConfigurationError("invalid Kafka URL", err)
 		}
 	}
 

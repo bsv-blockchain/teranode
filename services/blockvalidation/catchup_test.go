@@ -4205,6 +4205,10 @@ func (r *recordingValidatedProgressP2PClient) IsPeerMalicious(_ context.Context,
 	return false, "", nil
 }
 
+func (r *recordingValidatedProgressP2PClient) ReportValidBlockHeaders(_ context.Context, _ string, _ int64) error {
+	return nil
+}
+
 func (r *recordingValidatedProgressP2PClient) ReportValidBlock(_ context.Context, peerID string, blockHash string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

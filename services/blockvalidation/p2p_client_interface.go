@@ -44,6 +44,11 @@ type P2PClientI interface {
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error
 
+	// ReportValidBlockHeaders reports that a peer successfully served a batch of block
+	// headers during catchup. Credits a generic interaction success (reputation) without
+	// touching the catchup-operation counters.
+	ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error
+
 	// ReportValidSubtree reports that a subtree was successfully received and validated from a peer.
 	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
 

@@ -41,11 +41,11 @@ func (e *env) phase3Finalize(ctx context.Context, pf *preflightResult) error {
 func (e *env) resetBlockAssemblerState(ctx context.Context, pf *preflightResult) error {
 	header, _, err := e.blockchainStore.GetBlockHeader(ctx, pf.targetHash)
 	if err != nil {
-		return errors.NewStorageError("failed to read target header: %w", err)
+		return errors.NewStorageError("failed to read target header", err)
 	}
 
 	if err = e.blockchainStore.SetState(ctx, blockassembly.StateKey, blockassembly.EncodeState(header, pf.target)); err != nil {
-		return errors.NewStorageError("failed to write state[BlockAssembler]: %w", err)
+		return errors.NewStorageError("failed to write state[BlockAssembler]", err)
 	}
 
 	e.logger.Infof("state[BlockAssembler] rewritten to height %d (%s)", pf.target, pf.targetHash)
@@ -63,7 +63,7 @@ func (e *env) resetBlockPersisterHeight(ctx context.Context, pf *preflightResult
 			e.logger.Debugf("state[%s] not present: %v", blockPersisterHeightKey, err)
 			return nil
 		}
-		return errors.NewStorageError("failed to read state[%s]: %w", blockPersisterHeightKey, err)
+		return errors.NewStorageError("failed to read state[%s]", blockPersisterHeightKey, err)
 	}
 	if len(existing) == 0 {
 		return nil
@@ -73,7 +73,7 @@ func (e *env) resetBlockPersisterHeight(ctx context.Context, pf *preflightResult
 	binary.LittleEndian.PutUint32(payload, pf.target)
 
 	if err = e.blockchainStore.SetState(ctx, blockPersisterHeightKey, payload); err != nil {
-		return errors.NewStorageError("failed to rewrite state[%s]: %w", blockPersisterHeightKey, err)
+		return errors.NewStorageError("failed to rewrite state[%s]", blockPersisterHeightKey, err)
 	}
 
 	e.logger.Infof("state[%s] rewritten to %d", blockPersisterHeightKey, pf.target)

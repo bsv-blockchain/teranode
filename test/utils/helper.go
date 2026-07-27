@@ -1314,7 +1314,7 @@ func WaitForBlockAccepted(ctx context.Context, node TeranodeTestClient, expected
 	for {
 		bestBlockHeader, _, err := node.BlockchainClient.GetBestBlockHeader(ctx)
 		if err != nil {
-			return errors.NewProcessingError("failed to get best block header: %w", err)
+			return errors.NewProcessingError("failed to get best block header", err)
 		}
 
 		if bytes.Equal(expectedHash, bestBlockHeader.Hash().CloneBytes()) {

@@ -16,7 +16,7 @@ import (
 func (e *env) phase2Blocks(ctx context.Context, pf *preflightResult) error {
 	for _, b := range pf.deleteList {
 		if err := e.rewindOneBlock(ctx, pf, b); err != nil {
-			return errors.NewProcessingError("rewinding block %s (height %d): %w", b.hash.String(), b.height, err)
+			return errors.NewProcessingError("rewinding block %s (height %d)", b.hash.String(), b.height, err)
 		}
 	}
 	return nil
@@ -25,12 +25,12 @@ func (e *env) phase2Blocks(ctx context.Context, pf *preflightResult) error {
 func (e *env) rewindOneBlock(ctx context.Context, pf *preflightResult, bl blockToDelete) error {
 	block, _, err := e.blockchainStore.GetBlock(ctx, bl.hash)
 	if err != nil {
-		return errors.NewStorageError("GetBlock: %w", err)
+		return errors.NewStorageError("GetBlock", err)
 	}
 
 	subtrees, err := block.GetSubtrees(ctx, e.logger, e.subtreeStore, e.concurrency)
 	if err != nil {
-		return errors.NewStorageError("GetSubtrees: %w", err)
+		return errors.NewStorageError("GetSubtrees", err)
 	}
 
 	collector := newRemovalCollector()
@@ -75,7 +75,7 @@ func (e *env) rewindOneBlock(ctx context.Context, pf *preflightResult, bl blockT
 	}
 
 	if err = e.blockchainStore.DeleteBlock(ctx, bl.hash); err != nil {
-		return errors.NewStorageError("DeleteBlock: %w", err)
+		return errors.NewStorageError("DeleteBlock", err)
 	}
 	e.stats.BlocksDeleted++
 
@@ -91,7 +91,7 @@ func (e *env) deleteCoinbase(ctx context.Context, pf *preflightResult, coinbaseH
 		if isNotFound(err) {
 			return nil
 		}
-		return errors.NewStorageError("Get coinbase %s: %w", coinbaseHash.String(), err)
+		return errors.NewStorageError("Get coinbase %s", coinbaseHash.String(), err)
 	}
 
 	var deletedHits, survivors []uint32
@@ -106,7 +106,7 @@ func (e *env) deleteCoinbase(ctx context.Context, pf *preflightResult, coinbaseH
 		if len(deletedHits) > 0 {
 			removals := []utxo.BlockIDsRemoval{{TxHash: coinbaseHash, BlockIDs: deletedHits}}
 			if err = e.utxoStore.RemoveBlockIDs(ctx, removals); err != nil {
-				return errors.NewStorageError("RemoveBlockIDs coinbase: %w", err)
+				return errors.NewStorageError("RemoveBlockIDs coinbase", err)
 			}
 			e.stats.TxsBlockIDsTrimmed++
 		}
@@ -115,7 +115,7 @@ func (e *env) deleteCoinbase(ctx context.Context, pf *preflightResult, coinbaseH
 
 	if err = e.utxoStore.Delete(ctx, coinbaseHash); err != nil {
 		if !isNotFound(err) {
-			return errors.NewStorageError("Delete coinbase: %w", err)
+			return errors.NewStorageError("Delete coinbase", err)
 		}
 	}
 	e.stats.TxsDeleted++
@@ -130,7 +130,7 @@ func (e *env) deleteSubtreeBlobs(ctx context.Context, pf *preflightResult, subtr
 
 		shared, err := e.blockchainStore.HasBlockBelowHeightContainingSubtree(ctx, sh, pf.target)
 		if err != nil {
-			return errors.NewStorageError("HasBlockBelowHeightContainingSubtree: %w", err)
+			return errors.NewStorageError("HasBlockBelowHeightContainingSubtree", err)
 		}
 		if shared {
 			e.stats.SubtreesSkippedShared++

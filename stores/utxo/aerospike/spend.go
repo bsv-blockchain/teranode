@@ -825,7 +825,7 @@ func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch
 		// (key-creation/validation failures) are simply no-ops here, so this
 		// safely covers every remaining item without double-signalling.
 		for idx, bItem := range batch {
-			var sendErr error = errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchID, idx, err)
+			var sendErr error = errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d idx %d", bItem.spend.TxID.String(), batchID, idx, err)
 			bItem.complete(sendErr)
 		}
 		return err

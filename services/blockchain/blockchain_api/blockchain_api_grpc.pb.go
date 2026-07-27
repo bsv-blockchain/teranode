@@ -2849,6 +2849,9 @@ const (
 	PeerRegistryService_RecordSubtreeReceived_FullMethodName       = "/blockchain_api.PeerRegistryService/RecordSubtreeReceived"
 	PeerRegistryService_RecordTransactionReceived_FullMethodName   = "/blockchain_api.PeerRegistryService/RecordTransactionReceived"
 	PeerRegistryService_RecordCatchupError_FullMethodName          = "/blockchain_api.PeerRegistryService/RecordCatchupError"
+	PeerRegistryService_RecordCatchupAttempt_FullMethodName        = "/blockchain_api.PeerRegistryService/RecordCatchupAttempt"
+	PeerRegistryService_RecordCatchupSuccess_FullMethodName        = "/blockchain_api.PeerRegistryService/RecordCatchupSuccess"
+	PeerRegistryService_RecordCatchupFailure_FullMethodName        = "/blockchain_api.PeerRegistryService/RecordCatchupFailure"
 	PeerRegistryService_ResetReputation_FullMethodName             = "/blockchain_api.PeerRegistryService/ResetReputation"
 	PeerRegistryService_ReconsiderBadPeers_FullMethodName          = "/blockchain_api.PeerRegistryService/ReconsiderBadPeers"
 	PeerRegistryService_RecordValidatedPeerProgress_FullMethodName = "/blockchain_api.PeerRegistryService/RecordValidatedPeerProgress"
@@ -2899,6 +2902,14 @@ type PeerRegistryServiceClient interface {
 	RecordTransactionReceived(ctx context.Context, in *RecordReceivedRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// RecordCatchupError stores the peer's most recent catchup error for diagnostics.
 	RecordCatchupError(ctx context.Context, in *RecordCatchupErrorRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// RecordCatchupAttempt increments the peer's catchup-attempt counter and updates
+	// sync backoff tracking (LastSyncAttempt / SyncAttemptCount).
+	RecordCatchupAttempt(ctx context.Context, in *RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// RecordCatchupSuccess increments the peer's catchup-success counter and records
+	// a successful interaction with the given response time.
+	RecordCatchupSuccess(ctx context.Context, in *RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// RecordCatchupFailure increments the peer's catchup-failure counter and records a failed interaction.
+	RecordCatchupFailure(ctx context.Context, in *RecordCatchupFailureRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// ResetReputation resets reputation for the given peer (or all peers when peer_id is empty)
 	// to the recovery baseline and returns the count of peers reset.
 	ResetReputation(ctx context.Context, in *ResetReputationRequest, opts ...grpc.CallOption) (*ResetReputationResponse, error)
@@ -3097,6 +3108,36 @@ func (c *peerRegistryServiceClient) RecordCatchupError(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *peerRegistryServiceClient) RecordCatchupAttempt(ctx context.Context, in *RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, PeerRegistryService_RecordCatchupAttempt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerRegistryServiceClient) RecordCatchupSuccess(ctx context.Context, in *RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, PeerRegistryService_RecordCatchupSuccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerRegistryServiceClient) RecordCatchupFailure(ctx context.Context, in *RecordCatchupFailureRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, PeerRegistryService_RecordCatchupFailure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *peerRegistryServiceClient) ResetReputation(ctx context.Context, in *ResetReputationRequest, opts ...grpc.CallOption) (*ResetReputationResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResetReputationResponse)
@@ -3172,6 +3213,14 @@ type PeerRegistryServiceServer interface {
 	RecordTransactionReceived(context.Context, *RecordReceivedRequest) (*emptypb.Empty, error)
 	// RecordCatchupError stores the peer's most recent catchup error for diagnostics.
 	RecordCatchupError(context.Context, *RecordCatchupErrorRequest) (*emptypb.Empty, error)
+	// RecordCatchupAttempt increments the peer's catchup-attempt counter and updates
+	// sync backoff tracking (LastSyncAttempt / SyncAttemptCount).
+	RecordCatchupAttempt(context.Context, *RecordCatchupAttemptRequest) (*emptypb.Empty, error)
+	// RecordCatchupSuccess increments the peer's catchup-success counter and records
+	// a successful interaction with the given response time.
+	RecordCatchupSuccess(context.Context, *RecordCatchupSuccessRequest) (*emptypb.Empty, error)
+	// RecordCatchupFailure increments the peer's catchup-failure counter and records a failed interaction.
+	RecordCatchupFailure(context.Context, *RecordCatchupFailureRequest) (*emptypb.Empty, error)
 	// ResetReputation resets reputation for the given peer (or all peers when peer_id is empty)
 	// to the recovery baseline and returns the count of peers reset.
 	ResetReputation(context.Context, *ResetReputationRequest) (*ResetReputationResponse, error)
@@ -3243,6 +3292,15 @@ func (UnimplementedPeerRegistryServiceServer) RecordTransactionReceived(context.
 }
 func (UnimplementedPeerRegistryServiceServer) RecordCatchupError(context.Context, *RecordCatchupErrorRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecordCatchupError not implemented")
+}
+func (UnimplementedPeerRegistryServiceServer) RecordCatchupAttempt(context.Context, *RecordCatchupAttemptRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordCatchupAttempt not implemented")
+}
+func (UnimplementedPeerRegistryServiceServer) RecordCatchupSuccess(context.Context, *RecordCatchupSuccessRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordCatchupSuccess not implemented")
+}
+func (UnimplementedPeerRegistryServiceServer) RecordCatchupFailure(context.Context, *RecordCatchupFailureRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordCatchupFailure not implemented")
 }
 func (UnimplementedPeerRegistryServiceServer) ResetReputation(context.Context, *ResetReputationRequest) (*ResetReputationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResetReputation not implemented")
@@ -3598,6 +3656,60 @@ func _PeerRegistryService_RecordCatchupError_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerRegistryService_RecordCatchupAttempt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordCatchupAttemptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerRegistryServiceServer).RecordCatchupAttempt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerRegistryService_RecordCatchupAttempt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerRegistryServiceServer).RecordCatchupAttempt(ctx, req.(*RecordCatchupAttemptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerRegistryService_RecordCatchupSuccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordCatchupSuccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerRegistryServiceServer).RecordCatchupSuccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerRegistryService_RecordCatchupSuccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerRegistryServiceServer).RecordCatchupSuccess(ctx, req.(*RecordCatchupSuccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerRegistryService_RecordCatchupFailure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordCatchupFailureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerRegistryServiceServer).RecordCatchupFailure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerRegistryService_RecordCatchupFailure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerRegistryServiceServer).RecordCatchupFailure(ctx, req.(*RecordCatchupFailureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PeerRegistryService_ResetReputation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ResetReputationRequest)
 	if err := dec(in); err != nil {
@@ -3730,6 +3842,18 @@ var PeerRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RecordCatchupError",
 			Handler:    _PeerRegistryService_RecordCatchupError_Handler,
+		},
+		{
+			MethodName: "RecordCatchupAttempt",
+			Handler:    _PeerRegistryService_RecordCatchupAttempt_Handler,
+		},
+		{
+			MethodName: "RecordCatchupSuccess",
+			Handler:    _PeerRegistryService_RecordCatchupSuccess_Handler,
+		},
+		{
+			MethodName: "RecordCatchupFailure",
+			Handler:    _PeerRegistryService_RecordCatchupFailure_Handler,
 		},
 		{
 			MethodName: "ResetReputation",

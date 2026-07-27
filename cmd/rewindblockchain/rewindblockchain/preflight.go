@@ -35,7 +35,7 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 	// 1. FSM state check.
 	fsmState, err := e.blockchainStore.GetFSMState(ctx)
 	if err != nil {
-		return nil, errors.NewStorageError("failed to read FSM state: %w", err)
+		return nil, errors.NewStorageError("failed to read FSM state", err)
 	}
 
 	normalised := strings.ToUpper(strings.TrimSpace(fsmState))
@@ -55,7 +55,7 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 	// 3. Read current tip.
 	_, tipMeta, err := e.blockchainStore.GetBestBlockHeader(ctx)
 	if err != nil {
-		return nil, errors.NewStorageError("failed to read best block: %w", err)
+		return nil, errors.NewStorageError("failed to read best block", err)
 	}
 
 	tip := tipMeta.Height
@@ -110,19 +110,19 @@ func (e *env) resolveTarget(ctx context.Context) (uint32, *chainhash.Hash, error
 		height := uint32(e.opts.TargetHeight)
 		block, err := e.blockchainStore.GetBlockByHeight(ctx, height)
 		if err != nil {
-			return 0, nil, errors.NewStorageError("failed to look up block at target height %d: %w", height, err)
+			return 0, nil, errors.NewStorageError("failed to look up block at target height %d", height, err)
 		}
 		return height, block.Hash(), nil
 	}
 
 	stateBytes, err := e.blockchainStore.GetState(ctx, blockassembly.StateKey)
 	if err != nil {
-		return 0, nil, errors.NewStorageError(`failed to read state["BlockAssembler"] (pass --target-height to override): %w`, err)
+		return 0, nil, errors.NewStorageError(`failed to read state["BlockAssembler"] (pass --target-height to override)`, err)
 	}
 
 	header, height, err := blockassembly.DecodeState(stateBytes)
 	if err != nil {
-		return 0, nil, errors.NewProcessingError(`failed to decode state["BlockAssembler"] (pass --target-height to override): %w`, err)
+		return 0, nil, errors.NewProcessingError(`failed to decode state["BlockAssembler"] (pass --target-height to override)`, err)
 	}
 
 	return height, header.Hash(), nil
@@ -162,7 +162,7 @@ func (e *env) confirmPrompt(r *preflightResult) error {
 	reader := bufio.NewReader(e.opts.Stdin)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return errors.NewProcessingError("failed to read confirmation: %w", err)
+		return errors.NewProcessingError("failed to read confirmation", err)
 	}
 
 	line = strings.ToLower(strings.TrimSpace(line))

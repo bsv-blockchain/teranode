@@ -68,6 +68,10 @@ func (m *maliciousAbortP2PClient) GetPeersForCatchup(_ context.Context) ([]*p2p.
 func (m *maliciousAbortP2PClient) GetPeer(_ context.Context, _ string) (*p2p.PeerInfo, error) {
 	return nil, nil
 }
+func (m *maliciousAbortP2PClient) ReportValidBlockHeaders(_ context.Context, _ string, _ int64) error {
+	return nil
+}
+
 func (m *maliciousAbortP2PClient) ReportValidBlock(_ context.Context, _ string, _ string) error {
 	return nil
 }

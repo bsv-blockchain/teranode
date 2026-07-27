@@ -837,12 +837,12 @@ func (s *SQL) getPreviousBlockData(
 func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Block) ([]byte, error) {
 	prevChainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWorkBytes))
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to convert previous chain work bytes to hash for block %s: %w", block.Hash().String(), err)
+		return nil, errors.NewProcessingError("failed to convert previous chain work bytes to hash for block %s", block.Hash().String(), err)
 	}
 
 	cumulativeChainWorkHash, err := getCumulativeChainWork(prevChainWorkHash, block)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to calculate cumulative chain work for block %s: %w", block.Hash().String(), err)
+		return nil, errors.NewProcessingError("failed to calculate cumulative chain work for block %s", block.Hash().String(), err)
 	}
 
 	cumulativeChainWorkBytes := bt.ReverseBytes(cumulativeChainWorkHash.CloneBytes())
@@ -919,7 +919,7 @@ func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) e
 
 	blockHeight, err := block.ExtractCoinbaseHeight()
 	if err != nil {
-		return errors.NewStorageError("failed to extract coinbase height for block %s (height %d): %w", block.Hash().String(), currentHeight, err)
+		return errors.NewStorageError("failed to extract coinbase height for block %s (height %d)", block.Hash().String(), currentHeight, err)
 	}
 
 	if blockHeight != currentHeight {

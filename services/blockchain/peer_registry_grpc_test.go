@@ -120,6 +120,36 @@ func TestGRPC_RecordValidatedPeerProgress(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// RecordCatchupAttempt / RecordCatchupSuccess / RecordCatchupFailure
+// ---------------------------------------------------------------------------
+
+func TestGRPC_RecordCatchupCounters(t *testing.T) {
+	b := newTestBlockchain()
+	ctx := context.Background()
+
+	_, err := b.RegisterPeer(ctx, &blockchain_api.RegisterPeerRequest{
+		Peer: &blockchain_api.PeerRegistryInfo{PeerId: "peer-1"},
+	})
+	require.NoError(t, err)
+
+	_, err = b.RecordCatchupAttempt(ctx, &blockchain_api.RecordCatchupAttemptRequest{PeerId: "peer-1"})
+	require.NoError(t, err)
+	_, err = b.RecordCatchupAttempt(ctx, &blockchain_api.RecordCatchupAttemptRequest{PeerId: "peer-1"})
+	require.NoError(t, err)
+	_, err = b.RecordCatchupSuccess(ctx, &blockchain_api.RecordCatchupSuccessRequest{PeerId: "peer-1", ResponseTimeMs: 150})
+	require.NoError(t, err)
+	_, err = b.RecordCatchupFailure(ctx, &blockchain_api.RecordCatchupFailureRequest{PeerId: "peer-1"})
+	require.NoError(t, err)
+
+	got, ok := b.peerRegistry.Get("peer-1")
+	require.True(t, ok)
+	require.Equal(t, int64(2), got.CatchupAttempts)
+	require.Equal(t, int64(1), got.CatchupSuccesses)
+	require.Equal(t, int64(1), got.CatchupFailures)
+	require.Equal(t, int64(150), got.AvgResponseTimeMs)
+}
+
+// ---------------------------------------------------------------------------
 // RemovePeer
 // ---------------------------------------------------------------------------
 
@@ -444,6 +474,9 @@ func TestGRPC_PeerInfoProtoRoundTrip(t *testing.T) {
 		LastValidatedAt:           now.Add(-2 * time.Minute),
 		FullStorageContradictions: 3,
 		FullStoragePenaltyUntil:   now.Add(30 * time.Minute),
+		CatchupAttempts:           12,
+		CatchupSuccesses:          9,
+		CatchupFailures:           2,
 	}
 
 	proto := peerInfoToProto(original)
@@ -466,6 +499,9 @@ func TestGRPC_PeerInfoProtoRoundTrip(t *testing.T) {
 	require.Equal(t, original.MaliciousCount, roundTripped.MaliciousCount)
 	require.Equal(t, original.ReputationScore, roundTripped.ReputationScore)
 	require.Equal(t, original.AvgResponseTimeMs, roundTripped.AvgResponseTimeMs)
+	require.Equal(t, original.CatchupAttempts, roundTripped.CatchupAttempts)
+	require.Equal(t, original.CatchupSuccesses, roundTripped.CatchupSuccesses)
+	require.Equal(t, original.CatchupFailures, roundTripped.CatchupFailures)
 
 	// Timestamps: protobuf round-trips lose sub-microsecond precision, but we
 	// truncated above so direct comparison is safe within a second.

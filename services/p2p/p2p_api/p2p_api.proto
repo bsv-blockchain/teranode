@@ -205,6 +205,19 @@ message AddBanScoreRequest {
     string message = 2;
   }
 
+  // Report a successfully served batch of block headers during catchup.
+  // Credits the peer with a generic interaction success (reputation and
+  // response time) without touching the catchup-operation counters.
+  message ReportValidBlockHeadersRequest {
+    string peer_id = 1;      // Peer ID that served the headers
+    int64 duration_ms = 2;   // Time taken to serve the headers (0 = not applicable)
+  }
+
+  message ReportValidBlockHeadersResponse {
+    bool success = 1;
+    string message = 2;
+  }
+
   // Report locally validated peer chain progress
   message ReportValidatedChainProgressRequest {
     string peer_id = 1;
@@ -266,6 +279,12 @@ message AddBanScoreRequest {
     string client_name = 24;  // Human-readable name of the client
     string last_catchup_error = 25;  // Last error message from catchup attempt
     int64 last_catchup_error_time = 26;  // Unix timestamp of last catchup error
+
+    // Catchup-specific counters (recorded via RecordCatchupAttempt/Success/Failure),
+    // distinct from the generic interaction counters above.
+    int64 catchup_attempts = 27;
+    int64 catchup_successes = 28;
+    int64 catchup_failures = 29;
   }
 
   message GetPeerRegistryResponse {
@@ -316,6 +335,7 @@ message AddBanScoreRequest {
     // Subtree and block validation reporting
     rpc ReportValidSubtree(ReportValidSubtreeRequest) returns (ReportValidSubtreeResponse) {}
     rpc ReportValidBlock(ReportValidBlockRequest) returns (ReportValidBlockResponse) {}
+    rpc ReportValidBlockHeaders(ReportValidBlockHeadersRequest) returns (ReportValidBlockHeadersResponse) {}
     rpc ReportValidatedChainProgress(ReportValidatedChainProgressRequest) returns (ReportValidatedChainProgressResponse) {}
 
     // Peer status checking

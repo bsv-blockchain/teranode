@@ -369,6 +369,43 @@ func TestCentralizedPeerRegistry_RecordBlockSubtreeTransaction(t *testing.T) {
 	require.False(t, got.LastBlockTime.IsZero())
 }
 
+func TestCentralizedPeerRegistry_RecordCatchupCounters(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "p"})
+
+	r.RecordCatchupAttempt("p")
+	r.RecordCatchupAttempt("p")
+	r.RecordCatchupAttempt("p")
+	r.RecordCatchupSuccess("p", 150)
+	r.RecordCatchupFailure("p")
+
+	// Non-catchup activity must not move the catchup counters.
+	r.RecordBlockReceived("p", 100)
+	r.RecordSubtreeReceived("p", 0)
+
+	got, _ := r.Get("p")
+	require.Equal(t, int64(3), got.CatchupAttempts)
+	require.Equal(t, int64(1), got.CatchupSuccesses)
+	require.Equal(t, int64(1), got.CatchupFailures)
+
+	// Attempts also feed the sync backoff tracking.
+	require.Equal(t, int32(3), got.SyncAttemptCount)
+	require.False(t, got.LastSyncAttempt.IsZero())
+
+	// Success/failure still feed the generic interaction metrics.
+	require.Equal(t, int64(3), got.InteractionSuccesses, "catchup success + block + subtree")
+	require.Equal(t, int64(1), got.InteractionFailures)
+	require.False(t, got.LastInteractionFailure.IsZero())
+
+	// Unknown peers are a no-op.
+	r.RecordCatchupAttempt("ghost")
+	r.RecordCatchupSuccess("ghost", 0)
+	r.RecordCatchupFailure("ghost")
+	_, ok := r.Get("ghost")
+	require.False(t, ok)
+}
+
 func TestCentralizedPeerRegistry_RecordCatchupError(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
 
@@ -732,12 +769,18 @@ func TestCentralizedPeerRegistry_ResetReputation(t *testing.T) {
 	r.Register(&PeerInfo{ID: "a"})
 	r.UpdateMetrics("a", 0, 0, 0, false, false, true, 0)
 	r.RecordSyncAttempt("a")
+	r.RecordCatchupAttempt("a")
+	r.RecordCatchupSuccess("a", 100)
+	r.RecordCatchupFailure("a")
 
 	require.Equal(t, 1, r.ResetReputation("a"))
 	got, _ := r.Get("a")
 	require.Equal(t, 50.0, got.ReputationScore)
 	require.Equal(t, int64(0), got.MaliciousCount)
 	require.Equal(t, int32(0), got.SyncAttemptCount)
+	require.Equal(t, int64(0), got.CatchupAttempts)
+	require.Equal(t, int64(0), got.CatchupSuccesses)
+	require.Equal(t, int64(0), got.CatchupFailures)
 
 	// Reset all.
 	r.Register(&PeerInfo{ID: "b"})

@@ -37,6 +37,7 @@ var publicPeerServiceMethods = map[string]bool{
 	"/p2p_api.PeerService/UpdateCatchupError":           true,
 	"/p2p_api.PeerService/ReportValidSubtree":           true,
 	"/p2p_api.PeerService/ReportValidBlock":             true,
+	"/p2p_api.PeerService/ReportValidBlockHeaders":      true,
 	"/p2p_api.PeerService/ReportValidatedChainProgress": true,
 	"/p2p_api.PeerService/RecordBytesDownloaded":        true,
 }

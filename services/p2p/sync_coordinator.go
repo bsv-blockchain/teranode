@@ -1234,11 +1234,15 @@ func (sc *SyncCoordinator) checkAllPeersAttempted() {
 
 // considerReputationRecovery checks if any bad peers should have their reputation reset
 func (sc *SyncCoordinator) considerReputationRecovery() {
+	sc.mu.RLock()
+	backoffMultiplier := sc.backoffMultiplier
+	sc.mu.RUnlock()
+
 	// Calculate cooldown based on how many times we've been in backoff
 	baseCooldown := 5 * time.Minute
-	if sc.backoffMultiplier > 1 {
+	if backoffMultiplier > 1 {
 		// Exponentially increase cooldown if we've been in backoff multiple times
-		cooldownMultiplier := sc.backoffMultiplier / 2
+		cooldownMultiplier := backoffMultiplier / 2
 		if cooldownMultiplier < 1 {
 			cooldownMultiplier = 1
 		}

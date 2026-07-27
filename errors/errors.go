@@ -347,6 +347,12 @@ func (e *Error) GetData(key string) interface{} {
 }
 
 // New creates a new Error instance with the specified code, message, and optional parameters.
+//
+// Pass the causing error as the final argument to wrap it; do NOT use a %w verb
+// in the message. The trailing error is extracted before fmt.Errorf runs, so a
+// %w would be orphaned (rendering "%!w(MISSING)" or a literal "%w"); the wrapped
+// error is rendered by Error() via " -> " instead. Any orphaned %w is stripped
+// defensively, but the errors.New* format strings should simply omit it.
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr *Error
 
@@ -362,6 +368,15 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			wErr = &Error{message: err.Error()}
 			params = params[:len(params)-1]
 		}
+	}
+
+	// A trailing error argument was extracted as the wrapped error above, so any
+	// %w verb left in the format string is now orphaned: fmt.Errorf would render
+	// it as %!w(MISSING), or (when no params remain) the literal %w would survive
+	// unformatted. The wrapped error is rendered by Error() via " -> ", so the
+	// verb is redundant here — strip it. Escaped %%w is preserved.
+	if wErr != nil {
+		message = stripOrphanedWrapVerbs(message)
 	}
 
 	// Format the message with the remaining parameters
@@ -406,6 +421,53 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	}
 
 	return returnErr
+}
+
+// stripOrphanedWrapVerbs removes unescaped %w verbs from a format string, together
+// with one immediately preceding separator run (trailing spaces and/or ':', '-',
+// ','), so "GetBlock: %w" -> "GetBlock" and "failed %s: %w" -> "failed %s". Escaped
+// verbs (%%w, i.e. a literal "%w") are preserved. It is only called once a trailing
+// error argument has been extracted as the wrapped error, at which point any %w in
+// the format is orphaned (see New). The scan is escape-aware rather than a regex so
+// that the second % of a %%w sequence is never mistaken for a verb.
+func stripOrphanedWrapVerbs(format string) string {
+	if !strings.Contains(format, "%w") {
+		return format
+	}
+
+	var b strings.Builder
+	b.Grow(len(format))
+
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			b.WriteByte(format[i])
+			continue
+		}
+
+		// Escaped percent: keep both bytes verbatim so "%%w" stays a literal "%w".
+		if i+1 < len(format) && format[i+1] == '%' {
+			b.WriteString("%%")
+			i++
+
+			continue
+		}
+
+		// Orphaned wrap verb: drop it and tidy any dangling separator that preceded it.
+		if i+1 < len(format) && format[i+1] == 'w' {
+			s := strings.TrimRight(b.String(), " ")
+			s = strings.TrimRight(s, ":-,")
+			s = strings.TrimRight(s, " ")
+			b.Reset()
+			b.WriteString(s)
+			i++
+
+			continue
+		}
+
+		b.WriteByte(format[i])
+	}
+
+	return b.String()
 }
 
 // contains checks if the target error or any of its wrapped errors exist in this error's chain

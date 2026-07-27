@@ -70,7 +70,18 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// Lookup previous block height from blockchain
 	_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
 	if err != nil {
-		sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+		// A missing parent is an expected, recoverable condition: a normal orphan /
+		// out-of-order tip announce, or a descendant of a block that was rejected
+		// upstream. The caller (handleBlockMsg) answers with a getblocks and, for a
+		// known-failed ancestor, short-circuits the descendant cascade (#1333) — so
+		// logging it at ERROR here only produces misleading "previous block
+		// NOT_FOUND" spam. Genuine lookup failures (e.g. storage errors) still ERROR.
+		if errors.Is(err, errors.ErrBlockNotFound) {
+			sm.logger.Debugf("[HandleBlockDirect][%s] previous block %s not found (orphan/out-of-order; caller will request missing blocks): %v", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+		} else {
+			sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+		}
+
 		return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
 	}
 
