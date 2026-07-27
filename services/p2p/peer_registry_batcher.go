@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -29,10 +30,10 @@ const (
 	// block hash, DataHub URL) forces a RegisterPeer earlier.
 	registryReassertTTL = time.Minute
 
-	// registryAssertStatePruneAge is how long an idle peer's assert-state
-	// entry survives before the flush loop prunes it. Must exceed
-	// registryReassertTTL; a pruned peer is simply re-registered on its next
-	// message.
+	// registryAssertStatePruneAge is how long an idle peer's assert-state (or
+	// removal-tombstone) entry survives before the flush loop prunes it. Must
+	// exceed registryReassertTTL; a pruned peer is simply re-registered on its
+	// next message.
 	registryAssertStatePruneAge = 10 * time.Minute
 
 	// registryFlushTimeout bounds a single flush cycle so a wedged registry
@@ -43,8 +44,8 @@ const (
 )
 
 // pendingPeerUpdate accumulates every registry-affecting observation for one
-// peer between flushes. Registration fields keep the latest non-zero value
-// (matching the registry's own merge semantics), bytes accumulate, and the
+// peer between flushes. Registration fields keep the most meaningful value
+// (highest height, latest non-empty strings), bytes accumulate, and the
 // boolean intents are sticky until flushed.
 type pendingPeerUpdate struct {
 	clientName       string
@@ -55,6 +56,37 @@ type pendingPeerUpdate struct {
 	markConnected    bool
 	touchLastMessage bool
 	bytesReceived    uint64
+}
+
+// merge folds another observation into u. Heights are advertised tips; with
+// concurrent topic workers the enqueue order no longer matches message order,
+// so the highest height (and its paired block hash) wins rather than the
+// last-enqueued one.
+func (u *pendingPeerUpdate) merge(from *pendingPeerUpdate) {
+	if from.clientName != "" {
+		u.clientName = from.clientName
+	}
+	if from.height > u.height {
+		u.height = from.height
+		if from.blockHash != nil {
+			u.blockHash = from.blockHash
+		}
+	} else if from.height == u.height && from.blockHash != nil {
+		u.blockHash = from.blockHash
+	}
+	if from.dataHubURL != "" {
+		u.dataHubURL = from.dataHubURL
+	}
+	if from.storage != "" {
+		u.storage = from.storage
+	}
+	if from.markConnected {
+		u.markConnected = true
+	}
+	if from.touchLastMessage {
+		u.touchLastMessage = true
+	}
+	u.bytesReceived += from.bytesReceived
 }
 
 // hasInfo reports whether the update carries registration data worth pushing
@@ -81,7 +113,8 @@ type registryAssertState struct {
 //
 // A flushInterval <= 0 puts the batcher in synchronous mode: every enqueue
 // flushes inline and start/stop are no-ops. Used by tests that assert registry
-// state immediately after invoking a handler.
+// state immediately after invoking a handler; NewServer clamps the configured
+// interval so production never runs synchronously.
 type peerRegistryBatcher struct {
 	logger        ulogger.Logger
 	registry      blockchain.PeerRegistryClientI
@@ -92,10 +125,16 @@ type peerRegistryBatcher struct {
 	pending      map[string]*pendingPeerUpdate
 	dropped      uint64
 	lastAsserted map[string]registryAssertState
+	// removed holds tombstones for peers dropped via forget(). A tombstone
+	// makes an in-flight flush skip the peer (so a removed peer is not
+	// resurrected by updates coalesced before the removal) and is cleared by
+	// the peer's next enqueued observation.
+	removed map[string]time.Time
 
 	// flushMu serializes flush cycles (ticker, stop, and synchronous mode).
 	flushMu sync.Mutex
 
+	started  atomic.Bool
 	stopCh   chan struct{}
 	doneCh   chan struct{}
 	stopOnce sync.Once
@@ -109,6 +148,7 @@ func newPeerRegistryBatcher(ctx context.Context, logger ulogger.Logger, registry
 		flushInterval: flushInterval,
 		pending:       make(map[string]*pendingPeerUpdate),
 		lastAsserted:  make(map[string]registryAssertState),
+		removed:       make(map[string]time.Time),
 		stopCh:        make(chan struct{}),
 		doneCh:        make(chan struct{}),
 	}
@@ -117,7 +157,9 @@ func newPeerRegistryBatcher(ctx context.Context, logger ulogger.Logger, registry
 // start launches the background flush goroutine. No-op in synchronous mode.
 func (b *peerRegistryBatcher) start() {
 	if b.flushInterval <= 0 {
-		close(b.doneCh)
+		return
+	}
+	if !b.started.CompareAndSwap(false, true) {
 		return
 	}
 
@@ -141,19 +183,22 @@ func (b *peerRegistryBatcher) start() {
 }
 
 // stop terminates the flush goroutine and performs a final best-effort flush
-// so updates observed just before shutdown are not lost.
+// so updates observed just before shutdown are not lost. Safe to call whether
+// or not start ran (Start can fail before reaching the batcher).
 func (b *peerRegistryBatcher) stop() {
 	b.stopOnce.Do(func() {
 		close(b.stopCh)
-		<-b.doneCh
+		if b.started.Load() {
+			<-b.doneCh
+		}
 		b.flushOnce()
 	})
 }
 
-// enqueue merges an update for peerID into the pending map, applying
+// enqueue merges an observation for peerID into the pending map, applying
 // backpressure when the map is full. Returns false when the update was
 // dropped.
-func (b *peerRegistryBatcher) enqueue(peerID string, apply func(*pendingPeerUpdate)) bool {
+func (b *peerRegistryBatcher) enqueue(peerID string, from *pendingPeerUpdate) bool {
 	b.mu.Lock()
 	u, ok := b.pending[peerID]
 	if !ok {
@@ -165,7 +210,9 @@ func (b *peerRegistryBatcher) enqueue(peerID string, apply func(*pendingPeerUpda
 		u = &pendingPeerUpdate{}
 		b.pending[peerID] = u
 	}
-	apply(u)
+	u.merge(from)
+	// A fresh observation supersedes a pending removal tombstone.
+	delete(b.removed, peerID)
 	b.mu.Unlock()
 
 	if b.flushInterval <= 0 {
@@ -177,37 +224,23 @@ func (b *peerRegistryBatcher) enqueue(peerID string, apply func(*pendingPeerUpda
 // enqueueRegister records the peer's latest registration data, optionally
 // marking it as directly connected. Mirrors addPeer/addConnectedPeer.
 func (b *peerRegistryBatcher) enqueueRegister(peerID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string, connected bool) {
-	b.enqueue(peerID, func(u *pendingPeerUpdate) {
-		if clientName != "" {
-			u.clientName = clientName
-		}
-		if height > 0 {
-			u.height = height
-		}
-		if blockHash != nil {
-			u.blockHash = blockHash
-		}
-		if dataHubURL != "" {
-			u.dataHubURL = dataHubURL
-		}
-		if connected {
-			u.markConnected = true
-		}
+	b.enqueue(peerID, &pendingPeerUpdate{
+		clientName:    clientName,
+		height:        height,
+		blockHash:     blockHash,
+		dataHubURL:    dataHubURL,
+		markConnected: connected,
 	})
 }
 
 // enqueueLastMessage records that a wire message was received from the peer.
 func (b *peerRegistryBatcher) enqueueLastMessage(peerID string) {
-	b.enqueue(peerID, func(u *pendingPeerUpdate) {
-		u.touchLastMessage = true
-	})
+	b.enqueue(peerID, &pendingPeerUpdate{touchLastMessage: true})
 }
 
 // enqueueBytesReceived accumulates a received-bytes delta for the peer.
 func (b *peerRegistryBatcher) enqueueBytesReceived(peerID string, n uint64) {
-	b.enqueue(peerID, func(u *pendingPeerUpdate) {
-		u.bytesReceived += n
-	})
+	b.enqueue(peerID, &pendingPeerUpdate{bytesReceived: n})
 }
 
 // enqueueStorage records the peer's latest advertised storage mode.
@@ -215,19 +248,19 @@ func (b *peerRegistryBatcher) enqueueStorage(peerID, storage string) {
 	if storage == "" {
 		return
 	}
-	b.enqueue(peerID, func(u *pendingPeerUpdate) {
-		u.storage = storage
-	})
+	b.enqueue(peerID, &pendingPeerUpdate{storage: storage})
 }
 
-// forget clears the peer's assert state so its next message re-registers it.
-// Called when the peer is removed from the registry (disconnect, ban); without
-// this the batcher would keep skipping RegisterPeer while the registry no
-// longer has the entry.
+// forget clears the peer's batcher state and leaves a removal tombstone.
+// Called when the peer is removed from the registry (disconnect, ban): pending
+// updates for a removed peer are stale, an in-flight flush must not resurrect
+// it, and its next message must re-register it rather than being skipped as
+// recently asserted.
 func (b *peerRegistryBatcher) forget(peerID string) {
 	b.mu.Lock()
 	delete(b.lastAsserted, peerID)
 	delete(b.pending, peerID)
+	b.removed[peerID] = time.Now()
 	b.mu.Unlock()
 }
 
@@ -247,7 +280,7 @@ func (b *peerRegistryBatcher) flushOnce() {
 	b.mu.Unlock()
 
 	if dropped > 0 {
-		b.logger.Warnf("[peerRegistryBatcher] dropped updates for %d peers (pending map full at %d entries)", dropped, registryBatcherMaxPending)
+		b.logger.Warnf("[peerRegistryBatcher] dropped %d peer updates (pending map full at %d peers)", dropped, registryBatcherMaxPending)
 	}
 
 	if len(pending) == 0 {
@@ -255,21 +288,34 @@ func (b *peerRegistryBatcher) flushOnce() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(b.ctx, registryFlushTimeout)
+	// The batcher's parent ctx is cancelled before Stop() runs during service
+	// shutdown; the final flush must still go out, so detach from cancellation
+	// and rely on the timeout alone.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(b.ctx), registryFlushTimeout)
 	defer cancel()
 
 	now := time.Now()
 	rpcErrs := 0
+	unflushed := len(pending)
 
 	for peerID, u := range pending {
 		if ctx.Err() != nil {
-			b.logger.Warnf("[peerRegistryBatcher] flush aborted with %d peers unflushed: %v", len(pending), ctx.Err())
+			b.logger.Warnf("[peerRegistryBatcher] flush timed out with updates for %d of %d peers unflushed", unflushed, len(pending))
 			return
 		}
 
 		b.mu.Lock()
+		_, isRemoved := b.removed[peerID]
 		st := b.lastAsserted[peerID]
 		b.mu.Unlock()
+
+		unflushed--
+
+		// The peer was removed after these updates were coalesced; pushing
+		// them now would resurrect it in the registry.
+		if isRemoved {
+			continue
+		}
 
 		sendRegister := u.hasInfo() || now.Sub(st.registeredAt) > registryReassertTTL
 		sendConnected := u.markConnected && now.Sub(st.connectedAt) > registryReassertTTL
@@ -286,7 +332,8 @@ func (b *peerRegistryBatcher) flushOnce() {
 			}
 			if err := b.registry.RegisterPeer(ctx, info); err != nil {
 				rpcErrs++
-				continue // registry ignores updates for unknown peers, skip the rest
+				b.requeue(peerID, u)
+				continue // registry ignores updates for unknown peers, retry next flush
 			}
 			st.registeredAt = now
 		}
@@ -319,7 +366,12 @@ func (b *peerRegistryBatcher) flushOnce() {
 
 		if sendRegister || sendConnected {
 			b.mu.Lock()
-			b.lastAsserted[peerID] = st
+			// Re-check the tombstone: a forget() may have raced the RPCs above,
+			// and recording the assertion would suppress the peer's
+			// re-registration for registryReassertTTL after its next message.
+			if _, r := b.removed[peerID]; !r {
+				b.lastAsserted[peerID] = st
+			}
 			b.mu.Unlock()
 		}
 	}
@@ -331,8 +383,37 @@ func (b *peerRegistryBatcher) flushOnce() {
 	b.pruneAssertState()
 }
 
-// pruneAssertState drops assert-state entries for peers idle longer than
-// registryAssertStatePruneAge, bounding the map to recently active peers.
+// requeue puts a peer's coalesced update back into the pending map after a
+// failed RegisterPeer, so the accumulated bytes / last-message / storage
+// intents are retried on the next flush instead of being silently dropped.
+// Called from flushOnce only; must not trigger a synchronous flush.
+func (b *peerRegistryBatcher) requeue(peerID string, u *pendingPeerUpdate) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, isRemoved := b.removed[peerID]; isRemoved {
+		return
+	}
+	existing, ok := b.pending[peerID]
+	if !ok {
+		if len(b.pending) >= registryBatcherMaxPending {
+			b.dropped++
+			return
+		}
+		existing = &pendingPeerUpdate{}
+		b.pending[peerID] = existing
+	}
+	// Merge the failed batch under the newer observations: existing wins on
+	// conflicts, which merge() achieves by folding existing into the old
+	// update last.
+	merged := &pendingPeerUpdate{}
+	merged.merge(u)
+	merged.merge(existing)
+	*existing = *merged
+}
+
+// pruneAssertState drops assert-state entries and removal tombstones older
+// than registryAssertStatePruneAge, bounding both maps to recently active
+// peers.
 func (b *peerRegistryBatcher) pruneAssertState() {
 	cutoff := time.Now().Add(-registryAssertStatePruneAge)
 
@@ -340,6 +421,11 @@ func (b *peerRegistryBatcher) pruneAssertState() {
 	for peerID, st := range b.lastAsserted {
 		if st.registeredAt.Before(cutoff) && st.connectedAt.Before(cutoff) {
 			delete(b.lastAsserted, peerID)
+		}
+	}
+	for peerID, removedAt := range b.removed {
+		if removedAt.Before(cutoff) {
+			delete(b.removed, peerID)
 		}
 	}
 	b.mu.Unlock()

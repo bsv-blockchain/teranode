@@ -170,6 +170,9 @@ type Server struct {
 	// in tests that construct Server directly; helpers then fall back to
 	// synchronous registry calls.
 	registryBatcher *peerRegistryBatcher
+	// localHeightCache is a short-lived cache of the local best height used by
+	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
+	localHeightCache atomic.Pointer[localHeightCacheEntry]
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -443,8 +446,10 @@ func NewServer(
 	// Loading, persistence, ban scoring, and TTL/LRU eviction all live there now.
 	p2pServer.peerRegistry = peerRegistryClient
 	if peerRegistryClient != nil {
+		// Clamp to the default: <= 0 would select the batcher's synchronous
+		// test mode, which serializes every gossip handler on one mutex.
 		batchInterval := tSettings.P2P.PeerRegistryBatchInterval
-		if batchInterval == 0 {
+		if batchInterval <= 0 {
 			batchInterval = defaultRegistryBatchInterval
 		}
 		p2pServer.registryBatcher = newPeerRegistryBatcher(ctx, logger, peerRegistryClient, batchInterval)
@@ -2100,9 +2105,16 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 		return nil, errors.WrapGRPCPublic(errors.NewServiceError("reset reputation", err))
 	}
 
+	// Drop cached ban statuses so a reset (which may unban) takes effect
+	// immediately instead of after the cache TTL.
 	if req.PeerId == "" {
+		s.banStatusCache.Range(func(key, _ interface{}) bool {
+			s.banStatusCache.Delete(key)
+			return true
+		})
 		s.logger.Infof("[ResetReputation] Reset reputation for all peers. Count: %d", peersReset)
 	} else {
+		s.banStatusCache.Delete(req.PeerId)
 		s.logger.Infof("[ResetReputation] Reset reputation for peer %s", req.PeerId)
 	}
 

@@ -461,18 +461,38 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 	return ""
 }
 
-// getLocalHeight returns the current local blockchain height.
+// localHeightCacheTTL bounds how stale the cached local height may be. The
+// height only feeds advertised-tip sanitization caps and periodic sync
+// evaluation, both tolerant of a second of staleness.
+const localHeightCacheTTL = time.Second
+
+type localHeightCacheEntry struct {
+	height    uint32
+	fetchedAt time.Time
+}
+
+// getLocalHeight returns the current local blockchain height. The result is
+// cached briefly: gossip handlers call this per message (via
+// sanitizeAdvertisedTip) and must not issue a blockchain gRPC round-trip each
+// time. Failures are cached too, so a blockchain outage does not turn back
+// into a per-message RPC storm.
 func (s *Server) getLocalHeight() uint32 {
 	if s.blockchainClient == nil {
 		return 0
 	}
 
-	_, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx)
-	if err != nil || bhMeta == nil {
-		return 0
+	if e := s.localHeightCache.Load(); e != nil && time.Since(e.fetchedAt) < localHeightCacheTTL {
+		return e.height
 	}
 
-	return bhMeta.Height
+	height := uint32(0)
+	if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx); err == nil && bhMeta != nil {
+		height = bhMeta.Height
+	}
+
+	s.localHeightCache.Store(&localHeightCacheEntry{height: height, fetchedAt: time.Now()})
+
+	return height
 }
 
 func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
