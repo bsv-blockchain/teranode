@@ -46,7 +46,11 @@ func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSe
 // This is a pure function - no side effects, no network calls.
 // Peer IDs are canonical libp2p ID strings.
 func (ps *PeerSelector) SelectSyncPeer(peers []*blockchain.PeerInfo, criteria SelectionCriteria) string {
-	// Handle forced peer - always select it if it exists, regardless of eligibility
+	// Handle forced peer - always select it if it exists, regardless of
+	// eligibility. This deliberately skips the blacklist check in isEligible
+	// too, but a blacklisted DataHub URL is still refused downstream:
+	// sendSyncTriggerToKafka drops the trigger rather than handing the URL to
+	// block validation, so forcing a peer cannot override the blacklist.
 	if criteria.ForcedPeerID != "" {
 		for _, p := range peers {
 			if p.ID == criteria.ForcedPeerID {

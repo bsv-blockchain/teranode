@@ -1271,6 +1271,16 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash stri
 		dataHubURL = peerInfo.DataHubURL
 	}
 
+	// Enforce the operator blacklist on the URL read from the registry: it may
+	// have been stored before its host was blacklisted (the incumbent sync peer
+	// is not re-selected on every trigger) or belong to a forced sync peer,
+	// which bypasses selection eligibility. Deny wins - block validation must
+	// never be pointed at a blacklisted host.
+	if dataHubURL != "" && sc.settings != nil && isBaseURLBlacklisted(dataHubURL, sc.settings.SubtreeValidation.BlacklistedBaseURLs) {
+		sc.logger.Warnf("[sendSyncTriggerToKafka] not sending sync trigger for peer %s: DataHubURL %s is blacklisted", syncPeer, dataHubURL)
+		return
+	}
+
 	sc.logger.Infof("[sendSyncTriggerToKafka] Sending sync trigger with primary URL %s from peer %s", dataHubURL, syncPeer)
 
 	msg := &kafkamessage.KafkaBlockTopicMessage{

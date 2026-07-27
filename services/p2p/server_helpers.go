@@ -424,7 +424,7 @@ func (s *Server) checkDataHubURL(dataHubURL, fromID, handlerName string) bool {
 	}
 
 	if s.isBlacklistedBaseURL(dataHubURL) {
-		s.logger.Errorf("[%s] blocked notification from blacklisted DataHubURL %s (peer %s)", handlerName, dataHubURL, fromID)
+		s.logger.Warnf("[%s] blocked notification from blacklisted DataHubURL %s (peer %s)", handlerName, dataHubURL, fromID)
 		return false
 	}
 

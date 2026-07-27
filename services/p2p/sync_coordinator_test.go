@@ -1339,3 +1339,39 @@ func TestSyncCoordinator_ConcurrentSyncDecisions_NoDeadlock(t *testing.T) {
 		require.True(t, found, "current sync peer %s must be a registered peer", current)
 	}
 }
+
+// TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL: the sync
+// trigger reads the peer's DataHub URL straight from the registry, bypassing
+// selection eligibility. A URL stored before its host was blacklisted (or
+// belonging to a forced sync peer) must not be handed to block validation -
+// the trigger is dropped instead.
+func TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	sc.blocksKafkaProducerClient = producer
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "peer",
+		DataHubURL: "http://evil.example",
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	// Control: without a blacklist entry the trigger is published.
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	select {
+	case <-producer.PublishChannel():
+	default:
+		t.Fatal("precondition: sync trigger must be published when the URL is not blacklisted")
+	}
+
+	// Operator blacklists the host after the URL was stored.
+	sc.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	select {
+	case published := <-producer.PublishChannel():
+		t.Fatalf("sync trigger with blacklisted DataHubURL must not be published: %+v", published)
+	default:
+	}
+}
