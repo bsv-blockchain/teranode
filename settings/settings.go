@@ -538,6 +538,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SyncCoordinatorPeriodicEvaluationInterval: getDuration("p2p_sync_coordinator_periodic_evaluation_interval", 30*time.Second, alternativeContext...),
 			// On-demand peer health checking (uses built-in 2s timeout)
 			HealthCheckEnabled: getBool("p2p_health_check_enabled", true, alternativeContext...),
+			// Gossip handler load management
+			PeerRegistryBatchInterval: getDuration("p2p_peer_registry_batch_interval", time.Second, alternativeContext...),
+			GossipHandlerConcurrency:  getInt("p2p_gossip_handler_concurrency", 4, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),

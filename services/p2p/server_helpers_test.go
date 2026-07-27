@@ -213,9 +213,35 @@ func TestServerHelpers_ShouldSkipBannedPeer_FlagsBanned(t *testing.T) {
 
 	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "no ban → don't skip")
 
+	// A purely registry-side ban is masked by the cached negative lookup until
+	// the entry expires (reputationCacheTTL).
 	reg.AddBanScore(pid.String(), "spam", 0)
 	reg.AddBanScore(pid.String(), "spam", 0)
-	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "score-banned peer is skipped")
+	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "cached negative lookup masks the ban briefly")
+
+	// Once the cache entry expires (simulated by dropping it), the ban is honored.
+	s.banStatusCache.Delete(pid.String())
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "score-banned peer is skipped after cache expiry")
+}
+
+// TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate verifies that a ban
+// applied through the local transition path (applyBanScore → onPeerBanned)
+// takes effect immediately, without waiting for the cached negative
+// IsPeerBanned lookup to expire.
+func TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = noopBanList{}
+	pid := mustNewPeerID(t)
+
+	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "no ban → don't skip (caches negative)")
+
+	// protocol_violation = 20 points; 6 hits cross the default 100 threshold
+	// and trigger onPeerBanned, which overwrites the cached negative entry.
+	for i := 0; i < 6; i++ {
+		s.applyBanScore(pid.String(), ReasonProtocolViolation)
+	}
+
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "locally banned peer must be skipped immediately")
 }
 
 func TestServerHelpers_ShouldSkipUnhealthyPeer(t *testing.T) {

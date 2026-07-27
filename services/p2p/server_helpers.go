@@ -524,11 +524,19 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 }
 
 func (s *Server) addPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, false)
+		return
+	}
 	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
 }
 
 // addConnectedPeer adds a peer and marks it as directly connected
 func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, true)
+		return
+	}
 	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
 	if s.peerRegistry == nil {
 		return
@@ -558,6 +566,12 @@ func (s *Server) InjectPeerForTesting(peerID peer.ID, clientName, dataHubURL str
 }
 
 func (s *Server) removePeer(peerID peer.ID) {
+	// Clear batcher state first: pending updates for a removed peer are stale,
+	// and its next message must re-register it rather than being skipped as
+	// recently asserted.
+	if s.registryBatcher != nil {
+		s.registryBatcher.forget(peerID.String())
+	}
 	if s.peerRegistry != nil {
 		idStr := peerID.String()
 		if err := s.peerRegistry.UpdateConnectionState(s.gCtx, idStr, false); err != nil {
@@ -605,7 +619,14 @@ func (s *Server) getSyncPeer() peer.ID {
 
 // updateStorage updates peer storage mode in the centralized registry.
 func (s *Server) updateStorage(peerID peer.ID, mode string) {
-	if s.peerRegistry != nil && mode != "" {
+	if mode == "" {
+		return
+	}
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueStorage(peerID.String(), mode)
+		return
+	}
+	if s.peerRegistry != nil {
 		if err := s.peerRegistry.UpdateStorage(s.gCtx, peerID.String(), mode); err != nil {
 			s.logger.Warnf("[updateStorage] UpdateStorage %s failed: %v", peerID, err)
 		}
@@ -792,10 +813,25 @@ func (s *Server) cleanupPeerMaps() {
 		s.ipBanCache.Delete(key)
 	}
 
+	// Evict expired banStatusCache entries: shouldSkipBannedPeer inserts one
+	// entry per unique peer ID gossip is seen from.
+	var banStatusKeysToDelete []string
+	s.banStatusCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(banStatusCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				banStatusKeysToDelete = append(banStatusKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range banStatusKeysToDelete {
+		s.banStatusCache.Delete(key)
+	}
+
 	// Log cleanup stats
-	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 || len(ipBanKeysToDelete) > 0 {
-		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries, %d expired IP-ban entries",
-			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete), len(ipBanKeysToDelete))
+	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 || len(ipBanKeysToDelete) > 0 || len(banStatusKeysToDelete) > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries, %d expired IP-ban entries, %d expired ban-status entries",
+			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete), len(ipBanKeysToDelete), len(banStatusKeysToDelete))
 	}
 
 	// Second pass: enforce size limits if needed
@@ -862,15 +898,28 @@ func (s *Server) isOwnMessage(from string, peerID string) bool {
 // shouldSkipBannedPeer checks if we should skip a message from a banned peer:
 // score-based bans live in the centralized peer registry, operator IP/subnet
 // bans in the local ban list. Registry failures are tolerated (return false)
-// so a transient registry blip doesn't drop traffic silently.
+// so a transient registry blip doesn't drop traffic silently. Registry lookups
+// are cached for reputationCacheTTL to avoid a gRPC round-trip per gossip
+// message; local ban transitions (onPeerBanned) overwrite the cache entry
+// immediately.
 func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 	if s.peerRegistry != nil {
-		banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
-		if err != nil {
-			s.logger.Warnf("[%s] IsPeerBanned %s failed: %v", messageType, from, err)
-		} else if banned {
-			s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
-			return true
+		if banned, ok := s.cachedBanStatus(from); ok {
+			if banned {
+				s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+				return true
+			}
+		} else {
+			banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
+			if err != nil {
+				s.logger.Warnf("[%s] IsPeerBanned %s failed: %v", messageType, from, err)
+			} else {
+				s.banStatusCache.Store(from, banStatusCacheEntry{banned: banned, expiresAt: time.Now().Add(reputationCacheTTL)})
+				if banned {
+					s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+					return true
+				}
+			}
 		}
 	}
 
@@ -880,6 +929,23 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 	}
 
 	return false
+}
+
+type banStatusCacheEntry struct {
+	banned    bool
+	expiresAt time.Time
+}
+
+// cachedBanStatus returns the cached registry ban status for the peer and
+// whether a fresh cache entry existed.
+func (s *Server) cachedBanStatus(peerID string) (bool, bool) {
+	if v, ok := s.banStatusCache.Load(peerID); ok {
+		entry := v.(banStatusCacheEntry)
+		if time.Now().Before(entry.expiresAt) {
+			return entry.banned, true
+		}
+	}
+	return false, false
 }
 
 type ipBanCacheEntry struct {
