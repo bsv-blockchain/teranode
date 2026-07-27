@@ -265,6 +265,79 @@ func TestPeerSelector_SelectSyncPeer_StoragePenaltyDemotesFullClaim(t *testing.T
 	require.Equal(t, "full", got)
 }
 
+func TestPeerSelector_SelectFromCandidates_RandomTiebreakCoversWholeTopBand(t *testing.T) {
+	ps := newSelectorForTest()
+
+	// Three peers tied on every merit criterion, plus one strictly worse peer.
+	// Stubbing the random source proves each band member is reachable and the
+	// worse peer never is.
+	tied := []string{"tied-1", "tied-2", "tied-3"}
+	for want := range len(tied) {
+		peers := []*blockchain.PeerInfo{
+			newPeer("tied-2", 100, "full", 80, 0),
+			newPeer("tied-3", 100, "full", 80, 0),
+			newPeer("tied-1", 100, "full", 80, 0),
+			newPeer("worse", 100, "full", 50, 0),
+		}
+
+		ps.randIntN = func(n int) int {
+			require.Equal(t, 3, n, "top band must contain exactly the three tied peers")
+			return want
+		}
+
+		got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
+		require.Contains(t, tied, got)
+		require.NotEqual(t, "worse", got)
+	}
+}
+
+func TestPeerSelector_SelectSyncPeer_GrindableIDCannotCaptureSelection(t *testing.T) {
+	ps := newSelectorForTest()
+
+	// The attacker ID sorts lexicographically before every honest ID. With the
+	// old ID tiebreak it would win 100% of the time; with random tiebreaks it
+	// must lose at least once over many rounds. P(all 200 rounds pick the
+	// attacker among 4 tied peers) = 0.25^200, so this cannot flake.
+	attackerWins := 0
+	const rounds = 200
+	for range rounds {
+		peers := []*blockchain.PeerInfo{
+			newPeer("000000-ground-attacker-id", 100, "full", 80, 0),
+			newPeer("honest-a", 100, "full", 80, 0),
+			newPeer("honest-b", 100, "full", 80, 0),
+			newPeer("honest-c", 100, "full", 80, 0),
+		}
+		if ps.SelectSyncPeer(peers, advertisedProbeCriteria(50)) == "000000-ground-attacker-id" {
+			attackerWins++
+		}
+	}
+	require.Less(t, attackerWins, rounds, "attacker with lexicographically smallest ID must not win every selection")
+}
+
+func TestPeerSelector_SelectSyncPeer_PreviousPeerExcludedFromTiedTopBand(t *testing.T) {
+	ps := newSelectorForTest()
+
+	// Previous peer ties with one other candidate; it must never be re-drawn.
+	for range 50 {
+		peers := []*blockchain.PeerInfo{
+			newPeer("prev", 100, "full", 80, 0),
+			newPeer("other", 100, "full", 80, 0),
+		}
+		criteria := advertisedProbeCriteria(50)
+		criteria.PreviousPeer = "prev"
+		require.Equal(t, "other", ps.SelectSyncPeer(peers, criteria))
+	}
+}
+
+func TestPeerSelector_SelectSyncPeer_PreviousPeerKeptWhenOnlyCandidate(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{newPeer("prev", 100, "full", 80, 0)}
+	criteria := advertisedProbeCriteria(50)
+	criteria.PreviousPeer = "prev"
+	require.Equal(t, "prev", ps.SelectSyncPeer(peers, criteria), "sole candidate is selected even if it was the previous peer")
+}
+
 func TestPeerSelector_SelectSyncPeer_UnprovenProbeBudgetBoundsHeaderOnlyPeers(t *testing.T) {
 	ps := newSelectorForTest()
 	peers := []*blockchain.PeerInfo{
