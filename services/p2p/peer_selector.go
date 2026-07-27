@@ -41,15 +41,27 @@ func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSe
 	return &PeerSelector{
 		logger:   logger,
 		settings: settings,
+		// math/rand/v2 uses a per-thread ChaCha8 generator seeded from OS
+		// entropy; a remote attacker cannot observe or predict the stream, so
+		// crypto/rand is unnecessary for this tiebreak.
 		randIntN: rand.IntN,
 	}
+}
+
+// randomIndex returns a uniform value in [0, n), falling back to the package
+// default source if the selector was constructed without one.
+func (ps *PeerSelector) randomIndex(n int) int {
+	if ps.randIntN == nil {
+		return rand.IntN(n)
+	}
+	return ps.randIntN(n)
 }
 
 // SelectSyncPeer selects the best peer for syncing using two-phase selection:
 // Phase 1: Try to select from full nodes (nodes with complete block data)
 // Phase 2: If no full nodes and fallback enabled, select from non-full nodes
-// Selection has no side effects; ties among equally ranked candidates are
-// broken randomly, never by peer ID.
+// Ties among equally ranked candidates are broken randomly, never by peer ID.
+// May perform HTTP health checks when P2P.HealthCheckEnabled is set.
 // Peer IDs are canonical libp2p ID strings.
 func (ps *PeerSelector) SelectSyncPeer(peers []*blockchain.PeerInfo, criteria SelectionCriteria) string {
 	// Handle forced peer - always select it if it exists, regardless of eligibility
@@ -187,6 +199,8 @@ func (ps *PeerSelector) comparePeerCandidates(a, b *blockchain.PeerInfo, now tim
 // Candidates that tie on every merit criterion form the top band, and the
 // winner is drawn uniformly at random from that band so an attacker cannot
 // deterministically capture selection by grinding peer IDs.
+// The candidates slice is consumed: it is reordered and may be filtered in
+// place, so callers must not reuse it afterwards.
 func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, criteria SelectionCriteria, isFullNode bool) string {
 	if len(candidates) == 0 {
 		return ""
@@ -220,8 +234,7 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 
 	selectedIndex := 0
 	if topBandSize > 1 {
-		selectedIndex = ps.randIntN(topBandSize)
-		ps.logger.Debugf("[PeerSelector] Randomly selected index %d among %d equally ranked top candidates", selectedIndex, topBandSize)
+		selectedIndex = ps.randomIndex(topBandSize)
 	}
 
 	selected := candidates[selectedIndex]
@@ -229,8 +242,8 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 	if !isFullNode {
 		nodeType = "PRUNED"
 	}
-	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (index=%d)",
-		nodeType, selected.ID, selected.ValidatedHeight, selected.Height, selected.BanScore, selected.AvgResponseTimeMs, len(candidates), selectedIndex)
+	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (topBandSize=%d, index=%d)",
+		nodeType, selected.ID, selected.ValidatedHeight, selected.Height, selected.BanScore, selected.AvgResponseTimeMs, len(candidates), topBandSize, selectedIndex)
 
 	for i := 0; i < len(candidates) && i < 3; i++ {
 		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d, mode=%s, url=%s)",

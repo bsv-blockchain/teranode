@@ -31,8 +31,8 @@ end note
 PS -> PS: Filter for "full" storage mode
 
 alt Full nodes available
-  PS -> PS: Sort by:\n1. Reputation (desc)\n2. Ban score (asc)\n3. Height (desc)\n4. Peer ID
-  PS -> PS: Select top candidate
+  PS -> PS: Rank by:\n1. Proven full-block delivery\n2. Validated chain work (desc)\n3. Reputation (desc)\n4. Response time (asc)\n5. Ban score (asc)\n6. Validated height (desc)
+  PS -> PS: Random pick among\ntop-ranked ties\n(no peer-ID tiebreak)
   PS --> BV: Selected full node peer
 else No full nodes available
 
@@ -40,13 +40,8 @@ else No full nodes available
 
   alt Fallback enabled
     PS -> PS: Filter non-full peers
-    PS -> PS: Sort by:\n1. Reputation (desc)\n2. Ban score (asc)\n3. Height (asc)\n4. Peer ID
-    note right
-      Prefer youngest pruned
-      nodes to minimize
-      UTXO pruning risk
-    end note
-    PS -> PS: Select top candidate
+    PS -> PS: Rank with same criteria\nas full nodes
+    PS -> PS: Random pick among\ntop-ranked ties\n(no peer-ID tiebreak)
     PS --> BV: Selected pruned node peer
   else Fallback disabled
     PS --> BV: No peer available

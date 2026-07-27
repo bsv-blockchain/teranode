@@ -272,6 +272,7 @@ func TestPeerSelector_SelectFromCandidates_RandomTiebreakCoversWholeTopBand(t *t
 	// Stubbing the random source proves each band member is reachable and the
 	// worse peer never is.
 	tied := []string{"tied-1", "tied-2", "tied-3"}
+	seen := map[string]bool{}
 	for want := range len(tied) {
 		peers := []*blockchain.PeerInfo{
 			newPeer("tied-2", 100, "full", 80, 0),
@@ -288,44 +289,83 @@ func TestPeerSelector_SelectFromCandidates_RandomTiebreakCoversWholeTopBand(t *t
 		got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
 		require.Contains(t, tied, got)
 		require.NotEqual(t, "worse", got)
+		seen[got] = true
 	}
+	require.Len(t, seen, len(tied), "every band member must be reachable via the random index")
 }
 
 func TestPeerSelector_SelectSyncPeer_GrindableIDCannotCaptureSelection(t *testing.T) {
 	ps := newSelectorForTest()
 
 	// The attacker ID sorts lexicographically before every honest ID. With the
-	// old ID tiebreak it would win 100% of the time; with random tiebreaks it
-	// must lose at least once over many rounds. P(all 200 rounds pick the
-	// attacker among 4 tied peers) = 0.25^200, so this cannot flake.
-	attackerWins := 0
+	// old ID tiebreak it would win 100% of the time; with a uniform random
+	// tiebreak every one of the 4 tied peers must win at least once over 200
+	// rounds. P(some peer never wins) <= 4 * 0.75^200 ~ 1e-24, so this cannot
+	// flake, and it also catches any fixed-index selection, not just index 0.
+	ids := []string{"000000-ground-attacker-id", "honest-a", "honest-b", "honest-c"}
+	wins := map[string]int{}
 	const rounds = 200
 	for range rounds {
 		peers := []*blockchain.PeerInfo{
-			newPeer("000000-ground-attacker-id", 100, "full", 80, 0),
-			newPeer("honest-a", 100, "full", 80, 0),
-			newPeer("honest-b", 100, "full", 80, 0),
-			newPeer("honest-c", 100, "full", 80, 0),
+			newPeer(ids[0], 100, "full", 80, 0),
+			newPeer(ids[1], 100, "full", 80, 0),
+			newPeer(ids[2], 100, "full", 80, 0),
+			newPeer(ids[3], 100, "full", 80, 0),
 		}
-		if ps.SelectSyncPeer(peers, advertisedProbeCriteria(50)) == "000000-ground-attacker-id" {
-			attackerWins++
-		}
+		wins[ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))]++
 	}
-	require.Less(t, attackerWins, rounds, "attacker with lexicographically smallest ID must not win every selection")
+	for _, id := range ids {
+		require.Positive(t, wins[id], "every tied peer must win at least once, got %v", wins)
+	}
+	require.Less(t, wins[ids[0]], rounds, "attacker with lexicographically smallest ID must not win every selection")
 }
 
 func TestPeerSelector_SelectSyncPeer_PreviousPeerExcludedFromTiedTopBand(t *testing.T) {
 	ps := newSelectorForTest()
 
-	// Previous peer ties with one other candidate; it must never be re-drawn.
+	// Previous peer ties with two other candidates, so after it is excluded
+	// the random draw still runs over a band of two; it must never be re-drawn.
 	for range 50 {
 		peers := []*blockchain.PeerInfo{
 			newPeer("prev", 100, "full", 80, 0),
-			newPeer("other", 100, "full", 80, 0),
+			newPeer("other-a", 100, "full", 80, 0),
+			newPeer("other-b", 100, "full", 80, 0),
 		}
 		criteria := advertisedProbeCriteria(50)
 		criteria.PreviousPeer = "prev"
-		require.Equal(t, "other", ps.SelectSyncPeer(peers, criteria))
+		got := ps.SelectSyncPeer(peers, criteria)
+		require.Contains(t, []string{"other-a", "other-b"}, got)
+	}
+}
+
+func TestPeerSelector_ComparePeerCandidates_Antisymmetric(t *testing.T) {
+	ps := newSelectorForTest()
+	now := time.Now()
+	window := 24 * time.Hour
+
+	// Peers varying one criterion at a time plus mixed combinations; the
+	// hand-written three-way comparator must satisfy compare(a,b) == -compare(b,a)
+	// and compare(a,a) == 0 for sort.Slice and the band scan to be sound.
+	peers := []*blockchain.PeerInfo{
+		newPeer("base", 100, "full", 80, 0),
+		withRecentFullBlockDelivery(newPeer("proven", 100, "full", 80, 0)),
+		withValidatedWork(newPeer("more-work", 100, "full", 80, 0), 100, []byte{0x05}),
+		withValidatedWork(newPeer("less-work", 100, "full", 80, 0), 100, []byte{0x03}),
+		newPeer("high-rep", 100, "full", 95, 0),
+		newPeer("banned-ish", 100, "full", 80, 30),
+		withValidatedWork(newPeer("tall", 100, "full", 80, 0), 500, []byte{0x03}),
+		withRecentFullBlockDelivery(withValidatedWork(newPeer("mixed", 100, "full", 60, 10), 200, []byte{0x04})),
+	}
+	peers[4].AvgResponseTimeMs = 50
+	peers[5].AvgResponseTimeMs = 500
+
+	for _, a := range peers {
+		for _, b := range peers {
+			ab := ps.comparePeerCandidates(a, b, now, window)
+			ba := ps.comparePeerCandidates(b, a, now, window)
+			require.Equal(t, -ba, ab, "compare(%s,%s) must be antisymmetric", a.ID, b.ID)
+		}
+		require.Zero(t, ps.comparePeerCandidates(a, a, now, window), "compare(%s,%s) must be 0", a.ID, a.ID)
 	}
 }
 
