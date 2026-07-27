@@ -39,6 +39,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1015,16 +1016,17 @@ func newBackoffTestManager(t *testing.T, blockchainClient *blockchain2.Mock, blo
 	state.requestedBlocks.Set(blockHash, struct{}{})
 
 	sm := &SyncManager{
-		ctx:                 context.Background(),
-		logger:              ulogger.TestLogger{},
-		settings:            tSettings,
-		chainParams:         &chaincfg.MainNetParams,
-		blockchainClient:    blockchainClient,
-		peerStates:          txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
-		requestedBlocks:     expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-		blockFailureBackoff: expiringmap.New[chainhash.Hash, *blockFailureState](time.Minute),
+		ctx:                  context.Background(),
+		logger:               ulogger.TestLogger{},
+		settings:             tSettings,
+		chainParams:          &chaincfg.MainNetParams,
+		blockchainClient:     blockchainClient,
+		peerStates:           txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+		requestedBlocks:      expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		blockFailureBackoff:  expiringmap.New[chainhash.Hash, *blockFailureState](time.Minute),
+		recentlyFailedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
 	}
-	t.Cleanup(func() { sm.requestedBlocks.Stop(); sm.blockFailureBackoff.Stop() })
+	t.Cleanup(func() { sm.requestedBlocks.Stop(); sm.blockFailureBackoff.Stop(); sm.recentlyFailedBlocks.Stop() })
 	sm.peerStates.Set(p, state)
 	sm.requestedBlocks.Set(blockHash, struct{}{})
 
@@ -1318,6 +1320,152 @@ func TestHandleBlockMsg_BackoffClearedOnSuccess(t *testing.T) {
 
 	_, ok := sm.blockFailureBackoff.Get(blockHash)
 	require.False(t, ok, "backoff entry should be cleared after a successful block")
+}
+
+// TestHandleBlockMsg_FailedParentCascadeShortCircuits verifies the #1333 fix: a
+// block whose parent recently failed to store/validate is skipped before any RPC
+// (no GetBlockExists / GetBlockHeader), logs no ERROR, is itself marked failed so
+// the cascade is suppressed transitively, and still triggers the getblocks
+// recovery so sync resumes once the root is resolved.
+func TestHandleBlockMsg_FailedParentCascadeShortCircuits(t *testing.T) {
+	failedParent := chainhash.Hash{0xAA}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &failedParent, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	bestHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestHeader, &model.BlockHeaderMeta{Height: 100}, nil)
+	blockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return([]*chainhash.Hash{bestHeader.Hash()}, nil)
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+	ml := mocklogger.NewTestLogger()
+	sm.logger = ml
+
+	// The parent is already known-failed.
+	sm.recentlyFailedBlocks.Set(failedParent, struct{}{})
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.NoError(t, err, "a short-circuited descendant returns nil (recovered via getblocks)")
+
+	// Short-circuited before HandleBlockDirect: no block lookup RPCs ran.
+	blockchainClient.AssertNotCalled(t, "GetBlockExists", mock.Anything, mock.Anything)
+	blockchainClient.AssertNotCalled(t, "GetBlockHeader", mock.Anything, mock.Anything)
+
+	// Transitively marked so this block's own descendants are also suppressed.
+	_, marked := sm.recentlyFailedBlocks.Get(blockHash)
+	require.True(t, marked, "a skipped descendant must itself be marked failed")
+
+	// Recovery still fired, and no misleading ERROR was logged.
+	blockchainClient.AssertCalled(t, "GetBlockLocator", mock.Anything, mock.Anything, mock.Anything)
+	ml.AssertNumberOfCalls(t, "Errorf", 0)
+}
+
+// TestHandleBlockMsg_FailedBlockRecorded verifies a block that fails to
+// store/validate is recorded in recentlyFailedBlocks so its descendants can be
+// short-circuited (#1333).
+func TestHandleBlockMsg_FailedBlockRecorded(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, errors.NewStorageError("boom"))
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.Error(t, err)
+	_, ok := sm.recentlyFailedBlocks.Get(blockHash)
+	require.True(t, ok, "a failed block should be recorded so its descendants are short-circuited")
+}
+
+// TestHandleBlockMsg_FailedBlockClearedOnSuccess verifies a successful (re)process
+// clears the cascade-suppression marker so descendants are no longer skipped (#1333).
+func TestHandleBlockMsg_FailedBlockClearedOnSuccess(t *testing.T) {
+	prevHash := chainhash.Hash{0x01}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	bestHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	// Block already exists -> HandleBlockDirect returns nil immediately.
+	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(true, nil)
+	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestHeader, &model.BlockHeaderMeta{Height: 100}, nil)
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+	sm.rejectedTxns = txmap.NewSyncedMap[chainhash.Hash, struct{}](100)
+	sm.blockSizeTracker = newBlockSizeTracker(10)
+	sm.recentlyFailedBlocks.Set(blockHash, struct{}{})
+
+	_ = sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	_, ok := sm.recentlyFailedBlocks.Get(blockHash)
+	require.False(t, ok, "cascade-suppression marker should be cleared after a successful block")
+}
+
+// TestHandleBlockMsg_OrphanNotMarkedFailed verifies a normal orphan (parent not
+// yet known, but no ancestor was rejected) is NOT recorded as failed: its parent
+// is genuinely still in flight, and it must log at DEBUG rather than ERROR (#1333).
+func TestHandleBlockMsg_OrphanNotMarkedFailed(t *testing.T) {
+	prevHash := chainhash.Hash{0x02}
+	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
+	blockHash := msgBlock.Header.BlockHash()
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	bestHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	// Parent lookup misses -> ErrBlockNotFound -> normal orphan path.
+	blockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.NewBlockNotFoundError("not found"))
+	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestHeader, &model.BlockHeaderMeta{Height: 100}, nil)
+	blockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return([]*chainhash.Hash{bestHeader.Hash()}, nil)
+
+	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+	ml := mocklogger.NewTestLogger()
+	sm.logger = ml
+
+	err := sm.handleBlockMsg(&blockQueueMsg{
+		block:       msgBlock,
+		blockHash:   blockHash,
+		blockHeight: 101,
+		peer:        p,
+	})
+
+	require.NoError(t, err)
+
+	// A normal orphan is not "known-bad" — its parent is genuinely still in flight.
+	_, ok := sm.recentlyFailedBlocks.Get(blockHash)
+	require.False(t, ok, "a normal orphan must not be recorded as failed")
+
+	// The missing-parent lookup in HandleBlockDirect logs at DEBUG, not ERROR.
+	ml.AssertNumberOfCalls(t, "Errorf", 0)
 }
 
 // TestHandleCheckSyncPeer_LocalBacklog verifies the stall detector does not

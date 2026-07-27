@@ -1328,7 +1328,7 @@ func (td *TestDaemon) generateBlocks(t *testing.T, numBlocks uint32) error {
 	// Get current height before generating
 	_, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
 	if err != nil {
-		return errors.NewUnknownError("failed to get best block header: %w", err)
+		return errors.NewUnknownError("failed to get best block header", err)
 	}
 	startHeight := meta.Height
 
@@ -1339,13 +1339,13 @@ func (td *TestDaemon) generateBlocks(t *testing.T, numBlocks uint32) error {
 
 		err := td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: int32(remaining)})
 		if err != nil {
-			return errors.NewUnknownError("failed to generate %d blocks (batch %d/%d): %w", remaining, generated, numBlocks, err)
+			return errors.NewUnknownError("failed to generate %d blocks (batch %d/%d)", remaining, generated, numBlocks, err)
 		}
 
 		// Wait for this batch of blocks to be available before generating the next batch
 		intermediateTarget := startHeight + generated + remaining
 		if err = td.waitForBlockHeight(t, intermediateTarget, remaining); err != nil {
-			return errors.NewUnknownError("failed waiting for batch %d blocks at height %d: %w", remaining, intermediateTarget, err)
+			return errors.NewUnknownError("failed waiting for batch %d blocks at height %d", remaining, intermediateTarget, err)
 		}
 
 		generated += remaining

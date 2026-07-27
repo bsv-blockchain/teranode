@@ -62,6 +62,15 @@ import (
 func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (invalidatedHashes []chainhash.Hash, err error) {
 	s.logger.Debugf("InvalidateBlock %s", blockHash.String())
 
+	// Refuse to invalidate the genesis block. Genesis is the root of the recursive
+	// descendant CTE below, so invalidating it would flip the entire chain to
+	// invalid/off-main-chain in a single statement, and RevalidateBlock (single block,
+	// no recursion) could not undo it. bitcoind and the Java reference node both forbid
+	// marking genesis for exactly this reason.
+	if s.chainParams != nil && blockHash.IsEqual(s.chainParams.GenesisHash) {
+		return nil, errors.NewProcessingError("cannot invalidate the genesis block")
+	}
+
 	exists, err := s.GetBlockExists(ctx, blockHash)
 	if err != nil {
 		return nil, errors.NewStorageError("error checking block exists", err)

@@ -43,6 +43,9 @@ func TestServer_PeerInfoToP2PProto_RoundTripFields(t *testing.T) {
 		ClientName:             "test/1.0",
 		LastCatchupError:       "boom",
 		LastCatchupErrorTime:   now,
+		CatchupAttempts:        7,
+		CatchupSuccesses:       5,
+		CatchupFailures:        2,
 	}
 
 	out := peerInfoToP2PProto(bp)
@@ -58,6 +61,9 @@ func TestServer_PeerInfoToP2PProto_RoundTripFields(t *testing.T) {
 	require.Equal(t, bp.ClientName, out.ClientName)
 	require.Equal(t, bp.LastCatchupError, out.LastCatchupError)
 	require.Equal(t, now.Unix(), out.ConnectedAt)
+	require.Equal(t, bp.CatchupAttempts, out.CatchupAttempts)
+	require.Equal(t, bp.CatchupSuccesses, out.CatchupSuccesses)
+	require.Equal(t, bp.CatchupFailures, out.CatchupFailures)
 }
 
 func TestServer_PeerInfoToP2PProto_NilHashAndZeroTimes(t *testing.T) {

@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -39,6 +41,7 @@ type MockPeerServiceClient struct {
 	GetPeersForCatchupFunc           func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error)
 	ReportValidSubtreeFunc           func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error)
 	ReportValidBlockFunc             func(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error)
+	ReportValidBlockHeadersFunc      func(ctx context.Context, in *p2p_api.ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockHeadersResponse, error)
 	ReportValidatedChainProgressFunc func(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error)
 	IsPeerMaliciousFunc              func(ctx context.Context, in *p2p_api.IsPeerMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerMaliciousResponse, error)
 	IsPeerUnhealthyFunc              func(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error)
@@ -178,6 +181,13 @@ func (m *MockPeerServiceClient) ReportValidBlock(ctx context.Context, in *p2p_ap
 		return m.ReportValidBlockFunc(ctx, in, opts...)
 	}
 	return &p2p_api.ReportValidBlockResponse{Success: true}, nil
+}
+
+func (m *MockPeerServiceClient) ReportValidBlockHeaders(ctx context.Context, in *p2p_api.ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockHeadersResponse, error) {
+	if m.ReportValidBlockHeadersFunc != nil {
+		return m.ReportValidBlockHeadersFunc(ctx, in, opts...)
+	}
+	return &p2p_api.ReportValidBlockHeadersResponse{Success: true}, nil
 }
 
 func (m *MockPeerServiceClient) ReportValidatedChainProgress(ctx context.Context, in *p2p_api.ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidatedChainProgressResponse, error) {
@@ -708,7 +718,9 @@ func TestSimpleClientGetPeersForCatchup(t *testing.T) {
 		require.Len(t, peers, 1)
 		require.Equal(t, uint32(42), peers[0].Height)
 		require.InDelta(t, 88.5, peers[0].ReputationScore, 0.001)
-		require.Equal(t, int64(3), peers[0].InteractionAttempts)
+		require.Equal(t, int64(3), peers[0].CatchupAttempts)
+		require.Equal(t, int64(2), peers[0].CatchupSuccesses)
+		require.Equal(t, int64(1), peers[0].CatchupFailures)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -718,6 +730,45 @@ func TestSimpleClientGetPeersForCatchup(t *testing.T) {
 		})
 		_, err := client.GetPeersForCatchup(context.Background())
 		require.Error(t, err)
+	})
+}
+
+func TestSimpleClientReportValidBlockHeaders(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		var gotReq *p2p_api.ReportValidBlockHeadersRequest
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidBlockHeadersFunc: func(ctx context.Context, in *p2p_api.ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockHeadersResponse, error) {
+				gotReq = in
+				return &p2p_api.ReportValidBlockHeadersResponse{Success: true}, nil
+			},
+		})
+		require.NoError(t, client.ReportValidBlockHeaders(context.Background(), "peer1", 150))
+		require.Equal(t, "peer1", gotReq.PeerId)
+		require.Equal(t, int64(150), gotReq.DurationMs)
+	})
+	t.Run("falls back to RecordCatchupSuccess on Unimplemented", func(t *testing.T) {
+		var legacyReq *p2p_api.RecordCatchupSuccessRequest
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidBlockHeadersFunc: func(ctx context.Context, in *p2p_api.ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockHeadersResponse, error) {
+				return nil, status.Error(codes.Unimplemented, "unknown method")
+			},
+			RecordCatchupSuccessFunc: func(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error) {
+				legacyReq = in
+				return &p2p_api.RecordCatchupSuccessResponse{Ok: true}, nil
+			},
+		})
+		require.NoError(t, client.ReportValidBlockHeaders(context.Background(), "peer1", 200))
+		require.NotNil(t, legacyReq, "old p2p server must receive the legacy success report")
+		require.Equal(t, "peer1", legacyReq.PeerId)
+		require.Equal(t, int64(200), legacyReq.DurationMs)
+	})
+	t.Run("grpc_error", func(t *testing.T) {
+		client := newClientWithMock(&MockPeerServiceClient{
+			ReportValidBlockHeadersFunc: func(ctx context.Context, in *p2p_api.ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockHeadersResponse, error) {
+				return nil, assert.AnError
+			},
+		})
+		require.Error(t, client.ReportValidBlockHeaders(context.Background(), "peer1", 0))
 	})
 }
 

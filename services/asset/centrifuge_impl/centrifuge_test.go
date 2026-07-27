@@ -3,6 +3,8 @@ package centrifuge_impl
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,10 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/centrifugal/centrifuge"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -971,7 +975,7 @@ func TestCentrifuge_Start(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockRepo := &repository.Repository{}
 
-	t.Run("Start fails with missing P2P address", func(t *testing.T) {
+	t.Run("Start skips p2p listener when address missing", func(t *testing.T) {
 		mockHTTP, err := createTestHTTP(logger, mockRepo)
 		require.NoError(t, err)
 
@@ -980,7 +984,7 @@ func TestCentrifuge_Start(t *testing.T) {
 				HTTPAddress: "http://localhost:8080",
 			},
 			P2P: settings.P2PSettings{
-				HTTPAddress: "", // Missing P2P address
+				HTTPAddress: "", // No p2p address -> listener skipped, service still runs
 			},
 		}
 
@@ -999,10 +1003,10 @@ func TestCentrifuge_Start(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 
-		// Start should fail due to missing P2P address
+		// With no p2p address the listener is skipped (WARN) and Start runs until
+		// the context is cancelled, returning nil rather than erroring (#1334).
 		err = c.Start(ctx, "localhost:9999")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "p2p_httpAddress not found in config")
+		require.NoError(t, err)
 	})
 
 	t.Run("Start with valid P2P address and mock server", func(t *testing.T) {
@@ -1160,6 +1164,198 @@ func TestCentrifuge_connect(t *testing.T) {
 		// Connection should not be established
 		assert.False(t, clientConnected.Load())
 		assert.Nil(t, client.Load())
+	})
+}
+
+// TestCentrifuge_connectBackoff covers the #1334 fix: a failing p2p dial backs off
+// exponentially (capped) and logs at WARN once then DEBUG, instead of an ERROR
+// every second; the backoff resets after a successful connect; and a context
+// cancellation during backoff returns promptly.
+// capturingLogger records the formatted log message per level so tests can assert
+// on message content, which mocklogger.MockLogger (call-counts only) cannot — e.g.
+// to confirm the DNS-hint WARN branch actually ran, not just that some WARN fired
+// (#1337 review). It embeds MockLogger for the rest of the ulogger.Logger surface.
+type capturingLogger struct {
+	*mocklogger.MockLogger
+
+	mu   sync.Mutex
+	msgs map[string][]string
+}
+
+func newCapturingLogger() *capturingLogger {
+	return &capturingLogger{MockLogger: mocklogger.NewTestLogger(), msgs: make(map[string][]string)}
+}
+
+func (l *capturingLogger) capture(level, format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.msgs[level] = append(l.msgs[level], fmt.Sprintf(format, args...))
+}
+
+func (l *capturingLogger) Warnf(format string, args ...interface{}) {
+	l.MockLogger.Warnf(format, args...)
+	l.capture("Warnf", format, args...)
+}
+
+func (l *capturingLogger) Debugf(format string, args ...interface{}) {
+	l.MockLogger.Debugf(format, args...)
+	l.capture("Debugf", format, args...)
+}
+
+func (l *capturingLogger) Errorf(format string, args ...interface{}) {
+	l.MockLogger.Errorf(format, args...)
+	l.capture("Errorf", format, args...)
+}
+
+func (l *capturingLogger) messages(level string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.msgs[level]...)
+}
+
+func TestCentrifuge_connectBackoff(t *testing.T) {
+	mockRepo := &repository.Repository{}
+
+	newCentrifuge := func(t *testing.T, logger ulogger.Logger) *Centrifuge {
+		t.Helper()
+
+		mockHTTP, err := createTestHTTP(ulogger.TestLogger{}, mockRepo)
+		require.NoError(t, err)
+
+		tSettings := &settings.Settings{
+			Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"},
+			P2P:   settings.P2PSettings{HTTPAddress: "peer:9906"},
+		}
+
+		c, err := New(logger, tSettings, mockRepo, mockHTTP)
+		require.NoError(t, err)
+
+		return c
+	}
+
+	dialURL := url.URL{Scheme: "ws", Host: "peer:9906", Path: "/p2p-ws"}
+
+	t.Run("backoff grows and caps; WARN at start and at the cap, DEBUG between, never ERROR", func(t *testing.T) {
+		ml := newCapturingLogger()
+		c := newCentrifuge(t, ml)
+
+		c.dialWebsocket = func(string) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.NewProcessingError("connection refused")
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		var waits []time.Duration
+		c.sleepWithContext = func(_ context.Context, d time.Duration) {
+			waits = append(waits, d)
+			if len(waits) >= 8 {
+				cancel()
+			}
+		}
+
+		c.connect(ctx, dialURL, &atomic.Pointer[websocket.Conn]{}, &atomic.Bool{})
+
+		require.Equal(t, []time.Duration{
+			1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+			16 * time.Second, 32 * time.Second, 60 * time.Second, 60 * time.Second,
+		}, waits, "backoff must grow 2x and cap at 60s")
+
+		require.Empty(t, ml.messages("Errorf"), "must never log at ERROR")
+
+		// Two WARNs per streak: the first failure, then a single "still failing"
+		// breadcrumb once the backoff saturates at the cap.
+		warns := ml.messages("Warnf")
+		require.Len(t, warns, 2)
+		require.Contains(t, warns[0], "retrying with backoff")
+		require.Contains(t, warns[1], "still cannot reach")
+
+		// The DEBUG lines between must carry the attempt/backoff detail.
+		hasDetail := false
+		for _, d := range ml.messages("Debugf") {
+			if strings.Contains(d, "attempt") && strings.Contains(d, "next retry") {
+				hasDetail = true
+				break
+			}
+		}
+		require.True(t, hasDetail, "steady-state DEBUG lines should carry attempt/backoff detail")
+	})
+
+	t.Run("unresolvable host logs a WARN carrying the config hint, never ERROR", func(t *testing.T) {
+		ml := newCapturingLogger()
+		c := newCentrifuge(t, ml)
+
+		c.dialWebsocket = func(string) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "server misbehaving", Name: "peer"}}
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		c.sleepWithContext = func(_ context.Context, _ time.Duration) { cancel() }
+
+		c.connect(ctx, dialURL, &atomic.Pointer[websocket.Conn]{}, &atomic.Bool{})
+
+		require.Empty(t, ml.messages("Errorf"))
+
+		// Assert the specific DNS-hint branch ran, not just that some WARN fired:
+		// the message must name the unresolvable host and carry the config hint.
+		warns := ml.messages("Warnf")
+		require.Len(t, warns, 1)
+		require.Contains(t, warns[0], "cannot resolve p2p server host")
+		require.Contains(t, warns[0], "asset_centrifuge_disable")
+	})
+
+	t.Run("backoff resets after a successful connect", func(t *testing.T) {
+		ml := mocklogger.NewTestLogger()
+		c := newCentrifuge(t, ml)
+
+		attempts := 0
+		c.dialWebsocket = func(string) (*websocket.Conn, *http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return &websocket.Conn{}, nil, nil // first dial succeeds
+			}
+
+			return nil, nil, errors.NewProcessingError("connection refused") // subsequent dials fail
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		clientConnected := &atomic.Bool{}
+
+		var waits []time.Duration
+		c.sleepWithContext = func(_ context.Context, d time.Duration) {
+			waits = append(waits, d)
+			// Drop the connection after the successful dial so the loop re-dials and
+			// starts a fresh failure streak; its backoff must restart at 1s.
+			clientConnected.Store(false)
+			if len(waits) >= 4 {
+				cancel()
+			}
+		}
+
+		c.connect(ctx, dialURL, &atomic.Pointer[websocket.Conn]{}, clientConnected)
+
+		require.Equal(t, []time.Duration{
+			1 * time.Second, // poll after the successful connect
+			1 * time.Second, // fresh streak resets to the initial backoff
+			2 * time.Second,
+			4 * time.Second,
+		}, waits)
+		ml.AssertNumberOfCalls(t, "Warnf", 1) // one WARN for the post-reconnect streak
+	})
+
+	t.Run("returns promptly when context is cancelled during backoff", func(t *testing.T) {
+		c := newCentrifuge(t, ulogger.TestLogger{}) // real sleepWithContext (default)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		c.dialWebsocket = func(string) (*websocket.Conn, *http.Response, error) {
+			cancel() // cancel the context on the first dial, mid-loop
+			return nil, nil, errors.NewProcessingError("connection refused")
+		}
+
+		start := time.Now()
+		c.connect(ctx, dialURL, &atomic.Pointer[websocket.Conn]{}, &atomic.Bool{})
+		require.Less(t, time.Since(start), 500*time.Millisecond,
+			"context-aware sleep must interrupt the backoff wait on cancellation")
 	})
 }
 
@@ -1766,12 +1962,11 @@ func TestCentrifuge_StartP2PListener(t *testing.T) {
 		c, err := New(logger, tSettings, mockRepo, mockHTTP)
 		require.NoError(t, err)
 
-		// Skip the Start() call that requires HTTP server setup
-		// We can test startP2PListener logic by checking settings validation
-		if c.settings.P2P.HTTPAddress == "" {
-			// This would fail in startP2PListener
-			assert.Empty(t, c.settings.P2P.HTTPAddress)
-		}
+		// An unset p2p address is skipped gracefully (WARN + nil) rather than
+		// erroring, so the asset service keeps running without a p2p server (#1334).
+		// Returns immediately without spawning the connect/readMessages goroutines.
+		err = c.startP2PListener(context.Background())
+		require.NoError(t, err)
 	})
 }
 

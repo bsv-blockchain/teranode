@@ -11,6 +11,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -74,6 +76,18 @@ type PeerRegistryClientI interface {
 
 	// RecordCatchupError stores the peer's most recent catchup error.
 	RecordCatchupError(ctx context.Context, peerID, errMsg string) error
+
+	// RecordCatchupAttempt increments the peer's catchup-attempt counter and
+	// updates sync backoff tracking.
+	RecordCatchupAttempt(ctx context.Context, peerID string) error
+
+	// RecordCatchupSuccess increments the peer's catchup-success counter and
+	// records a successful interaction with the given response time.
+	RecordCatchupSuccess(ctx context.Context, peerID string, responseTimeMs int64) error
+
+	// RecordCatchupFailure increments the peer's catchup-failure counter and
+	// records a failed interaction.
+	RecordCatchupFailure(ctx context.Context, peerID string) error
 
 	// ResetReputation resets reputation for a peer (or all peers when peerID is empty).
 	// Returns the count of peers reset.
@@ -312,6 +326,43 @@ func (c *PeerRegistryClient) RecordCatchupError(ctx context.Context, peerID, err
 	return err
 }
 
+// RecordCatchupAttempt implements PeerRegistryClientI. During a rolling upgrade
+// the blockchain service may predate this RPC; fall back to the legacy
+// RecordSyncAttempt call so sync backoff tracking keeps working (only the new
+// catchup-attempt counter is lost until the server is upgraded).
+func (c *PeerRegistryClient) RecordCatchupAttempt(ctx context.Context, peerID string) error {
+	_, err := c.client.RecordCatchupAttempt(ctx, &blockchain_api.RecordCatchupAttemptRequest{PeerId: peerID})
+	if status.Code(err) == codes.Unimplemented {
+		_, err = c.client.RecordSyncAttempt(ctx, &blockchain_api.RecordSyncAttemptRequest{PeerId: peerID})
+	}
+	return err
+}
+
+// RecordCatchupSuccess implements PeerRegistryClientI. Falls back to the legacy
+// UpdatePeerMetrics(success) call when the blockchain service predates this RPC,
+// so reputation credit keeps flowing during a rolling upgrade.
+func (c *PeerRegistryClient) RecordCatchupSuccess(ctx context.Context, peerID string, responseTimeMs int64) error {
+	_, err := c.client.RecordCatchupSuccess(ctx, &blockchain_api.RecordCatchupSuccessRequest{
+		PeerId:         peerID,
+		ResponseTimeMs: responseTimeMs,
+	})
+	if status.Code(err) == codes.Unimplemented {
+		return c.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, true, false, false, responseTimeMs)
+	}
+	return err
+}
+
+// RecordCatchupFailure implements PeerRegistryClientI. Falls back to the legacy
+// UpdatePeerMetrics(failure) call when the blockchain service predates this RPC,
+// so reputation penalties keep applying during a rolling upgrade.
+func (c *PeerRegistryClient) RecordCatchupFailure(ctx context.Context, peerID string) error {
+	_, err := c.client.RecordCatchupFailure(ctx, &blockchain_api.RecordCatchupFailureRequest{PeerId: peerID})
+	if status.Code(err) == codes.Unimplemented {
+		return c.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, false, true, false, 0)
+	}
+	return err
+}
+
 // ResetReputation implements PeerRegistryClientI.
 func (c *PeerRegistryClient) ResetReputation(ctx context.Context, peerID string) (int32, error) {
 	resp, err := c.client.ResetReputation(ctx, &blockchain_api.ResetReputationRequest{PeerId: peerID})
@@ -458,6 +509,21 @@ func (l *localPeerRegistryClient) RecordTransactionReceived(_ context.Context, p
 
 func (l *localPeerRegistryClient) RecordCatchupError(_ context.Context, peerID, errMsg string) error {
 	l.reg.RecordCatchupError(peerID, errMsg)
+	return nil
+}
+
+func (l *localPeerRegistryClient) RecordCatchupAttempt(_ context.Context, peerID string) error {
+	l.reg.RecordCatchupAttempt(peerID)
+	return nil
+}
+
+func (l *localPeerRegistryClient) RecordCatchupSuccess(_ context.Context, peerID string, responseTimeMs int64) error {
+	l.reg.RecordCatchupSuccess(peerID, responseTimeMs)
+	return nil
+}
+
+func (l *localPeerRegistryClient) RecordCatchupFailure(_ context.Context, peerID string) error {
+	l.reg.RecordCatchupFailure(peerID)
 	return nil
 }
 

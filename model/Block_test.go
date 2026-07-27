@@ -522,6 +522,90 @@ func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 	})
 }
 
+// TestBlock_CheckHeaderContextual exercises the header checks factored out of Valid() so the
+// optimistic-mining path can run them synchronously at block-receipt time (issue #1149): the
+// 2-hours-in-the-future timestamp bound, the median-time-past rule, and the block-version floor.
+func TestBlock_CheckHeaderContextual(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	// buildBlock returns a coinbase-only block whose header carries the given timestamp; height 1
+	// keeps it below every BIP34/66/65 activation on the params used below, so the version check
+	// never fires and each subtest isolates the timestamp/MTP behaviour under test.
+	buildBlock := func(t *testing.T, timestamp uint32) *Block {
+		t.Helper()
+
+		bits, err := NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		header := &BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      timestamp,
+			Bits:           *bits,
+			Nonce:          1,
+		}
+
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		block, err := NewBlock(header, coinbase, []*chainhash.Hash{}, 1, 123, 1, 0)
+		require.NoError(t, err)
+
+		return block
+	}
+
+	t.Run("timestamp more than two hours in the future is rejected at call time", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		block := buildBlock(t, uint32(time.Now().Add(3*time.Hour).Unix())) // nolint:gosec
+
+		err := block.CheckHeaderContextual([]*BlockHeader{}, tSettings, logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "two hours in the future")
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	})
+
+	t.Run("current timestamp is accepted", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		block := buildBlock(t, uint32(time.Now().Unix())) // nolint:gosec
+
+		require.NoError(t, block.CheckHeaderContextual([]*BlockHeader{}, tSettings, logger))
+	})
+
+	t.Run("timestamp just under two hours in the future is accepted", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		block := buildBlock(t, uint32(time.Now().Add(2*time.Hour-time.Minute).Unix())) // nolint:gosec
+
+		require.NoError(t, block.CheckHeaderContextual([]*BlockHeader{}, tSettings, logger))
+	})
+
+	t.Run("timestamp not after median time past is rejected when generate is not supported", func(t *testing.T) {
+		// Mainnet params have GenerateSupported == false, so an MTP violation is a hard error
+		// (on regtest it is only a warning). BIP34Height is 227931, so height 1 stays below the
+		// version floor and the version check does not interfere.
+		tSettings := test.CreateBaseTestSettings(t)
+		mainParams := chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &mainParams
+
+		now := uint32(time.Now().Unix()) // nolint:gosec
+
+		// 11 previous headers all stamped "now"; their median is "now".
+		currentChain := make([]*BlockHeader, 11)
+		for i := range currentChain {
+			currentChain[i] = &BlockHeader{Timestamp: now}
+		}
+
+		// Block timestamp equal to the median violates the strictly-after rule, while staying
+		// well inside the 2-hours-in-the-future bound so the earlier check passes.
+		block := buildBlock(t, now)
+
+		err := block.CheckHeaderContextual(currentChain, tSettings, logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "median time past")
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	})
+}
+
 // TestBlock_NewBlockFromMsgBlock_ComprehensiveCoverage tests various paths in NewBlockFromMsgBlock
 func TestBlock_NewBlockFromMsgBlock_ComprehensiveCoverage(t *testing.T) {
 	t.Run("nil msgBlock error", func(t *testing.T) {
@@ -1299,6 +1383,116 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
+// TestBlockValid_AcceptsP2SHCoinbaseOutput pins accept-side parity with bitcoin-sv:
+// CheckBlock/CheckCoinbase never runs the P2SH output scan on the coinbase (the
+// bad-txns-vout-p2sh rule in CheckRegularTransaction applies to non-coinbase
+// transactions only — svnode validation.cpp:611-623, DoS 100, on both the mempool and
+// block-consensus paths; the mining RPCs reuse the same bad-txns-vout-p2sh string via
+// HasP2SHOutput, but that is a separate mining-side emitter, not the consensus rule), so
+// a peer block whose coinbase pays to a P2SH-shaped output is
+// consensus-valid and Block.Valid must accept it. Rejecting it here would make the
+// node reject blocks the rest of the network accepts. The mining-side guard against
+// *originating* such a coinbase lives in blockassembly SubmitMiningSolution and must
+// never be mirrored into this validation path.
+func TestBlockValid_AcceptsP2SHCoinbaseOutput(t *testing.T) {
+	validateWithCoinbase := func(t *testing.T, coinbase *bt.Tx) (bool, error) {
+		t.Helper()
+
+		tSettings := test.CreateBaseTestSettings(t)
+
+		// The pin must hold at a POST-Genesis height: a (wrong) Genesis-gated
+		// P2SH rejection added to Block.Valid would not fire at height 0.
+		// Regression params: GenesisActivationHeight=10000, BIP0034Height is
+		// unreachable (BIP34 coinbase-height check stays off), BIP65/66 floors
+		// require header version 4 at this height.
+		height := tSettings.ChainCfgParams.GenesisActivationHeight + 1
+
+		// The coinbase may claim at most fees+subsidy at this height (all outputs count).
+		for _, out := range coinbase.Outputs {
+			out.Satoshis = 0
+		}
+		coinbase.Outputs[0].Satoshis = util.GetBlockSubsidyForHeight(height, tSettings.ChainCfgParams)
+
+		// Easy-difficulty header bound to this coinbase (merkle root of a
+		// coinbase-only block is the coinbase txid).
+		bits, err := NewNBitFromString("207fffff")
+		require.NoError(t, err)
+
+		blockHeader := &BlockHeader{
+			Version:        4,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: coinbase.TxIDChainHash(),
+			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
+			Bits:           *bits,
+			Nonce:          0,
+		}
+
+		// Grind the nonce until the easy target is met; HasMetTargetDifficulty
+		// returns an error (not just false) for a miss, so only `ok` matters here.
+		for {
+			ok, _, _ := blockHeader.HasMetTargetDifficulty()
+			if ok {
+				break
+			}
+
+			require.Less(t, blockHeader.Nonce, uint32(1_000_000), "could not grind a nonce meeting the easy target")
+			blockHeader.Nonce++
+		}
+
+		b, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, height, 0)
+		require.NoError(t, err)
+
+		subtreeStore, err := null.New(ulogger.TestLogger{})
+		require.NoError(t, err)
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		currentChain := make([]*BlockHeader, 11)
+		currentChainIDs := make([]uint32, 11)
+
+		for i := 0; i < 11; i++ {
+			currentChain[i] = &BlockHeader{
+				HashPrevBlock:  &chainhash.Hash{},
+				HashMerkleRoot: &chainhash.Hash{},
+				Timestamp:      blockHeader.Timestamp - 100 - uint32(i), // nolint:gosec
+			}
+			currentChainIDs[i] = uint32(i) // nolint:gosec
+		}
+
+		oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+
+		return b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
+	}
+
+	t.Run("control: unmodified coinbase is accepted", func(t *testing.T) {
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		v, err := validateWithCoinbase(t, coinbase)
+		require.NoError(t, err)
+		require.True(t, v)
+	})
+
+	t.Run("P2SH coinbase output is accepted", func(t *testing.T) {
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		// Redirect the payout to the exact P2SH shape svnode's IsP2SH tests:
+		// OP_HASH160 <20-byte push> OP_EQUAL.
+		p2shScript, err := bscript.NewFromHexString("a914000000000000000000000000000000000000000087")
+		require.NoError(t, err)
+		coinbase.Outputs[0].LockingScript = p2shScript
+
+		v, err := validateWithCoinbase(t, coinbase)
+		require.NoError(t, err)
+		require.True(t, v)
+	})
+}
+
 func TestGetAndValidateSubtrees(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockHeaderBytes, _ := hex.DecodeString(block1Header)
@@ -1905,8 +2099,16 @@ func TestGenesisBytesFromModelBlock(t *testing.T) {
 
 func TestBlock_ExtractCoinbaseHeight(t *testing.T) {
 	t.Run("valid coinbase with height", func(t *testing.T) {
-		// Use the existing coinbase transaction from the test constants
-		coinbaseTx, err := bt.NewTxFromString(CoinbaseHex)
+		// Build a canonical coinbase via the production path. GetCoinbaseParts/makeCoinbase1 encode
+		// the height minimally (matching SV Node), so it round-trips through the strict extractor.
+		// The shared CoinbaseHex constant uses a legacy non-minimal 3-byte height push and is
+		// deliberately not used here (extracting it would now, correctly, fail SV Node parity).
+		const wantHeight = uint32(1019)
+
+		c1, c2, err := GetCoinbaseParts(wantHeight, 5000000000, "/m2-us/", []string{"1DkmRkb5iQFkDu4NBysog5bugnsyx7kwtn"})
+		require.NoError(t, err)
+
+		coinbaseTx, err := bt.NewTxFromBytes(BuildCoinbase(c1, c2, "0000000000000000", "00000000"))
 		require.NoError(t, err)
 
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
@@ -1918,7 +2120,7 @@ func TestBlock_ExtractCoinbaseHeight(t *testing.T) {
 
 		height, err := b.ExtractCoinbaseHeight()
 		require.NoError(t, err)
-		assert.Equal(t, uint32(1019), height) // Height extracted from coinbase scriptSig
+		assert.Equal(t, wantHeight, height) // Height extracted from coinbase scriptSig
 	})
 
 	t.Run("no coinbase transaction", func(t *testing.T) {

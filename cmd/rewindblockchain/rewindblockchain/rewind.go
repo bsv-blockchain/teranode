@@ -80,14 +80,14 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 
 	// Phase 0 — UTXO store internal height reset.
 	if err = stores.UTXO.SetBlockHeight(preflightResult.target); err != nil {
-		return stats, errors.NewStorageError("failed to reset UTXO store blockHeight: %w", err)
+		return stats, errors.NewStorageError("failed to reset UTXO store blockHeight", err)
 	}
 
 	logger.Infof("Phase 0 complete: UTXO store blockHeight set to %d", preflightResult.target)
 
 	// Phase 1 — unmined + conflicting cleanup.
 	if err = env.phase1Unmined(ctx, preflightResult); err != nil {
-		return stats, errors.NewProcessingError("Phase 1 failed: %w", err)
+		return stats, errors.NewProcessingError("Phase 1 failed", err)
 	}
 
 	logger.Infof("Phase 1 complete: unmined_purged=%d conflicting_purged=%d",
@@ -95,7 +95,7 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 
 	// Phase 2 — block rewind.
 	if err = env.phase2Blocks(ctx, preflightResult); err != nil {
-		return stats, errors.NewProcessingError("Phase 2 failed: %w", err)
+		return stats, errors.NewProcessingError("Phase 2 failed", err)
 	}
 
 	logger.Infof("Phase 2 complete: blocks_deleted=%d txs_deleted=%d blockids_trimmed=%d subtrees_deleted=%d subtrees_skipped_shared=%d",
@@ -104,12 +104,12 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 
 	// Phase 3 — finalize.
 	if err = env.phase3Finalize(ctx, preflightResult); err != nil {
-		return stats, errors.NewProcessingError("Phase 3 failed: %w", err)
+		return stats, errors.NewProcessingError("Phase 3 failed", err)
 	}
 
 	if opts.Verify {
 		if err = env.phase4Verify(ctx, preflightResult); err != nil {
-			return stats, errors.NewProcessingError("Phase 4 verify failed: %w", err)
+			return stats, errors.NewProcessingError("Phase 4 verify failed", err)
 		}
 		logger.Infof("Phase 4 verify complete")
 	}
@@ -131,17 +131,17 @@ func resolveStores(ctx context.Context, logger ulogger.Logger, s *settings.Setti
 
 	blockchainStore, err := blockchain.NewStore(logger, s.BlockChain.StoreURL, s)
 	if err != nil {
-		return nil, false, errors.NewConfigurationError("failed to open blockchain store: %w", err)
+		return nil, false, errors.NewConfigurationError("failed to open blockchain store", err)
 	}
 
 	utxoStore, err := utxofactory.NewStore(ctx, logger, s, "rewindblockchain", false)
 	if err != nil {
-		return nil, false, errors.NewConfigurationError("failed to open utxo store: %w", err)
+		return nil, false, errors.NewConfigurationError("failed to open utxo store", err)
 	}
 
 	subtreeStore, err := blob.NewStore(logger, s.SubtreeValidation.SubtreeStore)
 	if err != nil {
-		return nil, false, errors.NewConfigurationError("failed to open subtree blob store: %w", err)
+		return nil, false, errors.NewConfigurationError("failed to open subtree blob store", err)
 	}
 
 	return &Stores{

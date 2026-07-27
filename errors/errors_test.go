@@ -2756,3 +2756,116 @@ func TestSanitizationSecurityScenarios(t *testing.T) {
 		require.Contains(t, userMsg, "operation failed")
 	})
 }
+
+// TestNewStripsOrphanedWrapVerbs verifies that a %w verb left in an errors.New*
+// format string never renders as "%!w(MISSING)" nor survives literally, because
+// the trailing error argument is extracted as the wrapped error before formatting
+// (see issue #1332). The wrapped error is rendered via the " -> " chain instead.
+func TestNewStripsOrphanedWrapVerbs(t *testing.T) {
+	inner := New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase must start with the height")
+
+	tests := []struct {
+		name        string
+		build       func() *Error
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "verbs plus trailing %w (StoreBlock shape)",
+			build: func() *Error {
+				return New(ERR_STORAGE_ERROR, "failed to extract height for block %s (height %d): %w", "abc", 5, inner)
+			},
+			wantContain: []string{"failed to extract height for block abc (height 5)", " -> "},
+			wantAbsent:  []string{"%!w", "%w", "(height 5):"},
+		},
+		{
+			name:        "%w is the only verb",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "GetBlock: %w", inner) },
+			wantContain: []string{"GetBlock -> "},
+			wantAbsent:  []string{"%w", "GetBlock:"},
+		},
+		{
+			name:        "escaped %%w preserved",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "literal %%w here: %d", 1, inner) },
+			wantContain: []string{"literal %w here: 1"},
+			wantAbsent:  []string{"%!w"},
+		},
+		{
+			name:        "mid-string %w dropped",
+			build:       func() *Error { return New(ERR_SERVICE_ERROR, "[%s] server failed [%w]", "grpc", inner) },
+			wantContain: []string{"[grpc] server failed []"},
+			wantAbsent:  []string{"%!w", "[%w]"},
+		},
+		{
+			name:        "comma separator variant",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "load state, %w", inner) },
+			wantContain: []string{"load state -> "},
+			wantAbsent:  []string{"%w", "load state,"},
+		},
+		{
+			name:        "multiple %w dropped",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "x %w y %w", inner) },
+			wantContain: []string{"x y"},
+			wantAbsent:  []string{"%w", "%!w"},
+		},
+		{
+			name:        "no %w with wrapped err is byte-identical (hot path)",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "plain %s", "value", inner) },
+			wantContain: []string{"plain value", " -> "},
+			wantAbsent:  []string{"%!", "%w"},
+		},
+		{
+			name:        "typed wrapper drops trailing %w",
+			build:       func() *Error { return NewStorageError("GetBlock %s: %w", "hash", inner) },
+			wantContain: []string{"GetBlock hash -> "},
+			wantAbsent:  []string{"%w", "GetBlock hash:"},
+		},
+		{
+			// The ')' inside the format string must not truncate stripping (#1335, ChiR1).
+			name:        "closing paren before trailing %w",
+			build:       func() *Error { return NewStorageError(`read state (pass --flag to override): %w`, inner) },
+			wantContain: []string{"read state (pass --flag to override) -> "},
+			wantAbsent:  []string{"%w", "%!w", "override):"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.build().Error()
+			for _, want := range tc.wantContain {
+				require.Contains(t, got, want, "rendered: %q", got)
+			}
+			for _, absent := range tc.wantAbsent {
+				require.NotContains(t, got, absent, "rendered: %q", got)
+			}
+		})
+	}
+
+	// A message with no wrapped error is left untouched: an unpaired %w with no
+	// error argument still renders per fmt (we do not strip when wErr == nil).
+	noWrap := New(ERR_STORAGE_ERROR, "plain %s", "value")
+	require.Contains(t, noWrap.Error(), "plain value")
+}
+
+// TestStripOrphanedWrapVerbs unit-tests the helper directly for separator edge cases.
+func TestStripOrphanedWrapVerbs(t *testing.T) {
+	cases := map[string]string{
+		"GetBlock: %w":         "GetBlock",
+		"failed %s: %w":        "failed %s",
+		" - %w":                "",
+		", %w":                 "",
+		":%w":                  "",
+		" %w":                  "",
+		"no verb here":         "no verb here",
+		"literal %%w stays":    "literal %%w stays", // escaped %%w is not a verb
+		"a [%w] b":             "a [] b",            // mid-string verb dropped, brackets remain
+		"x %w y %w":            "x y",               // both verbs dropped
+		"trailing text %w end": "trailing text end", // verb dropped, surrounding text kept
+		// a ')' inside the format before %w must not confuse stripping (#1335, ChiR1).
+		"read state (pass --flag to override): %w": "read state (pass --flag to override)",
+	}
+
+	for in, want := range cases {
+		require.Equal(t, want, stripOrphanedWrapVerbs(in), "input %q", in)
+	}
+}

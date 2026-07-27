@@ -39,6 +39,7 @@ const (
 	PeerService_GetPeersForCatchup_FullMethodName           = "/p2p_api.PeerService/GetPeersForCatchup"
 	PeerService_ReportValidSubtree_FullMethodName           = "/p2p_api.PeerService/ReportValidSubtree"
 	PeerService_ReportValidBlock_FullMethodName             = "/p2p_api.PeerService/ReportValidBlock"
+	PeerService_ReportValidBlockHeaders_FullMethodName      = "/p2p_api.PeerService/ReportValidBlockHeaders"
 	PeerService_ReportValidatedChainProgress_FullMethodName = "/p2p_api.PeerService/ReportValidatedChainProgress"
 	PeerService_IsPeerMalicious_FullMethodName              = "/p2p_api.PeerService/IsPeerMalicious"
 	PeerService_IsPeerUnhealthy_FullMethodName              = "/p2p_api.PeerService/IsPeerUnhealthy"
@@ -74,6 +75,7 @@ type PeerServiceClient interface {
 	// Subtree and block validation reporting
 	ReportValidSubtree(ctx context.Context, in *ReportValidSubtreeRequest, opts ...grpc.CallOption) (*ReportValidSubtreeResponse, error)
 	ReportValidBlock(ctx context.Context, in *ReportValidBlockRequest, opts ...grpc.CallOption) (*ReportValidBlockResponse, error)
+	ReportValidBlockHeaders(ctx context.Context, in *ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*ReportValidBlockHeadersResponse, error)
 	ReportValidatedChainProgress(ctx context.Context, in *ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*ReportValidatedChainProgressResponse, error)
 	// Peer status checking
 	IsPeerMalicious(ctx context.Context, in *IsPeerMaliciousRequest, opts ...grpc.CallOption) (*IsPeerMaliciousResponse, error)
@@ -284,6 +286,16 @@ func (c *peerServiceClient) ReportValidBlock(ctx context.Context, in *ReportVali
 	return out, nil
 }
 
+func (c *peerServiceClient) ReportValidBlockHeaders(ctx context.Context, in *ReportValidBlockHeadersRequest, opts ...grpc.CallOption) (*ReportValidBlockHeadersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportValidBlockHeadersResponse)
+	err := c.cc.Invoke(ctx, PeerService_ReportValidBlockHeaders_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *peerServiceClient) ReportValidatedChainProgress(ctx context.Context, in *ReportValidatedChainProgressRequest, opts ...grpc.CallOption) (*ReportValidatedChainProgressResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReportValidatedChainProgressResponse)
@@ -371,6 +383,7 @@ type PeerServiceServer interface {
 	// Subtree and block validation reporting
 	ReportValidSubtree(context.Context, *ReportValidSubtreeRequest) (*ReportValidSubtreeResponse, error)
 	ReportValidBlock(context.Context, *ReportValidBlockRequest) (*ReportValidBlockResponse, error)
+	ReportValidBlockHeaders(context.Context, *ReportValidBlockHeadersRequest) (*ReportValidBlockHeadersResponse, error)
 	ReportValidatedChainProgress(context.Context, *ReportValidatedChainProgressRequest) (*ReportValidatedChainProgressResponse, error)
 	// Peer status checking
 	IsPeerMalicious(context.Context, *IsPeerMaliciousRequest) (*IsPeerMaliciousResponse, error)
@@ -447,6 +460,9 @@ func (UnimplementedPeerServiceServer) ReportValidSubtree(context.Context, *Repor
 }
 func (UnimplementedPeerServiceServer) ReportValidBlock(context.Context, *ReportValidBlockRequest) (*ReportValidBlockResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportValidBlock not implemented")
+}
+func (UnimplementedPeerServiceServer) ReportValidBlockHeaders(context.Context, *ReportValidBlockHeadersRequest) (*ReportValidBlockHeadersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportValidBlockHeaders not implemented")
 }
 func (UnimplementedPeerServiceServer) ReportValidatedChainProgress(context.Context, *ReportValidatedChainProgressRequest) (*ReportValidatedChainProgressResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportValidatedChainProgress not implemented")
@@ -829,6 +845,24 @@ func _PeerService_ReportValidBlock_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_ReportValidBlockHeaders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportValidBlockHeadersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).ReportValidBlockHeaders(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_ReportValidBlockHeaders_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).ReportValidBlockHeaders(ctx, req.(*ReportValidBlockHeadersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PeerService_ReportValidatedChainProgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReportValidatedChainProgressRequest)
 	if err := dec(in); err != nil {
@@ -1019,6 +1053,10 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportValidBlock",
 			Handler:    _PeerService_ReportValidBlock_Handler,
+		},
+		{
+			MethodName: "ReportValidBlockHeaders",
+			Handler:    _PeerService_ReportValidBlockHeaders_Handler,
 		},
 		{
 			MethodName: "ReportValidatedChainProgress",

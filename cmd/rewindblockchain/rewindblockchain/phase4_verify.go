@@ -15,7 +15,7 @@ import (
 func (e *env) phase4Verify(ctx context.Context, pf *preflightResult) error {
 	header, meta, err := e.blockchainStore.GetBestBlockHeader(ctx)
 	if err != nil {
-		return errors.NewStorageError("verify: GetBestBlockHeader: %w", err)
+		return errors.NewStorageError("verify: GetBestBlockHeader", err)
 	}
 
 	if meta.Height != pf.target {

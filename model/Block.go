@@ -500,32 +500,30 @@ type SubtreeStore interface {
 	GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
-	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, error) {
-	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
-		tracing.WithHistogram(prometheusBlockValid),
-		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
-	)
-	defer deferFn()
-
-	// 1. Check that the block header hash is less than the target difficulty.
-	headerValid, _, err := b.Header.HasMetTargetDifficulty()
-	if err != nil {
-		return false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.String(), err)
-	}
-
-	if !headerValid {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.String())
-	}
-
+// CheckHeaderContextual runs the header checks whose outcome depends on wall-clock time
+// (time.Now()) or on the current chain: the 2-hours-in-the-future timestamp bound, the
+// median-time-past rule, and the mandatory block-version floor (BIP34/66/65). It mirrors the
+// timestamp/version portion of bitcoin-sv's ContextualCheckBlockHeader (proof-of-work and nBits
+// are checked separately by the block-validation service, so they are not repeated here).
+//
+// It is the subset of Valid()'s header checks that must be evaluated at block-receipt time. Under
+// optimistic mining Valid() runs in a background goroutine after the block has already been added,
+// so evaluating the 2-hours-in-the-future check there uses a drifted time.Now() and can transiently
+// accept a too-far-future block; the block-validation service calls this synchronously before the
+// optimistic AddBlock to close that gap (issue #1149). Valid() also calls it so the check remains a
+// single source of truth.
+//
+// currentChain is the run of previous headers ending at the block's parent; when empty the
+// median-time-past rule is skipped (same as Valid()). Returns nil when the header passes.
+func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *settings.Settings, logger ulogger.Logger) error {
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	twoHoursToTheFutureTimestampUint32, err := safeconversion.Int64ToUint32(time.Now().Add(2 * time.Hour).Unix())
 	if err != nil {
-		return false, errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
+		return errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
 	}
 
 	if b.Header.Timestamp > twoHoursToTheFutureTimestampUint32 {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.String())
+		return errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.String())
 	}
 
 	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
@@ -549,19 +547,19 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		// calculate the median timestamp
 		medianTimestamp, err := CalculateMedianTimestamp(prevTimeStamps)
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		b.medianTimestamp, err = safeconversion.Int64ToUint32(medianTimestamp.Unix())
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		// validate that the block's timestamp is after the median timestamp
 		if b.Header.Timestamp <= b.medianTimestamp {
 			// if we're not on a chain that allows blocks to be generated quickly then return an error
 			if !settings.ChainCfgParams.GenerateSupported {
-				return false, errors.NewBlockInvalidError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
+				return errors.NewBlockInvalidError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
 			}
 			// otherwise just warn
 			logger.Warnf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
@@ -572,7 +570,37 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// Parity with bitcoin-sv ContextualCheckBlockHeader; must run before body/coinbase checks to
 	// match svnode's bad-version error priority.
 	if err := CheckBlockVersion(b.Header.Version, b.Height, settings.ChainCfgParams); err != nil {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] outdated block version", b.String(), err)
+		return errors.NewBlockInvalidError("[BLOCK][%s] outdated block version", b.String(), err)
+	}
+
+	return nil
+}
+
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
+	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, error) {
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
+		tracing.WithHistogram(prometheusBlockValid),
+		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
+	)
+	defer deferFn()
+
+	// 1. Check that the block header hash is less than the target difficulty.
+	headerValid, _, err := b.Header.HasMetTargetDifficulty()
+	if err != nil {
+		return false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.String(), err)
+	}
+
+	if !headerValid {
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.String())
+	}
+
+	// 2, 3, 3b: contextual header checks (2h-future timestamp, median-time-past, block-version
+	// floor). These depend on time.Now() and the current chain, so under optimistic mining they
+	// must be evaluated at block-receipt time rather than only in the background Valid() goroutine
+	// where time.Now() has drifted past receipt. Factored into CheckHeaderContextual so the
+	// optimistic path can run them synchronously before AddBlock (issue #1149).
+	if err := b.CheckHeaderContextual(currentChain, settings, logger); err != nil {
+		return false, err
 	}
 
 	// 4. Check that the coinbase transaction is valid (reward checked later).

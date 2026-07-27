@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -115,6 +116,7 @@ type Server struct {
 	AssetHTTPAddressURL               string                    // HTTP address URL for assets
 	PropagationURL                    string                    // URL for peers to use for propagating txs (defaults to AssetHTTPAddressURL)
 	e                                 *echo.Echo                // Echo server instance
+	httpServeErr                      atomic.Pointer[error]     // Unexpected exit error of the HTTP serve goroutine; surfaced via Health
 	notificationCh                    chan *notificationMsg     // Channel for notifications
 	rejectedTxKafkaConsumerClient     kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
 	invalidBlocksKafkaConsumerClient  kafka.KafkaConsumerGroupI // Kafka consumer for invalid blocks
@@ -458,6 +460,18 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		// Add liveness checks here. Don't include dependency checks.
 		// If the service is stuck return http.StatusServiceUnavailable
 		// to indicate a restart is needed
+		//
+		// A dead HTTP serve goroutine is deliberately a liveness failure, not
+		// just a readiness one: once Serve/ServeTLS returns, the goroutine is
+		// gone and the listener may be closed, so the HTTP/websocket surface
+		// cannot recover in-process. Restarting the whole P2P process (and
+		// dropping healthy libp2p/gRPC state with it) is the only way to get
+		// the endpoint back; readiness-only would leave the node running
+		// permanently without it.
+		if err := s.httpServeError(); err != nil {
+			return http.StatusServiceUnavailable, "HTTP server not serving", err
+		}
+
 		return http.StatusOK, "OK", nil
 	}
 
@@ -471,6 +485,13 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
 	checks := make([]health.Check, 0, 4)
+	checks = append(checks, health.Check{Name: "HTTPServer", Check: func(_ context.Context, _ bool) (int, string, error) {
+		if err := s.httpServeError(); err != nil {
+			return http.StatusServiceUnavailable, "HTTP server not serving", err
+		}
+
+		return http.StatusOK, "OK", nil
+	}})
 	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
 
 	if s.blockchainClient != nil {
@@ -479,6 +500,16 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
+}
+
+// httpServeError returns the error the HTTP serve goroutine exited with, or nil
+// if the HTTP server is (still) serving or was shut down gracefully.
+func (s *Server) httpServeError() error {
+	if errPtr := s.httpServeErr.Load(); errPtr != nil {
+		return *errPtr
+	}
+
+	return nil
 }
 
 // Init initializes the P2P server and its components.
@@ -584,17 +615,12 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	s.e = s.setupHTTPServer()
 
-	go func() {
-		if err := s.StartHTTP(ctx); err != nil {
-			if errors.Is(err, http.ErrServerClosed) {
-				s.logger.Infof("http server shutdown")
-			} else {
-				s.logger.Errorf("failed to start http server: %v", err)
-			}
-
-			return
-		}
-	}()
+	// StartHTTP binds the listener synchronously (serving happens in its own
+	// goroutine), so bind and TLS configuration errors fail startup here rather
+	// than leaving the node ready with its HTTP surface down.
+	if err := s.StartHTTP(ctx); err != nil {
+		return errors.NewServiceError("failed to start http server", err)
+	}
 
 	// Start a goroutine to periodically log observed addresses (for debugging NAT traversal)
 	go func() {
@@ -1063,7 +1089,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
 	if err != nil {
-		return errors.NewError("error getting block header and meta for BlockMessage: %w", err)
+		return errors.NewError("error getting block header and meta for BlockMessage", err)
 	}
 
 	if meta.Invalid {
@@ -1083,11 +1109,11 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
-		return errors.NewError("blockMessage - json marshal error: %w", err)
+		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
 	if err = s.P2PClient.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
-		return errors.NewError("blockMessage - publish error: %w", err)
+		return errors.NewError("blockMessage - publish error", err)
 	}
 
 	// Also send a node_status update when best block changes
@@ -1196,40 +1222,46 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Get current sync peer
 	syncPeer := s.getSyncPeer()
 	if syncPeer != "" {
-		if syncPeer != "" {
-			syncPeerID = syncPeer.String()
+		syncPeerID = syncPeer.String()
 
-			// Track when we first connected to this sync peer
-			if existingTime, ok := s.syncConnectionTimes.Load(syncPeerID); ok {
-				syncConnectedAt = existingTime.(int64)
-			} else {
-				// First time connecting to this sync peer
-				syncConnectedAt = time.Now().Unix()
-				s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
-				s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
-			}
-
-			// Get sync peer's height and block hash
-			for _, peerInfo := range s.P2PClient.GetPeers() {
-				if peerInfo.ID == syncPeer.String() {
-					// Get the peer's best block hash from registry
-					if pInfo, exists := s.getPeer(syncPeer); exists {
-						if pInfo.BlockHash != nil {
-							syncPeerBlockHash = pInfo.BlockHash.String()
-						}
-
-						syncPeerHeight = pInfo.Height
-					}
-					break
-				}
-			}
+		// Track when we first connected to this sync peer
+		if existingTime, ok := s.syncConnectionTimes.Load(syncPeerID); ok {
+			syncConnectedAt = existingTime.(int64)
 		} else {
-			// No sync peer - clear any old connection time tracking
-			s.syncConnectionTimes.Range(func(key, value interface{}) bool {
-				s.syncConnectionTimes.Delete(key)
-				return true
-			})
+			// First time connecting to this sync peer
+			syncConnectedAt = time.Now().Unix()
+			s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
+			s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
 		}
+
+		// Drop entries for previous sync peers so the map only tracks the current one
+		s.syncConnectionTimes.Range(func(key, value any) bool {
+			if key != syncPeerID {
+				s.syncConnectionTimes.Delete(key)
+			}
+			return true
+		})
+
+		// Get sync peer's height and block hash
+		for _, peerInfo := range s.P2PClient.GetPeers() {
+			if peerInfo.ID == syncPeer.String() {
+				// Get the peer's best block hash from registry
+				if pInfo, exists := s.getPeer(syncPeer); exists {
+					if pInfo.BlockHash != nil {
+						syncPeerBlockHash = pInfo.BlockHash.String()
+					}
+
+					syncPeerHeight = pInfo.Height
+				}
+				break
+			}
+		}
+	} else {
+		// No sync peer - clear any old connection time tracking
+		s.syncConnectionTimes.Range(func(key, value any) bool {
+			s.syncConnectionTimes.Delete(key)
+			return true
+		})
 	}
 
 	// Get peer ID safely
@@ -1430,14 +1462,14 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
-		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
+		return errors.NewError("nodeStatusMessage - json marshal error", err)
 	}
 
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
 	if err = s.P2PClient.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
-		return errors.NewError("nodeStatusMessage - publish error: %w", err)
+		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
 	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
@@ -1468,11 +1500,11 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 
 	msgBytes, err := json.Marshal(subtreeMessage)
 	if err != nil {
-		return errors.NewError("subtreeMessage - json marshal error: %w", err)
+		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
 	if err := s.P2PClient.Publish(ctx, s.subtreeTopicName, msgBytes); err != nil {
-		return errors.NewError("subtreeMessage - publish error: %w", err)
+		return errors.NewError("subtreeMessage - publish error", err)
 	}
 
 	return nil
@@ -1504,7 +1536,7 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 	hash, err := chainhash.NewHash(notification.Hash)
 	if err != nil {
 		// Specific error about hash conversion, not logged here, but returned to caller.
-		return errors.NewError(fmt.Sprintf("error getting chainhash from notification hash %s: %%w", notification.Hash), err)
+		return errors.NewError("error getting chainhash from notification hash %s", notification.Hash, err)
 	}
 
 	switch notification.Type {
@@ -1576,6 +1608,21 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 		return errors.NewConfigurationError("p2p HTTP listen address is not set")
 	}
 
+	// Validate TLS configuration before binding so a misconfigured HTTPS setup
+	// fails startup instead of being logged and swallowed in the serve goroutine.
+	var certFile, keyFile string
+	if s.settings.SecurityLevelHTTP != 0 {
+		certFile = s.settings.ServerCertFile
+		if certFile == "" {
+			return errors.NewConfigurationError("[StartHTTP] server_certFile is required for HTTPS")
+		}
+
+		keyFile = s.settings.ServerKeyFile
+		if keyFile == "" {
+			return errors.NewConfigurationError("[StartHTTP] server_keyFile is required for HTTPS")
+		}
+	}
+
 	// Get listener using util.GetListener
 	listener, address, _, err := util.GetListener(s.settings.Context, "p2p", "http://", addr)
 	if err != nil {
@@ -1597,28 +1644,21 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 	go func() {
 		defer util.RemoveListener(s.settings.Context, "p2p", "http://")
 
+		var serveErr error
+
 		if s.settings.SecurityLevelHTTP == 0 {
 			servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTP listening on %s", address))
-			err = s.e.Server.Serve(listener)
+			serveErr = s.e.Server.Serve(listener)
 		} else {
-			certFile := s.settings.ServerCertFile
-			if certFile == "" {
-				s.logger.Errorf("server_certFile is required for HTTPS")
-				return
-			}
-
-			keyFile := s.settings.ServerKeyFile
-			if keyFile == "" {
-				s.logger.Errorf("server_keyFile is required for HTTPS")
-				return
-			}
-
 			servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTPS listening on %s", address))
-			err = s.e.Server.ServeTLS(listener, certFile, keyFile)
+			serveErr = s.e.Server.ServeTLS(listener, certFile, keyFile)
 		}
 
-		if err != nil && err != http.ErrServerClosed {
-			s.logger.Errorf("[StartHTTP] server error: %v", err)
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			s.logger.Errorf("[StartHTTP] server error: %v", serveErr)
+			// Record the failure so Health reports the service unhealthy instead
+			// of the node staying ready with its HTTP surface down.
+			s.httpServeErr.Store(&serveErr)
 		}
 	}()
 
@@ -2131,6 +2171,9 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 		ClientName:             p.ClientName,
 		LastCatchupError:       p.LastCatchupError,
 		LastCatchupErrorTime:   timeToUnix(p.LastCatchupErrorTime),
+		CatchupAttempts:        p.CatchupAttempts,
+		CatchupSuccesses:       p.CatchupSuccesses,
+		CatchupFailures:        p.CatchupFailures,
 	}
 }
 

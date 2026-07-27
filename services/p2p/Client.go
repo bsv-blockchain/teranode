@@ -13,6 +13,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -580,6 +582,53 @@ func (c *Client) ReportValidBlock(ctx context.Context, peerID string, blockHash 
 	return nil
 }
 
+// ReportValidBlockHeaders reports that a peer successfully served a batch of block
+// headers during catchup. Credits a generic interaction success (reputation and
+// response time) without touching the catchup-operation counters.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: Peer ID that served the headers
+//   - durationMs: Time taken to serve the headers (0 = not applicable)
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error {
+	req := &p2p_api.ReportValidBlockHeadersRequest{
+		PeerId:     peerID,
+		DurationMs: durationMs,
+	}
+
+	resp, err := c.client.ReportValidBlockHeaders(ctx, req)
+	if status.Code(err) == codes.Unimplemented {
+		// Rolling upgrade: the p2p service predates this RPC. Fall back to
+		// RecordCatchupSuccess, which on such a server is implemented as a
+		// generic interaction success — exactly the credit this call carries.
+		// (New servers never hit this: there RecordCatchupSuccess would also
+		// bump the catchup counters, which a headers batch must not do.)
+		legacyResp, legacyErr := c.client.RecordCatchupSuccess(ctx, &p2p_api.RecordCatchupSuccessRequest{
+			PeerId:     peerID,
+			DurationMs: durationMs,
+		})
+		if legacyErr != nil {
+			return legacyErr
+		}
+		if legacyResp != nil && !legacyResp.Ok {
+			return errors.NewServiceError("failed to report valid block headers via legacy fallback")
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report valid block headers: %s", resp.Message)
+	}
+
+	return nil
+}
+
 // ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
 //
 // Parameters:
@@ -732,14 +781,14 @@ func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
 		}
 
 		return &PeerInfo{
-			ID:                   peerID,
-			Height:               p.Height,
-			BlockHash:            blockHash,
-			DataHubURL:           p.DataHubUrl,
-			ReputationScore:      p.CatchupReputationScore,
-			InteractionAttempts:  p.CatchupAttempts,
-			InteractionSuccesses: p.CatchupSuccesses,
-			InteractionFailures:  p.CatchupFailures,
+			ID:               peerID,
+			Height:           p.Height,
+			BlockHash:        blockHash,
+			DataHubURL:       p.DataHubUrl,
+			ReputationScore:  p.CatchupReputationScore,
+			CatchupAttempts:  p.CatchupAttempts,
+			CatchupSuccesses: p.CatchupSuccesses,
+			CatchupFailures:  p.CatchupFailures,
 		}
 
 	case *p2p_api.PeerRegistryInfo:
@@ -775,6 +824,9 @@ func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
 			AvgResponseTime:        time.Duration(p.AvgResponseTimeMs) * time.Millisecond,
 			LastCatchupError:       p.LastCatchupError,
 			LastCatchupErrorTime:   time.Unix(p.LastCatchupErrorTime, 0),
+			CatchupAttempts:        p.CatchupAttempts,
+			CatchupSuccesses:       p.CatchupSuccesses,
+			CatchupFailures:        p.CatchupFailures,
 		}
 
 	default:

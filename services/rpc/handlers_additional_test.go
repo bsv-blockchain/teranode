@@ -5490,6 +5490,10 @@ func (m *mockP2PClient) ReportValidSubtree(ctx context.Context, peerID string, s
 	return nil
 }
 
+func (m *mockP2PClient) ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error {
+	return nil
+}
+
 func (m *mockP2PClient) ReportValidBlock(ctx context.Context, peerID string, blockHash string) error {
 	return nil
 }

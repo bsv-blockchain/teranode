@@ -150,6 +150,46 @@ func TestGetNodeStatusMessage_CountsOnlyConnectedPeers(t *testing.T) {
 	require.Equal(t, 2, msg.ConnectedPeersCount, "gossiped/disconnected registry peers must not be counted")
 }
 
+// TestGetNodeStatusMessage_SyncConnectionTimesBounded is a regression test:
+// syncConnectionTimes must not grow unbounded — entries for previous sync peers
+// are pruned on rotation, and the map is cleared when there is no sync peer.
+func TestGetNodeStatusMessage_SyncConnectionTimesBounded(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.P2PClient = &MockServerP2PClient{peerID: mustNewPeerID(t)}
+	s.syncCoordinator = &SyncCoordinator{}
+
+	pidA := mustNewPeerID(t)
+	pidB := mustNewPeerID(t)
+
+	syncMapLen := func() int {
+		n := 0
+		s.syncConnectionTimes.Range(func(_, _ any) bool { n++; return true })
+		return n
+	}
+
+	// Sync peer A selected: its connection time is recorded.
+	s.syncCoordinator.currentSyncPeer = pidA.String()
+	msg := s.getNodeStatusMessage(context.Background())
+	require.NotNil(t, msg)
+	_, ok := s.syncConnectionTimes.Load(pidA.String())
+	require.True(t, ok, "current sync peer must be tracked")
+	require.Equal(t, 1, syncMapLen())
+
+	// Rotate to sync peer B: A's stale entry is pruned.
+	s.syncCoordinator.currentSyncPeer = pidB.String()
+	s.getNodeStatusMessage(context.Background())
+	_, ok = s.syncConnectionTimes.Load(pidA.String())
+	require.False(t, ok, "previous sync peer entry must be pruned on rotation")
+	_, ok = s.syncConnectionTimes.Load(pidB.String())
+	require.True(t, ok, "current sync peer must be tracked after rotation")
+	require.Equal(t, 1, syncMapLen())
+
+	// No sync peer: the map is cleared.
+	s.syncCoordinator.currentSyncPeer = ""
+	s.getNodeStatusMessage(context.Background())
+	require.Zero(t, syncMapLen(), "map must be cleared when there is no sync peer")
+}
+
 func TestServerHelpers_GetSyncPeer_NoCoordinator(t *testing.T) {
 	s, _ := newServerWithLocalRegistry(t)
 	require.Empty(t, s.getSyncPeer())
