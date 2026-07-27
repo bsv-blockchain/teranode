@@ -8125,9 +8125,9 @@
 </ul>
 <h3 id="p2p-service">P2P Service<a class="headerlink" href="#p2p-service" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Uses <code>InvalidBlocksConfig</code> or constructs URL from <code>InvalidBlocks</code>, <code>Hosts</code>, <code>Port</code></li>
+<li>Uses <code>InvalidBlocksConfig</code> (the consumer is disabled with an error log when unset)</li>
 <li>Applies TLS settings from KafkaSettings</li>
-<li>Consumer group: <code>{topic}-consumer</code></li>
+<li>Consumer group: <code>p2p.{clientName}</code></li>
 </ul>
 <h3 id="legacy-service-tls">Legacy Service (TLS)<a class="headerlink" href="#legacy-service-tls" title="Permanent link">&para;</a></h3>
 <ul>
