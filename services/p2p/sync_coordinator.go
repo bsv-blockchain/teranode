@@ -588,7 +588,7 @@ func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork 
 
 func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, localChainWork []byte, previousPeer string) string {
 	criteria := sc.selectionCriteria(localHeight, localChainWork, previousPeer)
-	return sc.selector.SelectSyncPeer(peers, criteria)
+	return sc.selector.SelectSyncPeer(sc.ctx, peers, criteria)
 }
 
 // monitorFSM monitors FSM state changes

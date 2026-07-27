@@ -1,0 +1,241 @@
+package p2p
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/stretchr/testify/require"
+)
+
+func newHealthCheckSelectorForTest() *PeerSelector {
+	return NewPeerSelector(ulogger.TestLogger{}, &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:     true,
+			FullDeliveryFreshnessWindow: 24 * time.Hour,
+			HealthCheckEnabled:          true,
+		},
+	})
+}
+
+// countingHealthStub records probe invocations per URL and returns the
+// configured health status (unlisted URLs are healthy).
+type countingHealthStub struct {
+	mu        sync.Mutex
+	calls     map[string]int
+	unhealthy map[string]bool
+}
+
+func newCountingHealthStub(unhealthyURLs ...string) *countingHealthStub {
+	unhealthy := make(map[string]bool, len(unhealthyURLs))
+	for _, u := range unhealthyURLs {
+		unhealthy[u] = true
+	}
+	return &countingHealthStub{calls: make(map[string]int), unhealthy: unhealthy}
+}
+
+func (s *countingHealthStub) check(_ context.Context, url string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls[url]++
+	return !s.unhealthy[url], nil
+}
+
+func (s *countingHealthStub) callsFor(url string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[url]
+}
+
+func (s *countingHealthStub) totalCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	total := 0
+	for _, n := range s.calls {
+		total += n
+	}
+	return total
+}
+
+func TestPeerSelector_HealthChecks_FilterUnhealthyPeers(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	peerA := newPeer("peer-a", 100, "full", 50, 0)
+	peerB := newPeer("peer-b", 100, "full", 50, 0)
+
+	stub := newCountingHealthStub(peerA.DataHubURL)
+	ps.checkHealth = stub.check
+
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{peerA, peerB}, advertisedProbeCriteria(50))
+	require.Equal(t, "peer-b", got)
+}
+
+func TestPeerSelector_HealthChecks_ProbeEachURLOnceAcrossBothPasses(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	full := newPeer("peer-full", 100, "full", 50, 0)
+	pruned := newPeer("peer-pruned", 100, "pruned", 50, 0)
+
+	// Both peers unhealthy: the full pass yields nothing, forcing the pruned
+	// fallback pass, which previously re-probed every peer.
+	stub := newCountingHealthStub(full.DataHubURL, pruned.DataHubURL)
+	ps.checkHealth = stub.check
+
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{full, pruned}, advertisedProbeCriteria(50))
+	require.Equal(t, "", got)
+	require.Equal(t, 1, stub.callsFor(full.DataHubURL))
+	require.Equal(t, 1, stub.callsFor(pruned.DataHubURL))
+}
+
+func TestPeerSelector_HealthChecks_CachedAcrossCalls(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	peerA := newPeer("peer-a", 100, "full", 50, 0)
+	peerB := newPeer("peer-b", 100, "full", 50, 0)
+	peers := []*blockchain.PeerInfo{peerA, peerB}
+
+	stub := newCountingHealthStub()
+	ps.checkHealth = stub.check
+
+	first := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
+	require.NotEqual(t, "", first)
+	require.Equal(t, 2, stub.totalCalls())
+
+	second := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
+	require.Equal(t, first, second)
+	require.Equal(t, 2, stub.totalCalls(), "second selection within the TTL must not re-probe")
+}
+
+func TestPeerSelector_HealthChecks_CacheExpires(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	peerA := newPeer("peer-a", 100, "full", 50, 0)
+	peers := []*blockchain.PeerInfo{peerA}
+
+	stub := newCountingHealthStub()
+	ps.checkHealth = stub.check
+
+	ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
+	require.Equal(t, 1, stub.totalCalls())
+
+	// Age the cached entry past the TTL; the next selection must re-probe.
+	ps.healthMu.Lock()
+	entry := ps.healthCache[peerA.DataHubURL]
+	entry.checkedAt = entry.checkedAt.Add(-peerHealthCacheTTL)
+	ps.healthCache[peerA.DataHubURL] = entry
+	ps.healthMu.Unlock()
+
+	ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
+	require.Equal(t, 2, stub.totalCalls())
+}
+
+func TestPeerSelector_HealthChecks_RunConcurrently(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+
+	const numPeers = 8
+	const probeDelay = 100 * time.Millisecond
+
+	peers := make([]*blockchain.PeerInfo, 0, numPeers)
+	for i := range numPeers {
+		peers = append(peers, newPeer(fmt.Sprintf("peer-%d", i), 100, "full", 50, 0))
+	}
+
+	var inFlight, maxInFlight atomic.Int32
+	ps.checkHealth = func(ctx context.Context, _ string) (bool, error) {
+		cur := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			prev := maxInFlight.Load()
+			if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+				break
+			}
+		}
+		select {
+		case <-time.After(probeDelay):
+		case <-ctx.Done():
+		}
+		return true, nil
+	}
+
+	start := time.Now()
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
+	elapsed := time.Since(start)
+
+	require.NotEqual(t, "", got)
+	require.Greater(t, maxInFlight.Load(), int32(1), "probes must overlap, not run serially")
+	require.Less(t, elapsed, time.Duration(numPeers)*probeDelay, "selection must be faster than serial probing")
+}
+
+func TestPeerSelector_HealthChecks_HonorCallerContext(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	peerA := newPeer("peer-a", 100, "full", 50, 0)
+
+	ps.checkHealth = func(ctx context.Context, _ string) (bool, error) {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	got := ps.SelectSyncPeer(ctx, []*blockchain.PeerInfo{peerA}, advertisedProbeCriteria(50))
+	elapsed := time.Since(start)
+
+	require.Equal(t, "", got)
+	require.Less(t, elapsed, time.Second, "a cancelled context must abort probes immediately")
+}
+
+func TestPeerSelector_HealthChecks_BudgetExpiryNotCached(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	peerA := newPeer("peer-a", 100, "full", 50, 0)
+	peers := []*blockchain.PeerInfo{peerA}
+
+	ps.checkHealth = func(ctx context.Context, _ string) (bool, error) {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got := ps.SelectSyncPeer(ctx, peers, advertisedProbeCriteria(50))
+	require.Equal(t, "", got)
+
+	// The aborted probe must not have been recorded as an unhealthy result.
+	stub := newCountingHealthStub()
+	ps.checkHealth = stub.check
+
+	got = ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
+	require.Equal(t, "peer-a", got)
+	require.Equal(t, 1, stub.totalCalls())
+}
+
+func TestPeerSelector_HealthChecks_RealHTTPEndpoints(t *testing.T) {
+	healthyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bestblockheader" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer healthyServer.Close()
+
+	unhealthyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer unhealthyServer.Close()
+
+	ps := newHealthCheckSelectorForTest()
+	healthyPeer := newPeer("peer-healthy", 100, "full", 50, 0)
+	healthyPeer.DataHubURL = healthyServer.URL
+	unhealthyPeer := newPeer("peer-unhealthy", 100, "full", 50, 0)
+	unhealthyPeer.DataHubURL = unhealthyServer.URL
+
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{healthyPeer, unhealthyPeer}, advertisedProbeCriteria(50))
+	require.Equal(t, "peer-healthy", got)
+}
