@@ -707,33 +707,55 @@ func (k *KafkaConsumerGroup) ResumeAll() {
 	}
 }
 
+// messageKey returns the message key as a string for logging, empty when absent.
+func messageKey(msg *KafkaMessage) string {
+	if msg == nil || msg.Key == nil {
+		return ""
+	}
+
+	return string(msg.Key)
+}
+
+// retryWithBackoff runs fn up to maxRetries times, sleeping with linear backoff
+// between attempts. The backoff aborts immediately when ctx is cancelled so a
+// mid-retry shutdown is not blocked; the last error is returned in that case.
+func retryWithBackoff(ctx context.Context, logger ulogger.Logger, options *consumerOptions, msg *KafkaMessage, fn func(message *KafkaMessage) error) error {
+	var err error
+	for i := 0; i < options.maxRetries; i++ {
+		if err = fn(msg); err == nil {
+			return nil
+		}
+
+		backoff := time.Duration(options.backoffMultiplier*(i+1)) * options.backoffDurationType
+		logger.Warnf("[kafka_consumer] retrying processing kafka message... attempt %d/%d, backoff %v", i+1, options.maxRetries, backoff)
+
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return err
+		}
+	}
+
+	return err
+}
+
 // wrapConsumerFn applies retry/error handling wrappers to consumer function
 func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, consumerFn func(message *KafkaMessage) error, options *consumerOptions) func(message *KafkaMessage) error {
 	if options.withRetryAndMoveOn {
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
-			var err error
-			for i := 0; i < options.maxRetries; i++ {
-				err = originalFn(msg)
-				if err == nil {
-					return nil
-				}
-				backoff := time.Duration(options.backoffMultiplier*(i+1)) * options.backoffDurationType
-				logger.Warnf("[kafka_consumer] retrying processing kafka message... attempt %d/%d, backoff %v", i+1, options.maxRetries, backoff)
-				select {
-				case <-time.After(backoff):
-				case <-ctx.Done():
-					// Shutdown mid-backoff: return the error without committing
-					// so the message is redelivered after restart.
-					return err
-				}
+			err := retryWithBackoff(ctx, logger, options, msg, originalFn)
+			if err == nil {
+				return nil
 			}
 
-			key := ""
-			if msg != nil && msg.Key != nil {
-				key = string(msg.Key)
+			if ctx.Err() != nil {
+				// Shutdown mid-backoff: return the error without committing so
+				// the message is redelivered after restart.
+				return err
 			}
-			logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping", topic, key)
+
+			logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping", topic, messageKey(msg))
 			return nil
 		}
 	}
@@ -741,28 +763,18 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 	if options.withRetryAndStop {
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
-			var err error
-			for i := 0; i < options.maxRetries; i++ {
-				err = originalFn(msg)
-				if err == nil {
-					return nil
-				}
-				backoff := time.Duration(options.backoffMultiplier*(i+1)) * options.backoffDurationType
-				logger.Warnf("[kafka_consumer] retrying processing kafka message... attempt %d/%d, backoff %v", i+1, options.maxRetries, backoff)
-				select {
-				case <-time.After(backoff):
-				case <-ctx.Done():
-					// Shutdown mid-backoff: return the error without committing
-					// so the message is redelivered after restart.
-					return err
-				}
+			err := retryWithBackoff(ctx, logger, options, msg, originalFn)
+			if err == nil {
+				return nil
 			}
 
-			key := ""
-			if msg != nil && msg.Key != nil {
-				key = string(msg.Key)
+			if ctx.Err() != nil {
+				// Shutdown mid-backoff: return the error without committing so
+				// the message is redelivered after restart.
+				return err
 			}
-			logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), stopping", topic, key)
+
+			logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), stopping", topic, messageKey(msg))
 			if options.stopFn != nil {
 				options.stopFn()
 			}
@@ -773,13 +785,8 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 	if options.withLogErrorAndMoveOn {
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
-			err := originalFn(msg)
-			if err != nil {
-				key := ""
-				if msg != nil && msg.Key != nil {
-					key = string(msg.Key)
-				}
-				logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping: %v", topic, key, err)
+			if err := originalFn(msg); err != nil {
+				logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping: %v", topic, messageKey(msg), err)
 			}
 			return nil
 		}
