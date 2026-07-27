@@ -359,7 +359,7 @@ func TestWrapConsumerFnRetryAndMoveOnExhaustsThenSkips(t *testing.T) {
 	err := wrapped(&KafkaMessage{Key: []byte("some-key")})
 
 	require.NoError(t, err, "exhausted retries must skip the message, not fail the consumer")
-	require.Equal(t, options.maxRetries, calls)
+	require.Equal(t, options.maxRetries+1, calls, "one attempt plus maxRetries retries")
 }
 
 func TestWrapConsumerFnRetrySucceedsAfterFailure(t *testing.T) {
@@ -404,7 +404,7 @@ func TestWrapConsumerFnRetryAndStopCallsStopFn(t *testing.T) {
 	err := wrapped(&KafkaMessage{})
 
 	require.NoError(t, err)
-	require.Equal(t, options.maxRetries, calls)
+	require.Equal(t, options.maxRetries+1, calls, "one attempt plus maxRetries retries")
 	require.True(t, stopped, "stopFn must be called after retries are exhausted")
 }
 
@@ -416,4 +416,25 @@ func TestWrapConsumerFnLogErrorAndMoveOnSwallowsError(t *testing.T) {
 	}, options)
 
 	require.NoError(t, wrapped(&KafkaMessage{Key: []byte("some-key")}))
+}
+
+func TestWrapConsumerFnZeroMaxRetriesStillAttemptsOnce(t *testing.T) {
+	stopped := false
+	options := &consumerOptions{
+		withRetryAndStop:    true,
+		maxRetries:          0,
+		backoffMultiplier:   1,
+		backoffDurationType: time.Millisecond,
+		stopFn:              func() { stopped = true },
+	}
+
+	calls := 0
+	wrapped := wrapConsumerFn(context.Background(), ulogger.TestLogger{}, "test-topic", func(*KafkaMessage) error {
+		calls++
+		return errors.NewProcessingError("handler always fails")
+	}, options)
+
+	require.NoError(t, wrapped(&KafkaMessage{}))
+	require.Equal(t, 1, calls, "maxRetries=0 must still attempt the handler once")
+	require.True(t, stopped, "stopFn must be called after the single failed attempt")
 }

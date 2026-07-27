@@ -617,19 +617,21 @@ func (s *Server) updateStorage(peerID peer.ID, mode string) {
 // this, so Stop() closes the consumer that is actually running.
 func (s *Server) startInvalidBlocksConsumer(ctx context.Context) {
 	if s.invalidBlocksKafkaConsumerClient == nil {
-		s.logger.Warnf("[startInvalidBlocksConsumer] invalid-blocks Kafka consumer not configured (kafka_invalidBlocksConfig unset), peers will not be banned for invalid blocks")
+		s.logger.Errorf("[startInvalidBlocksConsumer] invalid-blocks Kafka consumer not configured (kafka_invalidBlocksConfig unset), peers will not be banned for invalid blocks")
 		return
 	}
 
-	s.logger.Infof("[startInvalidBlocksConsumer] starting invalid blocks Kafka consumer")
-	// Transient handler failures (e.g. peer registry unavailable) are retried
-	// in process with backoff before the offset is committed; after the retries
-	// are exhausted the message is skipped so it cannot stall the partition.
-	s.invalidBlocksKafkaConsumerClient.Start(ctx, s.processInvalidBlockMessage, kafka.WithRetryAndMoveOn(3, 2, time.Second))
+	s.logger.Infof("[startInvalidBlocksConsumer] starting invalid blocks Kafka consumer on topic: %s", s.settings.Kafka.InvalidBlocks)
+	// Transient handler failures (e.g. peer registry unavailable) get two
+	// retries with backoff (three attempts total) before the offset is
+	// committed; after that the message is skipped so it cannot stall the
+	// partition.
+	s.invalidBlocksKafkaConsumerClient.Start(ctx, s.processInvalidBlockMessage, kafka.WithRetryAndMoveOn(2, 2, time.Second))
 }
 
 func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
-	ctx := context.Background()
+	// Use the server context so an in-flight AddBanScore is cancelled at shutdown.
+	ctx := s.gCtx
 
 	var invalidBlockMsg kafkamessage.KafkaInvalidBlockTopicMessage
 	if err := proto.Unmarshal(message.Value, &invalidBlockMsg); err != nil {
@@ -656,7 +658,7 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 
 	req := &p2p_api.AddBanScoreRequest{
 		PeerId: peerID,
-		Reason: "invalid_block",
+		Reason: ReasonInvalidBlock,
 	}
 
 	if _, err := s.AddBanScore(ctx, req); err != nil {

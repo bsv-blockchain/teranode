@@ -433,15 +433,16 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 		opt(options)
 	}
 
-	// Apply retry/error handling wrappers
-	consumerFn = wrapConsumerFn(ctx, k.Config.Logger, k.Config.Topic, consumerFn, options)
-
 	// Create internal context and store cancel func before spawning goroutines.
 	// Protected by cancelMu to avoid a data race with Close().
 	internalCtx, cancel := context.WithCancel(ctx)
 	k.cancelMu.Lock()
 	k.cancel = cancel
 	k.cancelMu.Unlock()
+
+	// Apply retry/error handling wrappers, bound to internalCtx so both caller
+	// cancellation and Close() abort an in-flight retry backoff.
+	consumerFn = wrapConsumerFn(internalCtx, k.Config.Logger, k.Config.Topic, consumerFn, options)
 
 	go func() {
 		defer cancel()
@@ -634,11 +635,10 @@ func (k *KafkaConsumerGroup) startInMemory(ctx context.Context, consumerFn func(
 		opt(options)
 	}
 
+	// Reuse the same retry/error wrappers as the real consumer so in-memory
+	// (dev/test) semantics match production, including cancellable backoff.
 	handler := &inMemoryConsumerHandler{
-		logger:     k.Config.Logger,
-		consumerFn: consumerFn,
-		options:    options,
-		topic:      k.Config.Topic,
+		consumerFn: wrapConsumerFn(ctx, k.Config.Logger, k.Config.Topic, consumerFn, options),
 	}
 
 	go func() {
@@ -716,27 +716,33 @@ func messageKey(msg *KafkaMessage) string {
 	return string(msg.Key)
 }
 
-// retryWithBackoff runs fn up to maxRetries times, sleeping with linear backoff
-// between attempts. The backoff aborts immediately when ctx is cancelled so a
-// mid-retry shutdown is not blocked; the last error is returned in that case.
-func retryWithBackoff(ctx context.Context, logger ulogger.Logger, options *consumerOptions, msg *KafkaMessage, fn func(message *KafkaMessage) error) error {
-	var err error
-	for i := 0; i < options.maxRetries; i++ {
+// retryWithBackoff runs fn once plus up to maxRetries retries, sleeping with
+// linear backoff between attempts (never after the last one). It reports
+// cancelled=true when ctx was cancelled mid-backoff, in which case the last
+// error is returned without further attempts.
+func retryWithBackoff(ctx context.Context, logger ulogger.Logger, options *consumerOptions, msg *KafkaMessage, fn func(message *KafkaMessage) error) (cancelled bool, err error) {
+	attempts := max(options.maxRetries, 0) + 1
+
+	for i := range attempts {
 		if err = fn(msg); err == nil {
-			return nil
+			return false, nil
+		}
+
+		if i == attempts-1 {
+			break
 		}
 
 		backoff := time.Duration(options.backoffMultiplier*(i+1)) * options.backoffDurationType
-		logger.Warnf("[kafka_consumer] retrying processing kafka message... attempt %d/%d, backoff %v", i+1, options.maxRetries, backoff)
+		logger.Warnf("[kafka_consumer] retrying processing kafka message... attempt %d/%d, backoff %v", i+1, attempts, backoff)
 
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
-			return err
+			return true, err
 		}
 	}
 
-	return err
+	return false, err
 }
 
 // wrapConsumerFn applies retry/error handling wrappers to consumer function
@@ -744,12 +750,12 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 	if options.withRetryAndMoveOn {
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
-			err := retryWithBackoff(ctx, logger, options, msg, originalFn)
+			cancelled, err := retryWithBackoff(ctx, logger, options, msg, originalFn)
 			if err == nil {
 				return nil
 			}
 
-			if ctx.Err() != nil {
+			if cancelled {
 				// Shutdown mid-backoff: return the error without committing so
 				// the message is redelivered after restart.
 				return err
@@ -763,12 +769,12 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 	if options.withRetryAndStop {
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
-			err := retryWithBackoff(ctx, logger, options, msg, originalFn)
+			cancelled, err := retryWithBackoff(ctx, logger, options, msg, originalFn)
 			if err == nil {
 				return nil
 			}
 
-			if ctx.Err() != nil {
+			if cancelled {
 				// Shutdown mid-backoff: return the error without committing so
 				// the message is redelivered after restart.
 				return err
@@ -797,10 +803,7 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 
 // inMemoryConsumerHandler implements the handler for in-memory consumer
 type inMemoryConsumerHandler struct {
-	logger     ulogger.Logger
 	consumerFn func(message *KafkaMessage) error
-	options    *consumerOptions
-	topic      string
 }
 
 func (h *inMemoryConsumerHandler) Setup(_ inmemorykafka.ConsumerGroupSession) error {
@@ -823,32 +826,9 @@ func (h *inMemoryConsumerHandler) ConsumeClaim(session inmemorykafka.ConsumerGro
 			HighWaterMark: claim.HighWaterMarkOffset(),
 		}
 
-		var err error
-		if h.options.withRetryAndMoveOn {
-			for i := 0; i < h.options.maxRetries; i++ {
-				err = h.consumerFn(kafkaMsg)
-				if err == nil {
-					break
-				}
-				time.Sleep(time.Duration(h.options.backoffMultiplier*(i+1)) * h.options.backoffDurationType)
-			}
-			if err != nil {
-				h.logger.Errorf("[kafka_consumer] error processing message, skipping: %v", err)
-			}
-			continue
-		}
-
-		if h.options.withLogErrorAndMoveOn {
-			if err := h.consumerFn(kafkaMsg); err != nil {
-				h.logger.Errorf("[kafka_consumer] error processing message, skipping: %v", err)
-			}
-			continue
-		}
-
+		// consumerFn is pre-wrapped by wrapConsumerFn, so the retry/skip/stop
+		// option semantics here are identical to the real consumer's.
 		if err := h.consumerFn(kafkaMsg); err != nil {
-			if h.options.withRetryAndStop && h.options.stopFn != nil {
-				h.options.stopFn()
-			}
 			return err
 		}
 
