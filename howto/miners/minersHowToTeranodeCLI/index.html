@@ -2567,6 +2567,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rewind-blockchain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rewind Blockchain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#logs-interactive-log-viewer" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7324,6 +7335,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rewind-blockchain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rewind Blockchain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#logs-interactive-log-viewer" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7635,27 +7657,30 @@
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span>aerospikereader<span class="w">      </span>Aerospike<span class="w"> </span>Reader
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span>bitcointoutxoset<span class="w">     </span>Bitcoin<span class="w"> </span>to<span class="w"> </span>Utxoset
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span>checkblock<span class="w">           </span>Check<span class="w"> </span>block<span class="w"> </span>-<span class="w"> </span>fetches<span class="w"> </span>a<span class="w"> </span>block<span class="w"> </span>and<span class="w"> </span>validates<span class="w"> </span>it<span class="w"> </span>using<span class="w"> </span>the<span class="w"> </span>block<span class="w"> </span>validation<span class="w"> </span>service
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span>checkblocktemplate<span class="w">   </span>Check<span class="w"> </span>block<span class="w"> </span>template
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span>export-blocks<span class="w">        </span>Export<span class="w"> </span>blockchain<span class="w"> </span>to<span class="w"> </span>CSV
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span>filereader<span class="w">           </span>File<span class="w"> </span>Reader
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span>fix-chainwork<span class="w">        </span>Fix<span class="w"> </span>incorrect<span class="w"> </span>chainwork<span class="w"> </span>values<span class="w"> </span><span class="k">in</span><span class="w"> </span>blockchain<span class="w"> </span>database
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span>getfsmstate<span class="w">          </span>Get<span class="w"> </span>the<span class="w"> </span>current<span class="w"> </span>FSM<span class="w"> </span>State
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span>import-blocks<span class="w">        </span>Import<span class="w"> </span>blockchain<span class="w"> </span>from<span class="w"> </span>CSV
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span>loadunminedbench<span class="w">     </span>Benchmark<span class="w"> </span>loadUnminedTransactions<span class="w"> </span>with<span class="w"> </span>CPU<span class="w"> </span>and<span class="w"> </span>memory<span class="w"> </span>profiling
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span>logs<span class="w">                 </span>Interactive<span class="w"> </span>log<span class="w"> </span>viewer<span class="w"> </span>with<span class="w"> </span>filtering<span class="w"> </span>and<span class="w"> </span>search
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">    </span>monitor<span class="w">              </span>Live<span class="w"> </span>TUI<span class="w"> </span>dashboard<span class="w"> </span><span class="k">for</span><span class="w"> </span>monitoring<span class="w"> </span>node<span class="w"> </span>status
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span>reconsiderblock<span class="w">      </span>Reconsider<span class="w"> </span>a<span class="w"> </span>block<span class="w"> </span>that<span class="w"> </span>was<span class="w"> </span>previously<span class="w"> </span>marked<span class="w"> </span>as<span class="w"> </span>invalid
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span>remainderbench<span class="w">       </span>Benchmark<span class="w"> </span>processRemainderTransactionsAndDequeue<span class="w"> </span>with<span class="w"> </span>CPU<span class="w"> </span>and<span class="w"> </span>memory<span class="w"> </span>profiling
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span>resetblockassembly<span class="w">   </span>Reset<span class="w"> </span>block<span class="w"> </span>assembly<span class="w"> </span>state
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">    </span>seeder<span class="w">               </span>Seeder
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">    </span>setfsmstate<span class="w">          </span>Set<span class="w"> </span>the<span class="w"> </span>FSM<span class="w"> </span>State
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">    </span>settings<span class="w">             </span>Settings
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">    </span>subtreebench<span class="w">         </span>Benchmark<span class="w"> </span>SubtreeProcessor<span class="w"> </span>throughput<span class="w"> </span>with<span class="w"> </span>CPU<span class="w"> </span>and<span class="w"> </span>memory<span class="w"> </span>profiling
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">    </span>txmapbench<span class="w">           </span>Benchmark<span class="w"> </span>CreateTransactionMap<span class="w"> </span>with<span class="w"> </span>CPU<span class="w"> </span>and<span class="w"> </span>memory<span class="w"> </span>profiling
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">    </span>utxopersister<span class="w">        </span>Utxo<span class="w"> </span>Persister
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w">    </span>validate-utxo-set<span class="w">    </span>Validate<span class="w"> </span>UTXO<span class="w"> </span><span class="nb">set</span><span class="w"> </span>file
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="w">    </span>Use<span class="w"> </span><span class="s1">&#39;teranode-cli &lt;command&gt; --help&#39;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span>more<span class="w"> </span>information<span class="w"> </span>about<span class="w"> </span>a<span class="w"> </span><span class="nb">command</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span>checkblockassembly<span class="w">   </span>Check<span class="w"> </span>block<span class="w"> </span>assembly<span class="w"> </span>state<span class="w"> </span>by<span class="w"> </span>validating<span class="w"> </span>unmined<span class="w"> </span>transaction<span class="w"> </span>inputs<span class="w"> </span><span class="o">(</span>read-only<span class="o">)</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span>checkblocktemplate<span class="w">   </span>Check<span class="w"> </span>block<span class="w"> </span>template
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span>diagnose<span class="w">             </span>Diagnose<span class="w"> </span>node<span class="w"> </span>health<span class="w"> </span>and<span class="w"> </span>validate<span class="w"> </span>configuration
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span>export-blocks<span class="w">        </span>Export<span class="w"> </span>blockchain<span class="w"> </span>to<span class="w"> </span>CSV
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span>filereader<span class="w">           </span>File<span class="w"> </span>Reader
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span>fix-chainwork<span class="w">        </span>Fix<span class="w"> </span>incorrect<span class="w"> </span>chainwork<span class="w"> </span>values<span class="w"> </span><span class="k">in</span><span class="w"> </span>blockchain<span class="w"> </span>database
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span>getfsmstate<span class="w">          </span>Get<span class="w"> </span>the<span class="w"> </span>current<span class="w"> </span>FSM<span class="w"> </span>State
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span>import-blocks<span class="w">        </span>Import<span class="w"> </span>blockchain<span class="w"> </span>from<span class="w"> </span>CSV
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">    </span>loadunminedbench<span class="w">     </span>Benchmark<span class="w"> </span>loadUnminedTransactions<span class="w"> </span>with<span class="w"> </span>CPU<span class="w"> </span>and<span class="w"> </span>memory<span class="w"> </span>profiling
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span>logs<span class="w">                 </span>Interactive<span class="w"> </span>log<span class="w"> </span>viewer<span class="w"> </span>with<span class="w"> </span>filtering<span class="w"> </span>and<span class="w"> </span>search
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span>monitor<span class="w">              </span>Live<span class="w"> </span>TUI<span class="w"> </span>dashboard<span class="w"> </span><span class="k">for</span><span class="w"> </span>monitoring<span class="w"> </span>node<span class="w"> </span>status
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span>reconsiderblock<span class="w">      </span>Reconsider<span class="w"> </span>a<span class="w"> </span>block<span class="w"> </span>that<span class="w"> </span>was<span class="w"> </span>previously<span class="w"> </span>marked<span class="w"> </span>as<span class="w"> </span>invalid
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">    </span>remainderbench<span class="w">       </span>Benchmark<span class="w"> </span>processRemainderTransactionsAndDequeue<span class="w"> </span>with<span class="w"> </span>CPU<span class="w"> </span>and<span class="w"> </span>memory<span class="w"> </span>profiling
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">    </span>resetblockassembly<span class="w">   </span>Reset<span class="w"> </span>block<span class="w"> </span>assembly<span class="w"> </span>state
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">    </span>rewindblockchain<span class="w">     </span>Rewind<span class="w"> </span>blockchain<span class="w"> </span>DB,<span class="w"> </span>UTXO<span class="w"> </span>store<span class="w"> </span>and<span class="w"> </span>subtree<span class="w"> </span>blobs<span class="w"> </span>to<span class="w"> </span>Block<span class="w"> </span>Assembly<span class="s1">&#39;s persisted height (DESTRUCTIVE, node must be stopped)</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="s1">    seeder               Seeder</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="s1">    setfsmstate          Set the FSM State</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="s1">    settings             Settings</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="s1">    subtreebench         Benchmark SubtreeProcessor throughput with CPU and memory profiling</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="s1">    txmapbench           Benchmark CreateTransactionMap with CPU and memory profiling</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="s1">    utxopersister        Utxo Persister</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="s1">    validate-utxo-set    Validate UTXO set file</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="s1">    Use &#39;</span>teranode-cli<span class="w"> </span>&lt;command&gt;<span class="w"> </span>--help<span class="err">&#39;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span>more<span class="w"> </span>information<span class="w"> </span>about<span class="w"> </span>a<span class="w"> </span><span class="nb">command</span>
 </span></code></pre></div>
 <h2 id="available-commands">Available Commands<a class="headerlink" href="#available-commands" title="Permanent link">&para;</a></h2>
 <h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
@@ -7899,6 +7924,41 @@
 <td></td>
 <td><code>--end-height</code> - Ending block height (default: 0 for tip)</td>
 </tr>
+<tr>
+<td><code>rewindblockchain</code></td>
+<td>Rewind blockchain DB, UTXO store and subtree</td>
+<td><code>--target-height</code> - Height to rewind to (default: Block Assembly's saved height)</td>
+</tr>
+<tr>
+<td></td>
+<td>blobs to Block Assembly's persisted height</td>
+<td><code>--dry-run</code> - Report the plan without modifying any store</td>
+</tr>
+<tr>
+<td></td>
+<td>(DESTRUCTIVE - node must be stopped)</td>
+<td><code>--assume-yes</code> - Skip the interactive confirmation</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><code>--force-not-idle</code> - Proceed when FSM is not IDLE (DANGEROUS)</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><code>--force-deep</code> - Allow a rewind deeper than 100 blocks</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><code>--verify</code> - Run post-rewind consistency checks</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><code>--concurrency</code> - Subtree-load concurrency (default: 0 = auto)</td>
+</tr>
 </tbody>
 </table>
 <h3 id="interactive-tools">Interactive Tools<a class="headerlink" href="#interactive-tools" title="Permanent link">&para;</a></h3>
@@ -8061,8 +8121,40 @@
 <li><code>--end-height</code>: Ending block height (0 for current tip) (default: 0)</li>
 </ul>
 <p>⚠️ <strong>Warning</strong>: This command modifies blockchain database records. Always run with <code>--dry-run=true</code> first to preview changes before applying them to production databases.</p>
+<h3 id="rewind-blockchain">Rewind Blockchain<a class="headerlink" href="#rewind-blockchain" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>teranode-cli<span class="w"> </span>rewindblockchain<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+</span></code></pre></div>
+<p>Rewinds the blockchain database, UTXO store, and subtree blob storage back to a
+target block height. This is a repair tool for a node whose UTXO state has
+diverged from its blockchain DB — the symptom is block validation rejecting a
+block that the rest of the network accepted.</p>
+<p>The node process must be stopped first, and the FSM state stored in the
+blockchain DB must read <code>IDLE</code>.</p>
+<p>Options:</p>
+<ul>
+<li><code>--target-height</code>: Height to rewind to (default: <code>-1</code>, meaning read Block Assembly's persisted height from <code>state["BlockAssembler"]</code>)</li>
+<li><code>--dry-run</code>: Report the current tip, target, and block count without modifying any store</li>
+<li><code>--assume-yes</code>: Skip the interactive confirmation prompt (required when there is no TTY)</li>
+<li><code>--force-not-idle</code>: Proceed even when the FSM state is not <code>IDLE</code> (DANGEROUS — only to recover from a crashed partial run)</li>
+<li><code>--force-deep</code>: Allow a rewind deeper than 100 blocks, past coinbase maturity (DANGEROUS)</li>
+<li><code>--verify</code>: Run post-rewind consistency checks</li>
+<li><code>--concurrency</code>: Subtree-load concurrency (default: <code>0</code>, meaning use <code>blockassembly_moveBackBlockConcurrency</code>, which defaults to 375)</li>
+</ul>
+<p>⚠️ <strong>Warning</strong>: This command is destructive and cannot be undone. It deletes
+blocks, transactions, and subtree blobs. It also assumes preconditions it does
+not fully enforce — the node stopped, the FSM state in the blockchain DB reading
+<code>IDLE</code>, and the subtree blobs for the deleted range still unpruned. <code>--dry-run</code>
+reports the tip, target, and block count without mutating anything, but it
+returns before the subtree store is touched, so it cannot confirm that last one.</p>
+<p>Note that <code>IDLE</code> is only reachable from <code>RUNNING</code>: the FSM has no
+<code>CATCHINGBLOCKS</code> → <code>IDLE</code> transition, so on a node stuck catching blocks
+<code>setfsmstate --fsmstate=idle</code> fails and the state has to be moved via <code>running</code>
+first.</p>
+<p>A step-by-step operator runbook is not published yet. Until it is, do not run
+this against a production node without working through those preconditions
+yourself.</p>
 <h3 id="logs-interactive-log-viewer">Logs (Interactive Log Viewer)<a class="headerlink" href="#logs-interactive-log-viewer" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>teranode-cli<span class="w"> </span>logs<span class="w"> </span><span class="o">[</span>--file<span class="o">=</span>&lt;path&gt;<span class="o">]</span><span class="w"> </span><span class="o">[</span>--buffer<span class="o">=</span>&lt;size&gt;<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>teranode-cli<span class="w"> </span>logs<span class="w"> </span><span class="o">[</span>--file<span class="o">=</span>&lt;path&gt;<span class="o">]</span><span class="w"> </span><span class="o">[</span>--buffer<span class="o">=</span>&lt;size&gt;<span class="o">]</span>
 </span></code></pre></div>
 <p>An interactive TUI (Terminal User Interface) for viewing and filtering Teranode logs in real-time. The viewer supports service filtering, log level filtering, text search, and transaction ID tracking across services.</p>
 <p>Options:</p>
@@ -8175,14 +8267,14 @@
 <li><strong>Rate monitoring</strong>: Sparkline graph showing log volume over the last 30 seconds</li>
 </ul>
 <p><strong>Example:</strong></p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># View logs from default location</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>teranode-cli<span class="w"> </span>logs
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1"># View logs from a specific file with larger buffer</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>teranode-cli<span class="w"> </span>logs<span class="w"> </span>--file<span class="o">=</span>/var/log/teranode/teranode.log<span class="w"> </span>--buffer<span class="o">=</span><span class="m">50000</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># View logs from default location</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>teranode-cli<span class="w"> </span>logs
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1"># View logs from a specific file with larger buffer</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>teranode-cli<span class="w"> </span>logs<span class="w"> </span>--file<span class="o">=</span>/var/log/teranode/teranode.log<span class="w"> </span>--buffer<span class="o">=</span><span class="m">50000</span>
 </span></code></pre></div>
 <h3 id="monitor-node-dashboard">Monitor (Node Dashboard)<a class="headerlink" href="#monitor-node-dashboard" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>teranode-cli<span class="w"> </span>monitor
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>teranode-cli<span class="w"> </span>monitor
 </span></code></pre></div>
 <p>A live TUI dashboard for monitoring Teranode node status. Displays real-time information about blockchain state, FSM status, connected peers, service health, and Aerospike cluster statistics.</p>
 <p>The monitor uses configuration from your settings files (<code>settings.conf</code>, <code>settings_local.conf</code>) to connect to services.</p>
@@ -8264,13 +8356,13 @@
 <li>Gray (<code>○</code>): Not configured</li>
 </ul>
 <p><strong>Example:</strong></p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Launch the monitor dashboard</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>teranode-cli<span class="w"> </span>monitor
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Launch the monitor dashboard</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>teranode-cli<span class="w"> </span>monitor
 </span></code></pre></div>
 <h2 id="benchmarking-tools">Benchmarking Tools<a class="headerlink" href="#benchmarking-tools" title="Permanent link">&para;</a></h2>
 <p>Four profiling commands for measuring block assembly performance. Each writes CPU and memory profiles to disk for analysis with <code>go tool pprof</code>.</p>
 <h3 id="subtree-benchmark">Subtree Benchmark<a class="headerlink" href="#subtree-benchmark" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>teranode-cli<span class="w"> </span>subtreebench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>teranode-cli<span class="w"> </span>subtreebench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
 </span></code></pre></div>
 <p>Benchmarks SubtreeProcessor throughput.</p>
 <p>Options:</p>
@@ -8283,7 +8375,7 @@
 <li><code>--mem-profile</code>: Memory profile output file (default: <code>mem.prof</code>)</li>
 </ul>
 <h3 id="load-unmined-benchmark">Load Unmined Benchmark<a class="headerlink" href="#load-unmined-benchmark" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>teranode-cli<span class="w"> </span>loadunminedbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>teranode-cli<span class="w"> </span>loadunminedbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
 </span></code></pre></div>
 <p>Benchmarks loadUnminedTransactions performance.</p>
 <p>Options:</p>
@@ -8295,7 +8387,7 @@
 <li><code>--mem-profile</code>: Memory profile output file (default: <code>loadunmined_mem.prof</code>)</li>
 </ul>
 <h3 id="transaction-map-benchmark">Transaction Map Benchmark<a class="headerlink" href="#transaction-map-benchmark" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>teranode-cli<span class="w"> </span>txmapbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>teranode-cli<span class="w"> </span>txmapbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
 </span></code></pre></div>
 <p>Benchmarks CreateTransactionMap performance.</p>
 <p>Options:</p>
@@ -8306,7 +8398,7 @@
 <li><code>--mem-profile</code>: Memory profile output file (default: <code>createtransactionmap_mem.prof</code>)</li>
 </ul>
 <h3 id="remainder-benchmark">Remainder Benchmark<a class="headerlink" href="#remainder-benchmark" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>teranode-cli<span class="w"> </span>remainderbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>teranode-cli<span class="w"> </span>remainderbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
 </span></code></pre></div>
 <p>Benchmarks processRemainderTransactionsAndDequeue performance.</p>
 <p>Options:</p>
