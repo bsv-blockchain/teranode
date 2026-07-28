@@ -16,12 +16,15 @@ import (
 //
 // Returns a Check function that can be used with CheckAll
 func CheckHTTPServer(address string, healthPath string) func(context.Context, bool) (int, string, error) {
-	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
-		// Create an HTTP client with a timeout
-		client := &http.Client{
-			Timeout: 2 * time.Second,
-		}
+	return CheckHTTPServerWithClient(&http.Client{Timeout: 2 * time.Second}, address, healthPath)
+}
 
+// CheckHTTPServerWithClient behaves like CheckHTTPServer but uses the supplied client.
+// Callers that probe peer-supplied addresses must use this variant with a client whose
+// Transport.DialContext enforces an SSRF policy (see util.NewSSRFSafeDialContext), since
+// the default client happily connects to whatever a hostname resolves to.
+func CheckHTTPServerWithClient(client *http.Client, address string, healthPath string) func(context.Context, bool) (int, string, error) {
+	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
 		// Construct the full URL
 		url := fmt.Sprintf("%s%s", address, healthPath)
 		if len(address) > 0 && len(healthPath) > 0 && address[len(address)-1] == '/' && healthPath[0] == '/' {

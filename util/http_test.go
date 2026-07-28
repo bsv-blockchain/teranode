@@ -1035,6 +1035,56 @@ func TestSSRFDialContext_RejectsMixedPublicBlocked(t *testing.T) {
 	assert.Contains(t, err.Error(), "blocked IP")
 }
 
+// TestNewSSRFSafeDialContext_CustomPolicy proves a caller-supplied policy is enforced at
+// resolution time: the p2p peer health check needs private ranges blocked too (its
+// DataHubURL validation rejects them), which this package's own policy deliberately allows.
+func TestNewSSRFSafeDialContext_CustomPolicy(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	// A public-looking, peer-supplied name that resolves to an internal RFC1918 host.
+	ssrfLookupHost = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"10.0.0.5"}, nil
+	}
+
+	strict := NewSSRFSafeDialContext(func(ip net.IP) string {
+		if ip.IsPrivate() {
+			return "private address"
+		}
+		return defaultDialPolicy(ip)
+	})
+
+	_, err := strict(context.Background(), "tcp", "metadata.attacker.example:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "private address")
+
+	// The package default policy allows private ranges, so it would have dialed instead
+	// (the connection itself fails, but not with an SSRF rejection).
+	_, err = ssrfDialContext(context.Background(), "tcp", "metadata.attacker.example:1")
+	if err != nil {
+		assert.NotContains(t, err.Error(), "SSRF dial check")
+	}
+}
+
+// TestNewSSRFSafeDialContext_RespectsGlobalToggle keeps SetSSRFProtection(false) - used by
+// test daemons talking to localhost nodes - effective for caller-supplied policies too.
+func TestNewSSRFSafeDialContext_RespectsGlobalToggle(t *testing.T) {
+	SetSSRFProtection(false)
+	defer SetSSRFProtection(false)
+
+	dial := NewSSRFSafeDialContext(func(net.IP) string { return "always blocked" })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := dial(ctx, "tcp", "127.0.0.1:1")
+	if err != nil {
+		assert.NotContains(t, err.Error(), "always blocked")
+	}
+}
+
 func TestHTTPClient_RejectsRedirectToLinkLocal(t *testing.T) {
 	SetSSRFProtection(true)
 	defer SetSSRFProtection(false)

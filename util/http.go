@@ -16,15 +16,11 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// ssrfSafeDialer wraps the default dialer and rejects connections to link-local/loopback
-// IPs after DNS resolution. This closes the DNS-rebinding gap that the static IP-literal
-// check in ValidateURL cannot cover: a peer could pass http://internal.cluster.local/ whose
-// hostname resolves to 169.254.169.254 (the cloud metadata endpoint) only at dial time.
-//
-// Only link-local and loopback are blocked — see isBlockedDialIP for the rationale. RFC1918
-// ranges are deliberately allowed because teranode peers, k8s pods, and private miner
-// interconnects all communicate over private networks in real deployments; this matches the
-// static ValidateURL/isBlockedIP policy.
+// ssrfSafeDialer holds the connection settings used by the dialers built by
+// NewSSRFSafeDialContext, which reject connections to unsafe IPs after DNS resolution.
+// That closes the DNS-rebinding gap the static IP-literal check in ValidateURL cannot
+// cover: a peer could pass http://internal.cluster.local/ whose hostname resolves to
+// 169.254.169.254 (the cloud metadata endpoint) only at dial time.
 var ssrfSafeDialer = &net.Dialer{
 	Timeout:   30 * time.Second,
 	KeepAlive: 30 * time.Second,
@@ -35,10 +31,17 @@ var ssrfSafeDialer = &net.Dialer{
 // address for a name that "looks" public).
 var ssrfLookupHost = net.DefaultResolver.LookupHost
 
-// ssrfDialContext wraps ssrfSafeDialer.DialContext and rejects resolved addresses that
-// fall into link-local or loopback ranges (see isBlockedDialIP). It is installed as the
-// Transport.DialContext for httpClient so that every outgoing connection is checked,
-// including those that follow HTTP redirects.
+// SSRFDialPolicy reports why an IP resolved from a peer-supplied hostname is unsafe to
+// connect to, or "" when it is safe. The policy is a parameter rather than fixed so that
+// callers with stricter requirements can reuse the resolve-then-dial machinery below
+// without inheriting this package's policy: the p2p peer health check, for example, must
+// also reject RFC1918 addresses to match its DataHubURL validation.
+type SSRFDialPolicy func(net.IP) string
+
+// NewSSRFSafeDialContext returns a DialContext that resolves the target hostname, rejects
+// the dial if policy flags any resolved address, and otherwise connects to a validated IP.
+// Install it as http.Transport.DialContext so every outgoing connection is checked,
+// including connections made while following HTTP redirects.
 //
 // Critically, after validating the resolved addresses we dial those exact IPs rather than
 // the hostname. Dialing by hostname would let net.Dialer perform a SECOND, independent DNS
@@ -47,53 +50,77 @@ var ssrfLookupHost = net.DefaultResolver.LookupHost
 // 169.254.169.254 / 127.0.0.1 for the dialer's lookup. Connecting to the already-validated
 // IP closes that window. (The Transport still derives the TLS ServerName and Host header
 // from the original URL, so dialing by IP does not break virtual hosting or HTTPS.)
-func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	if !ssrfProtectionEnabled.Load() {
-		return ssrfSafeDialer.DialContext(ctx, network, addr)
-	}
-
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, errors.NewInvalidArgumentError("SSRF dial check: cannot split host/port from %q: %v", addr, err)
-	}
-
-	ips, err := ssrfLookupHost(ctx, host)
-	if err != nil {
-		return nil, errors.NewServiceError("SSRF dial check: failed to resolve %q", host, err)
-	}
-
-	// Validate every resolved address first; reject outright if any is blocked so a
-	// mixed public/private answer cannot smuggle an internal target through failover.
-	validated := make([]net.IP, 0, len(ips))
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
+//
+// The returned dialer is a no-op passthrough when SSRF protection is disabled via
+// SetSSRFProtection(false), which test daemons use to talk to localhost nodes.
+func NewSSRFSafeDialContext(policy SSRFDialPolicy) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if !ssrfProtectionEnabled.Load() {
+			return ssrfSafeDialer.DialContext(ctx, network, addr)
 		}
-		if isBlockedDialIP(ip) {
-			return nil, errors.NewInvalidArgumentError("SSRF dial check: resolved address %s for host %q is a blocked IP", ipStr, host)
+
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, errors.NewInvalidArgumentError("SSRF dial check: cannot split host/port from %q: %v", addr, err)
 		}
-		validated = append(validated, ip)
-	}
 
-	if len(validated) == 0 {
-		return nil, errors.NewServiceError("SSRF dial check: no usable addresses resolved for host %q", host)
-	}
-
-	// Dial the validated IPs directly (no re-resolution), trying each to preserve
-	// multi-A-record failover.
-	var lastErr error
-	for _, ip := range validated {
-		conn, dialErr := ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if dialErr != nil {
-			lastErr = dialErr
-			continue
+		ips, err := ssrfLookupHost(ctx, host)
+		if err != nil {
+			return nil, errors.NewServiceError("SSRF dial check: failed to resolve %q", host, err)
 		}
-		return conn, nil
-	}
 
-	return nil, lastErr
+		// Validate every resolved address first; reject outright if any is blocked so a
+		// mixed public/private answer cannot smuggle an internal target through failover.
+		validated := make([]net.IP, 0, len(ips))
+
+		for _, ipStr := range ips {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				continue
+			}
+
+			if reason := policy(ip); reason != "" {
+				return nil, errors.NewInvalidArgumentError("SSRF dial check: resolved address %s for host %q is a %s", ipStr, host, reason)
+			}
+
+			validated = append(validated, ip)
+		}
+
+		if len(validated) == 0 {
+			return nil, errors.NewServiceError("SSRF dial check: no usable addresses resolved for host %q", host)
+		}
+
+		// Dial the validated IPs directly (no re-resolution), trying each to preserve
+		// multi-A-record failover.
+		var lastErr error
+
+		for _, ip := range validated {
+			conn, dialErr := ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if dialErr != nil {
+				lastErr = dialErr
+				continue
+			}
+
+			return conn, nil
+		}
+
+		return nil, lastErr
+	}
 }
+
+// defaultDialPolicy is this package's dial policy: link-local, loopback and unspecified
+// addresses are rejected, private ranges are allowed (see isBlockedDialIP).
+func defaultDialPolicy(ip net.IP) string {
+	if isBlockedDialIP(ip) {
+		return "blocked IP"
+	}
+
+	return ""
+}
+
+// ssrfDialContext is the DialContext installed on httpClient, enforcing defaultDialPolicy
+// on every connection made for peer-supplied URLs.
+var ssrfDialContext = NewSSRFSafeDialContext(defaultDialPolicy)
 
 // isBlockedDialIP returns true for IPs that are unsafe to connect to when the hostname
 // came from a peer-controlled URL, evaluated after DNS resolution to close the
