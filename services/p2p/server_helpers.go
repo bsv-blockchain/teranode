@@ -203,13 +203,20 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 	s.logger.Debugf("[handleSubtreeTopic] received subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
 
+	// Parse the hash before any use, mirroring handleBlockTopic: a malformed
+	// hash must not reach WebSocket subscribers or count as peer activity.
+	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
+	if err != nil {
+		return
+	}
+
 	now := time.Now().UTC()
 
 	select {
 	case s.notificationCh <- &notificationMsg{
 		Timestamp:  now.Format(isoFormat),
 		Type:       "subtree",
-		Hash:       subtreeMessage.Hash,
+		Hash:       hash.String(),
 		BaseURL:    subtreeMessage.DataHubURL,
 		PeerID:     subtreeMessage.PeerID,
 		ClientName: subtreeMessage.ClientName,
@@ -232,12 +239,6 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 	// Skip notifications from unhealthy peers
 	if s.shouldSkipUnhealthyPeer(fromID, "handleSubtreeTopic") {
-		return
-	}
-
-	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
-	if err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] error parsing hash: %v", err)
 		return
 	}
 

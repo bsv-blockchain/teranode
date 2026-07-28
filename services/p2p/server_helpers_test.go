@@ -468,6 +468,91 @@ func TestHandleSubtreeTopic_PeerMapKeyedByCanonicalHash(t *testing.T) {
 	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, canonical, "subtree")
 	require.NoError(t, err, "subtreePeerMap must be keyed by the canonical hash string")
 	require.Equal(t, remote.String(), peerID)
+
+	_, err = s.getPeerFromMap(&s.subtreePeerMap, strings.ToUpper(canonical), "subtree")
+	require.Error(t, err, "raw non-canonical announce string must not be a map key")
+
+	select {
+	case notification := <-s.notificationCh:
+		require.Equal(t, canonical, notification.Hash,
+			"subtree notification must carry the canonical hash")
+	default:
+		t.Fatal("expected subtree notification")
+	}
+}
+
+// A malformed subtree hash must be rejected before any use: no WebSocket
+// notification, no peerMapEntry, and no peer-activity credit.
+func TestHandleSubtreeTopic_RejectsMalformedHash(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       "not-a-subtree-hash",
+	})
+	require.NoError(t, err)
+
+	s.handleSubtreeTopic(context.Background(), msgBytes, remote.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		t.Fatalf("unexpected subtree notification for malformed hash: %+v", notification)
+	default:
+	}
+
+	entries := 0
+	s.subtreePeerMap.Range(func(_, _ any) bool { entries++; return true })
+	require.Zero(t, entries, "malformed hash must not create a subtreePeerMap entry")
+
+	_, ok := reg.Get(remote.String())
+	require.False(t, ok, "malformed hash must not count as peer activity")
+}
+
+// End-to-end guard for the canonical-key fix: a peer that announces an
+// invalid block using a non-canonical hex form (uppercase) must still be
+// banned when block validation reports the block by its canonical hash.
+func TestHandleBlockTopic_NonCanonicalAnnouncerStillBanned(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	canonical := chainhash.HashH([]byte("invalid block announced uppercase")).String()
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       strings.ToUpper(canonical),
+		Height:     101,
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+
+	// Block validation reports the invalid block by its canonical hash.
+	invalidMsg := mustMarshalInvalidBlockMsg(t, canonical, "invalid block")
+	require.NoError(t, s.processInvalidBlockMessage(&kafka.KafkaMessage{Value: invalidMsg}))
+
+	info, ok := reg.Get(remote.String())
+	require.True(t, ok)
+	require.Positive(t, info.BanScore, "announcer of the invalid block must be banned")
+
+	_, stillThere := s.blockPeerMap.Load(canonical)
+	require.False(t, stillThere, "entry must be removed after the ban")
 }
 
 func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
