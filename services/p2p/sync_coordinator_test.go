@@ -185,6 +185,34 @@ func TestSyncCoordinator_IsCaughtUp_OnlyLowRepPeerIsCaughtUp(t *testing.T) {
 	require.True(t, sc.isCaughtUp())
 }
 
+// TestSyncCoordinator_IsCaughtUp_BlacklistedPeerIsCaughtUp: the caught-up
+// determination must agree with selection about the operator blacklist. A
+// blacklisted-but-ahead peer can never be selected by SelectSyncPeer, so if it
+// still counted as a viable sync candidate here the node would report
+// not-caught-up forever while every selection attempt fails.
+func TestSyncCoordinator_IsCaughtUp_BlacklistedPeerIsCaughtUp(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "ahead",
+		DataHubURL: "http://evil.example",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+	// Boost reputation past 20 so the peer is viable apart from the blacklist.
+	for i := 0; i < 5; i++ {
+		reg.UpdateMetrics("ahead", 0, 0, 0, true, false, false, 100)
+	}
+
+	// Control: the ahead peer keeps us not caught up while its host is allowed.
+	require.False(t, sc.isCaughtUp(), "precondition: ahead non-blacklisted peer means not caught up")
+
+	// Operator blacklists the host after the URL was stored in the registry.
+	sc.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	require.True(t, sc.isCaughtUp(), "blacklisted peer must not keep the node in a not-caught-up state")
+}
+
 func TestSyncCoordinator_HandlePeerDisconnected_RemovesPeer(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	pid := mustNewPeerID(t)
