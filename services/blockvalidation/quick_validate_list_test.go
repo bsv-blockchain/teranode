@@ -764,7 +764,7 @@ func (s *callBoundStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, 
 
 func (s *callBoundStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
-	return utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, s, tx, blockHeight, opts...)
+	return utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, s, tx, blockHeight, false, opts...)
 }
 
 // Spend and the pass-through half of Create reach the real store's own methods, which utxo.Store
@@ -871,7 +871,7 @@ func (s *flakyTxStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeigh
 		return nil, nil, errors.NewStorageError("forced transient fault on %s", tx.TxIDChainHash())
 	}
 
-	return utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, s, tx, blockHeight, opts...)
+	return utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, s, tx, blockHeight, false, opts...)
 }
 
 func (s *flakyTxStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32,

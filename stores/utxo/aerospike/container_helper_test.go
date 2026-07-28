@@ -335,7 +335,7 @@ func prepareBatchStoreItem(t *testing.T, s *teranode_aerospike.Store, tx *bt.Tx,
 	txHash := tx.TxIDChainHash()
 	isCoinbase := tx.IsCoinbase()
 
-	binsToStore, err := s.GetBinsToStore(tx, blockHeight, blockIDs, blockHeights, subtreeIdxs, true, txHash, isCoinbase, false, false, lane.None, nil)
+	binsToStore, err := s.GetBinsToStore(tx, blockHeight, blockIDs, blockHeights, subtreeIdxs, true, txHash, isCoinbase, false, false, false, lane.None, nil)
 	require.NoError(t, err)
 	require.NotNil(t, binsToStore)
 
