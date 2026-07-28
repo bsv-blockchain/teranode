@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -572,7 +573,7 @@ type failFirstRegisterClient struct {
 func (c *failFirstRegisterClient) RegisterPeer(ctx context.Context, info *blockchain.PeerInfo) error {
 	c.attempts++
 	if c.attempts == 1 {
-		return fmt.Errorf("transient registry error")
+		return errors.NewServiceError("transient registry error")
 	}
 	return c.PeerRegistryClientI.RegisterPeer(ctx, info)
 }
@@ -699,7 +700,7 @@ type erroringBanClient struct {
 }
 
 func (c *erroringBanClient) IsPeerBanned(_ context.Context, _ string) (bool, error) {
-	return false, fmt.Errorf("registry unavailable")
+	return false, errors.NewServiceError("registry unavailable")
 }
 
 // TestShouldSkipBannedPeer_ErrorBreaker verifies ChiR2: when IsPeerBanned
