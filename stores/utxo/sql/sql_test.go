@@ -3819,3 +3819,23 @@ func TestPreviousOutputsDecorate_MissingParentIsTxNotFound(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrTxNotFound)
 }
+
+func TestSQLStore_CreateFirstNoOps(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///createfirst_noops")
+	require.NoError(t, err)
+
+	store, err := New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	// SQL is spend-first: no create-first support, finalize is a no-op, no stale creating txs.
+	require.False(t, store.SupportsCreateFirst())
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}))
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
+}

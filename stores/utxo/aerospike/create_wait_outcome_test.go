@@ -60,7 +60,7 @@ func TestCreate_BatcherWaitTimeoutKeepsTheSpends(t *testing.T) {
 	t.Run("SequentialSpendAndCreate keeps the spends", func(t *testing.T) {
 		c := &createWaitStore{Store: s, spends: []*utxo.Spend{{}}}
 
-		md, spends, err := utxo.SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, c, tx, 100)
+		md, spends, err := utxo.SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, c, tx, 100, false)
 		require.Error(t, err)
 		require.Nil(t, md)
 		require.Equal(t, 0, c.unspendCalls, "the spends must not be rolled back while the create may still commit")

@@ -523,7 +523,7 @@ func (c *createUntilDone) Create(ctx context.Context, _ *bt.Tx, _ uint32, _ ...u
 }
 
 func (c *createUntilDone) SpendAndCreate(ctx context.Context, tx *bt.Tx, h uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
-	return utxostore.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, c, tx, h, opts...)
+	return utxostore.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, c, tx, h, false, opts...)
 }
 
 // cancelInsideCall cancels the caller's context from inside the call for hold,

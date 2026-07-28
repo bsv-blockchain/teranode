@@ -131,3 +131,16 @@ func TestNullStoreConflictingTxHashes(t *testing.T) {
 	require.True(t, indexed)
 	require.Empty(t, hashes)
 }
+
+func TestNullStoreCreateFirstNoOps(t *testing.T) {
+	store := &NullStore{}
+	ctx := context.Background()
+	tx := &bt.Tx{}
+
+	assert.False(t, store.SupportsCreateFirst())
+	assert.NoError(t, store.FinalizeTransaction(ctx, tx))
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	assert.NoError(t, err)
+	assert.Nil(t, hashes)
+}
