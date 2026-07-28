@@ -31,12 +31,13 @@ if [ -n "$GITHUB_REF" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
   GIT_TAG="${GITHUB_REF#refs/tags/}"
 else
   # Prefer a stable release tag (vMAJOR.MINOR.PATCH) if one is present.
-  while IFS= read -r candidate; do
-    if [[ "$candidate" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      GIT_TAG="$candidate"
-      break
-    fi
-  done < <(git tag --points-at HEAD 2>/dev/null | sort -V -r)
+  # `grep -E` is POSIX and works on both GNU and BSD (macOS) — unlike
+  # `sort -V`, which is a GNU coreutils extension and errors out silently
+  # on the default macOS `sort`. Multiple stable tags on one commit is
+  # never expected, so head -n 1 is deterministic enough here.
+  GIT_TAG=$(git tag --points-at HEAD 2>/dev/null \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+    | head -n 1)
 
   if [ -z "$GIT_TAG" ]; then
     GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
