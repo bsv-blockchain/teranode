@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -398,6 +399,75 @@ func TestHandleBlockTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 		t.Fatalf("unexpected Kafka publish for malformed hash: %+v", published)
 	default:
 	}
+
+	entries := 0
+	s.blockPeerMap.Range(func(_, _ any) bool { entries++; return true })
+	require.Zero(t, entries, "malformed hash must not create a blockPeerMap entry")
+}
+
+// chainhash.NewHashFromStr accepts non-canonical hex forms (uppercase,
+// truncated), while the ban lookups in ReportInvalidBlock and
+// processInvalidBlockMessage use the canonical hash.String() from block
+// validation. The blockPeerMap must therefore be keyed by the canonical form,
+// or a peer could evade the invalid-block ban by announcing the block with a
+// non-canonical hash string.
+func TestHandleBlockTopic_PeerMapKeyedByCanonicalHash(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	canonical := chainhash.HashH([]byte("canonical block key")).String()
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       strings.ToUpper(canonical),
+		Height:     101,
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+
+	peerID, err := s.getPeerFromMap(&s.blockPeerMap, canonical, "block")
+	require.NoError(t, err, "blockPeerMap must be keyed by the canonical hash string")
+	require.Equal(t, remote.String(), peerID)
+
+	_, err = s.getPeerFromMap(&s.blockPeerMap, strings.ToUpper(canonical), "block")
+	require.Error(t, err, "raw non-canonical announce string must not be a map key")
+}
+
+// Same canonical-key requirement as the block map: ReportInvalidSubtree looks
+// up subtreePeerMap with the canonical hash.String() from subtree validation.
+func TestHandleSubtreeTopic_PeerMapKeyedByCanonicalHash(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	canonical := chainhash.HashH([]byte("canonical subtree key")).String()
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       strings.ToUpper(canonical),
+	})
+	require.NoError(t, err)
+
+	s.handleSubtreeTopic(context.Background(), msgBytes, remote.String())
+
+	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, canonical, "subtree")
+	require.NoError(t, err, "subtreePeerMap must be keyed by the canonical hash string")
+	require.Equal(t, remote.String(), peerID)
 }
 
 func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {

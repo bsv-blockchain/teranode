@@ -108,8 +108,12 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 
 	now := time.Now().UTC()
 
-	// Store the peer ID that sent this block
-	s.storePeerMapEntry(&s.blockPeerMap, blockMessage.Hash, fromID, now)
+	// Store the peer ID that sent this block, keyed by the canonical hash
+	// string. Ban lookups (ReportInvalidBlock, processInvalidBlockMessage) use
+	// hash.String() from block validation, so keying by the raw message string
+	// would let a peer evade the invalid-block ban by announcing a
+	// non-canonical hex form (uppercase, truncated).
+	s.storePeerMapEntry(&s.blockPeerMap, hash.String(), fromID, now)
 
 	s.logger.Debugf("[handleBlockTopic] storing peer %s for block %s", fromID, blockMessage.Hash)
 
@@ -237,8 +241,11 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	// Store the peer ID that sent this subtree
-	s.storePeerMapEntry(&s.subtreePeerMap, subtreeMessage.Hash, fromID, now)
+	// Store the peer ID that sent this subtree, keyed by the canonical hash
+	// string so the ReportInvalidSubtree lookup (which uses hash.String() from
+	// subtree validation) matches even when the announcer sent a non-canonical
+	// hex form.
+	s.storePeerMapEntry(&s.subtreePeerMap, hash.String(), fromID, now)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", fromID, subtreeMessage.Hash)
 
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
