@@ -218,6 +218,7 @@ type Store struct {
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
 	lockedBatcher       batcherIfc[batchLocked]
+	finalizeBatcher     batcherIfc[batchFinalize]
 	externalStore       blob.Store
 	utxoBatchSize       int
 
@@ -597,6 +598,14 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 	s.lockedBatcher = lockedBatcherInst
 
+	// finalizeBatcher clears the create-first "creating" flag; it reuses the locked
+	// batcher's size/duration since both are small per-tx flag flips.
+	finalizeBatcherInst := batcher.NewWithPool(lockedBatcherSize, lockedBatchDuration, s.sendFinalizeBatch, batcherBackground, batcherOpts("aerospike_finalize")...)
+	if batcherMaxConcurrent > 0 {
+		finalizeBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	}
+	s.finalizeBatcher = finalizeBatcherInst
+
 	// Per-batcher drain mode: each batcher can be independently configured.
 	// Drain mode is beneficial for stages that receive bursts (Get, Create)
 	// but harmful for stages where items trickle in one-at-a-time (Spend,
@@ -622,6 +631,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 	if tSettings.UtxoStore.LockedBatcherDrainMode {
 		s.lockedBatcher.SetDrainMode(true)
+		s.finalizeBatcher.SetDrainMode(true)
 	}
 	if tSettings.UtxoStore.OutpointBatcherDrainMode {
 		s.outpointBatcher.SetDrainMode(true)
@@ -651,6 +661,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 	if ms := tSettings.UtxoStore.LockedBatcherTickerIntervalMillis; ms > 0 {
 		s.lockedBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+		s.finalizeBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
 	}
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
@@ -822,6 +833,9 @@ func (s *Store) Close(ctx context.Context) error {
 		if s.lockedBatcher != nil {
 			s.lockedBatcher.Close()
 		}
+		if s.finalizeBatcher != nil {
+			s.finalizeBatcher.Close()
+		}
 
 		// Drains complete; close the external blob store (created in
 		// Store.New) so its handles/connections are not leaked.
@@ -857,6 +871,11 @@ func (s *Store) Close(ctx context.Context) error {
 // SkipUTXOHashCheck and would hard-error on un-decorated inputs). Deferred to Stage B;
 // until then callers keep the fast path OFF on Aerospike.
 func (s *Store) SupportsOutpointOnlySpend() bool { return false }
+
+// SupportsCreateFirst reports create-first support: the creating bin gates both
+// spend paths (expression filter and Lua), FinalizeTransaction clears it (finalize.go),
+// and QueryStaleCreatingTxs finds abandoned tentative records (creating_query.go).
+func (s *Store) SupportsCreateFirst() bool { return true }
 
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/* As written by one of the Aerospike developers, Go contexts are not supported:

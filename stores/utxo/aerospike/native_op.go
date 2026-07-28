@@ -587,7 +587,7 @@ func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike
 		return false
 	}
 
-	bins, binsErr := s.GetBinsToStore(tx, probeBlockHeight, nil, nil, nil, false, txHash, false, false, false, nil)
+	bins, binsErr := s.GetBinsToStore(tx, probeBlockHeight, nil, nil, nil, false, txHash, false, false, false, false, nil)
 	if binsErr != nil || len(bins) != 1 {
 		s.logger.Warnf("[teranode-native-op] spend probe record build failed (%v, %d batches); falling back to UDF path", binsErr, len(bins))
 		return false

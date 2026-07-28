@@ -905,11 +905,21 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			// NOT memoized — result.spenderChecked stays false — so it is retried
 			// on the next ErrTxNotFound item in this batch. rollbackPartialSpends
 			// does not read this memo at all; it always probes fresh.
+			//
+			// Create-first inverts the old invariant: the child now exists (Creating=true)
+			// BEFORE its inputs are spent, so bare existence no longer implies the input was
+			// spent. The `!md.Creating` guard is inert when the feature is off (no record is
+			// ever creating). The stricter "must be mined" requirement (BlockIDs>0) is gated
+			// on the feature flag, so a legacy spend-first node keeps its exact prior
+			// predicate (existence alone).
 			if !result.spenderChecked {
-				if _, getErr := s.Get(ctx, tx.TxIDChainHash(), fields.Fee); getErr == nil {
-					s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
+				if md, getErr := s.Get(ctx, tx.TxIDChainHash(), fields.Creating, fields.BlockIDs); getErr == nil {
+					if !md.Creating && (len(md.BlockIDs) > 0 || !s.settings.UtxoStore.UseCreateFirstOrder) {
+						s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
 
-					result.spenderExists = true
+						result.spenderExists = true
+					}
+
 					result.spenderChecked = true
 				} else if errors.Is(getErr, errors.ErrTxNotFound) {
 					result.spenderChecked = true
