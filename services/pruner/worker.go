@@ -324,6 +324,18 @@ func (s *Server) runPrunePhases(ctx context.Context, blockHeight uint32, blockHa
 		s.logger.Infof("[pruner][%s:%d] phase 1b: skipped (pruner_skipProcessExpiredPreservations=true)", blockHashStr, blockHeight)
 	}
 
+	// Phase 1c: roll forward transactions abandoned in the create-first
+	// "creating" state (crash between spend and finalize). Gated on the feature
+	// so a node that never enables create-first pays no per-block scan (the
+	// query is an unminedSince index range filtered to creating server-side).
+	// Trade-off: creating records left behind after disabling the flag are not
+	// swept until it is re-enabled — acceptable given how rare they should be.
+	if s.utxoStore != nil && s.settings.UtxoStore.UseCreateFirstOrder {
+		startTime := time.Now()
+		s.sweepCreatingTxs(ctx, blockHeight)
+		prunerDuration.WithLabelValues("creating_sweep").Observe(time.Since(startTime).Seconds())
+	}
+
 	// Phase 2: DAH pruning (deletion)
 	// Deletes transactions marked for deletion at or before the current height.
 	// Never runs in a cycle where Phase 1 failed: a stale DeleteAtHeight on a parent of an old

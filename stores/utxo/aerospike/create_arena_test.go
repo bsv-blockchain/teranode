@@ -50,12 +50,12 @@ func assertArenaEqualNoArena(t *testing.T, s *Store, tx *bt.Tx, isCoinbase bool,
 
 	txHash := tx.TxIDChainHash()
 
-	want, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, txHash, isCoinbase, false, false, lane.None, nil)
+	want, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, txHash, isCoinbase, false, false, false, lane.None, nil)
 	require.NoError(t, err, "%s: GetBinsToStore(nil arena) failed", name)
 
 	arena := bt.NewArena(0)
 
-	got, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, txHash, isCoinbase, false, false, lane.None, arena)
+	got, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, txHash, isCoinbase, false, false, false, lane.None, arena)
 	require.NoError(t, err, "%s: GetBinsToStore(arena) failed", name)
 
 	require.Equal(t, len(want), len(got), "%s: number of bin groups differs", name)

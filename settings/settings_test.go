@@ -223,3 +223,14 @@ func TestPostgresCircuitBreaker_EnvOverride(t *testing.T) {
 	require.Equal(t, 45*time.Second, tSettings.Postgres.CircuitBreakerCooldown)
 	require.Equal(t, 20*time.Second, tSettings.Postgres.CircuitBreakerFailureWindow)
 }
+
+// TestCreateFirstSettingsWired guards against the struct-tag-default trap: fields must be
+// populated via get* in NewSettings, not merely carry a `default` tag (docs-only).
+func TestCreateFirstSettingsWired(t *testing.T) {
+	tSettings := NewSettings()
+
+	require.Equal(t, uint32(2), tSettings.Pruner.CreatingTxSweepMinAgeBlocks,
+		"pruner_creatingTxSweepMinAgeBlocks must be wired in NewSettings (default 2), else the sweep is dead code")
+	require.False(t, tSettings.UtxoStore.UseCreateFirstOrder,
+		"utxostore_useCreateFirstOrder must be wired in NewSettings (default false)")
+}

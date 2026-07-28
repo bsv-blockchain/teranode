@@ -80,6 +80,13 @@ func (m *MockStore) Close(ctx context.Context) error {
 }
 
 func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
+func (m *MockStore) SupportsCreateFirst() bool       { return false }
+func (m *MockStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
+	return nil
+}
+func (m *MockStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
 
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
@@ -1370,4 +1377,17 @@ func TestLoggerStore_ForwardsConflictRecovery(t *testing.T) {
 	require.NoError(t, store.SetConflictLocks(ctx, id, nil, true))
 	require.NoError(t, store.ReleaseConflictLocks(ctx, id, nil))
 	require.Equal(t, []string{"save", "load", "restore", "lock", "release"}, inner.calls)
+}
+
+func TestLoggerStore_CreateFirstDelegates(t *testing.T) {
+	inner := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, inner).(*Store)
+	ctx := context.Background()
+
+	require.False(t, store.SupportsCreateFirst())
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}))
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
 }
