@@ -57,6 +57,8 @@ import (
 // workers; 16K buckets at roughly the same total footprint reduces collision
 // probability ~4×. Exported to package-internal callers (tests) so they can
 // construct fresh maps without re-deriving the value.
+const errAddingNodeToSubtree = "error adding node to subtree"
+
 const splitMapBuckets = 16 * 1024
 
 // splitMapBucketsMax is the inclusive upper bound for
@@ -2110,7 +2112,7 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 	}
 
 	if err = stp.currentSubtree.Load().AddSubtreeNode(node); err != nil {
-		return errors.NewProcessingError("error adding node to subtree", err)
+		return errors.NewProcessingError(errAddingNodeToSubtree, err)
 	}
 
 	if stp.currentSubtree.Load().IsComplete() {
@@ -2151,7 +2153,7 @@ func (stp *SubtreeProcessor) addNodePreValidated(node subtreepkg.Node, skipNotif
 	}
 
 	if err = stp.currentSubtree.Load().AddSubtreeNode(node); err != nil {
-		return errors.NewProcessingError("error adding node to subtree", err)
+		return errors.NewProcessingError(errAddingNodeToSubtree, err)
 	}
 
 	if stp.currentSubtree.Load().IsComplete() {
@@ -2868,7 +2870,7 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 				// Restore to currentTxMap to avoid inconsistent state
 				stp.currentTxMap.Set(node.Hash, parents)
 				stp.deletedTxs.Delete(node.Hash)
-				return errors.NewProcessingError("error adding node to subtree", err)
+				return errors.NewProcessingError(errAddingNodeToSubtree, err)
 			}
 
 			// Clear from deletedTxs (transaction successfully re-added, no longer deleted)
