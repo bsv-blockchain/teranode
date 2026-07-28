@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -17,13 +16,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 )
 
-const (
-	// peerHealthCheckTimeout bounds a single peer availability probe.
-	peerHealthCheckTimeout = 2 * time.Second
-
-	// maxPeerHealthCheckRedirects bounds redirect chains followed while probing a peer.
-	maxPeerHealthCheckRedirects = 5
-)
+// peerHealthCheckTimeout bounds a single peer availability probe.
+const peerHealthCheckTimeout = 2 * time.Second
 
 // SelectionCriteria defines criteria for peer selection
 type SelectionCriteria struct {
@@ -37,8 +31,8 @@ type SelectionCriteria struct {
 	SyncAttemptCooldown          time.Duration // Cooldown period before retrying a peer
 }
 
-// PeerSelector handles peer selection logic
-// This is a stateless, pure function component
+// PeerSelector handles peer selection logic. Selection itself is pure; the only state it
+// holds is the HTTP client used for optional peer availability probes.
 type PeerSelector struct {
 	logger   ulogger.Logger
 	settings *settings.Settings
@@ -54,7 +48,7 @@ func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSe
 		logger:   logger,
 		settings: settings,
 	}
-	ps.httpClient = newPeerHealthCheckClient(ps.dataHubDialPolicy)
+	ps.httpClient = util.NewSSRFSafeHTTPClient(peerHealthCheckTimeout, ps.dataHubDialPolicy)
 
 	return ps
 }
@@ -294,10 +288,10 @@ func compareChainWork(a, b []byte) int {
 
 // checkPeerAvailability tests if a peer's DataHub URL is reachable via HTTP.
 // DataHubURL already includes /api/v1 prefix, so we just append the endpoint path.
-// Uses existing util/health infrastructure with built-in 2s timeout.
+// Any 2xx response counts as available; the probe is bounded by peerHealthCheckTimeout.
 //
 // The probe target is peer-supplied, so it goes through ps.httpClient, whose dialer
-// re-validates every resolved IP (see newPeerHealthCheckClient).
+// re-validates every resolved IP against dataHubDialPolicy.
 func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL string) (bool, error) {
 	if dataHubURL == "" {
 		return false, nil
@@ -307,55 +301,38 @@ func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL st
 	// Append /bestblockheader to get full endpoint path
 	checker := health.CheckHTTPServerWithClient(ps.httpClient, dataHubURL, "/bestblockheader")
 
-	statusCode, _, err := checker(ctx, false)
+	statusCode, msg, err := checker(ctx, false)
+	if statusCode == http.StatusOK {
+		return true, nil
+	}
 
-	// Only accept 200 OK - API endpoints should return exactly 200
-	return statusCode == http.StatusOK, err
+	// A non-2xx response carries no error, so surface the status message instead - the
+	// caller only logs the error and would otherwise log "unhealthy: <nil>".
+	if err == nil && msg != "" {
+		err = errors.NewServiceError("peer health check failed: %s", msg)
+	}
+
+	return false, err
 }
 
-// dataHubDialPolicy is the SSRF policy applied to every address the peer health check
-// resolves. It mirrors validateDataHubURL's IP rules but runs after DNS resolution, so a
-// peer-supplied hostname that resolves to a loopback, private, link-local or unspecified
-// address cannot slip past the static check and get probed.
+// dataHubDialPolicy is the SSRF policy applied to every address resolved while probing a
+// peer-supplied DataHub URL. Running after DNS resolution is the point: the static
+// validateDataHubURL check only inspects IP literals, so without this a hostname
+// resolving to an internal address would be probed.
 //
-// P2P.AllowPrivateIPs disables it, exactly as it disables validateDataHubURL, so local and
-// docker-networked deployments keep working.
+// The blocked set matches the shared block/subtree fetch client
+// (util.DefaultSSRFDialPolicy) rather than validateDataHubURL's stricter literal rules.
+// Private ranges stay allowed on purpose: peers, k8s pods and private miner interconnects
+// legitimately live on RFC1918 networks, and rejecting them here would make a peer
+// permanently unselectable even though the fetch path would happily talk to it.
+//
+// P2P.AllowPrivateIPs additionally allows loopback, so single-host local deployments keep
+// working. It deliberately does NOT relax link-local: no deployment needs to probe
+// 169.254.169.254, and that is the address an attacker is actually after.
 func (ps *PeerSelector) dataHubDialPolicy(ip net.IP) string {
-	if ps.settings != nil && ps.settings.P2P.AllowPrivateIPs {
+	if ip.IsLoopback() && ps.settings != nil && ps.settings.P2P.AllowPrivateIPs {
 		return ""
 	}
 
-	return isUnsafeIP(ip)
-}
-
-// newPeerHealthCheckClient builds the HTTP client used to probe peer-supplied DataHub URLs.
-// Its transport rejects unsafe resolved addresses at dial time, and CheckRedirect stops a
-// peer-controlled server from bouncing the probe to a non-HTTP scheme or an internal IP
-// literal (redirects to internal hostnames are caught by the dialer as well).
-func newPeerHealthCheckClient(policy util.SSRFDialPolicy) *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = util.NewSSRFSafeDialContext(policy)
-
-	return &http.Client{
-		Timeout:   peerHealthCheckTimeout,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxPeerHealthCheckRedirects {
-				return errors.NewInvalidArgumentError("peer health check stopped after %d redirects", maxPeerHealthCheckRedirects)
-			}
-
-			scheme := strings.ToLower(req.URL.Scheme)
-			if scheme != "http" && scheme != "https" {
-				return errors.NewInvalidArgumentError("peer health check redirect has invalid scheme: %s", scheme)
-			}
-
-			if ip := net.ParseIP(req.URL.Hostname()); ip != nil {
-				if reason := policy(ip); reason != "" {
-					return errors.NewInvalidArgumentError("peer health check redirect points to %s", reason)
-				}
-			}
-
-			return nil
-		},
-	}
+	return util.DefaultSSRFDialPolicy(ip)
 }

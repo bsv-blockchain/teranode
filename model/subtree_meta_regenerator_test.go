@@ -3,8 +3,11 @@ package model
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -15,8 +18,19 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/require"
 )
+
+// allowLoopbackPeers disables the SSRF dial guard for one test. The regenerator fetches
+// peer-supplied URLs through an SSRF-safe client that refuses loopback targets, while
+// httptest servers only ever listen on 127.0.0.1.
+func allowLoopbackPeers(t *testing.T) {
+	t.Helper()
+
+	util.SetSSRFProtection(false)
+	t.Cleanup(func() { util.SetSSRFProtection(true) })
+}
 
 // mockSubtreeStoreWriter implements SubtreeStoreWriter for testing
 type mockSubtreeStoreWriter struct {
@@ -155,6 +169,8 @@ func TestSubtreeMetaRegenerator_RegenerateMeta_FromLocal(t *testing.T) {
 }
 
 func TestSubtreeMetaRegenerator_RegenerateMeta_FromPeer(t *testing.T) {
+	allowLoopbackPeers(t)
+
 	// Create test transactions
 	prevTxID1 := "0000000000000000000000000000000000000000000000000000000000000001"
 	prevTxID2 := "0000000000000000000000000000000000000000000000000000000000000002"
@@ -216,6 +232,8 @@ func TestSubtreeMetaRegenerator_RegenerateMeta_FromPeer(t *testing.T) {
 }
 
 func TestSubtreeMetaRegenerator_RegenerateMeta_AllSourcesFail(t *testing.T) {
+	allowLoopbackPeers(t)
+
 	tx1 := createTestTransaction(t, "0000000000000000000000000000000000000000000000000000000000000001", 0)
 	txHash1 := *tx1.TxIDChainHash()
 
@@ -243,6 +261,8 @@ func TestSubtreeMetaRegenerator_RegenerateMeta_AllSourcesFail(t *testing.T) {
 }
 
 func TestSubtreeMetaRegenerator_RegenerateMeta_NilStore_PeerFallback(t *testing.T) {
+	allowLoopbackPeers(t)
+
 	// Create test transaction
 	prevTxID1 := "0000000000000000000000000000000000000000000000000000000000000001"
 	tx1 := createTestTransaction(t, prevTxID1, 0)
@@ -346,4 +366,56 @@ func TestSubtreeStoreAdapter(t *testing.T) {
 
 	// Verify nothing was stored (adapter's Set is a no-op)
 	require.Empty(t, mockStore.FileData)
+}
+
+// TestSubtreeMetaRegenerator_RejectsInternalPeer is the SSRF regression test for the peer
+// fetch path: peerURLs come straight from peer block/subtree announcements. The fetch must
+// be refused after DNS resolution, so a hostname resolving to an internal address is no
+// better for an attacker than an internal literal - and the target sees no request even
+// though it is serving exactly what the regenerator wants.
+func TestSubtreeMetaRegenerator_RejectsInternalPeer(t *testing.T) {
+	tx1 := createTestTransaction(t, "0000000000000000000000000000000000000000000000000000000000000001", 0)
+	subtree := createTestSubtree([]chainhash.Hash{*tx1.TxIDChainHash()})
+	subtreeHash := subtree.RootHash()
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	subtreeData.Txs[1] = tx1
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	var hits atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(subtreeDataBytes)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	_, port, err := net.SplitHostPort(serverURL.Host)
+	require.NoError(t, err)
+
+	tests := map[string]string{
+		// A hostname: the target is internal only once resolved.
+		"http://localhost:" + port: "loopback address",
+		// A literal cloud metadata endpoint.
+		"http://169.254.169.254": "link-local address",
+	}
+
+	for peerURL, reason := range tests {
+		t.Run(peerURL, func(t *testing.T) {
+			regenerator := NewSubtreeMetaRegenerator(ulogger.TestLogger{}, newMockSubtreeStoreWriter(),
+				[]string{peerURL}, "/api/v1", func() uint32 { return 100 }, 288)
+
+			data, err := regenerator.getSubtreeDataFromPeer(context.Background(), subtreeHash, subtree, peerURL)
+			require.Error(t, err)
+			require.Nil(t, data)
+			require.Contains(t, err.Error(), reason)
+		})
+	}
+
+	require.Zero(t, hits.Load(), "the fetch must not reach the internal target")
 }

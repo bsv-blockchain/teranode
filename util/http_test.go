@@ -977,7 +977,7 @@ func TestSSRFDialContext_RejectsPrivateHostname(t *testing.T) {
 	ctx := context.Background()
 	_, err := ssrfDialContext(ctx, "tcp", "localhost:80")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "blocked IP")
+	assert.Contains(t, err.Error(), "loopback address")
 }
 
 func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
@@ -991,7 +991,7 @@ func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
 	_, err := ssrfDialContext(ctx, "tcp", "127.0.0.1:1")
 	// Any error here is a real network error (connection refused), NOT our SSRF guard.
 	if err != nil {
-		assert.NotContains(t, err.Error(), "blocked IP")
+		assert.NotContains(t, err.Error(), "SSRF dial check")
 	}
 }
 
@@ -1014,7 +1014,7 @@ func TestSSRFDialContext_RejectsDNSRebinding(t *testing.T) {
 
 	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "blocked IP")
+	assert.Contains(t, err.Error(), "loopback address")
 }
 
 // TestSSRFDialContext_RejectsMixedPublicBlocked ensures a resolver answer mixing a public
@@ -1032,12 +1032,11 @@ func TestSSRFDialContext_RejectsMixedPublicBlocked(t *testing.T) {
 
 	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "blocked IP")
+	assert.Contains(t, err.Error(), "link-local address")
 }
 
 // TestNewSSRFSafeDialContext_CustomPolicy proves a caller-supplied policy is enforced at
-// resolution time: the p2p peer health check needs private ranges blocked too (its
-// DataHubURL validation rejects them), which this package's own policy deliberately allows.
+// resolution time, so a service can add ranges this package deliberately allows.
 func TestNewSSRFSafeDialContext_CustomPolicy(t *testing.T) {
 	SetSSRFProtection(true)
 	defer SetSSRFProtection(false)
@@ -1053,16 +1052,23 @@ func TestNewSSRFSafeDialContext_CustomPolicy(t *testing.T) {
 		if ip.IsPrivate() {
 			return "private address"
 		}
-		return defaultDialPolicy(ip)
+		return DefaultSSRFDialPolicy(ip)
 	})
 
 	_, err := strict(context.Background(), "tcp", "metadata.attacker.example:80")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "private address")
 
-	// The package default policy allows private ranges, so it would have dialed instead
-	// (the connection itself fails, but not with an SSRF rejection).
-	_, err = ssrfDialContext(context.Background(), "tcp", "metadata.attacker.example:1")
+	// The package default policy allows private ranges, so it dials instead. Bound the
+	// attempt: a dropped (rather than refused) RFC1918 packet would otherwise sit here for
+	// the dialer's full 30s.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, err := ssrfDialContext(ctx, "tcp", "metadata.attacker.example:1")
+	if conn != nil {
+		_ = conn.Close()
+	}
 	if err != nil {
 		assert.NotContains(t, err.Error(), "SSRF dial check")
 	}
@@ -1074,15 +1080,59 @@ func TestNewSSRFSafeDialContext_RespectsGlobalToggle(t *testing.T) {
 	SetSSRFProtection(false)
 	defer SetSSRFProtection(false)
 
-	dial := NewSSRFSafeDialContext(func(net.IP) string { return "always blocked" })
+	var policyCalls atomic.Int64
+
+	dial := NewSSRFSafeDialContext(func(net.IP) string {
+		policyCalls.Add(1)
+		return "always blocked"
+	})
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := dial(ctx, "tcp", "127.0.0.1:1")
-	if err != nil {
-		assert.NotContains(t, err.Error(), "always blocked")
+	conn, err := dial(ctx, "tcp", listener.Addr().String())
+	require.NoError(t, err, "with protection disabled the dial must go through")
+	require.NotNil(t, conn)
+	_ = conn.Close()
+	require.Zero(t, policyCalls.Load(), "the policy must not even be consulted")
+}
+
+// TestNewSSRFSafeDialContext_PerAttemptBudget checks a blackholed first address cannot eat
+// the caller's whole deadline: the reachable second address must still be tried. Dialing
+// by validated IP loses net.Dialer's dual-stack fast fallback, so the budget split is what
+// preserves multi-address failover under a short timeout (e.g. the 2s p2p health probe).
+func TestNewSSRFSafeDialContext_PerAttemptBudget(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	// 203.0.113.1 is TEST-NET-3: routable-looking but unreachable, so the first attempt
+	// hangs until its slice of the budget expires.
+	ssrfLookupHost = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"203.0.113.1", "127.0.0.1"}, nil
 	}
+
+	dial := NewSSRFSafeDialContext(func(net.IP) string { return "" })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	conn, err := dial(ctx, "tcp", "peer.example:"+port)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	_ = conn.Close()
 }
 
 func TestHTTPClient_RejectsRedirectToLinkLocal(t *testing.T) {

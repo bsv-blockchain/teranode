@@ -13,7 +13,11 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 )
+
+// peerFetchTimeout bounds a single subtree data fetch from a peer.
+const peerFetchTimeout = 30 * time.Second
 
 // SubtreeMetaRegeneratorI defines the interface for regenerating missing subtree meta files
 type SubtreeMetaRegeneratorI interface {
@@ -47,11 +51,13 @@ type SubtreeMetaRegenerator struct {
 func NewSubtreeMetaRegenerator(logger ulogger.Logger, subtreeStore SubtreeStoreWriter, peerURLs []string, apiPrefix string,
 	getBlockHeight func() uint32, blockHeightRetention uint32) *SubtreeMetaRegenerator {
 	return &SubtreeMetaRegenerator{
-		logger:               logger.New("meta_regenerator"),
-		subtreeStore:         subtreeStore,
-		peerURLs:             peerURLs,
-		apiPrefix:            apiPrefix,
-		httpClient:           &http.Client{Timeout: 30 * time.Second},
+		logger:       logger.New("meta_regenerator"),
+		subtreeStore: subtreeStore,
+		peerURLs:     peerURLs,
+		apiPrefix:    apiPrefix,
+		// peerURLs come from peer block/subtree announcements, so the client must reject
+		// addresses that only turn out to be internal after DNS resolution.
+		httpClient:           util.NewSSRFSafeHTTPClient(peerFetchTimeout, util.DefaultSSRFDialPolicy),
 		getBlockHeight:       getBlockHeight,
 		blockHeightRetention: blockHeightRetention,
 	}

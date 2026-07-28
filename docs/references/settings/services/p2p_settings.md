@@ -166,6 +166,13 @@ p2p_enable_mdns=false     # mDNS peer discovery
 p2p_allow_private_ips=false  # RFC1918 private networks
 ```
 
+`p2p_allow_private_ips` also relaxes the SSRF checks applied to peer-supplied DataHub URLs:
+with `true`, private and loopback targets are accepted and the peer availability probe will
+connect to them. Link-local (169.254.0.0/16, fe80::/10) and unspecified addresses are
+refused at connection time regardless of this setting - including when a peer-supplied
+hostname only resolves to one - so a peer can never steer the node at a cloud metadata
+endpoint.
+
 ### Peer Selection and Reputation
 
 For details on how peer selection and reputation scoring work, see [Peer Registry and Reputation System](../../../topics/features/peer_registry_reputation.md).

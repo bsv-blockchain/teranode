@@ -101,7 +101,7 @@ The `PeerRegistry` is a thread-safe data store that maintains comprehensive info
 
 ### 3.2. Peer Selector
 
-The `PeerSelector` is a stateless, pure-function component that implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation.
+The `PeerSelector` implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation. Selection itself is pure; the only state it holds is the HTTP client used for optional availability probes, which refuses to connect to internal addresses even when a peer-supplied hostname only resolves to one.
 
 **Selection Criteria:**
 

@@ -7,8 +7,14 @@ import (
 	"time"
 )
 
+// defaultCheckTimeout bounds a single health check request when the caller supplies no client.
+const defaultCheckTimeout = 2 * time.Second
+
 // CheckHTTPServer creates a health check that verifies an HTTP server is listening and accepting requests.
 // It attempts to make an HTTP GET request to the specified health endpoint.
+//
+// The address is expected to be one this node configured itself. To probe an address that
+// came from a peer, use CheckHTTPServerWithClient with an SSRF-safe client instead.
 //
 // Parameters:
 //   - address: The HTTP server address (e.g., "http://localhost:8080")
@@ -16,14 +22,20 @@ import (
 //
 // Returns a Check function that can be used with CheckAll
 func CheckHTTPServer(address string, healthPath string) func(context.Context, bool) (int, string, error) {
-	return CheckHTTPServerWithClient(&http.Client{Timeout: 2 * time.Second}, address, healthPath)
+	return CheckHTTPServerWithClient(nil, address, healthPath)
 }
 
 // CheckHTTPServerWithClient behaves like CheckHTTPServer but uses the supplied client.
-// Callers that probe peer-supplied addresses must use this variant with a client whose
-// Transport.DialContext enforces an SSRF policy (see util.NewSSRFSafeDialContext), since
-// the default client happily connects to whatever a hostname resolves to.
+// Callers probing peer-supplied addresses must use this variant with a client whose
+// Transport.DialContext enforces an SSRF policy (see util.NewSSRFSafeHTTPClient), since a
+// default client happily connects to whatever a hostname resolves to.
+//
+// A nil client falls back to a plain client with the default 2s timeout.
 func CheckHTTPServerWithClient(client *http.Client, address string, healthPath string) func(context.Context, bool) (int, string, error) {
+	if client == nil {
+		client = &http.Client{Timeout: defaultCheckTimeout}
+	}
+
 	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
 		// Construct the full URL
 		url := fmt.Sprintf("%s%s", address, healthPath)
