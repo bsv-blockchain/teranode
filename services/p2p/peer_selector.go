@@ -82,7 +82,8 @@ func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSe
 // Phase 2: If no full nodes and fallback enabled, select from non-full nodes
 // When settings.P2P.HealthCheckEnabled is set, candidate DataHub URLs are
 // probed over HTTP before either phase: concurrently (bounded by
-// peerHealthCheckConcurrency), under both ctx and an overall deadline
+// peerHealthCheckConcurrency), full-node tier first so slow pruned peers
+// cannot starve a full node's probe, under both ctx and an overall deadline
 // (peerHealthCheckBudget), with results cached for peerHealthCacheTTL so the
 // two phases and closely spaced calls do not re-probe the same URL.
 // Peer IDs are canonical libp2p ID strings.
@@ -99,12 +100,16 @@ func (ps *PeerSelector) SelectSyncPeer(ctx context.Context, peers []*blockchain.
 		return ""
 	}
 
+	// Basic (network-free) eligibility is computed once per selection and
+	// shared by the availability pre-pass and both candidate passes below.
+	basicEligible := ps.basicEligibleByID(peers, criteria)
+
 	// Probe availability of every basic-eligible candidate once, up front, so
 	// the eligibility checks below do no network I/O.
-	healthByURL := ps.checkCandidatesHealth(ctx, peers, criteria)
+	healthByURL := ps.checkCandidatesHealth(ctx, peers, basicEligible)
 
 	// PHASE 1: Try to select from full nodes
-	fullNodeCandidates := ps.getFullNodeCandidates(peers, criteria, healthByURL)
+	fullNodeCandidates := ps.getFullNodeCandidates(peers, basicEligible, healthByURL)
 	if len(fullNodeCandidates) > 0 {
 		selected := ps.selectFromCandidates(fullNodeCandidates, criteria, true)
 		if selected != "" {
@@ -121,7 +126,7 @@ func (ps *PeerSelector) SelectSyncPeer(ctx context.Context, peers []*blockchain.
 
 	if allowFallback {
 		ps.logger.Infof("[PeerSelector] No full nodes available, attempting pruned node fallback")
-		prunedCandidates := ps.getPrunedNodeCandidates(peers, criteria, healthByURL)
+		prunedCandidates := ps.getPrunedNodeCandidates(peers, basicEligible, healthByURL)
 		if len(prunedCandidates) > 0 {
 			selected := ps.selectFromCandidates(prunedCandidates, criteria, false)
 			if selected != "" {
@@ -139,11 +144,11 @@ func (ps *PeerSelector) SelectSyncPeer(ctx context.Context, peers []*blockchain.
 
 // getFullNodeCandidates returns eligible full nodes that are ahead by validated
 // work or eligible for a bounded advertised probe.
-func (ps *PeerSelector) getFullNodeCandidates(peers []*blockchain.PeerInfo, criteria SelectionCriteria, healthByURL map[string]bool) []*blockchain.PeerInfo {
+func (ps *PeerSelector) getFullNodeCandidates(peers []*blockchain.PeerInfo, basicEligible map[string]struct{}, healthByURL map[string]bool) []*blockchain.PeerInfo {
 	var candidates []*blockchain.PeerInfo
 	now := time.Now()
 	for _, p := range peers {
-		if ps.isEligibleFullNode(p, criteria, now, healthByURL) {
+		if ps.isEligibleFullNode(p, now, basicEligible, healthByURL) {
 			candidates = append(candidates, p)
 			ps.logger.Debugf("[PeerSelector] Full node candidate: %s (validated_height=%d, advertised_height=%d, mode=%s)",
 				p.ID, p.ValidatedHeight, p.Height, p.Storage)
@@ -154,12 +159,12 @@ func (ps *PeerSelector) getFullNodeCandidates(peers []*blockchain.PeerInfo, crit
 
 // getPrunedNodeCandidates returns eligible non-full nodes that are ahead by
 // validated work or eligible for a bounded advertised probe.
-func (ps *PeerSelector) getPrunedNodeCandidates(peers []*blockchain.PeerInfo, criteria SelectionCriteria, healthByURL map[string]bool) []*blockchain.PeerInfo {
+func (ps *PeerSelector) getPrunedNodeCandidates(peers []*blockchain.PeerInfo, basicEligible map[string]struct{}, healthByURL map[string]bool) []*blockchain.PeerInfo {
 	var candidates []*blockchain.PeerInfo
 	now := time.Now()
 	for _, p := range peers {
 		// Only include if eligible but NOT a full node
-		if ps.isEligible(p, criteria, healthByURL) && !ps.isEffectiveFullNode(p, now) {
+		if ps.isEligible(p, basicEligible, healthByURL) && !ps.isEffectiveFullNode(p, now) {
 			candidates = append(candidates, p)
 			ps.logger.Debugf("[PeerSelector] Pruned node candidate: %s (validated_height=%d, advertised_height=%d, mode=%s)",
 				p.ID, p.ValidatedHeight, p.Height, p.Storage)
@@ -227,7 +232,25 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 	return selected.ID
 }
 
+// basicEligibleByID runs isEligibleBasic over every peer once and returns the
+// set of eligible peer IDs. Computed once per selection so the availability
+// pre-pass and both candidate passes share one result (and one round of
+// per-criterion debug logging) instead of re-deriving it per pass. Eligibility
+// is therefore fixed at selection start: a peer whose cooldown expires while
+// probes run stays ineligible until the next selection.
+func (ps *PeerSelector) basicEligibleByID(peers []*blockchain.PeerInfo, criteria SelectionCriteria) map[string]struct{} {
+	eligible := make(map[string]struct{}, len(peers))
+	for _, p := range peers {
+		if ps.isEligibleBasic(p, criteria) {
+			eligible[p.ID] = struct{}{}
+		}
+	}
+	return eligible
+}
+
 // isEligibleBasic checks every selection criterion that needs no network I/O.
+// Callers on the selection path should consult the per-selection set from
+// basicEligibleByID instead of calling this repeatedly.
 func (ps *PeerSelector) isEligibleBasic(p *blockchain.PeerInfo, criteria SelectionCriteria) bool {
 	// Always exclude banned peers
 	if p.IsBanned {
@@ -265,11 +288,12 @@ func (ps *PeerSelector) isEligibleBasic(p *blockchain.PeerInfo, criteria Selecti
 	return true
 }
 
-// isEligible checks if a peer meets selection criteria. healthByURL is the
-// availability pre-pass result from checkCandidatesHealth; nil means health
-// checking is disabled.
-func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCriteria, healthByURL map[string]bool) bool {
-	if !ps.isEligibleBasic(p, criteria) {
+// isEligible checks if a peer meets selection criteria. basicEligible is the
+// per-selection result of basicEligibleByID; healthByURL is the availability
+// pre-pass result from checkCandidatesHealth, nil meaning health checking is
+// disabled.
+func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, basicEligible map[string]struct{}, healthByURL map[string]bool) bool {
+	if _, ok := basicEligible[p.ID]; !ok {
 		return false
 	}
 
@@ -279,9 +303,9 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCri
 	if healthByURL != nil {
 		healthy, probed := healthByURL[p.DataHubURL]
 
-		// A peer can be absent from the map when it became basic-eligible only
-		// after the pre-pass ran (e.g. a cooldown expired during the probes);
-		// treat it as unavailable this round rather than probing serially.
+		// Defensive: the pre-pass probes every basic-eligible peer's URL, so
+		// this should always hit; if it ever doesn't, treat the peer as
+		// unavailable this round rather than probing serially.
 		if !probed {
 			ps.logger.Debugf("[PeerSelector] Peer %s was not probed this selection, skipping", p.ID)
 			return false
@@ -298,39 +322,49 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCri
 
 // checkCandidatesHealth probes the DataHub URL of every basic-eligible peer and
 // returns availability keyed by URL, or nil when health checking is disabled.
-// URLs are deduplicated, probes run on a worker pool of at most
-// peerHealthCheckConcurrency goroutines under ctx plus the overall
-// healthCheckBudget deadline, and results are cached for peerHealthCacheTTL.
-// A probe cut short by ctx or the budget counts as unhealthy for this
-// selection but is not cached, so a slow peer is not remembered as down.
-// Concurrent calls may probe the same URL twice (the cache only dedupes
-// completed probes); today every caller serialises behind
+// URLs are deduplicated and enqueued full-node tier first, so the shared
+// worker pool and probe budget serve the preferred tier before pruned or
+// header-only peers: a queue of slow pruned peers can no longer exhaust the
+// budget ahead of a healthy full node and demote it for the tick. Probes run
+// on a worker pool of at most peerHealthCheckConcurrency goroutines under ctx
+// plus the overall healthCheckBudget deadline, and results are cached for
+// peerHealthCacheTTL. A probe cut short by ctx or the budget counts as
+// unhealthy for this selection but is not cached, so a slow peer is not
+// remembered as down. Concurrent calls may probe the same URL twice (the
+// cache only dedupes completed probes); today every caller serialises behind
 // SyncCoordinator.decisionMu.
-func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*blockchain.PeerInfo, criteria SelectionCriteria) map[string]bool {
+func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*blockchain.PeerInfo, basicEligible map[string]struct{}) map[string]bool {
 	if ps.settings == nil || !ps.settings.P2P.HealthCheckEnabled {
 		return nil
 	}
 
-	// Collect the distinct DataHub URLs of basic-eligible peers.
-	urls := make([]string, 0, len(peers))
+	// Collect the distinct DataHub URLs of basic-eligible peers, full-node
+	// tier ahead of pruned tier. A URL shared by peers of both tiers is
+	// classified by the first peer seen with it.
+	var fullURLs, prunedURLs []string
 	seen := make(map[string]struct{}, len(peers))
+	now := time.Now()
 
 	for _, p := range peers {
 		if _, dup := seen[p.DataHubURL]; dup {
 			continue
 		}
 
-		if !ps.isEligibleBasic(p, criteria) {
+		if _, ok := basicEligible[p.ID]; !ok {
 			continue
 		}
 
 		seen[p.DataHubURL] = struct{}{}
-		urls = append(urls, p.DataHubURL)
+		if ps.isEffectiveFullNode(p, now) {
+			fullURLs = append(fullURLs, p.DataHubURL)
+		} else {
+			prunedURLs = append(prunedURLs, p.DataHubURL)
+		}
 	}
+	urls := append(fullURLs, prunedURLs...)
 
 	results := make(map[string]bool, len(urls))
 	pending := make([]string, 0, len(urls))
-	now := time.Now()
 
 	ps.healthMu.Lock()
 	for _, url := range urls {
@@ -410,8 +444,8 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 
 // isEligibleFullNode checks if a peer is eligible as a full node for catchup
 // Only peers explicitly announcing as "full" are considered full nodes
-func (ps *PeerSelector) isEligibleFullNode(p *blockchain.PeerInfo, criteria SelectionCriteria, now time.Time, healthByURL map[string]bool) bool {
-	if !ps.isEligible(p, criteria, healthByURL) {
+func (ps *PeerSelector) isEligibleFullNode(p *blockchain.PeerInfo, now time.Time, basicEligible map[string]struct{}, healthByURL map[string]bool) bool {
+	if !ps.isEligible(p, basicEligible, healthByURL) {
 		return false // Must pass basic eligibility first
 	}
 

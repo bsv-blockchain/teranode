@@ -171,6 +171,37 @@ func TestPeerSelector_HealthChecks_RunConcurrently(t *testing.T) {
 	require.Less(t, elapsed, time.Duration(numPeers)*probeDelay, "selection must be faster than serial probing")
 }
 
+func TestPeerSelector_HealthChecks_FullNodeNotStarvedBySlowPrunedPeers(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	ps.healthCheckBudget = 200 * time.Millisecond
+
+	// Enough slow pruned peers to keep every worker busy for the whole budget,
+	// all ordered ahead of the single healthy full node in the peer slice.
+	// Full-node-tier URLs must be probed first, so the full node still gets a
+	// worker while the budget is alive and wins Phase 1.
+	peers := make([]*blockchain.PeerInfo, 0, 2*peerHealthCheckConcurrency+1)
+	for i := range 2 * peerHealthCheckConcurrency {
+		peers = append(peers, newPeer(fmt.Sprintf("peer-pruned-%d", i), 100, "pruned", 50, 0))
+	}
+	full := newPeer("peer-full", 100, "full", 50, 0)
+	peers = append(peers, full)
+
+	ps.checkHealth = func(ctx context.Context, url string) (bool, error) {
+		// Like the real probe, fail immediately once the budget has expired.
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if url == full.DataHubURL {
+			return true, nil
+		}
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
+	require.Equal(t, "peer-full", got, "a healthy full node must not be starved of its probe by slow pruned peers")
+}
+
 func TestPeerSelector_HealthChecks_HonorCallerContext(t *testing.T) {
 	ps := newHealthCheckSelectorForTest()
 	peerA := newPeer("peer-a", 100, "full", 50, 0)
