@@ -463,34 +463,48 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 
 // localHeightCacheTTL bounds how stale the cached local height may be. The
 // height only feeds advertised-tip sanitization caps and periodic sync
-// evaluation, both tolerant of a second of staleness.
-const localHeightCacheTTL = time.Second
+// evaluation, both tolerant of a second of staleness. Failed reads are cached
+// with the shorter error TTL: long enough to shed the per-message RPC storm
+// during a blockchain outage, short enough that recovery is picked up quickly
+// (while an error entry is served, advertised tips are capped as if the local
+// height were 0).
+const (
+	localHeightCacheTTL      = time.Second
+	localHeightErrorCacheTTL = 200 * time.Millisecond
+)
 
 type localHeightCacheEntry struct {
 	height    uint32
+	ok        bool
 	fetchedAt time.Time
 }
 
 // getLocalHeight returns the current local blockchain height. The result is
 // cached briefly: gossip handlers call this per message (via
 // sanitizeAdvertisedTip) and must not issue a blockchain gRPC round-trip each
-// time. Failures are cached too, so a blockchain outage does not turn back
-// into a per-message RPC storm.
+// time. Failures are cached too (with a shorter TTL), so a blockchain outage
+// does not turn back into a per-message RPC storm.
 func (s *Server) getLocalHeight() uint32 {
 	if s.blockchainClient == nil {
 		return 0
 	}
 
-	if e := s.localHeightCache.Load(); e != nil && time.Since(e.fetchedAt) < localHeightCacheTTL {
-		return e.height
+	if e := s.localHeightCache.Load(); e != nil {
+		ttl := localHeightCacheTTL
+		if !e.ok {
+			ttl = localHeightErrorCacheTTL
+		}
+		if time.Since(e.fetchedAt) < ttl {
+			return e.height
+		}
 	}
 
-	height := uint32(0)
+	height, ok := uint32(0), false
 	if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx); err == nil && bhMeta != nil {
-		height = bhMeta.Height
+		height, ok = bhMeta.Height, true
 	}
 
-	s.localHeightCache.Store(&localHeightCacheEntry{height: height, fetchedAt: time.Now()})
+	s.localHeightCache.Store(&localHeightCacheEntry{height: height, ok: ok, fetchedAt: time.Now()})
 
 	return height
 }
@@ -932,7 +946,12 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 		} else {
 			banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
 			if err != nil {
-				s.logger.Warnf("[%s] IsPeerBanned %s failed: %v", messageType, from, err)
+				// Error breaker: cache the failure as not-banned (fail open,
+				// same staleness contract as the reputation cache) so a
+				// degraded registry is hit — and logged — at most once per
+				// TTL per peer instead of once per gossip message.
+				s.banStatusCache.Store(from, banStatusCacheEntry{banned: false, expiresAt: time.Now().Add(reputationCacheTTL)})
+				s.logger.Warnf("[%s] IsPeerBanned %s failed (treating as not banned for %s): %v", messageType, from, reputationCacheTTL, err)
 			} else {
 				s.banStatusCache.Store(from, banStatusCacheEntry{banned: banned, expiresAt: time.Now().Add(reputationCacheTTL)})
 				if banned {

@@ -30,11 +30,21 @@ const (
 	// block hash, DataHub URL) forces a RegisterPeer earlier.
 	registryReassertTTL = time.Minute
 
-	// registryAssertStatePruneAge is how long an idle peer's assert-state (or
-	// removal-tombstone) entry survives before the flush loop prunes it. Must
-	// exceed registryReassertTTL; a pruned peer is simply re-registered on its
-	// next message.
+	// registryAssertStatePruneAge is how long an idle peer's assert-state
+	// entry survives before the flush loop prunes it. Must exceed
+	// registryReassertTTL; a pruned peer is simply re-registered on its next
+	// message. The map is additionally count-bounded at
+	// registryBatcherMaxPending: when full, entries staler than
+	// registryReassertTTL are swept and, if it is still full, new assertions
+	// are simply not recorded (the peer re-registers next flush) — so a flood
+	// of spoofed peer IDs cannot grow the map without bound.
 	registryAssertStatePruneAge = 10 * time.Minute
+
+	// registryTombstoneAge is how long a removal tombstone is retained. It
+	// only needs to outlive an in-flight flush cycle (registryFlushTimeout);
+	// the "next message must re-register" guarantee comes from deleting the
+	// peer's lastAsserted entry, not from the tombstone.
+	registryTombstoneAge = 2 * registryFlushTimeout
 
 	// registryFlushTimeout bounds a single flush cycle so a wedged registry
 	// cannot hang the flush goroutine forever. Updates still pending after a
@@ -176,22 +186,33 @@ func (b *peerRegistryBatcher) start() {
 			case <-b.stopCh:
 				return
 			case <-ticker.C:
-				b.flushOnce()
+				// Detach periodic flushes from parent-ctx cancellation so a
+				// flush already in progress when shutdown starts completes
+				// (bounded by registryFlushTimeout inside flushOnce).
+				b.flushOnce(context.WithoutCancel(b.ctx))
 			}
 		}
 	}()
 }
 
 // stop terminates the flush goroutine and performs a final best-effort flush
-// so updates observed just before shutdown are not lost. Safe to call whether
-// or not start ran (Start can fail before reaching the batcher).
-func (b *peerRegistryBatcher) stop() {
+// so updates observed just before shutdown are not lost. The whole call is
+// bounded by ctx — the service manager's per-service stop budget — mirroring
+// kafka.StopProducerCtx; when the budget runs out the final flush is skipped
+// (or cut short) rather than overrunning it. Safe to call whether or not
+// start ran (Start can fail before reaching the batcher).
+func (b *peerRegistryBatcher) stop(ctx context.Context) {
 	b.stopOnce.Do(func() {
 		close(b.stopCh)
 		if b.started.Load() {
-			<-b.doneCh
+			select {
+			case <-b.doneCh:
+			case <-ctx.Done():
+				b.logger.Warnf("[peerRegistryBatcher] stop budget exhausted waiting for in-flight flush; skipping final flush: %v", ctx.Err())
+				return
+			}
 		}
-		b.flushOnce()
+		b.flushOnce(ctx)
 	})
 }
 
@@ -216,7 +237,7 @@ func (b *peerRegistryBatcher) enqueue(peerID string, from *pendingPeerUpdate) bo
 	b.mu.Unlock()
 
 	if b.flushInterval <= 0 {
-		b.flushOnce()
+		b.flushOnce(context.WithoutCancel(b.ctx))
 	}
 	return true
 }
@@ -267,8 +288,11 @@ func (b *peerRegistryBatcher) forget(peerID string) {
 // flushOnce swaps out the pending map and pushes one batch of RPCs per peer.
 // RPC order per peer matches the old inline path: RegisterPeer first (the
 // registry ignores updates for unknown peers), then connection state, last
-// message time, metrics, and storage.
-func (b *peerRegistryBatcher) flushOnce() {
+// message time, metrics, and storage. The cycle is bounded by the caller's
+// ctx capped at registryFlushTimeout: periodic flushes pass a detached ctx
+// (they must survive parent cancellation during shutdown), the final flush in
+// stop passes the service stop budget.
+func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 	b.flushMu.Lock()
 	defer b.flushMu.Unlock()
 
@@ -288,10 +312,7 @@ func (b *peerRegistryBatcher) flushOnce() {
 		return
 	}
 
-	// The batcher's parent ctx is cancelled before Stop() runs during service
-	// shutdown; the final flush must still go out, so detach from cancellation
-	// and rely on the timeout alone.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(b.ctx), registryFlushTimeout)
+	ctx, cancel := context.WithTimeout(ctx, registryFlushTimeout)
 	defer cancel()
 
 	now := time.Now()
@@ -300,7 +321,7 @@ func (b *peerRegistryBatcher) flushOnce() {
 
 	for peerID, u := range pending {
 		if ctx.Err() != nil {
-			b.logger.Warnf("[peerRegistryBatcher] flush timed out with updates for %d of %d peers unflushed", unflushed, len(pending))
+			b.logger.Warnf("[peerRegistryBatcher] flush cut short (%v) with updates for %d of %d peers unflushed", ctx.Err(), unflushed, len(pending))
 			return
 		}
 
@@ -370,7 +391,7 @@ func (b *peerRegistryBatcher) flushOnce() {
 			// and recording the assertion would suppress the peer's
 			// re-registration for registryReassertTTL after its next message.
 			if _, r := b.removed[peerID]; !r {
-				b.lastAsserted[peerID] = st
+				b.recordAssertStateLocked(peerID, st)
 			}
 			b.mu.Unlock()
 		}
@@ -411,20 +432,43 @@ func (b *peerRegistryBatcher) requeue(peerID string, u *pendingPeerUpdate) {
 	*existing = *merged
 }
 
-// pruneAssertState drops assert-state entries and removal tombstones older
-// than registryAssertStatePruneAge, bounding both maps to recently active
-// peers.
-func (b *peerRegistryBatcher) pruneAssertState() {
-	cutoff := time.Now().Add(-registryAssertStatePruneAge)
+// recordAssertStateLocked stores a peer's assert state, enforcing the count
+// bound: when the map is full, entries staler than registryReassertTTL are
+// swept first, and if it is still full the assertion is not recorded — the
+// peer just re-registers on the next flush, keeping the RPC rate capped by
+// the pending-map bound while memory stays bounded under a spoofed-ID flood.
+// Caller must hold b.mu.
+func (b *peerRegistryBatcher) recordAssertStateLocked(peerID string, st registryAssertState) {
+	if _, exists := b.lastAsserted[peerID]; !exists && len(b.lastAsserted) >= registryBatcherMaxPending {
+		b.evictStaleAssertStateLocked(time.Now().Add(-registryReassertTTL))
+		if len(b.lastAsserted) >= registryBatcherMaxPending {
+			return
+		}
+	}
+	b.lastAsserted[peerID] = st
+}
 
-	b.mu.Lock()
+// evictStaleAssertStateLocked removes assert-state entries whose assertions
+// are all older than cutoff. Caller must hold b.mu.
+func (b *peerRegistryBatcher) evictStaleAssertStateLocked(cutoff time.Time) {
 	for peerID, st := range b.lastAsserted {
 		if st.registeredAt.Before(cutoff) && st.connectedAt.Before(cutoff) {
 			delete(b.lastAsserted, peerID)
 		}
 	}
+}
+
+// pruneAssertState drops assert-state entries older than
+// registryAssertStatePruneAge and removal tombstones older than
+// registryTombstoneAge, bounding both maps to recently active peers.
+func (b *peerRegistryBatcher) pruneAssertState() {
+	now := time.Now()
+
+	b.mu.Lock()
+	b.evictStaleAssertStateLocked(now.Add(-registryAssertStatePruneAge))
+	tombstoneCutoff := now.Add(-registryTombstoneAge)
 	for peerID, removedAt := range b.removed {
-		if removedAt.Before(cutoff) {
+		if removedAt.Before(tombstoneCutoff) {
 			delete(b.removed, peerID)
 		}
 	}

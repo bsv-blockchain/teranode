@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -242,6 +243,25 @@ func TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate(t *testing.T) {
 	}
 
 	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "locally banned peer must be skipped immediately")
+}
+
+// TestGetLocalHeight_ErrorCachedWithShorterTTL: failed blockchain reads are
+// cached (no per-message RPC storm during an outage) but with a shorter TTL
+// than successful reads, so recovery is picked up quickly.
+func TestGetLocalHeight_ErrorCachedWithShorterTTL(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.NewServiceError("blockchain down")).Once()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42}, nil)
+	s.blockchainClient = mockBlockchain
+
+	require.Equal(t, uint32(0), s.getLocalHeight(), "failed read returns 0")
+	require.Equal(t, uint32(0), s.getLocalHeight(), "failure must be served from cache within the error TTL")
+	mockBlockchain.AssertNumberOfCalls(t, "GetBestBlockHeader", 1)
+
+	time.Sleep(localHeightErrorCacheTTL + 50*time.Millisecond)
+	require.Equal(t, uint32(42), s.getLocalHeight(), "recovery must be picked up after the error TTL")
 }
 
 func TestServerHelpers_ShouldSkipUnhealthyPeer(t *testing.T) {

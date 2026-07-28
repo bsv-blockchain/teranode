@@ -92,7 +92,7 @@ func TestPeerRegistryBatcher_CoalescesFloodIntoOneBatch(t *testing.T) {
 		b.enqueueBytesReceived(pid, 100)
 	}
 
-	b.flushOnce()
+	b.flushOnce(context.Background())
 
 	require.Equal(t, 1, counting.callCount("RegisterPeer"), "1000 messages must coalesce into one RegisterPeer")
 	require.Equal(t, 1, counting.callCount("UpdateConnectionState"))
@@ -115,7 +115,7 @@ func TestPeerRegistryBatcher_MergesLatestRegistrationData(t *testing.T) {
 	b.enqueueRegister(pid, "client/1.0", 10, &hash1, "http://hub.example", false)
 	b.enqueueRegister(pid, "", 11, &hash2, "", false)
 
-	b.flushOnce()
+	b.flushOnce(context.Background())
 
 	got, ok := reg.Get(pid)
 	require.True(t, ok)
@@ -131,13 +131,13 @@ func TestPeerRegistryBatcher_SkipsReassertWithinTTL(t *testing.T) {
 
 	b.enqueueRegister(pid, "", 0, nil, "", true)
 	b.enqueueLastMessage(pid)
-	b.flushOnce()
+	b.flushOnce(context.Background())
 
 	// Second round with no new registration data: only the last-message touch
 	// should go out, not another RegisterPeer/UpdateConnectionState.
 	b.enqueueRegister(pid, "", 0, nil, "", true)
 	b.enqueueLastMessage(pid)
-	b.flushOnce()
+	b.flushOnce(context.Background())
 
 	require.Equal(t, 1, counting.callCount("RegisterPeer"), "recently asserted peer must not be re-registered")
 	require.Equal(t, 1, counting.callCount("UpdateConnectionState"))
@@ -149,13 +149,13 @@ func TestPeerRegistryBatcher_NewInfoForcesRegister(t *testing.T) {
 	pid := mustNewPeerID(t).String()
 
 	b.enqueueRegister(pid, "", 0, nil, "", true)
-	b.flushOnce()
+	b.flushOnce(context.Background())
 	require.Equal(t, 1, counting.callCount("RegisterPeer"))
 
 	// A height update (new block announced) must reach the registry on the
 	// next flush even though the peer was registered recently.
 	b.enqueueRegister(pid, "", 42, nil, "", false)
-	b.flushOnce()
+	b.flushOnce(context.Background())
 
 	require.Equal(t, 2, counting.callCount("RegisterPeer"))
 	got, _ := reg.Get(pid)
@@ -167,7 +167,7 @@ func TestPeerRegistryBatcher_ForgetForcesReRegister(t *testing.T) {
 	pid := mustNewPeerID(t).String()
 
 	b.enqueueRegister(pid, "", 0, nil, "", true)
-	b.flushOnce()
+	b.flushOnce(context.Background())
 	require.Equal(t, 1, counting.callCount("RegisterPeer"))
 
 	// Peer removed from the registry (disconnect/ban) — batcher must forget it
@@ -176,7 +176,7 @@ func TestPeerRegistryBatcher_ForgetForcesReRegister(t *testing.T) {
 	b.forget(pid)
 
 	b.enqueueLastMessage(pid)
-	b.flushOnce()
+	b.flushOnce(context.Background())
 
 	require.Equal(t, 2, counting.callCount("RegisterPeer"))
 	_, ok := reg.Get(pid)
@@ -218,7 +218,7 @@ func TestPeerRegistryBatcher_StopFlushesPending(t *testing.T) {
 	b.enqueueRegister(pid, "client/1.0", 5, nil, "", true)
 	b.enqueueBytesReceived(pid, 123)
 
-	b.stop()
+	b.stop(context.Background())
 
 	got, ok := reg.Get(pid)
 	require.True(t, ok, "stop must flush pending updates")
@@ -288,7 +288,7 @@ func TestServer_GossipFlood_BoundedRegistryRPCs(t *testing.T) {
 	require.Equal(t, 0, counting.callCount("UpdateLastMessageTime"))
 	require.Equal(t, 0, counting.callCount("UpdatePeerMetrics"))
 
-	s.registryBatcher.flushOnce()
+	s.registryBatcher.flushOnce(context.Background())
 
 	require.Equal(t, 1, counting.callCount("RegisterPeer"), "one flush = one RegisterPeer for the flooding peer")
 	require.Equal(t, 1, counting.callCount("UpdateConnectionState"))
@@ -427,7 +427,7 @@ func TestPeerRegistryBatcher_ForgetDuringFlushDoesNotStickAssertState(t *testing
 	flushDone := make(chan struct{})
 	go func() {
 		defer close(flushDone)
-		b.flushOnce()
+		b.flushOnce(context.Background())
 	}()
 
 	// Wait until the flush is inside RegisterPeer for the first peer, then
@@ -457,7 +457,7 @@ func TestPeerRegistryBatcher_ForgetDuringFlushDoesNotStickAssertState(t *testing
 		<-blocking.enteredRegister
 		blocking.releaseRegister <- struct{}{}
 	}()
-	b.flushOnce()
+	b.flushOnce(context.Background())
 
 	require.Equal(t, registerCallsBefore+1, counting.callCount("RegisterPeer"),
 		"peer removed mid-flush must be re-registered on its next message")
@@ -483,7 +483,7 @@ func TestPeerRegistryBatcher_StopWithoutStartDoesNotBlock(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.stop() // start() was never called — must not block on doneCh
+		b.stop(context.Background()) // start() was never called — must not block on doneCh
 		close(done)
 	}()
 
@@ -510,7 +510,7 @@ func TestPeerRegistryBatcher_StopFlushesAfterParentCtxCancelled(t *testing.T) {
 	b.enqueueRegister(pid, "client/1.0", 7, nil, "", true)
 
 	cancel()
-	b.stop()
+	b.stop(context.Background())
 
 	got, ok := reg.Get(pid)
 	require.True(t, ok, "final flush must survive parent context cancellation")
@@ -532,7 +532,7 @@ func TestPeerRegistryBatcher_HeightMergeIsMonotonic(t *testing.T) {
 	b.enqueueRegister(pid, "", 42, &hashNew, "", false)
 	b.enqueueRegister(pid, "", 41, &hashOld, "", false)
 
-	b.flushOnce()
+	b.flushOnce(context.Background())
 
 	got, ok := reg.Get(pid)
 	require.True(t, ok)
@@ -552,11 +552,11 @@ func TestPeerRegistryBatcher_RequeueOnRegisterFailure(t *testing.T) {
 	b.enqueueRegister(pid, "client/1.0", 5, nil, "", true)
 	b.enqueueBytesReceived(pid, 500)
 
-	b.flushOnce() // RegisterPeer fails; batch must be requeued
+	b.flushOnce(context.Background()) // RegisterPeer fails; batch must be requeued
 	_, ok := reg.Get(pid)
 	require.False(t, ok, "failed register must not partially apply")
 
-	b.flushOnce() // retry succeeds
+	b.flushOnce(context.Background()) // retry succeeds
 	got, ok := reg.Get(pid)
 	require.True(t, ok)
 	require.Equal(t, uint32(5), got.Height)
@@ -575,6 +575,152 @@ func (c *failFirstRegisterClient) RegisterPeer(ctx context.Context, info *blockc
 		return fmt.Errorf("transient registry error")
 	}
 	return c.PeerRegistryClientI.RegisterPeer(ctx, info)
+}
+
+// TestPeerRegistryBatcher_StopHonorsBudget verifies ChiR1: stop is bounded by
+// the caller's context (the service manager's per-service stop budget). With
+// a flush wedged inside a registry RPC and an already-expired budget, stop
+// must return promptly instead of waiting out registryFlushTimeout.
+func TestPeerRegistryBatcher_StopHonorsBudget(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	blocking := &blockingRegistryClient{
+		PeerRegistryClientI: blockchain.NewLocalPeerRegistryClient(reg),
+		enteredRegister:     make(chan string),
+		releaseRegister:     make(chan struct{}),
+	}
+	b := newPeerRegistryBatcher(context.Background(), ulogger.TestLogger{}, blocking, 10*time.Millisecond)
+	b.start()
+
+	pid := mustNewPeerID(t).String()
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+
+	// Wait until the ticker flush is wedged inside RegisterPeer.
+	recvRegisterEntered(t, blocking.enteredRegister)
+
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	stopReturned := make(chan struct{})
+	go func() {
+		b.stop(expired)
+		close(stopReturned)
+	}()
+
+	select {
+	case <-stopReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop did not honor the exhausted budget while a flush was in flight")
+	}
+
+	// Unwedge the in-flight flush so the goroutine can exit cleanly.
+	blocking.releaseRegister <- struct{}{}
+}
+
+// TestPeerRegistryBatcher_AssertStateCountBounded verifies the assert-state
+// map cannot grow beyond registryBatcherMaxPending under a flood of distinct
+// (spoofable) peer IDs: fresh entries at the cap reject new recordings, stale
+// entries are swept to make room.
+func TestPeerRegistryBatcher_AssertStateCountBounded(t *testing.T) {
+	b, _, _ := newBatcherWithCountingRegistry()
+
+	now := time.Now()
+
+	b.mu.Lock()
+	for i := 0; i < registryBatcherMaxPending; i++ {
+		b.lastAsserted[fmt.Sprintf("peer-%d", i)] = registryAssertState{registeredAt: now}
+	}
+	b.recordAssertStateLocked("one-too-many", registryAssertState{registeredAt: now})
+	require.Len(t, b.lastAsserted, registryBatcherMaxPending, "fresh entries at the cap must not be exceeded")
+	_, recorded := b.lastAsserted["one-too-many"]
+	require.False(t, recorded)
+
+	// With stale entries, the sweep makes room and the new entry is recorded.
+	stale := now.Add(-2 * registryReassertTTL)
+	for i := 0; i < registryBatcherMaxPending; i++ {
+		b.lastAsserted[fmt.Sprintf("peer-%d", i)] = registryAssertState{registeredAt: stale}
+	}
+	b.recordAssertStateLocked("one-too-many", registryAssertState{registeredAt: now})
+	_, recorded = b.lastAsserted["one-too-many"]
+	require.True(t, recorded, "stale entries must be swept to make room")
+	b.mu.Unlock()
+}
+
+// TestSubscribeToTopic_PanicInHandlerDoesNotCrash verifies ChiR3: a gossip
+// handler panicking on a crafted message is recovered per message, and the
+// workers keep processing subsequent messages.
+func TestSubscribeToTopic_PanicInHandlerDoesNotCrash(t *testing.T) {
+	s := &Server{
+		logger: ulogger.TestLogger{},
+		gCtx:   context.Background(),
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{GossipHandlerConcurrency: 2},
+		},
+	}
+
+	ch := make(chan p2pMessageBus.Message, 4)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.On("Subscribe", "panic-topic").Return((<-chan p2pMessageBus.Message)(ch))
+	s.P2PClient = mockP2P
+
+	var mu sync.Mutex
+	var processed []string
+	done := make(chan struct{})
+
+	handler := func(_ context.Context, data []byte, _ string) {
+		if string(data) == "boom" {
+			panic("crafted message")
+		}
+		mu.Lock()
+		processed = append(processed, string(data))
+		if len(processed) == 2 {
+			close(done)
+		}
+		mu.Unlock()
+	}
+
+	s.subscribeToTopic(context.Background(), "panic-topic", handler)
+
+	ch <- p2pMessageBus.Message{Data: []byte("boom"), FromID: "attacker"}
+	ch <- p2pMessageBus.Message{Data: []byte("ok-1"), FromID: "peer"}
+	ch <- p2pMessageBus.Message{Data: []byte("ok-2"), FromID: "peer"}
+	close(ch)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("messages after a handler panic were not processed")
+	}
+}
+
+// erroringBanClient fails every IsPeerBanned lookup, simulating a degraded
+// registry.
+type erroringBanClient struct {
+	blockchain.PeerRegistryClientI
+}
+
+func (c *erroringBanClient) IsPeerBanned(_ context.Context, _ string) (bool, error) {
+	return false, fmt.Errorf("registry unavailable")
+}
+
+// TestShouldSkipBannedPeer_ErrorBreaker verifies ChiR2: when IsPeerBanned
+// errors, the failure is cached (fail open) so a gossip flood against a
+// degraded registry costs one RPC per peer per TTL instead of one per message.
+func TestShouldSkipBannedPeer_ErrorBreaker(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	counting := newCountingRegistryClient(&erroringBanClient{blockchain.NewLocalPeerRegistryClient(reg)})
+
+	s := &Server{
+		peerRegistry: counting,
+		logger:       ulogger.TestLogger{},
+		gCtx:         context.Background(),
+	}
+
+	pid := mustNewPeerID(t).String()
+	for i := 0; i < 100; i++ {
+		require.False(t, s.shouldSkipBannedPeer(pid, "test"), "lookup errors must fail open")
+	}
+
+	require.Equal(t, 1, counting.callCount("IsPeerBanned"), "failed lookups must be cached, not retried per message")
 }
 
 // TestUpdatePeerLastMessageTime_BatchedPathSkipsSelfOriginator mirrors the

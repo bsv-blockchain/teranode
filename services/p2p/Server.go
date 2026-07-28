@@ -767,7 +767,7 @@ func (s *Server) subscribeToTopic(ctx context.Context, topicName string, handler
 		go func() {
 			defer wg.Done()
 			for msg := range topicChannel {
-				handler(ctx, msg.Data, msg.FromID)
+				s.handleTopicMessage(ctx, topicName, handler, msg.Data, msg.FromID)
 			}
 		}()
 	}
@@ -775,6 +775,18 @@ func (s *Server) subscribeToTopic(ctx context.Context, topicName string, handler
 		wg.Wait()
 		s.logger.Warnf("%s topic channel closed", topicName)
 	}()
+}
+
+// handleTopicMessage invokes a gossip handler with a per-message recover.
+// Handlers parse untrusted network input; without this, a single message that
+// drives a handler into a panic would crash the whole node.
+func (s *Server) handleTopicMessage(ctx context.Context, topicName string, handler func(context.Context, []byte, string), data []byte, fromID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("[%s] gossip handler panic recovered (peer %s): %v", topicName, fromID, r)
+		}
+	}()
+	handler(ctx, data, fromID)
 }
 
 func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
@@ -1794,9 +1806,10 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
 	}
 
-	// Stop the registry batcher (performs a final flush of pending updates)
+	// Stop the registry batcher (performs a final flush of pending updates,
+	// bounded by the service manager's stop budget carried in ctx)
 	if s.registryBatcher != nil {
-		s.registryBatcher.stop()
+		s.registryBatcher.stop(ctx)
 	}
 
 	// Peer registry cleanup ticker is gone — the centralized blockchain registry
