@@ -153,6 +153,8 @@ type Server struct {
 	// getNodeStatusMessage (refreshed every publish tick and on best-block
 	// changes) so new websocket clients can be served without a blockchain
 	// gRPC round-trip on the shared notification-processor goroutine.
+	// The stored message is marshaled concurrently by multiple goroutines:
+	// a notificationMsg must never be mutated after being stored or published.
 	latestNodeStatus atomic.Pointer[notificationMsg]
 
 	// ipBanCache is a short-lived cache of "is this peer's IP banned" lookups
@@ -629,6 +631,16 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
+
+	// Warm the node-status cache before the HTTP surface (and its /p2p-ws
+	// route) comes up, so websocket clients are always served the cached status
+	// synchronously on the notification-processor goroutine. This keeps the
+	// guarantee that the first node_status a client receives is our own node's:
+	// the asset service (centrifuge) and the dashboard pin the current node's
+	// identity to the first node_status they see.
+	warmCtx, warmCancel := context.WithTimeout(ctx, initialNodeStatusTimeout)
+	s.getNodeStatusMessage(warmCtx)
+	warmCancel()
 
 	s.e = s.setupHTTPServer()
 
@@ -1153,14 +1165,26 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 	return nil
 }
 
+// nodeStatusPublishInterval is how often the node status is recomputed and
+// published. Each publish is bounded to this interval so one wedged blockchain
+// call cannot stall the publisher (and freeze the latestNodeStatus cache) forever.
+const nodeStatusPublishInterval = 10 * time.Second
+
 func (s *Server) publishNodeStatus(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(nodeStatusPublishInterval)
 	defer ticker.Stop()
 
-	// Publish initial status immediately
-	if err := s.handleNodeStatusNotification(ctx); err != nil {
-		s.logger.Errorf("[publishNodeStatus] error sending initial node status: %v", err)
+	publish := func() {
+		tickCtx, cancel := context.WithTimeout(ctx, nodeStatusPublishInterval)
+		defer cancel()
+
+		if err := s.handleNodeStatusNotification(tickCtx); err != nil {
+			s.logger.Errorf("[publishNodeStatus] error sending node status: %v", err)
+		}
 	}
+
+	// Publish initial status immediately
+	publish()
 
 	for {
 		select {
@@ -1168,9 +1192,7 @@ func (s *Server) publishNodeStatus(ctx context.Context) {
 			s.logger.Infof("[publishNodeStatus] node status publisher shutting down")
 			return
 		case <-ticker.C:
-			if err := s.handleNodeStatusNotification(ctx); err != nil {
-				s.logger.Errorf("[publishNodeStatus] error sending node status: %v", err)
-			}
+			publish()
 		}
 	}
 }
@@ -1186,7 +1208,9 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	if s.blockchainClient != nil {
 		bestBlockHeader, bestBlockMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 	}
-	if err != nil {
+
+	degraded := err != nil
+	if degraded {
 		s.logger.Errorf("[handleNodeStatusNotification] error getting best block header: %s", err)
 		// Use genesis block as fallback when we can't get the best block
 		bestBlockHeader = model.GenesisBlockHeader
@@ -1439,8 +1463,13 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	}
 
 	// Cache the status so sendInitialNodeStatuses can serve new websocket
-	// clients without blocking on blockchain gRPC.
-	s.latestNodeStatus.Store(msg)
+	// clients without blocking on blockchain gRPC. A degraded status (genesis
+	// fallback after a best-header failure) must not overwrite a good one, or a
+	// single transient blockchain error would misreport height 0 to every
+	// client connecting until the next successful refresh.
+	if !degraded || s.latestNodeStatus.Load() == nil {
+		s.latestNodeStatus.Store(msg)
+	}
 
 	return msg
 }

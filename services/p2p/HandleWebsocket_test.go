@@ -805,7 +805,7 @@ func TestSendInitialNodeStatuses_SendsCachedStatusSynchronously(t *testing.T) {
 	s.latestNodeStatus.Store(cached)
 
 	clientCh := make(chan []byte, 1)
-	s.sendInitialNodeStatuses(clientCh)
+	s.sendInitialNodeStatuses(context.Background(), clientCh)
 
 	// The server has no blockchain client, so only the synchronous cached path
 	// can have produced a message by now.
@@ -844,6 +844,10 @@ func TestGetNodeStatusMessage_PopulatesCache(t *testing.T) {
 func TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor(t *testing.T) {
 	release := make(chan struct{})
 
+	// blockchain.Mock is used deliberately here despite the prefer-sqlitememory
+	// rule: the test needs a GetBestBlockHeader call that blocks on demand to
+	// prove the processor loop is not stalled behind it, which a real store
+	// cannot simulate.
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Run(func(mock.Arguments) {
 		<-release
@@ -902,5 +906,52 @@ func TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor(t *testi
 		require.Equal(t, "node_status", msg.Type)
 	case <-time.After(2 * time.Second):
 		t.Fatal("initial node_status never delivered after the blockchain call unblocked")
+	}
+}
+
+// TestStartNotificationProcessor_InitialStatusPrecedesBroadcasts encodes the
+// contract that consumers (the asset service's centrifuge listener and the
+// dashboard) rely on: the first node_status a new client receives identifies our
+// own node. With the cache warmed (as Start does before exposing the websocket
+// route), the initial status is sent synchronously during client registration,
+// so a concurrently broadcast remote node_status can never precede it.
+func TestStartNotificationProcessor_InitialStatusPrecedesBroadcasts(t *testing.T) {
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode: settings.ListenModeFull,
+			},
+		},
+	}
+
+	ourStatus := &notificationMsg{Type: "node_status", PeerID: "our-node"}
+	s.latestNodeStatus.Store(ourStatus)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	clientChannels := newClientChannelMap()
+	newClientCh := make(chan chan []byte, 10)
+	deadClientCh := make(chan chan []byte, 10)
+	notificationCh := make(chan *notificationMsg, 10)
+
+	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+
+	// Register a client and broadcast a remote peer's node_status at the same
+	// time. The client must either see our own status first or miss the remote
+	// broadcast entirely (if it was processed before registration).
+	clientCh := make(chan []byte, 10)
+	newClientCh <- clientCh
+	notificationCh <- &notificationMsg{Type: "node_status", PeerID: "remote-node"}
+
+	select {
+	case data := <-clientCh:
+		var msg notificationMsg
+		require.NoError(t, json.Unmarshal(data, &msg))
+		require.Equal(t, "node_status", msg.Type)
+		require.Equal(t, "our-node", msg.PeerID, "first node_status must identify our own node")
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial node_status never delivered")
 	}
 }
