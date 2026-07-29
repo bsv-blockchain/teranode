@@ -57,9 +57,9 @@ import (
 // workers; 16K buckets at roughly the same total footprint reduces collision
 // probability ~4×. Exported to package-internal callers (tests) so they can
 // construct fresh maps without re-deriving the value.
-const errAddingNodeToSubtree = "error adding node to subtree"
-
 const splitMapBuckets = 16 * 1024
+
+const errAddingNodeToSubtree = "error adding node to subtree"
 
 // splitMapBucketsMax is the inclusive upper bound for
 // BlockAssembly.SplitMapBuckets — driven by the uint16 internal
