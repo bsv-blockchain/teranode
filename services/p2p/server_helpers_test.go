@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func newServerWithLocalRegistry(t *testing.T) (*Server, *blockchain.CentralizedPeerRegistry) {
@@ -962,4 +963,20 @@ func TestIsBaseURLBlacklisted(t *testing.T) {
 				"baseURL %q vs blacklist entry %q", tt.baseURL, tt.entry)
 		})
 	}
+}
+
+func TestServerGetPeersReturnsConnectedPeersWithHeight(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	connectedPID := mustNewPeerID(t)
+	disconnectedPID := mustNewPeerID(t)
+
+	s.addConnectedPeer(connectedPID, "client/1.0", 123, nil, "")
+	s.addPeer(disconnectedPID, "client/1.0", 99, nil, "")
+
+	resp, err := s.GetPeers(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.Len(t, resp.Peers, 1, "disconnected peers must be excluded")
+	require.Equal(t, connectedPID.String(), resp.Peers[0].Id)
+	require.Equal(t, uint32(123), resp.Peers[0].CurrentHeight)
 }
