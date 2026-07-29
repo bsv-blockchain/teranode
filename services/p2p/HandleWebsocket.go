@@ -259,26 +259,55 @@ func (s *Server) startNotificationProcessor(
 	}
 }
 
+// initialNodeStatusTimeout bounds the blockchain gRPC round-trips made when a
+// client connects before the first periodic node-status publish has cached one.
+const initialNodeStatusTimeout = 5 * time.Second
+
 // sendInitialNodeStatuses sends the current node's status to a newly connected client
-// This ensures the UI can identify which node is the current one
+// so the UI can identify which node is the current one. It runs on the shared
+// notification-processor goroutine and must never block: the status cached by the
+// periodic publisher is sent directly; only when nothing is cached yet (a client
+// connecting before the first publish completes) is a fresh status computed on a
+// separate goroutine, with a bounded context tied to the server lifecycle.
 func (s *Server) sendInitialNodeStatuses(clientCh chan []byte) {
-	// Always generate a fresh node_status message for our node
-	ourStatus := s.getNodeStatusMessage(context.Background())
-	if ourStatus == nil {
-		s.logger.Warnf("[sendInitialNodeStatuses] Failed to get current node status")
+	if status := s.latestNodeStatus.Load(); status != nil {
+		s.sendNodeStatusToClient(clientCh, status)
 		return
 	}
 
-	// Send our node's status as the first message
-	if data, err := json.Marshal(ourStatus); err == nil {
-		select {
-		case clientCh <- data:
-			s.logger.Debugf("[sendInitialNodeStatuses] Sent current node status (peer_id: %s) to new client", ourStatus.PeerID)
-		default:
-			s.logger.Warnf("[sendInitialNodeStatuses] Failed to send current node status - channel full")
+	go func() {
+		parent := s.gCtx
+		if parent == nil {
+			parent = context.Background()
 		}
-	} else {
+
+		ctx, cancel := context.WithTimeout(parent, initialNodeStatusTimeout)
+		defer cancel()
+
+		status := s.getNodeStatusMessage(ctx)
+		if status == nil {
+			s.logger.Warnf("[sendInitialNodeStatuses] Failed to get current node status")
+			return
+		}
+
+		s.sendNodeStatusToClient(clientCh, status)
+	}()
+}
+
+// sendNodeStatusToClient marshals a node status and sends it to the client's
+// buffered channel without blocking, dropping the message if the channel is full.
+func (s *Server) sendNodeStatusToClient(clientCh chan []byte, status *notificationMsg) {
+	data, err := json.Marshal(status)
+	if err != nil {
 		s.logger.Errorf("[sendInitialNodeStatuses] Failed to marshal current node status: %v", err)
+		return
+	}
+
+	select {
+	case clientCh <- data:
+		s.logger.Debugf("[sendInitialNodeStatuses] Sent current node status (peer_id: %s) to new client", status.PeerID)
+	default:
+		s.logger.Warnf("[sendInitialNodeStatuses] Failed to send current node status - channel full")
 	}
 }
 

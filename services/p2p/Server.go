@@ -149,6 +149,12 @@ type Server struct {
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
+	// latestNodeStatus caches the most recent node status computed by
+	// getNodeStatusMessage (refreshed every publish tick and on best-block
+	// changes) so new websocket clients can be served without a blockchain
+	// gRPC round-trip on the shared notification-processor goroutine.
+	latestNodeStatus atomic.Pointer[notificationMsg]
+
 	// ipBanCache is a short-lived cache of "is this peer's IP banned" lookups
 	// used by shouldSkipBannedPeer, avoiding a GetPeers scan per gossip message.
 	ipBanCache sync.Map // peerID string -> ipBanCacheEntry
@@ -1403,8 +1409,7 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	s.logger.Debugf("[getNodeStatusMessage] Determined storage=%q for this node (persisterHeight=%d, bestHeight=%d, retention=%d, prunerTrigger=%s)",
 		storage, blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
 
-	// Return the notification message
-	return &notificationMsg{
+	msg := &notificationMsg{
 		Timestamp:           time.Now().UTC().Format(isoFormat),
 		Type:                "node_status",
 		BaseURL:             baseURL,
@@ -1432,6 +1437,12 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		ConnectedPeersCount: connectedPeersCount,
 		Storage:             storage,
 	}
+
+	// Cache the status so sendInitialNodeStatuses can serve new websocket
+	// clients without blocking on blockchain gRPC.
+	s.latestNodeStatus.Store(msg)
+
+	return msg
 }
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {

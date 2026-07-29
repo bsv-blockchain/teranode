@@ -11,11 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -787,4 +790,117 @@ func TestBroadcast_NonPositivePoolSizeDoesNotDeadlock(t *testing.T) {
 	}
 
 	require.Equal(t, numChannels, cm.count(), "responsive channels should still be registered")
+}
+
+// TestSendInitialNodeStatuses_SendsCachedStatusSynchronously verifies that when a
+// node status has been cached by the periodic publisher, a new client is served
+// the cached copy directly on the calling goroutine, without any blockchain call.
+func TestSendInitialNodeStatuses_SendsCachedStatusSynchronously(t *testing.T) {
+	s := &Server{
+		logger:   &ulogger.TestLogger{},
+		settings: &settings.Settings{},
+	}
+
+	cached := &notificationMsg{Type: "node_status", PeerID: "cached-peer", BestHeight: 42}
+	s.latestNodeStatus.Store(cached)
+
+	clientCh := make(chan []byte, 1)
+	s.sendInitialNodeStatuses(clientCh)
+
+	// The server has no blockchain client, so only the synchronous cached path
+	// can have produced a message by now.
+	select {
+	case data := <-clientCh:
+		var msg notificationMsg
+		require.NoError(t, json.Unmarshal(data, &msg))
+		require.Equal(t, "node_status", msg.Type)
+		require.Equal(t, "cached-peer", msg.PeerID)
+		require.Equal(t, uint32(42), msg.BestHeight)
+	default:
+		t.Fatal("cached node_status was not sent synchronously")
+	}
+}
+
+// TestGetNodeStatusMessage_PopulatesCache verifies that computing a node status
+// stores it in the cache used by sendInitialNodeStatuses.
+func TestGetNodeStatusMessage_PopulatesCache(t *testing.T) {
+	s := &Server{
+		logger:   &ulogger.TestLogger{},
+		settings: &settings.Settings{},
+	}
+
+	require.Nil(t, s.latestNodeStatus.Load())
+
+	msg := s.getNodeStatusMessage(context.Background())
+	require.NotNil(t, msg)
+	require.Same(t, msg, s.latestNodeStatus.Load())
+}
+
+// TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor is a
+// regression test for the issue where sendInitialNodeStatuses ran a blockchain
+// gRPC round-trip inline on the single notification-processor goroutine: one slow
+// blockchain call (or a burst of new clients) froze all broadcasts and dead-client
+// reaping. The initial status fetch must not block the processor loop.
+func TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor(t *testing.T) {
+	release := make(chan struct{})
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Run(func(mock.Arguments) {
+		<-release
+	}).Return(model.GenesisBlockHeader, model.GenesisBlockHeaderMeta, nil).Maybe()
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode: settings.ListenModeFull,
+			},
+		},
+		blockchainClient: mockBlockchain,
+		gCtx:             ctx,
+	}
+
+	clientChannels := newClientChannelMap()
+	newClientCh := make(chan chan []byte, 10)
+	deadClientCh := make(chan chan []byte, 10)
+	notificationCh := make(chan *notificationMsg, 10)
+
+	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+
+	// Connect a client while the blockchain call cannot complete.
+	clientCh := make(chan []byte, 10)
+	newClientCh <- clientCh
+
+	require.Eventually(t, func() bool { return clientChannels.contains(clientCh) },
+		time.Second, 5*time.Millisecond, errClientNotAdded)
+
+	// The processor must keep broadcasting while the initial node-status fetch
+	// is still blocked on the blockchain service.
+	notificationCh <- &notificationMsg{Type: "test", BaseURL: baseURL}
+
+	select {
+	case data := <-clientCh:
+		var msg notificationMsg
+		require.NoError(t, json.Unmarshal(data, &msg))
+		require.Equal(t, "test", msg.Type, "broadcast should arrive before the blocked initial node_status")
+	case <-time.After(2 * time.Second):
+		t.Fatal("notification broadcast stalled behind the initial node-status fetch")
+	}
+
+	// Unblock the blockchain call; the initial node_status must still be delivered.
+	close(release)
+
+	select {
+	case data := <-clientCh:
+		var msg notificationMsg
+		require.NoError(t, json.Unmarshal(data, &msg))
+		require.Equal(t, "node_status", msg.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial node_status never delivered after the blockchain call unblocked")
+	}
 }
