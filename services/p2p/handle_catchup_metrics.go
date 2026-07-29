@@ -222,6 +222,14 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 			continue
 		}
 
+		// Enforce the operator blacklist at the point of use: a URL stored in
+		// the registry before its host was blacklisted must not be handed to
+		// catchup (gossip-time checks cannot evict already-stored URLs).
+		if s.isBlacklistedBaseURL(p.DataHubURL) {
+			s.logger.Debugf("[GetPeersForCatchup] skipping peer %s with blacklisted DataHubURL %s", p.ID, p.DataHubURL)
+			continue
+		}
+
 		blockHashStr := ""
 		if p.BlockHash != nil {
 			blockHashStr = p.BlockHash.String()

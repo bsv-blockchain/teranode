@@ -280,3 +280,28 @@ func TestPeerSelector_SelectSyncPeer_UnprovenProbeBudgetBoundsHeaderOnlyPeers(t 
 	boundedBudget.UnprovenProbeBudgetRemaining = 3
 	require.NotEmpty(t, ps.SelectSyncPeer(peers, boundedBudget))
 }
+
+// TestPeerSelector_SelectSyncPeer_SkipsBlacklistedDataHubURL: the operator
+// blacklist is enforced at sync-peer selection so a DataHub URL stored in the
+// registry before its host was blacklisted can never be chosen for catchup.
+func TestPeerSelector_SelectSyncPeer_SkipsBlacklistedDataHubURL(t *testing.T) {
+	ps := NewPeerSelector(ulogger.TestLogger{}, &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:     true,
+			FullDeliveryFreshnessWindow: 24 * time.Hour,
+		},
+		SubtreeValidation: settings.SubtreeValidationSettings{
+			BlacklistedBaseURLs: map[string]struct{}{"http://evil.example": {}},
+		},
+	})
+
+	good := newPeer("good", 100, "full", 60, 0)
+	bad := newPeer("bad", 200, "full", 90, 0)
+	bad.DataHubURL = "http://evil.example:8080/api" // same host as blacklist entry
+
+	got := ps.SelectSyncPeer([]*blockchain.PeerInfo{bad, good}, advertisedProbeCriteria(50))
+	require.Equal(t, "good", got, "peer with blacklisted DataHub URL must not win selection")
+
+	got = ps.SelectSyncPeer([]*blockchain.PeerInfo{bad}, advertisedProbeCriteria(50))
+	require.Empty(t, got, "a blacklisted peer must not be selected even as the only candidate")
+}

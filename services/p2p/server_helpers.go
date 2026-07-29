@@ -64,10 +64,8 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		return
 	}
 
-	// Validate DataHubURL to prevent SSRF attacks
-	if err = s.validateDataHubURL(blockMessage.DataHubURL); err != nil {
-		s.logger.Errorf("[handleBlockTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		s.addProtocolViolation(fromID)
+	// Validate DataHubURL (SSRF + operator blacklist)
+	if !s.checkDataHubURL(blockMessage.DataHubURL, fromID, "handleBlockTopic") {
 		return
 	}
 
@@ -194,19 +192,12 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	// Validate DataHubURL to prevent SSRF attacks
-	if err = s.validateDataHubURL(subtreeMessage.DataHubURL); err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		s.addProtocolViolation(fromID)
+	// Validate DataHubURL (SSRF + operator blacklist)
+	if !s.checkDataHubURL(subtreeMessage.DataHubURL, fromID, "handleSubtreeTopic") {
 		return
 	}
 
 	s.logger.Debugf("[handleSubtreeTopic] received subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
-
-	if s.isBlacklistedBaseURL(subtreeMessage.DataHubURL) {
-		s.logger.Errorf("[handleSubtreeTopic] Blocked subtree notification from blacklisted baseURL: %s", subtreeMessage.DataHubURL)
-		return
-	}
 
 	now := time.Now().UTC()
 
@@ -275,12 +266,24 @@ func (s *Server) addProtocolViolation(peerID string) {
 	s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
-// isBlacklistedBaseURL checks if the given baseURL matches any entry in the blacklist.
+// isBlacklistedBaseURL checks the given baseURL against the operator-configured
+// blacklist (settings.SubtreeValidation.BlacklistedBaseURLs).
 func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
-	inputHost := s.extractHost(baseURL)
+	if s.settings == nil {
+		return false
+	}
+
+	return isBaseURLBlacklisted(baseURL, s.settings.SubtreeValidation.BlacklistedBaseURLs)
+}
+
+// isBaseURLBlacklisted checks if the given baseURL matches any entry in the
+// blacklist. Package-level so both the gossip handlers (via the Server wrapper
+// above) and the sync PeerSelector can enforce the same blacklist.
+func isBaseURLBlacklisted(baseURL string, blacklist map[string]struct{}) bool {
+	inputHost := extractHost(baseURL)
 	if inputHost == "" {
 		// Fall back to exact string matching for invalid URLs
-		for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
+		for blocked := range blacklist {
 			if baseURL == blocked {
 				return true
 			}
@@ -290,10 +293,10 @@ func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 	}
 
 	// Check each blacklisted URL
-	for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
-		blockedHost := s.extractHost(blocked)
+	for blocked := range blacklist {
+		blockedHost := blacklistEntryHost(blocked)
 		if blockedHost == "" {
-			// Fall back to exact string matching for invalid blacklisted URLs
+			// Fall back to exact string matching for unparseable blacklisted entries
 			if baseURL == blocked {
 				return true
 			}
@@ -309,14 +312,29 @@ func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 	return false
 }
 
+// blacklistEntryHost extracts the normalized host of a blacklist entry.
+// Operators commonly configure bare hosts ("evil.example"), which url.Parse
+// reads as a path (empty host), so scheme-less entries are retried in
+// protocol-relative form. Returns "" only for entries with no parseable host.
+func blacklistEntryHost(blocked string) string {
+	if host := extractHost(blocked); host != "" {
+		return host
+	}
+
+	return extractHost("//" + blocked)
+}
+
 // extractHost extracts and normalizes the host component from a URL
-func (s *Server) extractHost(urlStr string) string {
+func extractHost(urlStr string) string {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return ""
 	}
 
-	host := parsedURL.Hostname()
+	// Strip trailing dots of a rooted FQDN so "evil.example." (or the
+	// non-resolvable "evil.example..") matches a blacklist entry for
+	// "evil.example".
+	host := strings.TrimRight(parsedURL.Hostname(), ".")
 	if host == "" {
 		return ""
 	}
@@ -366,7 +384,10 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 		return errors.NewInvalidArgumentError("DataHubURL has invalid scheme: %s (only http/https allowed)", parsed.Scheme)
 	}
 
-	hostname := parsed.Hostname()
+	// Canonicalize before checking: strip trailing dots of a rooted FQDN and
+	// lowercase, so "localhost.", "LOCALHOST" or "127.0.0.1." cannot slip past
+	// the checks below (DNS resolution is case-insensitive).
+	hostname := strings.ToLower(strings.TrimRight(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
 	}
@@ -385,6 +406,27 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	}
 
 	return nil
+}
+
+// checkDataHubURL runs the trust checks shared by the block and subtree
+// announcement handlers: SSRF validation (a failure counts as a protocol
+// violation) and the operator-configured blacklist (a match drops the message
+// without penalising the peer). Returns false when the message must be dropped.
+// handleNodeStatusTopic runs the same two checks inline because a blacklist
+// match there only strips the BaseURL instead of dropping the telemetry.
+func (s *Server) checkDataHubURL(dataHubURL, fromID, handlerName string) bool {
+	if err := s.validateDataHubURL(dataHubURL); err != nil {
+		s.logger.Errorf("[%s] invalid DataHubURL from peer %s: %v", handlerName, fromID, err)
+		s.addProtocolViolation(fromID)
+		return false
+	}
+
+	if s.isBlacklistedBaseURL(dataHubURL) {
+		s.logger.Warnf("[%s] blocked notification from blacklisted DataHubURL %s (peer %s)", handlerName, dataHubURL, fromID)
+		return false
+	}
+
+	return true
 }
 
 func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID string) {

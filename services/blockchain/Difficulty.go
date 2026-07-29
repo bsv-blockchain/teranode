@@ -167,10 +167,24 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 //   - suitableFirstBlock: First block in the difficulty adjustment window
 //   - suitableLastBlock: Last block in the difficulty adjustment window
 func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
+	return ComputeTarget(d.settings, suitableFirstBlock, suitableLastBlock)
+}
+
+// ComputeTarget calculates the DAA target difficulty from the first and last suitable
+// blocks of the difficulty adjustment window. It is the pure arithmetic core shared by
+// the store-backed Difficulty.CalcNextWorkRequired path and by callers that reconstruct
+// the window from headers not yet persisted (e.g. block validation catchup). It reads
+// only the ChainWork and Time of the two suitable blocks plus the chain parameters, so
+// it makes no store access and holds no state.
+//
+// Parameters:
+//   - tSettings: chain settings (TargetTimePerBlock, PowLimit, NoDifficultyAdjustment)
+//   - suitableFirstBlock: first (older) suitable block in the window
+//   - suitableLastBlock: last (newer) suitable block in the window
+func ComputeTarget(tSettings *settings.Settings, suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
 	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
 	// If regtest we don't adjust the difficulty
-	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
-		d.logger.Debugf("no difficulty adjustment - returning %v", lastSuitableBits)
+	if tSettings.ChainCfgParams.NoDifficultyAdjustment {
 		return lastSuitableBits, nil
 	}
 
@@ -179,29 +193,22 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	lastChainwork := new(big.Int).SetBytes(suitableLastBlock.ChainWork)
 
 	work := new(big.Int).Sub(lastChainwork, firstChainwork)
-	d.logger.Debugf("work: %s", work.String())
 
 	// In order to avoid difficulty cliffs, we bound the amplitude of the
 	// adjustment we are going to do.
-	d.logger.Debugf("suitableLastBlock.Height: %d, suitableFirstBlock.Height: %d", suitableLastBlock.Height, suitableFirstBlock.Height)
-	d.logger.Debugf("suitableLastBlock.Time: %d, suitableFirstBlock.Time: %d", suitableLastBlock.Time, suitableFirstBlock.Time)
-
 	duration := int64(suitableLastBlock.Time - suitableFirstBlock.Time)
-	if duration > 288*int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
-		d.logger.Debugf("duration %d is greater than 288 * target time per block %.0f - setting to 288 * target time per block", duration, d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
-		duration = 288 * int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
-	} else if duration < 72*int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
-		d.logger.Debugf("duration %d is less than 72 * target time per block %.0f - setting to 72 * target time per block", duration, d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
-		duration = 72 * int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
+	if duration > 288*int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
+		duration = 288 * int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds())
+	} else if duration < 72*int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
+		duration = 72 * int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds())
 	}
 
 	// Calculate the projected work by multiplying the current work by the target time per block (in seconds).
-	projectedWork := new(big.Int).Mul(work, big.NewInt(int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())))
+	projectedWork := new(big.Int).Mul(work, big.NewInt(int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds())))
 
 	// Divide the projected work by the actual time duration between the blocks to get the adjusted work.
 	// check if duration is zero
 	if duration == 0 {
-		d.logger.Debugf("duration is zero - returning %v", lastSuitableBits)
 		return lastSuitableBits, nil
 	}
 
@@ -222,7 +229,6 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	// Calculate the new target by dividing the result by the adjusted work. This gives the new difficulty target.
 	// check if pw is zero
 	if pw.Sign() == 0 {
-		d.logger.Debugf("pw is zero, - returning %v", lastSuitableBits)
 		return lastSuitableBits, nil
 	}
 
@@ -233,9 +239,8 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	// This was incorrectly squaring the target, making it much larger (easier difficulty)
 
 	// clip again if above minimum target (too easy)
-	if newTarget.Cmp(d.settings.ChainCfgParams.PowLimit) > 0 {
-		d.logger.Debugf("new target would be above pow limit, set to pow limit")
-		newTarget.Set(d.settings.ChainCfgParams.PowLimit)
+	if newTarget.Cmp(tSettings.ChainCfgParams.PowLimit) > 0 {
+		newTarget.Set(tSettings.ChainCfgParams.PowLimit)
 	}
 
 	// Convert back to compact format

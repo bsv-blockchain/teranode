@@ -42,6 +42,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+const logErrParsingBufferSize = "error parsing utxoPersister_buffer_size %q, using default of 4KB"
+
 // This type is responsible for reading and writing UTXO additions, deletions and sets to and from files.
 
 // The file format is as follows:
@@ -418,7 +420,7 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
-		us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+		us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 		bufferSize = 4096
 	}
@@ -458,7 +460,7 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
-		us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+		us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 		bufferSize = 4096
 	}
@@ -606,7 +608,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 		if err != nil {
-			us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+			us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 			bufferSize = 4096
 		}

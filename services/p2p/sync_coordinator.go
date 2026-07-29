@@ -117,6 +117,8 @@ const (
 // viability filters used by the coordinator when deciding whether we're
 // caught up and when determining whether all eligible peers have been
 // attempted. Keeping this in one place ensures both call sites stay in sync.
+// Coordinator decision paths must use the SyncCoordinator method of the same
+// name, which additionally applies the operator blacklist.
 //
 // These filters — not banned, has a DataHub URL, and sufficient reputation —
 // exclude obviously unsuitable peers. They do
@@ -130,6 +132,25 @@ const (
 // tolerance here.
 func isViableSyncCandidate(p *blockchain.PeerInfo) bool {
 	return !p.IsBanned && p.DataHubURL != "" && p.ReputationScore >= 20
+}
+
+// isViableSyncCandidate layers the operator blacklist on top of the
+// unconditional filters. The caught-up determination (and every other
+// coordinator decision) must agree with peer selection here: isEligible
+// filters blacklisted DataHub URLs out of selection, so a
+// blacklisted-but-ahead peer that still counted as viable would keep
+// isCaughtUp reporting not-caught-up forever while SelectSyncPeer can never
+// pick it.
+func (sc *SyncCoordinator) isViableSyncCandidate(p *blockchain.PeerInfo) bool {
+	if !isViableSyncCandidate(p) {
+		return false
+	}
+
+	if sc.settings != nil && isBaseURLBlacklisted(p.DataHubURL, sc.settings.SubtreeValidation.BlacklistedBaseURLs) {
+		return false
+	}
+
+	return true
 }
 
 func maxUnprovenProbeBudget(settings *settings.Settings) int {
@@ -219,7 +240,7 @@ func peerEligibleForAdvertisedProbe(p *blockchain.PeerInfo, localHeight uint32) 
 }
 
 func (sc *SyncCoordinator) peerEligibleForAdvertisedProbe(p *blockchain.PeerInfo, localHeight uint32) bool {
-	return peerEligibleForAdvertisedProbe(p, localHeight)
+	return sc.isViableSyncCandidate(p) && p.Height > localHeight && p.BlockHash != nil
 }
 
 func (sc *SyncCoordinator) isUnprovenProbeCandidate(p *blockchain.PeerInfo, now time.Time) bool {
@@ -312,7 +333,7 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 		localHeight = tipHeight
 		peers := sc.listAllPeers()
 		for _, p := range peers {
-			if isViableSyncCandidate(p) && peerAheadByValidatedWork(p, chainWork) {
+			if sc.isViableSyncCandidate(p) && peerAheadByValidatedWork(p, chainWork) {
 				return false
 			}
 		}
@@ -818,7 +839,7 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 func (sc *SyncCoordinator) filterEligiblePeersWithTip(peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32, localChainWork []byte, localWorkOK bool) []*blockchain.PeerInfo {
 	validatedPeers := make([]*blockchain.PeerInfo, 0, len(peers))
 	for _, p := range peers {
-		if p.ID == oldPeer || !isViableSyncCandidate(p) {
+		if p.ID == oldPeer || !sc.isViableSyncCandidate(p) {
 			if p.ID == oldPeer {
 				sc.logger.Debugf("[SyncCoordinator] Skipping old peer %s", p.ID)
 			}
@@ -1208,7 +1229,7 @@ func (sc *SyncCoordinator) checkAllPeersAttempted() {
 	syncAttemptCooldown := 1 * time.Minute // Don't retry a peer for at least 1 minute
 
 	for _, p := range peers {
-		if !isViableSyncCandidate(p) {
+		if !sc.isViableSyncCandidate(p) {
 			continue
 		}
 		eligibleByValidatedWork := localWorkOK && peerAheadByValidatedWork(p, localChainWork)
@@ -1273,6 +1294,16 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash stri
 	dataHubURL := ""
 	if peerInfo, exists, err := sc.registry.GetPeer(sc.ctx, syncPeer); err == nil && exists {
 		dataHubURL = peerInfo.DataHubURL
+	}
+
+	// Enforce the operator blacklist on the URL read from the registry: it may
+	// have been stored before its host was blacklisted (the incumbent sync peer
+	// is not re-selected on every trigger) or belong to a forced sync peer,
+	// which bypasses selection eligibility. Deny wins - block validation must
+	// never be pointed at a blacklisted host.
+	if dataHubURL != "" && sc.settings != nil && isBaseURLBlacklisted(dataHubURL, sc.settings.SubtreeValidation.BlacklistedBaseURLs) {
+		sc.logger.Warnf("[sendSyncTriggerToKafka] not sending sync trigger for peer %s: DataHubURL %s is blacklisted", syncPeer, dataHubURL)
+		return
 	}
 
 	sc.logger.Infof("[sendSyncTriggerToKafka] Sending sync trigger with primary URL %s from peer %s", dataHubURL, syncPeer)
