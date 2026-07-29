@@ -133,9 +133,9 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mock UTXO store Create method
-		server.utxoStore.(*utxo.MockUtxostore).On("Create",
+		server.utxoStore.(*utxo.MockUtxostore).On("SpendAndCreate",
 			mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(&utxometa.Data{}, nil)
+			Return(&utxometa.Data{}, nil, nil)
 
 		// Mock validator to return success - set up the validator client to succeed
 		mockValidator := server.validatorClient.(*validator.MockValidator)
@@ -400,9 +400,9 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mock UTXO store Create method
-		server.utxoStore.(*utxo.MockUtxostore).On("Create",
+		server.utxoStore.(*utxo.MockUtxostore).On("SpendAndCreate",
 			mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(&utxometa.Data{}, nil)
+			Return(&utxometa.Data{}, nil, nil)
 
 		// Mock validator and blockchain client
 		mockValidator := server.validatorClient.(*validator.MockValidator)
@@ -2287,9 +2287,9 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 	// Mock UTXO store
 	mockUtxoStore := &utxo.MockUtxostore{}
 	// Set up default mock for Create method
-	mockUtxoStore.On("Create",
+	mockUtxoStore.On("SpendAndCreate",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(&utxometa.Data{}, nil).Maybe()
+		Return(&utxometa.Data{}, nil, nil).Maybe()
 	// Set up default mock for BatchDecorate method
 	mockUtxoStore.On("BatchDecorate",
 		mock.Anything, mock.Anything, mock.Anything).

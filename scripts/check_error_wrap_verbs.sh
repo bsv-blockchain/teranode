@@ -34,7 +34,7 @@ matches=$(grep -rnE 'errors\.New[A-Za-z]*\(.*%w' \
   --include='*.go' --exclude-dir=vendor . \
   | grep -vE '^\./errors/[^/]*_test\.go:' || true)
 
-if [ -n "$matches" ]; then
+if [[ -n "$matches" ]]; then
   echo "ERROR: %w found inside errors.New* format string(s)."
   echo "The trailing error argument is extracted as the wrapped error before"
   echo "formatting, so %w renders as %!w(MISSING) or survives literally."

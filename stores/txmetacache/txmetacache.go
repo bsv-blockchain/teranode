@@ -623,48 +623,6 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	return nil
 }
 
-// Create adds a new transaction to the system, updating both the underlying store and the cache.
-// This is typically called when a new transaction is seen, either from the mempool or in a block.
-//
-// Parameters:
-// - ctx: Context for the operation
-// - tx: The transaction to create metadata for
-// - blockHeight: The current blockchain height
-// - opts: Optional creation options such as block information
-//
-// Returns:
-// - The created transaction metadata
-// - Error if creation fails
-//
-// This method delegates the creation to the underlying store and then adds the result to the cache.
-func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
-	txMeta, err := t.utxoStore.Create(ctx, tx, blockHeight, opts...)
-	if err != nil {
-		return txMeta, err
-	}
-
-	options := &utxo.CreateOptions{}
-	for _, opt := range opts {
-		opt(options)
-	}
-
-	var txHash *chainhash.Hash
-
-	if options.TxID != nil {
-		txHash = options.TxID
-	} else {
-		txHash = tx.TxIDChainHash()
-	}
-
-	// add to cache, but only if the blockIDs have not been set
-	if len(txMeta.BlockIDs) == 0 && !txMeta.Conflicting {
-		// don't return errors from SetCache, as it is not critical if the cache fails to set
-		_ = t.SetCache(txHash, txMeta)
-	}
-
-	return txMeta, nil
-}
-
 // SetMined marks a transaction as mined in the underlying store and evicts it
 // from the cache. The cache is populated on read only for txs with no block IDs
 // and not flagged conflicting (see GetMeta), so a newly mined tx must not stay
@@ -916,19 +874,35 @@ func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Sp
 	return t.utxoStore.GetSpend(ctx, spend)
 }
 
-// Spend marks UTXOs as spent by a transaction.
-// This method delegates directly to the underlying UTXO store without caching.
-//
-// Parameters:
-// - ctx: Context for the operation
-// - tx: The transaction that spends the UTXOs
-// - ignoreFlags: Optional flags to modify spending behavior
-//
-// Returns:
-// - Array of Spend objects representing the spent UTXOs
-// - Error if the spend operation fails
-func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	return t.utxoStore.Spend(ctx, tx, blockHeight, ignoreFlags...)
+// SpendAndCreate delegates the combined spend+create operation to the underlying
+// store and caches the returned metadata the same way Create does. The metadata
+// is nil (and nothing is cached) on error or with WithSpendOnly.
+func (t *TxMetaCache) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	txMeta, spends, err := t.utxoStore.SpendAndCreate(ctx, tx, blockHeight, opts...)
+	if err != nil || txMeta == nil {
+		return txMeta, spends, err
+	}
+
+	options := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	var txHash *chainhash.Hash
+
+	if options.TxID != nil {
+		txHash = options.TxID
+	} else {
+		txHash = tx.TxIDChainHash()
+	}
+
+	// add to cache, but only if the blockIDs have not been set
+	if len(txMeta.BlockIDs) == 0 && !txMeta.Conflicting {
+		// don't return errors from SetCache, as it is not critical if the cache fails to set
+		_ = t.SetCache(txHash, txMeta)
+	}
+
+	return txMeta, spends, nil
 }
 
 // Unspend marks previously spent UTXOs as unspent.

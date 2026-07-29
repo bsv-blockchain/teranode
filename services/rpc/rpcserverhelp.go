@@ -36,6 +36,23 @@ import (
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 )
 
+// Help description strings reused across multiple command help entries.
+const (
+	descDisassemblyScript = "Disassembly of the script"
+	descTxHash            = "The hash of the transaction"
+	descTxVersion         = "The transaction version"
+	descTxLockTime        = "The transaction lock time"
+	descTxInputs          = "The transaction inputs as JSON objects"
+	descTxOutputs         = "The transaction outputs as JSON objects"
+	descBlockHash         = "The hash of the block"
+	descNumConfirmations  = "The number of confirmations"
+	descBlockVersion      = "The block version"
+	descVerboseFalse      = "verbose=false"
+	descVerboseTrue       = "verbose=true"
+	descUsingTestnet      = "Whether or not server is using testnet"
+	descAnyCurrentErrors  = "Any current errors"
+)
+
 // helpDescsEnUS defines the English descriptions used for the help strings.
 var helpDescsEnUS = map[string]string{
 	// DebugLevelCmd help.
@@ -79,7 +96,7 @@ var helpDescsEnUS = map[string]string{
 	"createrawtransaction--result0":       "Hex-encoded bytes of the serialized transaction",
 
 	// ScriptSig help.
-	"scriptsig-asm": "Disassembly of the script",
+	"scriptsig-asm": descDisassemblyScript,
 	"scriptsig-hex": "Hex-encoded bytes of the script",
 
 	// PrevOut help.
@@ -104,7 +121,7 @@ var helpDescsEnUS = map[string]string{
 	"vin-sequence":    "The script sequence number",
 
 	// ScriptPubKeyResult help.
-	"scriptpubkeyresult-asm":       "Disassembly of the script",
+	"scriptpubkeyresult-asm":       descDisassemblyScript,
 	"scriptpubkeyresult-hex":       "Hex-encoded bytes of the script",
 	"scriptpubkeyresult-reqSigs":   "The number of required signatures",
 	"scriptpubkeyresult-type":      "The type of the script (e.g. 'pubkeyhash')",
@@ -116,18 +133,18 @@ var helpDescsEnUS = map[string]string{
 	"vout-scriptPubKey": "The public key script used to pay coins as a JSON object",
 
 	// TxRawDecodeResult help.
-	"txrawdecoderesult-txid":     "The hash of the transaction",
-	"txrawdecoderesult-version":  "The transaction version",
-	"txrawdecoderesult-locktime": "The transaction lock time",
-	"txrawdecoderesult-vin":      "The transaction inputs as JSON objects",
-	"txrawdecoderesult-vout":     "The transaction outputs as JSON objects",
+	"txrawdecoderesult-txid":     descTxHash,
+	"txrawdecoderesult-version":  descTxVersion,
+	"txrawdecoderesult-locktime": descTxLockTime,
+	"txrawdecoderesult-vin":      descTxInputs,
+	"txrawdecoderesult-vout":     descTxOutputs,
 
 	// DecodeRawTransactionCmd help.
 	"decoderawtransaction--synopsis": "Returns a JSON object representing the provided serialized, hex-encoded transaction.",
 	"decoderawtransaction-hextx":     "Serialized, hex-encoded transaction",
 
 	// DecodeScriptResult help.
-	"decodescriptresult-asm":       "Disassembly of the script",
+	"decodescriptresult-asm":       descDisassemblyScript,
 	"decodescriptresult-reqSigs":   "The number of required signatures",
 	"decodescriptresult-type":      "The type of the script (e.g. 'pubkeyhash')",
 	"decodescriptresult-addresses": "The bitcoin addresses associated with this script",
@@ -183,7 +200,7 @@ var helpDescsEnUS = map[string]string{
 
 	// GetBlockCmd help.
 	"getblock--synopsis":   "Returns information about a block given its hash.",
-	"getblock-hash":        "The hash of the block",
+	"getblock-hash":        descBlockHash,
 	"getblock-verbosity":   "Specifies the block format returns",
 	"getblock--condition0": "verbosity=0",
 	"getblock--condition1": "verbosity=1",
@@ -221,11 +238,11 @@ var helpDescsEnUS = map[string]string{
 
 	// TxRawResult help.
 	"txrawresult-hex":           "Hex-encoded transaction",
-	"txrawresult-txid":          "The hash of the transaction",
-	"txrawresult-version":       "The transaction version",
-	"txrawresult-locktime":      "The transaction lock time",
-	"txrawresult-vin":           "The transaction inputs as JSON objects",
-	"txrawresult-vout":          "The transaction outputs as JSON objects",
+	"txrawresult-txid":          descTxHash,
+	"txrawresult-version":       descTxVersion,
+	"txrawresult-locktime":      descTxLockTime,
+	"txrawresult-vin":           descTxInputs,
+	"txrawresult-vout":          descTxOutputs,
 	"txrawresult-blockhash":     "Hash of the block the transaction is part of",
 	"txrawresult-confirmations": "Number of confirmations of the block",
 	"txrawresult-time":          "Transaction time in seconds since 1 Jan 1970 GMT",
@@ -236,12 +253,12 @@ var helpDescsEnUS = map[string]string{
 
 	// SearchRawTransactionsResult help.
 	"searchrawtransactionsresult-hex":           "Hex-encoded transaction",
-	"searchrawtransactionsresult-txid":          "The hash of the transaction",
+	"searchrawtransactionsresult-txid":          descTxHash,
 	"searchrawtransactionsresult-hash":          "The wxtid of the transaction",
-	"searchrawtransactionsresult-version":       "The transaction version",
-	"searchrawtransactionsresult-locktime":      "The transaction lock time",
-	"searchrawtransactionsresult-vin":           "The transaction inputs as JSON objects",
-	"searchrawtransactionsresult-vout":          "The transaction outputs as JSON objects",
+	"searchrawtransactionsresult-version":       descTxVersion,
+	"searchrawtransactionsresult-locktime":      descTxLockTime,
+	"searchrawtransactionsresult-vin":           descTxInputs,
+	"searchrawtransactionsresult-vout":          descTxOutputs,
 	"searchrawtransactionsresult-blockhash":     "Hash of the block the transaction is part of",
 	"searchrawtransactionsresult-confirmations": "Number of confirmations of the block",
 	"searchrawtransactionsresult-time":          "Transaction time in seconds since 1 Jan 1970 GMT",
@@ -257,10 +274,10 @@ var helpDescsEnUS = map[string]string{
 
 	// GetBlockBaseVerboseResult help.
 	"getblockbaseverboseresult-hash":              "The hash of the block (same as provided)",
-	"getblockbaseverboseresult-confirmations":     "The number of confirmations",
+	"getblockbaseverboseresult-confirmations":     descNumConfirmations,
 	"getblockbaseverboseresult-size":              "The size of the block",
 	"getblockbaseverboseresult-height":            "The height of the block in the block chain",
-	"getblockbaseverboseresult-version":           "The block version",
+	"getblockbaseverboseresult-version":           descBlockVersion,
 	"getblockbaseverboseresult-versionHex":        "The block version in hexadecimal",
 	"getblockbaseverboseresult-merkleroot":        "Root hash of the merkle tree",
 	"getblockbaseverboseresult-time":              "The block time in seconds since 1 Jan 1970 GMT",
@@ -281,17 +298,17 @@ var helpDescsEnUS = map[string]string{
 
 	// GetBlockHeaderCmd help.
 	"getblockheader--synopsis":   "Returns information about a block header given its hash.",
-	"getblockheader-hash":        "The hash of the block",
+	"getblockheader-hash":        descBlockHash,
 	"getblockheader-verbose":     "Specifies the block header is returned as a JSON object instead of hex-encoded string",
-	"getblockheader--condition0": "verbose=false",
-	"getblockheader--condition1": "verbose=true",
+	"getblockheader--condition0": descVerboseFalse,
+	"getblockheader--condition1": descVerboseTrue,
 	"getblockheader--result0":    "The block header hash",
 
 	// GetBlockHeaderVerboseResult help.
 	"getblockheaderverboseresult-hash":              "The hash of the block (same as provided)",
-	"getblockheaderverboseresult-confirmations":     "The number of confirmations",
+	"getblockheaderverboseresult-confirmations":     descNumConfirmations,
 	"getblockheaderverboseresult-height":            "The height of the block in the block chain",
-	"getblockheaderverboseresult-version":           "The block version",
+	"getblockheaderverboseresult-version":           descBlockVersion,
 	"getblockheaderverboseresult-versionHex":        "The block version in hexadecimal",
 	"getblockheaderverboseresult-merkleroot":        "Root hash of the merkle tree",
 	"getblockheaderverboseresult-time":              "The block time in seconds since 1 Jan 1970 GMT",
@@ -331,7 +348,7 @@ var helpDescsEnUS = map[string]string{
 	"getblocktemplateresult-sigoplimit":                 "Number of sigops allowed in blocks ",
 	"getblocktemplateresult-sizelimit":                  "Number of bytes allowed in blocks",
 	"getblocktemplateresult-transactions":               "Array of transactions as JSON objects",
-	"getblocktemplateresult-version":                    "The block version",
+	"getblocktemplateresult-version":                    descBlockVersion,
 	"getblocktemplateresult-coinbaseaux":                "Data that should be included in the coinbase signature script",
 	"getblocktemplateresult-coinbasetxn":                "Information about the coinbase transaction",
 	"getblocktemplateresult-coinbasevalue":              "Total amount available for the coinbase in Satoshi",
@@ -361,13 +378,13 @@ var helpDescsEnUS = map[string]string{
 	// GetCFilterCmd help.
 	"getcfilter--synopsis":  "Returns a block's committed filter given its hash.",
 	"getcfilter-filtertype": "The type of filter to return (0=regular)",
-	"getcfilter-hash":       "The hash of the block",
+	"getcfilter-hash":       descBlockHash,
 	"getcfilter--result0":   "The block's committed filter",
 
 	// GetCFilterHeaderCmd help.
 	"getcfilterheader--synopsis":  "Returns a block's compact filter header given its hash.",
 	"getcfilterheader-filtertype": "The type of filter header to return (0=regular)",
-	"getcfilterheader-hash":       "The hash of the block",
+	"getcfilterheader-hash":       descBlockHash,
 	"getcfilterheader--result0":   "The block's gcs filter header",
 
 	// GetConnectionCountCmd help.
@@ -398,9 +415,9 @@ var helpDescsEnUS = map[string]string{
 	"infochainresult-connections":     "The number of connected peers",
 	"infochainresult-proxy":           "The proxy used by the server",
 	"infochainresult-difficulty":      "The current target difficulty",
-	"infochainresult-testnet":         "Whether or not server is using testnet",
+	"infochainresult-testnet":         descUsingTestnet,
 	"infochainresult-relayfee":        "The minimum relay fee for non-free transactions in BTC/KB",
-	"infochainresult-errors":          "Any current errors",
+	"infochainresult-errors":          descAnyCurrentErrors,
 
 	// InfoWalletResult help.
 	"infowalletresult-version":         "The version of the server",
@@ -412,13 +429,13 @@ var helpDescsEnUS = map[string]string{
 	"infowalletresult-connections":     "The number of connected peers",
 	"infowalletresult-proxy":           "The proxy used by the server",
 	"infowalletresult-difficulty":      "The current target difficulty",
-	"infowalletresult-testnet":         "Whether or not server is using testnet",
+	"infowalletresult-testnet":         descUsingTestnet,
 	"infowalletresult-keypoololdest":   "Seconds since 1 Jan 1970 GMT of the oldest pre-generated key in the key pool",
 	"infowalletresult-keypoolsize":     "The number of new keys that are pre-generated",
 	"infowalletresult-unlocked_until":  "The timestamp in seconds since 1 Jan 1970 GMT that the wallet is unlocked for transfers, or 0 if the wallet is locked",
 	"infowalletresult-paytxfee":        "The transaction fee set in BTC/KB",
 	"infowalletresult-relayfee":        "The minimum relay fee for non-free transactions in BTC/KB",
-	"infowalletresult-errors":          "Any current errors",
+	"infowalletresult-errors":          descAnyCurrentErrors,
 
 	// GetHeadersCmd help.
 	"getheaders--synopsis":     "Returns block headers starting with the first known block hash from the request",
@@ -441,13 +458,13 @@ var helpDescsEnUS = map[string]string{
 	"getmininginforesult-currentblocksize": "Size of the latest best block",
 	"getmininginforesult-currentblocktx":   "Number of transactions in the latest best block",
 	"getmininginforesult-difficulty":       "Current target difficulty",
-	"getmininginforesult-errors":           "Any current errors",
+	"getmininginforesult-errors":           descAnyCurrentErrors,
 	"getmininginforesult-generate":         "Whether or not server is set to generate coins",
 	"getmininginforesult-genproclimit":     "Number of processors to use for coin generation (-1 when disabled)",
 	"getmininginforesult-hashespersec":     "Recent hashes per second performance measurement while generating coins",
 	"getmininginforesult-networkhashps":    "Estimated network hashes per second for the most recent blocks",
 	"getmininginforesult-pooledtx":         "Number of transactions in the memory pool",
-	"getmininginforesult-testnet":          "Whether or not server is using testnet",
+	"getmininginforesult-testnet":          descUsingTestnet,
 
 	// GetMiningInfoCmd help.
 	"getmininginfo--synopsis": "Returns a JSON object containing mining-related information.",
@@ -507,29 +524,29 @@ var helpDescsEnUS = map[string]string{
 	// GetRawMempoolCmd help.
 	"getrawmempool--synopsis":   "Returns information about all of the transactions currently in the memory pool.",
 	"getrawmempool-verbose":     "Returns JSON object when true or an array of transaction hashes when false",
-	"getrawmempool--condition0": "verbose=false",
-	"getrawmempool--condition1": "verbose=true",
+	"getrawmempool--condition0": descVerboseFalse,
+	"getrawmempool--condition1": descVerboseTrue,
 	"getrawmempool--result0":    "Array of transaction hashes",
 
 	// GetRawTransactionCmd help.
 	"getrawtransaction--synopsis":   "Returns information about a transaction given its hash.",
-	"getrawtransaction-txid":        "The hash of the transaction",
+	"getrawtransaction-txid":        descTxHash,
 	"getrawtransaction-verbose":     "Specifies the transaction is returned as a JSON object instead of a hex-encoded string",
-	"getrawtransaction--condition0": "verbose=false",
-	"getrawtransaction--condition1": "verbose=true",
+	"getrawtransaction--condition0": descVerboseFalse,
+	"getrawtransaction--condition1": descVerboseTrue,
 	"getrawtransaction--result0":    "Hex-encoded bytes of the serialized transaction",
 
 	// GetTxOutResult help.
 	"gettxoutresult-bestblock":     "The block hash that contains the transaction output",
-	"gettxoutresult-confirmations": "The number of confirmations",
+	"gettxoutresult-confirmations": descNumConfirmations,
 	"gettxoutresult-value":         "The transaction amount in BTC",
 	"gettxoutresult-scriptPubKey":  "The public key script used to pay coins as a JSON object",
-	"gettxoutresult-version":       "The transaction version",
+	"gettxoutresult-version":       descTxVersion,
 	"gettxoutresult-coinbase":      "Whether or not the transaction is a coinbase",
 
 	// GetTxOutCmd help.
 	"gettxout--synopsis":      "Returns information about an unspent transaction output..",
-	"gettxout-txid":           "The hash of the transaction",
+	"gettxout-txid":           descTxHash,
 	"gettxout-vout":           "The index of the output",
 	"gettxout-includemempool": "Include the mempool when true",
 
@@ -577,7 +594,7 @@ var helpDescsEnUS = map[string]string{
 	"sendrawtransaction--synopsis":     "Submits the serialized, hex-encoded transaction to the local peer and relays it to the network.",
 	"sendrawtransaction-hextx":         "Serialized, hex-encoded signed transaction",
 	"sendrawtransaction-allowhighfees": "When true, bypass the absurd-fee ceiling (policy.maxrawtxfee) and submit the transaction even if the absolute fee exceeds it",
-	"sendrawtransaction--result0":      "The hash of the transaction",
+	"sendrawtransaction--result0":      descTxHash,
 
 	// ReconsiderBlockCmd
 	"reconsiderblock--synopsis": "Reconsider a block for validation.",

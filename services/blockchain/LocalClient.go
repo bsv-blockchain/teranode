@@ -22,6 +22,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 )
 
+const errNotImplemented = "not implemented"
+
 // LocalClient implements a blockchain client with direct store access.
 type LocalClient struct {
 	logger       ulogger.Logger     // Logger instance
@@ -550,47 +552,47 @@ func (c *LocalClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32,
 
 // ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
 func (c *LocalClient) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
-	return 0, false, errors.NewProcessingError("not implemented")
+	return 0, false, errors.NewProcessingError(errNotImplemented)
 }
 
 // CancelBlobDeletion cancels a previously scheduled blob deletion.
 func (c *LocalClient) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
-	return false, errors.NewProcessingError("not implemented")
+	return false, errors.NewProcessingError(errNotImplemented)
 }
 
 // ListScheduledDeletions lists scheduled blob deletions with optional filtering.
 func (c *LocalClient) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
-	return nil, 0, errors.NewProcessingError("not implemented")
+	return nil, 0, errors.NewProcessingError(errNotImplemented)
 }
 
 // GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
 func (c *LocalClient) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
-	return nil, errors.NewProcessingError("not implemented")
+	return nil, errors.NewProcessingError(errNotImplemented)
 }
 
 // RemoveBlobDeletion removes a blob deletion from the schedule.
 func (c *LocalClient) RemoveBlobDeletion(ctx context.Context, deletionID int64) error {
-	return errors.NewProcessingError("not implemented")
+	return errors.NewProcessingError(errNotImplemented)
 }
 
 // IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
 func (c *LocalClient) IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error) {
-	return false, 0, errors.NewProcessingError("not implemented")
+	return false, 0, errors.NewProcessingError(errNotImplemented)
 }
 
 // CompleteBlobDeletions completes multiple blob deletions in a single batch call.
 func (c *LocalClient) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error) {
-	return 0, 0, errors.NewProcessingError("not implemented")
+	return 0, 0, errors.NewProcessingError(errNotImplemented)
 }
 
 // AcquireBlobDeletionBatch acquires a batch of deletions with locking.
 func (c *LocalClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
-	return "", nil, errors.NewProcessingError("not implemented")
+	return "", nil, errors.NewProcessingError(errNotImplemented)
 }
 
 // CompleteBlobDeletionBatch completes a previously acquired batch.
 func (c *LocalClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
-	return errors.NewProcessingError("not implemented")
+	return errors.NewProcessingError(errNotImplemented)
 }
 
 // GetMedianTimePastForHeights returns the MTP for one or more block heights.

@@ -1061,9 +1061,9 @@ func newChunkingTestSetup(t *testing.T, totalTxs, batchSize, routines int) (
 
 	// Every Create returns ErrTxExists so every hash flows into existingTxHashes
 	// and the merge path executes — that's what we're exercising.
-	mockStore.On("Create",
+	mockStore.On("SpendAndCreate",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return((*meta.Data)(nil), errors.ErrTxExists)
+	).Return((*meta.Data)(nil), nil, errors.ErrTxExists)
 
 	sm := &SyncManager{
 		settings:  tSettings,

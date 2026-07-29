@@ -54,6 +54,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	logValidateBlockGetBlockHeaders      = "[ValidateBlock][%s] GetBlockHeaders"
+	logValidateBlockSetExistsCacheFailed = "[ValidateBlock][%s] failed to set block exists cache: %s"
+)
+
 // ValidateBlockOptions provides optional parameters for block validation.
 // This is primarily used during catchup to optimize performance by reusing
 // cached data rather than fetching it repeatedly.
@@ -1582,9 +1587,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		} else {
 			// Fetch headers from blockchain service
 			if opts.IsCatchupMode {
-				ctxLogger.Debugf("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+				ctxLogger.Debugf(logValidateBlockGetBlockHeaders, block.Header.Hash().String())
 			} else {
-				ctxLogger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+				ctxLogger.Infof(logValidateBlockGetBlockHeaders, block.Header.Hash().String())
 			}
 
 			// get all X previous block headers, 100 is the default
@@ -1758,7 +1763,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
 
 			if err = u.SetBlockExists(block.Header.Hash()); err != nil {
-				ctxLogger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
+				ctxLogger.Errorf(logValidateBlockSetExistsCacheFailed, block.Header.Hash().String(), err)
 			}
 
 			// decouple the tracing context to not cancel the context when finalize the block processing in the background
@@ -1862,7 +1867,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}()
 		} else {
 			// get all 100 previous block headers on the main chain
-			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+			u.logger.Infof(logValidateBlockGetBlockHeaders, block.Header.Hash().String())
 
 			blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 			if err != nil {
@@ -1986,7 +1991,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			if err = u.SetBlockExists(block.Header.Hash()); err != nil {
-				u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
+				u.logger.Errorf(logValidateBlockSetExistsCacheFailed, block.Header.Hash().String(), err)
 			}
 
 			u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
@@ -2087,7 +2092,7 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 	} else {
 		// Update cache to reflect that block exists
 		if cacheErr := u.SetBlockExists(block.Header.Hash()); cacheErr != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), cacheErr)
+			u.logger.Errorf(logValidateBlockSetExistsCacheFailed, block.Header.Hash().String(), cacheErr)
 		}
 	}
 

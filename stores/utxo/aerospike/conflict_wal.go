@@ -31,6 +31,8 @@ const (
 	walBinStartedAt   = "startedAt"
 )
 
+const errWALRecordMissingBin = "[PendingConflictIntents] WAL record missing or invalid %s bin"
+
 // conflictWALSet returns the dedicated set name for this store's WAL.
 func (s *Store) conflictWALSet() string {
 	return s.setName + conflictWALSetSuffix
@@ -139,27 +141,27 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 
 		kind, ok := record.Bins[walBinKind].(string)
 		if !ok {
-			return nil, errors.NewStorageError("[PendingConflictIntents] WAL record missing or invalid %s bin", walBinKind)
+			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinKind)
 		}
 
 		blockHeight, ok := record.Bins[walBinBlockHeight].(int)
 		if !ok {
-			return nil, errors.NewStorageError("[PendingConflictIntents] WAL record missing or invalid %s bin", walBinBlockHeight)
+			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinBlockHeight)
 		}
 
 		blockHashBytes, ok := record.Bins[walBinBlockHash].([]byte)
 		if !ok {
-			return nil, errors.NewStorageError("[PendingConflictIntents] WAL record missing or invalid %s bin", walBinBlockHash)
+			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinBlockHash)
 		}
 
 		txHashesBytes, ok := record.Bins[walBinTxHashes].([]byte)
 		if !ok {
-			return nil, errors.NewStorageError("[PendingConflictIntents] WAL record missing or invalid %s bin", walBinTxHashes)
+			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinTxHashes)
 		}
 
 		startedAt, ok := record.Bins[walBinStartedAt].(int)
 		if !ok {
-			return nil, errors.NewStorageError("[PendingConflictIntents] WAL record missing or invalid %s bin", walBinStartedAt)
+			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinStartedAt)
 		}
 
 		bh, err := chainhash.NewHash(blockHashBytes)

@@ -53,6 +53,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+const logProcessingNotification = "[processBlockchainNotification] Processing %s notification: %s"
+
 const (
 	banActionAdd = "add" // Action constant for adding a ban
 
@@ -129,7 +131,6 @@ type Server struct {
 	blockTopicName                    string
 	subtreeTopicName                  string
 	rejectedTxTopicName               string
-	invalidBlocksTopicName            string                         // Kafka topic for invalid blocks
 	invalidSubtreeTopicName           string                         // Kafka topic for invalid subtrees
 	nodeStatusTopicName               string                         // pubsub topic for node status messages
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
@@ -240,6 +241,15 @@ func NewServer(
 	listenMode := tSettings.P2P.ListenMode
 	if listenMode != settings.ListenModeFull && listenMode != settings.ListenModeListenOnly && listenMode != settings.ListenModeSilent {
 		return nil, errors.NewConfigurationError("listen_mode must be one of '%s', '%s', or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, settings.ListenModeSilent, listenMode)
+	}
+
+	// Surface blacklist entries with no parseable host: they can only ever
+	// match an announcement byte-for-byte, so the operator almost certainly
+	// misconfigured them. Warn loudly instead of leaving the entry silently inert.
+	for blocked := range tSettings.SubtreeValidation.BlacklistedBaseURLs {
+		if blacklistEntryHost(blocked) == "" {
+			logger.Warnf("[P2P] blacklisted base URL %q has no parseable host and will only match announcements exactly equal to it", blocked)
+		}
 	}
 
 	banlist, banChan, err := GetBanList(ctx, logger, tSettings)
@@ -406,7 +416,6 @@ func NewServer(
 		blockTopicName:                    fmt.Sprintf("%s-%s", topicPrefix, blockTopic),
 		subtreeTopicName:                  fmt.Sprintf("%s-%s", topicPrefix, subtreeTopic),
 		rejectedTxTopicName:               fmt.Sprintf("%s-%s", topicPrefix, rejectedTxTopic),
-		invalidBlocksTopicName:            tSettings.Kafka.InvalidBlocks,
 		invalidSubtreeTopicName:           tSettings.Kafka.InvalidSubtrees,
 		nodeStatusTopicName:               fmt.Sprintf("%s-%s", topicPrefix, nodeStatusTopic),
 		topicPrefix:                       topicPrefix,
@@ -604,10 +613,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	s.rejectedTxKafkaConsumerClient.Start(ctx, s.rejectedTxHandler(ctx), kafka.WithLogErrorAndMoveOn())
 
 	// Handler for invalid blocks Kafka messages
-	if s.invalidBlocksKafkaConsumerClient != nil {
-		s.logger.Infof("[Start] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
-		s.invalidBlocksKafkaConsumerClient.Start(ctx, s.invalidBlockHandler(ctx), kafka.WithLogErrorAndMoveOn())
-	}
+	s.startInvalidBlocksConsumer(ctx)
 
 	// Handler for invalid subtrees Kafka messages
 	if s.invalidSubtreeKafkaConsumerClient != nil {
@@ -674,11 +680,6 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// disconnect any pre-existing banned peers at startup
 	go s.disconnectPreExistingBannedPeers(ctx)
-
-	// start the invalid blocks consumer
-	if err := s.startInvalidBlockConsumer(ctx); err != nil {
-		return errors.NewServiceError("failed to start invalid blocks consumer", err)
-	}
 
 	// Start periodic cleanup of peer maps
 	s.startPeerMapCleanup(ctx)
@@ -767,40 +768,6 @@ func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.Kafk
 			// Don't return error here, as we want to continue processing messages
 			s.logger.Errorf("[invalidSubtreeHandler] Failed to report invalid subtree from Kafka: %v", err)
 		}
-
-		return nil
-	}
-}
-
-func (s *Server) invalidBlockHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
-	return func(msg *kafka.KafkaMessage) error {
-		var (
-			syncing bool
-			err     error
-		)
-
-		if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-			return err
-		}
-
-		if syncing {
-			return nil
-		}
-
-		var m kafkamessage.KafkaInvalidBlockTopicMessage
-		if err := proto.Unmarshal(msg.Value, &m); err != nil {
-			s.logger.Errorf("[invalidBlockHandler] error unmarshalling invalidBlocksMessage: %v", err)
-			return err
-		}
-
-		s.logger.Infof("[invalidBlockHandler] Received invalid block notification via Kafka: %s, reason: %s", m.BlockHash, m.Reason)
-
-		// Use the existing ReportInvalidBlock method to handle the invalid block
-		/*err = s.ReportInvalidBlock(ctx, m.BlockHash, m.Reason)
-		if err != nil {
-			// Don't return error here, as we want to continue processing messages
-			s.logger.Errorf("[invalidBlockHandler] Failed to report invalid block from Kafka: %v", err)
-		}*/
 
 		return nil
 	}
@@ -1016,12 +983,23 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 		return
 	}
 
-	// Validate BaseURL to prevent SSRF attacks
 	if nodeStatusMessage.BaseURL != "" {
+		// Validate BaseURL to prevent SSRF attacks
 		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
 			s.applyBanScore(peerID, ReasonProtocolViolation)
 			return
+		}
+
+		// A blacklisted BaseURL must not reach the peer registry, but
+		// node_status is telemetry: keep the message with the URL removed
+		// instead of hiding the peer from monitoring. This only stops fresh
+		// registrations; a URL stored before its host was blacklisted stays in
+		// the registry and is filtered at the point of use instead
+		// (GetPeersForCatchup and PeerSelector.isEligible).
+		if s.isBlacklistedBaseURL(nodeStatusMessage.BaseURL) {
+			s.logger.Warnf("[handleNodeStatusTopic] removed blacklisted BaseURL %s from node_status of peer %s", nodeStatusMessage.BaseURL, peerID)
+			nodeStatusMessage.BaseURL = ""
 		}
 	}
 
@@ -1585,15 +1563,15 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 
 	switch notification.Type {
 	case model.NotificationType_Block:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handleBlockNotification(ctx, hash) // These handlers return wrapped errors
 
 	case model.NotificationType_Subtree:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handleSubtreeNotification(ctx, hash)
 
 	case model.NotificationType_PeerFailure:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handlePeerFailureNotification(ctx, notification)
 
 	default:

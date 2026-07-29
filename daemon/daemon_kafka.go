@@ -186,6 +186,16 @@ func getKafkaTxmetaConsumerGroup(logger ulogger.Logger, settings *settings.Setti
 	return getKafkaConsumerGroup(logger, kafkaTxmetaConfig, consumerGroupID, true, &settings.Kafka)
 }
 
+// nonNilConsumerGroup returns the consumer group as an interface, mapping a
+// typed nil to a true nil so downstream nil checks behave correctly.
+func nonNilConsumerGroup(group *kafka.KafkaConsumerGroup) kafka.KafkaConsumerGroupI {
+	if group == nil {
+		return nil
+	}
+
+	return group
+}
+
 func getKafkaInvalidBlocksConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
 	kafkaInvalidBlocksConfig := settings.Kafka.InvalidBlocksConfig
 	if kafkaInvalidBlocksConfig == nil {

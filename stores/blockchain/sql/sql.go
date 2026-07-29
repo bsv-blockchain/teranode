@@ -52,6 +52,8 @@ import (
 // several minutes, and the cached results (parent_id walks) are immutable.
 const chainWalkCacheTTL = 10 * time.Minute
 
+const errCouldNotCreateBlocksTable = "could not create blocks table"
+
 // blockIDReservationTTL bounds how long a block-id reservation (AssignBlockID)
 // survives in the in-memory L1 cache without a commit. Reservations are normally
 // cleared on commit; the TTL only reclaims L1 entries for blocks that are fetched
@@ -626,7 +628,7 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create blocks table", err)
+		return errors.NewStorageError(errCouldNotCreateBlocksTable, err)
 	}
 
 	// block_id_reservations durably backs the in-memory AssignBlockID cache so a
@@ -909,7 +911,7 @@ func createSqliteSchema(db *usql.DB) error {
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create blocks table", err)
+		return errors.NewStorageError(errCouldNotCreateBlocksTable, err)
 	}
 
 	if _, err := db.Exec(`
@@ -943,7 +945,7 @@ func createSqliteSchema(db *usql.DB) error {
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create blocks table", err)
+		return errors.NewStorageError(errCouldNotCreateBlocksTable, err)
 	}
 
 	// block_id_reservations: see the Postgres schema for rationale. Durably backs

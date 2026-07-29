@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/daemon"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,7 +82,7 @@ func TestUTXOValidation(t *testing.T) {
 	err = anotherTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: pk})
 	require.NoError(t, err)
 
-	_, err = td.UtxoStore.Spend(ctx, tx, 1)
+	_, _, err = td.UtxoStore.SpendAndCreate(ctx, tx, 1, utxostore.WithSpendOnly())
 	require.NoError(t, err)
 
 	err = td.PropagationClient.ProcessTransaction(ctx, anotherTx)

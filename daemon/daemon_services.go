@@ -315,15 +315,21 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
-	invalidBlocksKafkaConsumerClient, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
+	// These consumers are optional (nil when unconfigured): map typed nils to
+	// true nils so the server's nil checks behave correctly.
+	invalidBlocksKafkaConsumerGroup, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
 	if err != nil {
 		return err
 	}
 
-	invalidSubtreeKafkaConsumerClient, err := getKafkaInvalidSubtreeConsumerGroup(createLogger("kpis"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
+	invalidBlocksKafkaConsumerClient := nonNilConsumerGroup(invalidBlocksKafkaConsumerGroup)
+
+	invalidSubtreeKafkaConsumerGroup, err := getKafkaInvalidSubtreeConsumerGroup(createLogger("kpis"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
 	if err != nil {
 		return err
 	}
+
+	invalidSubtreeKafkaConsumerClient := nonNilConsumerGroup(invalidSubtreeKafkaConsumerGroup)
 
 	// Create Kafka producers for subtrees and blocks
 	var subtreeKafkaProducerClient *kafka.KafkaAsyncProducer

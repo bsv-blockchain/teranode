@@ -570,7 +570,7 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 
 	tx := td.CreateTransaction(t, block1.CoinbaseTx)
 
-	txMeta, err := td.UtxoStore.Create(td.Ctx, tx, 0)
+	txMeta, _, err := td.UtxoStore.SpendAndCreate(td.Ctx, tx, 0, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	// err = td.PropagationClient.ProcessTransaction(td.Ctx, tx)

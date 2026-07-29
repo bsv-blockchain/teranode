@@ -17,6 +17,8 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+const errInvalidHeightParameter = "invalid height parameter"
+
 // BlockExtended represents a block with additional information about the next block
 // in the blockchain. It embeds the base Block model and adds the next block hash.
 //
@@ -148,12 +150,12 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 
 		height, err := strconv.ParseUint(c.Param("height"), 10, 64)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError(errInvalidHeightParameter, err).Error())
 		}
 
 		heightUint32, err := safeconversion.Uint64ToUint32(height)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError(errInvalidHeightParameter, err).Error())
 		}
 
 		block, err := h.repository.GetBlockByHeight(ctx, heightUint32)
@@ -177,7 +179,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 
 			nextHeight, err := safeconversion.Uint64ToUint32(height + 1)
 			if err != nil {
-				return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
+				return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError(errInvalidHeightParameter, err).Error())
 			}
 
 			nextBlock, _ := h.repository.GetBlockByHeight(ctx, nextHeight)

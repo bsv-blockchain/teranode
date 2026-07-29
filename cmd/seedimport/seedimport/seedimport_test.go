@@ -417,7 +417,7 @@ func TestRunRejectsFooterMismatchAndRollsBack(t *testing.T) {
 	}
 }
 
-// failingCreateStore wraps a utxo.Store and fails Create after failAfter
+// failingCreateStore wraps a utxo.Store and fails SpendAndCreate after failAfter
 // successful calls, to exercise rollback on a mid-stream load error.
 type failingCreateStore struct {
 	utxo.Store
@@ -426,13 +426,13 @@ type failingCreateStore struct {
 	calls     int
 }
 
-func (s *failingCreateStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (s *failingCreateStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
 	s.calls++
 	if s.calls > s.failAfter {
-		return nil, errors.NewStorageError("injected store failure on create #%d", s.calls)
+		return nil, nil, errors.NewStorageError("injected store failure on create #%d", s.calls)
 	}
 
-	return s.Store.Create(ctx, tx, blockHeight, opts...)
+	return s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
 }
 
 func TestRunRollsBackOnMidStreamLoadError(t *testing.T) {

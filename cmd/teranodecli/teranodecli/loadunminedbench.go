@@ -232,7 +232,7 @@ func populateAerospikeWithTransactions(ctx context.Context, store utxo.Store, co
 				LockingScript: lockingScript,
 			})
 
-			if _, err := store.Create(ctx, tx, currentBlockHeight); err != nil {
+			if _, _, err := store.SpendAndCreate(ctx, tx, currentBlockHeight, utxo.WithCreateOnly()); err != nil {
 				return err
 			}
 

@@ -82,6 +82,12 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
+const (
+	errOutputNotFound           = "output %s:%d not found"
+	errFailedCreateSpendingData = "failed to create spending data from bytes"
+	errSQLUpdatingTransactions  = "SQL error updating transactions: %v"
+)
+
 // batchSpend represents a single UTXO spend request in a batch.
 // Mirrors aerospike/spend.go batchSpend struct.
 type batchSpend struct {
@@ -2214,7 +2220,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		spend := item.spend
 		r, found := resultMap[i]
 		if !found {
-			validationErrors[i] = errors.NewTxNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
 			continue
 		}
 
@@ -2240,7 +2246,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			if spend.SpendingData != nil && !bytes.Equal(r.spendingDataBytes, spend.SpendingData.Bytes()) {
 				existingSpendData, parseErr := spendpkg.NewSpendingDataFromBytes(r.spendingDataBytes)
 				if parseErr != nil {
-					validationErrors[i] = errors.NewProcessingError("failed to create spending data from bytes", parseErr)
+					validationErrors[i] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
 					continue
 				}
 				validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
@@ -2295,7 +2301,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				spend := batch[u.batchIdx].spend
 				existingSpendData, parseErr := spendpkg.NewSpendingDataFromBytes(entry.spendingData)
 				if parseErr != nil {
-					validationErrors[u.batchIdx] = errors.NewProcessingError("failed to create spending data from bytes", parseErr)
+					validationErrors[u.batchIdx] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
 				} else {
 					validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
 				}
@@ -2705,7 +2711,7 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				validationErrors[i] = errors.NewTxNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+				validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
 				continue
 			}
 			if isDeadlock(err) {
@@ -2742,7 +2748,7 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			if spend.SpendingData != nil && !bytes.Equal(spendingDataBytes, spend.SpendingData.Bytes()) {
 				existingSpendData, parseErr := spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
 				if parseErr != nil {
-					validationErrors[i] = errors.NewProcessingError("failed to create spending data from bytes", parseErr)
+					validationErrors[i] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
 					continue
 				}
 				validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
@@ -3069,7 +3075,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 				// still runs; the only real error here is a missing row.
 				if err = txn.QueryRowContext(ctx, qFindTxID, spend.TxID[:], spend.Vout).Scan(&transactionID); err != nil {
 					if errors.Is(err, sql.ErrNoRows) {
-						return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+						return errors.NewNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
 					}
 
 					return err
@@ -3352,7 +3358,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			`, inClause3)
 			args := append([]interface{}{newDAH}, inArgs3...)
 			if _, err = txn.ExecContext(ctx, qUpdate, args...); err != nil {
-				return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
 			}
 		} else {
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
@@ -3362,7 +3368,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
-				return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
 			}
 		}
 	} else {
@@ -3386,7 +3392,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
-				return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
 			}
 
 			// Step 2: Set unmined_since only for transactions with no remaining block_ids
@@ -3417,7 +3423,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
-				return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
 			}
 		}
 	}

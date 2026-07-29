@@ -388,19 +388,19 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	// Create a grandparent transaction for parentTx
 	grandParentForParentTx := newTx(1000) // Create without parent
-	_, err = utxoStore.Create(context.Background(), grandParentForParentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), grandParentForParentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Add parentTx to UTXO store since tx1, tx2, tx3, tx4 all reference it as their parent
 	// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
-	_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Create tx1 to reference parentTx instead of using the hex string version
 	// This ensures the parent relationship is under our control
 	// Use version 10 to differentiate from tx2 which uses version 1
 	tx1New := newTx(10, parentTx.TxIDChainHash())
-	_, err = utxoStore.Create(context.Background(), tx1New, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1New, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Update hashes to use the new transactions
@@ -414,17 +414,17 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	require.NoError(t, subtreeData.AddTx(tx1New, 1))
 
-	_, err = utxoStore.Create(context.Background(), tx2, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	require.NoError(t, subtreeData.AddTx(tx2, 2))
 
-	_, err = utxoStore.Create(context.Background(), tx3, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	require.NoError(t, subtreeData.AddTx(tx3, 3))
 
-	_, err = utxoStore.Create(context.Background(), tx4, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx4, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -538,7 +538,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		// This ensures that when we create child transactions, their parents exist
 		// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
 		parentTx := newTx(uint32(i + 10000)) // Create parent without parent (no second param)
-		_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 		require.NoError(t, err)
 
 		//nolint:gosec
@@ -549,7 +549,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 
 		fees += 100
 
-		_, err = utxoStore.Create(context.Background(), tx, 0)
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx, 0, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -671,7 +671,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 
 	require.True(t, coinbase.IsCoinbase())
 
-	_, err = utxoStore.Create(context.Background(), coinbase, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbase, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(4)
@@ -759,7 +759,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 
 	require.True(t, coinbase.IsCoinbase())
 
-	_, err = utxoStore.Create(context.Background(), coinbase, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbase, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(4)
@@ -846,7 +846,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 
 	// Create parent transaction for tx2, tx3, tx4 (they all reference parentTx)
 	// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
-	_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Create tx1 with a parent reference to parentTx
@@ -862,16 +862,16 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx2))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx3))
 
-	_, err = utxoStore.Create(context.Background(), tx1Test, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1Test, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(context.Background(), tx2, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(context.Background(), tx3, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(context.Background(), tx4, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx4, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -976,7 +976,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 
 	txns := []*bt.Tx{tx1, tx2, tx3, tx4}
 	for i, tx := range txns {
-		_, err := utxoStore.Create(context.Background(), tx, 0)
+		_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, 0, utxostore.WithCreateOnly())
 		require.NoError(t, err, "Failed to store tx%d: %v", i+1, tx.TxIDChainHash())
 		t.Logf("Stored tx%d: %s", i+1, tx.TxIDChainHash())
 	}
@@ -1118,7 +1118,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 		// This ensures that when we create child transactions, their parents exist
 		// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
 		parentTx := newTx(uint32(i + 10000)) // Create parent without parent (no second param)
-		_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 		require.NoError(t, err)
 
 		tx := newTx(uint32(i), parentTx.TxIDChainHash()) //nolint:gosec
@@ -1128,7 +1128,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 
 		fees += 100
 
-		_, err = utxoStore.Create(context.Background(), tx, 0)
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx, 0, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -1275,7 +1275,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 	// Store all transactions except tx3 (which will be our missing transaction)
 	for _, tx := range txs[:3] { // Store all except tx3
-		_, err := utxoStore.Create(context.Background(), tx, 100)
+		_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, 100, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -1837,9 +1837,9 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 	require.NoError(t, err)
 
 	// Store transactions in txMetaStore
-	_, err = txMetaStore.Create(context.Background(), coinbaseTx, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = txMetaStore.Create(context.Background(), tx1, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), tx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Create a subtree with coinbase and tx1
@@ -1929,11 +1929,11 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
 	// add the coinbase to the utxo store
-	_, err = utxoStore.Create(t.Context(), coinbaseTx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = utxoStore.SpendAndCreate(t.Context(), coinbaseTx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 1,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Two double-spend txs
@@ -1960,11 +1960,11 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	_ = tx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store in utxoStore
-	_, err = utxoStore.Create(context.Background(), tx1, 2)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1, 2, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// since this was a double spend it should be marked as conflicting
-	_, err = utxoStore.Create(context.Background(), tx2, 2, utxostore.WithConflicting(true))
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 2, utxostore.WithConflicting(true), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	err = utxoStore.SetBlockHeight(2)
@@ -2087,9 +2087,9 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	_ = tx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store in txMetaStore
-	_, _ = txMetaStore.Create(context.Background(), coinbaseTx, 0)
-	_, _ = txMetaStore.Create(context.Background(), tx1, 0)
-	_, _ = txMetaStore.Create(context.Background(), tx2, 0)
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx1, 0, utxostore.WithCreateOnly())
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx2, 0, utxostore.WithCreateOnly())
 
 	// Subtree: coinbase, tx2, tx1 (wrong order: tx2 before tx1)
 	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
@@ -2180,11 +2180,11 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	_, err = txMetaStore.Create(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Normal tx spending coinbase
@@ -2199,8 +2199,8 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	_ = tx1.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store transactions
-	_, _ = txMetaStore.Create(context.Background(), coinbaseTx, 0)
-	_, _ = txMetaStore.Create(context.Background(), tx1, 0)
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx1, 0, utxostore.WithCreateOnly())
 
 	// Subtree: coinbase, tx1
 	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
@@ -2863,11 +2863,11 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	_, err = txMetaStore.Create(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// parentTx spends coinbase
@@ -2903,25 +2903,25 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	_ = childTx2.AddP2PKHOutputFromAddress(address.AddressString, parentTx.Outputs[0].Satoshis-1000)
 	_ = childTx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	_, err = txMetaStore.Create(context.Background(), parentTx, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), parentTx, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), childTx1, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx1, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), childTx2, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx2, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Subtree: coinbase, tx1, tx2 (correct order)
@@ -3020,11 +3020,11 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 			blockHeight = 101
 		}
 
-		_, err := txMetaStore.Create(context.Background(), tx, blockID, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+		_, _, err := txMetaStore.SpendAndCreate(context.Background(), tx, blockID, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 			BlockID:     blockID,
 			BlockHeight: blockHeight,
 			SubtreeIdx:  0,
-		}))
+		}), utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -3146,9 +3146,9 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	_ = normalTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store both in txMetaStore
-	_, err = txMetaStore.Create(context.Background(), coinbaseTx, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = txMetaStore.Create(context.Background(), normalTx, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), normalTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and the same normalTx twice
@@ -3377,11 +3377,11 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	_, err := txMetaStore.Create(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err := txMetaStore.SpendAndCreate(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// parentTx spends coinbase
@@ -3417,25 +3417,25 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 	_ = childTx2.AddP2PKHOutputFromAddress(address.AddressString, parentTx.Outputs[0].Satoshis-1000)
 	_ = childTx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	_, err = txMetaStore.Create(context.Background(), parentTx, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), parentTx, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), childTx1, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx1, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), childTx2, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx2, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Subtree: coinbase, tx1, tx2 (correct order)
@@ -3912,13 +3912,13 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	_ = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store both in txMetaStore
-	_, err = txMetaStore.Create(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = txMetaStore.Create(context.Background(), childTx, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and normalTx
@@ -4037,13 +4037,13 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	_ = childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
 	_ = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	_, err := utxoStore.Create(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err := utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(2)
@@ -4436,13 +4436,13 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	_ = childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
 	_ = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	_, err := utxoStore.Create(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err := utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(2)
@@ -4746,13 +4746,13 @@ func TestBlockValidation_BlockValidMissingParent_NotPersistedInvalid(t *testing.
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
-	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
 	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
 	childTx := newTx(7, parentTx.TxIDChainHash())
-	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Subtree: coinbase + childTx.
@@ -4864,13 +4864,13 @@ func TestBlockValidation_FloaterPersistedInvalidWhenCaughtUp(t *testing.T) {
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
-	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
 	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
 	childTx := newTx(7, parentTx.TxIDChainHash())
-	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Subtree: coinbase + childTx.

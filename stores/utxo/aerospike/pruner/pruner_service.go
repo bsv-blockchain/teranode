@@ -39,6 +39,8 @@ var _ pruner.Service = (*Service)(nil)
 
 var IndexName, _ = gocore.Config().Get("pruner_IndexName", "pruner_dah_index")
 
+const errParentUpdateOpsFailed = "%d parent update operations failed"
+
 // TimeoutError indicates that a query operation timed out or encountered a network error.
 // This error type is used to distinguish retriable timeout errors from other errors.
 type TimeoutError struct {
@@ -1708,7 +1710,7 @@ func (s *Service) executeBatchCleanupCombined(ctx context.Context, updates map[s
 
 	if parentErrors > 0 {
 		s.logger.Errorf("Combined cleanup: %d parent update errors (first: %v)", parentErrors, firstParentErr)
-		return errors.NewStorageError("%d parent update operations failed", parentErrors, firstParentErr)
+		return errors.NewStorageError(errParentUpdateOpsFailed, parentErrors, firstParentErr)
 	}
 	if deleteErrors > 0 {
 		s.logger.Errorf("Combined cleanup: %d deletion errors (first: %v)", deleteErrors, firstDeleteErr)
@@ -1840,7 +1842,7 @@ func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[
 	}
 
 	if errorCount > 0 {
-		return errors.NewStorageError("%d parent update operations failed", errorCount)
+		return errors.NewStorageError(errParentUpdateOpsFailed, errorCount)
 	}
 
 	if successCount > 0 {
@@ -1904,7 +1906,7 @@ func (s *Service) executeBatchParentUpdatesBatchWrite(ctx context.Context, updat
 	}
 
 	if errorCount > 0 {
-		return errors.NewStorageError("%d parent update operations failed", errorCount)
+		return errors.NewStorageError(errParentUpdateOpsFailed, errorCount)
 	}
 
 	if successCount > 0 {

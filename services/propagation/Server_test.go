@@ -288,7 +288,7 @@ func TestProcessTransaction(t *testing.T) {
 		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
 
 		// Add the first transaction (coinbase) to UTXO store
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Use the second transaction (non-coinbase) for testing
@@ -1278,7 +1278,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 		}
 
 		// Add the first transaction to the store
-		_, err = utxoStore.Create(t.Context(), txs[1], 1)
+		_, _, err = utxoStore.SpendAndCreate(t.Context(), txs[1], 1, utxo.WithCreateOnly())
 		require.NoError(t, err, "processTransactionInternal should not return an error for valid transaction")
 
 		tx2NotExtended, err := bt.NewTxFromBytes(txs[2].Bytes())
@@ -1309,7 +1309,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 		txs := transactions.CreateTestTransactionChainWithCount(t, 5)
 
 		// Add the first transaction to the store
-		_, err = utxoStore.Create(t.Context(), txs[1], 1)
+		_, _, err = utxoStore.SpendAndCreate(t.Context(), txs[1], 1, utxo.WithCreateOnly())
 		require.NoError(t, err, "processTransactionInternal should not return an error for valid transaction")
 
 		g := errgroup.Group{}
@@ -1801,7 +1801,7 @@ func TestProcessTransaction_BatchHandlerLimit(t *testing.T) {
 		}
 
 		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		req := &propagation_api.ProcessTransactionRequest{Tx: txs[1].ExtendedBytes()}
@@ -1827,7 +1827,7 @@ func TestProcessTransaction_BatchHandlerLimit(t *testing.T) {
 		}
 
 		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		req := &propagation_api.ProcessTransactionRequest{Tx: txs[1].ExtendedBytes()}
@@ -1896,7 +1896,7 @@ func TestProcessTransactionBatch_BatchConcurrencyLimit(t *testing.T) {
 
 		// Create transactions
 		txs := transactions.CreateTestTransactionChainWithCount(t, 4)
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Process a batch — should succeed even with concurrency limit of 1
@@ -1929,7 +1929,7 @@ func TestProcessTransactionBatch_BatchConcurrencyLimit(t *testing.T) {
 		}
 
 		txs := transactions.CreateTestTransactionChainWithCount(t, 4)
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		req := &propagation_api.ProcessTransactionBatchRequest{

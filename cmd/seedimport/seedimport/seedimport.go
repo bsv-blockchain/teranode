@@ -78,7 +78,8 @@ func loadWrapper(ctx context.Context, store utxo.Store, w *utxopersister.UTXOWra
 
 	txid := w.TxID
 
-	_, err = store.Create(ctx, tx, w.Height,
+	_, _, err = store.SpendAndCreate(ctx, tx, w.Height,
+		utxo.WithCreateOnly(),
 		utxo.WithTXID(&txid),
 		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
 			BlockID:        blockID,
