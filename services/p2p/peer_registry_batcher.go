@@ -72,6 +72,15 @@ type pendingPeerUpdate struct {
 // concurrent topic workers the enqueue order no longer matches message order,
 // so the highest height (and its paired block hash) wins rather than the
 // last-enqueued one.
+//
+// The monotonicity guarantee is scoped to a single flush window: two
+// near-simultaneous messages split across a flush boundary can still reach
+// the registry out of order (registry Register overwrites Height
+// unconditionally), leaving a transiently regressed height until the peer's
+// next message. That is deliberate — a hard monotonic clamp (batcher- or
+// registry-side) would also suppress legitimate decreases, e.g. a peer
+// reorging to a shorter chain or restarting from a lower height, which the
+// old strictly-ordered path propagated immediately.
 func (u *pendingPeerUpdate) merge(from *pendingPeerUpdate) {
 	if from.clientName != "" {
 		u.clientName = from.clientName
