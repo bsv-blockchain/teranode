@@ -45,6 +45,12 @@ type PeerInfo struct {
 	TransactionsReceived int64 // Number of transactions received from this peer
 	CatchupBlocks        int64 // Number of blocks received during catchup
 
+	// Catchup-specific counters (recorded via RecordCatchupAttempt/Success/Failure),
+	// distinct from the generic interaction counters above.
+	CatchupAttempts  int64 // Catchup attempts made to this peer (including unresolved ones)
+	CatchupSuccesses int64 // Catchup operations that completed successfully
+	CatchupFailures  int64 // Catchup operations that failed
+
 	// Sync attempt tracking for backoff and recovery
 	LastSyncAttempt      time.Time // When we last attempted to sync with this peer
 	SyncAttemptCount     int       // Number of sync attempts with this peer
@@ -188,6 +194,11 @@ type ClientI interface {
 	// ReportValidSubtree reports that a subtree was successfully fetched and validated from a peer.
 	// This increases the peer's reputation score for providing valid data.
 	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
+
+	// ReportValidBlockHeaders reports that a peer successfully served a batch of block
+	// headers during catchup. Credits a generic interaction success (reputation and
+	// response time) without touching the catchup-operation counters.
+	ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error
 
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	// This increases the peer's reputation score for providing valid blocks.

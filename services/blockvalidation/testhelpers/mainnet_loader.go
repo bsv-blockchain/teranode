@@ -46,14 +46,14 @@ func loadMainnetBlocks() ([]*model.Block, []*model.BlockHeader, error) {
 		// Read the file
 		data, err := os.ReadFile(testdataPath)
 		if err != nil {
-			cachedMainnetBlocksErr = errors.NewProcessingError("failed to read mainnet blocks file %s: %w", testdataPath, err)
+			cachedMainnetBlocksErr = errors.NewProcessingError("failed to read mainnet blocks file %s", testdataPath, err)
 			return
 		}
 
 		// Parse JSON
 		var testData TestBlockData
 		if err := json.Unmarshal(data, &testData); err != nil {
-			cachedMainnetBlocksErr = errors.NewProcessingError("failed to parse mainnet blocks JSON: %w", err)
+			cachedMainnetBlocksErr = errors.NewProcessingError("failed to parse mainnet blocks JSON", err)
 			return
 		}
 
@@ -65,7 +65,7 @@ func loadMainnetBlocks() ([]*model.Block, []*model.BlockHeader, error) {
 			// Parse the JSON block
 			var blockData map[string]interface{}
 			if err := json.Unmarshal(blockJSON, &blockData); err != nil {
-				cachedMainnetBlocksErr = errors.NewProcessingError("failed to parse block %d JSON: %w", i, err)
+				cachedMainnetBlocksErr = errors.NewProcessingError("failed to parse block %d JSON", i, err)
 				return
 			}
 
@@ -86,7 +86,7 @@ func loadMainnetBlocks() ([]*model.Block, []*model.BlockHeader, error) {
 			if hashStr, ok := headerData["hash_prev_block"].(string); ok {
 				hash, err := chainhash.NewHashFromStr(hashStr)
 				if err != nil {
-					cachedMainnetBlocksErr = errors.NewProcessingError("block %d: invalid prev hash: %w", i, err)
+					cachedMainnetBlocksErr = errors.NewProcessingError("block %d: invalid prev hash", i, err)
 					return
 				}
 				header.HashPrevBlock = hash
@@ -95,7 +95,7 @@ func loadMainnetBlocks() ([]*model.Block, []*model.BlockHeader, error) {
 			if hashStr, ok := headerData["hash_merkle_root"].(string); ok {
 				hash, err := chainhash.NewHashFromStr(hashStr)
 				if err != nil {
-					cachedMainnetBlocksErr = errors.NewProcessingError("block %d: invalid merkle root: %w", i, err)
+					cachedMainnetBlocksErr = errors.NewProcessingError("block %d: invalid merkle root", i, err)
 					return
 				}
 				header.HashMerkleRoot = hash
@@ -108,7 +108,7 @@ func loadMainnetBlocks() ([]*model.Block, []*model.BlockHeader, error) {
 			if bitsStr, ok := headerData["bits"].(string); ok {
 				nBits, err := model.NewNBitFromString(bitsStr)
 				if err != nil {
-					cachedMainnetBlocksErr = errors.NewProcessingError("block %d: invalid bits: %w", i, err)
+					cachedMainnetBlocksErr = errors.NewProcessingError("block %d: invalid bits", i, err)
 					return
 				}
 				header.Bits = *nBits

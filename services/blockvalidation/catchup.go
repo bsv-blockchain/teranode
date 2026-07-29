@@ -265,6 +265,14 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 
 	u.reportValidatedHeaderProgress(catchupCtx)
 
+	// Step 9.5: Validate header-chain difficulty (DAA) before fetching full blocks.
+	// Header-fetch validation only checks each header's PoW against its own nBits; this
+	// recomputes the DAA-required nBits from the header chain and rejects a peer that
+	// supplied a self-consistent low-difficulty chain.
+	if err = u.validateCatchupHeaderDifficulty(ctx, catchupCtx); err != nil {
+		return err
+	}
+
 	// Step 10: Fetch and validate blocks
 	if err = u.fetchAndValidateBlocks(ctx, catchupCtx); err != nil {
 		return err
@@ -490,7 +498,7 @@ func (u *Server) fetchHeaders(ctx context.Context, catchupCtx *CatchupContext) e
 
 	result, _, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL)
 	if err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to get block headers: %w", catchupCtx.blockUpTo.Hash().String(), err)
+		return errors.NewProcessingError("[catchup][%s] failed to get block headers", catchupCtx.blockUpTo.Hash().String(), err)
 	}
 
 	catchupCtx.headersFetchResult = result

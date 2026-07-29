@@ -253,10 +253,8 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	var tErr *errors.Error
 
 	for _, tx := range winningTxs {
-		spends, spendErr := s.Spend(ctx, tx, blockHeight, IgnoreFlags{
-			IgnoreConflicting: true,
-			IgnoreLocked:      true,
-		})
+		_, spends, spendErr := s.SpendAndCreate(ctx, tx, blockHeight, WithSpendOnly(),
+			WithIgnoreConflicting(true), WithIgnoreLocked(true))
 		// Capture per-input partial successes regardless of overall outcome so the rollback
 		// can undo them via Unspend(false) (parents at step 3 entry were unlocked-by-us, so
 		// the unspend MUST NOT relock).
@@ -450,10 +448,8 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 				continue
 			}
 
-			if _, spendErr := s.Spend(ctx, counterMeta.Tx, blockHeight, IgnoreFlags{
-				IgnoreConflicting: true,
-				IgnoreLocked:      true,
-			}); spendErr != nil {
+			if _, _, spendErr := s.SpendAndCreate(ctx, counterMeta.Tx, blockHeight, WithSpendOnly(),
+				WithIgnoreConflicting(true), WithIgnoreLocked(true)); spendErr != nil {
 				return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error spending counter %s", demotedHash.String(), counterHash.String(), spendErr)
 			}
 
@@ -808,7 +804,8 @@ func rollbackProcessConflicting(ctx context.Context, s Store, conflictingTxHashe
 				continue
 			}
 
-			if _, e := s.Spend(ctx, txMeta.Tx, blockHeight, IgnoreFlags{IgnoreConflicting: true, IgnoreLocked: true}); e != nil {
+			if _, _, e := s.SpendAndCreate(ctx, txMeta.Tx, blockHeight, WithSpendOnly(),
+				WithIgnoreConflicting(true), WithIgnoreLocked(true)); e != nil {
 				rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 2 (re-spend tx %s) failed", h.String(), e))
 			}
 		}

@@ -132,8 +132,11 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 		panic(err)
 	}
 
-	height, err := util.ExtractCoinbaseHeight(coinbase)
-	require.NoError(t, err)
+	// model.CoinbaseHex encodes height 1019 with a legacy non-minimal 3-byte push, which the strict
+	// (SV Node parity) extractor now rejects. This test only needs a block-height context to exercise
+	// that Validate refuses a coinbase transaction, so use the height literally rather than extracting
+	// it. Height-extraction parity is covered in util/coinbase_test.go and model/*_test.go.
+	const height = uint32(1019)
 
 	_, err = v.Validate(context.Background(), coinbase, height, WithSkipPolicyChecks(true))
 	require.Error(t, err)

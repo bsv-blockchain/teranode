@@ -99,10 +99,11 @@ func (h *HTTP) GetPeers(c echo.Context) error {
 			LastBlockTime:   peer.LastBlockTime.Unix(),
 			LastMessageTime: peer.LastMessageTime.Unix(),
 
-			// Interaction/catchup metrics (using the original field names for backward compatibility)
-			CatchupAttempts:        peer.InteractionAttempts,
-			CatchupSuccesses:       peer.InteractionSuccesses,
-			CatchupFailures:        peer.InteractionFailures,
+			// Catchup-specific counters (timestamps below remain the generic
+			// interaction ones; catchup-scoped timestamps are not tracked).
+			CatchupAttempts:        peer.CatchupAttempts,
+			CatchupSuccesses:       peer.CatchupSuccesses,
+			CatchupFailures:        peer.CatchupFailures,
 			CatchupLastAttempt:     peer.LastInteractionAttempt.Unix(),
 			CatchupLastSuccess:     peer.LastInteractionSuccess.Unix(),
 			CatchupLastFailure:     peer.LastInteractionFailure.Unix(),

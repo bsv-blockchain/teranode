@@ -31,6 +31,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
+const msgFailedGetUtxoFromStore = "[%s] failed to get utxo %s from utxo store: %s"
+
 // NodeConfig holds the configuration for connecting to a teranode instance from the host
 type NodeConfig struct {
 	Name          string
@@ -499,7 +501,7 @@ func checkNodeIntegrity(nodeConfig NodeConfig, _ int, _ int, debug bool, logfile
 					UTXOHash: utxoHash,
 				})
 				if err != nil {
-					logger.Errorf("[%s] failed to get utxo %s from utxo store: %s", loggerContext, utxoHash, err)
+					logger.Errorf(msgFailedGetUtxoFromStore, loggerContext, utxoHash, err)
 					continue
 				}
 
@@ -509,7 +511,7 @@ func checkNodeIntegrity(nodeConfig NodeConfig, _ int, _ int, debug bool, logfile
 					if utxo.SpendingData != nil {
 						metaData := &meta.Data{}
 						if err := utxoStore.GetMeta(ctx, utxo.SpendingData.TxID, metaData); err != nil {
-							logger.Errorf("[%s] failed to get utxo %s from utxo store: %s", loggerContext, utxoHash, err)
+							logger.Errorf(msgFailedGetUtxoFromStore, loggerContext, utxoHash, err)
 							continue
 						}
 
@@ -672,7 +674,7 @@ func checkNodeIntegrity(nodeConfig NodeConfig, _ int, _ int, debug bool, logfile
 										if utxo.SpendingData != nil {
 											metaData := &meta.Data{}
 											if err := utxoStore.GetMeta(ctx, utxo.SpendingData.TxID, metaData); err != nil {
-												logger.Errorf("[%s] failed to get utxo %s from utxo store: %s", loggerContext, utxoHash, err)
+												logger.Errorf(msgFailedGetUtxoFromStore, loggerContext, utxoHash, err)
 												continue
 											}
 
@@ -714,7 +716,7 @@ func checkNodeIntegrity(nodeConfig NodeConfig, _ int, _ int, debug bool, logfile
 								UTXOHash: utxoHash,
 							})
 							if err != nil {
-								logger.Errorf("[%s] failed to get utxo %s from utxo store: %s", loggerContext, utxoHash, err)
+								logger.Errorf(msgFailedGetUtxoFromStore, loggerContext, utxoHash, err)
 								continue
 							}
 

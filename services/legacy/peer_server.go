@@ -95,6 +95,10 @@ const (
 	// AddRebroadcastInventory drops on full rather than blocking the
 	// hot relay path, so this is best-effort, not lossless.
 	modifyRebroadcastInvBuffer = 1024
+
+	// cantSplitBanPeerMsg is logged when a peer address cannot be split into
+	// host and port during ban handling.
+	cantSplitBanPeerMsg = "can't split ban peer %s %v"
 )
 
 var (
@@ -943,11 +947,25 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 
 	if err == nil {
 		// Ban-check round-trip bounded by preAdmitCtx. ok=false means the query
-		// send or its reply was cancelled/timed out before an answer arrived, so
-		// drop the block rather than park the read-loop on a wedged query goroutine.
+		// send or its reply was cancelled/timed out before an answer arrived.
 		isBanned, ok := sp.checkBannedBounded(preAdmitCtx, host)
 		if !ok {
-			sp.server.logger.Warnf("dropping block %s: ban-check timed out/cancelled for peer %s", msg.BlockHash(), sp)
+			// A pre-admission DEADLINE means the query path is wedged: the block
+			// was solicited (netsync marked it requested and fetchHeaderBlocks
+			// already advanced startHeader past it), so silently dropping it
+			// strands the hash — nothing re-requests it and IBD stalls on this
+			// single block. Rotate the sync peer instead: the primary disconnect
+			// drives handleDonePeerMsg → updateSyncPeer → startSync, which clears
+			// requestedBlocks and re-drives the fetch from a fresh locator
+			// (restoring the pre-prefetch watchdog behaviour). On parent cancel
+			// (daemon shutdown / peer teardown) just drop the block.
+			if preAdmitTimedOut(preAdmitCtx) {
+				disconnectMisbehaving(sp, fmt.Sprintf("pre-admission ban-check timed out for block %s, disconnecting to trigger sync peer rotation", msg.BlockHash()))
+				return
+			}
+
+			sp.server.logger.Warnf("dropping block %s: ban-check cancelled by teardown for peer %s", msg.BlockHash(), sp)
+
 			return
 		}
 
@@ -979,10 +997,23 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 	sp.AddKnownInventory(iv)
 
 	// single round-trip: GetBlockHeader tells us both existence and validity.
-	// preAdmitCtx bounds this lookup (see the pre-admission timeout above); a
-	// timed-out lookup returns an error → blockIsKnownValid=false, so the block
-	// proceeds as "not known valid" exactly as an errored lookup does today.
+	// preAdmitCtx bounds this lookup (see the pre-admission timeout above).
 	_, meta, err := sp.server.blockchainClient.GetBlockHeader(preAdmitCtx, blockHash)
+	if err != nil && preAdmitCtx.Err() != nil {
+		// The lookup was cut short by the pre-admission context, so the error
+		// says nothing about whether we already have the block. Proceeding as
+		// "not known valid" would charge a possibly known-valid block against
+		// the prefetch budget and fully re-validate it. On a genuine deadline,
+		// treat the wedged lookup like the wedged ban-check above: rotate the
+		// sync peer so netsync re-drives the fetch. On parent cancel (daemon
+		// shutdown / peer teardown) just drop the block.
+		if preAdmitTimedOut(preAdmitCtx) {
+			disconnectMisbehaving(sp, fmt.Sprintf("pre-admission header lookup timed out for block %s, disconnecting to trigger sync peer rotation", blockHash))
+		}
+
+		return
+	}
+
 	blockIsKnownValid := err == nil && !meta.Invalid
 
 	if !blockIsKnownValid {
@@ -1145,14 +1176,61 @@ func (sp *serverPeer) checkBannedBounded(ctx context.Context, host string) (bann
 	}
 }
 
+// preAdmitTimedOut reports whether a failed pre-admission call should rotate
+// the sync peer: true only when the pre-admission context hit its own deadline
+// (a wedged local round-trip that stranded a requested block), not when the
+// parent context was cancelled (daemon shutdown / peer teardown), where the
+// block is simply dropped. Callers must only consult this after the
+// pre-admission call has actually failed.
+func preAdmitTimedOut(preAdmitCtx context.Context) bool {
+	return errors.Is(preAdmitCtx.Err(), context.DeadlineExceeded)
+}
+
 // shouldDisconnectOnBlockErr reports whether a block-processing error should
-// rotate the sync peer. Block validation failures disconnect the peer; local
-// infrastructure errors (database, Kafka, etc.) must not, since they would only
-// cause unnecessary sync-peer churn.
+// rotate the sync peer. Block validation failures disconnect the peer; transient
+// LOCAL conditions must not, since they would only cause unnecessary sync-peer
+// churn. The suppressed set is service/storage errors plus the per-block backoff
+// throttle (ErrServiceUnavailable, #1187) and ErrStorageUnavailable ("no
+// aerospike nodes available") — the backoff skip returns ErrServiceUnavailable
+// on every re-delivery, so disconnecting on it would churn through sync peers for
+// a fault that is ours, not the peer's. errors.IsTransientLocalError is the
+// shared classifier (also used by the netsync backoff path) so the two decisions
+// cannot drift apart.
 func shouldDisconnectOnBlockErr(err error) bool {
-	return err != nil &&
-		!errors.Is(err, errors.ErrServiceError) &&
-		!errors.Is(err, errors.ErrStorageError)
+	if err == nil {
+		return false
+	}
+
+	return !errors.IsTransientLocalError(err)
+}
+
+// tearDownAssociationStreams closes the live connection of every stream
+// sub-peer in assoc except the given peer. It is the primary-disconnect
+// counterpart to disconnectMisbehaving: when an association's PRIMARY goes away
+// (misbehaviour eviction, sync-peer rotation, remote hang-up), handleDonePeerMsg
+// removes only the association BOOKKEEPING, which left the DATA1 sub-peer's TCP
+// connection open reading blocks off the wire for a dead association, and left a
+// budget-parked sub-peer read-loop parked forever — AcquireBlockPrefetch waits
+// on the sub-peer's own serverPeer.quit, which only closes when the sub-peer's
+// own connection drops. Disconnecting the sub-peer closes its peer.Peer.quit,
+// unblocking its peerDoneHandler, which closes its serverPeer.quit and unparks
+// the waiter. StreamPeers() includes the primary (registered as the GENERAL
+// stream at construction), so callers pass it as except — it is already
+// disconnecting. DisconnectWithInfo is idempotent (atomic guard), so overlap
+// with disconnectMisbehaving's explicit stream disconnect, or a sub-peer already
+// mid-teardown, is safe.
+func tearDownAssociationStreams(assoc *peer.Association, except *peer.Peer) {
+	if assoc == nil {
+		return
+	}
+
+	for _, p := range assoc.StreamPeers() {
+		if p == nil || p == except {
+			continue
+		}
+
+		p.DisconnectWithInfo("association primary disconnected")
+	}
 }
 
 // disconnectMisbehaving evicts a peer's whole association for misbehaviour. It
@@ -1166,11 +1244,13 @@ func shouldDisconnectOnBlockErr(err error) bool {
 // handleDonePeerMsg only does assoc.RemoveStream(...), so openRequiredStreams
 // re-opens DATA1 and the node keeps syncing from a peer serving invalid blocks
 // (IBD stalls). Resolving to the primary is what actually rotates the sync peer.
-// Conversely, handleDonePeerMsg tears down the association bookkeeping on primary
-// disconnect but never closes the sub-peers' connections, so the sub-peer must be
-// disconnected here too or its DATA stream keeps reading off the wire.
-// DisconnectWithWarning is idempotent (atomic guard), so the non-stream case
-// (target == sp.Peer) disconnects exactly once.
+// handleDonePeerMsg now also tears down the association's sub-peer connections on
+// primary disconnect (via tearDownAssociationStreams), so eviction of the whole
+// association is covered even when the bad block arrives on the primary; the
+// explicit stream disconnect here is kept as the fast path (it fires immediately,
+// not one peerHandler round-trip later). DisconnectWithWarning is idempotent
+// (atomic guard), so the non-stream case (target == sp.Peer) disconnects exactly
+// once and the overlap with the centralized teardown is harmless.
 func disconnectMisbehaving(sp *serverPeer, reason string) {
 	target := misbehaviorDisconnectTarget(sp.Peer)
 	target.DisconnectWithWarning(reason)
@@ -2269,7 +2349,14 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 			s.logger.Debugf("Removed stream type %d from association %s",
 				sp.Peer.StreamType(), assoc.ID())
 		} else {
-			// Primary peer disconnected - remove the entire association.
+			// Primary peer disconnected - tear down the whole association:
+			// close every sub-peer's live connection, then remove the
+			// bookkeeping. Removing only the bookkeeping left the DATA1 sub-peer
+			// reading off the wire (or parked forever in AcquireBlockPrefetch) on
+			// a connection nothing would ever close. Teardown runs before Remove
+			// so stale sub-peer connections are already dropping by the time the
+			// association ID becomes free for a reconnecting peer to re-register.
+			tearDownAssociationStreams(assoc, sp.Peer)
 			s.associationMgr.Remove(assoc.RawID())
 			s.logger.Debugf("Removed association %s (primary peer disconnected)", assoc.ID())
 		}
@@ -2332,7 +2419,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		sp.server.logger.Debugf(cantSplitBanPeerMsg, sp.Addr(), err)
 		return
 	}
 
@@ -2357,7 +2444,7 @@ func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, banUntil int64) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		sp.server.logger.Debugf(cantSplitBanPeerMsg, sp.Addr(), err)
 		return
 	}
 
@@ -2385,7 +2472,7 @@ func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, b
 func (s *server) handleUnbanPeerMsg(state *peerState, spAddr bannedPeerAddr) {
 	host, _, err := net.SplitHostPort(string(spAddr))
 	if err != nil {
-		s.logger.Errorf("can't split ban peer %s %v", spAddr, err)
+		s.logger.Errorf(cantSplitBanPeerMsg, spAddr, err)
 		return
 	}
 

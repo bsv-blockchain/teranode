@@ -13,6 +13,14 @@ import (
 )
 
 const (
+	errPeerRegistryNotInitialized = "peer registry not initialized"
+	errInvalidPeerIDFormat        = "invalid peer ID: %v"
+	errPeerIDRequired             = "peer ID is required"
+	errInvalidPeerID              = "invalid peer ID"
+	errBlockHashRequired          = "block hash is required"
+)
+
+const (
 	// maxReportedChainWorkBytes bounds inbound advisory chainwork on the
 	// ReportValidatedChainProgress RPC. It aliases the registry's single source of
 	// truth so the two stay in lockstep.
@@ -25,20 +33,19 @@ const (
 )
 
 // RecordCatchupAttempt records that a catchup attempt was made to a peer.
-// Backed by the centralized peer registry's interaction-attempt counter.
+// Backed by the centralized peer registry's catchup-attempt counter, which
+// also updates the sync backoff tracking fields.
 func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCatchupAttemptRequest) (*p2p_api.RecordCatchupAttemptResponse, error) {
 	if s.peerRegistry == nil {
-		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
 	if _, err := peer.Decode(req.PeerId); err != nil {
-		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
+		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
-	// UpdatePeerMetrics with no flags increments LastSeen and BytesReceived; bump
-	// the attempt counter via RecordSyncAttempt which sets LastSyncAttempt.
-	if err := s.peerRegistry.RecordSyncAttempt(ctx, req.PeerId); err != nil {
-		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record sync attempt", err))
+	if err := s.peerRegistry.RecordCatchupAttempt(ctx, req.PeerId); err != nil {
+		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup attempt", err))
 	}
 
 	return &p2p_api.RecordCatchupAttemptResponse{Ok: true}, nil
@@ -47,15 +54,15 @@ func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCa
 // RecordCatchupSuccess records a successful catchup from a peer.
 func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCatchupSuccessRequest) (*p2p_api.RecordCatchupSuccessResponse, error) {
 	if s.peerRegistry == nil {
-		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
 	if _, err := peer.Decode(req.PeerId); err != nil {
-		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
+		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
-	if err := s.peerRegistry.UpdatePeerMetrics(ctx, req.PeerId, 0, 0, 0, true, false, false, req.DurationMs); err != nil {
-		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("update peer metrics", err))
+	if err := s.peerRegistry.RecordCatchupSuccess(ctx, req.PeerId, req.DurationMs); err != nil {
+		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup success", err))
 	}
 
 	return &p2p_api.RecordCatchupSuccessResponse{Ok: true}, nil
@@ -64,15 +71,15 @@ func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCa
 // RecordCatchupFailure records a failed catchup attempt from a peer.
 func (s *Server) RecordCatchupFailure(ctx context.Context, req *p2p_api.RecordCatchupFailureRequest) (*p2p_api.RecordCatchupFailureResponse, error) {
 	if s.peerRegistry == nil {
-		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
 	if _, err := peer.Decode(req.PeerId); err != nil {
-		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
+		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
-	if err := s.peerRegistry.UpdatePeerMetrics(ctx, req.PeerId, 0, 0, 0, false, true, false, 0); err != nil {
-		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("update peer metrics", err))
+	if err := s.peerRegistry.RecordCatchupFailure(ctx, req.PeerId); err != nil {
+		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup failure", err))
 	}
 
 	if normalizeCatchupFailureKind(req.FailureKind) == catchupFailureKindBlockIncomplete {
@@ -156,11 +163,11 @@ func blockIncompleteCatchupError(blockHash string) string {
 // RecordCatchupMalicious records malicious behavior detected during catchup.
 func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.RecordCatchupMaliciousRequest) (*p2p_api.RecordCatchupMaliciousResponse, error) {
 	if s.peerRegistry == nil {
-		return &p2p_api.RecordCatchupMaliciousResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+		return &p2p_api.RecordCatchupMaliciousResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
 	if _, err := peer.Decode(req.PeerId); err != nil {
-		return &p2p_api.RecordCatchupMaliciousResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
+		return &p2p_api.RecordCatchupMaliciousResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
 	if err := s.peerRegistry.UpdatePeerMetrics(ctx, req.PeerId, 0, 0, 0, false, false, true, 0); err != nil {
@@ -183,11 +190,11 @@ func (s *Server) UpdateCatchupReputation(_ context.Context, _ *p2p_api.UpdateCat
 // UpdateCatchupError records the most recent catchup error reported against a peer.
 func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error) {
 	if s.peerRegistry == nil {
-		return &p2p_api.UpdateCatchupErrorResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+		return &p2p_api.UpdateCatchupErrorResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
 	if _, err := peer.Decode(req.PeerId); err != nil {
-		return &p2p_api.UpdateCatchupErrorResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
+		return &p2p_api.UpdateCatchupErrorResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
 	if err := s.peerRegistry.RecordCatchupError(ctx, req.PeerId, req.ErrorMsg); err != nil {
@@ -201,7 +208,7 @@ func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatc
 // non-banned, with a DataHub URL, sorted by storage preference and reputation.
 func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForCatchupRequest) (*p2p_api.GetPeersForCatchupResponse, error) {
 	if s.peerRegistry == nil {
-		return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+		return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
 	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, true, true)
@@ -215,8 +222,6 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 			continue
 		}
 
-		totalAttempts := p.InteractionSuccesses + p.InteractionFailures
-
 		blockHashStr := ""
 		if p.BlockHash != nil {
 			blockHashStr = p.BlockHash.String()
@@ -228,9 +233,9 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 			BlockHash:              blockHashStr,
 			DataHubUrl:             p.DataHubURL,
 			CatchupReputationScore: p.ReputationScore,
-			CatchupAttempts:        totalAttempts,
-			CatchupSuccesses:       p.InteractionSuccesses,
-			CatchupFailures:        p.InteractionFailures,
+			CatchupAttempts:        p.CatchupAttempts,
+			CatchupSuccesses:       p.CatchupSuccesses,
+			CatchupFailures:        p.CatchupFailures,
 		})
 	}
 
@@ -242,15 +247,15 @@ func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportVali
 	if s.peerRegistry == nil {
 		return &p2p_api.ReportValidSubtreeResponse{
 			Success: false,
-			Message: "peer registry not initialized",
-		}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+			Message: errPeerRegistryNotInitialized,
+		}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
 	if req.PeerId == "" {
 		return &p2p_api.ReportValidSubtreeResponse{
 			Success: false,
-			Message: "peer ID is required",
-		}, errors.WrapGRPC(errors.NewInvalidArgumentError("peer ID is required"))
+			Message: errPeerIDRequired,
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError(errPeerIDRequired))
 	}
 
 	if req.SubtreeHash == "" {
@@ -263,8 +268,8 @@ func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportVali
 	if _, err := peer.Decode(req.PeerId); err != nil {
 		return &p2p_api.ReportValidSubtreeResponse{
 			Success: false,
-			Message: "invalid peer ID",
-		}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
+			Message: errInvalidPeerID,
+		}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
 	if err := s.peerRegistry.RecordSubtreeReceived(ctx, req.PeerId, 0); err != nil {
@@ -286,29 +291,29 @@ func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidB
 	if s.peerRegistry == nil {
 		return &p2p_api.ReportValidBlockResponse{
 			Success: false,
-			Message: "peer registry not initialized",
-		}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+			Message: errPeerRegistryNotInitialized,
+		}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
 	if req.PeerId == "" {
 		return &p2p_api.ReportValidBlockResponse{
 			Success: false,
-			Message: "peer ID is required",
-		}, errors.WrapGRPC(errors.NewInvalidArgumentError("peer ID is required"))
+			Message: errPeerIDRequired,
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError(errPeerIDRequired))
 	}
 
 	if req.BlockHash == "" {
 		return &p2p_api.ReportValidBlockResponse{
 			Success: false,
-			Message: "block hash is required",
-		}, errors.WrapGRPC(errors.NewInvalidArgumentError("block hash is required"))
+			Message: errBlockHashRequired,
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError(errBlockHashRequired))
 	}
 
 	if _, err := peer.Decode(req.PeerId); err != nil {
 		return &p2p_api.ReportValidBlockResponse{
 			Success: false,
-			Message: "invalid peer ID",
-		}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
+			Message: errInvalidPeerID,
+		}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
 	if err := s.peerRegistry.RecordBlockReceived(ctx, req.PeerId, 0); err != nil {
@@ -332,15 +337,15 @@ func (s *Server) ReportValidatedChainProgress(ctx context.Context, req *p2p_api.
 	if req.PeerId == "" {
 		return &p2p_api.ReportValidatedChainProgressResponse{
 			Success: false,
-			Message: "peer ID is required",
-		}, errors.WrapGRPC(errors.NewInvalidArgumentError("peer ID is required"))
+			Message: errPeerIDRequired,
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError(errPeerIDRequired))
 	}
 
 	if _, err := peer.Decode(req.PeerId); err != nil {
 		return &p2p_api.ReportValidatedChainProgressResponse{
 			Success: false,
-			Message: "invalid peer ID",
-		}, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid peer ID: %v", err))
+			Message: errInvalidPeerID,
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError(errInvalidPeerIDFormat, err))
 	}
 
 	if req.Height == 0 {
@@ -353,8 +358,8 @@ func (s *Server) ReportValidatedChainProgress(ctx context.Context, req *p2p_api.
 	if req.BlockHash == "" {
 		return &p2p_api.ReportValidatedChainProgressResponse{
 			Success: false,
-			Message: "block hash is required",
-		}, errors.WrapGRPC(errors.NewInvalidArgumentError("block hash is required"))
+			Message: errBlockHashRequired,
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError(errBlockHashRequired))
 	}
 
 	blockHash, err := chainhash.NewHashFromStr(req.BlockHash)
@@ -399,6 +404,49 @@ func (s *Server) ReportValidatedChainProgress(ctx context.Context, req *p2p_api.
 	return &p2p_api.ReportValidatedChainProgressResponse{
 		Success: true,
 		Message: "validated chain progress recorded",
+	}, nil
+}
+
+// ReportValidBlockHeaders records that a peer successfully served a batch of
+// block headers during catchup. This credits the peer with a generic
+// interaction success (reputation and response time) WITHOUT incrementing the
+// catchup-operation counters: a headers batch is one stage of a catchup, not a
+// completed catchup. Keeping this credit matters — during a catchup that keeps
+// failing at the block-fetch stage (e.g. the serving peer rate-limits subtree
+// requests), it offsets the recorded failures so the peer's reputation does not
+// collapse below the unhealthy threshold and get the only viable peer excluded.
+func (s *Server) ReportValidBlockHeaders(ctx context.Context, req *p2p_api.ReportValidBlockHeadersRequest) (*p2p_api.ReportValidBlockHeadersResponse, error) {
+	if s.peerRegistry == nil {
+		return &p2p_api.ReportValidBlockHeadersResponse{
+			Success: false,
+			Message: errPeerRegistryNotInitialized,
+		}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
+	}
+
+	if req.PeerId == "" {
+		return &p2p_api.ReportValidBlockHeadersResponse{
+			Success: false,
+			Message: errPeerIDRequired,
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError(errPeerIDRequired))
+	}
+
+	if _, err := peer.Decode(req.PeerId); err != nil {
+		return &p2p_api.ReportValidBlockHeadersResponse{
+			Success: false,
+			Message: errInvalidPeerID,
+		}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
+	}
+
+	if err := s.peerRegistry.UpdatePeerMetrics(ctx, req.PeerId, 0, 0, 0, true, false, false, req.DurationMs); err != nil {
+		return &p2p_api.ReportValidBlockHeadersResponse{
+			Success: false,
+			Message: "failed to record headers success",
+		}, errors.WrapGRPC(errors.NewServiceError("update peer metrics", err))
+	}
+
+	return &p2p_api.ReportValidBlockHeadersResponse{
+		Success: true,
+		Message: "headers success recorded",
 	}, nil
 }
 
@@ -456,7 +504,7 @@ func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealt
 	if _, err := peer.Decode(req.PeerId); err != nil {
 		return &p2p_api.IsPeerUnhealthyResponse{
 			IsUnhealthy:     true,
-			Reason:          "invalid peer ID",
+			Reason:          errInvalidPeerID,
 			ReputationScore: 0,
 		}, nil
 	}

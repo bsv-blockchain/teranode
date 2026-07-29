@@ -151,7 +151,7 @@ func benchmarkLoadUnminedTransactions(b *testing.B, txCount int) {
 			tx := transactions[j]
 
 			// Create with unmined status (no block info)
-			_, err = utxoStore.Create(ctx, tx, 1)
+			_, _, err = utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(b, err)
 		}
 
@@ -342,21 +342,21 @@ func BenchmarkLoadUnminedTransactions_MixedStates(b *testing.B) {
 	for i, tx := range transactions {
 		switch i % 4 {
 		case 0, 1: // 50% unmined
-			_, err = utxoStore.Create(ctx, tx, 100)
+			_, _, err = utxoStore.SpendAndCreate(ctx, tx, 100, utxo.WithCreateOnly())
 			require.NoError(b, err)
 
 		case 2: // 25% already mined in main chain
-			_, err = utxoStore.Create(ctx, tx, 100, utxo.WithMinedBlockInfo(
+			_, _, err = utxoStore.SpendAndCreate(ctx, tx, 100, utxo.WithMinedBlockInfo(
 				utxo.MinedBlockInfo{
 					BlockID:     uint32(5 + (i % 5)),
 					BlockHeight: uint32(5 + (i % 5)),
 					SubtreeIdx:  1,
 				},
-			))
+			), utxo.WithCreateOnly())
 			require.NoError(b, err)
 
 		case 3: // 25% locked
-			meta, err := utxoStore.Create(ctx, tx, 100)
+			meta, _, err := utxoStore.SpendAndCreate(ctx, tx, 100, utxo.WithCreateOnly())
 			require.NoError(b, err)
 
 			err = utxoStore.SetLocked(ctx, []chainhash.Hash{*meta.Tx.TxIDChainHash()}, true)

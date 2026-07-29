@@ -58,7 +58,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
 
-		metaCreated, err := c.Create(ctx, coinbaseTx, 100)
+		metaCreated, _, err := c.SpendAndCreate(ctx, coinbaseTx, 100, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -81,7 +81,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, nativeUtxoStore, Native)
 		require.NoError(t, err)
 
-		metaCreated, err := c.Create(ctx, coinbaseTx, 100)
+		metaCreated, _, err := c.SpendAndCreate(ctx, coinbaseTx, 100, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -860,7 +860,7 @@ func Test_TxMetaCache_BatchDecorate(t *testing.T) {
 	}
 
 	// Pre-populate the underlying store with test data
-	_, err = cache.utxoStore.Create(ctx, tests.Tx, 100)
+	_, _, err = cache.utxoStore.SpendAndCreate(ctx, tests.Tx, 100, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Set up some cache entries
@@ -986,7 +986,7 @@ func Test_TxMetaCache_MiningOperations(t *testing.T) {
 	cache := c.(*TxMetaCache)
 
 	// First create a transaction in the store
-	_, err = cache.Create(ctx, coinbaseTx, 100)
+	_, _, err = cache.SpendAndCreate(ctx, coinbaseTx, 100, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	hash := coinbaseTx.TxIDChainHash()

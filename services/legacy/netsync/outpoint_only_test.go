@@ -89,7 +89,11 @@ func TestSyncManager_legacyOutpointOnly(t *testing.T) {
 		{name: "flag on, SQL, below checkpoint", enabled: true, sqlStore: true, height: below, want: true},
 		{name: "flag on, SQL, at checkpoint", enabled: true, sqlStore: true, height: atCheckpoint, want: true},
 		{name: "flag on, SQL, above checkpoint", enabled: true, sqlStore: true, height: above, want: false},
-		{name: "flag on, SQL, height 0", enabled: true, sqlStore: true, height: 0, want: true},
+		// Height 0 is fail-closed since the gates collapsed onto
+		// model.BelowCheckpoint: genesis carries only a coinbase and never flows
+		// through the legacy fast path, so excluding it costs nothing and keeps
+		// one boundary definition everywhere.
+		{name: "flag on, SQL, height 0 fail-closed", enabled: true, sqlStore: true, height: 0, want: false},
 		{name: "flag on, SQL, nil chain params", enabled: true, sqlStore: true, nilChain: true, height: below, want: false},
 		{name: "flag on, SQL, no checkpoints", enabled: true, sqlStore: true, noCheckpts: true, height: below, want: false},
 	}
@@ -301,4 +305,49 @@ func TestSyncManager_extendTransactions_OutpointOnlySkipsDecorate(t *testing.T) 
 	t.Run("gate OFF => decorate called", func(t *testing.T) {
 		require.Equal(t, int32(1), run(t, false), "default-off path must call BatchPreviousOutputsDecorate once")
 	})
+}
+
+// TestSyncManager_needsParentMinedWait verifies the parent-mined wait is skipped
+// only on the below-checkpoint outpoint-only fast path. It reuses the same
+// store-capability harness as TestSyncManager_legacyOutpointOnly: a supporting
+// store (spy over NullStore) for the "SQL" cases, a plain NullStore otherwise.
+func TestSyncManager_needsParentMinedWait(t *testing.T) {
+	const checkpointHeight = int32(1000)
+
+	tests := []struct {
+		name     string
+		enabled  bool
+		sqlStore bool
+		height   uint32
+		want     bool
+	}{
+		{name: "height 0 never waits", enabled: false, sqlStore: true, height: 0, want: false},
+		{name: "height 1 never waits", enabled: false, sqlStore: true, height: 1, want: false},
+		{name: "flag off, below checkpoint: waits", enabled: false, sqlStore: true, height: 500, want: true},
+		{name: "flag on, non-supporting store, below checkpoint: waits", enabled: true, sqlStore: false, height: 500, want: true},
+		{name: "flag on, supporting store, below checkpoint: skips", enabled: true, sqlStore: true, height: 500, want: false},
+		{name: "flag on, supporting store, at checkpoint: skips", enabled: true, sqlStore: true, height: 1000, want: false},
+		{name: "flag on, supporting store, above checkpoint: waits", enabled: true, sqlStore: true, height: 1500, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tSettings, params := newOutpointOnlySettings(t, tt.enabled, tt.sqlStore, checkpointHeight)
+
+			sm := &SyncManager{
+				settings:    tSettings,
+				chainParams: params,
+				logger:      ulogger.TestLogger{},
+			}
+
+			if tt.sqlStore {
+				sm.utxoStore = &outpointOnlySpyStore{NullStore: &nullstore.NullStore{}}
+			} else {
+				sm.utxoStore = &nullstore.NullStore{}
+			}
+
+			require.Equal(t, tt.want, sm.needsParentMinedWait(tt.height),
+				"needsParentMinedWait(%d) enabled=%v store=%v", tt.height, tt.enabled, tt.sqlStore)
+		})
+	}
 }

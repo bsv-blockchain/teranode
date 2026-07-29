@@ -246,6 +246,8 @@ The above represents an implementation of the core Teranode validation rules:
 
         - Note: This means that Teranode will deem non-final transactions invalid and REJECT these transactions. It is up to the user to create proper non-final transactions to ensure that Teranode is aware of them. For clarity, if a transaction has a locktime in the future, the Tx Validator will reject it.
 
+        - Design note (mempool-less rejection): Teranode has no mempool — neither a main mempool nor a non-final holding pool — so a non-final transaction is **terminally rejected** rather than retained. This differs from svnode, whose `CTimeLockedMempool` holds a non-final transaction and re-enqueues it once it becomes final. In Teranode this is expected behaviour, not a defect: the client is responsible for resubmitting once the chain tip's median-time-past (BIP113) passes the transaction's locktime. The rejection now carries the actionable reason (`UTXO_NON_FINAL` → `TX_LOCK_TIME`, including the locktime and the compared median block time) through to the public HTTP and gRPC surfaces, so the submitter can see why the transaction was rejected and when it is worth resubmitting.
+
     - No output must be Pay-to-Script-Hash (P2SH)
 
     - A new transaction must not have any output which includes P2SH, as creation of new P2SH transactions is not allowed.

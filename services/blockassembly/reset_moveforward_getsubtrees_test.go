@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -85,7 +86,7 @@ func TestReset_MoveForwardGetSubtreesFailure_PreservesMined(t *testing.T) {
 		Satoshis:      100_000,
 		LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x88, 0xac}),
 	}}
-	_, err := items.utxoStore.Create(ctx, txAlone, 1)
+	_, _, err := items.utxoStore.SpendAndCreate(ctx, txAlone, 1, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	txAloneHash := txAlone.TxIDChainHash()
 	require.NoError(t, items.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txAloneHash}, true))

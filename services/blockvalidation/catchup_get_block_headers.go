@@ -262,11 +262,13 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				}
 				failedIterations = append(failedIterations, iterErr)
 
-				// Return a timeout error - this is just a slow peer, not necessarily malicious
+				// Return a timeout error - this is just a slow peer, not necessarily malicious.
+				// Marked as already-reported so the top-level catchup handler does not
+				// record a second failure for the same attempt.
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 					iteration, failedIterations, false, "Peer response timeout",
-				), nil, errors.NewNetworkTimeoutError("peer %s timed out after %v during iteration %d", baseURL, elapsed, iteration)
+				), nil, markCatchupFailureReported(errors.NewNetworkTimeoutError("peer %s timed out after %v during iteration %d", baseURL, elapsed, iteration))
 			}
 
 			// Handle other non-timeout errors
@@ -287,18 +289,21 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			// Report failed request to P2P service
 			u.reportCatchupFailure(ctx, identifier)
 
-			// Check if this is a malicious response
+			// Check if this is a malicious response. Both returns below are marked
+			// as already-reported (the failure was recorded just above) so the
+			// top-level catchup handler does not record a second failure for the
+			// same attempt; the malicious classification itself is unaffected.
 			if errors.IsMaliciousResponseError(err) {
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 					iteration, failedIterations, false, "Malicious peer detected",
-				), nil, errors.NewNetworkPeerMaliciousError("peer returned malicious response: %w", err)
+				), nil, markCatchupFailureReported(errors.NewNetworkPeerMaliciousError("peer returned malicious response", err))
 			}
 
 			return catchup.CreateCatchupResult(
 				allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 				iteration, failedIterations, false, "Failed to fetch headers",
-			), nil, err
+			), nil, markCatchupFailureReported(err)
 		}
 
 		// Validate header bytes
@@ -327,7 +332,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 					iteration, failedIterations, false, "Malicious headers detected",
-				), nil, errors.NewNetworkPeerMaliciousError("peer sent invalid headers: %w", parseErr)
+				), nil, errors.NewNetworkPeerMaliciousError("peer sent invalid headers", parseErr)
 			}
 
 			// For non-malicious parse errors, still fail but with different error type
@@ -338,7 +343,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			return catchup.CreateCatchupResult(
 				allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 				iteration, failedIterations, false, "Header parse failed",
-			), nil, errors.NewNetworkInvalidResponseError("failed to parse headers: %w", parseErr)
+			), nil, errors.NewNetworkInvalidResponseError("failed to parse headers", parseErr)
 		}
 
 		// Check if we got any headers
@@ -448,10 +453,12 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		u.logger.Warnf("[catchup][%s] stopped after %d iterations without reaching target", chainTipHash.String(), iteration)
 	}
 
-	// Report successful catchup to P2P service (if we got any headers)
+	// Credit the peer for serving headers. This is a generic interaction success
+	// (reputation), deliberately NOT a catchup success: the whole catchup records
+	// exactly one attempt (doCatchup) and one outcome, so counting this stage as a
+	// catchup success would let CatchupSuccesses exceed CatchupAttempts.
 	if totalHeadersFetched > 0 {
-		responseTime := time.Since(startTime)
-		u.reportCatchupSuccess(ctx, identifier, responseTime)
+		u.reportValidBlockHeaders(ctx, identifier, time.Since(startTime))
 	}
 
 	// Set default stop reason if none was set
@@ -495,7 +502,7 @@ func (u *Server) getPeerChainTip(ctx context.Context, peerID string) (*chainhash
 	// Get peer info from P2P registry
 	peerInfo, err := u.p2pClient.GetPeer(ctx, peerID)
 	if err != nil {
-		return nil, errors.NewServiceError("failed to get peer info from P2P service: %w", err)
+		return nil, errors.NewServiceError("failed to get peer info from P2P service", err)
 	}
 
 	// Check if peer was found

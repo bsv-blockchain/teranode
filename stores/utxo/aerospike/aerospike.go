@@ -124,6 +124,41 @@ type batcherIfc[T any] interface {
 	Close()
 }
 
+// safeBatcherPutCtx enqueues item into b, converting the "send on closed channel"
+// panic — which go-batcher v2.0.6 raises when Put is called after Close — into a
+// returned error. Store.Close closes the batchers during graceful shutdown while
+// external callers (block validation, assembly, …) may still be enqueuing; that
+// race must abort the operation, not crash the process. who labels the call site.
+//
+// The recovered value is pre-formatted with fmt.Sprintf: the runtime's panic
+// value is a runtime.plainError, which implements error, and errors.New consumes
+// a trailing error argument as the wrapped error rather than formatting it —
+// orphaning the %v verb and mislabelling the result as wrapping an UNKNOWN (0).
+func safeBatcherPutCtx[T any](b batcherIfc[T], ctx context.Context, item *T, who string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewServiceUnavailableError("[%s] aerospike batcher unavailable (store shutting down): %v", who, fmt.Sprintf("%v", r))
+		}
+	}()
+
+	b.PutCtx(ctx, item)
+
+	return nil
+}
+
+// safeBatcherPut is the Put (no-context) counterpart of safeBatcherPutCtx.
+func safeBatcherPut[T any](b batcherIfc[T], item *T, who string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewServiceUnavailableError("[%s] aerospike batcher unavailable (store shutting down): %v", who, fmt.Sprintf("%v", r))
+		}
+	}()
+
+	b.Put(item)
+
+	return nil
+}
+
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
@@ -177,6 +212,19 @@ func (s *Store) batchOperate(policy *aerospike.BatchPolicy, records []aerospike.
 	}
 
 	return s.client.BatchOperate(policy, records)
+}
+
+// resolveBatcherMaxConcurrent returns the effective per-batcher concurrency cap.
+// A per-batcher override > 0 takes precedence; otherwise the shared
+// BatcherMaxConcurrent is used. A non-positive perBatcher value is treated as
+// "unset" so the shared knob still governs (and the caller's `> 0` guard keeps
+// the "both 0 = leave uncapped" path byte-identical to the pre-split behaviour).
+func resolveBatcherMaxConcurrent(perBatcher, shared int) int {
+	if perBatcher > 0 {
+		return perBatcher
+	}
+
+	return shared
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -391,8 +439,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
 	outpointBatcherInst := batcher.NewWithPool(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, batcherBackground, append(batcherOpts("aerospike_outpoint"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.OutpointBatcherGreedyAccumulate))...)
-	if batcherMaxConcurrent > 0 {
-		outpointBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.OutpointBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		outpointBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.outpointBatcher = outpointBatcherInst
 

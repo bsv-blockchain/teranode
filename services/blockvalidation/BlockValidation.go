@@ -54,6 +54,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	logValidateBlockGetBlockHeaders      = "[ValidateBlock][%s] GetBlockHeaders"
+	logValidateBlockSetExistsCacheFailed = "[ValidateBlock][%s] failed to set block exists cache: %s"
+)
+
 // ValidateBlockOptions provides optional parameters for block validation.
 // This is primarily used during catchup to optimize performance by reusing
 // cached data rather than fetching it repeatedly.
@@ -230,6 +235,11 @@ type BlockValidation struct {
 	// revalidateBlockChan receives blocks that need revalidation
 	revalidateBlockChan chan revalidateBlockData
 
+	// revalidateWorkerStopped is closed when the single revalidateBlockChan
+	// consumer (started in start) exits, so producers can select on it and avoid
+	// blocking forever on a full channel after the worker is gone at shutdown.
+	revalidateWorkerStopped chan struct{}
+
 	// stats tracks operational metrics for monitoring
 	stats *gocore.Stat
 
@@ -241,6 +251,10 @@ type BlockValidation struct {
 
 	// mmapDir, when non-empty, enables mmap-backed subtree loading.
 	mmapDir string
+
+	// spendRetryBackoff overrides the pause between quick-validate spend retry
+	// attempts; zero means spendRetryBackoffDefault. Settable in tests.
+	spendRetryBackoff time.Duration
 }
 
 // subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.
@@ -373,6 +387,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		setMinedOverflow:              make(map[chainhash.Hash]struct{}),
 		setMinedOverflowSignal:        make(chan struct{}, 1),
 		revalidateBlockChan:           make(chan revalidateBlockData, 2),
+		revalidateWorkerStopped:       make(chan struct{}),
 		stats:                         gocore.NewStat("blockvalidation"),
 		mmapDir:                       tSettings.BlockValidation.SubtreeMmapDir,
 	}
@@ -722,6 +737,9 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	u.logger.Infof("[BlockValidation:start] starting reValidation goroutine")
 
 	go func() {
+		// Signal producers (site 1's re-enqueue and ReValidateBlock) that this sole
+		// consumer is gone, so they don't block forever on a full channel at shutdown.
+		defer close(u.revalidateWorkerStopped)
 		defer u.logger.Infof("[BlockValidation:start] revalidateBlockChan worker stopped")
 
 		for {
@@ -751,7 +769,13 @@ func (u *BlockValidation) start(ctx context.Context) error {
 					if blockData.retries < 3 {
 						blockData.retries++
 						go func() {
-							u.revalidateBlockChan <- blockData
+							// Guard the re-enqueue: on shutdown the consumer (this
+							// worker) exits, so an unguarded send would leak this
+							// goroutine forever on the full channel.
+							select {
+							case u.revalidateBlockChan <- blockData:
+							case <-ctx.Done():
+							}
 						}()
 					} else {
 						u.logger.Errorf("[BlockValidation:start][%s] failed block revalidation, retries exhausted: %s", blockData.block.String(), err)
@@ -1510,6 +1534,15 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 		}
 
+		// NOTE on block-version (BIP34/66/65) enforcement and error ordering:
+		// The mandatory version floor is enforced authoritatively by model.CheckBlockVersion inside
+		// block.Valid (and on the quick-validation catchup path), which runs with the block's settled
+		// height. We deliberately do NOT also run it as an outer prefilter here. svnode rejects
+		// bad-version in ContextualCheckBlockHeader ahead of the body/coinbase checks; teranode does not
+		// replicate that exact error ordering at this outer stage. A complete below-floor block is
+		// rejected by block.Valid with the bad-version token; a below-floor block that ALSO fails the
+		// outer coinbase prechecks below returns earlier with the documented non-parity reason
+		// (block-incomplete or bad-coinbase-length) instead. Either way the block is rejected.
 		if block.CoinbaseTx == nil || block.CoinbaseTx.Inputs == nil || len(block.CoinbaseTx.Inputs) == 0 {
 			// Use BlockIncomplete rather than BlockInvalid — a missing coinbase likely means the peer
 			// doesn't have full block data (e.g. seeded peer). Don't store as invalid so we can
@@ -1554,9 +1587,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		} else {
 			// Fetch headers from blockchain service
 			if opts.IsCatchupMode {
-				ctxLogger.Debugf("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+				ctxLogger.Debugf(logValidateBlockGetBlockHeaders, block.Header.Hash().String())
 			} else {
-				ctxLogger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+				ctxLogger.Infof(logValidateBlockGetBlockHeaders, block.Header.Hash().String())
 			}
 
 			// get all X previous block headers, 100 is the default
@@ -1698,6 +1731,24 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// NOTE: We do NOT cache the block here as subtrees are not yet loaded.
 			// The block will be cached after subtrees are validated in the background goroutine.
 
+			// Run the contextual header checks (2h-future timestamp, median-time-past, block-version
+			// floor) synchronously at receipt time BEFORE optimistically adding the block. The full
+			// block.Valid() runs later in the background goroutine below, where a drifted time.Now()
+			// would evaluate the 2-hours-in-the-future bound against background-execution time and
+			// let a too-far-future block be transiently accepted then reverted (issue #1149). These
+			// checks use the same blockHeaders snapshot the background Valid() consumes.
+			if err = block.CheckHeaderContextual(blockHeaders, u.settings, ctxLogger); err != nil {
+				if errors.Is(err, errors.ErrBlockInvalid) {
+					if !opts.IsRevalidation {
+						u.storeInvalidBlock(ctx, block, opts.PeerID, err.Error())
+					}
+
+					return errors.NewBlockInvalidError("[ValidateBlock][%s] block header failed contextual validation", block.Header.Hash().String(), err)
+				}
+
+				return err
+			}
+
 			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
 
 			if err := u.computeAndSetCoinbaseBUMP(ctx, block); err != nil {
@@ -1712,7 +1763,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
 
 			if err = u.SetBlockExists(block.Header.Hash()); err != nil {
-				ctxLogger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
+				ctxLogger.Errorf(logValidateBlockSetExistsCacheFailed, block.Header.Hash().String(), err)
 			}
 
 			// decouple the tracing context to not cancel the context when finalize the block processing in the background
@@ -1816,7 +1867,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}()
 		} else {
 			// get all 100 previous block headers on the main chain
-			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+			u.logger.Infof(logValidateBlockGetBlockHeaders, block.Header.Hash().String())
 
 			blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 			if err != nil {
@@ -1940,7 +1991,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			if err = u.SetBlockExists(block.Header.Hash()); err != nil {
-				u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
+				u.logger.Errorf(logValidateBlockSetExistsCacheFailed, block.Header.Hash().String(), err)
 			}
 
 			u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
@@ -2041,7 +2092,7 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 	} else {
 		// Update cache to reflect that block exists
 		if cacheErr := u.SetBlockExists(block.Header.Hash()); cacheErr != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), cacheErr)
+			u.logger.Errorf(logValidateBlockSetExistsCacheFailed, block.Header.Hash().String(), cacheErr)
 		}
 	}
 
@@ -2144,9 +2195,21 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 // No return value is provided as the operation is asynchronous.
 func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
-	u.revalidateBlockChan <- revalidateBlockData{
-		block:   block,
-		baseURL: baseURL,
+
+	data := revalidateBlockData{block: block, baseURL: baseURL}
+
+	// Prefer an immediate enqueue whenever the channel has space (this also lets a
+	// stopped-worker test observe the routing decision). Only when the channel is
+	// full do we guard the blocking send: if the sole consumer has stopped
+	// (shutdown), drop rather than block the caller forever.
+	select {
+	case u.revalidateBlockChan <- data:
+	default:
+		select {
+		case u.revalidateBlockChan <- data:
+		case <-u.revalidateWorkerStopped:
+			u.logger.Warnf("[ReValidateBlock][%s] dropped: revalidation worker stopped", block.String())
+		}
 	}
 }
 
@@ -2304,11 +2367,18 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 // blocks at or below the highest checkpoint. Uses the standard chain-config checkpoints
 // (not the catchup override) so it fails safe — keeping the lock for any block above the
 // real checkpoint. See issue #1103.
+//
+// Nil chain params and missing checkpoints now fail closed, and height 0 is excluded — via the shared model.BelowCheckpoint boundary.
 func (u *BlockValidation) quickValidateSkipsUtxoLock(block *model.Block) bool {
 	if !u.settings.BlockValidation.QuickValidateSkipUtxoLock {
 		return false
 	}
-	return block.Height <= blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+
+	if u.settings.ChainCfgParams == nil {
+		return false
+	}
+
+	return model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height)
 }
 
 // quickValidateOutpointOnly reports whether this block may use the below-checkpoint
@@ -2319,14 +2389,10 @@ func (u *BlockValidation) quickValidateSkipsUtxoLock(block *model.Block) bool {
 // to blocks at or below the highest HARDCODED checkpoint. Uses the standard chain-config
 // checkpoints (not the catchup override) so it fails safe — never engaging above the real
 // checkpoint (spec §2.2, invariant I2).
+//
+// Nil chain params and missing checkpoints now fail closed, and height 0 is excluded — via the shared model.BelowCheckpoint boundary.
 func (u *BlockValidation) quickValidateOutpointOnly(block *model.Block) bool {
-	if !u.settings.BlockValidation.OutpointOnlyBelowCheckpoint {
-		return false
-	}
-	if !u.utxoStore.SupportsOutpointOnlySpend() { // Stage A is SQL-only; Aerospike deferred to Stage B
-		return false
-	}
-	return block.Height <= blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+	return model.OutpointOnlyEligible(u.settings, u.utxoStore, u.settings.ChainCfgParams, block.Height)
 }
 
 // updateSubtreesDAH marks block subtrees as properly set in the blockchain.

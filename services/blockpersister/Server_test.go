@@ -990,6 +990,9 @@ func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash, txMet
 func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
 }
+func (m *MockUTXOStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	return nil, nil, nil
+}
 func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	return nil
 }

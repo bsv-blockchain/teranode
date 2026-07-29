@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -52,8 +53,15 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+const logProcessingNotification = "[processBlockchainNotification] Processing %s notification: %s"
+
 const (
 	banActionAdd = "add" // Action constant for adding a ban
+
+	// banSweepInterval is how often connected peers are re-checked against the
+	// IP ban list. Without a libp2p connection gater banned peers can redial at
+	// will, so the sweep re-disconnects them at the application layer.
+	banSweepInterval = 1 * time.Minute
 
 	// Default values for peer map cleanup (reduced to prevent memory exhaustion)
 	defaultPeerMapMaxSize         = 10000            // Maximum entries in peer maps (reduced from 100k)
@@ -110,6 +118,7 @@ type Server struct {
 	AssetHTTPAddressURL               string                    // HTTP address URL for assets
 	PropagationURL                    string                    // URL for peers to use for propagating txs (defaults to AssetHTTPAddressURL)
 	e                                 *echo.Echo                // Echo server instance
+	httpServeErr                      atomic.Pointer[error]     // Unexpected exit error of the HTTP serve goroutine; surfaced via Health
 	notificationCh                    chan *notificationMsg     // Channel for notifications
 	rejectedTxKafkaConsumerClient     kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
 	invalidBlocksKafkaConsumerClient  kafka.KafkaConsumerGroupI // Kafka consumer for invalid blocks
@@ -122,7 +131,6 @@ type Server struct {
 	blockTopicName                    string
 	subtreeTopicName                  string
 	rejectedTxTopicName               string
-	invalidBlocksTopicName            string                         // Kafka topic for invalid blocks
 	invalidSubtreeTopicName           string                         // Kafka topic for invalid subtrees
 	nodeStatusTopicName               string                         // pubsub topic for node status messages
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
@@ -141,6 +149,9 @@ type Server struct {
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
+	// ipBanCache is a short-lived cache of "is this peer's IP banned" lookups
+	// used by shouldSkipBannedPeer, avoiding a GetPeers scan per gossip message.
+	ipBanCache sync.Map // peerID string -> ipBanCacheEntry
 	// reputationCache is a short-lived cache of peer reputation scores used by
 	// shouldSkipUnhealthyPeer to avoid a gRPC round-trip per pubsub message.
 	// Entries expire after reputationCacheTTL; misses fall back to the registry.
@@ -396,7 +407,6 @@ func NewServer(
 		blockTopicName:                    fmt.Sprintf("%s-%s", topicPrefix, blockTopic),
 		subtreeTopicName:                  fmt.Sprintf("%s-%s", topicPrefix, subtreeTopic),
 		rejectedTxTopicName:               fmt.Sprintf("%s-%s", topicPrefix, rejectedTxTopic),
-		invalidBlocksTopicName:            tSettings.Kafka.InvalidBlocks,
 		invalidSubtreeTopicName:           tSettings.Kafka.InvalidSubtrees,
 		nodeStatusTopicName:               fmt.Sprintf("%s-%s", topicPrefix, nodeStatusTopic),
 		topicPrefix:                       topicPrefix,
@@ -452,6 +462,18 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		// Add liveness checks here. Don't include dependency checks.
 		// If the service is stuck return http.StatusServiceUnavailable
 		// to indicate a restart is needed
+		//
+		// A dead HTTP serve goroutine is deliberately a liveness failure, not
+		// just a readiness one: once Serve/ServeTLS returns, the goroutine is
+		// gone and the listener may be closed, so the HTTP/websocket surface
+		// cannot recover in-process. Restarting the whole P2P process (and
+		// dropping healthy libp2p/gRPC state with it) is the only way to get
+		// the endpoint back; readiness-only would leave the node running
+		// permanently without it.
+		if err := s.httpServeError(); err != nil {
+			return http.StatusServiceUnavailable, "HTTP server not serving", err
+		}
+
 		return http.StatusOK, "OK", nil
 	}
 
@@ -465,6 +487,13 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
 	checks := make([]health.Check, 0, 4)
+	checks = append(checks, health.Check{Name: "HTTPServer", Check: func(_ context.Context, _ bool) (int, string, error) {
+		if err := s.httpServeError(); err != nil {
+			return http.StatusServiceUnavailable, "HTTP server not serving", err
+		}
+
+		return http.StatusOK, "OK", nil
+	}})
 	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
 
 	if s.blockchainClient != nil {
@@ -473,6 +502,16 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
+}
+
+// httpServeError returns the error the HTTP serve goroutine exited with, or nil
+// if the HTTP server is (still) serving or was shut down gracefully.
+func (s *Server) httpServeError() error {
+	if errPtr := s.httpServeErr.Load(); errPtr != nil {
+		return *errPtr
+	}
+
+	return nil
 }
 
 // Init initializes the P2P server and its components.
@@ -565,10 +604,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	s.rejectedTxKafkaConsumerClient.Start(ctx, s.rejectedTxHandler(ctx), kafka.WithLogErrorAndMoveOn())
 
 	// Handler for invalid blocks Kafka messages
-	if s.invalidBlocksKafkaConsumerClient != nil {
-		s.logger.Infof("[Start] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
-		s.invalidBlocksKafkaConsumerClient.Start(ctx, s.invalidBlockHandler(ctx), kafka.WithLogErrorAndMoveOn())
-	}
+	s.startInvalidBlocksConsumer(ctx)
 
 	// Handler for invalid subtrees Kafka messages
 	if s.invalidSubtreeKafkaConsumerClient != nil {
@@ -581,17 +617,12 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	s.e = s.setupHTTPServer()
 
-	go func() {
-		if err := s.StartHTTP(ctx); err != nil {
-			if errors.Is(err, http.ErrServerClosed) {
-				s.logger.Infof("http server shutdown")
-			} else {
-				s.logger.Errorf("failed to start http server: %v", err)
-			}
-
-			return
-		}
-	}()
+	// StartHTTP binds the listener synchronously (serving happens in its own
+	// goroutine), so bind and TLS configuration errors fail startup here rather
+	// than leaving the node ready with its HTTP surface down.
+	if err := s.StartHTTP(ctx); err != nil {
+		return errors.NewServiceError("failed to start http server", err)
+	}
 
 	// Start a goroutine to periodically log observed addresses (for debugging NAT traversal)
 	go func() {
@@ -641,11 +672,6 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// disconnect any pre-existing banned peers at startup
 	go s.disconnectPreExistingBannedPeers(ctx)
 
-	// start the invalid blocks consumer
-	if err := s.startInvalidBlockConsumer(ctx); err != nil {
-		return errors.NewServiceError("failed to start invalid blocks consumer", err)
-	}
-
 	// Start periodic cleanup of peer maps
 	s.startPeerMapCleanup(ctx)
 
@@ -668,18 +694,14 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		if err != nil {
 			return errors.NewServiceError("error generating random API key", err)
 		}
-	}
 
-	// Define protected methods - use the full gRPC method path
-	protectedMethods := map[string]bool{
-		"/p2p_api.PeerService/BanPeer":   true,
-		"/p2p_api.PeerService/UnbanPeer": true,
+		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban, clear bans, ban score, reputation reset, connect/disconnect peer) are unreachable until a key is configured")
 	}
 
 	// Create auth options
 	authOptions := &util.AuthOptions{
 		APIKey:           apiKey,
-		ProtectedMethods: protectedMethods,
+		ProtectedMethods: adminProtectedMethods(),
 	}
 
 	// this will block
@@ -737,40 +759,6 @@ func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.Kafk
 			// Don't return error here, as we want to continue processing messages
 			s.logger.Errorf("[invalidSubtreeHandler] Failed to report invalid subtree from Kafka: %v", err)
 		}
-
-		return nil
-	}
-}
-
-func (s *Server) invalidBlockHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
-	return func(msg *kafka.KafkaMessage) error {
-		var (
-			syncing bool
-			err     error
-		)
-
-		if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-			return err
-		}
-
-		if syncing {
-			return nil
-		}
-
-		var m kafkamessage.KafkaInvalidBlockTopicMessage
-		if err := proto.Unmarshal(msg.Value, &m); err != nil {
-			s.logger.Errorf("[invalidBlockHandler] error unmarshalling invalidBlocksMessage: %v", err)
-			return err
-		}
-
-		s.logger.Infof("[invalidBlockHandler] Received invalid block notification via Kafka: %s, reason: %s", m.BlockHash, m.Reason)
-
-		// Use the existing ReportInvalidBlock method to handle the invalid block
-		/*err = s.ReportInvalidBlock(ctx, m.BlockHash, m.Reason)
-		if err != nil {
-			// Don't return error here, as we want to continue processing messages
-			s.logger.Errorf("[invalidBlockHandler] Failed to report invalid block from Kafka: %v", err)
-		}*/
 
 		return nil
 	}
@@ -843,8 +831,29 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 }
 
 func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
-	for _, banned := range s.banList.ListBanned() {
-		s.handleBanEvent(ctx, BanEvent{Action: banActionAdd, IP: banned})
+	// Stored bans are IPs/subnets with no PeerID, so match them against the
+	// addresses of currently connected peers instead of replaying per-entry
+	// events. Peers that connect later are caught by the periodic sweep in
+	// listenForBanEvents.
+	s.disconnectPeersOnBanList(ctx, "banned before startup")
+}
+
+// adminProtectedMethods returns the full gRPC method paths of every
+// state-mutating admin RPC on the PeerService; the auth interceptor requires
+// the admin API key for these. Read-only queries and internal data-plane
+// reporting RPCs (catchup metrics, valid block/subtree reports, bytes
+// downloaded) stay unauthenticated because other services call them without
+// admin credentials. Any new mutating admin RPC must be added here; the
+// classification is enforced by TestAdminProtectedMethodsCoverAllRPCs.
+func adminProtectedMethods() map[string]bool {
+	return map[string]bool{
+		"/p2p_api.PeerService/BanPeer":         true,
+		"/p2p_api.PeerService/UnbanPeer":       true,
+		"/p2p_api.PeerService/ClearBanned":     true,
+		"/p2p_api.PeerService/AddBanScore":     true,
+		"/p2p_api.PeerService/ResetReputation": true,
+		"/p2p_api.PeerService/ConnectPeer":     true,
+		"/p2p_api.PeerService/DisconnectPeer":  true,
 	}
 }
 
@@ -956,6 +965,12 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
 		s.applyBanScore(peerID, ReasonProtocolViolation)
+		return
+	}
+
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing.
+	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
 		return
 	}
 
@@ -1076,7 +1091,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
 	if err != nil {
-		return errors.NewError("error getting block header and meta for BlockMessage: %w", err)
+		return errors.NewError("error getting block header and meta for BlockMessage", err)
 	}
 
 	if meta.Invalid {
@@ -1096,11 +1111,11 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
-		return errors.NewError("blockMessage - json marshal error: %w", err)
+		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
 	if err = s.P2PClient.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
-		return errors.NewError("blockMessage - publish error: %w", err)
+		return errors.NewError("blockMessage - publish error", err)
 	}
 
 	// Also send a node_status update when best block changes
@@ -1209,40 +1224,46 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Get current sync peer
 	syncPeer := s.getSyncPeer()
 	if syncPeer != "" {
-		if syncPeer != "" {
-			syncPeerID = syncPeer.String()
+		syncPeerID = syncPeer.String()
 
-			// Track when we first connected to this sync peer
-			if existingTime, ok := s.syncConnectionTimes.Load(syncPeerID); ok {
-				syncConnectedAt = existingTime.(int64)
-			} else {
-				// First time connecting to this sync peer
-				syncConnectedAt = time.Now().Unix()
-				s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
-				s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
-			}
-
-			// Get sync peer's height and block hash
-			for _, peerInfo := range s.P2PClient.GetPeers() {
-				if peerInfo.ID == syncPeer.String() {
-					// Get the peer's best block hash from registry
-					if pInfo, exists := s.getPeer(syncPeer); exists {
-						if pInfo.BlockHash != nil {
-							syncPeerBlockHash = pInfo.BlockHash.String()
-						}
-
-						syncPeerHeight = pInfo.Height
-					}
-					break
-				}
-			}
+		// Track when we first connected to this sync peer
+		if existingTime, ok := s.syncConnectionTimes.Load(syncPeerID); ok {
+			syncConnectedAt = existingTime.(int64)
 		} else {
-			// No sync peer - clear any old connection time tracking
-			s.syncConnectionTimes.Range(func(key, value interface{}) bool {
-				s.syncConnectionTimes.Delete(key)
-				return true
-			})
+			// First time connecting to this sync peer
+			syncConnectedAt = time.Now().Unix()
+			s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
+			s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
 		}
+
+		// Drop entries for previous sync peers so the map only tracks the current one
+		s.syncConnectionTimes.Range(func(key, value any) bool {
+			if key != syncPeerID {
+				s.syncConnectionTimes.Delete(key)
+			}
+			return true
+		})
+
+		// Get sync peer's height and block hash
+		for _, peerInfo := range s.P2PClient.GetPeers() {
+			if peerInfo.ID == syncPeer.String() {
+				// Get the peer's best block hash from registry
+				if pInfo, exists := s.getPeer(syncPeer); exists {
+					if pInfo.BlockHash != nil {
+						syncPeerBlockHash = pInfo.BlockHash.String()
+					}
+
+					syncPeerHeight = pInfo.Height
+				}
+				break
+			}
+		}
+	} else {
+		// No sync peer - clear any old connection time tracking
+		s.syncConnectionTimes.Range(func(key, value any) bool {
+			s.syncConnectionTimes.Delete(key)
+			return true
+		})
 	}
 
 	// Get peer ID safely
@@ -1311,14 +1332,19 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		s.logger.Debugf("[getNodeStatusMessage] Policy settings not available, using default MinMiningTxFee: %f", defaultFee)
 	}
 
-	// Get connected peers count from the registry
+	// Get connected peers count from the registry. The registry also holds
+	// gossiped/disconnected peers, so count only directly connected ones.
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
 		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
 		if err != nil {
 			s.logger.Warnf("[getNodeStatusMessage] ListPeers failed: %v", err)
 		} else {
-			connectedPeersCount = len(allPeers)
+			for _, p := range allPeers {
+				if p.IsConnected {
+					connectedPeersCount++
+				}
+			}
 		}
 	}
 
@@ -1438,14 +1464,14 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
-		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
+		return errors.NewError("nodeStatusMessage - json marshal error", err)
 	}
 
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
 	if err = s.P2PClient.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
-		return errors.NewError("nodeStatusMessage - publish error: %w", err)
+		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
 	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
@@ -1476,11 +1502,11 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 
 	msgBytes, err := json.Marshal(subtreeMessage)
 	if err != nil {
-		return errors.NewError("subtreeMessage - json marshal error: %w", err)
+		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
 	if err := s.P2PClient.Publish(ctx, s.subtreeTopicName, msgBytes); err != nil {
-		return errors.NewError("subtreeMessage - publish error: %w", err)
+		return errors.NewError("subtreeMessage - publish error", err)
 	}
 
 	return nil
@@ -1512,20 +1538,20 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 	hash, err := chainhash.NewHash(notification.Hash)
 	if err != nil {
 		// Specific error about hash conversion, not logged here, but returned to caller.
-		return errors.NewError(fmt.Sprintf("error getting chainhash from notification hash %s: %%w", notification.Hash), err)
+		return errors.NewError("error getting chainhash from notification hash %s", notification.Hash, err)
 	}
 
 	switch notification.Type {
 	case model.NotificationType_Block:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handleBlockNotification(ctx, hash) // These handlers return wrapped errors
 
 	case model.NotificationType_Subtree:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handleSubtreeNotification(ctx, hash)
 
 	case model.NotificationType_PeerFailure:
-		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handlePeerFailureNotification(ctx, notification)
 
 	default:
@@ -1584,6 +1610,21 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 		return errors.NewConfigurationError("p2p HTTP listen address is not set")
 	}
 
+	// Validate TLS configuration before binding so a misconfigured HTTPS setup
+	// fails startup instead of being logged and swallowed in the serve goroutine.
+	var certFile, keyFile string
+	if s.settings.SecurityLevelHTTP != 0 {
+		certFile = s.settings.ServerCertFile
+		if certFile == "" {
+			return errors.NewConfigurationError("[StartHTTP] server_certFile is required for HTTPS")
+		}
+
+		keyFile = s.settings.ServerKeyFile
+		if keyFile == "" {
+			return errors.NewConfigurationError("[StartHTTP] server_keyFile is required for HTTPS")
+		}
+	}
+
 	// Get listener using util.GetListener
 	listener, address, _, err := util.GetListener(s.settings.Context, "p2p", "http://", addr)
 	if err != nil {
@@ -1605,28 +1646,21 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 	go func() {
 		defer util.RemoveListener(s.settings.Context, "p2p", "http://")
 
+		var serveErr error
+
 		if s.settings.SecurityLevelHTTP == 0 {
 			servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTP listening on %s", address))
-			err = s.e.Server.Serve(listener)
+			serveErr = s.e.Server.Serve(listener)
 		} else {
-			certFile := s.settings.ServerCertFile
-			if certFile == "" {
-				s.logger.Errorf("server_certFile is required for HTTPS")
-				return
-			}
-
-			keyFile := s.settings.ServerKeyFile
-			if keyFile == "" {
-				s.logger.Errorf("server_keyFile is required for HTTPS")
-				return
-			}
-
 			servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTPS listening on %s", address))
-			err = s.e.Server.ServeTLS(listener, certFile, keyFile)
+			serveErr = s.e.Server.ServeTLS(listener, certFile, keyFile)
 		}
 
-		if err != nil && err != http.ErrServerClosed {
-			s.logger.Errorf("[StartHTTP] server error: %v", err)
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			s.logger.Errorf("[StartHTTP] server error: %v", serveErr)
+			// Record the failure so Health reports the service unhealthy instead
+			// of the node staying ready with its HTTP surface down.
+			s.httpServeErr.Store(&serveErr)
 		}
 	}()
 
@@ -1814,6 +1848,45 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) 
 	return &p2p_api.UnbanPeerResponse{Ok: true}, nil
 }
 
+// ConnectPeer connects the P2P client to the peer at the given multiaddr.
+// Banned addresses are refused.
+func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerRequest) (*p2p_api.ConnectPeerResponse, error) {
+	if s.P2PClient == nil {
+		return &p2p_api.ConnectPeerResponse{Success: false, Error: "P2P client is not initialised"}, nil
+	}
+
+	// Fail closed: if the ban status of the target cannot be determined (bad
+	// multiaddr, DNS resolution failure), refuse the dial.
+	banned, err := s.checkMultiaddrBanned(ctx, req.PeerAddress)
+	if err != nil {
+		return &p2p_api.ConnectPeerResponse{Success: false, Error: err.Error()}, nil
+	}
+	if banned {
+		return &p2p_api.ConnectPeerResponse{Success: false, Error: "address is banned"}, nil
+	}
+
+	if err := s.P2PClient.Connect(ctx, req.PeerAddress); err != nil {
+		return &p2p_api.ConnectPeerResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	return &p2p_api.ConnectPeerResponse{Success: true}, nil
+}
+
+// DisconnectPeer disconnects a peer by ID: it is removed from the peer
+// registry and sync coordinator, and the libp2p connection is closed when the
+// P2P client supports it (go-p2p-message-bus does not yet expose a network
+// disconnect; see networkDisconnector).
+func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error) {
+	pid, err := peer.Decode(req.PeerId)
+	if err != nil {
+		return &p2p_api.DisconnectPeerResponse{Success: false, Error: fmt.Sprintf("invalid peer ID %s: %v", req.PeerId, err)}, nil
+	}
+
+	s.disconnectBannedPeerByID(ctx, pid, "operator disconnect request")
+
+	return &p2p_api.DisconnectPeerResponse{Success: true}, nil
+}
+
 func (s *Server) IsBanned(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
 	// IP-based ban (banList) takes precedence; if not, check the centralized
 	// peer registry's score-based ban as well.
@@ -1901,24 +1974,33 @@ func (s *Server) onPeerBanned(peerID, reason string) {
 		return
 	}
 
-	if s.P2PClient != nil {
-		var ids []string
+	// Ban the peer's addresses by literal IP: the ban list stores IPs/subnets,
+	// so multiaddr strings ("/ip4/1.2.3.4/tcp/9905/p2p/...") must be reduced to
+	// their IP component or they would never match a lookup.
+	if s.P2PClient != nil && s.banList != nil {
+		seen := make(map[string]struct{})
 		for _, p := range s.P2PClient.GetPeers() {
-			if p.ID == pid.String() {
-				ids = append(ids, p.Addrs...)
-				break
+			if p.ID != pid.String() {
+				continue
 			}
-		}
-		for _, id := range ids {
-			if s.banList != nil {
-				if err := s.banList.Add(context.Background(), id, until); err != nil {
-					s.logger.Errorf("[onPeerBanned] failed to add %s to ban list: %v", id, err)
+			for _, addr := range p.Addrs {
+				ip := extractIPFromMultiaddr(addr)
+				if ip == "" {
+					continue
+				}
+				if _, dup := seen[ip]; dup {
+					continue
+				}
+				seen[ip] = struct{}{}
+				if err := s.banList.Add(context.Background(), ip, until); err != nil {
+					s.logger.Errorf("[onPeerBanned] failed to add %s to ban list: %v", ip, err)
 				}
 			}
+			break
 		}
 	}
 
-	s.removePeer(pid)
+	s.disconnectBannedPeerByID(s.gCtx, pid, reason)
 }
 
 // RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
@@ -2091,6 +2173,9 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 		ClientName:             p.ClientName,
 		LastCatchupError:       p.LastCatchupError,
 		LastCatchupErrorTime:   timeToUnix(p.LastCatchupErrorTime),
+		CatchupAttempts:        p.CatchupAttempts,
+		CatchupSuccesses:       p.CatchupSuccesses,
+		CatchupFailures:        p.CatchupFailures,
 	}
 }
 

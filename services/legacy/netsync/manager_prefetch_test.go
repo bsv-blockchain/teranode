@@ -49,6 +49,15 @@ func TestBlockRequested(t *testing.T) {
 		require.True(t, sm.BlockRequested(&peerpkg.Peer{}, &hash))
 	})
 
+	t.Run("copied regtest params admit any block", func(t *testing.T) {
+		// #1279: detection is by network magic, so a value copy of
+		// RegressionNetParams (distinct pointer) is still recognized as regtest —
+		// matching UsePrefetchIngestion so the two siblings cannot drift.
+		params := chaincfg.RegressionNetParams
+		sm := newSM(&params)
+		require.True(t, sm.BlockRequested(&peerpkg.Peer{}, &hash))
+	})
+
 	t.Run("requested block is admitted", func(t *testing.T) {
 		sm := newSM(&chaincfg.MainNetParams)
 		p := &peerpkg.Peer{}
@@ -151,6 +160,40 @@ func TestUsePrefetchIngestion(t *testing.T) {
 			// The gate tracks the shared predicate for the manager's own budget/net.
 			require.Equal(t, peerpkg.UseBlockPrefetchIngestion(budget, p.Net), sm.UsePrefetchIngestion())
 		}
+	}
+
+	// A nil chainParams fails closed to the synchronous path — no panic, prefetch
+	// off — even with a configured budget. Regression guard for #1279: the deref
+	// used to happen as a call argument, before the budget short-circuit.
+	t.Run("nil chainParams fails closed", func(t *testing.T) {
+		sm := &SyncManager{blockPrefetchBudgetBytes: 100, blockPrefetchBudget: semaphore.NewWeighted(100)}
+		require.NotPanics(t, func() { require.False(t, sm.UsePrefetchIngestion()) })
+	})
+}
+
+// TestIsRegtest pins the value semantics of the sync manager's single regtest
+// predicate: regtest is detected by network magic, not pointer identity with
+// chaincfg.RegressionNetParams, so a copied Params value (as some tests
+// construct) still counts; mainnet does not; and a nil chainParams fails closed.
+func TestIsRegtest(t *testing.T) {
+	regtestCopy := chaincfg.RegressionNetParams // value copy: pointer differs, .Net matches
+
+	tests := []struct {
+		name   string
+		params *chaincfg.Params
+		want   bool
+	}{
+		{name: "nil chain params", params: nil, want: false},
+		{name: "global regtest pointer", params: &chaincfg.RegressionNetParams, want: true},
+		{name: "copied regtest params", params: &regtestCopy, want: true},
+		{name: "mainnet", params: &chaincfg.MainNetParams, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := &SyncManager{chainParams: tt.params}
+			require.Equal(t, tt.want, sm.isRegtest())
+		})
 	}
 }
 

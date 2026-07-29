@@ -19,7 +19,9 @@ Usage: teranode-cli <command> [options]
     aerospikereader      Aerospike Reader
     bitcointoutxoset     Bitcoin to Utxoset
     checkblock           Check block - fetches a block and validates it using the block validation service
+    checkblockassembly   Check block assembly state by validating unmined transaction inputs (read-only)
     checkblocktemplate   Check block template
+    diagnose             Diagnose node health and validate configuration
     export-blocks        Export blockchain to CSV
     filereader           File Reader
     fix-chainwork        Fix incorrect chainwork values in blockchain database
@@ -31,6 +33,7 @@ Usage: teranode-cli <command> [options]
     reconsiderblock      Reconsider a block that was previously marked as invalid
     remainderbench       Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling
     resetblockassembly   Reset block assembly state
+    rewindblockchain     Rewind blockchain DB, UTXO store and subtree blobs to Block Assembly's persisted height (DESTRUCTIVE, node must be stopped)
     seeder               Seeder
     setfsmstate          Set the FSM State
     settings             Settings
@@ -103,6 +106,13 @@ Usage: teranode-cli <command> [options]
 |                      |                                                | `--batch-size` - Updates per transaction (default: 1000)        |
 |                      |                                                | `--start-height` - Starting block height (default: 650286)      |
 |                      |                                                | `--end-height` - Ending block height (default: 0 for tip)       |
+| `rewindblockchain`   | Rewind blockchain DB, UTXO store and subtree   | `--target-height` - Height to rewind to (default: Block Assembly's saved height) |
+|                      | blobs to Block Assembly's persisted height     | `--dry-run` - Report the plan without modifying any store        |
+|                      | (DESTRUCTIVE - node must be stopped)           | `--assume-yes` - Skip the interactive confirmation               |
+|                      |                                                | `--force-not-idle` - Proceed when FSM is not IDLE (DANGEROUS)    |
+|                      |                                                | `--force-deep` - Allow a rewind deeper than 100 blocks           |
+|                      |                                                | `--verify` - Run post-rewind consistency checks                  |
+|                      |                                                | `--concurrency` - Subtree-load concurrency (default: 0 = auto)   |
 
 ### Interactive Tools
 
@@ -304,6 +314,46 @@ Options:
 - `--end-height`: Ending block height (0 for current tip) (default: 0)
 
 ⚠️ **Warning**: This command modifies blockchain database records. Always run with `--dry-run=true` first to preview changes before applying them to production databases.
+
+### Rewind Blockchain
+
+```bash
+teranode-cli rewindblockchain [options]
+```
+
+Rewinds the blockchain database, UTXO store, and subtree blob storage back to a
+target block height. This is a repair tool for a node whose UTXO state has
+diverged from its blockchain DB — the symptom is block validation rejecting a
+block that the rest of the network accepted.
+
+The node process must be stopped first, and the FSM state stored in the
+blockchain DB must read `IDLE`.
+
+Options:
+
+- `--target-height`: Height to rewind to (default: `-1`, meaning read Block Assembly's persisted height from `state["BlockAssembler"]`)
+- `--dry-run`: Report the current tip, target, and block count without modifying any store
+- `--assume-yes`: Skip the interactive confirmation prompt (required when there is no TTY)
+- `--force-not-idle`: Proceed even when the FSM state is not `IDLE` (DANGEROUS — only to recover from a crashed partial run)
+- `--force-deep`: Allow a rewind deeper than 100 blocks, past coinbase maturity (DANGEROUS)
+- `--verify`: Run post-rewind consistency checks
+- `--concurrency`: Subtree-load concurrency (default: `0`, meaning use `blockassembly_moveBackBlockConcurrency`, which defaults to 375)
+
+⚠️ **Warning**: This command is destructive and cannot be undone. It deletes
+blocks, transactions, and subtree blobs. It also assumes preconditions it does
+not fully enforce — the node stopped, the FSM state in the blockchain DB reading
+`IDLE`, and the subtree blobs for the deleted range still unpruned. `--dry-run`
+reports the tip, target, and block count without mutating anything, but it
+returns before the subtree store is touched, so it cannot confirm that last one.
+
+Note that `IDLE` is only reachable from `RUNNING`: the FSM has no
+`CATCHINGBLOCKS` → `IDLE` transition, so on a node stuck catching blocks
+`setfsmstate --fsmstate=idle` fails and the state has to be moved via `running`
+first.
+
+A step-by-step operator runbook is not published yet. Until it is, do not run
+this against a production node without working through those preconditions
+yourself.
 
 ### Logs (Interactive Log Viewer)
 

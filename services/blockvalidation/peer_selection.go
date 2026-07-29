@@ -72,21 +72,24 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 			Height:                 p.Height,
 			BlockHash:              p.BlockHash,
 			CatchupReputationScore: p.ReputationScore,
-			CatchupAttempts:        p.InteractionAttempts,
-			CatchupSuccesses:       p.InteractionSuccesses,
-			CatchupFailures:        p.InteractionFailures,
+			CatchupAttempts:        p.CatchupAttempts,
+			CatchupSuccesses:       p.CatchupSuccesses,
+			CatchupFailures:        p.CatchupFailures,
 		})
 	}
 
 	u.logger.Infof("[peer_selection] Selected %d peers for catchup (from %d total)", len(peers), len(peerInfos))
 	for i, p := range peers {
+		// Success rate over resolved outcomes only: attempts include catchups
+		// still in flight or abandoned without a verdict, so successes/attempts
+		// would understate a usable peer.
 		successRate := float64(0)
 
-		if p.CatchupAttempts > 0 {
-			successRate = float64(p.CatchupSuccesses) / float64(p.CatchupAttempts) * 100
+		if resolved := p.CatchupSuccesses + p.CatchupFailures; resolved > 0 {
+			successRate = float64(p.CatchupSuccesses) / float64(resolved) * 100
 		}
 
-		u.logger.Debugf("[peer_selection] Peer %d: %s (score: %.2f, success: %d/%d = %.1f%%, height: %d)", i+1, p.ID, p.CatchupReputationScore, p.CatchupSuccesses, p.CatchupAttempts, successRate, p.Height)
+		u.logger.Debugf("[peer_selection] Peer %d: %s (score: %.2f, success: %d ok / %d failed of %d attempts = %.1f%%, height: %d)", i+1, p.ID, p.CatchupReputationScore, p.CatchupSuccesses, p.CatchupFailures, p.CatchupAttempts, successRate, p.Height)
 	}
 
 	return peers, nil

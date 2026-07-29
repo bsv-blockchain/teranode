@@ -61,6 +61,9 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// txRejectedPrefix is the message prefix used when a raw transaction is rejected.
+const txRejectedPrefix = "TX rejected: "
+
 // live items expire after 10s
 var rpcCallCache = newRPCCache()
 
@@ -848,7 +851,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	if err != nil {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCDeserialization,
-			Message: "TX rejected: " + err.Error(),
+			Message: txRejectedPrefix + err.Error(),
 		}
 	}
 
@@ -882,7 +885,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 			if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
 				return nil, &bsvjson.RPCError{
 					Code:    bsvjson.ErrRPCVerify,
-					Message: "TX rejected: " + err.Error(),
+					Message: txRejectedPrefix + err.Error(),
 				}
 			}
 			tx.SetExtended(true)
@@ -909,7 +912,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	if err != nil {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCVerify,
-			Message: "TX rejected: " + err.Error(),
+			Message: txRejectedPrefix + err.Error(),
 		}
 	}
 

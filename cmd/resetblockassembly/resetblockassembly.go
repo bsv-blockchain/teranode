@@ -27,21 +27,21 @@ func ResetBlockAssembly(logger ulogger.Logger, settings *settings.Settings, full
 	// Initialize the block assembly service
 	ba, err := blockassembly.NewClient(ctx, logger, settings)
 	if err != nil {
-		return errors.NewConfigurationError("failed to create block assembly client: %w", err)
+		return errors.NewConfigurationError("failed to create block assembly client", err)
 	}
 	defer func() { _ = ba.Close() }()
 
 	if validateInputs {
 		if err = ba.ResetBlockAssemblyValidateInputs(ctx); err != nil {
-			return errors.NewProcessingError("failed to reset block assembly with input validation: %w", err)
+			return errors.NewProcessingError("failed to reset block assembly with input validation", err)
 		}
 	} else if fullReset {
 		if err = ba.ResetBlockAssemblyFully(ctx); err != nil {
-			return errors.NewProcessingError("failed to reset block assembly: %w", err)
+			return errors.NewProcessingError("failed to reset block assembly", err)
 		}
 	} else {
 		if err = ba.ResetBlockAssembly(ctx); err != nil {
-			return errors.NewProcessingError("failed to reset block assembly: %w", err)
+			return errors.NewProcessingError("failed to reset block assembly", err)
 		}
 	}
 

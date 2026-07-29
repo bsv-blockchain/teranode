@@ -79,7 +79,7 @@ func TestConcurrentScriptParsing(t *testing.T) {
 					for _, script := range testScripts {
 						result, err := parser.ParseScript(script)
 						if err != nil {
-							errs <- errors.NewProcessingError("parser %d iteration %d script '%s': %w",
+							errs <- errors.NewProcessingError("parser %d iteration %d script '%s'",
 								parserIndex, j, script, err)
 							continue
 						}
@@ -143,7 +143,7 @@ func TestConcurrentScriptParsing(t *testing.T) {
 					for _, script := range strictScripts {
 						result, err := parser.ParseScript(script)
 						if err != nil {
-							errs <- errors.NewProcessingError("strict parser %d iteration %d script '%s': %w",
+							errs <- errors.NewProcessingError("strict parser %d iteration %d script '%s'",
 								parserIndex, j, script, err)
 							continue
 						}

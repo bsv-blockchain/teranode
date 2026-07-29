@@ -192,11 +192,6 @@ type Store interface {
     // Returns status code, status message and any error encountered.
     Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
-    // Create stores a new transaction's outputs as UTXOs and returns associated metadata.
-    // The blockHeight parameter is used to determine coinbase maturity.
-    // Additional options can be specified using CreateOption functions.
-    Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error)
-
     // Get retrieves UTXO metadata for a given transaction hash.
     // The fields parameter can be used to specify which metadata fields to retrieve.
     // If fields is empty, all fields will be retrieved.
@@ -211,8 +206,13 @@ type Store interface {
     // GetMeta retrieves transaction metadata into the provided data object.
     GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 
-    // Spend marks all the UTXOs of the transaction as spent.
-    Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
+    // SpendAndCreate spends the transaction's inputs and creates its outputs +
+    // metadata as one logical operation. On create failure other than ErrTxExists,
+    // successful spends are rolled back; ErrTxExists is returned with the spends
+    // left in place. WithCreateOnly() skips the spend phase (coinbase, seeding);
+    // WithSpendOnly() skips the create phase (reorg/conflict helpers). On spend
+    // failure the returned []*Spend carries per-input Err values.
+    SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error)
 
     // Unspend reverses a previous spend operation, marking UTXOs as unspent.
     // This is used during blockchain reorganizations.

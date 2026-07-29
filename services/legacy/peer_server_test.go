@@ -1168,6 +1168,16 @@ func TestShouldDisconnectOnBlockErr(t *testing.T) {
 	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("grpc down")))
 	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageError("db unavailable")))
 
+	// #1187: the per-block backoff skip returns ErrServiceUnavailable on every
+	// in-window re-delivery, and ErrStorageUnavailable is "no aerospike nodes
+	// available" — both are our local fault, not the peer's, so they must NOT
+	// disconnect the delivering peer (this is the regression that churned peers).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceUnavailableError("in backoff")))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageUnavailableError("no aerospike nodes available")))
+
+	// Wrapped transient-local errors are still suppressed (chain is walked).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("wrap", errors.NewStorageError("inner"))))
+
 	// A genuine block validation failure rotates the peer.
 	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
 }
@@ -1223,6 +1233,50 @@ func TestCheckBannedBounded(t *testing.T) {
 			require.True(t, ok, "a serviced round-trip must return ok=true")
 			require.Equal(t, want, banned)
 		}
+	})
+}
+
+// TestPreAdmitTimedOut verifies the deadline-vs-cancel policy OnBlock uses to
+// decide whether a failed pre-admission call (ban-check ok=false, or a
+// GetBlockHeader that erred under preAdmitCtx) should rotate the sync peer.
+// Only a genuine deadline (the wedged-local-round-trip case that strands a
+// requested block) returns true; a parent or direct cancel — daemon shutdown /
+// peer teardown — returns false so the block is dropped without a disconnect
+// storm across every peer that happens to be inside OnBlock.
+func TestPreAdmitTimedOut(t *testing.T) {
+	t.Run("deadline exceeded → rotate", func(t *testing.T) {
+		// Already-past deadline: Err() latches context.DeadlineExceeded.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		defer cancel()
+
+		<-ctx.Done()
+		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+		require.True(t, preAdmitTimedOut(ctx))
+	})
+
+	t.Run("parent cancelled → drop, no rotate", func(t *testing.T) {
+		// The daemon-shutdown shape: sp.ctx (parent) is cancelled, so the
+		// derived preAdmitCtx reports Canceled, not DeadlineExceeded.
+		parent, cancelParent := context.WithCancel(context.Background())
+		child, cancelChild := context.WithTimeout(parent, time.Hour)
+		defer cancelChild()
+
+		cancelParent()
+
+		<-child.Done()
+		require.ErrorIs(t, child.Err(), context.Canceled)
+		require.False(t, preAdmitTimedOut(child))
+	})
+
+	t.Run("direct cancel → drop, no rotate", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		require.False(t, preAdmitTimedOut(ctx))
+	})
+
+	t.Run("live context → no rotate (defensive; callers gate on failure)", func(t *testing.T) {
+		require.False(t, preAdmitTimedOut(context.Background()))
 	})
 }
 
@@ -1326,6 +1380,80 @@ func TestDisconnectMisbehaving(t *testing.T) {
 
 		require.NotPanics(t, func() { disconnectMisbehaving(&serverPeer{Peer: lone}, "bad block") })
 		require.True(t, disconnected(lone))
+	})
+}
+
+// TestTearDownAssociationStreams verifies the primary-disconnect teardown that
+// handleDonePeerMsg now performs: when an association's primary goes away, every
+// sub-peer stream connection is closed (fixing the DATA1 stream leak and the
+// budget-parked sub-peer read-loop), while the primary itself — passed as
+// except, since it is already disconnecting — is left untouched.
+// DisconnectWithInfo closes the peer's quit channel, so WaitForDisconnect
+// returning is the observable disconnect signal.
+func TestTearDownAssociationStreams(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
+
+	buildAssoc := func() (*peer.Association, *peer.Peer, *peer.Peer, *peer.Peer) {
+		primary := newPeer()
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+
+		data1 := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, data1))
+		data1.SetAssociation(assoc)
+		data1.SetStreamType(wire.StreamTypeData1)
+
+		data2 := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData2, data2))
+		data2.SetAssociation(assoc)
+		data2.SetStreamType(wire.StreamTypeData2)
+
+		return assoc, primary, data1, data2
+	}
+
+	t.Run("closes every sub-peer stream, leaves the primary", func(t *testing.T) {
+		assoc, primary, data1, data2 := buildAssoc()
+
+		tearDownAssociationStreams(assoc, primary)
+
+		require.False(t, disconnected(primary), "the primary is passed as except and must not be disconnected here")
+		require.True(t, disconnected(data1), "the DATA1 sub-peer connection must be closed")
+		require.True(t, disconnected(data2), "the DATA2 sub-peer connection must be closed")
+	})
+
+	t.Run("nil association is a no-op", func(t *testing.T) {
+		require.NotPanics(t, func() { tearDownAssociationStreams(nil, newPeer()) })
+	})
+
+	t.Run("idempotent when a sub-peer is already tearing down", func(t *testing.T) {
+		assoc, primary, data1, data2 := buildAssoc()
+
+		// Pre-disconnect one sub-peer: the helper must not panic (atomic guard)
+		// and must still close the remaining sub-peer.
+		data1.DisconnectWithWarning("already gone")
+
+		require.NotPanics(t, func() { tearDownAssociationStreams(assoc, primary) })
+		require.True(t, disconnected(data1))
+		require.True(t, disconnected(data2))
+		require.False(t, disconnected(primary))
 	})
 }
 

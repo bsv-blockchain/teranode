@@ -3289,6 +3289,13 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		CoinbaseMaturity:         100,
 		MaxCoinbaseScriptSigSize: 100,    // Default value for mainnet
 		SubsidyReductionInterval: 210000, // Bitcoin halving interval
+		// Not active - permit version 1 blocks (go-chaincfg's regtest BIP34 sentinel). Catchup
+		// fixtures replay real mainnet v1 blocks at synthetic heights, which the block-version floor
+		// would otherwise reject; the zero-value default (0) would make every v1 block above genesis
+		// invalid.
+		BIP0034Height: 100000000,
+		BIP0065Height: 100000000,
+		BIP0066Height: 100000000,
 	}
 
 	mockBlockchainClient := &blockchain.Mock{}
@@ -3397,6 +3404,13 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		CoinbaseMaturity:         config.CoinbaseMaturity,
 		MaxCoinbaseScriptSigSize: 100,    // Default value for mainnet
 		SubsidyReductionInterval: 210000, // Bitcoin halving interval
+		// Not active - permit version 1 blocks (go-chaincfg's regtest BIP34 sentinel). Catchup
+		// fixtures replay real mainnet v1 blocks at synthetic heights, which the block-version floor
+		// would otherwise reject; the zero-value default (0) would make every v1 block above genesis
+		// invalid.
+		BIP0034Height: 100000000,
+		BIP0065Height: 100000000,
+		BIP0066Height: 100000000,
 	}
 
 	mockBlockchainClient := &blockchain.Mock{}
@@ -4189,6 +4203,10 @@ func (r *recordingValidatedProgressP2PClient) GetPeer(_ context.Context, _ strin
 
 func (r *recordingValidatedProgressP2PClient) IsPeerMalicious(_ context.Context, _ string) (bool, string, error) {
 	return false, "", nil
+}
+
+func (r *recordingValidatedProgressP2PClient) ReportValidBlockHeaders(_ context.Context, _ string, _ int64) error {
+	return nil
 }
 
 func (r *recordingValidatedProgressP2PClient) ReportValidBlock(_ context.Context, peerID string, blockHash string) error {

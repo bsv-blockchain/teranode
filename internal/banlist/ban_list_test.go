@@ -109,6 +109,37 @@ func TestBanList_Clear(t *testing.T) {
 	require.False(t, bl.IsBanned("1.2.3.4"))
 }
 
+func TestBanList_ClearKeepsSubscribers(t *testing.T) {
+	bl := newTestBanList(t)
+
+	ch := bl.Subscribe()
+	defer bl.Unsubscribe(ch)
+
+	err := bl.Add(context.Background(), "1.2.3.4", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	select {
+	case event := <-ch:
+		require.Equal(t, "add", event.Action)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for event before Clear")
+	}
+
+	bl.Clear()
+	require.Empty(t, bl.ListBanned())
+
+	err = bl.Add(context.Background(), "5.6.7.8", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	select {
+	case event := <-ch:
+		require.Equal(t, "add", event.Action)
+		require.Equal(t, "5.6.7.8", event.IP)
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber detached by Clear: no event received after Clear")
+	}
+}
+
 func TestBanList_LoadFromDatabase(t *testing.T) {
 	bl := newTestBanList(t)
 

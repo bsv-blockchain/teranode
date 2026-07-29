@@ -376,6 +376,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipUnspendableTxStorageDuringCatchup: getBool("blockvalidation_skipUnspendableTxStorageDuringCatchup", false, alternativeContext...),
 			CatchupAllowQuickValidation:           getBool("blockvalidation_catchup_allow_quick_validation", true, alternativeContext...),
 			OutpointOnlyBelowCheckpoint:           getBool("blockvalidation_outpoint_only_below_checkpoint", false, alternativeContext...),
+			LegacyUnifiedBelowCheckpoint:          getBool("blockvalidation_legacy_unified_below_checkpoint", false, alternativeContext...),
+			LegacyBelowCheckpointFailClosed:       getBool("blockvalidation_legacy_below_checkpoint_fail_closed", false, alternativeContext...),
 			// Catchup circuit breaker configuration
 			CircuitBreakerFailureThreshold: getInt("blockvalidation_circuit_breaker_failure_threshold", 5, alternativeContext...),
 			CircuitBreakerSuccessThreshold: getInt("blockvalidation_circuit_breaker_success_threshold", 2, alternativeContext...),
@@ -485,6 +487,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DisableDAHCleaner:                       getBool("utxostore_disableDAHCleaner", false, alternativeContext...),
 			ReAssignedUtxoSpendableAfterBlocks:      getUint32("utxostore_reassignedUtxoSpendableAfterBlocks", 1000, alternativeContext...),
 			BatcherMaxConcurrent:                    getInt("utxostore_batcherMaxConcurrent", 64, alternativeContext...),
+			OutpointBatcherMaxConcurrent:            getInt("utxostore_outpointBatcherMaxConcurrent", 0, alternativeContext...),
 			QueryIdleTimeoutSeconds:                 getInt("utxostore_queryIdleTimeoutSeconds", 60, alternativeContext...),
 			StoreBatcherTickerIntervalMillis:        getInt("utxostore_storeBatcherTickerIntervalMillis", 0, alternativeContext...),
 			GetBatcherTickerIntervalMillis:          getInt("utxostore_getBatcherTickerIntervalMillis", 0, alternativeContext...),
@@ -656,6 +659,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
 			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...),     // ping/pong interval is 2 mins, so we set this to 125s to be sure
 			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
+			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
+			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),
 			BlockPrefetchBufferBytes:         getInt64("legacy_blockPrefetchBufferBytes", 256*1024*1024, alternativeContext...),
 		},
 		Propagation: PropagationSettings{

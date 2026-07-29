@@ -100,6 +100,9 @@ type PeerInfo struct {
 	SubtreesReceived     int64
 	TransactionsReceived int64
 	CatchupBlocks        int64
+	CatchupAttempts      int64
+	CatchupSuccesses     int64
+	CatchupFailures      int64
 	LastSyncAttempt      time.Time
 	SyncAttemptCount     int32
 	LastReputationReset  time.Time
@@ -1054,6 +1057,10 @@ func (r *CentralizedPeerRegistry) ResetReputation(peerID string) int {
 
 		info.LastSyncAttempt = time.Time{}
 		info.SyncAttemptCount = 0
+
+		info.CatchupAttempts = 0
+		info.CatchupSuccesses = 0
+		info.CatchupFailures = 0
 	}
 
 	if peerID == "" {
@@ -1186,9 +1193,9 @@ func (r *CentralizedPeerRegistry) ClearAllSyncAttempts() int {
 }
 
 // recordReceivedSuccessLocked is the shared body of RecordBlockReceived /
-// RecordSubtreeReceived: increment the supplied counter, mark a successful
-// interaction, blend the response time into the rolling average, recompute
-// reputation. Caller must hold the write lock.
+// RecordSubtreeReceived / RecordCatchupSuccess: increment the supplied counter,
+// mark a successful interaction, blend the response time into the rolling
+// average, recompute reputation. Caller must hold the write lock.
 func (r *CentralizedPeerRegistry) recordReceivedSuccessLocked(info *PeerInfo, counter *int64, responseTimeMs int64) {
 	*counter++
 	info.InteractionAttempts++
@@ -1241,6 +1248,50 @@ func (r *CentralizedPeerRegistry) RecordTransactionReceived(peerID string) {
 		info.InteractionSuccesses++
 		info.LastInteractionSuccess = time.Now()
 		info.LastSeen = info.LastInteractionSuccess
+		r.calculateAndUpdateReputation(info)
+	}
+}
+
+// RecordCatchupAttempt notes that a catchup attempt was made to the peer:
+// increments the catchup-attempt counter and updates the sync backoff tracking
+// fields (LastSyncAttempt / SyncAttemptCount). The attempt is counted even when
+// it later produces neither a success nor a failure.
+func (r *CentralizedPeerRegistry) RecordCatchupAttempt(peerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if info, ok := r.peers[peerID]; ok {
+		info.CatchupAttempts++
+		info.LastSyncAttempt = time.Now()
+		info.SyncAttemptCount++
+	}
+}
+
+// RecordCatchupSuccess increments the catchup-success counter and records a
+// successful interaction with the given response time.
+func (r *CentralizedPeerRegistry) RecordCatchupSuccess(peerID string, responseTimeMs int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if info, ok := r.peers[peerID]; ok {
+		r.recordReceivedSuccessLocked(info, &info.CatchupSuccesses, responseTimeMs)
+	}
+}
+
+// RecordCatchupFailure increments the catchup-failure counter and records a
+// failed interaction.
+func (r *CentralizedPeerRegistry) RecordCatchupFailure(peerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if info, ok := r.peers[peerID]; ok {
+		now := time.Now()
+		info.CatchupFailures++
+		info.InteractionAttempts++
+		info.InteractionFailures++
+		info.LastInteractionAttempt = now
+		info.LastInteractionFailure = now
+		info.LastSeen = now
 		r.calculateAndUpdateReputation(info)
 	}
 }

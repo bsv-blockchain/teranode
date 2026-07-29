@@ -4,6 +4,7 @@ package centrifuge_impl
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/centrifugal/centrifuge"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -26,7 +28,31 @@ const (
 	AccessControlAllowOrigin      = "Access-Control-Allow-Origin"
 	AccessControlAllowHeaders     = "Access-Control-Allow-Headers"
 	AccessControlAllowCredentials = "Access-Control-Allow-Credentials"
+
+	centrifugeLogFormat = "[Centrifuge] %s: %s"
 )
+
+const (
+	// p2p dial retry backoff (#1334): on a stack with no reachable p2p server the
+	// dial fails repeatedly; back off exponentially and log at DEBUG after the
+	// first failure instead of an ERROR every second.
+	p2pDialInitialBackoff = 1 * time.Second
+	p2pDialBackoffFactor  = 2.0
+	p2pDialMaxBackoff     = 60 * time.Second
+)
+
+// sleepWithContext sleeps for d, returning early if ctx is cancelled. It is the
+// default for Centrifuge.sleepWithContext and keeps shutdown prompt during a long
+// dial backoff.
+func sleepWithContext(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
 
 // Centrifuge manages real-time blockchain data broadcasting to WebSocket clients.
 // It provides pub/sub for blockchain events (new blocks, node status updates) using
@@ -45,6 +71,11 @@ type Centrifuge struct {
 	cachedCurrentNodeStatus *notificationMsg // Cached current node status for new clients
 	currentNodePeerID       string           // Track the current node's peer ID
 	statusMutex             sync.RWMutex     // Protects cachedCurrentNodeStatus and currentNodePeerID
+
+	// Test seams for the p2p dial loop (#1334), defaulted in New. Overridden in
+	// tests to drive dial outcomes and backoff timing without real DNS or sleeps.
+	dialWebsocket    func(urlStr string) (*websocket.Conn, *http.Response, error)
+	sleepWithContext func(ctx context.Context, d time.Duration)
 }
 
 // notificationMsg represents a notification message relayed to WebSocket clients.
@@ -112,6 +143,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		repository: repo,
 		baseURL:    assetHTTPAddress,
 		httpServer: httpServer,
+		dialWebsocket: func(urlStr string) (*websocket.Conn, *http.Response, error) {
+			return websocket.DefaultDialer.Dial(urlStr, nil)
+		},
+		sleepWithContext: sleepWithContext,
 	}
 
 	// Only set blockchainClient if repo is not nil
@@ -148,13 +183,13 @@ func (c *Centrifuge) Init(_ context.Context) (err error) {
 			// at INFO floods the asset logs, so respect the per-entry level.
 			switch e.Level {
 			case centrifuge.LogLevelError:
-				c.logger.Errorf("[Centrifuge] %s: %s", e.Message, e.Fields)
+				c.logger.Errorf(centrifugeLogFormat, e.Message, e.Fields)
 			case centrifuge.LogLevelWarn:
-				c.logger.Warnf("[Centrifuge] %s: %s", e.Message, e.Fields)
+				c.logger.Warnf(centrifugeLogFormat, e.Message, e.Fields)
 			case centrifuge.LogLevelInfo:
-				c.logger.Infof("[Centrifuge] %s: %s", e.Message, e.Fields)
+				c.logger.Infof(centrifugeLogFormat, e.Message, e.Fields)
 			default:
-				c.logger.Debugf("[Centrifuge] %s: %s", e.Message, e.Fields)
+				c.logger.Debugf(centrifugeLogFormat, e.Message, e.Fields)
 			}
 		},
 	})
@@ -265,7 +300,12 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 func (c *Centrifuge) startP2PListener(ctx context.Context) error {
 	p2pServerAddress := c.settings.P2P.HTTPAddress
 	if p2pServerAddress == "" {
-		return errors.NewConfigurationError("p2p_httpAddress not found in config")
+		// No p2p server configured — skip the listener rather than failing the
+		// whole asset service. The global default is localhost:9906, so an empty
+		// value is explicit operator intent (e.g. a legacy-only stack). Centrifuge
+		// only sources messages from the p2p websocket, so it is simply inert here.
+		c.logger.Warnf("[Centrifuge] p2p_httpAddress not configured - skipping p2p listener; live block/node status updates will be unavailable")
+		return nil
 	}
 
 	u := url.URL{Scheme: "ws", Host: p2pServerAddress, Path: "/p2p-ws"}
@@ -291,28 +331,93 @@ func (c *Centrifuge) startP2PListener(ctx context.Context) error {
 //   - client: Atomic pointer to the WebSocket connection
 //   - clientConnected: Atomic boolean indicating connection status
 func (c *Centrifuge) connect(ctx context.Context, u url.URL, client *atomic.Pointer[websocket.Conn], clientConnected *atomic.Bool) {
+	// dial and sleep are set by New for every Centrifuge; the nil-guards only cover
+	// a zero-value struct-literal construction (defence, not a live path).
+	dial := c.dialWebsocket
+	if dial == nil {
+		dial = func(urlStr string) (*websocket.Conn, *http.Response, error) {
+			return websocket.DefaultDialer.Dial(urlStr, nil)
+		}
+	}
+
+	sleep := c.sleepWithContext
+	if sleep == nil {
+		sleep = sleepWithContext
+	}
+
+	// failures counts consecutive dial failures; backoff grows exponentially while
+	// they persist so a stack with no reachable p2p server does not log an ERROR
+	// every second (#1334). cappedWarned ensures the "still failing" reminder is
+	// emitted only once per streak. All three reset on a successful connect.
+	var (
+		failures     int
+		cappedWarned bool
+	)
+
+	backoff := p2pDialInitialBackoff
+
 	for {
 		select {
 		case <-ctx.Done():
 			c.logger.Infof("[Centrifuge] p2p client shutting down")
 			return
 		default:
+			// While connected, poll once a second so a dropped connection (flipped
+			// by readMessages) is redialed promptly.
+			wait := 1 * time.Second
+
 			if !clientConnected.Load() {
-				c.logger.Infof("[Centrifuge] dialing p2p server at: %s", u.String())
-				websocketClient, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+				c.logger.Debugf("[Centrifuge] dialing p2p server at: %s", u.String())
+				websocketClient, _, err := dial(u.String())
 
 				if err != nil {
-					c.logger.Errorf("[Centrifuge] error dialing p2p server: %v", err)
+					failures++
+
+					switch {
+					case failures > 1:
+						// Steady-state noise stays at DEBUG.
+						c.logger.Debugf("[Centrifuge] error dialing p2p server (attempt %d, next retry in %s): %v", failures, backoff, err)
+					default:
+						// First failure of a streak: one WARN, with a config hint when
+						// the host cannot be resolved (the common "no p2p service here" case).
+						var dnsErr *net.DNSError
+						if errors.As(err, &dnsErr) {
+							c.logger.Warnf("[Centrifuge] cannot resolve p2p server host %q: %v - retrying with backoff (further attempts logged at DEBUG); if this deployment has no p2p service, set asset_centrifuge_disable=true or leave p2p_httpAddress empty", u.Host, err)
+						} else {
+							c.logger.Warnf("[Centrifuge] error dialing p2p server %s: %v - retrying with backoff (further attempts logged at DEBUG)", u.String(), err)
+						}
+					}
+
 					client.Store(nil)
+
+					wait = backoff
+					backoff = retry.CappedExponentialBackoff(backoff, p2pDialBackoffFactor, p2pDialMaxBackoff)
+
+					// Once the backoff saturates at the cap, emit a single WARN so a
+					// permanently peerless node leaves a durable breadcrumb that it is
+					// still retrying — otherwise it goes silent at INFO level after the
+					// first WARN. Reset on a successful connect below.
+					if backoff >= p2pDialMaxBackoff && !cappedWarned {
+						cappedWarned = true
+						c.logger.Warnf("[Centrifuge] still cannot reach p2p server %s after %d attempts; continuing to retry every %s (set asset_centrifuge_disable=true if this deployment has no p2p service)", u.String(), failures, p2pDialMaxBackoff)
+					}
 				} else {
-					c.logger.Infof("[Centrifuge] connected to p2p server on: %s", u.String())
+					if failures > 0 {
+						c.logger.Infof("[Centrifuge] connected to p2p server on: %s (after %d failed attempt(s))", u.String(), failures)
+					} else {
+						c.logger.Infof("[Centrifuge] connected to p2p server on: %s", u.String())
+					}
+
 					clientConnected.Store(true)
 					client.Store(websocketClient)
+
+					failures = 0
+					backoff = p2pDialInitialBackoff
+					cappedWarned = false
 				}
 			}
 
-			// retrying in 1 second
-			time.Sleep(1 * time.Second)
+			sleep(ctx, wait)
 		}
 	}
 }

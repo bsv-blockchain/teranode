@@ -3,12 +3,14 @@ package util
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,10 +26,24 @@ func TestExtractHeightAndMiner(t *testing.T) {
 		minerError     bool
 	}{
 		{
-			name:           "3-byte height 4105 with m5-cc1 miner",
-			tx:             "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff18030910002f6d352d6363312fdcce95f3c057431c486ae662ffffffff0a0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00000000",
-			expectedHeight: 4105,
-			expectedMiner:  "/m5-cc1/",
+			// Non-minimal 3-byte push (0x03 0910 00) of height 4105 — the encoding the old
+			// makeCoinbase1 emitted. Canonical is the 2-byte push 0x02 0910, so SV Node rejects it and
+			// so does the parser now. Height extraction errors; miner display still works because
+			// ExtractCoinbaseMiner suppresses the missing-height error and returns best-effort text.
+			name:          "non-minimal 3-byte height 4105 with m5-cc1 miner is rejected",
+			tx:            "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff18030910002f6d352d6363312fdcce95f3c057431c486ae662ffffffff0a0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac0065cd1d000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00000000",
+			expectedMiner: "/m5-cc1/",
+			heightError:   true,
+			minerError:    false,
+		},
+		{
+			// Teratestnet block 1 regression (issue #1142): coinbase scriptSig starts with 0x51
+			// (OP_1), the canonical BIP34 encoding of height 1. The old parser read 0x51 as a length
+			// of 81 bytes and returned BLOCK_COINBASE_MISSING_HEIGHT, stalling from-genesis IBD.
+			name:           "teratestnet block 1 OP_1 height with Galts-Gulch miner",
+			tx:             "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1251000f222f47616c74732d47756c63682f22ffffffff0100f2052a010000001976a914042848a901a9f0d79eb42c52813a7646c4a81bfd88ac00000000",
+			expectedHeight: 1,
+			expectedMiner:  "/Galts-Gulch/",
 		},
 		{
 			name:           "2 byte teratestnet-v2 miner",
@@ -59,14 +75,6 @@ func TestExtractHeightAndMiner(t *testing.T) {
 			expectedHeight: 856618,
 			expectedMiner:  "/qdlnk/",
 		},
-		{
-			name:           "testnet pre-BIP34 transaction",
-			tx:             "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4a60248ab1830b9f12c743e837ef4feb32dda0739ee6e3aaf3b24aa86883c592f2f3a20df867825d91bc096f3260b20ae49176d3bb8d02a107af4065a59fffeb9235fc991145224be83446ffffffff01e0850a2a010000002321038a6ca672c189b3af86b9894fcd40a3af6bbae7b45db9ee89258c848b68d66af3ac00000000",
-			expectedHeight: 0,
-			expectedMiner:  "",
-			heightError:    true,
-			minerError:     false, // Error is suppressed for ExtractCoinbaseMiner
-		},
 	}
 
 	for _, tc := range testCases {
@@ -95,6 +103,27 @@ func TestExtractHeightAndMiner(t *testing.T) {
 	}
 }
 
+// TestExtractCoinbaseHeightPreBIP34RealTx documents that a real pre-BIP34 testnet coinbase whose
+// scriptSig happens to begin with 0x60 (OP_16) now decodes to height 16 under push-opcode semantics,
+// where the old length-prefix parser errored. This is not a consensus change: both consensus call
+// sites skip blocks below the network's BIP34 activation height, so this coinbase is never height-
+// checked in production. The trailing bytes are arbitrary extranonce data; only the height decode
+// and the absence of an error are asserted (the sanitized miner is meaningless binary noise).
+func TestExtractCoinbaseHeightPreBIP34RealTx(t *testing.T) {
+	const txHex = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4a60248ab1830b9f12c743e837ef4feb32dda0739ee6e3aaf3b24aa86883c592f2f3a20df867825d91bc096f3260b20ae49176d3bb8d02a107af4065a59fffeb9235fc991145224be83446ffffffff01e0850a2a010000002321038a6ca672c189b3af86b9894fcd40a3af6bbae7b45db9ee89258c848b68d66af3ac00000000"
+
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	height, err := ExtractCoinbaseHeight(tx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(16), height)
+
+	// Miner extraction must not error on this input (its value is arbitrary binary noise).
+	_, err = ExtractCoinbaseMiner(tx)
+	require.NoError(t, err)
+}
+
 // TestExtractCoinbaseHeightAndText_Scripts tests direct script parsing
 func TestExtractCoinbaseHeightAndTextScripts(t *testing.T) {
 	testCases := []struct {
@@ -104,6 +133,7 @@ func TestExtractCoinbaseHeightAndTextScripts(t *testing.T) {
 		expectedMiner  string
 		expectError    bool
 	}{
+		// --- accepts: canonical encodings ---
 		{
 			name:           "3-byte height 807495 with taal.com miner",
 			script:         "0347520c2f7461616c2e636f6d2f79b010ec60689edf8d3a0000",
@@ -111,17 +141,72 @@ func TestExtractCoinbaseHeightAndTextScripts(t *testing.T) {
 			expectedMiner:  "/taal.com/",
 		},
 		{
-			name:           "3-byte height 0 with no miner",
-			script:         "03000000",
+			name:           "OP_0 height 0",
+			script:         "00",
 			expectedHeight: 0,
 			expectedMiner:  "",
 		},
 		{
-			name:           "2-byte height 1 with satoshi miner",
-			script:         "0201002f7361746f7368692f",
+			name:           "OP_1 height 1 (teratestnet block 1) with Galts-Gulch miner",
+			script:         "51000f222f47616c74732d47756c63682f22",
+			expectedHeight: 1,
+			expectedMiner:  "/Galts-Gulch/",
+		},
+		{
+			name:           "OP_1 height 1 with satoshi miner (canonical form of old fixture)",
+			script:         "512f7361746f7368692f",
 			expectedHeight: 1,
 			expectedMiner:  "/satoshi/",
 		},
+		{
+			name:           "OP_16 height 16",
+			script:         "60",
+			expectedHeight: 16,
+			expectedMiner:  "",
+		},
+		{
+			name:           "1-byte push height 17",
+			script:         "0111",
+			expectedHeight: 17,
+			expectedMiner:  "",
+		},
+		{
+			name:           "2-byte push height 128 (sign-bit pad)",
+			script:         "028000",
+			expectedHeight: 128,
+			expectedMiner:  "",
+		},
+		{
+			name:           "2-byte push height 255 (sign-bit pad)",
+			script:         "02ff00",
+			expectedHeight: 255,
+			expectedMiner:  "",
+		},
+		{
+			name:           "2-byte push height 256",
+			script:         "020001",
+			expectedHeight: 256,
+			expectedMiner:  "",
+		},
+		{
+			name:           "2-byte push height 4105 (canonical m5-cc1) with miner",
+			script:         "0209102f6d352d6363312f",
+			expectedHeight: 4105,
+			expectedMiner:  "/m5-cc1/",
+		},
+		{
+			name:           "3-byte push height 518847",
+			script:         "03bfea07",
+			expectedHeight: 518847,
+			expectedMiner:  "",
+		},
+		{
+			name:           "4-byte push height 67305985 (minimal, still accepted)",
+			script:         "0401020304",
+			expectedHeight: 0x4030201,
+			expectError:    false,
+		},
+		// --- rejects: invalid or non-canonical encodings (SV Node parity) ---
 		{
 			name:        "empty script",
 			script:      "",
@@ -133,10 +218,89 @@ func TestExtractCoinbaseHeightAndTextScripts(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:           "unsupported 4-byte length",
-			script:         "0401020304",
-			expectedHeight: 0x4030201,
-			expectError:    false,
+			name:        "OP_DATA3 declares 3 bytes, only 2 present",
+			script:      "03bfea",
+			expectError: true,
+		},
+		{
+			name:        "OP_PUSHDATA1 with no length byte",
+			script:      "4c",
+			expectError: true,
+		},
+		{
+			name:        "OP_PUSHDATA1 declares 3 bytes, only 2 present",
+			script:      "4c03bfea",
+			expectError: true,
+		},
+		{
+			name:        "OP_PUSHDATA2 with truncated length header",
+			script:      "4d03",
+			expectError: true,
+		},
+		{
+			name:        "OP_PUSHDATA4 with truncated length header",
+			script:      "4e030000",
+			expectError: true,
+		},
+		{
+			name:        "OP_PUSHDATA4 declares 3 bytes, payload truncated",
+			script:      "4e03000000",
+			expectError: true,
+		},
+		{
+			name:        "non-minimal 2-byte push of height 1 (canonical is OP_1)",
+			script:      "0201002f7361746f7368692f",
+			expectError: true,
+		},
+		{
+			name:        "non-minimal 3-byte push of height 0 (canonical is OP_0)",
+			script:      "03000000",
+			expectError: true,
+		},
+		{
+			name:        "non-minimal 3-byte push of height 4105 (canonical is 2-byte)",
+			script:      "030910002f6d352d6363312f",
+			expectError: true,
+		},
+		{
+			name:        "non-minimal 4-byte push of height 518847 (canonical is 3-byte)",
+			script:      "04bfea0700",
+			expectError: true,
+		},
+		{
+			name:        "OP_PUSHDATA1 push of height 518847 (never canonical)",
+			script:      "4c03bfea07",
+			expectError: true,
+		},
+		{
+			name:        "OP_PUSHDATA2 push of height 518847 (never canonical)",
+			script:      "4d0300bfea07",
+			expectError: true,
+		},
+		{
+			name:        "OP_PUSHDATA4 push of height 518847 (never canonical)",
+			script:      "4e03000000bfea07",
+			expectError: true,
+		},
+		{
+			name:        "OP_1NEGATE is not a valid height",
+			script:      "4f",
+			expectError: true,
+		},
+		{
+			name:        "1-byte push of -1 (sign bit set) is not a valid height",
+			script:      "0181",
+			expectError: true,
+		},
+		{
+			name:        "push longer than maxHeightBytes",
+			script:      "090102030405060708ff",
+			expectError: true,
+		},
+		{
+			name:        "first opcode is not a data push",
+			script:      "a90102",
+			expectError: true,
 		},
 	}
 
@@ -148,6 +312,7 @@ func TestExtractCoinbaseHeightAndTextScripts(t *testing.T) {
 			height, miner, err := extractCoinbaseHeightAndText(*script, false)
 			if tc.expectError {
 				require.Error(t, err)
+				require.ErrorIs(t, err, errors.ErrBlockCoinbaseMissingHeight)
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tc.expectedHeight, height)
@@ -357,6 +522,62 @@ func TestExtractCoinbaseMinerRaw(t *testing.T) {
 			defaultMiner, err := ExtractCoinbaseMiner(tx)
 			require.NoError(t, err)
 			assert.Equal(t, sanitized, defaultMiner)
+		})
+	}
+}
+
+// referenceHeightPush is a deliberately independent implementation of bitcoin-sv's
+// CScript() << nHeight (push_int64). It is written separately from the production
+// EncodeCoinbaseHeightPush so the round-trip test below cross-checks the two against each other
+// rather than against a shared implementation. Heights are always non-negative, hence uint32.
+func referenceHeightPush(n uint32) []byte {
+	if n == 0 {
+		return []byte{0x00} // OP_0
+	}
+
+	if n <= 16 {
+		return []byte{byte(0x50 + n)} // OP_1..OP_16
+	}
+
+	// minimal little-endian magnitude bytes; append 0x00 if the top bit would read as the sign
+	var num []byte
+	for v := n; v > 0; v >>= 8 {
+		num = append(num, byte(v&0xff))
+	}
+
+	if num[len(num)-1]&0x80 != 0 {
+		num = append(num, 0x00)
+	}
+
+	return append([]byte{byte(len(num))}, num...)
+}
+
+// TestCoinbaseHeightPushRoundTrip cross-checks the canonical encoder against an independent
+// reference and verifies that every canonically-encoded height round-trips back through the
+// extractor. This is the oracle test for SV Node encoding parity.
+func TestCoinbaseHeightPushRoundTrip(t *testing.T) {
+	// push of the 15-byte tag "\"/Galts-Gulch/\"", appended after the height so the extractor also
+	// has trailing arbitrary text to skip over.
+	const minerTagHex = "0f222f47616c74732d47756c63682f22"
+
+	heights := []uint32{0, 1, 2, 16, 17, 127, 128, 255, 256, 1000, 21111, 227931, 518847, 4294967295}
+
+	for _, h := range heights {
+		t.Run(fmt.Sprintf("height_%d", h), func(t *testing.T) {
+			ref := referenceHeightPush(h)
+
+			// 1. the production encoder matches the independent reference encoder.
+			require.Equal(t, ref, EncodeCoinbaseHeightPush(h), "canonical encoding mismatch")
+
+			// 2. the encoded height round-trips back through the extractor to the same value, and the
+			//    trailing tag is still recovered.
+			script, err := bscript.NewFromHexString(hex.EncodeToString(ref) + minerTagHex)
+			require.NoError(t, err)
+
+			height, miner, err := extractCoinbaseHeightAndText(*script, false)
+			require.NoError(t, err)
+			require.Equal(t, h, height)
+			require.Equal(t, "/Galts-Gulch/", miner)
 		})
 	}
 }

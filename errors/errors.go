@@ -347,6 +347,12 @@ func (e *Error) GetData(key string) interface{} {
 }
 
 // New creates a new Error instance with the specified code, message, and optional parameters.
+//
+// Pass the causing error as the final argument to wrap it; do NOT use a %w verb
+// in the message. The trailing error is extracted before fmt.Errorf runs, so a
+// %w would be orphaned (rendering "%!w(MISSING)" or a literal "%w"); the wrapped
+// error is rendered by Error() via " -> " instead. Any orphaned %w is stripped
+// defensively, but the errors.New* format strings should simply omit it.
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr *Error
 
@@ -362,6 +368,15 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			wErr = &Error{message: err.Error()}
 			params = params[:len(params)-1]
 		}
+	}
+
+	// A trailing error argument was extracted as the wrapped error above, so any
+	// %w verb left in the format string is now orphaned: fmt.Errorf would render
+	// it as %!w(MISSING), or (when no params remain) the literal %w would survive
+	// unformatted. The wrapped error is rendered by Error() via " -> ", so the
+	// verb is redundant here — strip it. Escaped %%w is preserved.
+	if wErr != nil {
+		message = stripOrphanedWrapVerbs(message)
 	}
 
 	// Format the message with the remaining parameters
@@ -406,6 +421,53 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	}
 
 	return returnErr
+}
+
+// stripOrphanedWrapVerbs removes unescaped %w verbs from a format string, together
+// with one immediately preceding separator run (trailing spaces and/or ':', '-',
+// ','), so "GetBlock: %w" -> "GetBlock" and "failed %s: %w" -> "failed %s". Escaped
+// verbs (%%w, i.e. a literal "%w") are preserved. It is only called once a trailing
+// error argument has been extracted as the wrapped error, at which point any %w in
+// the format is orphaned (see New). The scan is escape-aware rather than a regex so
+// that the second % of a %%w sequence is never mistaken for a verb.
+func stripOrphanedWrapVerbs(format string) string {
+	if !strings.Contains(format, "%w") {
+		return format
+	}
+
+	var b strings.Builder
+	b.Grow(len(format))
+
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			b.WriteByte(format[i])
+			continue
+		}
+
+		// Escaped percent: keep both bytes verbatim so "%%w" stays a literal "%w".
+		if i+1 < len(format) && format[i+1] == '%' {
+			b.WriteString("%%")
+			i++
+
+			continue
+		}
+
+		// Orphaned wrap verb: drop it and tidy any dangling separator that preceded it.
+		if i+1 < len(format) && format[i+1] == 'w' {
+			s := strings.TrimRight(b.String(), " ")
+			s = strings.TrimRight(s, ":-,")
+			s = strings.TrimRight(s, " ")
+			b.Reset()
+			b.WriteString(s)
+			i++
+
+			continue
+		}
+
+		b.WriteByte(format[i])
+	}
+
+	return b.String()
 }
 
 // contains checks if the target error or any of its wrapped errors exist in this error's chain
@@ -696,6 +758,83 @@ func WrapGRPC(err error) error {
 	}
 }
 
+// publicCauseCodes is the allowlist of client-safe verdict codes whose inner
+// code+message may be surfaced through the public error boundary. Each names a
+// verdict about the submitted transaction, carries no node-internal state, and
+// is actionable by the submitter; everything else collapses to the outermost code.
+//
+// This allowlist is intentionally narrower than the set of codes an HTTP handler
+// may classify as client errors: some codes earn a specific 4xx status yet are
+// deliberately absent here and from ErrorCodeToGRPCCode. An HTTP status only sorts
+// the request into a coarse client-error category and exposes neither the detailed
+// ERR code nor its message; surfacing a message is held to the stricter bar of a
+// client-safe, actionable verdict. Widening this set therefore needs the same
+// safety review — it is not kept in sync with the HTTP classifier by design.
+var publicCauseCodes = map[ERR]struct{}{
+	ERR_UTXO_NON_FINAL:          {},
+	ERR_TX_LOCK_TIME:            {},
+	ERR_TX_POLICY:               {},
+	ERR_TX_INVALID:              {},
+	ERR_TX_INVALID_DOUBLE_SPEND: {},
+	ERR_TX_CONFLICTING:          {},
+	ERR_UTXO_SPENT:              {},
+	ERR_TX_LOCKED:               {},
+}
+
+// isPublicCause reports whether code is on the client-safe allowlist.
+func isPublicCause(code ERR) bool {
+	_, ok := publicCauseCodes[code]
+	return ok
+}
+
+// DeepestPublicCause walks err's wrapped chain and returns the innermost error
+// whose code is on the client-safe allowlist (publicCauseCodes), or nil if none
+// is present. The walk is bounded like (*Error).Is to stay safe on pathological
+// chains. Only code+message are meaningful on the returned error; callers must
+// never surface its file/line/function, data, or the rest of the chain.
+//
+// This helper backs the shared public error boundary — UserMessage, PublicError,
+// and thus WrapGRPCPublic — consumed by all external surfaces (propagation /tx and
+// /txs, the asset HTTP error boundary, p2p), so preferring the deepest allowlisted
+// cause is a global boundary behaviour, not scoped to a single service. It is safe
+// by construction: only codes on publicCauseCodes are ever surfaced, and any other
+// cause collapses to the outermost code.
+func DeepestPublicCause(err error) *Error {
+	if err == nil {
+		return nil
+	}
+
+	var cur *Error
+	if !errors.As(err, &cur) || cur == nil {
+		return nil
+	}
+
+	var deepest *Error
+
+	for depth := 0; cur != nil && depth < maxIsChainDepth; depth++ {
+		if isPublicCause(cur.code) {
+			deepest = cur
+		}
+
+		if cur.wrappedErr == nil {
+			break
+		}
+
+		next, ok := cur.wrappedErr.(*Error)
+		if !ok {
+			// Non-*Error link: let errors.As dig through foreign wrappers to
+			// the next *Error, mirroring (*Error).Is.
+			if !errors.As(cur.wrappedErr, &next) {
+				break
+			}
+		}
+
+		cur = next
+	}
+
+	return deepest
+}
+
 // UserMessage returns a concise, user-facing error message without wrapped error chains or data.
 // It is intended for external surfaces (HTTP/gRPC) where internal details should not be exposed.
 func UserMessage(err error) string {
@@ -705,6 +844,12 @@ func UserMessage(err error) string {
 
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// Prefer an allowlisted verdict cause so actionable tx-rejection reasons
+	// survive the boundary instead of collapsing to the outermost generic code.
+	if cause := DeepestPublicCause(err); cause != nil {
+		return fmt.Sprintf(errCodeMsgFmt, cause.code.String(), cause.code, cause.message)
 	}
 
 	var tErr *Error
@@ -729,6 +874,14 @@ func PublicError(err error) *Error {
 
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// Prefer an allowlisted verdict cause when present; still emit code+message only.
+	if cause := DeepestPublicCause(err); cause != nil {
+		return &Error{
+			code:    cause.code,
+			message: cause.message,
+		}
 	}
 
 	var tErr *Error
@@ -875,6 +1028,18 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 		return codes.InvalidArgument
 	case ERR_THRESHOLD_EXCEEDED:
 		return codes.ResourceExhausted
+	// Tx-rejection verdicts: the submitted tx is not acceptable — a client error,
+	// not a server fault. This is a pure ERR->codes.Code lookup consumed by BOTH
+	// WrapGRPC (outermost code) and WrapGRPCPublic (public cause), so these rows
+	// change the gRPC status for every WrapGRPC caller, not only the public tx
+	// surfaces. That reach is intentional and benign: no caller branches on
+	// codes.Internal, the retry gate keys only on Unavailable/DeadlineExceeded, and
+	// application control-flow keys on the reconstructed ERR code, not the gRPC code.
+	case ERR_TX_INVALID, ERR_TX_LOCK_TIME, ERR_UTXO_NON_FINAL, ERR_TX_POLICY:
+		return codes.InvalidArgument
+	// Conflict/locked family: valid request, chain-state conflict.
+	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED:
+		return codes.FailedPrecondition
 	default:
 		return codes.Internal
 	}

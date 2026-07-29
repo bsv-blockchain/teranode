@@ -24,6 +24,18 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+const (
+	svcBlockchainGRPC        = "Blockchain gRPC"
+	svcValidatorGRPC         = "Validator gRPC"
+	svcBlockValidationGRPC   = "Block Validation gRPC"
+	svcBlockAssemblyGRPC     = "Block Assembly gRPC"
+	svcSubtreeValidationGRPC = "Subtree Validation gRPC"
+	svcP2PGRPC               = "P2P gRPC"
+	msgFailedToCreateClient  = "failed to create client"
+	msgNotConfigured         = "not configured"
+	pathHealth               = "/health"
+)
+
 // Clients that are reused across multiple checks are stored here
 // to avoid creating duplicate connections.
 type serviceClients struct {
@@ -105,21 +117,21 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 		if clients.blockchain != nil {
 			client := clients.blockchain
 			services = append(services, grpcService{
-				name:    "Blockchain gRPC",
+				name:    svcBlockchainGRPC,
 				address: s.BlockChain.GRPCAddress,
 				check:   func() (int, string, error) { return client.Health(ctx, true) },
 			})
 		} else {
 			services = append(services, grpcService{
-				name:    "Blockchain gRPC",
+				name:    svcBlockchainGRPC,
 				address: s.BlockChain.GRPCAddress,
 				check: func() (int, string, error) {
-					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, "failed to create client")
+					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, msgFailedToCreateClient)
 				},
 			})
 		}
 	} else {
-		services = append(services, grpcService{name: "Blockchain gRPC", skipMsg: skipReason("Blockchain")})
+		services = append(services, grpcService{name: svcBlockchainGRPC, skipMsg: skipReason("Blockchain")})
 	}
 
 	// Validator
@@ -127,20 +139,20 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 		client, err := validator.NewClient(ctx, logger, s)
 		if err != nil {
 			services = append(services, grpcService{
-				name:    "Validator gRPC",
+				name:    svcValidatorGRPC,
 				address: s.Validator.GRPCAddress,
 				check:   func() (int, string, error) { return http.StatusServiceUnavailable, "", err },
 			})
 		} else {
 			defer func() { _ = client.Close() }()
 			services = append(services, grpcService{
-				name:    "Validator gRPC",
+				name:    svcValidatorGRPC,
 				address: s.Validator.GRPCAddress,
 				check:   func() (int, string, error) { return client.Health(ctx, true) },
 			})
 		}
 	} else {
-		services = append(services, grpcService{name: "Validator gRPC", skipMsg: skipReason("Validator")})
+		services = append(services, grpcService{name: svcValidatorGRPC, skipMsg: skipReason("Validator")})
 	}
 
 	// Block Validation
@@ -148,21 +160,21 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 		if clients.blockValidation != nil {
 			client := clients.blockValidation
 			services = append(services, grpcService{
-				name:    "Block Validation gRPC",
+				name:    svcBlockValidationGRPC,
 				address: s.BlockValidation.GRPCAddress,
 				check:   func() (int, string, error) { return client.Health(ctx, true) },
 			})
 		} else {
 			services = append(services, grpcService{
-				name:    "Block Validation gRPC",
+				name:    svcBlockValidationGRPC,
 				address: s.BlockValidation.GRPCAddress,
 				check: func() (int, string, error) {
-					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, "failed to create client")
+					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, msgFailedToCreateClient)
 				},
 			})
 		}
 	} else {
-		services = append(services, grpcService{name: "Block Validation gRPC", skipMsg: skipReason("BlockValidation")})
+		services = append(services, grpcService{name: svcBlockValidationGRPC, skipMsg: skipReason("BlockValidation")})
 	}
 
 	// Block Assembly
@@ -170,21 +182,21 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 		if clients.blockAssembly != nil {
 			client := clients.blockAssembly
 			services = append(services, grpcService{
-				name:    "Block Assembly gRPC",
+				name:    svcBlockAssemblyGRPC,
 				address: s.BlockAssembly.GRPCAddress,
 				check:   func() (int, string, error) { return client.Health(ctx, true) },
 			})
 		} else {
 			services = append(services, grpcService{
-				name:    "Block Assembly gRPC",
+				name:    svcBlockAssemblyGRPC,
 				address: s.BlockAssembly.GRPCAddress,
 				check: func() (int, string, error) {
-					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, "failed to create client")
+					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, msgFailedToCreateClient)
 				},
 			})
 		}
 	} else {
-		services = append(services, grpcService{name: "Block Assembly gRPC", skipMsg: skipReason("BlockAssembly")})
+		services = append(services, grpcService{name: svcBlockAssemblyGRPC, skipMsg: skipReason("BlockAssembly")})
 	}
 
 	// Subtree Validation
@@ -192,7 +204,7 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 		client, err := subtreevalidation.NewClient(ctx, logger, s, "diagnose")
 		if err != nil {
 			services = append(services, grpcService{
-				name:    "Subtree Validation gRPC",
+				name:    svcSubtreeValidationGRPC,
 				address: s.SubtreeValidation.GRPCAddress,
 				check:   func() (int, string, error) { return http.StatusServiceUnavailable, "", err },
 			})
@@ -201,13 +213,13 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 				defer func() { _ = cc.Close() }()
 			}
 			services = append(services, grpcService{
-				name:    "Subtree Validation gRPC",
+				name:    svcSubtreeValidationGRPC,
 				address: s.SubtreeValidation.GRPCAddress,
 				check:   func() (int, string, error) { return client.Health(ctx, true) },
 			})
 		}
 	} else {
-		services = append(services, grpcService{name: "Subtree Validation gRPC", skipMsg: skipReason("SubtreeValidation")})
+		services = append(services, grpcService{name: svcSubtreeValidationGRPC, skipMsg: skipReason("SubtreeValidation")})
 	}
 
 	// P2P (uses GetPeers as health indicator - no Health method on ClientI)
@@ -215,7 +227,7 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 		if clients.p2p != nil {
 			client := clients.p2p
 			services = append(services, grpcService{
-				name:    "P2P gRPC",
+				name:    svcP2PGRPC,
 				address: s.P2P.GRPCAddress,
 				check: func() (int, string, error) {
 					_, err := client.GetPeers(ctx)
@@ -227,15 +239,15 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 			})
 		} else {
 			services = append(services, grpcService{
-				name:    "P2P gRPC",
+				name:    svcP2PGRPC,
 				address: s.P2P.GRPCAddress,
 				check: func() (int, string, error) {
-					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, "failed to create client")
+					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, msgFailedToCreateClient)
 				},
 			})
 		}
 	} else {
-		services = append(services, grpcService{name: "P2P gRPC", skipMsg: skipReason("P2P")})
+		services = append(services, grpcService{name: svcP2PGRPC, skipMsg: skipReason("P2P")})
 	}
 
 	var results []HealthResult
@@ -244,7 +256,7 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 		if svc.check == nil {
 			msg := svc.skipMsg
 			if msg == "" {
-				msg = "not configured"
+				msg = msgNotConfigured
 			}
 
 			results = append(results, HealthResult{
@@ -288,7 +300,7 @@ func checkHTTPServices(ctx context.Context, s *settings.Settings) []HealthResult
 	// Asset Server
 	if s.Asset.HTTPListenAddress != "" {
 		addr := normalizeHTTPAddress(s.Asset.HTTPListenAddress)
-		results = append(results, checkHTTPEndpoint(ctx, "Asset HTTP", addr, "/health"))
+		results = append(results, checkHTTPEndpoint(ctx, "Asset HTTP", addr, pathHealth))
 	} else {
 		results = append(results, HealthResult{
 			Service: "Asset HTTP",
@@ -301,13 +313,13 @@ func checkHTTPServices(ctx context.Context, s *settings.Settings) []HealthResult
 	// Propagation HTTP
 	if s.Propagation.HTTPListenAddress != "" {
 		addr := normalizeHTTPAddress(s.Propagation.HTTPListenAddress)
-		results = append(results, checkHTTPEndpoint(ctx, "Propagation HTTP", addr, "/health"))
+		results = append(results, checkHTTPEndpoint(ctx, "Propagation HTTP", addr, pathHealth))
 	}
 
 	// Block Persister HTTP
 	if s.BlockPersister.HTTPListenAddress != "" {
 		addr := normalizeHTTPAddress(s.BlockPersister.HTTPListenAddress)
-		results = append(results, checkHTTPEndpoint(ctx, "Block Persister HTTP", addr, "/health"))
+		results = append(results, checkHTTPEndpoint(ctx, "Block Persister HTTP", addr, pathHealth))
 	}
 
 	// RPC
@@ -318,7 +330,7 @@ func checkHTTPServices(ctx context.Context, s *settings.Settings) []HealthResult
 	// Health Check endpoint
 	if s.HealthCheckHTTPListenAddress != "" {
 		addr := normalizeHTTPAddress(s.HealthCheckHTTPListenAddress)
-		results = append(results, checkHTTPEndpoint(ctx, "Health Endpoint", addr, "/health"))
+		results = append(results, checkHTTPEndpoint(ctx, "Health Endpoint", addr, pathHealth))
 	}
 
 	// Profiler (pprof)
@@ -386,7 +398,7 @@ func checkKafka(ctx context.Context, s *settings.Settings) HealthResult {
 			Service: "Kafka",
 			Address: "-",
 			Status:  StatusSKIP,
-			Message: "not configured",
+			Message: msgNotConfigured,
 		}
 	}
 
@@ -421,7 +433,7 @@ func checkAerospike(ctx context.Context, logger ulogger.Logger, s *settings.Sett
 			Service: "Aerospike",
 			Address: "-",
 			Status:  StatusSKIP,
-			Message: "not configured",
+			Message: msgNotConfigured,
 		}
 	}
 
@@ -475,7 +487,7 @@ func checkPostgres(ctx context.Context, s *settings.Settings) HealthResult {
 			Service: "PostgreSQL",
 			Address: "-",
 			Status:  StatusSKIP,
-			Message: "not configured",
+			Message: msgNotConfigured,
 		}
 	}
 
@@ -788,13 +800,13 @@ func isServiceEnabled(formalName string) bool {
 }
 
 // skipReason returns a SKIP message explaining why a service is not checked.
-// If the service is disabled in settings, it says so. Otherwise "not configured".
+// If the service is disabled in settings, it says so. Otherwise msgNotConfigured.
 func skipReason(formalName string) string {
 	if !isServiceEnabled(formalName) {
 		return fmt.Sprintf("disabled (start%s=false)", formalName)
 	}
 
-	return "not configured"
+	return msgNotConfigured
 }
 
 func normalizeHTTPAddress(addr string) string {

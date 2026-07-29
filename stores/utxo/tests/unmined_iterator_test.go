@@ -102,16 +102,16 @@ func testUnminedTxIterator(t *testing.T, utxoStoreURL string) {
 		err = store.SetBlockHeight(currentBlockHeight)
 		require.NoError(t, err)
 
-		tx1Meta, err := store.Create(ctx, tx1, currentBlockHeight)
+		tx1Meta, _, err := store.SpendAndCreate(ctx, tx1, currentBlockHeight, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = store.Create(ctx, tx2, currentBlockHeight, utxo.WithMinedBlockInfo(
+		_, _, err = store.SpendAndCreate(ctx, tx2, currentBlockHeight, utxo.WithMinedBlockInfo(
 			utxo.MinedBlockInfo{
 				BlockID:     1,
 				BlockHeight: 1,
 				SubtreeIdx:  1,
 			},
-		))
+		), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		it, err := store.GetUnminedTxIterator()
@@ -146,22 +146,22 @@ func testUnminedTxIterator(t *testing.T, utxoStoreURL string) {
 		require.NoError(t, store.Delete(ctx, tx1.TxIDChainHash()))
 		require.NoError(t, store.Delete(ctx, tx2.TxIDChainHash()))
 
-		_, err = store.Create(ctx, tx1, 0, utxo.WithMinedBlockInfo(
+		_, _, err = store.SpendAndCreate(ctx, tx1, 0, utxo.WithMinedBlockInfo(
 			utxo.MinedBlockInfo{
 				BlockID:     2,
 				BlockHeight: 2,
 				SubtreeIdx:  2,
 			},
-		))
+		), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = store.Create(ctx, tx2, 0, utxo.WithMinedBlockInfo(
+		_, _, err = store.SpendAndCreate(ctx, tx2, 0, utxo.WithMinedBlockInfo(
 			utxo.MinedBlockInfo{
 				BlockID:     2,
 				BlockHeight: 2,
 				SubtreeIdx:  2,
 			},
-		))
+		), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		it, err := store.GetUnminedTxIterator()

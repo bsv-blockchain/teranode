@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	memory_blob "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -108,7 +109,7 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
 		if i != 0 {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), tx, params.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), tx, params.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 	}
@@ -157,7 +158,7 @@ func TestGetLegacyWireBlockWithSubtreeStore(t *testing.T) {
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
 		if i != 0 {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), tx, params.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), tx, params.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 	}
@@ -388,7 +389,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 
 		// Add all non-coinbase transactions to the UTXO store
 		for i := 1; i < len(txs); i++ {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], testParams.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], testParams.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -485,7 +486,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
 		for i := 1; i < len(txs); i++ {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], testParams.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], testParams.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -563,7 +564,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
 		for i := 1; i < len(txs); i++ {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], testParams.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], testParams.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -670,7 +671,7 @@ func TestGetLegacyBlockNoDuplication(t *testing.T) {
 			// Setup UTXO store if needed (for fallback path)
 			if tc.setupUTXOStore {
 				for i := 1; i < len(txs); i++ {
-					_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], blockParams.height)
+					_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], blockParams.height, utxo.WithCreateOnly())
 					require.NoError(t, err)
 				}
 				// Also need the subtree itself for fallback

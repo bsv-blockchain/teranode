@@ -61,12 +61,12 @@ func buildFloaterBlock(t *testing.T, utxoStore utxostore.Store, subtreeStore blo
 	require.NoError(t, coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	require.NoError(t, coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
-	_, err = utxoStore.Create(ctx, coinbaseTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(ctx, coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// The FLOATER PARENT: in the UTXO store, but created WITHOUT mined-block
 	// info so its BlockIDs stay empty. It is deliberately NOT added to the block.
-	_, err = utxoStore.Create(ctx, parentTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(ctx, parentTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	parentMeta, err := utxoStore.Get(ctx, parentTx.TxIDChainHash())
@@ -77,7 +77,7 @@ func buildFloaterBlock(t *testing.T, utxoStore utxostore.Store, subtreeStore blo
 	// single input referencing parentTx, so getParentTxMetaBlockIDs resolves to
 	// the unconfirmed parent rather than to an in-block tx via b.txMap.
 	childTx := newTx(7, parentTx.TxIDChainHash())
-	_, err = utxoStore.Create(ctx, childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(ctx, childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(2)

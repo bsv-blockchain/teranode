@@ -243,7 +243,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 
-	_, err = ctx.utxoStore.Create(context.Background(), tx1, 0)
+	_, _, err = ctx.utxoStore.SpendAndCreate(context.Background(), tx1, 0, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings(t)

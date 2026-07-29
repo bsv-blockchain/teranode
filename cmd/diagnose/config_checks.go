@@ -8,6 +8,12 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 )
 
+const (
+	labelGRPCAdminAPIKey = "gRPC admin API key"
+	valueEmpty           = "(empty)"
+	labelDataFolder      = "Data folder"
+)
+
 func runConfigChecks(s *settings.Settings) []ConfigResult {
 	var results []ConfigResult
 
@@ -239,21 +245,21 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 	if s.GRPCAdminAPIKey == "" {
 		results = append(results, ConfigResult{
 			Severity:    severity,
-			Check:       "gRPC admin API key",
-			Value:       "(empty)",
+			Check:       labelGRPCAdminAPIKey,
+			Value:       valueEmpty,
 			Recommended: "Set grpc_admin_api_key (32+ chars)",
 		})
 	} else if len(s.GRPCAdminAPIKey) < 16 {
 		results = append(results, ConfigResult{
 			Severity:    SeverityWARN,
-			Check:       "gRPC admin API key",
+			Check:       labelGRPCAdminAPIKey,
 			Value:       fmt.Sprintf("%d chars (weak)", len(s.GRPCAdminAPIKey)),
 			Recommended: "Use at least 16 characters, ideally 32+",
 		})
 	} else {
 		results = append(results, ConfigResult{
 			Severity: SeverityOK,
-			Check:    "gRPC admin API key",
+			Check:    labelGRPCAdminAPIKey,
 			Value:    fmt.Sprintf("%d chars", len(s.GRPCAdminAPIKey)),
 		})
 	}
@@ -268,7 +274,7 @@ func checkKafkaConfig(s *settings.Settings) []ConfigResult {
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       "Kafka hosts",
-			Value:       "(empty)",
+			Value:       valueEmpty,
 			Recommended: "Set KAFKA_HOSTS (e.g. localhost:9092)",
 		})
 	} else {
@@ -392,7 +398,7 @@ func checkP2PConfig(s *settings.Settings) []ConfigResult {
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       "P2P listen addresses",
-			Value:       "(empty)",
+			Value:       valueEmpty,
 			Recommended: "Set p2p_listen_addresses (e.g. /ip4/0.0.0.0/tcp/9905)",
 		})
 	} else {
@@ -652,14 +658,14 @@ func checkDataFolder(s *settings.Settings) []ConfigResult {
 		if os.IsNotExist(err) {
 			results = append(results, ConfigResult{
 				Severity:    SeverityWARN,
-				Check:       "Data folder",
+				Check:       labelDataFolder,
 				Value:       dataFolder,
 				Recommended: "Create the data folder before starting the node",
 			})
 		} else {
 			results = append(results, ConfigResult{
 				Severity:    SeverityERROR,
-				Check:       "Data folder",
+				Check:       labelDataFolder,
 				Value:       fmt.Sprintf("%s (%v)", dataFolder, err),
 				Recommended: "Check permissions on data folder",
 			})
@@ -667,7 +673,7 @@ func checkDataFolder(s *settings.Settings) []ConfigResult {
 	} else if !info.IsDir() {
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
-			Check:       "Data folder",
+			Check:       labelDataFolder,
 			Value:       dataFolder,
 			Recommended: "Path exists but is not a directory",
 		})
@@ -678,7 +684,7 @@ func checkDataFolder(s *settings.Settings) []ConfigResult {
 		if err != nil {
 			results = append(results, ConfigResult{
 				Severity:    SeverityERROR,
-				Check:       "Data folder",
+				Check:       labelDataFolder,
 				Value:       fmt.Sprintf("%s (not writable)", dataFolder),
 				Recommended: "Check write permissions on data folder",
 			})
@@ -688,7 +694,7 @@ func checkDataFolder(s *settings.Settings) []ConfigResult {
 
 			results = append(results, ConfigResult{
 				Severity: SeverityOK,
-				Check:    "Data folder",
+				Check:    labelDataFolder,
 				Value:    fmt.Sprintf("%s (writable)", dataFolder),
 			})
 		}

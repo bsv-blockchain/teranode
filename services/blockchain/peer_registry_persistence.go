@@ -39,7 +39,12 @@ type persistedBanEntry struct {
 	Reasons   []string  `json:"reasons,omitempty"`
 }
 
-const persistedRegistryVersion = 1
+// Version history:
+//   - 1: initial format
+//   - 2: added catchup-specific counters (CatchupAttempts/CatchupSuccesses/
+//     CatchupFailures) to PeerInfo. Bumped so a downgraded binary refuses to
+//     re-save (and thereby silently zero) counters it does not understand.
+const persistedRegistryVersion = 2
 
 // errFutureRegistryVersion is returned by loadPeerRegistry when the blob's
 // envelope.Version is newer than this binary supports. Callers (currently

@@ -53,14 +53,14 @@ func loadTestHeadersFromFile(filename string, cache *[]*model.BlockHeader, once 
 		// Read the file
 		data, err := os.ReadFile(testdataPath)
 		if err != nil {
-			*cacheErr = errors.NewProcessingError("failed to read test headers file %s: %w", testdataPath, err)
+			*cacheErr = errors.NewProcessingError("failed to read test headers file %s", testdataPath, err)
 			return
 		}
 
 		// Parse JSON
 		var testData TestHeaderData
 		if err := json.Unmarshal(data, &testData); err != nil {
-			*cacheErr = errors.NewProcessingError("failed to parse test headers JSON: %w", err)
+			*cacheErr = errors.NewProcessingError("failed to parse test headers JSON", err)
 			return
 		}
 
@@ -69,7 +69,7 @@ func loadTestHeadersFromFile(filename string, cache *[]*model.BlockHeader, once 
 		for i, headerBytes := range testData.Headers {
 			header, err := model.NewBlockHeaderFromBytes(headerBytes)
 			if err != nil {
-				*cacheErr = errors.NewProcessingError("failed to parse header %d: %w", i, err)
+				*cacheErr = errors.NewProcessingError("failed to parse header %d", i, err)
 				return
 			}
 			headers[i] = header
