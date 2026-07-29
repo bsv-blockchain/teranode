@@ -167,6 +167,34 @@ func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ig
 	return nil, nil
 }
 
+// SpendAndCreate implements utxo.Store as a no-op combination of Spend and Create.
+func (m *NullStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	options, err := utxo.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var spends []*utxo.Spend
+
+	if !options.CreateOnly {
+		spends, err = m.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
+		if err != nil {
+			return nil, spends, err
+		}
+
+		if options.SpendOnly {
+			return nil, spends, nil
+		}
+	}
+
+	md, err := m.Create(ctx, tx, blockHeight, opts...)
+	if err != nil {
+		return nil, spends, err
+	}
+
+	return md, spends, nil
+}
+
 func (m *NullStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	return nil
 }

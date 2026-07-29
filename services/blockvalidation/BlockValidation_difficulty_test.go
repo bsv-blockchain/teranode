@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/mock"
@@ -330,7 +331,7 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 	require.NoError(t, subtreeData.AddTx(coinbaseTx, 0))
 
 	// Store TX metadata for validation
-	_, err = utxoStore.Create(ctx, coinbaseTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(ctx, coinbaseTx, 0, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Create previous block header

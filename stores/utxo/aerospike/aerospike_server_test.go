@@ -1663,6 +1663,48 @@ func TestSmokeTests(t *testing.T) {
 		tests.UnspendIdempotent(t, store)
 	})
 
+	t.Run("aerospike_spend_and_create", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreate(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_create_only", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateCreateOnly(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_spend_only", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendOnly(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_tx_exists_keeps_spends", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateTxExistsKeepsSpends(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_spend_error_surfaces_per_input", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendErrorSurfacesPerInput(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_invalid_options", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateInvalidOptions(t, store)
+	})
+
 	t.Run("aerospike_conflict_WAL_crash_recovery", func(t *testing.T) {
 		tests.ConflictWALCrashRecovery(t, store)
 	})

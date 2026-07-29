@@ -113,7 +113,7 @@ func TestSubtreeStreamingHeadOfLineBackpressure(t *testing.T) {
 
 	// Populate the real utxo store, then wrap it so the head chunk stalls.
 	for i := 1; i < len(txs); i++ {
-		_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], testParams.height)
+		_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], testParams.height, utxo.WithCreateOnly())
 		require.NoError(t, err)
 	}
 

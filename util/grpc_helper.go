@@ -35,6 +35,9 @@ const (
 
 	// Default retry configuration
 	defaultRetryBackoff = 100 * time.Millisecond
+
+	errMsgReadKeyPair    = "failed to read key pair"
+	errMsgReadCaCertFile = "failed to read ca cert file"
 )
 
 // contextKey is a custom type for context keys to avoid collisions.
@@ -409,7 +412,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 		if isServer {
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -431,7 +434,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 		if isServer {
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -443,7 +446,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError(errMsgReadCaCertFile, err)
 			}
 
 			caCertPool := x509.NewCertPool()
@@ -451,7 +454,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -466,7 +469,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError(errMsgReadCaCertFile, err)
 			}
 
 			caCertPool := x509.NewCertPool()
@@ -474,7 +477,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -487,7 +490,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError(errMsgReadCaCertFile, err)
 			}
 
 			caCertPool := x509.NewCertPool()
@@ -495,7 +498,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{

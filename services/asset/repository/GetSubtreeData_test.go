@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -221,7 +222,7 @@ func setupSubtreeReaderTest(t *testing.T) (*testContext, *subtreepkg.Subtree, []
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
 		if i != 0 {
-			_, err := ctx.repo.UtxoStore.Create(t.Context(), tx, params.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(t.Context(), tx, params.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 

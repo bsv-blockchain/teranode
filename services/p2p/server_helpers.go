@@ -3,11 +3,9 @@ package p2p
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,10 +64,8 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		return
 	}
 
-	// Validate DataHubURL to prevent SSRF attacks
-	if err = s.validateDataHubURL(blockMessage.DataHubURL); err != nil {
-		s.logger.Errorf("[handleBlockTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		s.addProtocolViolation(fromID)
+	// Validate DataHubURL (SSRF + operator blacklist)
+	if !s.checkDataHubURL(blockMessage.DataHubURL, fromID, "handleBlockTopic") {
 		return
 	}
 
@@ -196,19 +192,12 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	// Validate DataHubURL to prevent SSRF attacks
-	if err = s.validateDataHubURL(subtreeMessage.DataHubURL); err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		s.addProtocolViolation(fromID)
+	// Validate DataHubURL (SSRF + operator blacklist)
+	if !s.checkDataHubURL(subtreeMessage.DataHubURL, fromID, "handleSubtreeTopic") {
 		return
 	}
 
 	s.logger.Debugf("[handleSubtreeTopic] received subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
-
-	if s.isBlacklistedBaseURL(subtreeMessage.DataHubURL) {
-		s.logger.Errorf("[handleSubtreeTopic] Blocked subtree notification from blacklisted baseURL: %s", subtreeMessage.DataHubURL)
-		return
-	}
 
 	now := time.Now().UTC()
 
@@ -277,12 +266,24 @@ func (s *Server) addProtocolViolation(peerID string) {
 	s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
-// isBlacklistedBaseURL checks if the given baseURL matches any entry in the blacklist.
+// isBlacklistedBaseURL checks the given baseURL against the operator-configured
+// blacklist (settings.SubtreeValidation.BlacklistedBaseURLs).
 func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
-	inputHost := s.extractHost(baseURL)
+	if s.settings == nil {
+		return false
+	}
+
+	return isBaseURLBlacklisted(baseURL, s.settings.SubtreeValidation.BlacklistedBaseURLs)
+}
+
+// isBaseURLBlacklisted checks if the given baseURL matches any entry in the
+// blacklist. Package-level so both the gossip handlers (via the Server wrapper
+// above) and the sync PeerSelector can enforce the same blacklist.
+func isBaseURLBlacklisted(baseURL string, blacklist map[string]struct{}) bool {
+	inputHost := extractHost(baseURL)
 	if inputHost == "" {
 		// Fall back to exact string matching for invalid URLs
-		for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
+		for blocked := range blacklist {
 			if baseURL == blocked {
 				return true
 			}
@@ -292,10 +293,10 @@ func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 	}
 
 	// Check each blacklisted URL
-	for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
-		blockedHost := s.extractHost(blocked)
+	for blocked := range blacklist {
+		blockedHost := blacklistEntryHost(blocked)
 		if blockedHost == "" {
-			// Fall back to exact string matching for invalid blacklisted URLs
+			// Fall back to exact string matching for unparseable blacklisted entries
 			if baseURL == blocked {
 				return true
 			}
@@ -311,14 +312,29 @@ func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 	return false
 }
 
+// blacklistEntryHost extracts the normalized host of a blacklist entry.
+// Operators commonly configure bare hosts ("evil.example"), which url.Parse
+// reads as a path (empty host), so scheme-less entries are retried in
+// protocol-relative form. Returns "" only for entries with no parseable host.
+func blacklistEntryHost(blocked string) string {
+	if host := extractHost(blocked); host != "" {
+		return host
+	}
+
+	return extractHost("//" + blocked)
+}
+
 // extractHost extracts and normalizes the host component from a URL
-func (s *Server) extractHost(urlStr string) string {
+func extractHost(urlStr string) string {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return ""
 	}
 
-	host := parsedURL.Hostname()
+	// Strip trailing dots of a rooted FQDN so "evil.example." (or the
+	// non-resolvable "evil.example..") matches a blacklist entry for
+	// "evil.example".
+	host := strings.TrimRight(parsedURL.Hostname(), ".")
 	if host == "" {
 		return ""
 	}
@@ -368,7 +384,10 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 		return errors.NewInvalidArgumentError("DataHubURL has invalid scheme: %s (only http/https allowed)", parsed.Scheme)
 	}
 
-	hostname := parsed.Hostname()
+	// Canonicalize before checking: strip trailing dots of a rooted FQDN and
+	// lowercase, so "localhost.", "LOCALHOST" or "127.0.0.1." cannot slip past
+	// the checks below (DNS resolution is case-insensitive).
+	hostname := strings.ToLower(strings.TrimRight(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
 	}
@@ -387,6 +406,27 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	}
 
 	return nil
+}
+
+// checkDataHubURL runs the trust checks shared by the block and subtree
+// announcement handlers: SSRF validation (a failure counts as a protocol
+// violation) and the operator-configured blacklist (a match drops the message
+// without penalising the peer). Returns false when the message must be dropped.
+// handleNodeStatusTopic runs the same two checks inline because a blacklist
+// match there only strips the BaseURL instead of dropping the telemetry.
+func (s *Server) checkDataHubURL(dataHubURL, fromID, handlerName string) bool {
+	if err := s.validateDataHubURL(dataHubURL); err != nil {
+		s.logger.Errorf("[%s] invalid DataHubURL from peer %s: %v", handlerName, fromID, err)
+		s.addProtocolViolation(fromID)
+		return false
+	}
+
+	if s.isBlacklistedBaseURL(dataHubURL) {
+		s.logger.Warnf("[%s] blocked notification from blacklisted DataHubURL %s (peer %s)", handlerName, dataHubURL, fromID)
+		return false
+	}
+
+	return true
 }
 
 func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID string) {
@@ -461,108 +501,6 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 		}
 	}
 	return ""
-}
-
-// startInvalidBlockConsumer initializes and starts the Kafka consumer for invalid blocks
-func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
-	var kafkaURL *url.URL
-
-	var brokerURLs []string
-
-	// Use InvalidBlocksConfig URL if available, otherwise construct one
-	if s.settings.Kafka.InvalidBlocksConfig != nil {
-		s.logger.Infof("Using InvalidBlocksConfig URL: %s", s.settings.Kafka.InvalidBlocksConfig.String())
-		kafkaURL = s.settings.Kafka.InvalidBlocksConfig
-
-		// For non-memory schemes, we need to extract broker URLs from the host
-		if kafkaURL.Scheme != "memory" {
-			brokerURLs = strings.Split(kafkaURL.Host, ",")
-		}
-	} else {
-		// Fall back to the old way of constructing the URL
-		host := s.settings.Kafka.Hosts
-
-		s.logger.Infof("Starting invalid block consumer on topic: %s", s.settings.Kafka.InvalidBlocks)
-		s.logger.Infof("Raw Kafka host from settings: %s", host)
-
-		// Split the host string in case it contains multiple hosts
-		hosts := strings.Split(host, ",")
-		brokerURLs = make([]string, 0, len(hosts))
-
-		// Process each host to ensure it has a port
-		for _, h := range hosts {
-			// Trim any whitespace
-			h = strings.TrimSpace(h)
-
-			// Skip empty hosts
-			if h == "" {
-				continue
-			}
-
-			// Check if the host string contains a port
-			if !strings.Contains(h, ":") {
-				// If no port is specified, use the default Kafka port from settings
-				h = h + ":" + strconv.Itoa(s.settings.Kafka.Port)
-				s.logger.Infof("Added default port to Kafka host: %s", h)
-			}
-
-			brokerURLs = append(brokerURLs, h)
-		}
-
-		if len(brokerURLs) == 0 {
-			return errors.NewConfigurationError("no valid Kafka hosts found")
-		}
-
-		s.logger.Infof("Using Kafka brokers: %v", brokerURLs)
-
-		// Create a valid URL for the Kafka consumer
-		kafkaURLString := fmt.Sprintf("kafka://%s/%s?partitions=%d",
-			brokerURLs[0], // Use the first broker for the URL
-			s.settings.Kafka.InvalidBlocks,
-			s.settings.Kafka.Partitions)
-
-		s.logger.Infof("Kafka URL: %s", kafkaURLString)
-
-		var err error
-
-		kafkaURL, err = url.Parse(kafkaURLString)
-		if err != nil {
-			return errors.NewConfigurationError("invalid Kafka URL", err)
-		}
-	}
-
-	// Create the Kafka consumer config
-	cfg := kafka.KafkaConsumerConfig{
-		Logger:            s.logger,
-		URL:               kafkaURL,
-		BrokersURL:        brokerURLs,
-		Topic:             s.settings.Kafka.InvalidBlocks,
-		Partitions:        s.settings.Kafka.Partitions,
-		ConsumerGroupID:   s.settings.Kafka.InvalidBlocks + "-consumer",
-		AutoCommitEnabled: true,
-		Replay:            false,
-		// TLS/Auth configuration
-		EnableTLS:          s.settings.Kafka.EnableTLS,
-		TLSSkipVerify:      s.settings.Kafka.TLSSkipVerify,
-		TLSCAFile:          s.settings.Kafka.TLSCAFile,
-		TLSCertFile:        s.settings.Kafka.TLSCertFile,
-		TLSKeyFile:         s.settings.Kafka.TLSKeyFile,
-		EnableDebugLogging: s.settings.Kafka.EnableDebugLogging,
-	}
-
-	// Create the Kafka consumer group - this will handle the memory scheme correctly
-	consumer, err := kafka.NewKafkaConsumerGroup(cfg)
-	if err != nil {
-		return errors.NewServiceError("failed to create Kafka consumer", err)
-	}
-
-	// Store the consumer for cleanup
-	s.invalidBlocksKafkaConsumerClient = consumer
-
-	// Start the consumer
-	consumer.Start(ctx, s.processInvalidBlockMessage)
-
-	return nil
 }
 
 // getLocalHeight returns the current local blockchain height.
@@ -716,38 +654,57 @@ func (s *Server) updateStorage(peerID peer.ID, mode string) {
 	}
 }
 
+// startInvalidBlocksConsumer starts the injected invalid-blocks Kafka consumer
+// with processInvalidBlockMessage. The consumer field is never reassigned after
+// this, so Stop() closes the consumer that is actually running.
+func (s *Server) startInvalidBlocksConsumer(ctx context.Context) {
+	if s.invalidBlocksKafkaConsumerClient == nil {
+		s.logger.Errorf("[startInvalidBlocksConsumer] invalid-blocks Kafka consumer not configured (kafka_invalidBlocksConfig unset), peers will not be banned for invalid blocks")
+		return
+	}
+
+	s.logger.Infof("[startInvalidBlocksConsumer] starting invalid blocks Kafka consumer on topic: %s", s.settings.Kafka.InvalidBlocks)
+	// Transient handler failures (e.g. peer registry unavailable) get two
+	// retries with backoff (three attempts total) before the offset is
+	// committed; after that the message is skipped so it cannot stall the
+	// partition.
+	s.invalidBlocksKafkaConsumerClient.Start(ctx, s.processInvalidBlockMessage, kafka.WithRetryAndMoveOn(2, 2, time.Second))
+}
+
 func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
-	ctx := context.Background()
+	// Use the server context so an in-flight AddBanScore is cancelled at shutdown.
+	ctx := s.gCtx
 
 	var invalidBlockMsg kafkamessage.KafkaInvalidBlockTopicMessage
 	if err := proto.Unmarshal(message.Value, &invalidBlockMsg); err != nil {
-		s.logger.Errorf("failed to unmarshal invalid block message: %v", err)
-		return err
+		// A malformed message can never succeed on retry: log and skip it.
+		s.logger.Errorf("[processInvalidBlockMessage] failed to unmarshal invalid block message: %v", err)
+		return nil
 	}
 
 	blockHash := invalidBlockMsg.GetBlockHash()
 	reason := invalidBlockMsg.GetReason()
 
-	s.logger.Infof("[handleInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
+	s.logger.Infof("[processInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
 
 	// Look up the peer ID that sent this block
 	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
 	if err != nil {
-		s.logger.Warnf("[handleInvalidBlockMessage] %v", err)
+		s.logger.Warnf("[processInvalidBlockMessage] %v", err)
 		return nil // Not an error, just no peer to ban
 	}
 
 	// Add ban score to the peer
-	s.logger.Infof("[handleInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
+	s.logger.Infof("[processInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
 		peerID, blockHash, reason)
 
 	req := &p2p_api.AddBanScoreRequest{
 		PeerId: peerID,
-		Reason: "invalid_block",
+		Reason: ReasonInvalidBlock,
 	}
 
 	if _, err := s.AddBanScore(ctx, req); err != nil {
-		s.logger.Errorf("[handleInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
+		s.logger.Errorf("[processInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
 		return err
 	}
 

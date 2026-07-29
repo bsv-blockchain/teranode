@@ -9,6 +9,8 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
+const errFailedScanDeletionRow = "failed to scan deletion row"
+
 // ScheduledDeletion represents a blob deletion scheduled for a specific height.
 type ScheduledDeletion struct {
 	ID             int64
@@ -114,7 +116,7 @@ func (s *SQL) GetPendingBlobDeletions(ctx context.Context, height uint32, limit 
 		err := rows.Scan(&d.ID, &d.BlobKey, &d.FileType, &d.StoreType,
 			&d.DeleteAtHeight, &d.RetryCount)
 		if err != nil {
-			return nil, errors.NewStorageError("failed to scan deletion row", err)
+			return nil, errors.NewStorageError(errFailedScanDeletionRow, err)
 		}
 		deletions = append(deletions, &d)
 	}
@@ -206,7 +208,7 @@ func (s *SQL) ListScheduledBlobDeletions(ctx context.Context, filters *ListFilte
 		err := rows.Scan(&d.ID, &d.BlobKey, &d.FileType, &d.StoreType,
 			&d.DeleteAtHeight, &d.RetryCount)
 		if err != nil {
-			return nil, 0, errors.NewStorageError("failed to scan deletion row", err)
+			return nil, 0, errors.NewStorageError(errFailedScanDeletionRow, err)
 		}
 		deletions = append(deletions, &d)
 	}
@@ -323,7 +325,7 @@ func (s *SQL) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit
 		err := rows.Scan(&d.ID, &d.BlobKey, &d.FileType, &d.StoreType,
 			&d.DeleteAtHeight, &d.RetryCount)
 		if err != nil {
-			return nil, errors.NewStorageError("failed to scan deletion row", err)
+			return nil, errors.NewStorageError(errFailedScanDeletionRow, err)
 		}
 		deletions = append(deletions, &d)
 	}

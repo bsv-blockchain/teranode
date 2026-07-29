@@ -195,7 +195,7 @@ func TestReplayPendingConflictIntents_StaleForwardHealed(t *testing.T) {
 	_ = parentIn.PreviousTxIDAdd(&chainhash.Hash{7, 7, 7})
 	parent.Inputs = []*bt.Input{parentIn}
 	parent.Outputs = []*bt.Output{{Satoshis: 100000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
-	_, err := store.Create(ctx, parent, 1)
+	_, _, err := store.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
 	require.NoError(t, err)
 	parentHash := parent.TxIDChainHash()
 	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parentHash}, true))
@@ -205,9 +205,9 @@ func TestReplayPendingConflictIntents_StaleForwardHealed(t *testing.T) {
 	require.NoError(t, txL.From(parentHash.String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
 	txL.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
 	txL.Outputs = []*bt.Output{{Satoshis: 90000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
-	_, err = store.Create(ctx, txL, 10)
+	_, _, err = store.SpendAndCreate(ctx, txL, 10, utxo.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = store.Spend(ctx, txL, store.GetBlockHeight()+1)
+	_, _, err = store.SpendAndCreate(ctx, txL, store.GetBlockHeight()+1, utxo.WithSpendOnly())
 	require.NoError(t, err)
 
 	// W: the would-be forward winner, left Conflicting=true.
@@ -215,7 +215,7 @@ func TestReplayPendingConflictIntents_StaleForwardHealed(t *testing.T) {
 	require.NoError(t, txW.From(parentHash.String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
 	txW.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
 	txW.Outputs = []*bt.Output{{Satoshis: 80000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
-	_, err = store.Create(ctx, txW, 10, utxo.WithConflicting(true))
+	_, _, err = store.SpendAndCreate(ctx, txW, 10, utxo.WithConflicting(true), utxo.WithCreateOnly())
 	require.NoError(t, err)
 	txWHash := txW.TxIDChainHash()
 
@@ -274,7 +274,7 @@ func TestReplayPendingConflictIntents_StaleReverseHealed(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &demoted, mock.Anything).Return(&meta.Data{Tx: demotedTx, Conflicting: true}, nil)
 	mockStore.On("GetCounterConflicting", mock.Anything, demoted).Return([]chainhash.Hash{}, nil)
 	mockStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
+	mockStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
 	mockStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
 	mockStore.On("SetLocked", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -285,7 +285,7 @@ func TestReplayPendingConflictIntents_StaleReverseHealed(t *testing.T) {
 	b.replayPendingConflictIntents(context.Background())
 
 	require.Contains(t, spy.completed, intent.IntentID(), "a stale reverse intent must be healed (forward re-applied) and cleared from the WAL")
-	mockStore.AssertCalled(t, "Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertCalled(t, "SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestReplayPendingConflictIntents_RealStoreReverseConverges is the crash-
@@ -313,7 +313,7 @@ func TestReplayPendingConflictIntents_RealStoreReverseConverges(t *testing.T) {
 	_ = parentIn.PreviousTxIDAdd(&chainhash.Hash{9, 9, 9})
 	parent.Inputs = []*bt.Input{parentIn}
 	parent.Outputs = []*bt.Output{{Satoshis: 100000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
-	_, err := store.Create(ctx, parent, 1)
+	_, _, err := store.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
 	require.NoError(t, err)
 	parentHash := parent.TxIDChainHash()
 	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parentHash}, true))
@@ -323,7 +323,7 @@ func TestReplayPendingConflictIntents_RealStoreReverseConverges(t *testing.T) {
 	require.NoError(t, txD.From(parentHash.String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
 	txD.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
 	txD.Outputs = []*bt.Output{{Satoshis: 90000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
-	_, err = store.Create(ctx, txD, 10, utxo.WithConflicting(true))
+	_, _, err = store.SpendAndCreate(ctx, txD, 10, utxo.WithConflicting(true), utxo.WithCreateOnly())
 	require.NoError(t, err)
 	txDHash := txD.TxIDChainHash()
 
@@ -333,9 +333,9 @@ func TestReplayPendingConflictIntents_RealStoreReverseConverges(t *testing.T) {
 	require.NoError(t, txC.From(parentHash.String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
 	txC.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
 	txC.Outputs = []*bt.Output{{Satoshis: 80000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
-	_, err = store.Create(ctx, txC, 10)
+	_, _, err = store.SpendAndCreate(ctx, txC, 10, utxo.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = store.Spend(ctx, txC, store.GetBlockHeight()+1)
+	_, _, err = store.SpendAndCreate(ctx, txC, store.GetBlockHeight()+1, utxo.WithSpendOnly())
 	require.NoError(t, err)
 
 	// The reverse for txD is already fully applied; only the WAL completion was

@@ -1284,11 +1284,12 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 			sIdx := globalSubtreeIdx
 			createG.Go(func() error {
-				_, err := u.utxoStore.Create(createCtx, tx, block.Height, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-					BlockID:     block.ID,
-					BlockHeight: block.Height,
-					SubtreeIdx:  sIdx,
-				}), utxo.WithLocked(lockUTXOs), utxo.WithSkipExtendedInputs(outpointOnly))
+				_, _, err := u.utxoStore.SpendAndCreate(createCtx, tx, block.Height, utxo.WithCreateOnly(),
+					utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+						BlockID:     block.ID,
+						BlockHeight: block.Height,
+						SubtreeIdx:  sIdx,
+					}), utxo.WithLocked(lockUTXOs), utxo.WithSkipExtendedInputs(outpointOnly))
 				if err != nil {
 					if errors.Is(err, errors.ErrTxExists) {
 						// Transaction already exists - collect it for mined info update
@@ -1379,7 +1380,8 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 		for _, tx := range pending {
 			tx := tx
 			spendG.Go(func() error {
-				if _, err := u.utxoStore.Spend(spendCtx, tx, block.Height, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: outpointOnly}); err != nil {
+				if _, _, err := u.utxoStore.SpendAndCreate(spendCtx, tx, block.Height, utxo.WithSpendOnly(),
+					utxo.WithIgnoreLocked(true), utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
 					if errors.IsRetryableError(err) {
 						mu.Lock()
 						retryable = append(retryable, tx)

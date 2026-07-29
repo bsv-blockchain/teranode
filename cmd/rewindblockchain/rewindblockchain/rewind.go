@@ -2,11 +2,14 @@ package rewindblockchain
 
 import (
 	"context"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
@@ -139,9 +142,9 @@ func resolveStores(ctx context.Context, logger ulogger.Logger, s *settings.Setti
 		return nil, false, errors.NewConfigurationError("failed to open utxo store", err)
 	}
 
-	subtreeStore, err := blob.NewStore(logger, s.SubtreeValidation.SubtreeStore)
+	subtreeStore, err := newSubtreeStore(logger, s)
 	if err != nil {
-		return nil, false, errors.NewConfigurationError("failed to open subtree blob store", err)
+		return nil, false, err
 	}
 
 	return &Stores{
@@ -149,6 +152,69 @@ func resolveStores(ctx context.Context, logger ulogger.Logger, s *settings.Setti
 		UTXO:       utxoStore,
 		Subtree:    subtreeStore,
 	}, true, nil
+}
+
+// defaultSubtreeHashPrefix matches daemon.GetSubtreeStore's default
+// (daemon/daemon_stores.go:454): a subtree store URL with no ?hashPrefix shards
+// two characters deep. Every shipped subtreestore setting is exactly that — a
+// bare file:// URL with no query — so this default is what real deployments run.
+const defaultSubtreeHashPrefix = 2
+
+// subtreeHashPrefix resolves the hash prefix for the subtree store, mirroring
+// daemon.GetSubtreeStore: default 2, overridden by ?hashPrefix= on the URL.
+func subtreeHashPrefix(subtreeStoreURL *url.URL) (int, error) {
+	v := subtreeStoreURL.Query().Get("hashPrefix")
+	if v == "" {
+		return defaultSubtreeHashPrefix, nil
+	}
+
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, errors.NewConfigurationError("subtreestore hashPrefix config error", err)
+	}
+
+	return parsed, nil
+}
+
+// newSubtreeStore opens the subtree blob store the same way the node does.
+//
+// The prefix has to be passed as a store option rather than left to the URL.
+// stores/blob/factory.go parses only batch, logger, sizeInBytes and writeKeys.
+// The file backend does additionally read ?hashPrefix / ?hashSuffix for itself
+// (stores/blob/file/file.go:446-462) and applies them after the options, so on
+// file:// a query parameter would win — but the s3 backend does not read the
+// query at all (s3.go derives its path via CalculatePrefix from the store
+// options alone), and no shipped subtreestore URL carries a query anyway. So
+// with the default configuration the option is the only source of the prefix,
+// and it is the only route that works across backends.
+//
+// Without it Options.HashPrefix stays 0, CalculatePrefix returns "", and every
+// key resolves to a flat path while the node writes hash-sharded ones — so every
+// read misses with NOT_FOUND and Phase 2 cannot rewind the deployment at all.
+//
+// Only WithHashPrefix is mirrored from the daemon: its other options drive
+// DAH-managed lifecycle, and this tool wants raw Dels.
+//
+// Known parity gap, inherited from daemon.GetSubtreeStore: neither reads
+// ?hashSuffix, which the file backend turns into a negative HashPrefix and
+// which would therefore override what is passed here.
+func newSubtreeStore(logger ulogger.Logger, s *settings.Settings) (blob.Store, error) {
+	subtreeStoreURL := s.SubtreeValidation.SubtreeStore
+	if subtreeStoreURL == nil {
+		return nil, errors.NewConfigurationError("subtreestore URL is not configured")
+	}
+
+	hashPrefix, err := subtreeHashPrefix(subtreeStoreURL)
+	if err != nil {
+		return nil, err
+	}
+
+	subtreeStore, err := blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(hashPrefix))
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to open subtree blob store", err)
+	}
+
+	return subtreeStore, nil
 }
 
 // env bundles the resolved stores and counters shared across phases.

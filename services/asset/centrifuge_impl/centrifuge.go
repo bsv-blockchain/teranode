@@ -28,6 +28,8 @@ const (
 	AccessControlAllowOrigin      = "Access-Control-Allow-Origin"
 	AccessControlAllowHeaders     = "Access-Control-Allow-Headers"
 	AccessControlAllowCredentials = "Access-Control-Allow-Credentials"
+
+	centrifugeLogFormat = "[Centrifuge] %s: %s"
 )
 
 const (
@@ -181,13 +183,13 @@ func (c *Centrifuge) Init(_ context.Context) (err error) {
 			// at INFO floods the asset logs, so respect the per-entry level.
 			switch e.Level {
 			case centrifuge.LogLevelError:
-				c.logger.Errorf("[Centrifuge] %s: %s", e.Message, e.Fields)
+				c.logger.Errorf(centrifugeLogFormat, e.Message, e.Fields)
 			case centrifuge.LogLevelWarn:
-				c.logger.Warnf("[Centrifuge] %s: %s", e.Message, e.Fields)
+				c.logger.Warnf(centrifugeLogFormat, e.Message, e.Fields)
 			case centrifuge.LogLevelInfo:
-				c.logger.Infof("[Centrifuge] %s: %s", e.Message, e.Fields)
+				c.logger.Infof(centrifugeLogFormat, e.Message, e.Fields)
 			default:
-				c.logger.Debugf("[Centrifuge] %s: %s", e.Message, e.Fields)
+				c.logger.Debugf(centrifugeLogFormat, e.Message, e.Fields)
 			}
 		},
 	})

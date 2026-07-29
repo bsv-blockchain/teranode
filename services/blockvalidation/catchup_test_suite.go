@@ -77,9 +77,6 @@ func (s *CatchupTestSuite) setupMocks() {
 	s.MockValidator = &validator.MockValidator{UtxoStore: s.MockUTXOStore}
 	s.HttpMock = testhelpers.NewHTTPMockSetup(s.T)
 
-	// Provide a permissive default for Spend to avoid unexpected calls from concurrent validation goroutines.
-	s.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
-
 	// Permissive default for GetBlockByHeight — used by locator capping when
 	// blockchain height > UTXO height. Returns error so capping falls back to blockchain height.
 	s.MockBlockchain.On("GetBlockByHeight", mock.Anything, mock.Anything).

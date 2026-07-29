@@ -5328,13 +5328,14 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 				LockingScript: lockingScript,
 			})
 
-			_, err := utxoStore.Create(context.Background(), parentTx, 1,
+			_, _, err := utxoStore.SpendAndCreate(context.Background(), parentTx, 1,
 				utxo.WithTXID(&allParentHashes[s][i]),
 				utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
 					BlockID:        1,
 					BlockHeight:    1,
 					OnLongestChain: true,
 				}),
+				utxo.WithCreateOnly(),
 			)
 			if err != nil {
 				fmt.Printf("Warning: failed to create parent tx %d-%d: %v\n", s, i, err)

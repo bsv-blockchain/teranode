@@ -19,19 +19,14 @@
 //
 //	store := // initialize your UTXO store implementation
 //
-//	// Create UTXOs from a transaction
-//	metadata, err := store.Create(ctx, transaction, blockHeight)
+//	// Spend the transaction's inputs and create its outputs in one operation
+//	metadata, spends, err := store.SpendAndCreate(ctx, transaction, blockHeight)
 //
-//	// Spend UTXOs
-//	spends := []*Spend{
-//	    {
-//	        TxID: txID,
-//	        Vout: 0,
-//	        UTXOHash: utxoHash,
-//	        SpendingTxID: spendingTxID,
-//	    },
-//	}
-//	err = store.Spend(ctx, spends, blockHeight)
+//	// Only create the transaction's outputs (e.g. coinbase, no inputs to spend)
+//	metadata, _, err = store.SpendAndCreate(ctx, coinbaseTx, blockHeight, WithCreateOnly())
+//
+//	// Only spend the transaction's inputs
+//	_, spends, err = store.SpendAndCreate(ctx, transaction, blockHeight, WithSpendOnly())
 package utxo
 
 import (
@@ -259,6 +254,11 @@ type CreateOptions struct {
 	Conflicting        bool
 	Locked             bool
 	SkipExtendedInputs bool
+
+	// SpendAndCreate-specific options.
+	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
+	CreateOnly  bool        // skip the spend phase
+	SpendOnly   bool        // skip the create phase
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -317,6 +317,51 @@ func WithSkipExtendedInputs(b bool) CreateOption {
 	}
 }
 
+// WithIgnoreConflicting makes the spend phase of SpendAndCreate ignore the
+// conflicting flag on the UTXOs being spent.
+func WithIgnoreConflicting(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.IgnoreConflicting = b
+	}
+}
+
+// WithIgnoreLocked makes the spend phase of SpendAndCreate ignore the locked
+// flag on the UTXOs being spent.
+func WithIgnoreLocked(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.IgnoreLocked = b
+	}
+}
+
+// WithSkipUTXOHashCheck disables the per-input utxo-hash integrity comparison in
+// the spend phase of SpendAndCreate. Set ONLY on the gated below-checkpoint
+// outpoint-only path (see IgnoreFlags.SkipUTXOHashCheck). The Aerospike store
+// does not implement the outpoint-only fast path and treats this flag as a
+// no-op (see SupportsOutpointOnlySpend).
+func WithSkipUTXOHashCheck(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.SkipUTXOHashCheck = b
+	}
+}
+
+// WithCreateOnly makes SpendAndCreate skip the spend phase: only the
+// transaction's outputs and metadata are stored (coinbase, seeding, and batch
+// flows whose inputs are spent elsewhere).
+func WithCreateOnly() CreateOption {
+	return func(o *CreateOptions) {
+		o.CreateOnly = true
+	}
+}
+
+// WithSpendOnly makes SpendAndCreate skip the create phase: only the
+// transaction's inputs are spent (reorg/conflict helpers and batch flows whose
+// outputs are created elsewhere).
+func WithSpendOnly() CreateOption {
+	return func(o *CreateOptions) {
+		o.SpendOnly = true
+	}
+}
+
 type MinedBlockInfo struct {
 	BlockID        uint32
 	BlockHeight    uint32
@@ -364,11 +409,6 @@ type Store interface {
 	// caller must treat a context error as "drain not confirmed complete".
 	Close(ctx context.Context) error
 
-	// Create stores a new transaction's outputs as UTXOs and returns associated metadata.
-	// The blockHeight parameter is used to determine coinbase maturity.
-	// Additional options can be specified using CreateOption functions.
-	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error)
-
 	// Get retrieves UTXO metadata for a given transaction hash.
 	// The fields parameter can be used to specify which metadata fields to retrieve.
 	// If fields is empty, all fields will be retrieved.
@@ -382,8 +422,29 @@ type Store interface {
 
 	// Blockchain specific functions
 
-	// Spend marks all the UTXOs of the transaction as spent.
-	Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
+	// SpendAndCreate spends tx's inputs and creates its outputs + metadata as one
+	// logical operation. Implementations SHOULD make this atomic (followup work);
+	// the current shared sequential implementation spends, then creates, and
+	// unspends on create failure (except ErrTxExists — see below).
+	//
+	// Semantics (contract for all implementations):
+	//   - Default: spend inputs, then create outputs. On create failure other than
+	//     ErrTxExists, successful spends are rolled back before returning.
+	//   - ErrTxExists from the create phase is returned to the caller WITH the
+	//     spends left in place; the caller decides what to do with the existing tx.
+	//   - WithCreateOnly(): skip the spend phase (coinbase, seeding, batch flows
+	//     whose inputs are spent elsewhere). Returned []*Spend is nil.
+	//   - WithSpendOnly(): skip the create phase (reorg/conflict helpers, batch
+	//     flows whose outputs are created elsewhere). Returned *meta.Data is nil.
+	//   - On spend failure the returned []*Spend carries per-input Err values for
+	//     caller inspection (conflict detection).
+	//   - When the create phase fails and the spends were rolled back, the
+	//     returned []*Spend is nil; a non-nil slice alongside a non-nil error
+	//     means the spends are still in effect (ErrTxExists, or rollback failure).
+	//   - Transactions with no inputs to spend (synthesized seed txs) must pass
+	//     WithCreateOnly(); backend behaviour for a default-mode spend of a
+	//     zero-input tx is undefined.
+	SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error)
 
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.

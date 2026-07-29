@@ -19,6 +19,8 @@ const (
 	statusInvalid      = "invalid"       // The block is invalid
 )
 
+const errFailedQueryParentBlock = "failed to query parent block"
+
 // GetChainTips retrieves information about all known tips in the block tree.
 func (s *SQL) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetChainTips")
@@ -215,7 +217,7 @@ func (s *SQL) calculateBranchLength(ctx context.Context, tipHashBytes []byte) (u
 		}
 		var nextParentID uint32
 		if err := s.db.QueryRowContext(ctx, `SELECT parent_id FROM blocks WHERE id = $1`, parentID).Scan(&nextParentID); err != nil {
-			return branchLength, errors.NewStorageError("failed to query parent block", err)
+			return branchLength, errors.NewStorageError(errFailedQueryParentBlock, err)
 		}
 		currentID = parentID
 		parentID = nextParentID
@@ -247,7 +249,7 @@ func (s *SQL) calculateBranchLengthSQL(ctx context.Context, tipHashBytes []byte,
 			if errors.Is(err, sql.ErrNoRows) {
 				break
 			}
-			return 0, errors.NewStorageError("failed to query parent block", err)
+			return 0, errors.NewStorageError(errFailedQueryParentBlock, err)
 		}
 
 		if !parentID.Valid {
@@ -303,7 +305,7 @@ func (s *SQL) isBlockInMainChain(ctx context.Context, blockHash, mainChainTipHas
 			if errors.Is(err, sql.ErrNoRows) {
 				return false, nil
 			}
-			return false, errors.NewStorageError("failed to query parent block", err)
+			return false, errors.NewStorageError(errFailedQueryParentBlock, err)
 		}
 
 		if !parentID.Valid {

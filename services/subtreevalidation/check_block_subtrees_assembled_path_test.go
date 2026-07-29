@@ -274,8 +274,8 @@ func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) 
 	// G, P, C as unknown — the bug-triggering shape for skip-level.
 	mockStore := server.utxoStore.(*utxo.MockUtxostore)
 	mockStore.ExpectedCalls = nil
-	mockStore.On("Create", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(&utxometa.Data{}, nil).Maybe()
+	mockStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(&utxometa.Data{}, nil, nil).Maybe()
 	mockStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
 	mockStore.On("GetMeta", mock.Anything, mock.Anything).
 		Return(&utxometa.Data{}, nil).Maybe()

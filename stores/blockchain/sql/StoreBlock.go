@@ -28,6 +28,8 @@ import (
 	"modernc.org/sqlite"
 )
 
+const errBlockAlreadyExistsInDB = "block already exists in the database: %s"
+
 // StoreBlock persists a new block to the database and updates chain state.
 // This implements the blockchain.Store.StoreBlock interface method.
 //
@@ -690,19 +692,19 @@ func (*SQL) parseSQLError(err error, block *model.Block) error {
 	// check whether this is a postgres exists constraint error (pgx driver)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == usql.PgErrUniqueViolation {
-		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+		return errors.NewBlockExistsError(errBlockAlreadyExistsInDB, block.Hash().String(), err)
 	}
 
 	// check whether this is a postgres exists constraint error (lib/pq fallback)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == usql.PgErrUniqueViolation {
-		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+		return errors.NewBlockExistsError(errBlockAlreadyExistsInDB, block.Hash().String(), err)
 	}
 
 	// check whether this is a sqlite exists constraint error
 	var sqliteErr *sqlite.Error
 	if errors.As(err, &sqliteErr) && (sqliteErr.Code()&0xff) == SQLITE_CONSTRAINT {
-		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+		return errors.NewBlockExistsError(errBlockAlreadyExistsInDB, block.Hash().String(), err)
 	}
 
 	// otherwise, return the generic error

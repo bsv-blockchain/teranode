@@ -88,7 +88,12 @@ func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSe
 // two phases and closely spaced calls do not re-probe the same URL.
 // Peer IDs are canonical libp2p ID strings.
 func (ps *PeerSelector) SelectSyncPeer(ctx context.Context, peers []*blockchain.PeerInfo, criteria SelectionCriteria) string {
-	// Handle forced peer - always select it if it exists, regardless of eligibility
+	// Handle forced peer - always select it if it exists, regardless of
+	// eligibility. This deliberately skips the blacklist check in
+	// isEligibleBasic too, but a blacklisted DataHub URL is still refused
+	// downstream: sendSyncTriggerToKafka drops the trigger rather than handing
+	// the URL to block validation, so forcing a peer cannot override the
+	// blacklist.
 	if criteria.ForcedPeerID != "" {
 		for _, p := range peers {
 			if p.ID == criteria.ForcedPeerID {
@@ -261,6 +266,14 @@ func (ps *PeerSelector) isEligibleBasic(p *blockchain.PeerInfo, criteria Selecti
 	// Check DataHub URL requirement - this protects against listen-only nodes
 	if p.DataHubURL == "" {
 		ps.logger.Debugf("[PeerSelector] Peer %s has no DataHub URL (listen-only node)", p.ID)
+		return false
+	}
+
+	// Enforce the operator blacklist at the point of use: a URL stored in the
+	// registry before its host was blacklisted must never be selected for
+	// sync/catchup (gossip-time checks cannot evict already-stored URLs).
+	if ps.settings != nil && isBaseURLBlacklisted(p.DataHubURL, ps.settings.SubtreeValidation.BlacklistedBaseURLs) {
+		ps.logger.Debugf("[PeerSelector] Peer %s has blacklisted DataHub URL %s", p.ID, p.DataHubURL)
 		return false
 	}
 

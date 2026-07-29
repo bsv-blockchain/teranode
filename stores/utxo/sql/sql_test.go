@@ -1071,6 +1071,60 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SpendIdempotent(t, db)
 	})
 
+	t.Run("spend and create", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreate(t, db)
+	})
+
+	t.Run("spend and create create only", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateCreateOnly(t, db)
+	})
+
+	t.Run("spend and create spend only", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendOnly(t, db)
+	})
+
+	t.Run("spend and create tx exists keeps spends", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateTxExistsKeepsSpends(t, db)
+	})
+
+	t.Run("spend and create spend error surfaces per input", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendErrorSurfacesPerInput(t, db)
+	})
+
+	t.Run("spend and create invalid options", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateInvalidOptions(t, db)
+	})
+
 	t.Run("set mined with spent", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 

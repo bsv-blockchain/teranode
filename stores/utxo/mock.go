@@ -107,6 +107,24 @@ func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32
 	return args.Get(0).([]*Spend), args.Error(1)
 }
 
+// SpendAndCreate mocks the combined spend+create operation in the UTXO store.
+// Returns the configured mock responses for metadata, spends and error.
+func (m *MockUtxostore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error) {
+	args := m.Called(ctx, tx, blockHeight, opts)
+
+	var md *meta.Data
+	if args.Get(0) != nil {
+		md = args.Get(0).(*meta.Data)
+	}
+
+	var spends []*Spend
+	if args.Get(1) != nil {
+		spends = args.Get(1).([]*Spend)
+	}
+
+	return md, spends, args.Error(2)
+}
+
 // Unspend mocks the reversal of transaction output spending in the UTXO store.
 // Returns the configured mock response for transaction unspending operations.
 func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error {

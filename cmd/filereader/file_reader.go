@@ -51,6 +51,9 @@ const (
 	numTransactionsFormat     = "Number of transactions: %d\n"    // format for number of transactions
 	previousBlockHashFormat   = "previous block hash:       %s\n" // format for previous block hash
 	stdin                     = "[stdin]"                         // constant for stdin input
+
+	msgErrorReadingSubtree      = "error reading subtree"       // error message for subtree read failures
+	msgErrorReadingHeaderNumber = "error reading header number" // error message for header number read failures
 )
 
 var (
@@ -211,7 +214,7 @@ func handleSubtreeData(br *bufio.Reader, logger ulogger.Logger, settings *settin
 
 	st := &subtree.Subtree{}
 	if err = st.DeserializeFromReader(stReader); err != nil {
-		return errors.NewProcessingError("error reading subtree", err)
+		return errors.NewProcessingError(msgErrorReadingSubtree, err)
 	}
 
 	var sd *subtree.Data
@@ -257,7 +260,7 @@ func handleSubtreeMeta(br *bufio.Reader, logger ulogger.Logger, settings *settin
 	st := &subtree.Subtree{}
 
 	if err = st.DeserializeFromReader(stReader); err != nil {
-		return errors.NewProcessingError("error reading subtree", err)
+		return errors.NewProcessingError(msgErrorReadingSubtree, err)
 	}
 
 	var subtreeMeta *subtree.Meta
@@ -353,7 +356,7 @@ func handleUtxoSet(ctx context.Context, br *bufio.Reader) error {
 	var blockHeight uint32
 
 	if err = binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
-		return errors.NewProcessingError("error reading header number", err)
+		return errors.NewProcessingError(msgErrorReadingHeaderNumber, err)
 	}
 
 	fmt.Printf(blockHeightFormat, blockHeight)
@@ -413,7 +416,7 @@ func handleUtxoAdditions(ctx context.Context, br *bufio.Reader) error {
 
 	var blockHeight uint32
 	if err = binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
-		return errors.NewProcessingError("error reading header number", err)
+		return errors.NewProcessingError(msgErrorReadingHeaderNumber, err)
 	}
 
 	fmt.Printf(blockHeightFormat, blockHeight)
@@ -522,7 +525,7 @@ func handleUtxoDeletions(br *bufio.Reader) error {
 	var blockHeight uint32
 
 	if err = binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
-		return errors.NewProcessingError("error reading header number", err)
+		return errors.NewProcessingError(msgErrorReadingHeaderNumber, err)
 	}
 
 	fmt.Printf(blockHeightFormat, blockHeight)
@@ -557,7 +560,7 @@ func handleUtxoDeletions(br *bufio.Reader) error {
 func handleSubtree(br *bufio.Reader) error {
 	st := &subtree.Subtree{}
 	if err := st.DeserializeFromReader(br); err != nil {
-		return errors.NewProcessingError("error reading subtree", err)
+		return errors.NewProcessingError(msgErrorReadingSubtree, err)
 	}
 
 	fmt.Printf("Subtree root hash: %s\n", st.RootHash())

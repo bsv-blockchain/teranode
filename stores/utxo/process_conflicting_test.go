@@ -48,7 +48,7 @@ func TestProcessConflicting_Success(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, affectedSpends, mock.Anything).Return(nil)
 
 	// Mock Spend call for winning transaction
-	mockStore.On("Spend", mock.Anything, testTx, mock.Anything, mock.Anything).Return([]*Spend{}, nil)
+	mockStore.On("SpendAndCreate", mock.Anything, testTx, mock.Anything, mock.Anything).Return(nil, []*Spend{}, nil)
 
 	// Mock SetConflicting call for marking winning txs as not conflicting
 	mockStore.On("SetConflicting", mock.Anything, conflictingTxHashes, false).
@@ -226,16 +226,16 @@ func TestProcessConflicting_SpendError(t *testing.T) {
 		Vout: 0,
 		Err:  errors.NewProcessingError("spend error"),
 	}
-	mockStore.On("Spend", mock.Anything, testTx, mock.Anything, mock.Anything).
-		Return([]*Spend{spendWithError}, errors.NewTxInvalidError("spend failed"))
+	mockStore.On("SpendAndCreate", mock.Anything, testTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{spendWithError}, errors.NewTxInvalidError("spend failed"))
 
 	// step-3 failure rollback path: re-fetch losing tx body, re-spend it, clear conflicting,
 	// unlock parents. (No partial successful step-3 spends — the only spend has Err != nil.)
 	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).Return(&meta.Data{
 		Tx: losingTx,
 	}, nil).Once()
-	mockStore.On("Spend", mock.Anything, losingTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, losingTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil)
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)

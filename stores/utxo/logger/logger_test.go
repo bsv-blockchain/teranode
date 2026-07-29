@@ -79,11 +79,6 @@ func TestSupportsOutpointOnlySpend_Delegates(t *testing.T) {
 	}
 }
 
-func (m *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
-	args := m.Called(ctx, tx, blockHeight, opts)
-	return args.Get(0).(*meta.Data), args.Error(1)
-}
-
 func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
 	args := m.Called(ctx, hash, data)
 	if result := args.Get(0); result != nil {
@@ -97,9 +92,20 @@ func (m *MockStore) Get(ctx context.Context, hash *chainhash.Hash, fieldsArg ...
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	args := m.Called(ctx, tx, ignoreFlags)
-	return args.Get(0).([]*utxo.Spend), args.Error(1)
+func (m *MockStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	args := m.Called(ctx, tx, blockHeight, opts)
+
+	var md *meta.Data
+	if args.Get(0) != nil {
+		md = args.Get(0).(*meta.Data)
+	}
+
+	var spends []*utxo.Spend
+	if args.Get(1) != nil {
+		spends = args.Get(1).([]*utxo.Spend)
+	}
+
+	return md, spends, args.Error(2)
 }
 
 func (m *MockStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
@@ -420,7 +426,7 @@ func TestHealth(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestCreate(t *testing.T) {
+func TestSpendAndCreate(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockStore := &MockStore{}
 	store := New(context.Background(), logger, mockStore).(*Store)
@@ -429,35 +435,16 @@ func TestCreate(t *testing.T) {
 	tx := createTestTx(1)
 	blockHeight := uint32(100)
 	expectedData := createTestMetaData()
-	expectedErr := errors.NewError("create error")
+	expectedSpends := []*utxo.Spend{createTestSpend(1), createTestSpend(2)}
+	expectedErr := errors.NewError("spend and create error")
 
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(expectedData, expectedErr)
+	mockStore.On("SpendAndCreate", ctx, tx, blockHeight, mock.Anything).Return(expectedData, expectedSpends, expectedErr)
 
-	data, err := store.Create(ctx, tx, blockHeight)
+	data, spends, err := store.SpendAndCreate(ctx, tx, blockHeight)
 
 	assert.Equal(t, expectedData, data)
+	assert.Equal(t, expectedSpends, spends)
 	assert.Equal(t, expectedErr, err)
-	mockStore.AssertExpectations(t)
-}
-
-func TestCreate_SkipLogging(t *testing.T) {
-	logger := ulogger.TestLogger{}
-	mockStore := &MockStore{}
-	store := New(context.Background(), logger, mockStore).(*Store)
-
-	ctx := context.Background()
-	tx := createTestTx(1)
-	// Create a transaction with nil output to trigger skipLogging
-	tx.Outputs[0] = nil
-	blockHeight := uint32(100)
-	expectedData := createTestMetaData()
-
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil)
-
-	data, err := store.Create(ctx, tx, blockHeight)
-
-	assert.Equal(t, expectedData, data)
-	assert.NoError(t, err)
 	mockStore.AssertExpectations(t)
 }
 
@@ -497,27 +484,6 @@ func TestGet(t *testing.T) {
 	data, err := store.Get(ctx, hash, fieldsToGet...)
 
 	assert.Equal(t, expectedData, data)
-	assert.Equal(t, expectedErr, err)
-	mockStore.AssertExpectations(t)
-}
-
-func TestSpend(t *testing.T) {
-	logger := ulogger.TestLogger{}
-	mockStore := &MockStore{}
-	store := New(context.Background(), logger, mockStore).(*Store)
-
-	ctx := context.Background()
-	tx := createTestTx(1)
-	ignoreFlags := []utxo.IgnoreFlags{{IgnoreConflicting: true, IgnoreLocked: false}}
-	expectedSpends := []*utxo.Spend{createTestSpend(1), createTestSpend(2)}
-	expectedErr := errors.NewError("spend error")
-
-	mockStore.On("GetBlockHeight").Return(uint32(100))
-	mockStore.On("Spend", ctx, tx, ignoreFlags).Return(expectedSpends, expectedErr)
-
-	spends, err := store.Spend(ctx, tx, store.GetBlockHeight()+1, ignoreFlags...)
-
-	assert.Equal(t, expectedSpends, spends)
 	assert.Equal(t, expectedErr, err)
 	mockStore.AssertExpectations(t)
 }
@@ -883,7 +849,7 @@ func TestLoggerIntegration(t *testing.T) {
 	// Setup expectations
 	mockStore.On("SetBlockHeight", blockHeight).Return(nil)
 	mockStore.On("GetBlockHeight").Return(blockHeight)
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(metaData, nil)
+	mockStore.On("SpendAndCreate", ctx, tx, blockHeight, mock.Anything).Return(metaData, nil, nil)
 	mockStore.On("GetMeta", ctx, hash, mock.Anything).Return(metaData, nil)
 
 	// Execute operations
@@ -893,7 +859,7 @@ func TestLoggerIntegration(t *testing.T) {
 	retrievedHeight := store.GetBlockHeight()
 	assert.Equal(t, blockHeight, retrievedHeight)
 
-	createdData, err := store.Create(ctx, tx, blockHeight)
+	createdData, _, err := store.SpendAndCreate(ctx, tx, blockHeight)
 	require.NoError(t, err)
 	assert.Equal(t, metaData, createdData)
 
@@ -959,9 +925,9 @@ func TestLoggerWithComplexData(t *testing.T) {
 	blockHeight := uint32(200)
 	expectedData := createTestMetaData()
 
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil)
+	mockStore.On("SpendAndCreate", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil, nil)
 
-	data, err := store.Create(ctx, tx, blockHeight)
+	data, _, err := store.SpendAndCreate(ctx, tx, blockHeight)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedData, data)
@@ -1056,9 +1022,9 @@ func TestCreateWithNilOutputs(t *testing.T) {
 	blockHeight := uint32(100)
 	expectedData := createTestMetaData()
 
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil)
+	mockStore.On("SpendAndCreate", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil, nil)
 
-	data, err := store.Create(ctx, tx, blockHeight)
+	data, _, err := store.SpendAndCreate(ctx, tx, blockHeight)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedData, data)

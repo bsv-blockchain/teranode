@@ -98,8 +98,8 @@ func TestReverseProcessConflicting_RestoresOriginalSpender(t *testing.T) {
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
 
 	// Re-spend parent UTXO with counter.
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 
 	// Step 5 — UnmarkConflictingRecursively([counter]) flips counter +
 	// descendants back to Conflicting=false.
@@ -202,8 +202,8 @@ func TestReverseProcessConflicting_PartialStateRetryCompletes(t *testing.T) {
 	// Unmark counter.
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{counterHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
@@ -256,8 +256,8 @@ func TestReverseProcessConflicting_DConflictingButParentStillPointsToD(t *testin
 		Return(nil).Once()
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{counterHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
@@ -624,8 +624,8 @@ func TestReverseProcessConflicting_PicksOldestCounterByCreatedAt(t *testing.T) {
 	// Only the oldest counter gets the Spend + Unmark sequence.
 	mockStore.On("Get", mock.Anything, &oldestHash, mock.Anything).
 		Return(&meta.Data{Tx: oldestTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, oldestTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, oldestTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{oldestHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
@@ -682,8 +682,8 @@ func TestReverseProcessConflicting_TiebreakOnEqualCreatedAtByHash(t *testing.T) 
 
 	mockStore.On("Get", mock.Anything, &lowerHashCounter, mock.Anything).
 		Return(&meta.Data{Tx: lowerCounterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, lowerCounterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, lowerCounterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{lowerHashCounter}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
@@ -928,8 +928,8 @@ func TestReverseProcessConflicting_CounterSpendErrorPropagates(t *testing.T) {
 
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, errors.NewProcessingError("spend failed")).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, errors.NewProcessingError("spend failed")).Once()
 
 	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
 
@@ -967,8 +967,8 @@ func TestReverseProcessConflicting_CounterUnmarkErrorPropagates(t *testing.T) {
 		Return(nil).Once()
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{counterHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, errors.NewProcessingError("unmark failed")).Once()
 

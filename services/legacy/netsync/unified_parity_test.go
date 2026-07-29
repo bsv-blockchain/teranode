@@ -159,7 +159,7 @@ func makeSpendValidator(store utxo.Store) *validator.MockValidator {
 		if tx.IsCoinbase() {
 			return &meta.Data{}, nil
 		}
-		if _, err := store.Spend(ctx, tx, 500, utxo.IgnoreFlags{SkipUTXOHashCheck: true, IgnoreLocked: true}); err != nil {
+		if _, _, err := store.SpendAndCreate(ctx, tx, 500, utxo.WithSpendOnly(), utxo.WithSkipUTXOHashCheck(true), utxo.WithIgnoreLocked(true)); err != nil {
 			return nil, err
 		}
 		return &meta.Data{}, nil
@@ -222,12 +222,13 @@ func runDirectCreateSpend(t *testing.T, ctx context.Context, corpus *parityCorpu
 		for _, bsvTx := range txs[1:] {
 			btTx, convErr := wireMsgTxToBt(t, bsvTx.MsgTx())
 			require.NoError(t, convErr, "Run B: wire→bt.Tx conversion failed")
-			_, err := storeB.Create(ctx, btTx, height,
+			_, _, err := storeB.SpendAndCreate(ctx, btTx, height,
 				utxo.WithSkipExtendedInputs(true),
 				utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
 					BlockID:     blockID,
 					BlockHeight: height,
 				}),
+				utxo.WithCreateOnly(),
 			)
 			require.NoError(t, err, "Run B Create failed for tx in block %d", height)
 		}
@@ -237,9 +238,8 @@ func runDirectCreateSpend(t *testing.T, ctx context.Context, corpus *parityCorpu
 		for _, bsvTx := range txs[1:] {
 			btTx, convErr := wireMsgTxToBt(t, bsvTx.MsgTx())
 			require.NoError(t, convErr, "Run B: wire→bt.Tx conversion failed")
-			_, err := storeB.Spend(ctx, btTx, height,
-				utxo.IgnoreFlags{SkipUTXOHashCheck: true, IgnoreLocked: true},
-			)
+			_, _, err := storeB.SpendAndCreate(ctx, btTx, height,
+				utxo.WithSpendOnly(), utxo.WithSkipUTXOHashCheck(true), utxo.WithIgnoreLocked(true))
 			require.NoError(t, err, "Run B Spend failed for tx in block %d", height)
 		}
 	}

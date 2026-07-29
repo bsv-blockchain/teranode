@@ -49,6 +49,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const errServiceNotReadyUnminedLoading = "service not ready - unmined transactions are still being loaded"
+
 var (
 	// addTxBatchGrpc = blockAssemblyStat.NewStat("AddTxBatch_grpc", true)
 
@@ -1353,7 +1355,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[SubmitMiningSolution] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
 	var responseChan chan error
@@ -1895,7 +1897,7 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[ResetBlockAssembly] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
 	ba.blockAssembler.Reset(false)
@@ -1913,7 +1915,7 @@ func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockas
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[ResetBlockAssemblyFully] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
 	ba.blockAssembler.Reset(true)
@@ -1935,7 +1937,7 @@ func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _
 
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[ResetBlockAssemblyValidateInputs] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
 	ba.blockAssembler.ResetWithInputValidation()
@@ -1956,7 +1958,7 @@ func (ba *BlockAssembly) CheckBlockAssemblyValidateInputs(ctx context.Context, _
 
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[CheckBlockAssemblyValidateInputs] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
 	invalidCount, err := ba.blockAssembler.CheckInputValidation(ctx)
@@ -2145,7 +2147,7 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[GenerateBlocks] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
 	if !ba.blockAssembler.settings.ChainCfgParams.GenerateSupported {

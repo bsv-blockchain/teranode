@@ -35,7 +35,6 @@ type Server struct {
     blockTopicName                    string
     subtreeTopicName                  string
     rejectedTxTopicName               string
-    invalidBlocksTopicName            string             // Kafka topic for invalid blocks
     invalidSubtreeTopicName           string             // Kafka topic for invalid subtrees
     nodeStatusTopicName               string             // pubsub topic for node status messages
     topicPrefix                       string             // Chain identifier prefix for topic validation
@@ -480,7 +479,7 @@ Records bytes downloaded from a peer via HTTP (typically from their DataHub).
 - `handleSubtreeTopic`: Handles incoming subtree messages and processes subtree data.
 - `handleRejectedTxTopic`: Handles rejected transaction notifications from peers.
 - `handleNodeStatusTopic`: Handles incoming node status update messages.
-- `invalidBlockHandler`: Processes notifications about invalid blocks from Kafka.
+- `processInvalidBlockMessage`: Processes notifications about invalid blocks from Kafka and bans the sending peer.
 - `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
 - `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
 

@@ -19,6 +19,15 @@ import (
 	"golang.org/x/crypto/ripemd160" //nolint:gosec // this is a known safe use of ripemd160
 )
 
+const (
+	// dataPushEncodedPrefix is the shared prefix for minimal-data push errors.
+	dataPushEncodedPrefix = "data push of %d bytes encoded "
+
+	// byteArraysNotSameLengthMsg is the error message for equal-length byte
+	// array comparisons that receive mismatched inputs.
+	byteArraysNotSameLengthMsg = "byte arrays are not the same length"
+)
+
 // An opcode defines the information related to a txscript opcode.  opfunc, if
 // present, is the function to call to perform the opcode on the script.  The
 // current script is passed in as a slice with the first member being the opcode
@@ -695,7 +704,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 	} else if dataLen <= 75 {
 		if int(opcode) != dataLen {
 			// Should have used a direct push
-			str := fmt.Sprintf("data push of %d bytes encoded "+
+			str := fmt.Sprintf(dataPushEncodedPrefix+
 				"with opcode %s instead of OP_DATA_%d", dataLen,
 				pop.opcode.name, dataLen)
 
@@ -703,7 +712,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 		}
 	} else if dataLen <= 255 {
 		if opcode != OP_PUSHDATA1 {
-			str := fmt.Sprintf("data push of %d bytes encoded "+
+			str := fmt.Sprintf(dataPushEncodedPrefix+
 				"with opcode %s instead of OP_PUSHDATA1",
 				dataLen, pop.opcode.name)
 
@@ -711,7 +720,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 		}
 	} else if dataLen <= 65535 {
 		if opcode != OP_PUSHDATA2 {
-			str := fmt.Sprintf("data push of %d bytes encoded "+
+			str := fmt.Sprintf(dataPushEncodedPrefix+
 				"with opcode %s instead of OP_PUSHDATA2",
 				dataLen, pop.opcode.name)
 
@@ -1613,7 +1622,7 @@ func opcodeAnd(op *parsedOpcode, vm *Engine) error {
 	}
 
 	if len(a) != len(b) {
-		return scriptError(ErrInvalidInputLength, "byte arrays are not the same length")
+		return scriptError(ErrInvalidInputLength, byteArraysNotSameLengthMsg)
 	}
 
 	c := make([]byte, len(a))
@@ -1641,7 +1650,7 @@ func opcodeOr(op *parsedOpcode, vm *Engine) error {
 	}
 
 	if len(a) != len(b) {
-		return scriptError(ErrInvalidInputLength, "byte arrays are not the same length")
+		return scriptError(ErrInvalidInputLength, byteArraysNotSameLengthMsg)
 	}
 
 	c := make([]byte, len(a))
@@ -1669,7 +1678,7 @@ func opcodeXor(op *parsedOpcode, vm *Engine) error {
 	}
 
 	if len(a) != len(b) {
-		return scriptError(ErrInvalidInputLength, "byte arrays are not the same length")
+		return scriptError(ErrInvalidInputLength, byteArraysNotSameLengthMsg)
 	}
 
 	c := make([]byte, len(a))
