@@ -1785,27 +1785,30 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			return nil, errors.WrapGRPCPublic(errors.NewServiceError("list peers", err))
 		}
 
+		// Look up libp2p addresses once, not per registry peer.
+		addrByPeerID := make(map[string]string)
+		if s.P2PClient != nil {
+			for _, sp := range s.P2PClient.GetPeers() {
+				if len(sp.Addrs) > 0 {
+					addrByPeerID[sp.ID] = sp.Addrs[0]
+				}
+			}
+		}
+
 		resp := &p2p_api.GetPeersResponse{}
 		for _, p := range allPeers {
 			if !p.IsConnected {
 				continue
 			}
-			// Get address from libp2p if available.
-			addr := ""
-			if s.P2PClient != nil {
-				libp2pPeers := s.P2PClient.GetPeers()
-				for _, sp := range libp2pPeers {
-					if sp.ID == p.ID && len(sp.Addrs) > 0 {
-						addr = sp.Addrs[0]
-						break
-					}
-				}
-			}
+
+			addr := addrByPeerID[p.ID]
 
 			resp.Peers = append(resp.Peers, &p2p_api.Peer{
-				Id:       p.ID,
-				Addr:     addr,
-				Banscore: p.BanScore,
+				Id:            p.ID,
+				Addr:          addr,
+				Banscore:      p.BanScore,
+				CurrentHeight: p.Height,
+				BytesReceived: p.BytesReceived,
 			})
 		}
 
