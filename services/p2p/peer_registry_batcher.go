@@ -147,8 +147,18 @@ type peerRegistryBatcher struct {
 	// removed holds tombstones for peers dropped via forget(). A tombstone
 	// makes an in-flight flush skip the peer (so a removed peer is not
 	// resurrected by updates coalesced before the removal) and is cleared by
-	// the peer's next enqueued observation.
+	// the peer's next enqueued observation. Count-bounded like pending and
+	// lastAsserted: when full, expired tombstones are swept and, if still
+	// full, the tombstone is skipped (the lastAsserted deletion in forget
+	// still guarantees the peer's next message re-registers it).
 	removed map[string]time.Time
+	// removedDuringFlush records forgets that arrive while a flush cycle is
+	// processing its snapshot. Unlike removed, it is NOT cleared by a peer's
+	// re-enqueue, so a forget → re-enqueue interleaving inside one flush
+	// cannot let the loop push the peer's stale pre-removal snapshot; the
+	// fresh post-removal data flushes next cycle. Nil when no flush is
+	// running; reset at the end of each cycle.
+	removedDuringFlush map[string]struct{}
 
 	// flushMu serializes flush cycles (ticker, stop, and synchronous mode).
 	flushMu sync.Mutex
@@ -287,10 +297,28 @@ func (b *peerRegistryBatcher) enqueueStorage(peerID, storage string) {
 // it, and its next message must re-register it rather than being skipped as
 // recently asserted.
 func (b *peerRegistryBatcher) forget(peerID string) {
+	now := time.Now()
+
 	b.mu.Lock()
 	delete(b.lastAsserted, peerID)
 	delete(b.pending, peerID)
-	b.removed[peerID] = time.Now()
+	if _, exists := b.removed[peerID]; !exists && len(b.removed) >= registryBatcherMaxPending {
+		// Sweep expired tombstones to make room; if the map is still full the
+		// tombstone is skipped — bounded memory wins, and the lastAsserted
+		// deletion above still forces re-registration on the next message.
+		cutoff := now.Add(-registryTombstoneAge)
+		for id, removedAt := range b.removed {
+			if removedAt.Before(cutoff) {
+				delete(b.removed, id)
+			}
+		}
+	}
+	if _, exists := b.removed[peerID]; exists || len(b.removed) < registryBatcherMaxPending {
+		b.removed[peerID] = now
+	}
+	if b.removedDuringFlush != nil && len(b.removedDuringFlush) < registryBatcherMaxPending {
+		b.removedDuringFlush[peerID] = struct{}{}
+	}
 	b.mu.Unlock()
 }
 
@@ -310,7 +338,19 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 	b.pending = make(map[string]*pendingPeerUpdate)
 	dropped := b.dropped
 	b.dropped = 0
+	if len(pending) > 0 {
+		// Track forgets that race this cycle: a peer's re-enqueue clears its
+		// persistent tombstone, but must not let this loop push the peer's
+		// stale pre-removal snapshot.
+		b.removedDuringFlush = make(map[string]struct{})
+	}
 	b.mu.Unlock()
+
+	defer func() {
+		b.mu.Lock()
+		b.removedDuringFlush = nil
+		b.mu.Unlock()
+	}()
 
 	if dropped > 0 {
 		b.logger.Warnf("[peerRegistryBatcher] dropped %d peer updates (pending map full at %d peers)", dropped, registryBatcherMaxPending)
@@ -335,7 +375,7 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 		}
 
 		b.mu.Lock()
-		_, isRemoved := b.removed[peerID]
+		isRemoved := b.isRemovedLocked(peerID)
 		st := b.lastAsserted[peerID]
 		b.mu.Unlock()
 
@@ -368,9 +408,16 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 			st.registeredAt = now
 		}
 
+		// Registration is applied; from here each failed update is collected
+		// and requeued for the next flush so accumulated byte deltas,
+		// last-message freshness, and storage intents are not silently lost
+		// when individual RPCs fail against a degraded registry.
+		failed := &pendingPeerUpdate{}
+
 		if sendConnected {
 			if err := b.registry.UpdateConnectionState(ctx, peerID, true); err != nil {
 				rpcErrs++
+				failed.markConnected = true
 			} else {
 				st.connectedAt = now
 			}
@@ -379,27 +426,34 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 		if u.touchLastMessage {
 			if err := b.registry.UpdateLastMessageTime(ctx, peerID); err != nil {
 				rpcErrs++
+				failed.touchLastMessage = true
 			}
 		}
 
 		if u.bytesReceived > 0 {
 			if err := b.registry.UpdatePeerMetrics(ctx, peerID, 0, 0, u.bytesReceived, false, false, false, 0); err != nil {
 				rpcErrs++
+				failed.bytesReceived = u.bytesReceived
 			}
 		}
 
 		if u.storage != "" {
 			if err := b.registry.UpdateStorage(ctx, peerID, u.storage); err != nil {
 				rpcErrs++
+				failed.storage = u.storage
 			}
+		}
+
+		if failed.markConnected || failed.touchLastMessage || failed.bytesReceived > 0 || failed.storage != "" {
+			b.requeue(peerID, failed)
 		}
 
 		if sendRegister || sendConnected {
 			b.mu.Lock()
-			// Re-check the tombstone: a forget() may have raced the RPCs above,
-			// and recording the assertion would suppress the peer's
+			// Re-check the tombstones: a forget() may have raced the RPCs
+			// above, and recording the assertion would suppress the peer's
 			// re-registration for registryReassertTTL after its next message.
-			if _, r := b.removed[peerID]; !r {
+			if !b.isRemovedLocked(peerID) {
 				b.recordAssertStateLocked(peerID, st)
 			}
 			b.mu.Unlock()
@@ -413,14 +467,30 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 	b.pruneAssertState()
 }
 
-// requeue puts a peer's coalesced update back into the pending map after a
-// failed RegisterPeer, so the accumulated bytes / last-message / storage
-// intents are retried on the next flush instead of being silently dropped.
-// Called from flushOnce only; must not trigger a synchronous flush.
+// isRemovedLocked reports whether the peer has a removal tombstone, either
+// persistent or flush-scoped. Caller must hold b.mu.
+func (b *peerRegistryBatcher) isRemovedLocked(peerID string) bool {
+	if _, r := b.removed[peerID]; r {
+		return true
+	}
+	if b.removedDuringFlush != nil {
+		if _, r := b.removedDuringFlush[peerID]; r {
+			return true
+		}
+	}
+	return false
+}
+
+// requeue puts the failed portion of a peer's coalesced update back into the
+// pending map — the whole update after a failed RegisterPeer, or just the
+// failed intents when individual follow-up RPCs error — so accumulated bytes,
+// last-message freshness, and storage intents are retried on the next flush
+// instead of being silently dropped. Called from flushOnce only; must not
+// trigger a synchronous flush.
 func (b *peerRegistryBatcher) requeue(peerID string, u *pendingPeerUpdate) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, isRemoved := b.removed[peerID]; isRemoved {
+	if b.isRemovedLocked(peerID) {
 		return
 	}
 	existing, ok := b.pending[peerID]

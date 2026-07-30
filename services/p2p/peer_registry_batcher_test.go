@@ -578,6 +578,142 @@ func (c *failFirstRegisterClient) RegisterPeer(ctx context.Context, info *blockc
 	return c.PeerRegistryClientI.RegisterPeer(ctx, info)
 }
 
+type failFirstMetricsClient struct {
+	blockchain.PeerRegistryClientI
+	attempts int
+}
+
+func (c *failFirstMetricsClient) UpdatePeerMetrics(ctx context.Context, peerID string, height uint32, bytesSentDelta, bytesRecvDelta uint64, recordSuccess, recordFailure, recordMalicious bool, responseTimeMs int64) error {
+	c.attempts++
+	if c.attempts == 1 {
+		return errors.NewServiceError("transient registry error")
+	}
+	return c.PeerRegistryClientI.UpdatePeerMetrics(ctx, peerID, height, bytesSentDelta, bytesRecvDelta, recordSuccess, recordFailure, recordMalicious, responseTimeMs)
+}
+
+// TestPeerRegistryBatcher_RequeueOnMetricsFailure verifies that a failure in a
+// non-RegisterPeer RPC (here UpdatePeerMetrics, after RegisterPeer succeeded)
+// also requeues the failed intent instead of silently dropping the peer's
+// accumulated byte deltas with the flushed update.
+func TestPeerRegistryBatcher_RequeueOnMetricsFailure(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	failing := &failFirstMetricsClient{PeerRegistryClientI: blockchain.NewLocalPeerRegistryClient(reg)}
+	b := newPeerRegistryBatcher(context.Background(), ulogger.TestLogger{}, failing, time.Hour)
+
+	pid := mustNewPeerID(t).String()
+	b.enqueueRegister(pid, "client/1.0", 5, nil, "", true)
+	b.enqueueBytesReceived(pid, 500)
+
+	b.flushOnce(context.Background()) // RegisterPeer succeeds, UpdatePeerMetrics fails
+	got, ok := reg.Get(pid)
+	require.True(t, ok, "registration must have applied")
+	require.Zero(t, got.BytesReceived, "metrics RPC failed")
+
+	b.flushOnce(context.Background()) // failed byte delta retried
+	got, _ = reg.Get(pid)
+	require.Equal(t, uint64(500), got.BytesReceived, "byte delta must survive a failed UpdatePeerMetrics")
+}
+
+// TestPeerRegistryBatcher_TombstoneMapCountBounded verifies the removal
+// tombstone map is count-bounded like pending and lastAsserted: fresh
+// tombstones at the cap are skipped (re-registration is still guaranteed by
+// the lastAsserted deletion), expired ones are swept to make room.
+func TestPeerRegistryBatcher_TombstoneMapCountBounded(t *testing.T) {
+	b, _, _ := newBatcherWithCountingRegistry()
+
+	now := time.Now()
+
+	b.mu.Lock()
+	for i := 0; i < registryBatcherMaxPending; i++ {
+		b.removed[fmt.Sprintf("peer-%d", i)] = now
+	}
+	b.mu.Unlock()
+
+	b.forget("one-too-many")
+
+	b.mu.Lock()
+	require.Len(t, b.removed, registryBatcherMaxPending, "fresh tombstones at the cap must not be exceeded")
+	_, inserted := b.removed["one-too-many"]
+	require.False(t, inserted)
+
+	// With expired tombstones, the sweep makes room.
+	stale := now.Add(-2 * registryTombstoneAge)
+	for i := 0; i < registryBatcherMaxPending; i++ {
+		b.removed[fmt.Sprintf("peer-%d", i)] = stale
+	}
+	b.mu.Unlock()
+
+	b.forget("one-too-many")
+
+	b.mu.Lock()
+	_, inserted = b.removed["one-too-many"]
+	require.True(t, inserted, "expired tombstones must be swept to make room")
+	b.mu.Unlock()
+}
+
+// TestPeerRegistryBatcher_ReenqueueDuringFlushDoesNotFlushStaleSnapshot closes
+// the forget → re-enqueue interleaving inside one flush cycle: the re-enqueue
+// clears the persistent tombstone, but the loop must still skip the peer's
+// stale pre-removal snapshot (via the flush-scoped removal set) and flush the
+// fresh data next cycle instead.
+func TestPeerRegistryBatcher_ReenqueueDuringFlushDoesNotFlushStaleSnapshot(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	blocking := &blockingRegistryClient{
+		PeerRegistryClientI: blockchain.NewLocalPeerRegistryClient(reg),
+		enteredRegister:     make(chan string),
+		releaseRegister:     make(chan struct{}),
+	}
+	counting := newCountingRegistryClient(blocking)
+	b := newPeerRegistryBatcher(context.Background(), ulogger.TestLogger{}, counting, time.Hour)
+
+	first := mustNewPeerID(t).String()
+	second := mustNewPeerID(t).String()
+	b.enqueueRegister(first, "stale/1.0", 10, nil, "", false)
+	b.enqueueRegister(second, "stale/1.0", 10, nil, "", false)
+
+	flushDone := make(chan struct{})
+	go func() {
+		defer close(flushDone)
+		b.flushOnce(context.Background())
+	}()
+
+	// The flush is wedged inside RegisterPeer for one peer; the OTHER peer's
+	// snapshot has not been processed yet. Forget it, then re-enqueue it —
+	// which clears its persistent tombstone.
+	wedged := recvRegisterEntered(t, blocking.enteredRegister)
+	other := first
+	if wedged == first {
+		other = second
+	}
+	b.forget(other)
+	b.enqueueRegister(other, "fresh/2.0", 42, nil, "", false)
+	blocking.releaseRegister <- struct{}{}
+
+	select {
+	case <-flushDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("flush did not complete")
+	}
+
+	// The stale snapshot must NOT have been flushed: only the wedged peer's
+	// RegisterPeer went out this cycle.
+	require.Equal(t, 1, counting.callCount("RegisterPeer"), "stale pre-removal snapshot must be skipped")
+	_, ok := reg.Get(other)
+	require.False(t, ok, "forgotten peer must not be resurrected by its stale snapshot")
+
+	// The fresh post-removal data flushes on the next cycle.
+	go func() {
+		<-blocking.enteredRegister
+		blocking.releaseRegister <- struct{}{}
+	}()
+	b.flushOnce(context.Background())
+
+	got, ok := reg.Get(other)
+	require.True(t, ok, "fresh data must flush on the next cycle")
+	require.Equal(t, "fresh/2.0", got.ClientName)
+	require.Equal(t, uint32(42), got.Height)
+}
+
 // TestPeerRegistryBatcher_StopHonorsBudget verifies ChiR1: stop is bounded by
 // the caller's context (the service manager's per-service stop budget). With
 // a flush wedged inside a registry RPC and an already-expired budget, stop
