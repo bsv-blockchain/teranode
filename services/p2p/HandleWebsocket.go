@@ -182,25 +182,57 @@ type WebSocketConn interface {
 
 const (
 	isoFormat = "2006-01-02T15:04:05Z"
-)
 
-// WebSocket keepalive/timeout parameters for /p2p-ws. Declared as vars (not
-// consts) so tests can shrink them; not exposed as settings because they are
-// internal resource-protection ceilings, not behavioural knobs.
-var (
-	// wsWriteTimeout bounds every websocket write so a client that stops
-	// reading cannot wedge its writer goroutine forever.
-	wsWriteTimeout = 10 * time.Second
-	// wsPongWait is how long a connection may go without any read activity
-	// (pong or data) before the read pump gives up and the connection is torn
-	// down. Must be greater than wsPingPeriod.
-	wsPongWait = 60 * time.Second
-	// wsPingPeriod is how often the writer pings the client to refresh the
-	// read deadline of healthy connections.
-	wsPingPeriod = 54 * time.Second
 	// wsMaxReadBytes caps inbound frame size; clients are not expected to send data.
 	wsMaxReadBytes int64 = 1024
+	// wsHandshakeTimeout bounds the websocket upgrade handshake so a stalled
+	// client cannot hold a connection slot without completing the upgrade.
+	wsHandshakeTimeout = 10 * time.Second
+	// wsInitialStatusTimeout bounds the blockchain lookup for the initial
+	// node_status message so a hung backend cannot wedge connection setup.
+	wsInitialStatusTimeout = 5 * time.Second
 )
+
+// wsTimeouts groups the /p2p-ws keepalive parameters. They are per-Server so
+// tests can shrink them without racing on globals; production always uses
+// defaultWSTimeouts. Not exposed as settings because they are internal
+// resource-protection ceilings, not behavioural knobs.
+type wsTimeouts struct {
+	// writeTimeout bounds every websocket write so a client that stops
+	// reading cannot wedge its writer goroutine forever.
+	writeTimeout time.Duration
+	// pongWait is how long a connection may go without any read activity
+	// (pong or data) before the read pump gives up and the connection is
+	// torn down. Must be greater than pingPeriod.
+	pongWait time.Duration
+	// pingPeriod is how often the writer pings the client to refresh the
+	// read deadline of healthy connections.
+	pingPeriod time.Duration
+}
+
+func defaultWSTimeouts() wsTimeouts {
+	return wsTimeouts{
+		writeTimeout: 10 * time.Second,
+		pongWait:     60 * time.Second,
+		pingPeriod:   54 * time.Second,
+	}
+}
+
+// websocketTimeouts returns the effective keepalive parameters, enforcing the
+// pingPeriod < pongWait invariant so a misconfigured override cannot evict
+// every healthy connection each ping cycle.
+func (s *Server) websocketTimeouts() wsTimeouts {
+	to := defaultWSTimeouts()
+	if s.wsTimeouts != nil {
+		to = *s.wsTimeouts
+	}
+
+	if to.pingPeriod >= to.pongWait {
+		to.pingPeriod = to.pongWait * 9 / 10
+	}
+
+	return to
+}
 
 // originAllowed reports whether a browser Origin header value is acceptable
 // given the configured allow-list. An empty list preserves the historical
@@ -229,8 +261,12 @@ func (s *Server) broadcastMessage(data []byte, clientChannels *clientChannelMap)
 // Every write carries a deadline so a slow or stalled client fails fast
 // instead of wedging this goroutine, and periodic pings refresh the read
 // deadline of healthy clients (the peer answers each ping with a pong).
-func (s *Server) handleClientMessages(ctx context.Context, ws WebSocketConn, ch chan []byte, deadClientCh chan<- chan []byte) {
-	pingTicker := time.NewTicker(wsPingPeriod)
+// Returning is the only teardown signal needed: the connection handler joins
+// this goroutine and deregisters the client channel synchronously.
+func (s *Server) handleClientMessages(ctx context.Context, ws WebSocketConn, ch chan []byte) {
+	to := s.websocketTimeouts()
+
+	pingTicker := time.NewTicker(to.pingPeriod)
 	defer pingTicker.Stop()
 
 	for {
@@ -239,28 +275,22 @@ func (s *Server) handleClientMessages(ctx context.Context, ws WebSocketConn, ch 
 			s.logger.Infof("Closing WebSocket connection due to context cancellation")
 			return
 		case <-pingTicker.C:
-			_ = ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			_ = ws.SetWriteDeadline(time.Now().Add(to.writeTimeout))
 
 			if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
-				deadClientCh <- ch
 				s.logger.Debugf("Failed to ping websocket client, closing connection: %v", err)
-
 				return
 			}
 		case data := <-ch:
 			if data == nil {
 				s.logger.Warnf("Received nil data on client channel, closing connection")
-				deadClientCh <- ch
-
 				return
 			}
 
-			_ = ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			_ = ws.SetWriteDeadline(time.Now().Add(to.writeTimeout))
 
 			err := ws.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
-				deadClientCh <- ch
-
 				if err.Error() == "write: connection reset by peer" {
 					s.logger.Infof("Connection Lost: %v", err)
 				} else {
@@ -273,11 +303,12 @@ func (s *Server) handleClientMessages(ctx context.Context, ws WebSocketConn, ch 
 	}
 }
 
-// startNotificationProcessor starts the goroutine that processes notifications and manages clients
+// startNotificationProcessor starts the goroutine that broadcasts notifications
+// to registered clients. Client registration and removal happen synchronously
+// in the connection handler (not via channels), so a stalled broadcast can
+// never wedge connection setup or teardown.
 func (s *Server) startNotificationProcessor(
 	clientChannels *clientChannelMap,
-	newClientCh <-chan chan []byte,
-	deadClientCh <-chan chan []byte,
 	notificationCh <-chan *notificationMsg,
 	ctx context.Context,
 ) {
@@ -285,14 +316,6 @@ func (s *Server) startNotificationProcessor(
 		select {
 		case <-ctx.Done():
 			return
-
-		case newClient := <-newClientCh:
-			clientChannels.add(newClient)
-			// Send initial node_status messages to the new client
-			s.sendInitialNodeStatuses(newClient)
-
-		case deadClient := <-deadClientCh:
-			clientChannels.remove(deadClient)
 
 		case notification := <-notificationCh:
 			data, err := json.Marshal(notification)
@@ -308,9 +331,9 @@ func (s *Server) startNotificationProcessor(
 
 // sendInitialNodeStatuses sends the current node's status to a newly connected client
 // This ensures the UI can identify which node is the current one
-func (s *Server) sendInitialNodeStatuses(clientCh chan []byte) {
+func (s *Server) sendInitialNodeStatuses(ctx context.Context, clientCh chan []byte) {
 	// Always generate a fresh node_status message for our node
-	ourStatus := s.getNodeStatusMessage(context.Background())
+	ourStatus := s.getNodeStatusMessage(ctx)
 	if ourStatus == nil {
 		s.logger.Warnf("[sendInitialNodeStatuses] Failed to get current node status")
 		return
@@ -331,12 +354,10 @@ func (s *Server) sendInitialNodeStatuses(clientCh chan []byte) {
 
 func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c echo.Context) error {
 	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 1_000)
-	deadClientCh := make(chan chan []byte, 1_000)
 
 	serverCtx := s.gCtx
 
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, serverCtx)
+	go s.startNotificationProcessor(clientChannels, notificationCh, serverCtx)
 
 	var (
 		allowedOrigins []string
@@ -349,6 +370,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 	}
 
 	upgrader := websocket.Upgrader{
+		HandshakeTimeout: wsHandshakeTimeout,
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
 			if origin == "" {
@@ -360,14 +382,26 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 		},
 	}
 
-	var activeConns atomic.Int64
+	var (
+		activeConns   atomic.Int64
+		capWarnedOnce sync.Once
+	)
+
+	to := s.websocketTimeouts()
 
 	return func(c echo.Context) error {
 		// Cap concurrent connections before upgrading so an attacker can't
-		// exhaust goroutines/file descriptors by opening sockets.
-		if activeConns.Add(1) > maxConns && maxConns > 0 {
+		// exhaust goroutines/file descriptors by opening sockets. Concurrent
+		// upgrades may transiently overshoot the cap and be rejected; that
+		// conservative bias is fine for a resource ceiling.
+		if n := activeConns.Add(1); maxConns > 0 && n > maxConns {
 			activeConns.Add(-1)
-			s.logger.Warnf("Rejecting websocket connection from %s: limit of %d concurrent connections reached", c.RealIP(), maxConns)
+			// Warnf once so operators notice; Debugf after that so an
+			// attacker hammering the endpoint can't amplify into log spam.
+			capWarnedOnce.Do(func() {
+				s.logger.Warnf("Rejecting websocket connection from %s: limit of %d concurrent connections reached (further rejections logged at debug)", c.RealIP(), maxConns)
+			})
+			s.logger.Debugf("Rejecting websocket connection from %s: limit of %d concurrent connections reached", c.RealIP(), maxConns)
 
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "websocket connection limit reached")
 		}
@@ -386,24 +420,25 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 		readDone := make(chan struct{})
 		writeDone := make(chan struct{})
 
-		// Runs on every exit path: closing the socket unblocks both pumps,
-		// releases the fd, and the client channel is deregistered from the
-		// broadcaster. Waiting for the pumps guarantees no goroutine outlives
-		// the connection slot it is accounted against.
+		// Runs on every exit path: the client channel is deregistered from
+		// the broadcaster synchronously (never blocks), closing the socket
+		// unblocks both pumps and releases the fd, and waiting for the pumps
+		// guarantees no goroutine outlives the connection slot it is
+		// accounted against.
 		defer func() {
+			clientChannels.remove(ch)
 			connCancel()
 			_ = ws.Close()
 			<-writeDone
 			<-readDone
-			deadClientCh <- ch
 		}()
 
 		// Read pump: enforce a read deadline refreshed by pongs so half-open
 		// or silent connections are detected, and process control frames.
 		ws.SetReadLimit(wsMaxReadBytes)
-		_ = ws.SetReadDeadline(time.Now().Add(wsPongWait))
+		_ = ws.SetReadDeadline(time.Now().Add(to.pongWait))
 		ws.SetPongHandler(func(string) error {
-			return ws.SetReadDeadline(time.Now().Add(wsPongWait))
+			return ws.SetReadDeadline(time.Now().Add(to.pongWait))
 		})
 
 		go func() {
@@ -418,10 +453,17 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 
 		go func() {
 			defer close(writeDone)
-			s.handleClientMessages(connCtx, ws, ch, deadClientCh)
+			s.handleClientMessages(connCtx, ws, ch)
 		}()
 
-		newClientCh <- ch
+		// Queue the initial node_status into the client's buffer before
+		// registering for broadcasts, so it is always the first message. The
+		// lookup is bounded so a hung blockchain backend cannot wedge setup.
+		statusCtx, statusCancel := context.WithTimeout(connCtx, wsInitialStatusTimeout)
+		s.sendInitialNodeStatuses(statusCtx, ch)
+		statusCancel()
+
+		clientChannels.add(ch)
 
 		select {
 		case <-connCtx.Done():

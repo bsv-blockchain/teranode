@@ -40,6 +40,8 @@
 | PeerMapCleanupInterval | time.Duration | 5m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
 | PeerRegistryBatchInterval | time.Duration | 1s | p2p_peer_registry_batch_interval | Flush interval for batched peer-registry updates from gossip handlers |
 | GossipHandlerConcurrency | int | 4 | p2p_gossip_handler_concurrency | Concurrent gossip handler workers per pubsub topic |
+| WebSocketMaxConnections | int | 1000 | p2p_websocket_max_connections | Maximum concurrent /p2p-ws websocket connections (0 disables the cap) |
+| WebSocketAllowedOrigins | []string | (empty) | p2p_websocket_allowed_origins | Allowed browser origins for /p2p-ws upgrades and HTTP CORS (empty allows all) |
 
 ## Configuration Dependencies
 

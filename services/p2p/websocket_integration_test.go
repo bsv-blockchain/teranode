@@ -202,7 +202,7 @@ func TestP2PWebSocketCurrentNodeFirst(t *testing.T) {
 		clientCh := make(chan []byte, 10)
 
 		// Call the function
-		server.sendInitialNodeStatuses(clientCh)
+		server.sendInitialNodeStatuses(t.Context(), clientCh)
 
 		// Read all messages from the channel
 		var messages []notificationMsg
@@ -282,7 +282,7 @@ func TestP2PWebSocketMessageStructure(t *testing.T) {
 		clientCh := make(chan []byte, 5)
 
 		// Call sendInitialNodeStatuses
-		server.sendInitialNodeStatuses(clientCh)
+		server.sendInitialNodeStatuses(t.Context(), clientCh)
 
 		// Debug: check how many messages we have
 		t.Logf("Channel has %d messages queued", len(clientCh))

@@ -161,6 +161,8 @@ type Server struct {
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
+	wsTimeouts *wsTimeouts // Test-only override of the /p2p-ws keepalive parameters (nil = defaults)
+
 	// ipBanCache is a short-lived cache of "is this peer's IP banned" lookups
 	// used by shouldSkipBannedPeer, avoiding a GetPeers scan per gossip message.
 	ipBanCache sync.Map // peerID string -> ipBanCacheEntry
