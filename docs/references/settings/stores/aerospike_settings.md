@@ -31,6 +31,7 @@ Aerospike is a high-performance NoSQL database used as a backend for Teranode's 
 | WarmUp | bool | true | aerospike_warmUp | **CRITICAL** - Enable connection pool warm-up |
 | StoreBatcherDuration | time.Duration | 10ms | aerospike_storeBatcherDuration | Store batcher flush duration |
 | StatsRefreshDuration | time.Duration | 5s | aerospike_statsRefresh | Statistics refresh interval |
+| EnableClientMetrics | bool | true | aerospike_enable_client_metrics | Gate the `client.Stats()` polling goroutine |
 | Debug | bool | false | aerospike_debug | Enable Aerospike debug logging |
 
 ## Configuration Dependencies
@@ -250,6 +251,12 @@ aerospike_queryPolicy = aerospike:///?MaxRetries=3&TotalTimeout=2s&SocketTimeout
 
 - Set `Debug = true` for detailed Aerospike client logging
 - Monitor `StatsRefreshDuration` for performance statistics updates
+- Set `EnableClientMetrics = false` to stop the `client.Stats()` polling loop
+  entirely on deployments that do not consume those cluster-stats metrics. This
+  gates only that goroutine — the client's own per-result-code and latency
+  histograms are not collected either way, because `client.EnableMetrics` stays
+  disabled pending [#1001](https://github.com/bsv-blockchain/teranode/issues/1001),
+  so the flag cannot be used to relieve that contention
 - Check Aerospike server logs for connection and operation errors
 - Use Aerospike Management Console (AMC) for cluster monitoring
 

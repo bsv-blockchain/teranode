@@ -350,6 +350,43 @@ func TestSyncCoordinator_SelectNewSyncPeer_PrefersFullNode(t *testing.T) {
 	require.Equal(t, "full", sc.selectNewSyncPeer())
 }
 
+func TestSyncCoordinator_SelectNewSyncPeer_MeritTiedSybilCannotCapture(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 10, []byte{0x02})
+
+	// One attacker ID that sorts lexicographically first among four peers tied
+	// on every merit criterion. Through the real coordinator selection path it
+	// must not win every round; the removed peer-ID tiebreak gave it 100%
+	// capture. P(some tied peer never wins in 100 rounds) <= 4 * 0.75^100,
+	// so this cannot flake.
+	ids := []string{"000000-attacker", "honest-a", "honest-b", "honest-c"}
+	for _, id := range ids {
+		reg.Register(&blockchain.PeerInfo{
+			ID:                 id,
+			DataHubURL:         "http://" + id,
+			Height:             100,
+			BlockHash:          syncCoordinatorTestHash(t),
+			Storage:            "full",
+			ValidatedHeight:    100,
+			ValidatedBlockHash: syncCoordinatorTestHash(t),
+			ValidatedChainWork: []byte{0x03},
+		})
+		for i := 0; i < 5; i++ {
+			reg.UpdateMetrics(id, 0, 0, 0, true, false, false, 100)
+		}
+	}
+
+	wins := map[string]int{}
+	for range 100 {
+		got := sc.selectNewSyncPeer()
+		require.Contains(t, ids, got)
+		wins[got]++
+	}
+	for _, id := range ids {
+		require.Positive(t, wins[id], "every merit-tied peer must win at least once, got %v", wins)
+	}
+}
+
 func TestSyncCoordinator_FilterEligiblePeers_DropsLowAndOldPeer(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
 

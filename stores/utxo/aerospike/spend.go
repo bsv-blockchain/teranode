@@ -419,7 +419,16 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	}
 
 	// PutBatchCtx is a no-op on an empty slice (e.g. every input fast-failed).
-	s.spendBatcher.PutBatchCtx(ctx, toEnqueue)
+	// Guard the enqueue: Store.Close may close the spend batcher while an
+	// external caller is still spending. One send carries the whole group, so a
+	// rejected send rejects every item — complete all of them and let the
+	// resolveSpendCompletions path below report it, instead of parking on
+	// group.Wait for the full spendTimeout and reporting a bogus timeout.
+	if enqueueErr := safeBatcherPutBatchCtx(s.spendBatcher, ctx, toEnqueue, "spend"); enqueueErr != nil {
+		for _, item := range toEnqueue {
+			item.complete(enqueueErr)
+		}
+	}
 
 	// One shared wait for the whole batch, instead of one goroutine + timer
 	// per input. spendTimeout mirrors the previous per-item fallback.
@@ -1067,7 +1076,10 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 		}
 		items[i] = item
 
-		s.setDAHBatcher.Put(item)
+		// Per-item send, so only this child is rejected on a shutdown race.
+		if enqueueErr := safeBatcherPut(s.setDAHBatcher, item, "setDAH"); enqueueErr != nil {
+			item.complete(enqueueErr)
+		}
 	}
 
 	// s.batcherWait <= 0 means unbounded (ctx-only) — Group.Wait treats a
@@ -1156,7 +1168,10 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 								deleteAtHeight: 0, // clear DAH
 								group:          group,
 							}
-							s.setDAHBatcher.PutCtx(ctx, item)
+							if enqueueErr := safeBatcherPutCtx(s.setDAHBatcher, ctx, item, "setDAH"); enqueueErr != nil {
+								item.complete(enqueueErr)
+							}
+
 							if werr := group.Wait(ctx, s.batcherWait); werr != nil {
 								s.logger.Errorf("[handleExtraRecords][%s] failed to clear drifted master DAH: %v", txID.String(), werr)
 							} else if item.result != nil {
@@ -1263,7 +1278,9 @@ func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int, block
 	// Enqueue inline: Put is a non-blocking channel send, so the previous
 	// goroutine wrapper (needed only to avoid blocking on a per-item channel)
 	// is unnecessary under the group model.
-	s.incrementBatcher.Put(item)
+	if enqueueErr := safeBatcherPut(s.incrementBatcher, item, "increment"); enqueueErr != nil {
+		item.complete(nil, enqueueErr)
+	}
 
 	spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
 	if spendTimeout <= 0 {
