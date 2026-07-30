@@ -7460,6 +7460,13 @@
 <td>Statistics refresh interval</td>
 </tr>
 <tr>
+<td>EnableClientMetrics</td>
+<td>bool</td>
+<td>true</td>
+<td>aerospike_enable_client_metrics</td>
+<td>Gate the <code>client.Stats()</code> polling goroutine</td>
+</tr>
+<tr>
 <td>Debug</td>
 <td>bool</td>
 <td>false</td>
@@ -7783,6 +7790,12 @@
 <ul>
 <li>Set <code>Debug = true</code> for detailed Aerospike client logging</li>
 <li>Monitor <code>StatsRefreshDuration</code> for performance statistics updates</li>
+<li>Set <code>EnableClientMetrics = false</code> to stop the <code>client.Stats()</code> polling loop
+  entirely on deployments that do not consume those cluster-stats metrics. This
+  gates only that goroutine — the client's own per-result-code and latency
+  histograms are not collected either way, because <code>client.EnableMetrics</code> stays
+  disabled pending <a href="https://github.com/bsv-blockchain/teranode/issues/1001">#1001</a>,
+  so the flag cannot be used to relieve that contention</li>
 <li>Check Aerospike server logs for connection and operation errors</li>
 <li>Use Aerospike Management Console (AMC) for cluster monitoring</li>
 </ul>
