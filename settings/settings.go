@@ -543,6 +543,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Gossip handler load management
 			PeerRegistryBatchInterval: getDuration("p2p_peer_registry_batch_interval", time.Second, alternativeContext...),
 			GossipHandlerConcurrency:  getInt("p2p_gossip_handler_concurrency", 4, alternativeContext...),
+
+			WebSocketMaxConnections: getInt("p2p_websocket_max_connections", 1000, alternativeContext...),
+			WebSocketAllowedOrigins: getMultiString("p2p_websocket_allowed_origins", "|", []string{}, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),

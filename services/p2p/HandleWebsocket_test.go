@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -145,7 +146,7 @@ func TestHandleClientMessages(t *testing.T) {
 
 		done := make(chan struct{})
 		go func() {
-			s.handleClientMessages(ws, ch, deadClientCh)
+			s.handleClientMessages(t.Context(), ws, ch, deadClientCh)
 			close(done)
 		}()
 
@@ -159,6 +160,9 @@ func TestHandleClientMessages(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("Timeout waiting for handler to complete")
 		}
+
+		require.GreaterOrEqual(t, ws.deadlineCount(), ws.messageCount(),
+			"Every write must be preceded by a write deadline")
 	})
 
 	t.Run("Write error", func(t *testing.T) {
@@ -173,7 +177,7 @@ func TestHandleClientMessages(t *testing.T) {
 
 		done := make(chan struct{})
 		go func() {
-			s.handleClientMessages(ws, ch, deadClientCh)
+			s.handleClientMessages(t.Context(), ws, ch, deadClientCh)
 			close(done)
 		}()
 
@@ -199,16 +203,49 @@ func TestHandleClientMessages(t *testing.T) {
 
 // testWebSocketConn implements the minimal websocket.Conn interface needed for testing
 type testWebSocketConn struct {
-	t          *testing.T
-	writeCount int
-	writeError error
+	t             *testing.T
+	mu            sync.Mutex
+	writtenTypes  []int
+	deadlineCalls int
+	writeError    error
 }
 
 func (c *testWebSocketConn) WriteMessage(messageType int, data []byte) error {
-	c.writeCount++
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writtenTypes = append(c.writtenTypes, messageType)
 	c.t.Logf("WriteMessage called with message type %d, data: %s", messageType, string(data))
 
 	return c.writeError
+}
+
+func (c *testWebSocketConn) SetWriteDeadline(_ time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deadlineCalls++
+
+	return nil
+}
+
+func (c *testWebSocketConn) messageCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return len(c.writtenTypes)
+}
+
+func (c *testWebSocketConn) deadlineCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.deadlineCalls
+}
+
+func (c *testWebSocketConn) wroteMessageType(messageType int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return slices.Contains(c.writtenTypes, messageType)
 }
 
 func (c *testWebSocketConn) Close() error {
@@ -787,4 +824,248 @@ func TestBroadcast_NonPositivePoolSizeDoesNotDeadlock(t *testing.T) {
 	}
 
 	require.Equal(t, numChannels, cm.count(), "responsive channels should still be registered")
+}
+
+func TestOriginAllowed(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  string
+		allowed []string
+		want    bool
+	}{
+		{"empty list allows all", "http://evil.example", nil, true},
+		{"wildcard allows all", "http://evil.example", []string{"*"}, true},
+		{"exact match", "https://dash.example.com", []string{"https://dash.example.com"}, true},
+		{"case-insensitive match", "https://DASH.example.com", []string{"https://dash.example.com"}, true},
+		{"mismatch rejected", "http://evil.example", []string{"https://dash.example.com"}, false},
+		{"one of several", "https://ops.example.com", []string{"https://dash.example.com", "https://ops.example.com"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, originAllowed(tt.origin, tt.allowed))
+		})
+	}
+}
+
+// TestHandleClientMessages_Ping verifies the writer periodically pings the
+// client (with a write deadline) so healthy clients keep refreshing their
+// read deadline and dead ones are detected.
+func TestHandleClientMessages_Ping(t *testing.T) {
+	originalPingPeriod := wsPingPeriod
+	defer func() { wsPingPeriod = originalPingPeriod }()
+	wsPingPeriod = 20 * time.Millisecond
+
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+	}
+
+	ch := make(chan []byte, 1)
+	deadClientCh := make(chan chan []byte, 1)
+	ws := &testWebSocketConn{t: t}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		s.handleClientMessages(ctx, ws, ch, deadClientCh)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		return ws.wroteMessageType(websocket.PingMessage)
+	}, time.Second, 5*time.Millisecond, "Writer should send periodic pings")
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for handler to exit on context cancellation")
+	}
+
+	require.GreaterOrEqual(t, ws.deadlineCount(), ws.messageCount(),
+		"Every write (including pings) must be preceded by a write deadline")
+}
+
+// newWebSocketTestServer registers the handler on a real echo instance so
+// echo's error handling (e.g. 503 on connection-cap rejection) applies.
+func newWebSocketTestServer(t *testing.T, s *Server) (*httptest.Server, string) {
+	t.Helper()
+
+	handler := s.HandleWebSocket(make(chan *notificationMsg, 1))
+
+	e := echo.New()
+	e.HideBanner = true
+	e.GET("/p2p-ws", handler)
+
+	srv := httptest.NewServer(e)
+	t.Cleanup(srv.Close)
+
+	return srv, "ws" + strings.TrimPrefix(srv.URL, "http") + "/p2p-ws"
+}
+
+// TestHandleWebSocket_ConnectionCap verifies upgrades beyond the configured
+// connection cap are rejected with 503 and that slots are released when a
+// connection tears down.
+func TestHandleWebSocket_ConnectionCap(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 1,
+			},
+		},
+	}
+
+	_, wsURL := newWebSocketTestServer(t, s)
+
+	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "First connection should be accepted")
+
+	// Second connection must be rejected before the upgrade with 503.
+	ws2, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.Error(t, err, "Second connection should be rejected by the cap")
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	if ws2 != nil {
+		_ = ws2.Close()
+	}
+
+	// Closing the first connection must release its slot.
+	require.NoError(t, ws1.Close())
+
+	require.Eventually(t, func() bool {
+		ws3, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			return false
+		}
+		defer ws3.Close()
+
+		return true
+	}, 3*time.Second, 50*time.Millisecond, "Slot should be released after the first connection closes")
+}
+
+// TestHandleWebSocket_OriginRestriction verifies the upgrade-time Origin check
+// against the configured allow-list.
+func TestHandleWebSocket_OriginRestriction(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketAllowedOrigins: []string{"https://dash.example.com"},
+			},
+		},
+	}
+
+	_, wsURL := newWebSocketTestServer(t, s)
+
+	t.Run("Disallowed origin rejected", func(t *testing.T) {
+		ws, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": []string{"http://evil.example"}})
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+		if ws != nil {
+			_ = ws.Close()
+		}
+	})
+
+	t.Run("Allowed origin accepted", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": []string{"https://dash.example.com"}})
+		require.NoError(t, err)
+		require.NoError(t, ws.Close())
+	})
+
+	t.Run("No origin header accepted", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+		require.NoError(t, ws.Close())
+	})
+}
+
+// TestHandleWebSocket_SlowClientEvicted verifies a client that never reads
+// (so never answers pings) is torn down by the read deadline and releases its
+// resources, while a client that keeps reading (pong replies handled by the
+// gorilla default ping handler) stays connected past the pong deadline.
+func TestHandleWebSocket_SlowClientEvicted(t *testing.T) {
+	originalPongWait := wsPongWait
+	originalPingPeriod := wsPingPeriod
+	originalWriteTimeout := wsWriteTimeout
+	// Registered before newWebSocketTestServer so the server's Close cleanup
+	// (which waits for all connection handlers and their pumps) runs first;
+	// restoring the globals while pumps still read them is a data race.
+	t.Cleanup(func() {
+		wsPongWait = originalPongWait
+		wsPingPeriod = originalPingPeriod
+		wsWriteTimeout = originalWriteTimeout
+	})
+	wsPongWait = 300 * time.Millisecond
+	wsPingPeriod = 100 * time.Millisecond
+	wsWriteTimeout = 100 * time.Millisecond
+
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 1,
+			},
+		},
+	}
+
+	_, wsURL := newWebSocketTestServer(t, s)
+
+	t.Run("Silent client evicted and slot released", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		// Never read from ws: no pong replies, so the server's read deadline
+		// must fire and tear the connection down, releasing the only slot.
+		require.Eventually(t, func() bool {
+			ws2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				return false
+			}
+			defer ws2.Close()
+
+			return true
+		}, 5*time.Second, 100*time.Millisecond, "Silent client should be evicted, freeing its connection slot")
+	})
+
+	t.Run("Reading client survives past pong deadline", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		readErr := make(chan error, 1)
+		go func() {
+			for {
+				// Reading processes server pings; the default ping handler
+				// replies with pongs, keeping the connection alive.
+				if _, _, err := ws.ReadMessage(); err != nil {
+					readErr <- err
+					return
+				}
+			}
+		}()
+
+		select {
+		case err := <-readErr:
+			t.Fatalf("Reading client was disconnected: %v", err)
+		case <-time.After(3 * wsPongWait):
+			// Still connected well past the pong deadline.
+		}
+	})
 }

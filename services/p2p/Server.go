@@ -608,8 +608,15 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 
 	e.Use(middleware.Recover())
 
+	// Restrict CORS to the configured websocket origins; an empty list keeps
+	// the historical allow-all behaviour.
+	allowOrigins := []string{"*"}
+	if s.settings != nil && len(s.settings.P2P.WebSocketAllowedOrigins) > 0 {
+		allowOrigins = s.settings.P2P.WebSocketAllowedOrigins
+	}
+
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOrigins: allowOrigins,
 		AllowMethods: []string{echo.GET},
 	}))
 
