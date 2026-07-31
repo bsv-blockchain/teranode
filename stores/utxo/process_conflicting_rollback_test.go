@@ -48,8 +48,8 @@ func TestProcessConflictingRollback_Step3Failure(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, affectedSpends, []bool{true}).Return(nil).Once()
 
 	// step 3: Spend(winningTx) FAILS — no per-input partial successes
-	mockStore.On("Spend", mock.Anything, winningTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, errors.NewTxInvalidError("spend failed")).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, winningTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, errors.NewTxInvalidError("spend failed")).Once()
 
 	// rollback expectations (reverse order):
 	// 3a. step-3 had no successful spends → no Unspend call for step3SuccessfulSpends
@@ -57,8 +57,8 @@ func TestProcessConflictingRollback_Step3Failure(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).Return(&meta.Data{
 		Tx: losingTx,
 	}, nil).Once()
-	mockStore.On("Spend", mock.Anything, losingTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, losingTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	// 3c. SetConflicting(allMarkedHashes, false) — undoes step 1
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
@@ -104,8 +104,8 @@ func TestProcessConflictingRollback_RollbackAlsoFails(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, affectedSpends, []bool{true}).Return(nil).Once()
 
 	// step 3 fails
-	mockStore.On("Spend", mock.Anything, winningTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, errors.NewTxInvalidError("spend failed")).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, winningTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, errors.NewTxInvalidError("spend failed")).Once()
 
 	// rollback path:
 	// re-fetch losing tx
@@ -113,8 +113,8 @@ func TestProcessConflictingRollback_RollbackAlsoFails(t *testing.T) {
 		Tx: losingTx,
 	}, nil).Once()
 	// re-spend losing tx (rollback step 2) succeeds
-	mockStore.On("Spend", mock.Anything, losingTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, losingTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	// SetConflicting(false) FAILS — rollback failure
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, errors.NewProcessingError("set conflicting false failed")).Once()
@@ -160,8 +160,8 @@ func TestProcessConflictingRollback_Step5RetrySucceeds(t *testing.T) {
 
 	mockStore.On("Unspend", mock.Anything, affectedSpends, []bool{true}).Return(nil).Once()
 
-	mockStore.On("Spend", mock.Anything, winningTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, winningTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 
 	mockStore.On("SetConflicting", mock.Anything, conflictingTxHashes, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
@@ -208,8 +208,8 @@ func TestProcessConflictingRollback_Step5RetryExhausted(t *testing.T) {
 
 	mockStore.On("Unspend", mock.Anything, affectedSpends, []bool{true}).Return(nil).Once()
 
-	mockStore.On("Spend", mock.Anything, winningTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, winningTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 
 	mockStore.On("SetConflicting", mock.Anything, conflictingTxHashes, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
@@ -265,8 +265,8 @@ func TestProcessConflictingRollback_PartialStep3Spend(t *testing.T) {
 	successSpend := &Spend{TxID: &parent1, Vout: 0}
 	failSpend := &Spend{TxID: &parent2, Vout: 0, Err: errors.NewProcessingError("input-level spend failure")}
 
-	mockStore.On("Spend", mock.Anything, winningTx, mock.Anything, mock.Anything).
-		Return([]*Spend{successSpend, failSpend}, errors.NewTxInvalidError("aggregate spend failed")).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, winningTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{successSpend, failSpend}, errors.NewTxInvalidError("aggregate spend failed")).Once()
 
 	// rollback expectations (reverse order):
 	// 3a. step-3 partial successes are undone with flagAsLocked=false
@@ -275,8 +275,8 @@ func TestProcessConflictingRollback_PartialStep3Spend(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).Return(&meta.Data{
 		Tx: losingTx,
 	}, nil).Once()
-	mockStore.On("Spend", mock.Anything, losingTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, losingTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	// 3c. SetConflicting(allMarkedHashes, false) — undoes step 1
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
@@ -334,8 +334,8 @@ func TestProcessConflictingRollback_CascadeDescendants(t *testing.T) {
 		Return(nil).Once()
 
 	// step 3: Spend(winningTx) FAILS — no per-input partial successes.
-	mockStore.On("Spend", mock.Anything, winningTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, errors.NewTxInvalidError("spend failed")).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, winningTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, errors.NewTxInvalidError("spend failed")).Once()
 
 	// rollback path:
 	// 3a. step-3 had no successful spends → no Unspend call for partial spends.
@@ -343,8 +343,8 @@ func TestProcessConflictingRollback_CascadeDescendants(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).Return(&meta.Data{
 		Tx: losingTx,
 	}, nil).Once()
-	mockStore.On("Spend", mock.Anything, losingTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, losingTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	// 3c. attempt to fetch descendant body — store has nothing for it, surface but continue
 	mockStore.On("Get", mock.Anything, &descendantHash, mock.Anything).
 		Return((*meta.Data)(nil), errors.NewNotFoundError("descendant not found")).Once()

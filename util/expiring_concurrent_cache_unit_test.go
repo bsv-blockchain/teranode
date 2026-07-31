@@ -1,6 +1,10 @@
 package util
 
 import (
+	"bufio"
+	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +15,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// sentinelError is a minimal error type for the propagation tests. Its identity (not a Teranode
+// error code) is what require.Same asserts, proving verbatim propagation. Using a custom type
+// avoids the standard library "errors" package (forbidden module-wide) while still side-stepping
+// *errors.Error.Is's code-based matching, so a same-code look-alike cannot pass.
+type sentinelError struct{ msg string }
+
+func (e *sentinelError) Error() string { return e.msg }
+
+var errLeaderBoom = &sentinelError{msg: "leader boom"}
 
 func TestNewExpiringConcurrentCache(t *testing.T) {
 	cache := NewExpiringConcurrentCache[string, int](time.Second)
@@ -307,30 +321,17 @@ func TestGetOrSetConcurrentFetchError(t *testing.T) {
 
 	wg.Wait()
 
-	// When fetch fails, waiting goroutines get "cache: failed to get value after waiting"
-	// and then retry with their own fetch. So multiple fetches occur.
+	// Leaders and waiters share the flight's outcome; post-cleanup fresh leaders re-fetch. Either
+	// way the fetch runs at least once and at most once per goroutine.
 	fetchCountValue := atomic.LoadInt64(&fetchCount)
-	assert.Greater(t, fetchCountValue, int64(0), "At least one fetch should occur")
-	assert.LessOrEqual(t, fetchCountValue, int64(numGoroutines), "At most one fetch per goroutine")
+	require.Greater(t, fetchCountValue, int64(0), "At least one fetch should occur")
+	require.LessOrEqual(t, fetchCountValue, int64(numGoroutines), "At most one fetch per goroutine")
 
-	// Count different types of errors
-	originalErrorCount := 0
-	waitingErrorCount := 0
-
+	// With error propagation, every goroutine — leaders and waiters alike — returns the real error.
 	for i := 0; i < numGoroutines; i++ {
-		assert.Error(t, errs[i])
-		if errors.Is(expectedErr, errs[i]) {
-			originalErrorCount++
-		} else if strings.Contains(errs[i].Error(), "cache: failed to get value after waiting") {
-			waitingErrorCount++
-		} else {
-			t.Errorf("Unexpected error type %d: %v", i, errs[i])
-		}
+		require.Error(t, errs[i])
+		require.ErrorIs(t, errs[i], expectedErr)
 	}
-
-	// The exact counts depend on timing, but we should have some errors
-	assert.Greater(t, originalErrorCount, 0, "Should have some original errors")
-	assert.Equal(t, numGoroutines, originalErrorCount+waitingErrorCount, "All errors should be accounted for")
 }
 
 func TestGetOrSetNilValue(t *testing.T) {
@@ -583,4 +584,326 @@ func TestGetOrSetMultipleKeysConcurrently(t *testing.T) {
 		assert.Equal(t, int64(1), atomic.LoadInt64(&fetchCounts[i]),
 			"Key %d should have been fetched exactly once", i)
 	}
+}
+
+// TestGetOrSetConcurrentDifferentKeysDoNotSerialize verifies that fetches for different keys can
+// be in flight at the same time. Before the fix, fetchFunc ran while holding the global write
+// lock, so the second key's fetch could not start until the first finished — the "started"
+// signal for the second goroutine would never arrive and the bounded select would time out.
+func TestGetOrSetConcurrentDifferentKeysDoNotSerialize(t *testing.T) {
+	cache := NewExpiringConcurrentCache[string, string](time.Minute)
+
+	release := make(chan struct{})
+
+	var releaseOnce sync.Once
+	releaseBarrier := func() { releaseOnce.Do(func() { close(release) }) }
+	// Always release the barrier so blocked fetchFunc goroutines drain, even on the timeout path.
+	defer releaseBarrier()
+
+	var started sync.WaitGroup
+	started.Add(2)
+
+	var done sync.WaitGroup
+	done.Add(2)
+
+	results := make([]string, 2)
+	errs := make([]error, 2)
+
+	fetch := func(index int, key, value string) {
+		go func() {
+			defer done.Done()
+			val, err := cache.GetOrSet(key, func() (string, bool, error) {
+				started.Done() // signal this fetch has started
+				<-release      // block until both fetches are confirmed in flight
+				return value, true, nil
+			})
+			results[index] = val
+			errs[index] = err
+		}()
+	}
+
+	fetch(0, "key-a", "value-a")
+	fetch(1, "key-b", "value-b")
+
+	// Both fetches must be in flight simultaneously.
+	bothStarted := make(chan struct{})
+	go func() {
+		started.Wait()
+		close(bothStarted)
+	}()
+
+	select {
+	case <-bothStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("both fetches did not start concurrently; fetchFunc appears serialized under the lock")
+	}
+
+	// Release the barrier and let both calls return, bounded so a publish/return-path
+	// deadlock fails fast instead of hanging until the go test timeout.
+	releaseBarrier()
+
+	doneAll := make(chan struct{})
+	go func() {
+		done.Wait()
+		close(doneAll)
+	}()
+
+	select {
+	case <-doneAll:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fetches did not complete after the barrier was released")
+	}
+
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+	require.Equal(t, "value-a", results[0])
+	require.Equal(t, "value-b", results[1])
+}
+
+// TestGetOrSetReentrantFetchDoesNotDeadlock verifies that a fetchFunc may itself call GetOrSet for
+// a different key. Before the fix, the outer call held the global write lock across fetchFunc, so
+// the inner call blocked on its very first RLock — a deadlock. With the fix, no lock is held during
+// fetchFunc, so the re-entrant call proceeds.
+func TestGetOrSetReentrantFetchDoesNotDeadlock(t *testing.T) {
+	cache := NewExpiringConcurrentCache[string, string](time.Minute)
+
+	done := make(chan struct{})
+
+	var result string
+	var err error
+
+	go func() {
+		defer close(done)
+		result, err = cache.GetOrSet("key-outer", func() (string, bool, error) {
+			inner, innerErr := cache.GetOrSet("key-inner", func() (string, bool, error) {
+				return "inner-value", true, nil
+			})
+			if innerErr != nil {
+				return "", false, innerErr
+			}
+			return "outer+" + inner, true, nil
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("re-entrant GetOrSet deadlocked")
+	}
+
+	require.NoError(t, err)
+	require.Equal(t, "outer+inner-value", result)
+}
+
+// TestGetOrSetWaitersReceiveLeaderError verifies that when the leader's fetchFunc fails, a waiter on
+// the same flight receives the leader's real error verbatim (pointer identity) rather than the
+// generic "failed to get value after waiting" message, and never re-fetches. Ordering is made fully
+// deterministic via the testHookWaiterAboutToWait seam, with no time.Sleep used for sequencing.
+// Must not use t.Parallel().
+func TestGetOrSetWaitersReceiveLeaderError(t *testing.T) {
+	cache := NewExpiringConcurrentCache[string, string](time.Minute)
+
+	leaderStarted := make(chan struct{})
+	parked := make(chan struct{})
+	releaseLeader := make(chan struct{})
+
+	var waiterFetchCalls atomic.Int64
+
+	var goroutines sync.WaitGroup
+	goroutines.Add(2)
+
+	// Idempotent release so the leader is unblocked on every path.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseLeader) }) }
+
+	// Once-guarded parked signal fired from the waiter path via the test hook.
+	var parkOnce sync.Once
+	testHookWaiterAboutToWait = func() { parkOnce.Do(func() { close(parked) }) }
+
+	// Teardown ordered so the hook reset runs strictly after the drain (cleanups run LIFO: register
+	// the reset first so it runs last, after both goroutines that can read it have returned).
+	t.Cleanup(func() { testHookWaiterAboutToWait = nil }) // registered 1st => runs LAST
+	t.Cleanup(func() {                                    // registered 2nd => runs FIRST
+		release() // unblock a leader still parked on a failure/timeout path
+		doneDrain := make(chan struct{})
+		go func() { goroutines.Wait(); close(doneDrain) }()
+		select {
+		case <-doneDrain:
+		case <-time.After(10 * time.Second):
+			t.Error("leader/waiter goroutines did not drain")
+		}
+	})
+
+	var leaderErr, waiterErr error
+
+	// Leader: parks inside fetchFunc so the in-flight entry is pinned, then fails.
+	go func() {
+		defer goroutines.Done()
+		_, leaderErr = cache.GetOrSet("key", func() (string, bool, error) {
+			close(leaderStarted)
+			<-releaseLeader
+			return "", false, errLeaderBoom
+		})
+	}()
+
+	select {
+	case <-leaderStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("leader fetch did not start")
+	}
+
+	// Waiter: must join the flight and never run its own fetchFunc.
+	go func() {
+		defer goroutines.Done()
+		_, waiterErr = cache.GetOrSet("key", func() (string, bool, error) {
+			waiterFetchCalls.Add(1)
+			return "x", false, nil
+		})
+	}()
+
+	// Positive evidence the waiter captured the in-flight entry and committed to the waiter branch.
+	select {
+	case <-parked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("waiter did not reach the wait hook")
+	}
+
+	// Release the leader: it publishes wgw.err and tears down the flight.
+	release()
+
+	// Drain both goroutines before reading their results.
+	doneDrain := make(chan struct{})
+	go func() { goroutines.Wait(); close(doneDrain) }()
+	select {
+	case <-doneDrain:
+	case <-time.After(10 * time.Second):
+		t.Fatal("leader/waiter goroutines did not complete")
+	}
+
+	// Verbatim propagation, not a re-fetch or a wrap.
+	require.Same(t, errLeaderBoom, waiterErr)
+	// Waiter did not re-fetch.
+	require.Equal(t, int64(0), waiterFetchCalls.Load())
+	// Corroborating.
+	require.ErrorIs(t, waiterErr, errLeaderBoom)
+	// Leader returns its own error.
+	require.Same(t, errLeaderBoom, leaderErr)
+	require.NotContains(t, waiterErr.Error(), "failed to get value after waiting")
+}
+
+// TestGetOrSetErrorNotCachedRetriesNextCall verifies that a failed fetch is not cached: a later call
+// for the same key runs a fresh fetchFunc and, on success, caches the value for subsequent calls.
+func TestGetOrSetErrorNotCachedRetriesNextCall(t *testing.T) {
+	cache := NewExpiringConcurrentCache[string, string](time.Minute)
+
+	// First call fails; the error propagates verbatim.
+	_, err := cache.GetOrSet("key", func() (string, bool, error) {
+		return "", false, errLeaderBoom
+	})
+	require.Same(t, errLeaderBoom, err)
+
+	// Second call for the same key runs a fresh fetchFunc (error was not cached) and succeeds.
+	fetchCalled := false
+	val, err := cache.GetOrSet("key", func() (string, bool, error) {
+		fetchCalled = true
+		return "ok", true, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ok", val)
+	require.True(t, fetchCalled)
+
+	// Third call hits the cache; fetchFunc must not run.
+	fetchCalled = false
+	val, err = cache.GetOrSet("key", func() (string, bool, error) {
+		fetchCalled = true
+		return "different", true, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ok", val)
+	require.False(t, fetchCalled)
+}
+
+// TestGetOrSetReentrantSameKeyDeadlocks exercises the documented, unsupported same-key re-entry:
+// a fetchFunc that calls GetOrSet for the key it is fetching deadlocks on the in-flight waitgroup.
+// Reproducing that in-process would leak a permanently-blocked goroutine, so the deadlock is run in
+// a re-exec child of this test binary that the parent bounds and kills — nothing leaks in the
+// parent. It requires the standard `go test` execution model (os.Args[0] is the re-runnable test
+// binary) and must not use t.Parallel().
+func TestGetOrSetReentrantSameKeyDeadlocks(t *testing.T) {
+	if os.Getenv("GO_TEST_REENTRANT_SAMEKEY") == "1" {
+		cache := NewExpiringConcurrentCache[string, string](time.Minute)
+		returned := make(chan struct{})
+		go func() {
+			_, _ = cache.GetOrSet("k", func() (string, bool, error) {
+				// Marker at the ACTUAL re-entry point. os.Stdout is an unbuffered *os.File, so this
+				// Fprintln is a direct write syscall — flushed before the inner call blocks below.
+				fmt.Fprintln(os.Stdout, "reentrant-call-started")
+
+				v, e := cache.GetOrSet("k", func() (string, bool, error) { // same key -> deadlock by contract
+					return "inner", true, nil
+				})
+				return v, true, e
+			})
+			close(returned) // reached ONLY if the unsupported call did NOT deadlock (contract broke)
+		}()
+		select {
+		case <-returned:
+			os.Exit(42) // distinct code => "same-key re-entry returned instead of deadlocking"
+		case <-time.After(30 * time.Second): // armed timer keeps the runtime deadlock detector quiet
+			os.Exit(0) // unreached in practice; the parent kills the child first
+		}
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestGetOrSetReentrantSameKeyDeadlocks$")
+	cmd.Env = append(os.Environ(), "GO_TEST_REENTRANT_SAMEKEY=1")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }() // single reaper; buffered so it never blocks
+
+	reaped := false
+	t.Cleanup(func() { // runs on EVERY exit path, incl. an early t.Fatal or a missing marker
+		_ = cmd.Process.Kill() // idempotent/harmless if already dead
+		if !reaped {
+			<-waitErr // reap so no orphan/zombie child remains
+		}
+	})
+
+	// 1. Wait until the child PROVES it reached the re-entrant call.
+	markerSeen := make(chan struct{})
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			if strings.Contains(sc.Text(), "reentrant-call-started") {
+				close(markerSeen)
+				return
+			}
+		}
+	}()
+	select {
+	case <-markerSeen:
+	case err := <-waitErr:
+		reaped = true
+		t.Fatalf("child exited (%v) before reaching the re-entrant call", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("child never reached the re-entrant GetOrSet call")
+	}
+
+	// 2. Decision rule: past the marker, the child must NOT exit within the bound — proving the
+	//    documented same-key deadlock.
+	select {
+	case err := <-waitErr:
+		reaped = true
+		t.Fatalf("child exited (%v) instead of deadlocking; the same-key contract may have changed", err)
+	case <-time.After(1 * time.Second):
+		// Still blocked after the bound => deadlock confirmed.
+	}
+
+	// 3. Kill and reap.
+	require.NoError(t, cmd.Process.Kill())
+	<-waitErr
+	reaped = true
 }

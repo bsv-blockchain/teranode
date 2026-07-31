@@ -35,12 +35,11 @@ type Server struct {
     blockTopicName                    string
     subtreeTopicName                  string
     rejectedTxTopicName               string
-    invalidBlocksTopicName            string             // Kafka topic for invalid blocks
     invalidSubtreeTopicName           string             // Kafka topic for invalid subtrees
     nodeStatusTopicName               string             // pubsub topic for node status messages
     topicPrefix                       string             // Chain identifier prefix for topic validation
-    blockPeerMap                      sync.Map           // Map to track which peer sent each block (hash -> peerMapEntry)
-    subtreePeerMap                    sync.Map           // Map to track which peer sent each subtree (hash -> peerMapEntry)
+    blockPeerMap                      sync.Map           // Map to track which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry)
+    subtreePeerMap                    sync.Map           // Map to track which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry)
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Stateless peer selection logic
@@ -480,7 +479,7 @@ Records bytes downloaded from a peer via HTTP (typically from their DataHub).
 - `handleSubtreeTopic`: Handles incoming subtree messages and processes subtree data.
 - `handleRejectedTxTopic`: Handles rejected transaction notifications from peers.
 - `handleNodeStatusTopic`: Handles incoming node status update messages.
-- `invalidBlockHandler`: Processes notifications about invalid blocks from Kafka.
+- `processInvalidBlockMessage`: Processes notifications about invalid blocks from Kafka and bans the sending peer.
 - `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
 - `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
 

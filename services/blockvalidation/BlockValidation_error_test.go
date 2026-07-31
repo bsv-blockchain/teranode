@@ -187,9 +187,10 @@ func createCoinbaseAndChildTx(t *testing.T) (*bt.Tx, *bt.Tx, *bec.PrivateKey, *b
 }
 
 func storeTxsInUtxoStore(t *testing.T, utxoStore utxo.Store, coinbaseTx, childTx *bt.Tx, opts ...utxo.CreateOption) {
-	_, err := utxoStore.Create(context.Background(), coinbaseTx, 0, opts...)
+	createOpts := append([]utxo.CreateOption{utxo.WithCreateOnly()}, opts...)
+	_, _, err := utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, createOpts...)
 	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), childTx, 0, opts...)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, createOpts...)
 	require.NoError(t, err)
 }
 

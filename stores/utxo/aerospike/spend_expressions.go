@@ -363,7 +363,7 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 		// validation failures) are no-ops here, so this safely covers every
 		// remaining item without racing or double-signalling.
 		for _, bItem := range batch {
-			bItem.complete(errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend: %w", err))
+			bItem.complete(errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend", err))
 		}
 		return
 	}
@@ -443,7 +443,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 				}
 			}
 
-			bItem.complete(errors.NewStorageError("spend error for %s:%d: %w", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err))
+			bItem.complete(errors.NewStorageError("spend error for %s:%d", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err))
 			errCount++
 			if isInfrastructureFailure(batchRec.Err) {
 				infraErrCount++
@@ -460,7 +460,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 		state, err := s.parseSpendState(batchRec.Record.Bins)
 		if err != nil {
-			bItem.complete(errors.NewProcessingError("failed to parse spend state: %w", err))
+			bItem.complete(errors.NewProcessingError("failed to parse spend state", err))
 			errCount++
 			continue
 		}

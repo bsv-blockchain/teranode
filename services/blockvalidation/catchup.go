@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,6 +55,16 @@ type CatchupContext struct {
 	useQuickValidation      bool   // Whether to use quick validation for checkpointed blocks
 	highestCheckpointHeight uint32 // Highest checkpoint height for validation checks
 	catchupError            error  // Any error encountered during catchup
+	incompleteBlockHash     string // Block hash reported when a peer serves an incomplete block
+
+	// failedPeers records the peers that actually failed to serve data during this
+	// catchup cycle, deduplicated by peer ID (last error message wins). Written from
+	// concurrent per-subtree fetch goroutines via recordCatchupPeerFailure and drained
+	// by releaseCatchupLock, which charges each of them once. Deduplication keeps
+	// CatchupFailures from exceeding CatchupAttempts when several concurrent subtree
+	// fetches fail against the same peer.
+	failedPeersMu sync.Mutex
+	failedPeers   map[string]string
 
 	// Performance monitoring and dynamic peer switching
 	performanceMonitor   *CatchupPerformanceMonitor
@@ -262,6 +273,16 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
+	u.reportValidatedHeaderProgress(catchupCtx)
+
+	// Step 9.5: Validate header-chain difficulty (DAA) before fetching full blocks.
+	// Header-fetch validation only checks each header's PoW against its own nBits; this
+	// recomputes the DAA-required nBits from the header chain and rejects a peer that
+	// supplied a self-consistent low-difficulty chain.
+	if err = u.validateCatchupHeaderDifficulty(ctx, catchupCtx); err != nil {
+		return err
+	}
+
 	// Step 10: Fetch and validate blocks
 	if err = u.fetchAndValidateBlocks(ctx, catchupCtx); err != nil {
 		return err
@@ -349,10 +370,13 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	// service would block the lock indefinitely, which in turn blocks GetCatchupStatus
 	// (it RLocks the same mutex) and prevents the active catchup context from clearing.
 	var (
-		reportMalicious bool
-		reportPeerErr   bool
-		peerID          string
-		errorMsg        string
+		reportMalicious       bool
+		reportPeerErr         bool
+		reportIncompleteBlock bool
+		peerID                string
+		errorMsg              string
+		incompleteBlockHash   string
+		failedPeers           map[string]string
 	)
 
 	// Capture failure details for dashboard before clearing context
@@ -370,6 +394,16 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			errorType = "validation_failure"
 			// Mark peer as malicious for validation failure (reported after unlock)
 			reportMalicious = true
+		case errors.Is(*err, errors.ErrExternal):
+			// Every peer attempt failed to fetch subtree data. The individual failures
+			// were already attributed to the peers that produced them
+			// (recordCatchupPeerFailure), so charging the catchup primary here as well
+			// would penalize a healthy peer for another peer's failure — the 0%-success
+			// symptom in issue 1368. Must precede the IsNetworkError case: one peer's
+			// connection error inside the chain would otherwise classify the whole
+			// all-peers-failed error as a network error against the primary.
+			errorType = "peer_data_unavailable"
+			isPeerError = false
 		case errors.IsNetworkError(*err):
 			errorType = "network_error"
 		case strings.Contains(errorMsg, "secret mining") || strings.Contains(errorMsg, "secretly mined"):
@@ -388,11 +422,31 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// Service unavailable errors are local system issues, not peer errors
 			errorType = "local_service_unavailable"
 			isPeerError = false
+		case errors.IsTransientBlockIncomplete(*err):
+			// Transient LOCAL catchup-ordering gap (unabsorbed parent, issue 1031). Shares the
+			// ErrBlockIncomplete code, so this case must precede the generic one below. Abort
+			// and retry another peer, but do NOT report a peer failure or open a full-storage
+			// penalty window: the serving peer is honest and possibly the sole source ahead.
+			errorType = "block_incomplete_transient"
+			isPeerError = false
 		case errors.Is(*err, errors.ErrBlockIncomplete):
-			// Incomplete blocks (e.g. seeded peers without full block data) are not peer errors
+			// Peer-attributable incomplete block: the peer served header work it could not back
+			// with a full block body (e.g. seeded peer without full block data). Penalize so a
+			// header-only non-deliverer stops holding top-tier sync eligibility.
 			errorType = "block_incomplete"
 			isPeerError = false
+			reportIncompleteBlock = true
+			incompleteBlockHash = ctx.incompleteBlockHash
 		}
+
+		ctx.failedPeersMu.Lock()
+		if len(ctx.failedPeers) > 0 {
+			failedPeers = make(map[string]string, len(ctx.failedPeers))
+			for id, msg := range ctx.failedPeers {
+				failedPeers[id] = msg
+			}
+		}
+		ctx.failedPeersMu.Unlock()
 
 		u.previousCatchupAttempt = &PreviousAttempt{
 			PeerID:            ctx.peerID,
@@ -406,12 +460,12 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			BlocksValidated:   u.blocksValidated.Load(),
 		}
 
-		// Only store the error in the peer registry if it's a peer-related error
-		// Local system errors (like block assembly being behind) should not affect peer reputation
+		// Only store generic peer errors in the peer registry. Local system errors
+		// and non-malicious incomplete-block reports use their own handling.
 		if isPeerError {
 			reportPeerErr = true
 		} else {
-			u.logger.Infof("[catchup][%s] Skipping peer error report for local system error: %s", ctx.blockUpTo.Hash().String(), errorType)
+			u.logger.Infof("[catchup][%s] Skipping generic peer error report for catchup error type: %s", ctx.blockUpTo.Hash().String(), errorType)
 		}
 	}
 
@@ -422,9 +476,65 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	// Make the fire-and-forget reputation gRPC calls outside the lock with a bounded
 	// context, so a stalled P2P service can neither hold activeCatchupCtxMu nor outlive
 	// shutdown. These are best-effort; failures are logged inside the helpers.
-	if reportMalicious || reportPeerErr {
+	if reportMalicious || reportPeerErr || reportIncompleteBlock || len(failedPeers) > 0 {
 		rpcCtx, cancel := context.WithTimeout(context.Background(), catchupReputationReportTimeout)
 		defer cancel()
+
+		// Charge each peer that actually failed to serve data, once, with its own
+		// error text (issue 1368: a healthy peer used to carry another peer's 404).
+		//
+		// Accounting note: this charges a CatchupFailure without a paired
+		// CatchupAttempt for the failing peer (only the primary gets a
+		// reportCatchupAttempt call, at the start of catchup — see catchup.go's
+		// call site). That is new to this change, and there is no precedent for it
+		// in this package: the other sites that charge non-primary peers reach them
+		// through catchup()/catchupFunc(), which calls reportCatchupAttempt
+		// unconditionally, so those charges do have a paired attempt. Accepted
+		// regardless, because CatchupAttempts/CatchupFailures are display/telemetry
+		// counters, not reputation inputs (reputation is computed from the separate
+		// Interaction* counters, which RecordCatchupFailureWithKind keeps internally
+		// consistent). The tradeoff: the displayed attempts/failures ratio for a
+		// fallback-only peer is not a rate.
+		//
+		// This loop is authoritative for every peer in failedPeers, including the
+		// primary — deliberately, even though that means a peer which both failed
+		// a subtree fetch mid-cycle AND caused the cycle's terminal error gets
+		// charged twice for one attempt. An earlier version tried to skip the
+		// primary here whenever the terminal error was a generic peer error, on
+		// the assumption that Server.go's processCatchupChItem would charge it
+		// once instead, using the terminal error. That assumption does not hold
+		// for every terminal error shape: a genuinely local failure produced by
+		// fetchAndStoreSubtreeAndSubtreeData (e.g. its "Local error fetching
+		// subtree ... not retrying with other peers" wrap) is coded
+		// ErrServiceError, which this switch has no specific case for (it falls
+		// to the unknown_error default with isPeerError left true), and
+		// Server.go's ErrServiceError branch returns early WITHOUT ever calling
+		// reportCatchupFailureForError. Skipping the primary here in that case
+		// charged it zero times for a real subtree failure it caused — an
+		// under-charge that hides a genuine failure entirely, which is worse
+		// than an over-charge that is at least directionally accurate. Both
+		// increments feed InteractionAttempts/InteractionFailures consistently
+		// (see the peer registry), so the occasional double-charge is a
+		// telemetry precision cost, not a reputation-math break. The one
+		// exception is reportIncompleteBlock, guarded below, where both charges
+		// live in this same function and the skip carries no such cross-file risk.
+		for failedPeerID, failedMsg := range failedPeers {
+			if reportIncompleteBlock && failedPeerID == peerID {
+				// reportIncompleteBlock already charges the primary below via
+				// reportCatchupFailureWithKind, with the more specific
+				// catchupFailureKindBlockIncomplete (which drives a documented
+				// incomplete-block penalty window a generic charge would not).
+				// Both calls are local to this function, so — unlike the
+				// cross-file assumption described above — this skip is safe.
+				// Still store the subtree-level error text so it isn't lost;
+				// only the generic failure counter is skipped.
+				u.reportCatchupError(rpcCtx, failedPeerID, failedMsg)
+				continue
+			}
+
+			u.reportCatchupFailure(rpcCtx, failedPeerID)
+			u.reportCatchupError(rpcCtx, failedPeerID, failedMsg)
+		}
 
 		if reportMalicious {
 			u.reportCatchupMalicious(rpcCtx, peerID, "validation_failure")
@@ -432,6 +542,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		if reportPeerErr {
 			u.reportCatchupError(rpcCtx, peerID, errorMsg)
+		}
+
+		if reportIncompleteBlock {
+			u.reportCatchupFailureWithKind(rpcCtx, peerID, catchupFailureKindBlockIncomplete, incompleteBlockHash)
 		}
 	}
 
@@ -454,6 +568,37 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	}
 }
 
+// recordCatchupPeerFailure attributes a data-serving failure to the peer that caused
+// it, for the current catchup cycle. Best-effort: with no active catchup context
+// (e.g. a direct block fetch outside catchup) the call is a no-op.
+//
+// errors.IsLocalError is checked here — not at each call site — so every caller
+// gets the guard for free: a context cancellation (catchup abort / peer switch /
+// shutdown landing mid-retry) or a local storage failure (subtreeStore.Set) is ours,
+// not the peer's, and must never land an innocent peer in failedPeers.
+func (u *Server) recordCatchupPeerFailure(peerID string, err error) {
+	if peerID == "" || err == nil || errors.IsLocalError(err) {
+		return
+	}
+
+	u.activeCatchupCtxMu.RLock()
+	catchupCtx := u.activeCatchupCtx
+	u.activeCatchupCtxMu.RUnlock()
+
+	if catchupCtx == nil {
+		return
+	}
+
+	catchupCtx.failedPeersMu.Lock()
+	defer catchupCtx.failedPeersMu.Unlock()
+
+	if catchupCtx.failedPeers == nil {
+		catchupCtx.failedPeers = make(map[string]string)
+	}
+
+	catchupCtx.failedPeers[peerID] = err.Error()
+}
+
 // fetchHeaders retrieves block headers from the peer using block locator pattern.
 // Uses the headers_from_common_ancestor endpoint for efficient fetching.
 // IMPORTANT: Headers should extend to at least a checkpoint when possible to ensure
@@ -470,7 +615,7 @@ func (u *Server) fetchHeaders(ctx context.Context, catchupCtx *CatchupContext) e
 
 	result, _, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL)
 	if err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to get block headers: %w", catchupCtx.blockUpTo.Hash().String(), err)
+		return errors.NewProcessingError("[catchup][%s] failed to get block headers", catchupCtx.blockUpTo.Hash().String(), err)
 	}
 
 	catchupCtx.headersFetchResult = result
@@ -987,6 +1132,73 @@ func (u *Server) filterExistingBlocks(ctx context.Context, headers []*model.Bloc
 	return newHeaders, nil
 }
 
+// reportValidatedHeaderProgress records locally verified header work for the
+// peer that served the header chain. The report is advisory and best-effort.
+//
+// This runs after the per-header proof-of-work checks but before Step 10's full
+// block validation, so the credited value is per-header-PoW work, not yet
+// difficulty-adjustment-validated work. That is safe against upward forgery: a
+// higher credited value requires correspondingly harder bits backed by real PoW,
+// so a peer cannot inflate its rank. A valid-PoW but wrong-difficulty chain can
+// still be credited here; it is rejected later by full block validation.
+func (u *Server) reportValidatedHeaderProgress(catchupCtx *CatchupContext) {
+	height, blockHash, workBytes, ok := u.computeValidatedHeaderProgress(catchupCtx)
+	if !ok {
+		return
+	}
+
+	// Advisory best-effort report made while the global catchup single-flight lock is
+	// held: bound it with the same timeout releaseCatchupLock uses for its reputation
+	// gRPC calls so a wedged p2p service whose transport still answers keepalives cannot
+	// stall all node catchup on the unbounded service context.
+	rpcCtx, cancel := context.WithTimeout(context.Background(), catchupReputationReportTimeout)
+	defer cancel()
+
+	u.reportValidatedChainProgress(rpcCtx, catchupCtx.peerID, height, blockHash.String(), workBytes)
+}
+
+func (u *Server) computeValidatedHeaderProgress(catchupCtx *CatchupContext) (uint32, *chainhash.Hash, []byte, bool) {
+	if catchupCtx == nil || catchupCtx.commonAncestorMeta == nil {
+		return 0, nil, nil, false
+	}
+
+	if len(catchupCtx.blockHeaders) == 0 {
+		return 0, nil, nil, false
+	}
+
+	if len(catchupCtx.commonAncestorMeta.ChainWork) == 0 {
+		u.logger.Warnf("[catchup][%s] Skipping validated progress report: common ancestor chainwork is empty", catchupCtx.blockUpTo.Hash().String())
+		return 0, nil, nil, false
+	}
+
+	totalWork := new(big.Int).SetBytes(catchupCtx.commonAncestorMeta.ChainWork)
+	if totalWork.Sign() <= 0 {
+		u.logger.Warnf("[catchup][%s] Skipping validated progress report: common ancestor chainwork is malformed", catchupCtx.blockUpTo.Hash().String())
+		return 0, nil, nil, false
+	}
+
+	height := catchupCtx.commonAncestorMeta.Height
+	var lastHash *chainhash.Hash
+
+	for _, header := range catchupCtx.blockHeaders {
+		if header == nil {
+			u.logger.Warnf("[catchup][%s] Skipping validated progress report: nil header in validated range", catchupCtx.blockUpTo.Hash().String())
+			return 0, nil, nil, false
+		}
+
+		bits := binary.LittleEndian.Uint32(header.Bits.CloneBytes())
+		totalWork.Add(totalWork, work.CalcBlockWork(bits))
+		height++
+		lastHash = header.Hash()
+	}
+
+	if lastHash == nil {
+		return 0, nil, nil, false
+	}
+
+	return height, lastHash, totalWork.Bytes(), true
+}
+
 // recordMaliciousAttempt records a malicious attempt from a peer.
 // Updates peer metrics and logs security warnings.
 //
@@ -1114,8 +1326,9 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 
 					// Incomplete block (e.g. no coinbase from seeded peer) — abort catchup on this peer
 					// Block was NOT stored as invalid, so another peer can provide the full version
-					// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+					// Failure reporting is centralized in releaseCatchupLock.
 					if errors.Is(err, errors.ErrBlockIncomplete) {
+						catchupCtx.incompleteBlockHash = block.Hash().String()
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
 					} else if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
 						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
@@ -1187,8 +1400,9 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 		// Block is incomplete (e.g. seeded peer without full block data) — abort catchup for this peer
 		// Keep subtree files — they contain valid data that the next peer's validation can reuse
-		// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+		// Failure reporting is centralized in releaseCatchupLock.
 		if errors.Is(err, errors.ErrBlockIncomplete) {
+			catchupCtx.incompleteBlockHash = block.Hash().String()
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s is incomplete (no coinbase), aborting catchup",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
 

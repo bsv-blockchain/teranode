@@ -9,6 +9,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -470,16 +471,17 @@ func TestValidateCoinbaseHeight_NoValidationNeeded(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close(context.Background())
 
-	// Test block with version 1 (no BIP34 validation required)
-	blockVersion1 := &model.Block{
+	// Height 100 is below the (regtest) BIP34 activation height, so the coinbase-height rule is not
+	// enforced regardless of the header version.
+	blockBelowBIP34 := &model.Block{
 		Header: &model.BlockHeader{
 			Version: 1,
 		},
 		CoinbaseTx: block1.CoinbaseTx,
 	}
 
-	err = s.validateCoinbaseHeight(blockVersion1, 100)
-	assert.NoError(t, err)
+	err = s.validateCoinbaseHeight(blockBelowBIP34, 100)
+	require.NoError(t, err)
 }
 
 func TestValidateCoinbaseHeight_NoCoinbaseTx(t *testing.T) {
@@ -512,9 +514,36 @@ func TestValidateCoinbaseHeight_PreBIP34(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close(context.Background())
 
-	// Test with block height before BIP34 activation
-	err = s.validateCoinbaseHeight(block1, 100) // height < 227835
-	assert.NoError(t, err)                      // Should not fail for pre-BIP34 blocks
+	// Test with block height before the network's BIP34 activation height (from chaincfg)
+	err = s.validateCoinbaseHeight(block1, 100) // height < BIP0034Height
+	require.NoError(t, err)                     // Should not fail for pre-BIP34 blocks
+}
+
+func TestValidateCoinbaseHeight_GenesisExemptOnZeroBIP34(t *testing.T) {
+	// On networks with BIP0034Height == 0 (teratestnet/tstn), height 0 is at/after activation, so
+	// without the currentHeight > 0 guard the genesis block would attempt coinbase-height extraction
+	// and mismatch. The guard (mirroring model/Block.go Block.Valid) must keep genesis exempt.
+	tSettings := test.CreateBaseTestSettings(t)
+	teraParams := chaincfg.TeraTestNetParams // BIP0034Height == 0
+	tSettings.ChainCfgParams = &teraParams
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	// block1's coinbase does not encode height 0, so extraction would mismatch if it ran.
+	genesisLikeBlock := &model.Block{
+		Header: &model.BlockHeader{
+			Version: 1,
+		},
+		CoinbaseTx: block1.CoinbaseTx,
+	}
+
+	err = s.validateCoinbaseHeight(genesisLikeBlock, 0)
+	require.NoError(t, err)
 }
 
 func TestGetCumulativeChainWork_Success(t *testing.T) {
@@ -783,20 +812,43 @@ func TestValidateCoinbaseHeight_PostBIP34InvalidHeight(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close(context.Background())
 
-	// Create a block that would be post-BIP34 but with invalid coinbase height extraction
-	// This test verifies the BIP34 validation logic, though exact behavior depends on
-	// the ExtractCoinbaseHeight implementation
+	// Exercise the validation code path at a mid-range height. On the default (regtest) params this
+	// height is still below BIP34 (100000000), so extraction is not enforced; see
+	// TestValidateCoinbaseHeight_ChainCfgDriven for deterministic post-BIP34 enforcement on mainnet.
 	postBIP34Height := uint32(250000)
 
-	// Test with a block that has version > 1 at post-BIP34 height
 	err = s.validateCoinbaseHeight(block1, postBIP34Height)
 	// The result depends on whether block1's coinbase contains valid height encoding
 	// This test verifies the code path is exercised
 	if err != nil {
-		t.Logf("BIP34 validation failed as expected for height %d: %v", postBIP34Height, err)
+		t.Logf("coinbase-height validation returned an error for height %d: %v", postBIP34Height, err)
 	} else {
-		t.Logf("BIP34 validation passed for height %d", postBIP34Height)
+		t.Logf("coinbase-height validation passed for height %d", postBIP34Height)
 	}
+}
+
+// TestValidateCoinbaseHeight_ChainCfgDriven proves the coinbase-height gate is now driven by the
+// network's chaincfg BIP34 activation height rather than the old hardcoded 227835, and that the
+// version sub-condition has been dropped. Uses mainnet params (BIP34=227931).
+func TestValidateCoinbaseHeight_ChainCfgDriven(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	mainParams := chaincfg.MainNetParams
+	tSettings.ChainCfgParams = &mainParams
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	// Below mainnet BIP34 (227931): no enforcement, even for a v1 block.
+	require.NoError(t, s.validateCoinbaseHeight(block1, 100))
+
+	// At/after mainnet BIP34: block1's coinbase does not encode height 300000, so it is rejected —
+	// enforcement is height-driven and no longer skipped by a version sub-condition.
+	err = s.validateCoinbaseHeight(block1, 300000)
+	require.Error(t, err)
 }
 
 func TestStoreBlock_SubtreeProcessing(t *testing.T) {

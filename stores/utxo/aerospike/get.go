@@ -89,6 +89,8 @@ var (
 	previousOutputsDecorateStat = gocoreStat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
+const errCouldNotReadInput = "could not read input"
+
 // batchGetItemData holds the result of a batch get operation
 type batchGetItemData struct {
 	Data *meta.Data // Retrieved data
@@ -466,7 +468,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 }
 
 // putGetBatch enqueues item into the get batcher, converting the
-// "send on closed channel" panic — which go-batcher v2.0.4 raises when Put is
+// "send on closed channel" panic — which go-batcher v2.0.6 raises when Put is
 // called after Close — into a returned error. Store.Close closes the get batcher
 // during shutdown while external callers (e.g. an in-flight block-validation
 // goroutine in checkParentsExistOnChain) may still be calling Get. That race
@@ -519,7 +521,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 
 			_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
-				return nil, errors.NewTxInvalidError("could not read input", err)
+				return nil, errors.NewTxInvalidError(errCouldNotReadInput, err)
 			}
 		}
 	}
@@ -799,7 +801,7 @@ NEXT_BATCH_RECORD:
 
 							_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 							if err != nil {
-								return errors.NewTxInvalidError("could not read input", err)
+								return errors.NewTxInvalidError(errCouldNotReadInput, err)
 							}
 						}
 					}
@@ -1006,7 +1008,7 @@ func processInputsToTxInpoints(bins aerospike.BinMap) (txInpoints subtree.TxInpo
 
 		_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 		if err != nil {
-			return txInpoints, errors.NewProcessingError("could not read input", err)
+			return txInpoints, errors.NewProcessingError(errCouldNotReadInput, err)
 		}
 	}
 

@@ -726,6 +726,17 @@ service PeerRegistryService {
   // RecordCatchupError stores the peer's most recent catchup error for diagnostics.
   rpc RecordCatchupError(RecordCatchupErrorRequest) returns (google.protobuf.Empty) {}
 
+  // RecordCatchupAttempt increments the peer's catchup-attempt counter and updates
+  // sync backoff tracking (LastSyncAttempt / SyncAttemptCount).
+  rpc RecordCatchupAttempt(RecordCatchupAttemptRequest) returns (google.protobuf.Empty) {}
+
+  // RecordCatchupSuccess increments the peer's catchup-success counter and records
+  // a successful interaction with the given response time.
+  rpc RecordCatchupSuccess(RecordCatchupSuccessRequest) returns (google.protobuf.Empty) {}
+
+  // RecordCatchupFailure increments the peer's catchup-failure counter and records a failed interaction.
+  rpc RecordCatchupFailure(RecordCatchupFailureRequest) returns (google.protobuf.Empty) {}
+
   // ResetReputation resets reputation for the given peer (or all peers when peer_id is empty)
   // to the recovery baseline and returns the count of peers reset.
   rpc ResetReputation(ResetReputationRequest) returns (ResetReputationResponse) {}
@@ -733,6 +744,9 @@ service PeerRegistryService {
   // ReconsiderBadPeers resets reputation for peers whose last failure is older than the cooldown
   // and returns the count of peers reconsidered.
   rpc ReconsiderBadPeers(ReconsiderBadPeersRequest) returns (ReconsiderBadPeersResponse) {}
+
+  // RecordValidatedPeerProgress stores locally validated peer chain progress.
+  rpc RecordValidatedPeerProgress(RecordValidatedPeerProgressRequest) returns (google.protobuf.Empty) {}
 }
 
 // PeerRegistryInfo holds all information about a peer in the centralized registry.
@@ -781,11 +795,31 @@ message PeerRegistryInfo {
   int32 reputation_reset_count = 34;
   string last_catchup_error = 35;
   google.protobuf.Timestamp last_catchup_error_time = 36;
+  uint32 validated_height = 37;               // Highest locally validated height attributed to this peer
+  bytes validated_block_hash = 38;            // Block hash for validated_height
+  bytes validated_chain_work = 39;            // Locally validated cumulative chain work
+  google.protobuf.Timestamp last_validated_at = 40;
+  int64 full_storage_contradictions = 41;     // Count of observed contradictions to full-storage claims
+  google.protobuf.Timestamp full_storage_penalty_until = 42;
+
+  // Catchup-specific counters, maintained via RecordCatchupAttempt/Success/Failure.
+  // Distinct from the generic interaction counters, which mix in blocks/subtrees/txs.
+  int64 catchup_attempts = 43;
+  int64 catchup_successes = 44;
+  int64 catchup_failures = 45;
 }
 
 // RegisterPeerRequest registers or updates a peer in the centralized registry.
 message RegisterPeerRequest {
   PeerRegistryInfo peer = 1;
+}
+
+// RecordValidatedPeerProgressRequest records locally validated progress for a peer.
+message RecordValidatedPeerProgressRequest {
+  string peer_id = 1;
+  uint32 height = 2;
+  bytes block_hash = 3;
+  bytes chain_work = 4;
 }
 
 // UpdatePeerMetricsRequest updates runtime metrics for an existing peer.
@@ -896,6 +930,22 @@ message RecordReceivedRequest {
 message RecordCatchupErrorRequest {
   string peer_id = 1;
   string error_message = 2;
+}
+
+// RecordCatchupAttemptRequest records a catchup attempt against a peer.
+message RecordCatchupAttemptRequest {
+  string peer_id = 1;
+}
+
+// RecordCatchupSuccessRequest records a successful catchup from a peer.
+message RecordCatchupSuccessRequest {
+  string peer_id = 1;
+  int64 response_time_ms = 2;                 // Duration of the catchup operation (0 = not applicable)
+}
+
+// RecordCatchupFailureRequest records a failed catchup attempt against a peer.
+message RecordCatchupFailureRequest {
+  string peer_id = 1;
 }
 
 // ResetReputationRequest resets reputation for a single peer or all peers when peer_id is empty.

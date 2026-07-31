@@ -124,15 +124,44 @@ type batcherIfc[T any] interface {
 	Close()
 }
 
-// safeBatcherPutCtx enqueues item into b, converting the "send on closed channel"
-// panic — which go-batcher v2.0.4 raises when Put is called after Close — into a
-// returned error. Store.Close closes the batchers during graceful shutdown while
-// external callers (block validation, assembly, …) may still be enqueuing; that
-// race must abort the operation, not crash the process. who labels the call site.
+// shutdownPanicText is the runtime's message when a send targets a closed
+// channel. That is how go-batcher v2 surfaces Put-after-Close; see
+// batcher.Batcher.Close, which documents that Put must not be called after it.
+const shutdownPanicText = "send on closed channel"
+
+// recoverBatcherShutdown turns the send-on-closed-channel panic into a returned
+// error and re-panics everything else. Store.Close closes the batchers during
+// graceful shutdown while external callers (block validation, assembly, …) may
+// still be enqueuing; that race must abort the operation rather than crash the
+// process. Any other panic — a nil batcher, a future go-batcher failure mode — is
+// a genuine bug and must not be relabelled as an orderly shutdown.
+//
+// Matching is on the rendered text, not the concrete type: the runtime panics
+// with a runtime.plainError, so a type switch would pass in tests that fake the
+// panic with a string and miss in production. Rendering also has to happen before
+// the value reaches errors.New, which consumes a trailing error argument as the
+// wrapped error instead of formatting it — orphaning the %v verb and mislabelling
+// the result as wrapping an UNKNOWN (0).
+//
+// ERR_SERVICE_UNAVAILABLE is deliberate — it keeps this inside
+// errors.IsTransientLocalError so a shutdown is not reported to peers as an
+// invalid block. Do not align with handleSpendPanic's ERR_UNKNOWN.
+func recoverBatcherShutdown(r any, who string, err *error) {
+	text := fmt.Sprint(r)
+
+	if !strings.Contains(text, shutdownPanicText) {
+		panic(r)
+	}
+
+	*err = errors.NewServiceUnavailableError("[%s] aerospike batcher unavailable (store shutting down): %v", who, text)
+}
+
+// safeBatcherPutCtx enqueues item into b, converting a Put-after-Close panic into
+// a returned error. who labels the call site.
 func safeBatcherPutCtx[T any](b batcherIfc[T], ctx context.Context, item *T, who string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.NewServiceUnavailableError("[%s] aerospike batcher unavailable (store shutting down): %v", who, r)
+			recoverBatcherShutdown(r, who, &err)
 		}
 	}()
 
@@ -145,11 +174,27 @@ func safeBatcherPutCtx[T any](b batcherIfc[T], ctx context.Context, item *T, who
 func safeBatcherPut[T any](b batcherIfc[T], item *T, who string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.NewServiceUnavailableError("[%s] aerospike batcher unavailable (store shutting down): %v", who, r)
+			recoverBatcherShutdown(r, who, &err)
 		}
 	}()
 
 	b.Put(item)
+
+	return nil
+}
+
+// safeBatcherPutBatchCtx is the PutBatchCtx counterpart. PutBatch* enqueues the
+// whole group in a single channel send, so a rejected send rejects every item:
+// callers must complete all of them, or the shared group.Wait parks for its full
+// timeout and then reports a misleading timeout instead of the shutdown.
+func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items []*T, who string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			recoverBatcherShutdown(r, who, &err)
+		}
+	}()
+
+	b.PutBatchCtx(ctx, items)
 
 	return nil
 }
@@ -187,8 +232,10 @@ type Store struct {
 	// invocations through the native operate-path (TeranodeModifyOp, wire op
 	// type 200) rather than the legacy UDF path. Both the Aerospike setting
 	// and a server-capability probe (see detectNativeTeranodeOpSupport) must
-	// agree; otherwise calls fall back to UDF transparently. See native_op.go.
-	useNativeTeranodeOps bool
+	// agree; otherwise calls fall back to UDF transparently. Atomic because a
+	// runtime PARAMETER_ERROR demotes it back to false while batch goroutines
+	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
+	useNativeTeranodeOps atomic.Bool
 
 	// nativeOpBatchWritePolicy is the shared BatchWritePolicy used by every
 	// NewBatchWrite the native-op path constructs in teranodeBatchRecord.
@@ -223,6 +270,19 @@ func (s *Store) batchOperate(policy *aerospike.BatchPolicy, records []aerospike.
 	}
 
 	return s.client.BatchOperate(policy, records)
+}
+
+// resolveBatcherMaxConcurrent returns the effective per-batcher concurrency cap.
+// A per-batcher override > 0 takes precedence; otherwise the shared
+// BatcherMaxConcurrent is used. A non-positive perBatcher value is treated as
+// "unset" so the shared knob still governs (and the caller's `> 0` guard keeps
+// the "both 0 = leave uncapped" path byte-identical to the pre-split behaviour).
+func resolveBatcherMaxConcurrent(perBatcher, shared int) int {
+	if perBatcher > 0 {
+		return perBatcher
+	}
+
+	return shared
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -442,8 +502,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
 	outpointBatcherInst := batcher.NewWithPool(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, batcherBackground, append(batcherOpts("aerospike_outpoint"), batcher.WithGreedyAccumulate(tSettings.UtxoStore.OutpointBatcherGreedyAccumulate))...)
-	if batcherMaxConcurrent > 0 {
-		outpointBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
+	if mc := resolveBatcherMaxConcurrent(tSettings.UtxoStore.OutpointBatcherMaxConcurrent, batcherMaxConcurrent); mc > 0 {
+		outpointBatcherInst.SetMaxConcurrent(mc)
 	}
 	s.outpointBatcher = outpointBatcherInst
 
@@ -1122,6 +1182,17 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		}
 
 		if batchRecord.Err != nil {
+			s.demoteNativeOnUnsupported(batchRecord.Err)
+
+			// Missing record: the UDF path reports this as a Lua TX_NOT_FOUND
+			// status, which the switch below deliberately does not count as an
+			// error. Under the native path's UPDATE_ONLY policy the same
+			// condition arrives as a per-record KEY_NOT_FOUND — skip it the
+			// same way.
+			if isKeyNotFound(batchRecord.Err) {
+				continue
+			}
+
 			// FILTERED_OUT: not prune-eligible (no deleteAtHeight and not already preserved) —
 			// a deliberate skip by the eligibility gate, not an error.
 			var aErr *aerospike.AerospikeError

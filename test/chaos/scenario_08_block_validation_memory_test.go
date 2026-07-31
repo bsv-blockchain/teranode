@@ -506,7 +506,7 @@ func (g *BlockSubtreeGenerator) GenerateSubtree() (*BlockSubtree, error) {
 	for i := 0; i < txCount; i++ {
 		tx, err := g.generateRandomTransaction()
 		if err != nil {
-			return nil, errors.NewProcessingError("failed to generate transaction: %w", err)
+			return nil, errors.NewProcessingError("failed to generate transaction", err)
 		}
 		subtree.Transactions[i] = tx
 	}

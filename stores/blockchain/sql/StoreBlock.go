@@ -28,6 +28,8 @@ import (
 	"modernc.org/sqlite"
 )
 
+const errBlockAlreadyExistsInDB = "block already exists in the database: %s"
+
 // StoreBlock persists a new block to the database and updates chain state.
 // This implements the blockchain.Store.StoreBlock interface method.
 //
@@ -690,19 +692,19 @@ func (*SQL) parseSQLError(err error, block *model.Block) error {
 	// check whether this is a postgres exists constraint error (pgx driver)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == usql.PgErrUniqueViolation {
-		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+		return errors.NewBlockExistsError(errBlockAlreadyExistsInDB, block.Hash().String(), err)
 	}
 
 	// check whether this is a postgres exists constraint error (lib/pq fallback)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == usql.PgErrUniqueViolation {
-		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+		return errors.NewBlockExistsError(errBlockAlreadyExistsInDB, block.Hash().String(), err)
 	}
 
 	// check whether this is a sqlite exists constraint error
 	var sqliteErr *sqlite.Error
 	if errors.As(err, &sqliteErr) && (sqliteErr.Code()&0xff) == SQLITE_CONSTRAINT {
-		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+		return errors.NewBlockExistsError(errBlockAlreadyExistsInDB, block.Hash().String(), err)
 	}
 
 	// otherwise, return the generic error
@@ -837,12 +839,12 @@ func (s *SQL) getPreviousBlockData(
 func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Block) ([]byte, error) {
 	prevChainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWorkBytes))
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to convert previous chain work bytes to hash for block %s: %w", block.Hash().String(), err)
+		return nil, errors.NewProcessingError("failed to convert previous chain work bytes to hash for block %s", block.Hash().String(), err)
 	}
 
 	cumulativeChainWorkHash, err := getCumulativeChainWork(prevChainWorkHash, block)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to calculate cumulative chain work for block %s: %w", block.Hash().String(), err)
+		return nil, errors.NewProcessingError("failed to calculate cumulative chain work for block %s", block.Hash().String(), err)
 	}
 
 	cumulativeChainWorkBytes := bt.ReverseBytes(cumulativeChainWorkHash.CloneBytes())
@@ -852,12 +854,12 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 
 // validateCoinbaseHeight ensures that blocks comply with BIP34 requirements.
 // BIP34 requires that the coinbase transaction must include the correct block height
-// in its first input script for all blocks version 2 or higher after the activation height.
+// in its first input script for all blocks at or after the network's BIP34 activation height.
 //
 // This function implements an important Bitcoin consensus rule defined in BIP34
-// (Bitcoin Improvement Proposal 34), which was activated at block height 227,836 on
-// the main Bitcoin network. The rule requires miners to include the block height in
-// the coinbase transaction's input script, providing several important benefits:
+// (Bitcoin Improvement Proposal 34), which activates per network at the height carried on the
+// chain parameters (s.chainParams.BIP0034Height). The rule requires miners to include the block
+// height in the coinbase transaction's input script, providing several important benefits:
 //
 //  1. Prevents coinbase transaction hash collisions that could occur when miners
 //     used identical coinbase transactions in different blocks
@@ -869,10 +871,11 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 // The implementation performs a systematic validation process:
 //
 // 1. Applicability Check:
-//   - Determines if BIP34 validation applies based on block version and height
-//   - For blocks before the activation height or with version < 2, validation is skipped
+//   - Determines if BIP34 validation applies based on the block height
+//   - For blocks before the network's BIP34 activation height, validation is skipped
+//     (below-floor versions are already rejected by the block-version check)
 //
-// 2. Height Extraction:
+// 2. Height Extraction (only performed at or after BIP34 activation):
 //   - Accesses the coinbase transaction (first transaction in the block)
 //   - Examines the first input's script for the encoded height value
 //   - Uses Bitcoin's script parsing rules to extract the height as a number
@@ -893,32 +896,39 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 //   - error: ValidationError if the coinbase height doesn't match or can't be extracted,
 //     or nil if validation passes or isn't required for this block
 func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) error {
-	// Check that the coinbase transaction includes the correct block height for all
-	// blocks that are version 2 or higher. BIP34 activation height is 227835.
-	// Also check if CoinbaseTx exists.
-	if block.CoinbaseTx != nil && block.Header.Version > 1 {
-		blockHeight, err := block.ExtractCoinbaseHeight()
-		if err != nil {
-			// Define BIP34 activation height (consider getting from chainParams)
-			bip34ActivationHeight := uint32(227835)
-			if currentHeight < bip34ActivationHeight {
-				// Log warning for pre-BIP34 blocks where extraction might fail legitimately
-				s.logger.Warnf("failed to extract coinbase height for block %s (height %d), pre-BIP34 activation: %v", block.Hash(), currentHeight, err)
-				return nil // Don't fail validation for pre-BIP34 blocks
-			}
-			// Fail for post-BIP34 blocks if extraction fails
-			return errors.NewStorageError("failed to extract coinbase height for block %s (height %d): %w", block.Hash().String(), currentHeight, err)
-		}
-
-		// Define BIP34 activation height again (or use variable from above)
-		bip34ActivationHeight := uint32(227835)
-		// Check height match only if extraction succeeded and after BIP34 activation
-		if currentHeight >= bip34ActivationHeight && blockHeight != currentHeight {
-			return errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d) for block %s", blockHeight, currentHeight, block.Hash().String())
-		}
+	// Enforce the BIP34 coinbase-height rule for every block at or after the network's BIP34
+	// activation height, taken from chaincfg (mirroring bitcoin-sv ContextualCheckBlock). Below-floor
+	// versions are rejected earlier by the block-version floor, so there is no version sub-condition
+	// here. A negative activation height (should not occur) is treated as "never active".
+	//
+	// The currentHeight > 0 guard mirrors model/Block.go Block.Valid and is MANDATORY on networks
+	// with BIP0034Height == 0 (teratestnet/tstn): there height 0 is at/after activation, so without
+	// the guard a genesis (height-0) block routed here would attempt extraction, contradicting the
+	// genesis exemption. svnode never runs this check on genesis.
+	if block.CoinbaseTx == nil {
+		return nil
 	}
 
-	return nil // No validation needed or validation passed
+	bip34Height := s.chainParams.BIP0034Height
+	postBIP34 := currentHeight > 0 && bip34Height >= 0 && currentHeight >= uint32(bip34Height)
+	if !postBIP34 {
+		// Below BIP34 activation the coinbase need not encode the height, and svnode never inspects it
+		// here (ContextualCheckBlock, validation.cpp:6039). Skip the per-block extraction that would
+		// otherwise run for every pre-activation block during a from-genesis IBD (most well-formed early
+		// coinbases succeed silently; warnings came from first byte > 8 or empty/too-short scripts).
+		return nil
+	}
+
+	blockHeight, err := block.ExtractCoinbaseHeight()
+	if err != nil {
+		return errors.NewStorageError("failed to extract coinbase height for block %s (height %d)", block.Hash().String(), currentHeight, err)
+	}
+
+	if blockHeight != currentHeight {
+		return errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d) for block %s", blockHeight, currentHeight, block.Hash().String())
+	}
+
+	return nil
 }
 
 // calculateMedianTimePastForHeight calculates the Median Time Past (MTP) for a given block height.

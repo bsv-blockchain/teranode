@@ -19,6 +19,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+const aerospikeInvalidValueMsg = "[Aerospike] Invalid value %s=%v"
+
 var aerospikeConnectionMutex sync.Mutex
 var aerospikeConnections map[string]*uaerospike.Client
 
@@ -503,10 +505,11 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *sett
 	}
 
 	if !tSettings.Aerospike.EnableClientMetrics {
-		// Gated by aerospike_enable_client_metrics. When disabled we skip both
-		// client.EnableMetrics(nil) AND the stats-polling goroutine — the latter is
-		// pointless without the former, and the per-batch nodeStats updates that
-		// EnableMetrics implies are exactly the contention point we may be opting out of.
+		// Gated by aerospike_enable_client_metrics. This skips only the
+		// client.Stats() polling goroutine below. client.EnableMetrics(nil) is
+		// disabled unconditionally (see the comment further down, pending #1001),
+		// so this flag has no effect on the per-batch nodeStats contention either
+		// way — it cannot be used to relieve it.
 		logger.Infof("[Aerospike] client metrics disabled (aerospike_enable_client_metrics=false)")
 		return
 	}
@@ -745,7 +748,7 @@ func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Lo
 
 	valueBool, err := strconv.ParseBool(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%t", key, valueBool)
@@ -762,7 +765,7 @@ func getQueryInt(url *url.URL, key string, defaultValue int, logger ulogger.Logg
 
 	valueInt, err := strconv.Atoi(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%d", key, valueInt)
@@ -779,7 +782,7 @@ func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logg
 
 	valueDuration, err := time.ParseDuration(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%s", key, valueDuration.String())
@@ -796,7 +799,7 @@ func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger ulog
 
 	valueFloat64, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%f", key, valueFloat64)

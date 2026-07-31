@@ -37,8 +37,8 @@ type errOnCreateUtxoStore struct {
 
 func (e *errOnCreateUtxoStore) SupportsOutpointOnlySpend() bool { return false }
 
-func (e *errOnCreateUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, error) {
-	return nil, e.err
+func (e *errOnCreateUtxoStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	return nil, nil, e.err
 }
 
 // TestMoveForwardBlockDrainLoss_BatchesLostOnPostDrainError demonstrates

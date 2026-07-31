@@ -474,6 +474,13 @@ func luaResponseMap(v interface{}) (map[interface{}]interface{}, bool) {
 }
 
 func luaResponseIntSlice(v interface{}) ([]int, error) {
+	// Reject byte slices explicitly: a msgpack `bin`-encoded blockIDs would
+	// otherwise decode byte-by-byte into garbage block IDs and return success.
+	// blockIDs must arrive as a list of integers on both transports.
+	if _, isBytes := v.([]byte); isBytes {
+		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+	}
+
 	rv := reflect.ValueOf(v)
 	if !rv.IsValid() || (rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array) {
 		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)

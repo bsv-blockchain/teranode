@@ -305,8 +305,17 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
+		// guard against a nil parent tx, an out-of-range vout, or a nil output element before
+		// indexing the outputs (external outputs-only parents can have nil holes at in-range indices)
+		if parentTxMeta.Tx == nil ||
+			uint64(vout) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
+			parentTxMeta.Tx.Outputs[vout] == nil {
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, errors.NewError("parent tx output %d not found", vout))...)
+			continue
+		}
+
 		// calculate the utxo hash from the output script
-		utxoHash, err := util.UTXOHashFromOutput(parentTxMeta.Tx.TxIDChainHash(), parentTxMeta.Tx.Outputs[fund.TxOut.Vout], vout)
+		utxoHash, err := util.UTXOHashFromOutput(parentTxMeta.Tx.TxIDChainHash(), parentTxMeta.Tx.Outputs[vout], vout)
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
@@ -405,6 +414,15 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 			parentTxMeta, err := n.utxoStore.Get(ctx, txIn.PreviousTxIDChainHash(), fields.Tx)
 			if err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
+				continue
+			}
+
+			// guard against a nil parent tx, an out-of-range input index, or a nil output element before
+			// indexing the outputs (external outputs-only parents can have nil holes at in-range indices)
+			if parentTxMeta.Tx == nil ||
+				uint64(txIn.PreviousTxOutIndex) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
+				parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex] == nil {
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("parent tx output %d not found", txIn.PreviousTxOutIndex))...)
 				continue
 			}
 

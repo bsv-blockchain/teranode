@@ -30,8 +30,14 @@ import (
 
 	aerospike "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -61,9 +67,116 @@ const nativeOpResultBin = string(LuaSuccess)
 
 // encodeNativeOpPayload serializes a sub-op invocation onto the wire
 // as MessagePack `[sub_op_id, [args...]]` matching the dispatcher's
-// expected format.
+// expected format. A nil args slice is normalized to an empty list so a
+// zero-arg sub-op encodes as `[id, []]` rather than `[id, nil]` — the
+// documented contract is always an args *list*.
 func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
+	if args == nil {
+		args = []any{}
+	}
 	return msgpack.Marshal([]any{subOp, args})
+}
+
+// useNativeForSubOp decides whether a given mod-teranode sub-op may use the
+// native operate-path. It requires the setting+capability flag, and additionally
+// FENCES unspend (subOpUnspend) to the UDF/Lua path regardless of the flag.
+//
+// Rationale (#899): the UDF unspend path always enforces the #766 SpendingData
+// ownership check before reversing a spend. The native path would forward
+// SpendingData to the server-fork subOpUnspend=3 dispatcher, whose enforcement
+// the startup probe does not exercise — it proves setLocked dispatch and
+// spendMulti first-seen semantics (see probeNativeSpendSemantics), not
+// unspend's ownership check. Running native unspend against a server that
+// accepts sub-op 3 without enforcing ownership (an older fork build, a
+// mixed-version cluster, or a dispatcher that silently ignores the arg) would
+// be a silent spend-reversal / UTXO-resurrection primitive on the reorg /
+// ProcessConflicting / catchup path, so unspend stays on the UDF path. An
+// ownership-rejection probe analogous to the spend probe could un-fence it in
+// a follow-up once that scenario is exercised end-to-end.
+func (s *Store) useNativeForSubOp(subOp uint8) bool {
+	return s.useNativeTeranodeOps.Load() && subOp != subOpUnspend
+}
+
+// demoteNativeOnUnsupported permanently demotes the store to the UDF path when
+// a mod-teranode operation comes back with PARAMETER_ERROR — the result code an
+// unpatched aerospike-server returns for the unknown wire op 200. The startup
+// probe samples a single partition master, so a mixed-version cluster (or a
+// node rolled back to a stock build after startup) can pass the probe and then
+// reject native writes on other partitions at runtime. Without demotion every
+// mod-teranode write to those partitions fails for the process lifetime; with
+// it the affected batch fails once and everything after falls back to UDF.
+//
+// Called from the per-record error branches of every native-capable call site
+// and from executeTeranodeOp. A no-op when native ops are already off (the
+// UDF path can also surface PARAMETER_ERROR for unrelated reasons; we only
+// interpret it as "native unsupported" while native ops are active).
+func (s *Store) demoteNativeOnUnsupported(err error) {
+	if err == nil || !s.useNativeTeranodeOps.Load() {
+		return
+	}
+
+	var aerr aerospike.Error
+	if errors.As(err, &aerr) && aerr.Matches(types.PARAMETER_ERROR) && s.useNativeTeranodeOps.CompareAndSwap(true, false) {
+		s.logger.Errorf("[teranode-native-op] server rejected a native op with PARAMETER_ERROR; demoting to the UDF path for the rest of this process")
+	}
+}
+
+// isKeyNotFound reports whether err carries the per-record KEY_NOT_FOUND_ERROR
+// result code — the shape a missing record takes on the native path under
+// UPDATE_ONLY. The UDF path reports the same condition as a Lua TX_NOT_FOUND
+// status instead, so result handlers use this to keep both transports
+// producing identical not-found semantics.
+func isKeyNotFound(err error) bool {
+	var aerr aerospike.Error
+	return errors.As(err, &aerr) && aerr.Matches(types.KEY_NOT_FOUND_ERROR)
+}
+
+// teranodeBatchRecordResponse validates one mod-teranode batch record result
+// and extracts its parsed response. Returns:
+//   - (res, nil) when the record carries a parseable response map (the caller
+//     still branches on res.Status);
+//   - (nil, TxNotFoundError) when the record is missing (native UPDATE_ONLY
+//     KEY_NOT_FOUND — the UDF path's TX_NOT_FOUND equivalent);
+//   - (nil, StorageError) for every other failure shape (nil record, batch
+//     error, missing response bin, unparsable response).
+//
+// prefix is the caller's log tag (e.g. "[freeze][3][txid:vout]") and is
+// prepended verbatim to every error. Also feeds demoteNativeOnUnsupported so
+// a runtime PARAMETER_ERROR from a mixed-version cluster demotes the store
+// to the UDF path.
+func (s *Store) teranodeBatchRecordResponse(prefix string, record aerospike.BatchRecordIfc) (*LuaMapResponse, error) {
+	if record == nil {
+		return nil, errors.NewStorageError("%s missing batch record; %s", prefix, describeAerospikeBatchRecord(record))
+	}
+
+	batchRec := record.BatchRec()
+	if batchRec == nil {
+		return nil, errors.NewStorageError("%s missing batch record; %s", prefix, describeAerospikeBatchRecord(record))
+	}
+
+	if batchRec.Err != nil {
+		s.demoteNativeOnUnsupported(batchRec.Err)
+
+		if isKeyNotFound(batchRec.Err) {
+			return nil, errors.NewTxNotFoundError("%s transaction not found", prefix, batchRec.Err)
+		}
+
+		return nil, errors.NewStorageError("%s batch record failed; %s: %s", prefix, describeAerospikeBatchRecord(record), batchRec.Err.Error(), batchRec.Err)
+	}
+
+	response := batchRec.Record
+	if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
+		return nil, errors.NewStorageError("%s missing expected response bin %q; %s", prefix, LuaSuccess.String(), describeAerospikeBatchRecord(record))
+	}
+
+	rawResponse := response.Bins[LuaSuccess.String()]
+
+	res, err := s.ParseLuaMapResponse(rawResponse)
+	if err != nil {
+		return nil, errors.NewStorageError("%s failed to parse response bin %q (value %s); %s: %s", prefix, LuaSuccess.String(), describeAerospikeValue(rawResponse), describeAerospikeBatchRecord(record), err.Error(), err)
+	}
+
+	return res, nil
 }
 
 // teranodeBatchRecord builds a BatchRecord that invokes a mod-teranode
@@ -74,27 +187,11 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 // MessagePack and aerospike.NewValue.
 //
 // udfPolicy / udfPackage are used only when falling back to the UDF
-// path. Most call sites pass LuaPackage as udfPackage; setMined
-// optionally uses LuaPackageMined; spendMulti optionally uses one of
+// path — on the native path only udfPolicy's FilterExpression is
+// honoured; any other non-default BatchUDFPolicy field is dropped.
+// Most call sites pass LuaPackage as udfPackage; setMined optionally
+// uses LuaPackageMined; spendMulti optionally uses one of
 // s.spendLuaPackages. Pass nil for udfPolicy to get default.
-// useNativeForSubOp decides whether a given mod-teranode sub-op may use the
-// native operate-path. It requires the setting+capability flag, and additionally
-// FENCES unspend (subOpUnspend) to the UDF/Lua path regardless of the flag.
-//
-// Rationale (#899): the UDF unspend path always enforces the #766 SpendingData
-// ownership check before reversing a spend. The native path forwards SpendingData
-// to the server-fork subOpUnspend=3 dispatcher, but that dispatcher's enforcement
-// cannot be verified from the client — it is not in go.mod, and the startup
-// capability probe exercises only setLocked. Running native unspend against a
-// server that accepts sub-op 3 without enforcing ownership (an older fork build,
-// a mixed-version cluster, or a dispatcher that silently ignores the arg) would
-// be a silent spend-reversal / UTXO-resurrection primitive on the reorg /
-// ProcessConflicting / catchup path. Until enforcement is provable, unspend stays
-// on the UDF path. The other sub-ops keep the native win.
-func (s *Store) useNativeForSubOp(subOp uint8) bool {
-	return s.useNativeTeranodeOps && subOp != subOpUnspend
-}
-
 func (s *Store) teranodeBatchRecord(
 	udfPolicy *aerospike.BatchUDFPolicy,
 	udfPackage string,
@@ -194,6 +291,7 @@ func (s *Store) executeTeranodeOp(
 		}
 		rec, opErr := s.client.Operate(writePolicy, key, aerospike.TeranodeModifyOp(nativeOpResultBin, payload))
 		if opErr != nil {
+			s.demoteNativeOnUnsupported(opErr)
 			return nil, opErr
 		}
 		if rec == nil || rec.Bins == nil {
@@ -220,14 +318,26 @@ func (s *Store) executeTeranodeUDF(
 // detectNativeTeranodeOpSupport probes the cluster to confirm it
 // understands AS_MSG_OP_TERANODE_MODIFY (wire op 200). Returns true
 // only when the server accepts a valid native sub-op, returns a parseable
-// response, and applies the expected record mutation. Anything else biases
+// response, applies the expected record mutation, AND proves spend
+// semantics: a synthetic single-UTXO record built through the production
+// GetBinsToStore path must spend natively and then REJECT a re-spend
+// with different SpendingData (LuaErrorCodeSpent). Anything else biases
 // toward false-negative so the fallback never runs against a server that
-// doesn't support the op.
+// doesn't support the op — or supports the opcode without enforcing
+// first-seen on spend.
+//
+// The probe honours ctx between round-trips: cancellation aborts it and
+// falls back to the UDF path.
 //
 // Called once during store construction; the result is cached in
 // s.useNativeTeranodeOps.
 func (s *Store) detectNativeTeranodeOpSupport(ctx context.Context) bool {
 	if !s.settings.Aerospike.UseNativeTeranodeOps {
+		return false
+	}
+
+	if ctx.Err() != nil {
+		s.logger.Warnf("[teranode-native-op] probe aborted by context: %v; falling back to UDF path", ctx.Err())
 		return false
 	}
 
@@ -270,6 +380,11 @@ func (s *Store) detectNativeTeranodeOpSupport(ctx context.Context) bool {
 		_, _ = s.client.Delete(policy, probeKey)
 	}()
 
+	if ctx.Err() != nil {
+		s.logger.Warnf("[teranode-native-op] probe aborted by context: %v; falling back to UDF path", ctx.Err())
+		return false
+	}
+
 	rec, opErr := s.client.Operate(policy, probeKey, probeOp)
 	if opErr == nil {
 		if rec == nil || rec.Bins == nil || rec.Bins[nativeOpResultBin] == nil {
@@ -306,6 +421,18 @@ func (s *Store) detectNativeTeranodeOpSupport(ctx context.Context) bool {
 			return false
 		}
 
+		if ctx.Err() != nil {
+			s.logger.Warnf("[teranode-native-op] probe aborted by context: %v; falling back to UDF path", ctx.Err())
+			return false
+		}
+
+		// Opcode dispatch is proven; now prove the semantics the gate actually
+		// protects. spendMulti is the consensus-critical sub-op — an opcode-only
+		// probe says nothing about first-seen enforcement.
+		if !s.probeNativeSpendSemantics(ctx, policy) {
+			return false
+		}
+
 		return true
 	}
 
@@ -325,6 +452,147 @@ func (s *Store) detectNativeTeranodeOpSupport(ctx context.Context) bool {
 	return false
 }
 
+// probeNativeSpendSemantics proves the native dispatcher enforces first-seen
+// spend semantics before spendMulti is allowed onto the native path. The UDF
+// unspend fence exists because server-side enforcement cannot be read from
+// the client; for spend it CAN be exercised: build a synthetic single-UTXO
+// record through the production GetBinsToStore path (so the record layout is
+// exactly what real transactions get), spend it natively, then attempt a
+// re-spend of the same offset with different SpendingData and require the
+// dispatcher to reject it with LuaErrorCodeSpent. Any other outcome — first
+// spend fails, re-spend succeeds, re-spend fails with anything but SPENT —
+// reports unsupported and keeps the store on the UDF path.
+//
+// The record is keyed with the same CalculateKeySource form as real records;
+// the synthetic transaction's satoshi value carries per-process entropy so
+// concurrent booting instances never contend on one probe record. The 60s
+// TTL on the shared probe policy bounds residue if the deferred Delete fails.
+func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike.WritePolicy) bool {
+	const (
+		probeBlockHeight = uint32(1)
+		probeVout        = uint32(0)
+	)
+
+	if s.utxoBatchSize <= 0 {
+		s.logger.Warnf("[teranode-native-op] spend probe skipped: invalid utxoBatchSize %d; falling back to UDF path", s.utxoBatchSize)
+		return false
+	}
+
+	lockingScript, scriptErr := bscript.NewFromHexString("76a914000000000000000000000000000000000000000088ac")
+	if scriptErr != nil {
+		s.logger.Warnf("[teranode-native-op] spend probe script build failed: %v; falling back to UDF path", scriptErr)
+		return false
+	}
+
+	tx := bt.NewTx()
+	tx.Outputs = append(tx.Outputs, &bt.Output{
+		// Per-process entropy → unique txid → unique record key, so two
+		// instances probing the same cluster never interleave on one record.
+		Satoshis:      (uint64(os.Getpid())<<32 | uint64(time.Now().UnixNano())&0xFFFFFFFF) | 1,
+		LockingScript: lockingScript,
+	})
+
+	txHash := tx.TxIDChainHash()
+
+	utxoHashes, hashErr := utxo.GetUtxoHashes(tx, txHash)
+	if hashErr != nil || len(utxoHashes) != 1 {
+		s.logger.Warnf("[teranode-native-op] spend probe utxo hash failed (%v, %d hashes); falling back to UDF path", hashErr, len(utxoHashes))
+		return false
+	}
+
+	bins, binsErr := s.GetBinsToStore(tx, probeBlockHeight, nil, nil, nil, false, txHash, false, false, false, nil)
+	if binsErr != nil || len(bins) != 1 {
+		s.logger.Warnf("[teranode-native-op] spend probe record build failed (%v, %d batches); falling back to UDF path", binsErr, len(bins))
+		return false
+	}
+
+	key, keyErr := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(txHash, probeVout, s.utxoBatchSize))
+	if keyErr != nil {
+		s.logger.Warnf("[teranode-native-op] spend probe key creation failed: %v; falling back to UDF path", keyErr)
+		return false
+	}
+
+	if putErr := s.client.PutBins(policy, key, bins[0]...); putErr != nil {
+		s.logger.Warnf("[teranode-native-op] spend probe record setup failed: %v; falling back to UDF path", putErr)
+		return false
+	}
+	defer func() {
+		_, _ = s.client.Delete(policy, key)
+	}()
+
+	spendOnce := func(spendingData *spendpkg.SpendingData) (*LuaMapResponse, bool) {
+		if ctx.Err() != nil {
+			s.logger.Warnf("[teranode-native-op] spend probe aborted by context: %v; falling back to UDF path", ctx.Err())
+			return nil, false
+		}
+
+		items := []aerospike.MapValue{aerospike.NewMapValue(map[any]any{
+			"idx":          0,
+			"offset":       s.calculateOffsetForOutput(probeVout),
+			"vOut":         probeVout,
+			"utxoHash":     utxoHashes[0][:],
+			"spendingData": spendingData.Bytes(),
+		})}
+
+		payload, encErr := encodeNativeOpPayload(subOpSpendMulti, []any{
+			items, false, false, probeBlockHeight, s.settings.GetUtxoStoreBlockHeightRetention(),
+		})
+		if encErr != nil {
+			s.logger.Warnf("[teranode-native-op] spend probe payload encode failed: %v; falling back to UDF path", encErr)
+			return nil, false
+		}
+
+		rec, opErr := s.client.Operate(policy, key, aerospike.TeranodeModifyOp(nativeOpResultBin, payload))
+		if opErr != nil {
+			s.logger.Warnf("[teranode-native-op] spend probe operate failed: %v; falling back to UDF path", opErr)
+			return nil, false
+		}
+		if rec == nil || rec.Bins == nil || rec.Bins[nativeOpResultBin] == nil {
+			s.logger.Warnf("[teranode-native-op] spend probe returned no %q bin; %s; falling back to UDF path", nativeOpResultBin, describeAerospikeRecord(rec))
+			return nil, false
+		}
+
+		res, parseErr := s.ParseLuaMapResponse(rec.Bins[nativeOpResultBin])
+		if parseErr != nil {
+			s.logger.Warnf("[teranode-native-op] spend probe returned unparsable response (value %s): %v; falling back to UDF path", describeAerospikeValue(rec.Bins[nativeOpResultBin]), parseErr)
+			return nil, false
+		}
+		return res, true
+	}
+
+	firstRes, ok := spendOnce(spendpkg.NewSpendingData(&chainhash.Hash{0x01}, 0))
+	if !ok {
+		return false
+	}
+	if firstRes.Status != LuaStatusOK || len(firstRes.Errors) != 0 {
+		s.logger.Warnf("[teranode-native-op] spend probe first spend not accepted (%+v); falling back to UDF path", firstRes)
+		return false
+	}
+
+	secondRes, ok := spendOnce(spendpkg.NewSpendingData(&chainhash.Hash{0x02}, 0))
+	if !ok {
+		return false
+	}
+
+	if secondRes.Status != LuaStatusError {
+		s.logger.Warnf("[teranode-native-op] spend probe double-spend was NOT rejected (%+v); native dispatcher does not enforce first-seen; falling back to UDF path", secondRes)
+		return false
+	}
+
+	spentRejected := secondRes.ErrorCode == LuaErrorCodeSpent
+	for _, e := range secondRes.Errors {
+		if e.ErrorCode == LuaErrorCodeSpent {
+			spentRejected = true
+		}
+	}
+	if !spentRejected {
+		s.logger.Warnf("[teranode-native-op] spend probe double-spend rejected with wrong error (%+v), want %s; falling back to UDF path", secondRes, LuaErrorCodeSpent)
+		return false
+	}
+
+	return true
+}
+
 // initNativeTeranodeOps caches the native-op decision on the store and
 // allocates the shared BatchWritePolicy used by every record the native-op
 // path emits. Idempotent; safe to call from store construction.
@@ -335,8 +603,15 @@ func (s *Store) detectNativeTeranodeOpSupport(ctx context.Context) bool {
 // from many goroutines are safe. Do NOT mutate the policy after this call.
 func (s *Store) initNativeTeranodeOps(ctx context.Context) {
 	supported := s.detectNativeTeranodeOpSupport(ctx)
-	s.useNativeTeranodeOps = supported
+	s.useNativeTeranodeOps.Store(supported)
 	s.nativeOpBatchWritePolicy = aerospike.NewBatchWritePolicy()
+	// UPDATE_ONLY: a mod-teranode invocation must never create a record. On
+	// the UDF path a missing key runs the Lua function against no record and
+	// returns TX_NOT_FOUND without persisting anything; the native dispatcher
+	// lives out-of-repo, so pin the guarantee client-side. A missing record
+	// therefore surfaces as a per-record KEY_NOT_FOUND_ERROR, which the result
+	// handlers map to the same TX_NOT_FOUND semantics as the Lua status.
+	s.nativeOpBatchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	if s.settings.Aerospike.UseNativeTeranodeOps && !supported {
 		s.logger.Infof("[teranode-native-op] setting requested native ops but server " +

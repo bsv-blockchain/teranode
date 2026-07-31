@@ -218,6 +218,14 @@ type Client struct {
 	// isn't warranted here; revisit if a scan is ever added to a shutdown-critical
 	// path.
 	drainMu sync.RWMutex
+
+	// closed is signalled by Close to abort in-flight overload-retry backoff so a
+	// shutdown is not stalled for up to the retry budget (maxElapsed) while a
+	// BatchOperate is parked in backoff holding the drain RLock. closeOnce guards
+	// the single close. A zero-value Client leaves closed nil, which simply means
+	// the backoff runs to completion (such clients are never Close()d).
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 // beginOp registers an in-flight BatchOperate, blocking a concurrent Close from
@@ -252,6 +260,14 @@ func (c *Client) endOp() { c.drainMu.RUnlock() }
 //     the one being closed. If that path ever becomes reachable under load, close
 //     outside the mutex (snapshot+delete under lock, Close after unlock).
 func (c *Client) Close() {
+	// Signal any in-flight overload-retry backoff to abort BEFORE blocking on the
+	// drain lock. A BatchOperate parked in backoff holds the drain RLock, so
+	// without this signal Close would wait out the full retry budget (maxElapsed,
+	// ~2 min by default) before acquiring the exclusive Lock.
+	if c.closed != nil {
+		c.closeOnce.Do(func() { close(c.closed) })
+	}
+
 	c.drainMu.Lock()
 	defer c.drainMu.Unlock()
 
@@ -281,6 +297,7 @@ func NewClient(hostname string, port int, opts ...ClientOption) (*Client, error)
 		stats:         NewClientStats(),
 		overloadRetry: cfg.overloadRetry,
 		logger:        cfg.logger,
+		closed:        make(chan struct{}),
 	}, nil
 }
 
@@ -353,6 +370,7 @@ func NewClientWithPolicyAndHostOpts(policy *aerospike.ClientPolicy, hosts []*aer
 		stats:         NewClientStats(),
 		overloadRetry: cfg.overloadRetry,
 		logger:        cfg.logger,
+		closed:        make(chan struct{}),
 	}, nil
 }
 

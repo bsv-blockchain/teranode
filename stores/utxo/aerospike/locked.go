@@ -84,7 +84,15 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 	// Enqueue all hashes as one ordered group via a single PutBatchCtx, instead
 	// of one PutCtx per hash — cutting the per-item channel-send and collector-
 	// select overhead to a single operation for the whole set.
-	s.lockedBatcher.PutBatchCtx(ctx, items)
+	// Guard the enqueue: Store.Close closes the locked batcher last, so a
+	// SetLocked racing shutdown would otherwise panic. One send carries the whole
+	// group, so a rejected send rejects every hash — completing each item also
+	// trips its onError/failFast, which cancels waitCtx and captures firstErr.
+	if enqueueErr := safeBatcherPutBatchCtx(s.lockedBatcher, ctx, items, "locked"); enqueueErr != nil {
+		for _, item := range items {
+			item.complete(enqueueErr)
+		}
+	}
 
 	// s.batcherWait <= 0 means unbounded (ctx-only) — Group.Wait treats a
 	// non-positive timeout the same way. waitCtx cancellation (from failFast on
@@ -209,6 +217,16 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 		}
 
 		if batchRec.Err != nil {
+			s.demoteNativeOnUnsupported(batchRec.Err)
+
+			// Native UPDATE_ONLY reports a missing record as KEY_NOT_FOUND;
+			// map it to the TxNotFoundError the UDF path's TX_NOT_FOUND
+			// status produces below.
+			if isKeyNotFound(batchRec.Err) {
+				batchItem.complete(errors.NewTxNotFoundError("transaction not found: %s", describeLockedBatchItem(batchItem), batchRec.Err))
+				continue
+			}
+
 			batchItem.complete(errors.NewProcessingError("[setLocked][%s] batch record failed while setting locked=%t; %s: %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord), batchRec.Err.Error(), batchRec.Err))
 			continue
 		}
@@ -282,6 +300,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				}
 
 				if childRecord.BatchRec().Err != nil {
+					s.demoteNativeOnUnsupported(childRecord.BatchRec().Err)
 					childErr[idx] = errors.NewProcessingError("could not write locked child record", childRecord.BatchRec().Err)
 					continue
 				}

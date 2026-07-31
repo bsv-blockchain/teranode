@@ -121,7 +121,8 @@ func (m *MockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, bloc
 	}
 
 	if m.UtxoStore != nil {
-		return m.UtxoStore.Create(context.Background(), tx, 0)
+		md, _, err := m.UtxoStore.SpendAndCreate(context.Background(), tx, 0, utxo.WithCreateOnly())
+		return md, err
 	}
 
 	return util.TxMetaDataFromTx(tx)

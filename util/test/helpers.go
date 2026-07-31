@@ -2,6 +2,7 @@ package test
 
 import (
 	"net/url"
+	"os"
 
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -38,6 +39,17 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 	tSettings.Aerospike.WritePolicyURL = &url.URL{
 		Scheme:   "aerospike",
 		RawQuery: "MaxRetries=30&SleepBetweenRetries=50ms&SleepMultiplier=2&TotalTimeout=30s&SocketTimeout=10s",
+	}
+
+	// AEROSPIKE_EXPECT_NATIVE_OPS drives the fork-image CI job: it points
+	// AEROSPIKE_CONTAINER_IMAGE at the BSV fork of aerospike-server and runs
+	// the full suite with the native operate-path enabled, asserting in the
+	// store tests that the capability probe actually engaged it. Enabling the
+	// setting here (rather than per test) routes every store the suite builds
+	// through the same probe production uses; without the env var nothing
+	// changes and the default UDF path is tested.
+	if os.Getenv("AEROSPIKE_EXPECT_NATIVE_OPS") == "true" {
+		tSettings.Aerospike.UseNativeTeranodeOps = true
 	}
 
 	return tSettings

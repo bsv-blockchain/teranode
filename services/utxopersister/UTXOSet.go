@@ -29,6 +29,7 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/utxoseed"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -40,6 +41,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 )
+
+const logErrParsingBufferSize = "error parsing utxoPersister_buffer_size %q, using default of 4KB"
 
 // This type is responsible for reading and writing UTXO additions, deletions and sets to and from files.
 
@@ -417,7 +420,7 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
-		us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+		us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 		bufferSize = 4096
 	}
@@ -457,7 +460,7 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
-		us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+		us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 		bufferSize = 4096
 	}
@@ -495,6 +498,26 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 // The method uses error groups to process UTXOs in parallel for better performance,
 // with coordinated error handling to ensure data integrity. Tracing is used for
 // performance monitoring and diagnostics throughout the operation.
+
+// writeWrapperAndFold writes w's serialized bytes to storer and folds its UTXOs
+// into the set commitment. The write and the fold are coupled here on purpose:
+// the commitment must see exactly the set that was written, so every persisted
+// wrapper is committed to c.acc in the same call. Routing all write paths
+// through this helper makes it structurally impossible for a future path to
+// persist a wrapper without committing it, which would silently produce a set
+// hash the loaded set cannot reproduce.
+func (c *consolidator) writeWrapperAndFold(storer *filestorer.FileStorer, w *UTXOWrapper) error {
+	if _, err := storer.Write(w.Bytes()); err != nil {
+		return errors.NewStorageError("error writing utxo wrapper", err)
+	}
+
+	for _, u := range w.UTXOs {
+		c.acc.Add(utxoseed.Element(w.TxID, u.Index, w.Height, w.Coinbase, u.Value, u.Script))
+	}
+
+	return nil
+}
+
 func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err error) {
 	if us == nil {
 		return errors.NewStorageError("UTXOSet is nil")
@@ -585,7 +608,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 		if err != nil {
-			us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+			us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 			bufferSize = 4096
 		}
@@ -678,8 +701,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 				// Only write the UTXOWrapper if there are remaining UTXOs after deletions
 				if len(utxoWrapper.UTXOs) > 0 {
-					if _, err := storer.Write(utxoWrapper.Bytes()); err != nil {
-						return errors.NewStorageError("error writing utxo wrapper", err)
+					if err := c.writeWrapperAndFold(storer, utxoWrapper); err != nil {
+						return err
 					}
 
 					txCount++
@@ -704,8 +727,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		// Only write the UTXOWrapper if there are remaining UTXOs after deletions
 		if len(utxoWrapper.UTXOs) > 0 {
-			if _, err := storer.Write(utxoWrapper.Bytes()); err != nil {
-				return errors.NewStorageError("error writing utxo wrapper", err)
+			if err := c.writeWrapperAndFold(storer, utxoWrapper); err != nil {
+				return err
 			}
 
 			txCount++

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -149,6 +150,12 @@ func buildRealBDKCandidateBlock(t *testing.T, server *Server, childTx *bt.Tx) *m
 	// Well under the 25-BTC subsidy at height 257727 (+ fees), so
 	// checkBlockRewardAndFees passes.
 	require.NoError(t, coinbaseTx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000_000))
+	// BIP34-encode the candidate height (257727) into the coinbase scriptSig: PUSH(3) + the height
+	// as little-endian bytes (0x03EEBF). Since the coinbase-height check in Block.Valid is now
+	// height-driven and the header version satisfies the floor, the encoded height must match.
+	// Done before the merkle root is computed so the header commits to this coinbase.
+	heightScriptSig := bscript.Script{0x03, 0xbf, 0xee, 0x03}
+	coinbaseTx.Inputs[0].UnlockingScript = &heightScriptSig
 
 	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	require.NoError(t, err)
@@ -157,7 +164,7 @@ func buildRealBDKCandidateBlock(t *testing.T, server *Server, childTx *bt.Tx) *m
 	require.NoError(t, err)
 
 	header := &model.BlockHeader{
-		Version:        1, // version 1 → no BIP34 coinbase-height check in Valid
+		Version:        0x20000000, // satisfies the BIP34/66/65 version floor at this mainnet height
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: merkleRoot,
 		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec

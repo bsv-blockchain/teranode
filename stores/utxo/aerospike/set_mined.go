@@ -531,8 +531,9 @@ func (s *Store) handleBatchRecordError(batchRecord aerospike.BatchRecordIfc, err
 		if unsetMined {
 			return nil
 		}
-		return errors.NewTxNotFoundError("transaction not found: %s", hash.String())
+		return errors.NewTxNotFoundError("transaction not found: %s", describeChainHash(hash))
 	}
+	s.demoteNativeOnUnsupported(err)
 	return errors.NewStorageError("aerospike setMined batchRecord error for transaction %s; %s: %s", describeChainHash(hash), describeAerospikeBatchRecord(batchRecord), err.Error(), err)
 }
 

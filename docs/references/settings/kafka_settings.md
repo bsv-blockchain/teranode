@@ -252,9 +252,9 @@ This constraint is validated during consumer creation for both URL-based and dir
 
 ### P2P Service
 
-- Uses `InvalidBlocksConfig` or constructs URL from `InvalidBlocks`, `Hosts`, `Port`
+- Uses `InvalidBlocksConfig` (the consumer is disabled with an error log when unset)
 - Applies TLS settings from KafkaSettings
-- Consumer group: `{topic}-consumer`
+- Consumer group: `p2p.{clientName}`
 
 ### Legacy Service (TLS)
 

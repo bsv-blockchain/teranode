@@ -32,6 +32,8 @@
 | LongestChainBatcherDurationMillis | int | 5 | utxostore_longestChainBatcherDurationMillis | Longest chain batch duration |
 | GetBatcherSize | int | 1 | utxostore_getBatcherSize | Get operation batch size |
 | GetBatcherDurationMillis | int | 10 | utxostore_getBatcherDurationMillis | Get batch duration |
+| BatcherMaxConcurrent | int | 64 | utxostore_batcherMaxConcurrent | Max concurrent in-flight batch callbacks per batcher (shared cap; 0 = unlimited) |
+| OutpointBatcherMaxConcurrent | int | 0 | utxostore_outpointBatcherMaxConcurrent | Per-batcher outpoint/decorate concurrency override, the #1187 read fan-out throttle (0 = inherit utxostore_batcherMaxConcurrent) |
 | DBTimeout | time.Duration | 5s | utxostore_dbTimeoutDuration | **CRITICAL** - Database operation timeout |
 | UseExternalTxCache | bool | true | utxostore_useExternalTxCache | External transaction cache usage |
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |

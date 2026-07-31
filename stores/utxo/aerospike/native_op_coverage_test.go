@@ -23,8 +23,9 @@ var allSubOps = []uint8{
 // TestUseNativeForSubOp_Fencing locks the routing gate: native only when the
 // setting is on, and unspend is always fenced to the UDF path (#899).
 func TestUseNativeForSubOp_Fencing(t *testing.T) {
-	off := &Store{useNativeTeranodeOps: false}
-	on := &Store{useNativeTeranodeOps: true}
+	off := &Store{}
+	on := &Store{}
+	on.useNativeTeranodeOps.Store(true)
 
 	for _, op := range allSubOps {
 		require.Falsef(t, off.useNativeForSubOp(op), "sub-op %d must use UDF when native disabled", op)
@@ -54,6 +55,10 @@ func TestEncodeNativeOpPayload_ArgShapes(t *testing.T) {
 		{"spendMulti_mapvalues", subOpSpendMulti, []any{
 			[]aerospike.MapValue{{"utxoHash": hash[:], "offset": 0}}, false, false, uint32(1), 288,
 		}},
+		// A zero-arg sub-op must encode as [id, []] (empty list), never
+		// [id, nil]: the pruner follow-up wires subOpSetDeleteAtHeight /
+		// subOpAddDeletedChildren and the dispatcher expects an args list.
+		{"no_args_nil_slice", subOpSetDeleteAtHeight, nil},
 	}
 
 	for _, tc := range cases {
@@ -84,14 +89,14 @@ func TestTeranodeBatchRecord_Routing(t *testing.T) {
 	udfPolicy := aerospike.NewBatchUDFPolicy()
 
 	// Native disabled -> UDF record regardless of sub-op.
-	off := &Store{useNativeTeranodeOps: false, logger: ulogger.TestLogger{}}
+	off := &Store{logger: ulogger.TestLogger{}}
 	require.IsType(t, &aerospike.BatchUDF{}, off.teranodeBatchRecord(udfPolicy, "pkg", key, subOpSetLocked, "setLocked", true))
 
 	on := &Store{
-		useNativeTeranodeOps:     true,
 		nativeOpBatchWritePolicy: aerospike.NewBatchWritePolicy(),
 		logger:                   ulogger.TestLogger{},
 	}
+	on.useNativeTeranodeOps.Store(true)
 
 	// Native enabled, non-fenced sub-op -> native BatchWrite.
 	require.IsType(t, &aerospike.BatchWrite{}, on.teranodeBatchRecord(udfPolicy, "pkg", key, subOpSetLocked, "setLocked", true))
@@ -201,4 +206,21 @@ func TestCreateSpendError_Branches(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+// TestCreateSpendErrorHandlesNilBatchItem covers the nil-batch-item guard in
+// createSpendError. Without it, the LuaErrorCodeSpent arm dereferences a nil
+// txID (spend.go, "UTXO already spent but no spending data provided") and the
+// process panics instead of returning a diagnosable error. Every other arm
+// dereferences batchItem.spend, so the guard has to precede all of them.
+func TestCreateSpendErrorHandlesNilBatchItem(t *testing.T) {
+	s := &Store{}
+
+	err := s.createSpendError(LuaErrorInfo{
+		ErrorCode: LuaErrorCodeSpent,
+		Message:   "spent",
+	}, nil, nil)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil batch item")
 }

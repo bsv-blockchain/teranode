@@ -84,6 +84,36 @@ func TestIsRetryableError(t *testing.T) {
 	}
 }
 
+func TestIsTransientLocalError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{name: "nil error", err: nil, expected: false},
+		{name: "service error", err: NewServiceError("boom"), expected: true},
+		{name: "storage error", err: NewStorageError("DEVICE_OVERLOAD"), expected: true},
+		{name: "service unavailable", err: NewServiceUnavailableError("backoff"), expected: true},
+		{name: "storage unavailable", err: NewStorageUnavailableError("no aerospike nodes available"), expected: true},
+		// Distinguishing property vs IsRetryableError: ErrServiceError is included
+		// here but NOT by IsRetryableError — the two must not be swapped.
+		{name: "service error is not retryable but is transient-local", err: NewServiceError("boom"), expected: true},
+		// Wrapped chain must be walked.
+		{name: "wrapped storage error", err: NewProcessingError("decorate failed", NewStorageError("boom")), expected: true},
+		{name: "deeply wrapped service-unavailable", err: NewProcessingError("outer", NewProcessingError("inner", NewServiceUnavailableError("batch timeout"))), expected: true},
+		// Peer-fault / non-local errors must not be classified as transient-local.
+		{name: "malicious peer - not local", err: NewNetworkPeerMaliciousError("bad header"), expected: false},
+		{name: "network timeout - not local", err: NewNetworkTimeoutError("timed out"), expected: false},
+		{name: "plain processing error - not local", err: NewProcessingError("invalid block"), expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, IsTransientLocalError(tt.err))
+		})
+	}
+}
+
 func TestIsNetworkError(t *testing.T) {
 	tests := []struct {
 		name     string

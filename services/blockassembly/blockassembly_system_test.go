@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	nodehelpers "github.com/bsv-blockchain/teranode/test/nodeHelpers"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -302,17 +303,17 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	// Add transactions
 	t.Log("Adding transactions...")
 
-	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
-	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
-	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
@@ -439,16 +440,16 @@ func TestShouldHandleReorg(t *testing.T) {
 	// Add transactions
 	t.Log("Adding transactions...")
 
-	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
-	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
-	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
 
@@ -679,16 +680,16 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	// Add transactions
 	t.Log("Adding transactions...")
 
-	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
-	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
-	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
+	_, _, err = ba.utxoStore.SpendAndCreate(ctx, testTx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
 

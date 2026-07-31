@@ -41,7 +41,7 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 		var err error
 		aerospikeURL, cleanup, err = aerospikeutil.InitAerospikeContainer()
 		if err != nil {
-			return errors.NewProcessingError("failed to initialize Aerospike container: %w", err)
+			return errors.NewProcessingError("failed to initialize Aerospike container", err)
 		}
 		defer func() {
 			if err := cleanup(); err != nil {
@@ -57,12 +57,12 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 	// Parse Aerospike URL and create store
 	aerospikeURI, err := url.Parse(aerospikeURL)
 	if err != nil {
-		return errors.NewProcessingError("failed to parse Aerospike URL: %w", err)
+		return errors.NewProcessingError("failed to parse Aerospike URL", err)
 	}
 
 	aerospikeStore, err = aerospike.New(ctx, ulogger.TestLogger{}, tSettings, aerospikeURI)
 	if err != nil {
-		return errors.NewProcessingError("failed to create Aerospike store: %w", err)
+		return errors.NewProcessingError("failed to create Aerospike store", err)
 	}
 
 	// Setup phase - populate transactions
@@ -93,12 +93,12 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 	// Start profiling
 	cpuFile, err := os.Create(cpuProfile)
 	if err != nil {
-		return errors.NewProcessingError("failed to create CPU profile: %w", err)
+		return errors.NewProcessingError("failed to create CPU profile", err)
 	}
 	defer cpuFile.Close()
 
 	if err := pprof.StartCPUProfile(cpuFile); err != nil {
-		return errors.NewProcessingError("failed to start CPU profile: %w", err)
+		return errors.NewProcessingError("failed to start CPU profile", err)
 	}
 
 	// Run benchmark - iterate through all unmined transactions
@@ -108,7 +108,7 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 	iterator, err := aerospikeStore.GetUnminedTxIterator()
 	if err != nil {
 		pprof.StopCPUProfile()
-		return errors.NewProcessingError("failed to get iterator: %w", err)
+		return errors.NewProcessingError("failed to get iterator", err)
 	}
 
 	processedCount := int64(0)
@@ -121,7 +121,7 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 				break
 			}
 			pprof.StopCPUProfile()
-			return errors.NewProcessingError("iterator error: %w", err)
+			return errors.NewProcessingError("iterator error", err)
 		}
 		if batch == nil || len(batch) == 0 {
 			break
@@ -145,13 +145,13 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 	// Write memory profile
 	memFile, err := os.Create(memProfile)
 	if err != nil {
-		return errors.NewProcessingError("failed to create memory profile: %w", err)
+		return errors.NewProcessingError("failed to create memory profile", err)
 	}
 	defer memFile.Close()
 
 	runtime.GC()
 	if err := pprof.WriteHeapProfile(memFile); err != nil {
-		return errors.NewStorageError("failed to write memory profile: %w", err)
+		return errors.NewStorageError("failed to write memory profile", err)
 	}
 
 	// Calculate throughput
@@ -232,7 +232,7 @@ func populateAerospikeWithTransactions(ctx context.Context, store utxo.Store, co
 				LockingScript: lockingScript,
 			})
 
-			if _, err := store.Create(ctx, tx, currentBlockHeight); err != nil {
+			if _, _, err := store.SpendAndCreate(ctx, tx, currentBlockHeight, utxo.WithCreateOnly()); err != nil {
 				return err
 			}
 
@@ -241,7 +241,7 @@ func populateAerospikeWithTransactions(ctx context.Context, store utxo.Store, co
 	}
 
 	if err := g.Wait(); err != nil {
-		return errors.NewProcessingError("failed to populate Aerospike: %w", err)
+		return errors.NewProcessingError("failed to populate Aerospike", err)
 	}
 
 	duration := time.Since(startTime)

@@ -56,6 +56,7 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -114,44 +115,26 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 	errorsThrown := make([]error, 0, len(spends))
 
 	for idx, record := range batchRecords {
-		spend := spends[idx]
-		spendDesc := describeUTXOSpend(spend)
-		if record == nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] missing batch record while freezing; %s", batchID, spendDesc, describeAerospikeBatchRecord(record)))
-			continue
-		}
+		spendDesc := describeUTXOSpend(spends[idx])
 
-		batchRec := record.BatchRec()
-		if batchRec == nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] missing batch record while freezing; %s", batchID, spendDesc, describeAerospikeBatchRecord(record)))
-			continue
-		}
-
-		if batchRec.Err != nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to batch freeze aerospike utxo; %s: %s", batchID, spendDesc, describeAerospikeBatchRecord(record), batchRec.Err.Error(), batchRec.Err))
-			continue
-		}
-
-		// check the return value of the batch operation
-		response := batchRec.Record
-		if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] missing expected response bin %q while freezing; %s", batchID, spendDesc, LuaSuccess.String(), describeAerospikeBatchRecord(record)))
-			continue
-		}
-
-		rawResponse := response.Bins[LuaSuccess.String()]
-		res, err := s.ParseLuaMapResponse(rawResponse)
+		res, err := s.teranodeBatchRecordResponse(fmt.Sprintf("[freeze][%d][%s]", batchID, spendDesc), record)
 		if err != nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to parse response bin %q (value %s) while freezing; %s: %s", batchID, spendDesc, LuaSuccess.String(), describeAerospikeValue(rawResponse), describeAerospikeBatchRecord(record), err.Error(), err))
-		} else if res.Status == LuaStatusError {
-			if res.ErrorCode == LuaErrorCodeSpent {
-				// Extract spending data from error message
-				hexData := strings.TrimPrefix(res.Message, "SPENT:")
-				if spendingData, parseErr := spendpkg.NewSpendingDataFromString(hexData); parseErr == nil {
-					errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, spendDesc, spendingData))
-				} else {
-					errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo: %s", batchID, spendDesc, res.Message))
-				}
+			// The UDF path ignores TX_NOT_FOUND on freeze (only SPENT is
+			// reported below); keep the native path's KEY_NOT_FOUND — the same
+			// condition under UPDATE_ONLY — equally silent.
+			if !errors.Is(err, errors.ErrTxNotFound) {
+				errorsThrown = append(errorsThrown, err)
+			}
+			continue
+		}
+
+		if res.Status == LuaStatusError && res.ErrorCode == LuaErrorCodeSpent {
+			// Extract spending data from error message
+			hexData := strings.TrimPrefix(res.Message, "SPENT:")
+			if spendingData, parseErr := spendpkg.NewSpendingDataFromString(hexData); parseErr == nil {
+				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, spendDesc, spendingData))
+			} else {
+				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo: %s", batchID, spendDesc, res.Message))
 			}
 		}
 	}
@@ -209,36 +192,15 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 	errorsThrown := make([]error, 0, len(spends))
 
 	for idx, record := range batchRecords {
-		spend := spends[idx]
-		spendDesc := describeUTXOSpend(spend)
-		if record == nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] missing batch record while unfreezing; %s", batchID, spendDesc, describeAerospikeBatchRecord(record)))
-			continue
-		}
+		spendDesc := describeUTXOSpend(spends[idx])
 
-		batchRec := record.BatchRec()
-		if batchRec == nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] missing batch record while unfreezing; %s", batchID, spendDesc, describeAerospikeBatchRecord(record)))
-			continue
-		}
-
-		if batchRec.Err != nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] failed to batch unfreeze aerospike utxo; %s: %s", batchID, spendDesc, describeAerospikeBatchRecord(record), batchRec.Err.Error(), batchRec.Err))
-			continue
-		}
-
-		// check the return value of the batch operation
-		response := batchRec.Record
-		if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] missing expected response bin %q while unfreezing; %s", batchID, spendDesc, LuaSuccess.String(), describeAerospikeBatchRecord(record)))
-			continue
-		}
-
-		rawResponse := response.Bins[LuaSuccess.String()]
-		res, err := s.ParseLuaMapResponse(rawResponse)
+		res, err := s.teranodeBatchRecordResponse(fmt.Sprintf("[unfreeze][%d][%s]", batchID, spendDesc), record)
 		if err != nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] failed to parse response bin %q (value %s) while unfreezing; %s: %s", batchID, spendDesc, LuaSuccess.String(), describeAerospikeValue(rawResponse), describeAerospikeBatchRecord(record), err.Error(), err))
-		} else if res.Status == LuaStatusError {
+			errorsThrown = append(errorsThrown, err)
+			continue
+		}
+
+		if res.Status == LuaStatusError {
 			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] failed to unfreeze aerospike utxo: %s", batchID, spendDesc, res.Message))
 		}
 	}
@@ -295,29 +257,12 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 	}
 
 	// check whether an error was thrown
-	if batchRecords[0] == nil {
-		return errors.NewStorageError("[reassign][%s] missing batch record while reassigning; %s", describeUTXOSpend(oldUtxo), describeAerospikeBatchRecord(batchRecords[0]))
-	}
-
-	batchRec := batchRecords[0].BatchRec()
-	if batchRec == nil {
-		return errors.NewStorageError("[reassign][%s] missing batch record while reassigning; %s", describeUTXOSpend(oldUtxo), describeAerospikeBatchRecord(batchRecords[0]))
-	}
-	if batchRec.Err != nil {
-		return errors.NewStorageError("[reassign][%s] failed to reassign aerospike utxo; %s: %s", describeUTXOSpend(oldUtxo), describeAerospikeBatchRecord(batchRecords[0]), batchRec.Err.Error(), batchRec.Err)
-	}
-
-	// check the return value of the batch operation
-	response := batchRec.Record
-	if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
-		return errors.NewStorageError("[reassign][%s] missing expected response bin %q while reassigning; %s", describeUTXOSpend(oldUtxo), LuaSuccess.String(), describeAerospikeBatchRecord(batchRecords[0]))
-	}
-
-	rawResponse := response.Bins[LuaSuccess.String()]
-	res, err := s.ParseLuaMapResponse(rawResponse)
+	res, err := s.teranodeBatchRecordResponse(fmt.Sprintf("[reassign][%s]", describeUTXOSpend(oldUtxo)), batchRecords[0])
 	if err != nil {
-		return errors.NewStorageError("[reassign][%s] failed to parse response bin %q (value %s) while reassigning; %s: %s", describeUTXOSpend(oldUtxo), LuaSuccess.String(), describeAerospikeValue(rawResponse), describeAerospikeBatchRecord(batchRecords[0]), err.Error(), err)
-	} else if res.Status == LuaStatusError {
+		return err
+	}
+
+	if res.Status == LuaStatusError {
 		return errors.NewStorageError("[reassign][%s] failed to reassign aerospike utxo: %s", describeUTXOSpend(oldUtxo), res.Message)
 	}
 

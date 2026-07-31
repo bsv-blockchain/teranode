@@ -11,6 +11,8 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 )
 
+const errMsgInvalidSubtreeIndex = "invalid subtree index"
+
 // MerkleProof represents a complete merkle proof for a transaction in a block.
 // It contains all necessary information to verify that a transaction is included
 // in a specific block following the SPV (Simplified Payment Verification) protocol.
@@ -166,7 +168,7 @@ func ConstructMerkleProof(txID *chainhash.Hash, repo MerkleProofConstructor) (*M
 
 	// Validate subtree index
 	if subtreeIdx < 0 || subtreeIdx >= len(block.Subtrees) {
-		return nil, terr.NewProcessingError("invalid subtree index")
+		return nil, terr.NewProcessingError(errMsgInvalidSubtreeIndex)
 	}
 
 	// Get the subtree hash
@@ -425,7 +427,7 @@ func ConstructSubtreeMerkleProof(subtreeHash *chainhash.Hash, repo MerkleProofCo
 
 	// Validate subtree index
 	if subtreeIdx < 0 || subtreeIdx >= len(block.Subtrees) {
-		return nil, terr.NewProcessingError("invalid subtree index")
+		return nil, terr.NewProcessingError(errMsgInvalidSubtreeIndex)
 	}
 
 	// Verify the subtree hash matches
@@ -589,7 +591,7 @@ func GenerateBlockMerkleProof(subtrees []*chainhash.Hash, subtreeIndex int) ([]*
 	}
 
 	if subtreeIndex < 0 || subtreeIndex >= len(subtrees) {
-		return nil, nil, terr.NewProcessingError("invalid subtree index")
+		return nil, nil, terr.NewProcessingError(errMsgInvalidSubtreeIndex)
 	}
 
 	// Handle special case of single subtree

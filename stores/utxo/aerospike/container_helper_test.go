@@ -69,7 +69,7 @@ func waitForAerospikeWritesReady(client *uaerospike.Client) error {
 		return err
 	}
 
-	return errors.NewProcessingError("aerospike namespace %q did not become write-ready after %v: %w", aerospikeNamespace, time.Duration(attempts)*delay, lastErr)
+	return errors.NewProcessingError("aerospike namespace %q did not become write-ready after %v", aerospikeNamespace, time.Duration(attempts)*delay, lastErr)
 }
 
 const (

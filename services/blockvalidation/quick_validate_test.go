@@ -124,12 +124,12 @@ func TestQuickValidateBlock(t *testing.T) {
 		// Setup Get expectation for checking existing transactions (used for BlockID reuse on retry)
 		suite.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
 
-		// Setup UTXO store expectations for all transactions (including coinbase)
+		// Setup UTXO store expectations for creating all transactions (including coinbase)
 		// Use mock.Anything for the transaction since the order may vary
-		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).Return(&meta.Data{}, nil, nil)
 
-		// Setup UTXO store expectations for spending transactions (context, tx, ignoreFlags)
-		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
+		// Setup UTXO store expectations for spending transactions
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil)
 
 		// Setup SetLocked expectation for unlocking UTXOs after AddBlock
 		suite.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil)
@@ -239,22 +239,21 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 			batchEnd:   2,
 		}
 
-		// Mock Create to succeed (no ErrTxExists)
-		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).
-			Return(&meta.Data{}, nil).Maybe()
+		// Mock the create phase to succeed (no ErrTxExists)
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).
+			Return(&meta.Data{}, nil, nil).Maybe()
 
-		// Mock Spend - need to clear the default and set our own
-		suite.MockUTXOStore.ExpectedCalls = filterCalls(suite.MockUTXOStore.ExpectedCalls, "Spend")
-		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return([]*utxo.Spend{}, nil).Maybe()
+		// Mock the spend phase
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
+			Return(nil, []*utxo.Spend{}, nil).Maybe()
 
 		// SetMinedMulti should NOT be called since all txs are new
 
 		err := suite.Server.blockValidation.createAndSpendUTXOsForBatch(suite.Ctx, block, batch)
 		require.NoError(t, err)
 
-		// Verify Create was called for each transaction
-		suite.MockUTXOStore.AssertNumberOfCalls(t, "Create", 2)
+		// Verify the create phase ran for each transaction
+		require.Equal(t, 2, countCreatePhaseCalls(suite.MockUTXOStore))
 		// Verify SetMinedMulti was NOT called
 		suite.MockUTXOStore.AssertNotCalled(t, "SetMinedMulti", mock.Anything, mock.Anything, mock.Anything)
 	})
@@ -280,9 +279,9 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 			batchEnd:   2,
 		}
 
-		// Mock Create to return ErrTxExists for all transactions
-		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).
-			Return((*meta.Data)(nil), errors.ErrTxExists).Maybe()
+		// Mock the create phase to return ErrTxExists for all transactions
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).
+			Return((*meta.Data)(nil), nil, errors.ErrTxExists).Maybe()
 
 		// Mock SetMinedMulti - should be called with both transaction hashes
 		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.MatchedBy(func(hashes []*chainhash.Hash) bool {
@@ -291,10 +290,9 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 			return info.BlockID == 50 && info.BlockHeight == 100
 		})).Return(map[chainhash.Hash][]uint32{}, nil).Once()
 
-		// Mock Spend - clear default and set our own
-		suite.MockUTXOStore.ExpectedCalls = filterCalls(suite.MockUTXOStore.ExpectedCalls, "Spend")
-		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return([]*utxo.Spend{}, nil).Maybe()
+		// Mock the spend phase
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
+			Return(nil, []*utxo.Spend{}, nil).Maybe()
 
 		err := suite.Server.blockValidation.createAndSpendUTXOsForBatch(suite.Ctx, block, batch)
 		require.NoError(t, err)
@@ -324,9 +322,9 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 			batchEnd:   1,
 		}
 
-		// Mock Create to return ErrTxExists
-		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).
-			Return((*meta.Data)(nil), errors.ErrTxExists).Maybe()
+		// Mock the create phase to return ErrTxExists
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).
+			Return((*meta.Data)(nil), nil, errors.ErrTxExists).Maybe()
 
 		// Mock SetMinedMulti to return an error
 		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -336,6 +334,173 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to update mined info")
 	})
+}
+
+// TestExtendTxFromSameBlockParents covers the shared same-block-parent extend
+// helper, including the issue 1283 bounds check that turns an out-of-range vout
+// into an error instead of an index-out-of-range panic.
+func TestExtendTxFromSameBlockParents(t *testing.T) {
+	// Parent with two outputs: vout 0 and 1 are valid, >= 2 is out of range.
+	parent := bt.NewTx()
+	parent.Outputs = append(parent.Outputs,
+		&bt.Output{Satoshis: 1000, LockingScript: &bscript.Script{}},
+		&bt.Output{Satoshis: 2000, LockingScript: &bscript.Script{}},
+	)
+	parentHash := *parent.TxIDChainHash()
+
+	childWithVout := func(t *testing.T, vout uint32, parentID chainhash.Hash) *bt.Tx {
+		t.Helper()
+		child := bt.NewTx()
+		in := &bt.Input{PreviousTxOutIndex: vout}
+		require.NoError(t, in.PreviousTxIDAdd(&parentID))
+		child.Inputs = append(child.Inputs, in)
+		require.False(t, child.IsExtended(), "child must be non-extended to exercise the extend path")
+		return child
+	}
+
+	parents := map[chainhash.Hash]*bt.Tx{parentHash: parent}
+
+	t.Run("in-range vout extends the input", func(t *testing.T) {
+		child := childWithVout(t, 1, parentHash)
+
+		needsExternal, err := extendTxFromSameBlockParents(child, parents)
+		require.NoError(t, err)
+		require.False(t, needsExternal)
+		require.Equal(t, uint64(2000), child.Inputs[0].PreviousTxSatoshis)
+		require.NotNil(t, child.Inputs[0].PreviousTxScript)
+	})
+
+	t.Run("out-of-range vout returns error, no panic", func(t *testing.T) {
+		child := childWithVout(t, 2, parentHash) // parent only has outputs 0 and 1
+
+		_, err := extendTxFromSameBlockParents(child, parents)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "non-existent output")
+	})
+
+	t.Run("parent absent from map needs external lookup", func(t *testing.T) {
+		child := childWithVout(t, 0, parentHash)
+
+		needsExternal, err := extendTxFromSameBlockParents(child, map[chainhash.Hash]*bt.Tx{})
+		require.NoError(t, err)
+		require.True(t, needsExternal)
+	})
+
+	t.Run("parent with no outputs returns error", func(t *testing.T) {
+		emptyParent := bt.NewTx()
+		emptyHash := *emptyParent.TxIDChainHash()
+		child := childWithVout(t, 0, emptyHash)
+
+		_, err := extendTxFromSameBlockParents(child, map[chainhash.Hash]*bt.Tx{emptyHash: emptyParent})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "non-existent output")
+	})
+}
+
+// TestExtendBatch_SameBlockParentVoutBounds is the end-to-end regression guard for
+// issue 1283: a same-block-parent input whose PreviousTxOutIndex is out of range
+// must fail the block cleanly instead of panicking with index-out-of-range.
+func TestExtendBatch_SameBlockParentVoutBounds(t *testing.T) {
+	// Parent with a single output: vout 0 is valid, anything >= 1 is out of range.
+	parent := bt.NewTx()
+	parent.Outputs = append(parent.Outputs, &bt.Output{Satoshis: 1000, LockingScript: &bscript.Script{}})
+	parentHash := *parent.TxIDChainHash()
+
+	// newChild builds a non-extended child (nil PreviousTxScript) referencing the
+	// same-block parent at the given vout.
+	newChild := func(t *testing.T, vout uint32) *bt.Tx {
+		t.Helper()
+		child := bt.NewTx()
+		in := &bt.Input{PreviousTxOutIndex: vout}
+		require.NoError(t, in.PreviousTxIDAdd(&parentHash))
+		child.Inputs = append(child.Inputs, in)
+		require.False(t, child.IsExtended(), "child must be non-extended to exercise the extend path")
+		return child
+	}
+
+	extendedTxs := map[chainhash.Hash]*bt.Tx{parentHash: parent}
+
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	block := testhelpers.CreateTestBlocks(t, 1)[0]
+
+	batch := &SubtreeProcessingBatch{
+		subtreeData: []*subtreepkg.Data{{Txs: []*bt.Tx{newChild(t, 5)}}}, // vout 5 on a 1-output parent
+		batchStart:  0,
+		batchEnd:    1,
+	}
+
+	// Before the fix this panicked with index-out-of-range; now it must return a
+	// clean per-block error.
+	err := suite.Server.blockValidation.extendBatch(suite.Ctx, block, batch, extendedTxs)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "non-existent output")
+}
+
+// TestProcessSubtreeBatch_SameBlockParentVoutBounds drives the SEQUENTIAL
+// quick-validation path (processBlockSubtrees -> processBlockSubtreesSequential ->
+// processSubtreeBatch) through the issue 1283 bounds-check error branch.
+//
+// The crafted subtree holds a same-block PARENT tx (1 output) followed by a
+// non-extended CHILD tx whose input references the parent at vout 5 (out of
+// range). processSubtreeBatch builds its in-batch parent map as it iterates the
+// subtree's Txs, so the parent (Txs[1], after the coinbase at Txs[0]) is in the
+// map by the time the child (Txs[2]) is extended. extendTxFromSameBlockParents
+// then returns the "non-existent output" error, which processSubtreeBatch wraps
+// as "same-block parent extension failed". Before the fix this panicked with
+// index-out-of-range; now it must return a clean per-block error.
+func TestProcessSubtreeBatch_SameBlockParentVoutBounds(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Force the sequential path (processSubtreeBatch) rather than the pipeline.
+	suite.Server.blockValidation.settings.BlockValidation.SubtreeBatchPrefetchDepth = 0
+
+	// Real coinbase for Txs[0] (readSubtree requires subtree 0, index 0 to be a coinbase).
+	coinbaseTx := transactions.CreateTestTransactionChainWithCount(t, 2)[0]
+
+	// Same-block parent with a single output: vout 0 is valid, anything >= 1 is out of range.
+	parent := bt.NewTx()
+	parent.Outputs = append(parent.Outputs, &bt.Output{Satoshis: 1000, LockingScript: &bscript.Script{}})
+
+	// Non-extended child whose only input references the parent at vout 5 (out of range).
+	child := bt.NewTx()
+	in := &bt.Input{PreviousTxOutIndex: 5}
+	require.NoError(t, in.PreviousTxIDAdd(parent.TxIDChainHash()))
+	child.Inputs = append(child.Inputs, in)
+	require.False(t, child.IsExtended(), "child must be non-extended to exercise the extend path")
+
+	block := testhelpers.CreateTestBlocks(t, 1)[0]
+	block.CoinbaseTx = coinbaseTx
+
+	// Subtree nodes: coinbase, parent, child (order must match the subtree data below).
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(3)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*parent.TxIDChainHash(), 1, 1))
+	require.NoError(t, subtree.AddNode(*child.TxIDChainHash(), 2, 2))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, suite.Server.subtreeStore.Set(suite.Ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes))
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, subtreeData.AddTx(coinbaseTx, 0))
+	require.NoError(t, subtreeData.AddTx(parent, 1)) // parent before child so it lands in the in-batch map
+	require.NoError(t, subtreeData.AddTx(child, 2))
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, suite.Server.subtreeStore.Set(suite.Ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes))
+
+	block.Subtrees = []*chainhash.Hash{subtree.RootHash()}
+
+	// Must return a clean error (not panic) whose chain mentions the out-of-range output.
+	require.NotPanics(t, func() {
+		_, err = suite.Server.blockValidation.processBlockSubtrees(suite.Ctx, block, false)
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "non-existent output")
 }
 
 func TestQuickValidateBlock_IncompleteBlockNilCoinbase(t *testing.T) {
@@ -383,6 +548,39 @@ func filterCalls(calls []*mock.Call, methodToRemove string) []*mock.Call {
 		}
 	}
 	return filtered
+}
+
+// parseCreateOptions applies opts to a fresh CreateOptions for inspection.
+func parseCreateOptions(opts []utxo.CreateOption) *utxo.CreateOptions {
+	o := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	return o
+}
+
+// matchCreateOnly matches the create-phase SpendAndCreate call (WithCreateOnly).
+func matchCreateOnly() interface{} {
+	return mock.MatchedBy(func(opts []utxo.CreateOption) bool { return parseCreateOptions(opts).CreateOnly })
+}
+
+// matchSpendOnly matches the spend-phase SpendAndCreate call (WithSpendOnly).
+func matchSpendOnly() interface{} {
+	return mock.MatchedBy(func(opts []utxo.CreateOption) bool { return parseCreateOptions(opts).SpendOnly })
+}
+
+// countCreatePhaseCalls counts recorded SpendAndCreate calls that carried WithCreateOnly.
+func countCreatePhaseCalls(m *utxo.MockUtxostore) int {
+	count := 0
+
+	for _, c := range m.Calls {
+		if c.Method == "SpendAndCreate" && parseCreateOptions(c.Arguments.Get(3).([]utxo.CreateOption)).CreateOnly {
+			count++
+		}
+	}
+
+	return count
 }
 
 // setCheckpointSlice replaces the checkpoint set on the suite's settings with the given
@@ -443,19 +641,19 @@ func assertCreatedLocked(t *testing.T, m *utxo.MockUtxostore, wantLocked bool) {
 	t.Helper()
 	found := false
 	for _, c := range m.Calls {
-		if c.Method != "Create" {
+		if c.Method != "SpendAndCreate" {
 			continue
 		}
 		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
-		require.True(t, ok, "Create 4th arg should be []utxo.CreateOption")
-		o := &utxo.CreateOptions{}
-		for _, opt := range opts {
-			opt(o)
+		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
+		o := parseCreateOptions(opts)
+		if !o.CreateOnly {
+			continue
 		}
-		require.Equal(t, wantLocked, o.Locked, "Create WithLocked flag mismatch")
+		require.Equal(t, wantLocked, o.Locked, "SpendAndCreate WithLocked flag mismatch")
 		found = true
 	}
-	require.True(t, found, "expected at least one Create call")
+	require.True(t, found, "expected at least one create-phase SpendAndCreate call")
 }
 
 // assertCreatedSkipExtended asserts every Create call carried WithSkipExtendedInputs(want).
@@ -465,19 +663,19 @@ func assertCreatedSkipExtended(t *testing.T, m *utxo.MockUtxostore, want bool) {
 	t.Helper()
 	found := false
 	for _, c := range m.Calls {
-		if c.Method != "Create" {
+		if c.Method != "SpendAndCreate" {
 			continue
 		}
 		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
-		require.True(t, ok, "Create 4th arg should be []utxo.CreateOption")
-		o := &utxo.CreateOptions{}
-		for _, opt := range opts {
-			opt(o)
+		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
+		o := parseCreateOptions(opts)
+		if !o.CreateOnly {
+			continue
 		}
-		require.Equal(t, want, o.SkipExtendedInputs, "Create WithSkipExtendedInputs flag mismatch")
+		require.Equal(t, want, o.SkipExtendedInputs, "SpendAndCreate WithSkipExtendedInputs flag mismatch")
 		found = true
 	}
-	require.True(t, found, "expected at least one Create call")
+	require.True(t, found, "expected at least one create-phase SpendAndCreate call")
 }
 
 // assertSpentSkipUTXOHashCheck asserts every Spend call carried IgnoreFlags.SkipUTXOHashCheck(want).
@@ -487,16 +685,19 @@ func assertSpentSkipUTXOHashCheck(t *testing.T, m *utxo.MockUtxostore, want bool
 	t.Helper()
 	found := false
 	for _, c := range m.Calls {
-		if c.Method != "Spend" {
+		if c.Method != "SpendAndCreate" {
 			continue
 		}
-		flags, ok := c.Arguments.Get(3).([]utxo.IgnoreFlags)
-		require.True(t, ok, "Spend 4th arg should be []utxo.IgnoreFlags")
-		require.NotEmpty(t, flags, "Spend should carry an IgnoreFlags")
-		require.Equal(t, want, flags[0].SkipUTXOHashCheck, "Spend SkipUTXOHashCheck flag mismatch")
+		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
+		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
+		o := parseCreateOptions(opts)
+		if !o.SpendOnly {
+			continue
+		}
+		require.Equal(t, want, o.IgnoreFlags.SkipUTXOHashCheck, "SpendAndCreate SkipUTXOHashCheck flag mismatch")
 		found = true
 	}
-	require.True(t, found, "expected at least one Spend call")
+	require.True(t, found, "expected at least one spend-phase SpendAndCreate call")
 }
 
 // buildOneSubtreeBlock builds a block with one subtree (coinbase + 2 txs) and stores its
@@ -550,8 +751,8 @@ func setupQuickValidateMocks(s *CatchupTestSuite) {
 	s.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
-	s.MockUTXOStore.On("Create", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
-	s.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
+	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCreateOnly()).Return(&meta.Data{}, nil, nil)
+	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil)
 	s.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Maybe()
 	s.MockValidator.Errors = []error{nil, nil, nil}
 }
@@ -684,9 +885,6 @@ func TestQuickValidate_OutpointOnly_NoDecorate_ZeroFees(t *testing.T) {
 		// Place a high checkpoint so height 500 is firmly below it.
 		setCheckpoints(t, suite, 1_000_000)
 		setupQuickValidateMocks(suite)
-		// Replace the 3-arg Spend default from setupQuickValidateMocks with a 4-arg one.
-		suite.MockUTXOStore.ExpectedCalls = filterCalls(suite.MockUTXOStore.ExpectedCalls, "Spend")
-		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
 		// The block has coinbase + 3 regular txs; validator needs 4 nil errors.
 		suite.MockValidator.Errors = []error{nil, nil, nil, nil}
 		return suite
@@ -881,7 +1079,7 @@ func TestSkipUnspendableTxStorageDuringCatchup_EndToEnd(t *testing.T) {
 			transactions.WithCoinbaseData(1, "/genesis/"),
 			transactions.WithP2PKHOutputs(2, 5000, publicKey),
 		)
-		_, err := store.Create(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}))
+		_, _, err := store.SpendAndCreate(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// opReturnTx: spends output 0 of parent, produces only an OP_RETURN (unspendable).
@@ -961,7 +1159,7 @@ func TestSkipUnspendableTxStorageDuringCatchup_EndToEnd(t *testing.T) {
 			transactions.WithCoinbaseData(1, "/genesis/"),
 			transactions.WithP2PKHOutputs(1, 5000, publicKey),
 		)
-		_, err := store.Create(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}))
+		_, _, err := store.SpendAndCreate(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		opReturnTx := bt.NewTx()
@@ -1023,8 +1221,6 @@ func TestOutpointOnly_MetricIncrementsBelowOnly(t *testing.T) {
 		suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock = true
 		setCheckpoints(t, suite, 1000)
 		setupQuickValidateMocks(suite)
-		suite.MockUTXOStore.ExpectedCalls = filterCalls(suite.MockUTXOStore.ExpectedCalls, "Spend")
-		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
 
 		block := buildOneSubtreeBlock(t, suite, 500)
 

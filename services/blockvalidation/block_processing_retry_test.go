@@ -351,6 +351,37 @@ func TestProcessCatchupChItem(t *testing.T) {
 		mockBC.AssertCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, "catchup", mock.Anything)
 	})
 
+	// The two cases above build ErrExternal chains WITHOUT the already-reported
+	// marker. Production never emits that shape: fetchAndStoreSubtreeAndSubtreeData
+	// applies markCatchupFailureReported to every all-peers-failed error, and it is
+	// the only producer of this ErrExternal in the package. This case pins the real
+	// shape — ReportPeerFailure is the sync-peer ROTATION signal (blockchain
+	// PeerFailure notification -> p2p HandleCatchupFailure -> currentSyncPeer cleared
+	// + triggerSyncLocked), so it must still fire even though the marker suppresses
+	// the duplicate reputation charge in reportCatchupFailureForError. Gating it on
+	// the marker silently disabled rotation and left recovery to the 5-minute
+	// SyncPeerNoProgressTimeout.
+	t.Run("marked external error (production shape) still reports peer failure for rotation", func(t *testing.T) {
+		// Exactly what get_blocks.go returns, then the wraps it picks up on the way up.
+		marked := markCatchupFailureReported(errors.NewExternalError("all 3 peer attempts failed to fetch subtree aa"))
+		svcWrap := errors.NewServiceError("failed to fetch subtree data for block bb", marked)
+		chain := errors.NewProcessingError("worker failed for block bb", svcWrap)
+
+		require.True(t, catchupFailureAlreadyReported(chain), "precondition: production marks every all-peers-failed error")
+		require.True(t, errors.Is(chain, errors.ErrExternal))
+
+		u, _ := newServer(3, chain)
+		b := testBlock()
+		u.processBlockNotify.Set(*b.Hash(), true, ttlcache.DefaultTTL)
+
+		u.processCatchupChItem(ctx, item(b))
+
+		require.Nil(t, u.processBlockNotify.Get(*b.Hash()))
+
+		mockBC := u.blockchainClient.(*blockchain.Mock)
+		mockBC.AssertCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, "catchup", mock.Anything)
+	})
+
 	t.Run("invalid block clears notify without counting toward cap", func(t *testing.T) {
 		u, _ := newServer(3, errors.NewBlockInvalidError("bad block"))
 		b := testBlock()

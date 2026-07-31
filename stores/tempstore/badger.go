@@ -69,7 +69,7 @@ func New(opts Options) (*BadgerTempStore, error) {
 	if err != nil {
 		// Clean up directory on failure
 		_ = os.RemoveAll(path)
-		return nil, errors.NewServiceError("failed to open badger: %w", err)
+		return nil, errors.NewServiceError("failed to open badger", err)
 	}
 
 	return &BadgerTempStore{
@@ -223,7 +223,7 @@ func (s *BadgerTempStore) Close() error {
 		if err := s.db.Close(); err != nil {
 			// Still try to clean up
 			_ = os.RemoveAll(s.path)
-			return errors.NewServiceError("failed to close badger: %w", err)
+			return errors.NewServiceError("failed to close badger", err)
 		}
 	}
 

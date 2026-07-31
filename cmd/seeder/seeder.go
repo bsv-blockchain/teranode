@@ -635,10 +635,11 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		return nil
 	}
 
-	if _, err := store.Create(
+	if _, _, err := store.SpendAndCreate(
 		ctx,
 		tx,
 		utxoWrapper.Height,
+		utxo.WithCreateOnly(),
 		utxo.WithTXID(&utxoWrapper.TxID),
 		utxo.WithSetCoinbase(utxoWrapper.Coinbase),
 		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 0, BlockHeight: utxoWrapper.Height, SubtreeIdx: 0}),

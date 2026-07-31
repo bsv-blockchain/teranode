@@ -433,7 +433,7 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 }
 
 // fetchAndStoreSubtree fetches and stores only the subtree (for subtreeToCheck)
-func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, peerID, baseURL string) (*subtreepkg.Subtree, error) {
+func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, peerID, baseURL string, bypassCache bool) (*subtreepkg.Subtree, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtree",
 		tracing.WithParentStat(u.stats),
 		// tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtree] fetching subtree for %s", subtreeHash.String()),
@@ -468,7 +468,7 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 	}
 
 	// Fetch subtree from peer
-	subtreeNodeBytes, subtreeErr := u.fetchSubtreeFromPeer(ctx, subtreeHash, peerID, baseURL)
+	subtreeNodeBytes, subtreeErr := u.fetchSubtreeFromPeer(ctx, subtreeHash, peerID, baseURL, bypassCache)
 	if subtreeErr != nil {
 		return nil, errors.NewServiceError("[catchup:fetchAndStoreSubtree] Failed to fetch subtree for %s", subtreeHash.String(), subtreeErr)
 	}
@@ -530,7 +530,7 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 
 // fetchAndStoreSubtreeData fetches and stores only the subtreeData
 func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
-	subtree *subtreepkg.Subtree, peerID, baseURL string) error {
+	subtree *subtreepkg.Subtree, peerID, baseURL string, bypassCache bool) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeData",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeData][%s] Fetching subtree data from peer %s (%s) for subtree %s", block.Hash().String(), peerID, baseURL, subtreeHash.String()),
@@ -563,7 +563,7 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	// See companion fix in services/subtreevalidation/check_block_subtrees.go.
 	ctx = context.WithoutCancel(ctx)
 
-	subtreeDataReader, err := u.fetchSubtreeDataFromPeer(ctx, subtreeHash, peerID, baseURL)
+	subtreeDataReader, err := u.fetchSubtreeDataFromPeer(ctx, subtreeHash, peerID, baseURL, bypassCache)
 	if err != nil {
 		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Failed to fetch subtreeData for %s", subtreeHash.String(), err)
 	}
@@ -585,15 +585,50 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Failed to create subtreeData for %s", subtreeHash.String(), err)
 	}
 
-	// Debug: Log how many transactions we actually got
-	nonNilCount := 0
-	for _, tx := range subtreeData.Txs {
+	// Reject a response the subtree cannot be satisfied by, before Serialize turns it
+	// into a generic ErrSubtreeLengthMismatch that names no peer. An empty body is the
+	// issue-1368 signature: a peer's proxy cache replaying a failed or aborted
+	// on-demand generation as "200 + 0 bytes".
+	//
+	// The predicate mirrors what subtreepkg.Data.Serialize *safely* tolerates, which is
+	// not the same as its literal `i != 0` nil exemption. Serialize skips index 0 only
+	// when Nodes[0] is the coinbase placeholder: it then sets txStartIndex = 1 and never
+	// touches Txs[0]. For any other Nodes[0] it sets txStartIndex = 0 while still
+	// guarding its own nil check with `i != 0`, so it walks straight into
+	// Txs[0].SerializeBytes() on a nil *bt.Tx and panics (IsExtended is nil-safe, so it
+	// falls through to Bytes -> toBytesHelper -> Size). Copying the unconditional
+	// exemption here would let such a response through with missing == 0, and the panic
+	// lands in a per-subtree errgroup goroutine that no recover() in this package
+	// covers. That is reachable without malice: a non-first subtree has no coinbase
+	// placeholder, so any block whose tx count is congruent to 1 modulo the subtree size
+	// ends with a one-node subtree holding a real tx hash at index 0.
+	//
+	// So index 0 counts as missing unless it genuinely is the coinbase placeholder —
+	// the only case Serialize actually tolerates — and nothing that used to succeed
+	// starts failing here.
+	missing := 0
+	coinbaseAtZero := len(subtree.Nodes) > 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue)
+
+	for i, tx := range subtreeData.Txs {
 		if tx != nil {
-			nonNilCount++
+			continue
 		}
+
+		if i == 0 && coinbaseAtZero {
+			continue
+		}
+
+		missing++
 	}
-	u.logger.Debugf("[catchup:fetchAndStoreSubtreeData] Subtree %s from %s has %d/%d non-nil transactions",
-		subtreeHash.String(), baseURL, nonNilCount, len(subtreeData.Txs))
+
+	bytesRead := subtreeDataReader.BytesRead()
+
+	u.logger.Debugf("[catchup:fetchAndStoreSubtreeData] Subtree %s from %s has %d/%d txs (%d bytes, %d missing)",
+		subtreeHash.String(), baseURL, len(subtreeData.Txs)-missing, len(subtreeData.Txs), bytesRead, missing)
+
+	if missing > 0 {
+		return newPoisonedSubtreeDataError(peerID, baseURL, subtreeHash, missing, subtree.Length(), bytesRead)
+	}
 
 	// Try to serialize the subtreeData to validate it's complete
 	subtreeDataBytes, err := subtreeData.Serialize()
@@ -615,6 +650,57 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	return nil
 }
 
+// fetchSubtreeAndDataFromPeer fetches the subtree and then its subtreeData from a
+// single peer. With bypassCache set, both requests carry a cache-busting query
+// parameter.
+func (u *Server) fetchSubtreeAndDataFromPeer(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
+	peerID, baseURL string, bypassCache bool) error {
+	subtree, err := u.fetchAndStoreSubtree(ctx, block, subtreeHash, peerID, baseURL, bypassCache)
+	if err != nil {
+		return err
+	}
+
+	return u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL, bypassCache)
+}
+
+// tryPeerForSubtree fetches subtree + subtreeData from one peer, retrying that same
+// peer exactly once with a cache-busting URL when its response looked poisoned.
+// "Poisoned" is what carries the cache-bypass marker, and that is narrower than "any
+// 200 with a short body": a subtree_data body that is empty or cannot satisfy the
+// subtree, or a strictly empty /subtree body. A truncated-but-nonzero /subtree body
+// is not covered — it fails in the subtree parser on a different, unmarked path.
+//
+// A peer whose proxy cache is replaying a failed generation is the issue-1368 stall:
+// without the bypass no peer behind that cache can serve the subtree for the whole
+// TTL, and the node cannot pass the checkpoint. The bypass only fires after a
+// detected poisoning, so a healthy fleet never pays for it. The already-stored
+// subtree file makes the retry's /subtree fetch a local load, so only subtree_data
+// is re-requested.
+func (u *Server) tryPeerForSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
+	peerID, baseURL string) error {
+	err := u.fetchSubtreeAndDataFromPeer(ctx, block, subtreeHash, peerID, baseURL, false)
+	if err == nil {
+		return nil
+	}
+
+	if !isCacheBypassRetryable(err) {
+		// recordCatchupPeerFailure itself skips errors.IsLocalError — a local failure
+		// (context cancellation, storage) is ours, not the peer's.
+		u.recordCatchupPeerFailure(peerID, err)
+
+		return err
+	}
+
+	u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Peer %s served an unusable response for subtree %s, retrying with cache bypass: %v", peerID, subtreeHash.String(), err)
+
+	bypassErr := u.fetchSubtreeAndDataFromPeer(ctx, block, subtreeHash, peerID, baseURL, true)
+	if bypassErr != nil {
+		u.recordCatchupPeerFailure(peerID, bypassErr)
+	}
+
+	return bypassErr
+}
+
 // fetchAndStoreSubtreeAndSubtreeData fetches both subtree and subtreeData for a single subtree hash
 // and stores them in the subtreeStore. If the primary peer fails, it will try alternative peers
 // at max height before giving up.
@@ -627,28 +713,25 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 	)
 	defer deferFn()
 
-	// Try primary peer first
-	subtree, err := u.fetchAndStoreSubtree(ctx, block, subtreeHash, peerID, baseURL)
+	// Try the primary peer first.
+	err := u.tryPeerForSubtree(ctx, block, subtreeHash, peerID, baseURL)
 	if err == nil {
-		// Primary peer succeeded for subtree, now try subtreeData
-		if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL); err == nil {
-			return peerID, nil // Success
-		}
-		// Check if error is local (not peer-related) - don't retry with other peers
-		if errors.IsLocalError(err) {
-			return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtreeData for %s (not retrying with other peers)", subtreeHash.String(), err)
-		}
-		u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed to fetch subtreeData for %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
-	} else {
-		// Check if error is local (not peer-related) - don't retry with other peers
-		if errors.IsLocalError(err) {
-			return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree for %s (not retrying with other peers)", subtreeHash.String(), err)
-		}
-		u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed to fetch subtree for %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
+		return peerID, nil
 	}
 
-	// Primary peer failed, try alternative peers
-	var lastErr error = err
+	// A local error means our own storage or context failed — another peer cannot fix
+	// that, so do not spend attempts on the rest of the fleet.
+	if errors.IsLocalError(err) {
+		return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree %s (not retrying with other peers)", subtreeHash.String(), err)
+	}
+
+	u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed for subtree %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
+
+	primaryErr := err
+
+	attempts := make([]subtreeFetchAttempt, 0, 4)
+	attempts = append(attempts, subtreeFetchAttempt{peerID: peerID, baseURL: baseURL, role: "primary", err: err})
+
 	if u.p2pClient != nil {
 		alternativePeers, getPeersErr := GetPeersAtMaxHeight(ctx, u.logger, u.p2pClient, peerID)
 		if getPeersErr != nil {
@@ -664,34 +747,19 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 					continue
 				}
 
-				u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Trying alternative peer %s for subtree %s", altPeerID, subtreeHash.String())
-
-				// Try to fetch subtree from alternative peer
-				subtree, err = u.fetchAndStoreSubtree(ctx, block, subtreeHash, altPeerID, altBaseURL)
-				if err != nil {
-					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtree %s: %v", altPeerID, subtreeHash.String(), err)
-					lastErr = err
-					// Don't continue trying other peers if it's a local error
-					if errors.IsLocalError(err) {
-						return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree %s (aborting peer retry)", subtreeHash.String(), err)
-					}
-					continue
+				altErr := u.tryPeerForSubtree(ctx, block, subtreeHash, altPeerID, altBaseURL)
+				if altErr == nil {
+					u.logger.Infof("[catchup:fetchAndStoreSubtreeAndSubtreeData] Successfully fetched subtree %s from alternative peer %s", subtreeHash.String(), altPeerID)
+					return altPeerID, nil
 				}
 
-				// Subtree succeeded, try subtreeData
-				if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, altPeerID, altBaseURL); err != nil {
-					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtreeData %s: %v", altPeerID, subtreeHash.String(), err)
-					lastErr = err
-					// Don't continue trying other peers if it's a local error
-					if errors.IsLocalError(err) {
-						return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtreeData %s (aborting peer retry)", subtreeHash.String(), err)
-					}
-					continue
-				}
+				u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtree %s: %v", altPeerID, subtreeHash.String(), altErr)
 
-				// Success with alternative peer
-				u.logger.Infof("[catchup:fetchAndStoreSubtreeAndSubtreeData] Successfully fetched subtree %s from alternative peer %s", subtreeHash.String(), altPeerID)
-				return altPeerID, nil
+				attempts = append(attempts, subtreeFetchAttempt{peerID: altPeerID, baseURL: altBaseURL, role: "alternative", err: altErr})
+
+				if errors.IsLocalError(altErr) {
+					return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree %s (aborting peer retry)", subtreeHash.String(), altErr)
+				}
 			}
 		}
 	}
@@ -703,7 +771,7 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 	// into a silent "clear markers, retry" loop that hides peer-data-quality issues.
 	// With ErrExternal the handler reports peer failure and lets P2P switch peers instead.
 	//
-	// Note on detection: lastErr usually carries ERR_SERVICE_ERROR (the per-peer HTTP
+	// Note on detection: primaryErr usually carries ERR_SERVICE_ERROR (the per-peer HTTP
 	// fetch wrappers), and callers wrap this error further (fetchSubtreeDataForBlock
 	// adds a ServiceError, orderedDelivery a ProcessingError), so by the time it
 	// reaches processCatchupChItem the ERR_EXTERNAL code sits mid-chain and
@@ -711,20 +779,27 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 	// ErrExternal before ErrServiceError — see processCatchupChItem.
 	//
 	// errors.NewExternalError extracts the trailing error param as the wrapped error,
-	// so a "%v" placeholder for lastErr would render as %!v(MISSING). The wrapped error
-	// is preserved in the chain.
-	return "", errors.NewExternalError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s", subtreeHash.String(), lastErr)
+	// so a "%v" placeholder for primaryErr would render as %!v(MISSING). The wrapped
+	// error is preserved in the chain.
+	//
+	// The wrapped cause is the PRIMARY's error: it is the peer catchup selected and
+	// the most relevant single reason. The full per-peer summary rides in the message
+	// so no attempt is lost (issue 1368, Defect A — this function used to keep a single
+	// error variable that each alternative overwrote, so the reported cause was
+	// whichever alternative failed last, unrelated to the primary; primaryErr replaced
+	// it precisely so the primary's error survives).
+	return "", markCatchupFailureReported(errors.NewExternalError("[catchup:fetchAndStoreSubtreeAndSubtreeData] all %d peer attempts failed to fetch subtree %s [%s]", len(attempts), subtreeHash.String(), formatSubtreeFetchAttempts(attempts), primaryErr))
 }
 
 // fetchSubtreeFromPeer fetches subtree (for subtreeToCheck) from a peer via HTTP
-func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, peerID string, baseURL string) ([]byte, error) {
+func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, peerID string, baseURL string, bypassCache bool) ([]byte, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchSubtreeFromPeer",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
 
 	// Construct URL for subtree endpoint (for subtreeToCheck)
-	url := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	url := u.peerResourceURL(baseURL, "subtree", subtreeHash, bypassCache)
 
 	u.logger.Debugf("[catchup:fetchSubtreeFromPeer] fetching subtree from %s", url)
 
@@ -748,7 +823,7 @@ func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhas
 	}
 
 	if len(subtreeBytes) == 0 {
-		return nil, errors.NewNotFoundError("[catchup:fetchSubtreeFromPeer] empty subtree received from %s", url)
+		return nil, markCacheBypassRetryable(errors.NewNotFoundError("[catchup:fetchSubtreeFromPeer] empty subtree received from %s", url))
 	}
 
 	u.logger.Debugf("[catchup:fetchSubtreeFromPeer] successfully fetched %d bytes of subtree from %s", len(subtreeBytes), url)
@@ -776,16 +851,23 @@ func (c *countingReadCloser) Close() error {
 	return c.reader.Close()
 }
 
+// BytesRead returns the number of bytes pulled from the underlying reader so far.
+// Callers read it after the stream has been consumed, from the same goroutine that
+// consumed it, so no synchronisation is needed.
+func (c *countingReadCloser) BytesRead() uint64 {
+	return c.bytesRead
+}
+
 // fetchSubtreeDataFromPeer fetches subtree data from a peer via HTTP
-func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, peerID string, baseURL string) (io.ReadCloser, error) {
+func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, peerID string, baseURL string, bypassCache bool) (*countingReadCloser, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchSubtreeDataFromPeer",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
 
-	// Construct URL for subtree data endpoint
-	// Based on user clarification, subtree data is fetched from /subtree_data/:hash
-	url := fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String())
+	// peerResourceURL builds <baseURL>/subtree_data/<hash>, appending the cachebust
+	// query parameter when bypassCache is set.
+	url := u.peerResourceURL(baseURL, "subtree_data", subtreeHash, bypassCache)
 
 	u.logger.Debugf("[catchup:fetchSubtreeDataFromPeer] fetching subtree data from %s", url)
 

@@ -216,11 +216,11 @@ func createMinedTx(t *testing.T, ctx context.Context, store utxostore.Store, vou
 	require.NoError(t, tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 100000000))
 	tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
 
-	_, err = store.Create(ctx, tx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = store.SpendAndCreate(ctx, tx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:        blockID,
 		BlockHeight:    1,
 		OnLongestChain: true,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	return *tx.TxIDChainHash()

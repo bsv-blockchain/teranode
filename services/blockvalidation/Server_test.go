@@ -45,6 +45,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -1663,13 +1664,13 @@ func TestServer_ValidateBlock_TransientMissingParent_ReturnsIncomplete(t *testin
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
-	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
 	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
 	childTx := newTx(7, parentTx.TxIDChainHash())
-	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Subtree: coinbase + childTx.

@@ -2,11 +2,13 @@ package p2p
 
 import (
 	"context"
+	"math/rand/v2"
 	"net/http"
 	"sort"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
@@ -14,17 +16,24 @@ import (
 
 // SelectionCriteria defines criteria for peer selection
 type SelectionCriteria struct {
-	LocalHeight         int32
-	ForcedPeerID        string        // If set, only this peer (canonical libp2p ID string) will be selected
-	PreviousPeer        string        // The previously selected peer (canonical libp2p ID string), if any
-	SyncAttemptCooldown time.Duration // Cooldown period before retrying a peer
+	LocalHeight                  int32
+	LocalChainWork               []byte
+	AllowAdvertisedProbe         bool
+	UnprovenProbeBudgetRemaining int
+	FullDeliveryFreshnessWindow  time.Duration
+	ForcedPeerID                 string        // If set, only this peer (canonical libp2p ID string) will be selected
+	PreviousPeer                 string        // The previously selected peer (canonical libp2p ID string), if any
+	SyncAttemptCooldown          time.Duration // Cooldown period before retrying a peer
 }
 
-// PeerSelector handles peer selection logic
-// This is a stateless, pure function component
+// PeerSelector handles peer selection logic.
+// It is stateless; selection among candidates that are equal on every merit
+// criterion is randomized so a Sybil attacker cannot capture selection by
+// grinding peer IDs.
 type PeerSelector struct {
 	logger   ulogger.Logger
 	settings *settings.Settings
+	randIntN func(n int) int // injectable for tests; must return a uniform value in [0, n)
 }
 
 // NewPeerSelector creates a new peer selector
@@ -32,16 +41,34 @@ func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSe
 	return &PeerSelector{
 		logger:   logger,
 		settings: settings,
+		// math/rand/v2 uses a per-thread ChaCha8 generator seeded from OS
+		// entropy; a remote attacker cannot observe or predict the stream, so
+		// crypto/rand is unnecessary for this tiebreak.
+		randIntN: rand.IntN,
 	}
+}
+
+// randomIndex returns a uniform value in [0, n), falling back to the package
+// default source if the selector was constructed without one.
+func (ps *PeerSelector) randomIndex(n int) int {
+	if ps.randIntN == nil {
+		return rand.IntN(n)
+	}
+	return ps.randIntN(n)
 }
 
 // SelectSyncPeer selects the best peer for syncing using two-phase selection:
 // Phase 1: Try to select from full nodes (nodes with complete block data)
-// Phase 2: If no full nodes and fallback enabled, select youngest pruned node
-// This is a pure function - no side effects, no network calls.
+// Phase 2: If no full nodes and fallback enabled, select from non-full nodes
+// Ties among equally ranked candidates are broken randomly, never by peer ID.
+// May perform HTTP health checks when P2P.HealthCheckEnabled is set.
 // Peer IDs are canonical libp2p ID strings.
 func (ps *PeerSelector) SelectSyncPeer(peers []*blockchain.PeerInfo, criteria SelectionCriteria) string {
-	// Handle forced peer - always select it if it exists, regardless of eligibility
+	// Handle forced peer - always select it if it exists, regardless of
+	// eligibility. This deliberately skips the blacklist check in isEligible
+	// too, but a blacklisted DataHub URL is still refused downstream:
+	// sendSyncTriggerToKafka drops the trigger rather than handing the URL to
+	// block validation, so forcing a peer cannot override the blacklist.
 	if criteria.ForcedPeerID != "" {
 		for _, p := range peers {
 			if p.ID == criteria.ForcedPeerID {
@@ -75,7 +102,7 @@ func (ps *PeerSelector) SelectSyncPeer(peers []*blockchain.PeerInfo, criteria Se
 		if len(prunedCandidates) > 0 {
 			selected := ps.selectFromCandidates(prunedCandidates, criteria, false)
 			if selected != "" {
-				ps.logger.Warnf("[PeerSelector] Selected PRUNED node %s (smallest height to minimize UTXO pruning risk)", selected)
+				ps.logger.Warnf("[PeerSelector] Selected PRUNED node %s", selected)
 				return selected
 			}
 		}
@@ -87,69 +114,131 @@ func (ps *PeerSelector) SelectSyncPeer(peers []*blockchain.PeerInfo, criteria Se
 	return ""
 }
 
-// getFullNodeCandidates returns eligible full nodes that are ahead of local height
+// getFullNodeCandidates returns eligible full nodes that are ahead by validated
+// work or eligible for a bounded advertised probe.
 func (ps *PeerSelector) getFullNodeCandidates(peers []*blockchain.PeerInfo, criteria SelectionCriteria) []*blockchain.PeerInfo {
 	var candidates []*blockchain.PeerInfo
+	now := time.Now()
 	for _, p := range peers {
-		if ps.isEligibleFullNode(p, criteria) && int32(p.Height) > criteria.LocalHeight {
+		if ps.isEligibleFullNode(p, criteria, now) {
 			candidates = append(candidates, p)
-			ps.logger.Debugf("[PeerSelector] Full node candidate: %s at height %d (mode: %s)", p.ID, p.Height, p.Storage)
+			ps.logger.Debugf("[PeerSelector] Full node candidate: %s (validated_height=%d, advertised_height=%d, mode=%s)",
+				p.ID, p.ValidatedHeight, p.Height, p.Storage)
 		}
 	}
 	return candidates
 }
 
-// getPrunedNodeCandidates returns eligible pruned nodes that are ahead of local height
+// getPrunedNodeCandidates returns eligible non-full nodes that are ahead by
+// validated work or eligible for a bounded advertised probe.
 func (ps *PeerSelector) getPrunedNodeCandidates(peers []*blockchain.PeerInfo, criteria SelectionCriteria) []*blockchain.PeerInfo {
 	var candidates []*blockchain.PeerInfo
+	now := time.Now()
 	for _, p := range peers {
 		// Only include if eligible but NOT a full node
-		if ps.isEligible(p, criteria) && p.Storage != "full" && int32(p.Height) > criteria.LocalHeight {
+		if ps.isEligible(p, criteria) && !ps.isEffectiveFullNode(p, now) {
 			candidates = append(candidates, p)
-			ps.logger.Debugf("[PeerSelector] Pruned node candidate: %s at height %d (mode: %s)", p.ID, p.Height, p.Storage)
+			ps.logger.Debugf("[PeerSelector] Pruned node candidate: %s (validated_height=%d, advertised_height=%d, mode=%s)",
+				p.ID, p.ValidatedHeight, p.Height, p.Storage)
 		}
 	}
 	return candidates
+}
+
+// comparePeerCandidates orders two candidates by merit: proven recent full-block
+// delivery, validated chain work, reputation, response time, ban score, then
+// validated height. Returns a negative value when a ranks before b, positive
+// when b ranks before a, and 0 when they are equal on every criterion. There is
+// deliberately no peer-ID tiebreak: peer IDs are attacker-grindable, so ties
+// are resolved by random selection in selectFromCandidates instead.
+func (ps *PeerSelector) comparePeerCandidates(a, b *blockchain.PeerInfo, now time.Time, freshnessWindow time.Duration) int {
+	aProven := peerHasRecentFullBlockDelivery(a, now, freshnessWindow)
+	bProven := peerHasRecentFullBlockDelivery(b, now, freshnessWindow)
+	if aProven != bProven {
+		if aProven {
+			return -1
+		}
+		return 1
+	}
+	if cmp := compareChainWork(a.ValidatedChainWork, b.ValidatedChainWork); cmp != 0 {
+		return -cmp
+	}
+	if a.ReputationScore != b.ReputationScore {
+		if a.ReputationScore > b.ReputationScore {
+			return -1
+		}
+		return 1
+	}
+	aHasTime := a.AvgResponseTimeMs > 0
+	bHasTime := b.AvgResponseTimeMs > 0
+	if aHasTime != bHasTime {
+		if aHasTime {
+			return -1
+		}
+		return 1
+	}
+	if aHasTime && bHasTime && a.AvgResponseTimeMs != b.AvgResponseTimeMs {
+		if a.AvgResponseTimeMs < b.AvgResponseTimeMs {
+			return -1
+		}
+		return 1
+	}
+	if a.BanScore != b.BanScore {
+		if a.BanScore < b.BanScore {
+			return -1
+		}
+		return 1
+	}
+	if a.ValidatedHeight != b.ValidatedHeight {
+		if a.ValidatedHeight > b.ValidatedHeight {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 // selectFromCandidates selects the best peer from a list of candidates
-// If isFullNode is true, sorts by height descending (prefer highest)
-// If isFullNode is false (pruned), sorts by height ascending (prefer lowest/youngest)
+// using validation-gated delivery evidence and locally validated work.
+// Candidates that tie on every merit criterion form the top band, and the
+// winner is drawn uniformly at random from that band so an attacker cannot
+// deterministically capture selection by grinding peer IDs.
+// The candidates slice is consumed: it is reordered and may be filtered in
+// place, so callers must not reuse it afterwards.
 func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, criteria SelectionCriteria, isFullNode bool) string {
 	if len(candidates) == 0 {
 		return ""
 	}
 
-	// Sort candidates by: 1) ReputationScore (descending), 2) AvgResponseTimeMs (ascending),
-	// 3) BanScore (ascending), 4) Height (descending for full / ascending for pruned), 5) PeerID.
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].ReputationScore != candidates[j].ReputationScore {
-			return candidates[i].ReputationScore > candidates[j].ReputationScore
-		}
-		iHasTime := candidates[i].AvgResponseTimeMs > 0
-		jHasTime := candidates[j].AvgResponseTimeMs > 0
-		if iHasTime != jHasTime {
-			return iHasTime
-		}
-		if iHasTime && jHasTime && candidates[i].AvgResponseTimeMs != candidates[j].AvgResponseTimeMs {
-			return candidates[i].AvgResponseTimeMs < candidates[j].AvgResponseTimeMs
-		}
-		if candidates[i].BanScore != candidates[j].BanScore {
-			return candidates[i].BanScore < candidates[j].BanScore
-		}
-		if candidates[i].Height != candidates[j].Height {
-			if isFullNode {
-				return candidates[i].Height > candidates[j].Height
+	// Rotate off the previously selected peer whenever an alternative exists,
+	// so a tied previous peer cannot be re-drawn from the top band.
+	if len(candidates) > 1 && criteria.PreviousPeer != "" {
+		filtered := candidates[:0]
+		for _, c := range candidates {
+			if c.ID != criteria.PreviousPeer {
+				filtered = append(filtered, c)
 			}
-			return candidates[i].Height < candidates[j].Height
 		}
-		return candidates[i].ID < candidates[j].ID
+		if len(filtered) > 0 && len(filtered) < len(candidates) {
+			ps.logger.Debugf("[PeerSelector] Excluding previous peer %s from selection", criteria.PreviousPeer)
+			candidates = filtered
+		}
+	}
+
+	now := time.Now()
+	sort.Slice(candidates, func(i, j int) bool {
+		return ps.comparePeerCandidates(candidates[i], candidates[j], now, criteria.FullDeliveryFreshnessWindow) < 0
 	})
 
+	topBandSize := 1
+	for topBandSize < len(candidates) &&
+		ps.comparePeerCandidates(candidates[0], candidates[topBandSize], now, criteria.FullDeliveryFreshnessWindow) == 0 {
+		topBandSize++
+	}
+
 	selectedIndex := 0
-	if len(candidates) > 1 && criteria.PreviousPeer != "" && candidates[0].ID == criteria.PreviousPeer {
-		selectedIndex = 1
-		ps.logger.Debugf("[PeerSelector] Previous peer %s was top candidate, selecting second", criteria.PreviousPeer)
+	if topBandSize > 1 {
+		selectedIndex = ps.randomIndex(topBandSize)
 	}
 
 	selected := candidates[selectedIndex]
@@ -157,12 +246,12 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 	if !isFullNode {
 		nodeType = "PRUNED"
 	}
-	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (index=%d)",
-		nodeType, selected.ID, selected.Height, selected.BanScore, selected.AvgResponseTimeMs, len(candidates), selectedIndex)
+	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (topBandSize=%d, index=%d)",
+		nodeType, selected.ID, selected.ValidatedHeight, selected.Height, selected.BanScore, selected.AvgResponseTimeMs, len(candidates), topBandSize, selectedIndex)
 
 	for i := 0; i < len(candidates) && i < 3; i++ {
-		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (height=%d, banScore=%d, avgResponseTimeMs=%d, mode=%s, url=%s)",
-			i+1, candidates[i].ID, candidates[i].Height, candidates[i].BanScore, candidates[i].AvgResponseTimeMs, candidates[i].Storage, candidates[i].DataHubURL)
+		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d, mode=%s, url=%s)",
+			i+1, candidates[i].ID, candidates[i].ValidatedHeight, candidates[i].Height, candidates[i].BanScore, candidates[i].AvgResponseTimeMs, candidates[i].Storage, candidates[i].DataHubURL)
 	}
 
 	return selected.ID
@@ -182,15 +271,22 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCri
 		return false
 	}
 
-	// Check valid height
-	if p.Height <= 0 {
-		ps.logger.Debugf("[PeerSelector] Peer %s has invalid height %d", p.ID, p.Height)
+	// Enforce the operator blacklist at the point of use: a URL stored in the
+	// registry before its host was blacklisted must never be selected for
+	// sync/catchup (gossip-time checks cannot evict already-stored URLs).
+	if ps.settings != nil && isBaseURLBlacklisted(p.DataHubURL, ps.settings.SubtreeValidation.BlacklistedBaseURLs) {
+		ps.logger.Debugf("[PeerSelector] Peer %s has blacklisted DataHub URL %s", p.ID, p.DataHubURL)
 		return false
 	}
 
 	// Check reputation threshold - peers with very low reputation should not be selected
 	if p.ReputationScore < 20.0 {
 		ps.logger.Debugf("[PeerSelector] Peer %s has very low reputation %.2f (below threshold 20.0)", p.ID, p.ReputationScore)
+		return false
+	}
+
+	if !ps.isEligibleByProgress(p, criteria) {
+		ps.logger.Debugf("[PeerSelector] Peer %s has no validated-work/probe eligibility", p.ID)
 		return false
 	}
 
@@ -223,18 +319,41 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCri
 
 // isEligibleFullNode checks if a peer is eligible as a full node for catchup
 // Only peers explicitly announcing as "full" are considered full nodes
-func (ps *PeerSelector) isEligibleFullNode(p *blockchain.PeerInfo, criteria SelectionCriteria) bool {
+func (ps *PeerSelector) isEligibleFullNode(p *blockchain.PeerInfo, criteria SelectionCriteria, now time.Time) bool {
 	if !ps.isEligible(p, criteria) {
 		return false // Must pass basic eligibility first
 	}
 
-	// Only peers announcing as "full" are considered full nodes
-	// Unknown/empty mode is treated as pruned
-	if p.Storage != "full" {
+	return ps.isEffectiveFullNode(p, now)
+}
+
+func (ps *PeerSelector) isEffectiveFullNode(p *blockchain.PeerInfo, now time.Time) bool {
+	return p.Storage == "full" && (p.FullStoragePenaltyUntil.IsZero() || !now.Before(p.FullStoragePenaltyUntil))
+}
+
+func (ps *PeerSelector) isEligibleByProgress(p *blockchain.PeerInfo, criteria SelectionCriteria) bool {
+	if peerAheadByValidatedWork(p, criteria.LocalChainWork) {
+		return true
+	}
+	if !criteria.AllowAdvertisedProbe || criteria.UnprovenProbeBudgetRemaining <= 0 {
 		return false
 	}
+	// Unproven/header-only churn is bounded by the coordinator budget: for a
+	// Sybil set of size N, at most min(N, budget) peers can be activated before
+	// the backoff window is entered or honored. With the default budget this is
+	// min(N, 3).
+	return peerEligibleForAdvertisedProbe(p, localHeightFromCriteria(criteria))
+}
 
-	return true
+func localHeightFromCriteria(criteria SelectionCriteria) uint32 {
+	if criteria.LocalHeight <= 0 {
+		return 0
+	}
+	return uint32(criteria.LocalHeight)
+}
+
+func compareChainWork(a, b []byte) int {
+	return work.CompareChainWork(a, b)
 }
 
 // checkPeerAvailability tests if a peer's DataHub URL is reachable via HTTP.

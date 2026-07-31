@@ -18,6 +18,8 @@ const (
 	subtreeNodeRecordSize   = chainhash.HashSize + 16
 	subtreeStreamBufferSize = 32 * 1024
 	subtreePageMaxNodes     = 100 // Keep in sync with HTTP pagination bounds.
+
+	errUnableToReadSubtreeNode = "unable to read subtree node information"
 )
 
 type subtreeStreamHeader struct {
@@ -44,7 +46,7 @@ func readSubtreeStreamHeader(buf *bufio.Reader) (subtreeStreamHeader, error) {
 func readSubtreeNodeRecord(buf *bufio.Reader) ([subtreeNodeRecordSize]byte, error) {
 	var byteBuffer [subtreeNodeRecordSize]byte
 	if _, err := io.ReadFull(buf, byteBuffer[:]); err != nil {
-		return byteBuffer, errors.NewProcessingError("unable to read subtree node information", err)
+		return byteBuffer, errors.NewProcessingError(errUnableToReadSubtreeNode, err)
 	}
 
 	return byteBuffer, nil
@@ -297,9 +299,9 @@ func (r *subtreeNodeHashesReadCloser) Read(p []byte) (int, error) {
 
 			if _, err := io.ReadFull(r.buf, r.nodeBytes[:]); err != nil {
 				if total > 0 {
-					return total, errors.NewProcessingError("unable to read subtree node information", err)
+					return total, errors.NewProcessingError(errUnableToReadSubtreeNode, err)
 				}
-				return 0, errors.NewProcessingError("unable to read subtree node information", err)
+				return 0, errors.NewProcessingError(errUnableToReadSubtreeNode, err)
 			}
 
 			r.pending = r.nodeBytes[:chainhash.HashSize]

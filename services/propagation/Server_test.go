@@ -42,6 +42,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type panicReadCloser struct{}
@@ -287,7 +288,7 @@ func TestProcessTransaction(t *testing.T) {
 		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
 
 		// Add the first transaction (coinbase) to UTXO store
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Use the second transaction (non-coinbase) for testing
@@ -820,7 +821,9 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 	c.SetPath("/txs")
 
 	require.NoError(t, handler(c))
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	// orderedErrValidator rejects every tx with ERR_TX_INVALID, which the batch
+	// aggregation now classifies (via httpStatusForTxError) as a client error.
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 
 	responseBody, err := io.ReadAll(rec.Body)
 	require.NoError(t, err)
@@ -835,6 +838,403 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 		require.GreaterOrEqualf(t, idx, 0, "txid for submission %d (%s) not found in response after position %d; body=%q", i, txid, prev, body)
 		prev += idx + len(txid)
 	}
+}
+
+// nonFinalMsg mirrors the actionable non-final reason produced by util/lock_time.go.
+const nonFinalMsg = "lock time (1783806110) as timestamp is not less than median block time (1783805456)"
+
+// nonFinalValidator rejects every tx as non-final (UTXO_NON_FINAL -> TX_LOCK_TIME),
+// the exact chain the validator produces for a BIP113 non-final transaction.
+type nonFinalValidator struct {
+	validator.MockValidator
+}
+
+func (m *nonFinalValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	return nil, errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError(nonFinalMsg))
+}
+
+// verdictValidator returns a caller-supplied error per txid, so a batch can mix a
+// non-final rejection with a genuine storage fault and exercise the aggregate
+// HTTP status rule in handleMultipleTx.
+type verdictValidator struct {
+	validator.MockValidator
+	errByTxID map[string]error
+}
+
+func (m *verdictValidator) Validate(_ context.Context, tx *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	if err, ok := m.errByTxID[tx.TxIDChainHash().String()]; ok {
+		return nil, err
+	}
+
+	return nil, errors.NewStorageError("unexpected tx in batch")
+}
+
+// batchSiblings builds n sibling txs each spending a distinct output of a single
+// coinbase (honouring the no-parent-and-child-in-a-batch contract), returning the
+// concatenated extended bytes and the txids in submission order.
+func batchSiblings(t *testing.T, n uint32) ([]byte, []string) {
+	t.Helper()
+
+	_, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	privKey, _ := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(int(n), 50e6, pubKey),
+	)
+
+	txBytes := make([]byte, 0, 1024)
+	txids := make([]string, 0, n)
+
+	for i := uint32(0); i < n; i++ {
+		tx := transactions.Create(t,
+			transactions.WithPrivateKey(privKey),
+			transactions.WithInput(coinbaseTx, i),
+			transactions.WithP2PKHOutputs(1, 1000),
+		)
+		txids = append(txids, tx.TxIDChainHash().String())
+		txBytes = append(txBytes, tx.ExtendedBytes()...)
+	}
+
+	return txBytes, txids
+}
+
+// Test_handleMultipleTx_NonFinalReturns400 verifies that a batch whose txs are
+// rejected as non-final reports HTTP 400 (a client error) — not the previous
+// hardcoded 500 — with the actionable per-tx reason in the aggregated body.
+func Test_handleMultipleTx_NonFinalReturns400(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	ps := &PropagationServer{
+		logger:    logger,
+		validator: &nonFinalValidator{},
+		txStore:   txStore,
+		settings:  tSettings,
+	}
+
+	handler := ps.handleMultipleTx(t.Context())
+
+	txBytes, _ := batchSiblings(t, 4)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(txBytes))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/txs")
+
+	require.NoError(t, handler(c))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	body, err := io.ReadAll(rec.Body)
+	require.NoError(t, err)
+	// The actionable reason surfaces (commit 1) instead of a bare PROCESSING message.
+	require.Contains(t, string(body), "TX_LOCK_TIME")
+	require.Contains(t, string(body), nonFinalMsg)
+}
+
+// Test_handleMultipleTx_StorageErrorReturns500 verifies that when a batch mixes a
+// client-side tx rejection (non-final -> 400) with a genuine storage fault, the
+// server fault dominates and the aggregate status is 500.
+func Test_handleMultipleTx_StorageErrorReturns500(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	txBytes, txids := batchSiblings(t, 2)
+	require.Len(t, txids, 2)
+
+	ps := &PropagationServer{
+		logger: logger,
+		validator: &verdictValidator{
+			errByTxID: map[string]error{
+				txids[0]: errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError(nonFinalMsg)),
+				txids[1]: errors.NewStorageError("simulated store failure"),
+			},
+		},
+		txStore:  txStore,
+		settings: tSettings,
+	}
+
+	handler := ps.handleMultipleTx(t.Context())
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(txBytes))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/txs")
+
+	require.NoError(t, handler(c))
+	// A genuine server fault in the batch dominates the client-side rejection.
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	body, err := io.ReadAll(rec.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "Failed to process transactions")
+	// The client-side rejection reason is still reported alongside.
+	require.Contains(t, string(body), nonFinalMsg)
+}
+
+// Test_handleMultipleTx_FirstClientErrorStatusWins pins the aggregation rule:
+// absent any server fault, the first client-error (4xx) status in submission
+// order determines the batch status, even when the rejection classes differ
+// (e.g. a 409 conflict and a 400 non-final rejection).
+func Test_handleMultipleTx_FirstClientErrorStatusWins(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	conflictErr := func() error { return errors.NewTxLockedError("transaction is locked") }
+	nonFinalErr := func() error {
+		return errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError(nonFinalMsg))
+	}
+
+	tests := []struct {
+		name       string
+		firstErr   error // returned for the first tx in submission order
+		secondErr  error // returned for the second tx in submission order
+		wantStatus int
+	}{
+		{"conflict first yields 409", conflictErr(), nonFinalErr(), http.StatusConflict},
+		{"non-final first yields 400", nonFinalErr(), conflictErr(), http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			txBytes, txids := batchSiblings(t, 2)
+			require.Len(t, txids, 2)
+
+			ps := &PropagationServer{
+				logger: logger,
+				validator: &verdictValidator{
+					errByTxID: map[string]error{
+						txids[0]: tc.firstErr,
+						txids[1]: tc.secondErr,
+					},
+				},
+				txStore:  txStore,
+				settings: tSettings,
+			}
+
+			handler := ps.handleMultipleTx(t.Context())
+
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(txBytes))
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/txs")
+
+			require.NoError(t, handler(c))
+			require.Equal(t, tc.wantStatus, rec.Code)
+		})
+	}
+}
+
+// siblingTxs builds n sibling txs each spending a distinct output of a single
+// coinbase (honouring the no-parent-and-child-in-a-batch contract), returning the
+// txs themselves so callers can take individual bytes and txids.
+func siblingTxs(t *testing.T, n uint32) []*bt.Tx {
+	t.Helper()
+
+	_, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	privKey, _ := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(int(n), 50e6, pubKey),
+	)
+
+	txs := make([]*bt.Tx, 0, n)
+
+	for i := uint32(0); i < n; i++ {
+		txs = append(txs, transactions.Create(t,
+			transactions.WithPrivateKey(privKey),
+			transactions.WithInput(coinbaseTx, i),
+			transactions.WithP2PKHOutputs(1, 1000),
+		))
+	}
+
+	return txs
+}
+
+// Test_handleSingleTx_NonFinalReturns400 covers the HTTP /tx surface: a non-final
+// tx returns HTTP 400 with the actionable UTXO_NON_FINAL/TX_LOCK_TIME reason in
+// the body, not just the outer PROCESSING message.
+func Test_handleSingleTx_NonFinalReturns400(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	ps := &PropagationServer{
+		logger:    logger,
+		validator: &nonFinalValidator{},
+		txStore:   txStore,
+		settings:  tSettings,
+	}
+
+	handler := ps.handleSingleTx(t.Context())
+
+	txBytes := siblingTxs(t, 1)[0].ExtendedBytes()
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/tx", bytes.NewReader(txBytes))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tx")
+
+	require.NoError(t, handler(c))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	body, err := io.ReadAll(rec.Body)
+	require.NoError(t, err)
+	// The body carries EXACTLY the allowlisted reason: the outer PROCESSING code
+	// and the wrapped chain do not leak into it.
+	expectedReason := fmt.Sprintf("%s (%d): %s", errors.ERR_TX_LOCK_TIME.String(), errors.ERR_TX_LOCK_TIME, nonFinalMsg)
+	require.Equal(t, "Failed to process transaction: "+expectedReason, string(body))
+	require.NotContains(t, string(body), "PROCESSING")
+}
+
+// TestProcessTransaction_NonFinalGRPCStatus covers the gRPC ProcessTransaction
+// surface: a non-final tx yields the client-error status class (InvalidArgument),
+// and both the status message and the attached TError detail carry the allowlisted
+// TX_LOCK_TIME reason.
+func TestProcessTransaction_NonFinalGRPCStatus(t *testing.T) {
+	initPrometheusMetrics()
+	tracing.SetupMockTracer()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	ps := &PropagationServer{
+		logger:    logger,
+		validator: &nonFinalValidator{},
+		txStore:   txStore,
+		settings:  tSettings,
+	}
+
+	txBytes := siblingTxs(t, 1)[0].ExtendedBytes()
+
+	_, err = ps.ProcessTransaction(t.Context(), &propagation_api.ProcessTransactionRequest{Tx: txBytes})
+	require.Error(t, err)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+	// The status message is EXACTLY the allowlisted reason — no PROCESSING chain
+	// text, file paths, or other metadata wrapped around it.
+	require.Equal(t, nonFinalMsg, st.Message())
+
+	// The reconstructed public error carries only the allowlisted code+message,
+	// with no wrapped chain and no data.
+	unwrapped := errors.UnwrapGRPC(err)
+	require.NotNil(t, unwrapped)
+	require.Equal(t, errors.ERR_TX_LOCK_TIME, unwrapped.Code())
+	require.Equal(t, nonFinalMsg, unwrapped.Message())
+	require.Nil(t, unwrapped.WrappedErr())
+	require.Nil(t, unwrapped.Data())
+
+	// Inspect the attached wire-level TError detail directly (same access pattern
+	// as errors.UnwrapGRPC): only code+message are present — no file/line/function,
+	// data, or wrapped chain leaks.
+	require.Len(t, st.Details(), 1)
+	anyDetail, ok := st.Details()[0].(*anypb.Any)
+	require.True(t, ok, "status detail should be an *anypb.Any")
+
+	var detail errors.TError
+	require.NoError(t, anyDetail.UnmarshalTo(&detail))
+	require.Equal(t, errors.ERR_TX_LOCK_TIME, detail.Code)
+	require.Equal(t, nonFinalMsg, detail.Message)
+	require.Empty(t, detail.File)
+	require.Zero(t, detail.Line)
+	require.Empty(t, detail.Function)
+	require.Nil(t, detail.Data)
+	require.Nil(t, detail.WrappedError)
+}
+
+// TestProcessTransactionBatch_NonFinalPerTxError covers the gRPC
+// ProcessTransactionBatch surface: the rejected entry's response.Errors[idx]
+// carries the allowlisted TX_LOCK_TIME code+message, while the accepted entry is
+// nil.
+func TestProcessTransactionBatch_NonFinalPerTxError(t *testing.T) {
+	initPrometheusMetrics()
+	tracing.SetupMockTracer()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	txs := siblingTxs(t, 2)
+	acceptedTxID := txs[0].TxIDChainHash().String()
+	rejectedTxID := txs[1].TxIDChainHash().String()
+
+	ps := &PropagationServer{
+		logger: logger,
+		validator: &verdictValidator{
+			errByTxID: map[string]error{
+				acceptedTxID: nil, // Validate returns (nil, nil) -> accepted
+				rejectedTxID: errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError(nonFinalMsg)),
+			},
+		},
+		txStore:  txStore,
+		settings: tSettings,
+	}
+
+	req := &propagation_api.ProcessTransactionBatchRequest{
+		Items: []*propagation_api.BatchTransactionItem{
+			{Tx: txs[0].ExtendedBytes()},
+			{Tx: txs[1].ExtendedBytes()},
+		},
+	}
+
+	resp, err := ps.ProcessTransactionBatch(t.Context(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Errors, 2)
+
+	// Accepted entry: nil.
+	require.Nil(t, resp.Errors[0])
+
+	// Rejected entry: EXACTLY the allowlisted code+message, and no leaked
+	// metadata — no wrapped chain, data, or file/line/function.
+	rejected := resp.Errors[1]
+	require.NotNil(t, rejected)
+	require.Equal(t, errors.ERR_TX_LOCK_TIME, rejected.Code)
+	require.Equal(t, nonFinalMsg, rejected.Message)
+	require.Nil(t, rejected.WrappedError)
+	require.Nil(t, rejected.Data)
+	require.Empty(t, rejected.File)
+	require.Zero(t, rejected.Line)
+	require.Empty(t, rejected.Function)
 }
 
 func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
@@ -878,7 +1278,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 		}
 
 		// Add the first transaction to the store
-		_, err = utxoStore.Create(t.Context(), txs[1], 1)
+		_, _, err = utxoStore.SpendAndCreate(t.Context(), txs[1], 1, utxo.WithCreateOnly())
 		require.NoError(t, err, "processTransactionInternal should not return an error for valid transaction")
 
 		tx2NotExtended, err := bt.NewTxFromBytes(txs[2].Bytes())
@@ -909,7 +1309,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 		txs := transactions.CreateTestTransactionChainWithCount(t, 5)
 
 		// Add the first transaction to the store
-		_, err = utxoStore.Create(t.Context(), txs[1], 1)
+		_, _, err = utxoStore.SpendAndCreate(t.Context(), txs[1], 1, utxo.WithCreateOnly())
 		require.NoError(t, err, "processTransactionInternal should not return an error for valid transaction")
 
 		g := errgroup.Group{}
@@ -1401,7 +1801,7 @@ func TestProcessTransaction_BatchHandlerLimit(t *testing.T) {
 		}
 
 		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		req := &propagation_api.ProcessTransactionRequest{Tx: txs[1].ExtendedBytes()}
@@ -1427,7 +1827,7 @@ func TestProcessTransaction_BatchHandlerLimit(t *testing.T) {
 		}
 
 		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		req := &propagation_api.ProcessTransactionRequest{Tx: txs[1].ExtendedBytes()}
@@ -1496,7 +1896,7 @@ func TestProcessTransactionBatch_BatchConcurrencyLimit(t *testing.T) {
 
 		// Create transactions
 		txs := transactions.CreateTestTransactionChainWithCount(t, 4)
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Process a batch — should succeed even with concurrency limit of 1
@@ -1529,7 +1929,7 @@ func TestProcessTransactionBatch_BatchConcurrencyLimit(t *testing.T) {
 		}
 
 		txs := transactions.CreateTestTransactionChainWithCount(t, 4)
-		_, err := utxoStore.Create(ctx, txs[0], 1)
+		_, _, err := utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		req := &propagation_api.ProcessTransactionBatchRequest{

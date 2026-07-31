@@ -13,6 +13,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -97,15 +99,27 @@ func (c *Client) Close() error {
 //   - []*PeerInfo: Slice of peer information
 //   - error: Any error encountered during the operation
 func (c *Client) GetPeers(ctx context.Context) ([]*PeerInfo, error) {
-	_, err := c.client.GetPeers(ctx, &emptypb.Empty{})
+	resp, err := c.client.GetPeers(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert p2p_api response to native PeerInfo slice
-	// Note: The p2p_api.GetPeersResponse contains legacy SVNode format
-	// For now, return empty slice as the actual implementation uses GetPeerRegistry
-	return []*PeerInfo{}, nil
+	peers := make([]*PeerInfo, 0, len(resp.GetPeers()))
+
+	for _, apiPeer := range resp.GetPeers() {
+		peerInfo, err := convertFromAPIPeerInfo(apiPeer)
+		if err != nil {
+			c.logger.Warnf("skipping peer with invalid data: %v", err)
+			continue
+		}
+
+		// The GetPeers RPC only reports currently connected peers.
+		peerInfo.IsConnected = true
+
+		peers = append(peers, peerInfo)
+	}
+
+	return peers, nil
 }
 
 // BanPeer implements the ClientI interface method to ban a peer.
@@ -371,8 +385,23 @@ func (c *Client) RecordCatchupSuccess(ctx context.Context, peerID string, durati
 // Returns:
 //   - error: Any error encountered during the operation
 func (c *Client) RecordCatchupFailure(ctx context.Context, peerID string) error {
+	return c.RecordCatchupFailureWithKind(ctx, peerID, catchupFailureKindGeneric, "")
+}
+
+// RecordCatchupFailureWithKind records a failed catchup attempt from a peer with optional diagnostic context.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to record the failure for
+//   - failureKind: Optional failure classification
+//   - blockHash: Optional block hash associated with the failure
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) RecordCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) error {
 	req := &p2p_api.RecordCatchupFailureRequest{
-		PeerId: peerID,
+		PeerId:      peerID,
+		FailureKind: failureKind,
+		BlockHash:   blockHash,
 	}
 
 	resp, err := c.client.RecordCatchupFailure(ctx, req)
@@ -506,7 +535,12 @@ func (c *Client) GetPeersForCatchup(ctx context.Context) ([]*PeerInfo, error) {
 	// Convert p2p_api peer info to native PeerInfo
 	peers := make([]*PeerInfo, 0, len(resp.Peers))
 	for _, apiPeer := range resp.Peers {
-		peerInfo := convertFromAPIPeerInfo(apiPeer)
+		peerInfo, err := convertFromAPIPeerInfo(apiPeer)
+		if err != nil {
+			c.logger.Warnf("skipping catchup peer with invalid data: %v", err)
+			continue
+		}
+
 		peers = append(peers, peerInfo)
 	}
 
@@ -560,6 +594,84 @@ func (c *Client) ReportValidBlock(ctx context.Context, peerID string, blockHash 
 
 	if resp != nil && !resp.Success {
 		return errors.NewServiceError("failed to report valid block: %s", resp.Message)
+	}
+
+	return nil
+}
+
+// ReportValidBlockHeaders reports that a peer successfully served a batch of block
+// headers during catchup. Credits a generic interaction success (reputation and
+// response time) without touching the catchup-operation counters.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: Peer ID that served the headers
+//   - durationMs: Time taken to serve the headers (0 = not applicable)
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error {
+	req := &p2p_api.ReportValidBlockHeadersRequest{
+		PeerId:     peerID,
+		DurationMs: durationMs,
+	}
+
+	resp, err := c.client.ReportValidBlockHeaders(ctx, req)
+	if status.Code(err) == codes.Unimplemented {
+		// Rolling upgrade: the p2p service predates this RPC. Fall back to
+		// RecordCatchupSuccess, which on such a server is implemented as a
+		// generic interaction success — exactly the credit this call carries.
+		// (New servers never hit this: there RecordCatchupSuccess would also
+		// bump the catchup counters, which a headers batch must not do.)
+		legacyResp, legacyErr := c.client.RecordCatchupSuccess(ctx, &p2p_api.RecordCatchupSuccessRequest{
+			PeerId:     peerID,
+			DurationMs: durationMs,
+		})
+		if legacyErr != nil {
+			return legacyErr
+		}
+		if legacyResp != nil && !legacyResp.Ok {
+			return errors.NewServiceError("failed to report valid block headers via legacy fallback")
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report valid block headers: %s", resp.Message)
+	}
+
+	return nil
+}
+
+// ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: Peer ID that served the validated headers
+//   - height: Height of the last validated header
+//   - blockHash: Hash of the last validated header
+//   - chainWork: Locally validated cumulative chainwork
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error {
+	req := &p2p_api.ReportValidatedChainProgressRequest{
+		PeerId:    peerID,
+		Height:    height,
+		BlockHash: blockHash,
+		ChainWork: append([]byte(nil), chainWork...),
+	}
+
+	resp, err := c.client.ReportValidatedChainProgress(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report validated chain progress: %s", resp.Message)
 	}
 
 	return nil
@@ -622,7 +734,13 @@ func (c *Client) GetPeerRegistry(ctx context.Context) ([]*PeerInfo, error) {
 	// Convert p2p_api peer registry info to native PeerInfo
 	peers := make([]*PeerInfo, 0, len(resp.Peers))
 	for _, apiPeer := range resp.Peers {
-		peers = append(peers, convertFromAPIPeerInfo(apiPeer))
+		peerInfo, err := convertFromAPIPeerInfo(apiPeer)
+		if err != nil {
+			c.logger.Warnf("skipping registry peer with invalid data: %v", err)
+			continue
+		}
+
+		peers = append(peers, peerInfo)
 	}
 
 	return peers, nil
@@ -670,38 +788,81 @@ func (c *Client) GetPeer(ctx context.Context, peerID string) (*PeerInfo, error) 
 	}
 
 	// Convert from protobuf to native PeerInfo
-	return convertFromAPIPeerInfo(resp.Peer), nil
+	return convertFromAPIPeerInfo(resp.Peer)
 }
 
-// convertFromAPIPeerInfo converts a p2p_api peer info (either PeerInfoForCatchup or PeerRegistryInfo) to native PeerInfo
-func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
-	// Handle both PeerInfoForCatchup and PeerRegistryInfo types
-	switch p := apiPeer.(type) {
-	case *p2p_api.PeerInfoForCatchup:
-		peerID, _ := peer.Decode(p.Id)
+// decodePeerID decodes a peer ID string, wrapping any failure with context.
+func decodePeerID(id string) (peer.ID, error) {
+	peerID, err := peer.Decode(id)
+	if err != nil {
+		return "", errors.NewProcessingError("invalid peer ID %q", id, err)
+	}
 
-		var blockHash *chainhash.Hash
-		if p.BlockHash != "" {
-			blockHash, _ = chainhash.NewHashFromStr(p.BlockHash)
+	return peerID, nil
+}
+
+// parseOptionalBlockHash parses a block hash string, returning nil for an empty string.
+func parseOptionalBlockHash(hash, peerID string) (*chainhash.Hash, error) {
+	if hash == "" {
+		return nil, nil
+	}
+
+	blockHash, err := chainhash.NewHashFromStr(hash)
+	if err != nil {
+		return nil, errors.NewProcessingError("invalid block hash %q for peer %s", hash, peerID, err)
+	}
+
+	return blockHash, nil
+}
+
+// convertFromAPIPeerInfo converts a p2p_api peer message (Peer, PeerInfoForCatchup or
+// PeerRegistryInfo) to a native PeerInfo, propagating any decode failure.
+func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
+	switch p := apiPeer.(type) {
+	case *p2p_api.Peer:
+		peerID, err := decodePeerID(p.Id)
+		if err != nil {
+			return nil, err
 		}
 
 		return &PeerInfo{
-			ID:                   peerID,
-			Height:               p.Height,
-			BlockHash:            blockHash,
-			DataHubURL:           p.DataHubUrl,
-			ReputationScore:      p.CatchupReputationScore,
-			InteractionAttempts:  p.CatchupAttempts,
-			InteractionSuccesses: p.CatchupSuccesses,
-			InteractionFailures:  p.CatchupFailures,
+			ID:            peerID,
+			Height:        p.CurrentHeight,
+			BanScore:      int(p.Banscore),
+			BytesReceived: p.BytesReceived,
+		}, nil
+
+	case *p2p_api.PeerInfoForCatchup:
+		peerID, err := decodePeerID(p.Id)
+		if err != nil {
+			return nil, err
 		}
 
-	case *p2p_api.PeerRegistryInfo:
-		peerID, _ := peer.Decode(p.Id)
+		blockHash, err := parseOptionalBlockHash(p.BlockHash, p.Id)
+		if err != nil {
+			return nil, err
+		}
 
-		var blockHash *chainhash.Hash
-		if p.BlockHash != "" {
-			blockHash, _ = chainhash.NewHashFromStr(p.BlockHash)
+		return &PeerInfo{
+			ID:               peerID,
+			Height:           p.Height,
+			BlockHash:        blockHash,
+			DataHubURL:       p.DataHubUrl,
+			ReputationScore:  p.CatchupReputationScore,
+			CatchupAttempts:  p.CatchupAttempts,
+			CatchupSuccesses: p.CatchupSuccesses,
+			CatchupFailures:  p.CatchupFailures,
+		}, nil
+
+	case *p2p_api.PeerRegistryInfo:
+		peerID, err := decodePeerID(p.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		blockHash, err := parseOptionalBlockHash(p.BlockHash, p.Id)
+		if err != nil {
+			return nil, err
 		}
 
 		return &PeerInfo{
@@ -729,10 +890,12 @@ func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
 			AvgResponseTime:        time.Duration(p.AvgResponseTimeMs) * time.Millisecond,
 			LastCatchupError:       p.LastCatchupError,
 			LastCatchupErrorTime:   time.Unix(p.LastCatchupErrorTime, 0),
-		}
+			CatchupAttempts:        p.CatchupAttempts,
+			CatchupSuccesses:       p.CatchupSuccesses,
+			CatchupFailures:        p.CatchupFailures,
+		}, nil
 
 	default:
-		// Return empty PeerInfo for unknown types
-		return &PeerInfo{}
+		return nil, errors.NewProcessingError("unsupported peer info type %T", apiPeer)
 	}
 }

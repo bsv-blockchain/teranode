@@ -814,8 +814,26 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		utxoMapErr error
 	)
 
-	// this will reverse the spends if there is an error
-	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, blockHeight, validationOptions.IgnoreLocked, validationOptions.OutpointOnlySpend); err != nil {
+	// the option blockAssemblyDisabled is false by default
+	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
+	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
+
+	// spend the tx's inputs and create its outputs + metadata in one store
+	// operation; the store reverses the spends if the create fails (except on
+	// ErrTxExists, which leaves the spends in place and is handled below)
+	if txMetaData, spentUtxos, err = v.spendAndCreateInUtxoStore(decoupledCtx, tx, blockHeight, addToBlockAssembly, validationOptions); err != nil {
+		if errors.Is(err, errors.ErrTxExists) {
+			// create phase: the tx already exists in the store
+			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
+
+			txMetaData = &meta.Data{}
+			if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
+				return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
+			}
+
+			return txMetaData, nil
+		}
+
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
 
@@ -895,6 +913,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return txMetaData, err
 			}
 		} else if errors.Is(err, errors.ErrTxNotFound) {
+			// PHASE ASSUMPTION: this branch (and the ErrUtxoError branch above) assumes the
+			// error originated in the SPEND phase of SpendAndCreate — today no create path
+			// emits ErrTxNotFound or ErrUtxoError, and no spend path emits ErrTxExists.
+			// An atomic SpendAndCreate implementation (Postgres tx, Aerospike-native) whose
+			// create phase can surface ErrTxNotFound (e.g. an internal parent lookup) MUST
+			// NOT let it escape untagged, or a failed create gets misread here as a
+			// DAH-evicted parent and the tx is wrongly treated as blessed.
+			//
 			// The parent transaction was not found. This can legitimately happen when the parent has been DAH-evicted
 			// long after the child was mined. Only short-circuit if the stored metadata confirms prior full validation:
 			//   - tx has been included in at least one block (BlockIDs non-empty), AND
@@ -918,47 +944,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
-	// the option blockAssemblyDisabled is false by default
-	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
-	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
-
-	if !validationOptions.SkipUtxoCreation {
-		// store the transaction in the UTXO store, marking it as locked if we are going to add it to the block assembly
-		//
-		// CONTRACT (below-checkpoint outpoint-only fast path): when OutpointOnlySpend is
-		// set the tx is deliberately un-decorated (no parent satoshis/scripts), so EVERY
-		// UTXO-store Create reachable on this path MUST thread WithSkipExtendedInputs(true)
-		// — otherwise store.Create runs GetFees over zero parent satoshis and hard-fails the
-		// block. This coupling is NOT enforced by a runtime guard (unlike the
-		// OutpointOnlySpend => SkipScriptValidation precondition checked earlier), so any new
-		// create seam added on this path must repeat it. The conflicting-fallback create
-		// above threads the same option for this reason.
-		var createExtraOpts []utxo.CreateOption
-		if validationOptions.OutpointOnlySpend {
-			createExtraOpts = append(createExtraOpts, utxo.WithSkipExtendedInputs(true))
-		}
-		txMetaData, err = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, false, addToBlockAssembly, createExtraOpts...)
-		if err != nil {
-			if errors.Is(err, errors.ErrTxExists) {
-				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
-
-				txMetaData = &meta.Data{}
-				if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
-					return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
-				}
-
-				return txMetaData, nil
-			}
-
-			v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", txID, err)
-
-			if reverseErr := v.reverseSpends(decoupledCtx, spentUtxos); reverseErr != nil {
-				err = errors.NewProcessingError("[Validate][%s] error reversing utxo spends: %v", txID, reverseErr, err)
-			}
-
-			return nil, errors.NewProcessingError("[Validate][%s] error registering tx in metaStore", txID, err)
-		}
-	} else {
+	if validationOptions.SkipUtxoCreation {
 		// create the tx meta needed for the block assembly
 		if validationOptions.OutpointOnlySpend {
 			txMetaData, err = util.TxMetaDataFromTxNoFee(tx)
@@ -1212,7 +1198,8 @@ func (v *Validator) TriggerBatcher() {
 	// Noop
 }
 
-// CreateInUtxoStore stores transaction metadata in the UTXO store.
+// CreateInUtxoStore stores transaction metadata in the UTXO store without
+// spending any inputs (SpendAndCreate with WithCreateOnly).
 // Returns transaction metadata and error if storage fails.
 // Extra create options (e.g. utxo.WithSkipExtendedInputs) may be passed via extraOpts
 // for specialised call sites; the zero-arg call is byte-identical to the original.
@@ -1224,6 +1211,7 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 	defer deferFn()
 
 	createOptions := []utxo.CreateOption{
+		utxo.WithCreateOnly(),
 		utxo.WithConflicting(markAsConflicting),
 	}
 
@@ -1233,7 +1221,7 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 
 	createOptions = append(createOptions, extraOpts...)
 
-	txMetaData, err := v.utxoStore.Create(ctx, tx, blockHeight, createOptions...)
+	txMetaData, _, err := v.utxoStore.SpendAndCreate(ctx, tx, blockHeight, createOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -1521,32 +1509,57 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 	}
 }
 
-// spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
-// Returns the spent UTXOs and error if spending fails.
-// skipUTXOHashCheck must be true on the outpoint-only below-checkpoint path so
-// the store resolves spends via outpoint lookup without a UTXO-hash comparison.
-func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool, skipUTXOHashCheck bool) ([]*utxo.Spend, error) {
-	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "spendUtxos",
+// spendAndCreateInUtxoStore spends the UTXOs referenced by the transaction's
+// inputs and stores the transaction's outputs + metadata in one store operation.
+// The store rolls the spends back when the create phase fails with anything
+// other than ErrTxExists. With Options.SkipUtxoCreation only the spend phase
+// runs and the returned metadata is nil.
+//
+// CONTRACT (below-checkpoint outpoint-only fast path): when OutpointOnlySpend is
+// set the tx is deliberately un-decorated (no parent satoshis/scripts), so EVERY
+// UTXO-store create reachable on this path MUST thread WithSkipExtendedInputs(true)
+// — otherwise the store runs GetFees over zero parent satoshis and hard-fails the
+// block. This coupling is NOT enforced by a runtime guard (unlike the
+// OutpointOnlySpend => SkipScriptValidation precondition checked earlier), so any
+// new create seam added on this path must repeat it. The conflicting-fallback
+// create in validateInternal threads the same option for this reason.
+// SkipUTXOHashCheck must likewise be set on that path so the store resolves
+// spends via outpoint lookup without a UTXO-hash comparison.
+func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeight uint32,
+	addToBlockAssembly bool, validationOptions *Options) (*meta.Data, []*utxo.Spend, error) {
+	// NOTE: prometheusTransactionSpendUtxos keeps its name for dashboard
+	// continuity but now measures the combined spend+create (and any rollback),
+	// not just the spend. The primary path no longer records
+	// prometheusValidatorSetTxMeta (storeTxInUtxoMap) — that histogram only sees
+	// the conflicting-fallback create via CreateInUtxoStore.
+	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "spendAndCreateUtxos",
 		tracing.WithHistogram(prometheusTransactionSpendUtxos),
 	)
 	defer deferFn()
 
-	var (
-		err error
-	)
+	opts := []utxo.CreateOption{
+		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+	}
 
-	spends, err := v.utxoStore.Spend(ctx, tx, blockHeight, utxo.IgnoreFlags{
-		IgnoreConflicting: false,
-		IgnoreLocked:      ignoreLocked,
-		SkipUTXOHashCheck: skipUTXOHashCheck,
-	})
+	if validationOptions.OutpointOnlySpend {
+		opts = append(opts, utxo.WithSkipUTXOHashCheck(true), utxo.WithSkipExtendedInputs(true))
+	}
+
+	if validationOptions.SkipUtxoCreation {
+		opts = append(opts, utxo.WithSpendOnly())
+	} else if addToBlockAssembly {
+		// mark the tx as locked, since we are going to add it to the block assembly
+		opts = append(opts, utxo.WithLocked(true))
+	}
+
+	txMetaData, spends, err := v.utxoStore.SpendAndCreate(ctx, tx, blockHeight, opts...)
 	if err != nil {
 		span.RecordError(err)
 
-		return spends, errors.NewProcessingError("validator: UTXO Store spend failed for %s", tx.TxIDChainHash().String(), err)
+		return txMetaData, spends, errors.NewProcessingError("validator: UTXO Store spend and create failed for %s", tx.TxIDChainHash().String(), err)
 	}
 
-	return spends, nil
+	return txMetaData, spends, nil
 }
 
 // sendToBlockAssembler sends validated transaction data to the block assembler.
@@ -1568,31 +1581,6 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 		span.RecordError(e)
 
 		return e
-	}
-
-	return nil
-}
-
-// reverseSpends reverses previously spent UTXOs in case of validation failure.
-// Attempts up to 3 retries with exponential backoff.
-// Returns error if UTXO reversal fails.
-func (v *Validator) reverseSpends(ctx context.Context, spentUtxos []*utxo.Spend) error {
-	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "reverseSpends")
-	defer deferFn()
-
-	for retries := uint(0); retries < 3; retries++ {
-		if errReset := v.utxoStore.Unspend(ctx, spentUtxos); errReset != nil {
-			if retries < 2 {
-				backoff := time.Duration(1<<retries) * time.Second
-				v.logger.Errorf("error resetting utxos, retrying in %s: %v", backoff.String(), errReset)
-				time.Sleep(backoff)
-			} else {
-				span.RecordError(errReset)
-				return errors.NewProcessingError("error resetting utxos", errReset)
-			}
-		} else {
-			break
-		}
 	}
 
 	return nil

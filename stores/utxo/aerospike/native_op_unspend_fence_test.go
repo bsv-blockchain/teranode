@@ -11,7 +11,7 @@ import "testing"
 // path when the flag is on.
 func TestUseNativeForSubOp_FencesUnspend(t *testing.T) {
 	// Flag OFF: never native, regardless of sub-op.
-	off := &Store{useNativeTeranodeOps: false}
+	off := &Store{}
 	for _, op := range []uint8{subOpSpend, subOpUnspend, subOpSetLocked} {
 		if off.useNativeForSubOp(op) {
 			t.Fatalf("flag off must never use native (sub-op %d)", op)
@@ -19,7 +19,8 @@ func TestUseNativeForSubOp_FencesUnspend(t *testing.T) {
 	}
 
 	// Flag ON: every sub-op is native EXCEPT unspend, which is fenced to UDF.
-	on := &Store{useNativeTeranodeOps: true}
+	on := &Store{}
+	on.useNativeTeranodeOps.Store(true)
 
 	if on.useNativeForSubOp(subOpUnspend) {
 		t.Fatal("subOpUnspend must be fenced to the UDF path even with native ops on (#899)")

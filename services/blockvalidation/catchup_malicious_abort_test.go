@@ -50,6 +50,9 @@ func (m *maliciousAbortP2PClient) RecordCatchupSuccess(_ context.Context, _ stri
 	return nil
 }
 func (m *maliciousAbortP2PClient) RecordCatchupFailure(_ context.Context, _ string) error { return nil }
+func (m *maliciousAbortP2PClient) RecordCatchupFailureWithKind(_ context.Context, _, _, _ string) error {
+	return nil
+}
 func (m *maliciousAbortP2PClient) RecordCatchupMalicious(_ context.Context, _ string) error {
 	return nil
 }
@@ -65,10 +68,17 @@ func (m *maliciousAbortP2PClient) GetPeersForCatchup(_ context.Context) ([]*p2p.
 func (m *maliciousAbortP2PClient) GetPeer(_ context.Context, _ string) (*p2p.PeerInfo, error) {
 	return nil, nil
 }
+func (m *maliciousAbortP2PClient) ReportValidBlockHeaders(_ context.Context, _ string, _ int64) error {
+	return nil
+}
+
 func (m *maliciousAbortP2PClient) ReportValidBlock(_ context.Context, _ string, _ string) error {
 	return nil
 }
 func (m *maliciousAbortP2PClient) ReportValidSubtree(_ context.Context, _ string, _ string) error {
+	return nil
+}
+func (m *maliciousAbortP2PClient) ReportValidatedChainProgress(_ context.Context, _ string, _ uint32, _ string, _ []byte) error {
 	return nil
 }
 func (m *maliciousAbortP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (bool, string, float32, error) {

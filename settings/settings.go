@@ -209,6 +209,16 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PropagationProxyEnabled: getBool("asset_propagation_proxy_enabled", true, alternativeContext...),
 			PropagationProxyAddress: getString("asset_propagation_proxy_address", "http://localhost:8833", alternativeContext...),
 
+			// Rate limiting and access control
+			HTTPRateLimit:                getInt("asset_httpRateLimit", 1024, alternativeContext...),
+			HTTPHeavyRateLimit:           getInt("asset_httpHeavyRateLimit", 10, alternativeContext...),
+			HTTPPeerRateMultiplier:       getInt("asset_httpPeerRateMultiplier", 5, alternativeContext...),
+			HTTPMinerRateLimit:           getInt("asset_httpMinerRateLimit", 0, alternativeContext...),
+			HTTPBodyLimit:                getString("asset_httpBodyLimit", "100MB", alternativeContext...),
+			TrustedProxyCIDRs:            getString("asset_trustedProxyCIDRs", "", alternativeContext...),
+			PeerAuthAllowlist:            getString("asset_peerAuthAllowlist", "", alternativeContext...),
+			PeerMinerReputationThreshold: getFloat64("asset_peerMinerReputationThreshold", 50.0, alternativeContext...),
+
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
 			ConcurrencyGetTransaction:         getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
 			ConcurrencyGetTransactionMeta:     getInt("asset_concurrency_get_transaction_meta", 0, alternativeContext...),
@@ -224,16 +234,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Streaming configuration
 			SubtreeDataStreamingChunkSize:   getInt("asset_subtreeDataStreamingChunkSize", 10000, alternativeContext...),
 			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 2, alternativeContext...),
-
-			// HTTP rate limiting / auth / proxy trust (added in #643).
-			HTTPRateLimit:                getInt("asset_httpRateLimit", 1024, alternativeContext...),
-			HTTPHeavyRateLimit:           getInt("asset_httpHeavyRateLimit", 10, alternativeContext...),
-			HTTPPeerRateMultiplier:       getInt("asset_httpPeerRateMultiplier", 5, alternativeContext...),
-			HTTPMinerRateLimit:           getInt("asset_httpMinerRateLimit", 0, alternativeContext...),
-			HTTPBodyLimit:                getString("asset_httpBodyLimit", "100MB", alternativeContext...),
-			TrustedProxyCIDRs:            getString("asset_trustedProxyCIDRs", "", alternativeContext...),
-			PeerAuthAllowlist:            getString("asset_peerAuthAllowlist", "", alternativeContext...),
-			PeerMinerReputationThreshold: getFloat64("asset_peerMinerReputationThreshold", 50.0, alternativeContext...),
 		},
 		Block: BlockSettings{
 			MinedCacheMaxMB:                       getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
@@ -378,6 +378,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipUnspendableTxStorageDuringCatchup: getBool("blockvalidation_skipUnspendableTxStorageDuringCatchup", false, alternativeContext...),
 			CatchupAllowQuickValidation:           getBool("blockvalidation_catchup_allow_quick_validation", true, alternativeContext...),
 			OutpointOnlyBelowCheckpoint:           getBool("blockvalidation_outpoint_only_below_checkpoint", false, alternativeContext...),
+			LegacyUnifiedBelowCheckpoint:          getBool("blockvalidation_legacy_unified_below_checkpoint", false, alternativeContext...),
+			LegacyBelowCheckpointFailClosed:       getBool("blockvalidation_legacy_below_checkpoint_fail_closed", false, alternativeContext...),
 			// Catchup circuit breaker configuration
 			CircuitBreakerFailureThreshold: getInt("blockvalidation_circuit_breaker_failure_threshold", 5, alternativeContext...),
 			CircuitBreakerSuccessThreshold: getInt("blockvalidation_circuit_breaker_success_threshold", 2, alternativeContext...),
@@ -486,6 +488,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DisableDAHCleaner:                       getBool("utxostore_disableDAHCleaner", false, alternativeContext...),
 			ReAssignedUtxoSpendableAfterBlocks:      getUint32("utxostore_reassignedUtxoSpendableAfterBlocks", 1000, alternativeContext...),
 			BatcherMaxConcurrent:                    getInt("utxostore_batcherMaxConcurrent", 64, alternativeContext...),
+			OutpointBatcherMaxConcurrent:            getInt("utxostore_outpointBatcherMaxConcurrent", 0, alternativeContext...),
 			QueryIdleTimeoutSeconds:                 getInt("utxostore_queryIdleTimeoutSeconds", 60, alternativeContext...),
 			StoreBatcherTickerIntervalMillis:        getInt("utxostore_storeBatcherTickerIntervalMillis", 0, alternativeContext...),
 			GetBatcherTickerIntervalMillis:          getInt("utxostore_getBatcherTickerIntervalMillis", 0, alternativeContext...),
@@ -516,9 +519,14 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BanThreshold: getInt("p2p_ban_threshold", 100, alternativeContext...),
 			BanDuration:  getDuration("p2p_ban_duration", 24*time.Hour),
 			// Sync manager configuration
-			ForceSyncPeer:         getString("p2p_force_sync_peer", "", alternativeContext...),
-			NodeStatusTopic:       getString("p2p_node_status_topic", "", alternativeContext...),
-			SharePrivateAddresses: getBool("p2p_share_private_addresses", true, alternativeContext...),
+			ForceSyncPeer:                         getString("p2p_force_sync_peer", "", alternativeContext...),
+			NodeStatusTopic:                       getString("p2p_node_status_topic", "", alternativeContext...),
+			SharePrivateAddresses:                 getBool("p2p_share_private_addresses", true, alternativeContext...),
+			MaxUnvalidatedAdvertisedHeightLead:    getUint32("p2p_max_unvalidated_advertised_height_lead", 10000, alternativeContext...),
+			MaxUnprovenSyncProbesPerBackoffWindow: getInt("p2p_max_unproven_sync_probes_per_backoff_window", 3, alternativeContext...),
+			FullStoragePenaltyDuration:            getDuration("p2p_full_storage_penalty_duration", time.Hour, alternativeContext...),
+			FullDeliveryFreshnessWindow:           getDuration("p2p_full_delivery_freshness_window", 24*time.Hour, alternativeContext...),
+			SyncPeerNoProgressTimeout:             getDuration("p2p_sync_peer_no_progress_timeout", 5*time.Minute, alternativeContext...),
 			// DHT configuration
 			DHTMode:            getString("p2p_dht_mode", "server", alternativeContext...),
 			DHTCleanupInterval: getDuration("p2p_dht_cleanup_interval", 24*time.Hour, alternativeContext...),
@@ -532,6 +540,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SyncCoordinatorPeriodicEvaluationInterval: getDuration("p2p_sync_coordinator_periodic_evaluation_interval", 30*time.Second, alternativeContext...),
 			// On-demand peer health checking (uses built-in 2s timeout)
 			HealthCheckEnabled: getBool("p2p_health_check_enabled", true, alternativeContext...),
+			// Gossip handler load management
+			PeerRegistryBatchInterval: getDuration("p2p_peer_registry_batch_interval", time.Second, alternativeContext...),
+			GossipHandlerConcurrency:  getInt("p2p_gossip_handler_concurrency", 4, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),
@@ -636,6 +647,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ListenAddresses:                  getMultiString("legacy_listen_addresses", "|", []string{}, alternativeContext...),
 			ConnectPeers:                     getMultiString("legacy_connect_peers", "|", []string{}, alternativeContext...),
 			OrphanEvictionDuration:           getDuration("legacy_orphanEvictionDuration", 10*time.Minute, alternativeContext...),
+			MaxOrphanTxs:                     getInt("legacy_maxOrphanTxs", 100, alternativeContext...),
 			StoreBatcherSize:                 getInt("legacy_storeBatcherSize", 1024, alternativeContext...),
 			StoreBatcherConcurrency:          getInt("legacy_storeBatcherConcurrency", 32, alternativeContext...),
 			SpendBatcherSize:                 getInt("legacy_spendBatcherSize", 1024, alternativeContext...),
@@ -651,8 +663,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
 			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...),     // ping/pong interval is 2 mins, so we set this to 125s to be sure
 			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
-
-			MaxOrphanTxs: getInt("legacy_maxOrphanTxs", 100, alternativeContext...), // PR #776: cap on orphan tx pool
+			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
+			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),
+			BlockPrefetchBufferBytes:         getInt64("legacy_blockPrefetchBufferBytes", 256*1024*1024, alternativeContext...),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:         getString("ipv6_addresses", "", alternativeContext...),

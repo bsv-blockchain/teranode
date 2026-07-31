@@ -36,7 +36,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 10)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -63,7 +63,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 5)
 
 		for i, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 			// Sleep a tiny bit to ensure different CreatedAt timestamps
 			if i < len(transactions)-1 {
@@ -90,17 +90,17 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		for i, tx := range transactions {
 			if i%2 == 0 {
 				// Unmined
-				_, err := utxoStore.Create(ctx, tx, 1)
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 				require.NoError(t, err)
 			} else {
 				// Mined in a block on the main chain (block ID 0 is genesis)
-				_, err := utxoStore.Create(ctx, tx, 1, utxo.WithMinedBlockInfo(
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithMinedBlockInfo(
 					utxo.MinedBlockInfo{
 						BlockID:     0,
 						BlockHeight: 0,
 						SubtreeIdx:  1,
 					},
-				))
+				), utxo.WithCreateOnly())
 				require.NoError(t, err)
 			}
 		}
@@ -123,7 +123,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		// Create all as unmined
 		var txHashes []chainhash.Hash
 		for _, tx := range transactions {
-			meta, err := utxoStore.Create(ctx, tx, 1)
+			meta, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 			txHashes = append(txHashes, *meta.Tx.TxIDChainHash())
 		}
@@ -169,7 +169,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 5)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -190,7 +190,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 3)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -214,7 +214,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 5)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -236,7 +236,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 5)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 

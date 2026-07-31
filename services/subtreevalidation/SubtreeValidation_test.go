@@ -79,16 +79,16 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
 		require.NoError(t, subtree.AddNode(*hash4, 123, 0))
 
-		_, err = txMetaStore.Create(context.Background(), tx1, 0)
+		_, _, err = txMetaStore.SpendAndCreate(context.Background(), tx1, 0, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = txMetaStore.Create(context.Background(), tx2, 0)
+		_, _, err = txMetaStore.SpendAndCreate(context.Background(), tx2, 0, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = txMetaStore.Create(context.Background(), tx3, 0)
+		_, _, err = txMetaStore.SpendAndCreate(context.Background(), tx3, 0, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = txMetaStore.Create(context.Background(), tx4, 0)
+		_, _, err = txMetaStore.SpendAndCreate(context.Background(), tx4, 0, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		nodeBytes, err := subtree.SerializeNodes()
@@ -274,10 +274,10 @@ func TestValidateSubtreeInternal_DuplicateTxid(t *testing.T) {
 	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 	defer deferFunc()
 
-	_, err := utxoStore.Create(context.Background(), tx1, 0)
+	_, _, err := utxoStore.SpendAndCreate(context.Background(), tx1, 0, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(context.Background(), tx2, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 0, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	txHashes := []chainhash.Hash{*subtreepkg.CoinbasePlaceholderHash, *hash1, *hash2, *hash1}
@@ -846,19 +846,19 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 		coinbaseTx, tx1, tx2, tx3, tx4, tx5, tx6 := txs[0], txs[1], txs[2], txs[3], txs[4], txs[5], txs[6]
 
 		// Store initial transactions in txMetaStore
-		_, err := utxoStore.Create(context.Background(), coinbaseTx, 1)
+		_, _, err := utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = utxoStore.Create(context.Background(), tx1, 1)
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = utxoStore.Create(context.Background(), tx2, 1)
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = utxoStore.Create(context.Background(), tx3, 1)
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx3, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = utxoStore.Create(context.Background(), tx4, 1)
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx4, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Create subtrees
@@ -1018,10 +1018,10 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 			utxoStore: utxoStore,
 		}
 
-		_, err = s.utxoStore.Create(ctx, parentTx1, 123)
+		_, _, err = s.utxoStore.SpendAndCreate(ctx, parentTx1, 123, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = s.utxoStore.Create(ctx, tx1, 123)
+		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Call the checkCounterConflictingOnCurrentChain method
@@ -1046,20 +1046,20 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 			utxoStore: utxoStore,
 		}
 
-		_, err = s.utxoStore.Create(ctx, parentTx1, 122)
+		_, _, err = s.utxoStore.SpendAndCreate(ctx, parentTx1, 122, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		tx1DoubleSpend := tx1.Clone()
 		tx1DoubleSpend.Version = 2
 
 		// spend the parent tx with tx2
-		_, err = s.utxoStore.Spend(ctx, tx1DoubleSpend, 122)
+		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1DoubleSpend, 122, utxo.WithSpendOnly())
 		require.NoError(t, err)
 
-		_, err = s.utxoStore.Create(ctx, tx1DoubleSpend, 122)
+		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1DoubleSpend, 122, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = s.utxoStore.Create(ctx, tx1, 123, utxo.WithConflicting(true))
+		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithConflicting(true), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
