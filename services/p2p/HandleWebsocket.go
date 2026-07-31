@@ -4,10 +4,10 @@ package p2p
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -63,14 +63,16 @@ type notificationMsg struct {
 // clientChannelMap manages a thread-safe collection of WebSocket client channels.
 // This structure maintains a registry of active WebSocket connections, allowing
 // the server to broadcast notifications to all connected clients efficiently.
-// The map uses channels as keys to uniquely identify each client connection.
+// The map uses channels as keys to uniquely identify each client connection;
+// each channel carries the cancel func of its connection so eviction can tear
+// the connection down rather than orphaning it.
 //
 // All operations on this map are protected by a read-write mutex to ensure
 // thread safety when multiple goroutines are adding, removing, or broadcasting
 // to client channels concurrently.
 type clientChannelMap struct {
-	sync.RWMutex                          // Protects concurrent access to the channels map
-	channels     map[chan []byte]struct{} // Set of active client channels (using struct{} for memory efficiency)
+	sync.RWMutex                                    // Protects concurrent access to the channels map
+	channels     map[chan []byte]context.CancelFunc // Active client channels mapped to their connection cancel funcs
 }
 
 // newClientChannelMap creates a new thread-safe client channel registry.
@@ -84,20 +86,38 @@ type clientChannelMap struct {
 //   - Pointer to a new clientChannelMap instance with initialized internal map
 func newClientChannelMap() *clientChannelMap {
 	return &clientChannelMap{
-		channels: make(map[chan []byte]struct{}),
+		channels: make(map[chan []byte]context.CancelFunc),
 	}
 }
 
-func (cm *clientChannelMap) add(ch chan []byte) {
+// add registers a client channel together with its connection's cancel func
+// (may be nil in tests) so a broadcast eviction can close the connection.
+func (cm *clientChannelMap) add(ch chan []byte, cancel context.CancelFunc) {
 	cm.Lock()
 	defer cm.Unlock()
-	cm.channels[ch] = struct{}{}
+	cm.channels[ch] = cancel
 }
 
 func (cm *clientChannelMap) remove(ch chan []byte) {
 	cm.Lock()
 	defer cm.Unlock()
 	delete(cm.channels, ch)
+}
+
+// evict removes a client channel and cancels its connection. Without the
+// cancel, an evicted-but-protocol-healthy client (draining its socket and
+// answering pings, but too slow to consume broadcasts) would stay connected
+// forever - subscribed to nothing yet holding a connection slot, and its
+// consumer (e.g. the asset-service bridge) would never learn it went mute.
+func (cm *clientChannelMap) evict(ch chan []byte) {
+	cm.Lock()
+	cancel, exists := cm.channels[ch]
+	delete(cm.channels, ch)
+	cm.Unlock()
+
+	if exists && cancel != nil {
+		cancel()
+	}
 }
 
 // maxConcurrentBroadcasts caps the number of in-flight broadcast goroutines so a
@@ -150,9 +170,10 @@ func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 			case ch <- data:
 				// Data sent successfully
 			case <-timer.C:
-				logger.Errorf("Timeout sending data to client")
-				// Remove timed out client
-				cm.remove(ch)
+				logger.Errorf("Timeout sending data to client, closing connection")
+				// Evict the timed-out client and close its connection so it
+				// cannot linger muted while holding a connection slot.
+				cm.evict(ch)
 			}
 		}(ch)
 	}
@@ -183,10 +204,17 @@ type WebSocketConn interface {
 const (
 	isoFormat = "2006-01-02T15:04:05Z"
 
-	// wsMaxReadBytes caps inbound frame size; clients are not expected to send data.
+	// wsMaxReadBytes caps inbound message size; a message over the limit makes
+	// gorilla close the connection (1009). Clients are not expected to send data.
 	wsMaxReadBytes int64 = 1024
-	// wsHandshakeTimeout bounds the websocket upgrade handshake so a stalled
-	// client cannot hold a connection slot without completing the upgrade.
+	// wsMaxInboundFrames caps how many inbound frames a client may send per
+	// pongWait window; the endpoint is publish-only, so an admitted client
+	// must not be able to spend server read-path budget without bound.
+	wsMaxInboundFrames = 100
+	// wsHandshakeTimeout bounds writing the 101 upgrade response (gorilla
+	// applies HandshakeTimeout server-side only to the response write).
+	// Reading the request headers is bounded by the HTTP server's
+	// ReadHeaderTimeout, set in setupHTTPServer.
 	wsHandshakeTimeout = 10 * time.Second
 	// wsInitialStatusTimeout bounds the blockchain lookup for the initial
 	// node_status message so a hung backend cannot wedge connection setup.
@@ -252,6 +280,93 @@ func originAllowed(origin string, allowed []string) bool {
 	return false
 }
 
+// wsConnLimiter admission-controls /p2p-ws connections: a global cap plus a
+// per-source cap for untrusted sources (so one host cannot take the whole
+// pool), and a trusted-CIDR bypass so internal consumers such as the asset
+// service's websocket bridge can always reconnect even while an attacker
+// holds every public slot. Sources are keyed by the transport-level
+// RemoteAddr host, never by forwarded-for headers, which are caller-supplied.
+type wsConnLimiter struct {
+	mu           sync.Mutex
+	total        int64            // live connections from untrusted sources
+	perSource    map[string]int64 // live connections per untrusted source host
+	maxTotal     int64            // <= 0 disables both caps
+	maxPerSource int64
+	trusted      []*net.IPNet
+}
+
+func newWSConnLimiter(maxTotal int64, trustedCIDRs []string, logger ulogger.Logger) *wsConnLimiter {
+	l := &wsConnLimiter{
+		maxTotal:  maxTotal,
+		perSource: make(map[string]int64),
+	}
+
+	if maxTotal > 0 {
+		l.maxPerSource = max(4, maxTotal/20)
+	}
+
+	for _, cidr := range trustedCIDRs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			logger.Warnf("Ignoring invalid websocket trusted source CIDR %q: %v", cidr, err)
+			continue
+		}
+
+		l.trusted = append(l.trusted, ipNet)
+	}
+
+	return l
+}
+
+// acquire admits or rejects a connection from remoteAddr. On success the
+// returned release func must be called exactly once at connection teardown.
+// Trusted sources bypass and are not counted against either cap.
+func (l *wsConnLimiter) acquire(remoteAddr string) (release func(), ok bool) {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		for _, ipNet := range l.trusted {
+			if ipNet.Contains(ip) {
+				return func() {}, true
+			}
+		}
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.maxTotal > 0 && l.total >= l.maxTotal {
+		return nil, false
+	}
+
+	if l.maxPerSource > 0 && l.perSource[host] >= l.maxPerSource {
+		return nil, false
+	}
+
+	l.total++
+	l.perSource[host]++
+
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+
+		l.total--
+		if l.perSource[host] <= 1 {
+			delete(l.perSource, host)
+		} else {
+			l.perSource[host]--
+		}
+	}, true
+}
+
 // broadcastMessage sends a message to all connected clients
 func (s *Server) broadcastMessage(data []byte, clientChannels *clientChannelMap) {
 	clientChannels.broadcast(data, s.logger)
@@ -272,7 +387,9 @@ func (s *Server) handleClientMessages(ctx context.Context, ws WebSocketConn, ch 
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Infof("Closing WebSocket connection due to context cancellation")
+			// Debugf: this fires on every normal disconnect (the teardown
+			// cancels the per-connection context), not just at shutdown.
+			s.logger.Debugf("Closing WebSocket connection due to context cancellation")
 			return
 		case <-pingTicker.C:
 			_ = ws.SetWriteDeadline(time.Now().Add(to.writeTimeout))
@@ -362,11 +479,13 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 	var (
 		allowedOrigins []string
 		maxConns       int64
+		trustedCIDRs   []string
 	)
 
 	if s.settings != nil {
 		allowedOrigins = s.settings.P2P.WebSocketAllowedOrigins
 		maxConns = int64(s.settings.P2P.WebSocketMaxConnections)
+		trustedCIDRs = s.settings.P2P.WebSocketTrustedSourceCIDRs
 	}
 
 	upgrader := websocket.Upgrader{
@@ -382,30 +501,28 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 		},
 	}
 
-	var (
-		activeConns   atomic.Int64
-		capWarnedOnce sync.Once
-	)
+	limiter := newWSConnLimiter(maxConns, trustedCIDRs, s.logger)
+
+	var capWarnedOnce sync.Once
 
 	to := s.websocketTimeouts()
 
 	return func(c echo.Context) error {
 		// Cap concurrent connections before upgrading so an attacker can't
-		// exhaust goroutines/file descriptors by opening sockets. Concurrent
-		// upgrades may transiently overshoot the cap and be rejected; that
-		// conservative bias is fine for a resource ceiling.
-		if n := activeConns.Add(1); maxConns > 0 && n > maxConns {
-			activeConns.Add(-1)
+		// exhaust goroutines/file descriptors by opening sockets. RemoteAddr
+		// (not RealIP) on purpose: forwarded-for headers are caller-supplied.
+		release, ok := limiter.acquire(c.Request().RemoteAddr)
+		if !ok {
 			// Warnf once so operators notice; Debugf after that so an
 			// attacker hammering the endpoint can't amplify into log spam.
 			capWarnedOnce.Do(func() {
-				s.logger.Warnf("Rejecting websocket connection from %s: limit of %d concurrent connections reached (further rejections logged at debug)", c.RealIP(), maxConns)
+				s.logger.Warnf("Rejecting websocket connection from %s: connection limit reached (max %d total, %d per source; further rejections logged at debug)", c.Request().RemoteAddr, limiter.maxTotal, limiter.maxPerSource)
 			})
-			s.logger.Debugf("Rejecting websocket connection from %s: limit of %d concurrent connections reached", c.RealIP(), maxConns)
+			s.logger.Debugf("Rejecting websocket connection from %s: connection limit reached", c.Request().RemoteAddr)
 
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "websocket connection limit reached")
 		}
-		defer activeConns.Add(-1)
+		defer release()
 
 		connCtx, connCancel := context.WithCancel(serverCtx)
 		defer connCancel()
@@ -435,6 +552,9 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 
 		// Read pump: enforce a read deadline refreshed by pongs so half-open
 		// or silent connections are detected, and process control frames.
+		// Inbound data frames are tolerated (the dashboard's wstest page
+		// sends one) but budgeted per pongWait window - the endpoint is
+		// publish-only, so a client streaming frames at line rate is abuse.
 		ws.SetReadLimit(wsMaxReadBytes)
 		_ = ws.SetReadDeadline(time.Now().Add(to.pongWait))
 		ws.SetPongHandler(func(string) error {
@@ -444,8 +564,19 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 		go func() {
 			defer close(readDone)
 
+			inbound, windowEnd := 0, time.Now().Add(to.pongWait)
+
 			for {
 				if _, _, err := ws.ReadMessage(); err != nil {
+					return
+				}
+
+				if now := time.Now(); now.After(windowEnd) {
+					inbound, windowEnd = 0, now.Add(to.pongWait)
+				}
+
+				if inbound++; inbound > wsMaxInboundFrames {
+					s.logger.Debugf("Websocket client exceeded inbound frame budget, closing connection")
 					return
 				}
 			}
@@ -463,7 +594,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 		s.sendInitialNodeStatuses(statusCtx, ch)
 		statusCancel()
 
-		clientChannels.add(ch)
+		clientChannels.add(ch, connCancel)
 
 		select {
 		case <-connCtx.Done():

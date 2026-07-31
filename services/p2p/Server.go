@@ -608,17 +608,30 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 	e.HideBanner = true
 	e.HidePort = true
 
+	// Bound the pre-handler phases of every request: without ReadHeaderTimeout
+	// a client dribbling header bytes holds an fd and a net/http goroutine
+	// forever, bypassing the websocket connection cap entirely (slow-loris).
+	// Hijacked websocket connections are unaffected - net/http clears its
+	// deadlines on hijack and the websocket path manages its own.
+	e.Server.ReadHeaderTimeout = 10 * time.Second
+	e.Server.IdleTimeout = 120 * time.Second
+
 	e.Use(middleware.Recover())
 
 	// Restrict CORS to the configured websocket origins; an empty list keeps
-	// the historical allow-all behaviour.
-	allowOrigins := []string{"*"}
-	if s.settings != nil && len(s.settings.P2P.WebSocketAllowedOrigins) > 0 {
-		allowOrigins = s.settings.P2P.WebSocketAllowedOrigins
+	// the historical allow-all behaviour. AllowOriginFunc reuses the same
+	// matcher as the websocket upgrade's CheckOrigin so both surfaces share
+	// one strict semantic (exact, case-insensitive; bare "*" wildcard) rather
+	// than echo's looser glob/subdomain matching.
+	var allowedOrigins []string
+	if s.settings != nil {
+		allowedOrigins = s.settings.P2P.WebSocketAllowedOrigins
 	}
 
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: allowOrigins,
+		AllowOriginFunc: func(origin string) (bool, error) {
+			return originAllowed(origin, allowedOrigins), nil
+		},
 		AllowMethods: []string{echo.GET},
 	}))
 

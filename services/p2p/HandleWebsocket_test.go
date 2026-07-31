@@ -2,8 +2,12 @@
 package p2p
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -289,7 +293,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 
 	t.Run("Send notification", func(t *testing.T) {
 		clientCh := make(chan []byte, 10)
-		clientChannels.add(clientCh)
+		clientChannels.add(clientCh, nil)
 		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
 
 		// Send our test notification
@@ -316,7 +320,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 
 	t.Run("Broadcast timeout handling", func(t *testing.T) {
 		slowCh := make(chan []byte) // Unbuffered channel that will block
-		clientChannels.add(slowCh)
+		clientChannels.add(slowCh, nil)
 		require.True(t, clientChannels.contains(slowCh), errClientNotAdded)
 		initialCount := clientChannels.count()
 
@@ -505,7 +509,7 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	for i := 0; i < numMaliciousClients; i++ {
 		// Create unbuffered channel that will block when trying to send
 		maliciousChannels[i] = make(chan []byte)
-		clientChannels.add(maliciousChannels[i])
+		clientChannels.add(maliciousChannels[i], nil)
 	}
 
 	require.Equal(t, numMaliciousClients, clientChannels.count(), "All malicious clients should be added")
@@ -513,7 +517,7 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	// Add one legitimate client that will read messages
 	// Add it AFTER malicious clients to ensure it's processed last in the broadcast loop
 	legitimateCh := make(chan []byte, 100)
-	clientChannels.add(legitimateCh)
+	clientChannels.add(legitimateCh, nil)
 
 	// Start reading from legitimate client in background
 	legitimateReceived := make(chan []byte, 1)
@@ -712,7 +716,7 @@ func TestBroadcast_BoundedPool(t *testing.T) {
 
 	for i := 0; i < numChannels; i++ {
 		channels[i] = make(chan []byte)
-		cm.add(channels[i])
+		cm.add(channels[i], nil)
 	}
 
 	require.Equal(t, numChannels, cm.count(), "All channels should be registered")
@@ -752,7 +756,7 @@ func TestBroadcast_NonPositivePoolSizeDoesNotDeadlock(t *testing.T) {
 
 	const numChannels = 3
 	for i := 0; i < numChannels; i++ {
-		cm.add(make(chan []byte, 1)) // buffered so sends succeed immediately
+		cm.add(make(chan []byte, 1), nil) // buffered so sends succeed immediately
 	}
 
 	done := make(chan struct{})
@@ -857,10 +861,11 @@ func TestWebsocketTimeouts_PingPeriodClamped(t *testing.T) {
 
 // newWebSocketTestServer registers the handler on a real echo instance so
 // echo's error handling (e.g. 503 on connection-cap rejection) applies.
-func newWebSocketTestServer(t *testing.T, s *Server) (*httptest.Server, string) {
+func newWebSocketTestServer(t *testing.T, s *Server) (string, chan *notificationMsg) {
 	t.Helper()
 
-	handler := s.HandleWebSocket(make(chan *notificationMsg, 1))
+	notificationCh := make(chan *notificationMsg, 256)
+	handler := s.HandleWebSocket(notificationCh)
 
 	e := echo.New()
 	e.HideBanner = true
@@ -869,7 +874,7 @@ func newWebSocketTestServer(t *testing.T, s *Server) (*httptest.Server, string) 
 	srv := httptest.NewServer(e)
 	t.Cleanup(srv.Close)
 
-	return srv, "ws" + strings.TrimPrefix(srv.URL, "http") + "/p2p-ws"
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/p2p-ws", notificationCh
 }
 
 // TestHandleWebSocket_ConnectionCap verifies upgrades beyond the configured
@@ -887,7 +892,7 @@ func TestHandleWebSocket_ConnectionCap(t *testing.T) {
 		},
 	}
 
-	_, wsURL := newWebSocketTestServer(t, s)
+	wsURL, _ := newWebSocketTestServer(t, s)
 
 	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err, "First connection should be accepted")
@@ -930,7 +935,7 @@ func TestHandleWebSocket_ConnectionCapDisabled(t *testing.T) {
 		},
 	}
 
-	_, wsURL := newWebSocketTestServer(t, s)
+	wsURL, _ := newWebSocketTestServer(t, s)
 
 	conns := make([]*websocket.Conn, 0, 5)
 
@@ -961,7 +966,7 @@ func TestHandleWebSocket_OriginRestriction(t *testing.T) {
 		},
 	}
 
-	_, wsURL := newWebSocketTestServer(t, s)
+	wsURL, _ := newWebSocketTestServer(t, s)
 
 	t.Run("Disallowed origin rejected", func(t *testing.T) {
 		ws, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": []string{"http://evil.example"}})
@@ -1012,7 +1017,7 @@ func TestHandleWebSocket_SlowClientEvicted(t *testing.T) {
 		},
 	}
 
-	_, wsURL := newWebSocketTestServer(t, s)
+	wsURL, _ := newWebSocketTestServer(t, s)
 
 	t.Run("Silent client evicted and slot released", func(t *testing.T) {
 		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1057,5 +1062,322 @@ func TestHandleWebSocket_SlowClientEvicted(t *testing.T) {
 		case <-time.After(3 * pongWait):
 			// Still connected well past the pong deadline.
 		}
+	})
+}
+
+// TestWSConnLimiter unit-tests the admission logic directly.
+func TestWSConnLimiter(t *testing.T) {
+	logger := &ulogger.TestLogger{}
+
+	t.Run("Per-source cap", func(t *testing.T) {
+		l := newWSConnLimiter(100, nil, logger) // per-source cap = max(4, 100/20) = 5
+
+		releases := make([]func(), 0, 5)
+
+		for i := 0; i < 5; i++ {
+			release, ok := l.acquire("10.0.0.1:1000")
+			require.True(t, ok)
+			releases = append(releases, release)
+		}
+
+		_, ok := l.acquire("10.0.0.1:1006")
+		require.False(t, ok, "6th connection from the same source must be rejected")
+
+		release, ok := l.acquire("10.0.0.2:1000")
+		require.True(t, ok, "other sources must be unaffected by one source's cap")
+		release()
+
+		releases[0]()
+
+		release, ok = l.acquire("10.0.0.1:1007")
+		require.True(t, ok, "releasing a connection must free its per-source slot")
+		release()
+	})
+
+	t.Run("Total cap", func(t *testing.T) {
+		l := newWSConnLimiter(4, nil, logger)
+
+		for i := 0; i < 4; i++ {
+			_, ok := l.acquire(fmt.Sprintf("10.0.0.%d:1000", i))
+			require.True(t, ok)
+		}
+
+		_, ok := l.acquire("10.0.9.9:1000")
+		require.False(t, ok, "connections beyond the total cap must be rejected")
+	})
+
+	t.Run("Trusted bypass", func(t *testing.T) {
+		l := newWSConnLimiter(1, []string{"127.0.0.0/8", "::1/128", "not-a-cidr", ""}, logger)
+
+		_, ok := l.acquire("10.0.0.1:1000")
+		require.True(t, ok)
+
+		_, ok = l.acquire("10.0.0.2:1000")
+		require.False(t, ok, "untrusted sources must stay capped")
+
+		for i := 0; i < 10; i++ {
+			release, ok := l.acquire("127.0.0.1:9000")
+			require.True(t, ok, "trusted IPv4 sources must bypass a saturated cap")
+			release()
+		}
+
+		release, ok := l.acquire("[::1]:9000")
+		require.True(t, ok, "trusted IPv6 sources must bypass a saturated cap")
+		release()
+	})
+
+	t.Run("Cap disabled", func(t *testing.T) {
+		l := newWSConnLimiter(0, nil, logger)
+
+		for i := 0; i < 50; i++ {
+			_, ok := l.acquire("10.0.0.1:1000")
+			require.True(t, ok, "non-positive cap must disable both limits")
+		}
+	})
+}
+
+// TestHandleWebSocket_PerSourceCap verifies a single source host cannot take
+// the whole connection pool.
+func TestHandleWebSocket_PerSourceCap(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 100, // per-source cap = max(4, 100/20) = 5
+			},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	conns := make([]*websocket.Conn, 0, 5)
+
+	defer func() {
+		for _, ws := range conns {
+			_ = ws.Close()
+		}
+	}()
+
+	for i := 0; i < 5; i++ {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+		conns = append(conns, ws)
+	}
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.Error(t, err, "6th connection from the same source must be rejected")
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+}
+
+// TestHandleWebSocket_TrustedSourceBypassesCap verifies sources in the
+// trusted-CIDR list (e.g. the asset-service bridge) can always connect, even
+// when an attacker holds every public slot.
+func TestHandleWebSocket_TrustedSourceBypassesCap(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:                  settings.ListenModeFull,
+				WebSocketMaxConnections:     1,
+				WebSocketTrustedSourceCIDRs: []string{"127.0.0.1/32", "::1/128"},
+			},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	conns := make([]*websocket.Conn, 0, 3)
+
+	defer func() {
+		for _, ws := range conns {
+			_ = ws.Close()
+		}
+	}()
+
+	for i := 0; i < 3; i++ {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err, "trusted source must bypass the saturated cap")
+		conns = append(conns, ws)
+	}
+}
+
+// TestHandleWebSocket_BroadcastEvictionClosesConnection is the regression
+// test for the eviction path: a protocol-healthy client (socket draining,
+// pings answered) whose notification channel overflows must have its
+// connection closed and its slot released - not linger muted forever. Both
+// deadlines are set to 30s so nothing but the eviction path can free the
+// single slot within the assertion window.
+func TestHandleWebSocket_BroadcastEvictionClosesConnection(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 1,
+			},
+		},
+		wsTimeouts: &wsTimeouts{
+			writeTimeout: 30 * time.Second,
+			pongWait:     30 * time.Second,
+			pingPeriod:   27 * time.Second,
+		},
+	}
+
+	wsURL, notificationCh := newWebSocketTestServer(t, s)
+
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+
+	defer ws.Close()
+
+	// Flood large notifications the client never drains: the writer blocks on
+	// the full socket, the 100-slot channel overflows, and the broadcast's 1s
+	// send-timeout must evict AND close the connection.
+	payload := strings.Repeat("x", 256*1024)
+
+	go func() {
+		for i := 0; i < 300; i++ {
+			select {
+			case notificationCh <- &notificationMsg{Type: "flood", BaseURL: payload}:
+			case <-t.Context().Done():
+				return
+			}
+		}
+	}()
+
+	require.Eventually(t, func() bool {
+		ws2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			return false
+		}
+		defer ws2.Close()
+
+		return true
+	}, 10*time.Second, 100*time.Millisecond,
+		"broadcast eviction must close the connection and release its slot")
+}
+
+// TestHandleWebSocket_InboundFrameLimits verifies the read-side protocol
+// contract: an oversized message or an exhausted per-window frame budget
+// closes the connection.
+func TestHandleWebSocket_InboundFrameLimits(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{ListenMode: settings.ListenModeFull},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	// requireServerClosed reads until an error and asserts it is a real
+	// close/reset from the server, not the client's own read deadline (a
+	// timeout here would mean the server never closed - a false pass).
+	requireServerClosed := func(t *testing.T, ws *websocket.Conn) {
+		t.Helper()
+		require.NoError(t, ws.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				var netErr net.Error
+				require.False(t, errors.As(err, &netErr) && netErr.Timeout(),
+					"server did not close the connection: %v", err)
+
+				return
+			}
+		}
+	}
+
+	t.Run("Oversized message disconnects", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		require.NoError(t, ws.WriteMessage(websocket.TextMessage, bytes.Repeat([]byte("a"), 2048)))
+		requireServerClosed(t, ws)
+	})
+
+	t.Run("Frame budget exhaustion disconnects", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		for i := 0; i < wsMaxInboundFrames+50; i++ {
+			if err := ws.WriteMessage(websocket.TextMessage, []byte("spam")); err != nil {
+				break // server already closed on us mid-flood, which is the point
+			}
+		}
+
+		requireServerClosed(t, ws)
+	})
+}
+
+// TestSetupHTTPServer_Hardening pins the slow-loris protections and verifies
+// the CORS middleware shares the websocket upgrade's strict origin matcher:
+// exact and case-insensitive, no glob or subdomain expansion.
+func TestSetupHTTPServer_Hardening(t *testing.T) {
+	s := &Server{
+		gCtx:           t.Context(),
+		logger:         &ulogger.TestLogger{},
+		notificationCh: make(chan *notificationMsg, 1),
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketAllowedOrigins: []string{"https://dash.example.com"},
+			},
+		},
+	}
+
+	e := s.setupHTTPServer()
+
+	t.Run("HTTP server timeouts set", func(t *testing.T) {
+		require.Positive(t, e.Server.ReadHeaderTimeout,
+			"ReadHeaderTimeout must be set or slow-header clients bypass the connection cap")
+		require.Positive(t, e.Server.IdleTimeout,
+			"IdleTimeout must bound idle keep-alive connections")
+	})
+
+	srv := httptest.NewServer(e)
+	defer srv.Close()
+
+	get := func(t *testing.T, origin string) *http.Response {
+		t.Helper()
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/health", nil)
+		require.NoError(t, err)
+
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = resp.Body.Close() })
+
+		return resp
+	}
+
+	t.Run("Allowed origin echoed", func(t *testing.T) {
+		resp := get(t, "https://dash.example.com")
+		require.Equal(t, "https://dash.example.com", resp.Header.Get("Access-Control-Allow-Origin"))
+	})
+
+	t.Run("Disallowed origin gets no CORS header", func(t *testing.T) {
+		resp := get(t, "https://evil.example")
+		require.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"))
+	})
+
+	t.Run("Subdomain is not expanded", func(t *testing.T) {
+		resp := get(t, "https://sub.dash.example.com")
+		require.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"),
+			"strict matcher must not glob/subdomain-expand entries, unlike echo's AllowOrigins")
 	})
 }

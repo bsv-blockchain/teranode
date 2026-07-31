@@ -309,7 +309,7 @@ All notifications collected from the Block and Validator listeners are sent over
 - WebSocket Request Handling:
 
     - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client and registered in `clientChannels`.
-    - Concurrent connections are capped by `p2p_websocket_max_connections` (default 1000, 0 disables); requests beyond the cap are rejected with HTTP 503 before the upgrade.
+    - Concurrent connections are capped by `p2p_websocket_max_connections` (default 1000, 0 disables); requests beyond the cap are rejected with HTTP 503 before the upgrade. A per-source cap of max(4, cap/20) additionally bounds any single host, and sources in `p2p_websocket_trusted_source_cidrs` (default loopback) bypass both caps so internal consumers such as the asset-service bridge can always reconnect.
     - When `p2p_websocket_allowed_origins` is set, browser requests whose `Origin` header is not in the list are rejected during the upgrade, and the same list drives the HTTP server's CORS policy (empty = allow all, the historical behaviour).
     - Data is sent over the WebSocket, using its dedicated client channel. Every write carries a deadline so a slow client cannot wedge its writer goroutine.
     - The server periodically pings each client and enforces a read deadline refreshed by pong replies; silent or half-open connections are detected and torn down.
@@ -319,7 +319,7 @@ All notifications collected from the Block and Validator listeners are sent over
 
     - The server tracks all active client channels (`clientChannels`).
     - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
-    - A client that fails to drain its channel within the broadcast timeout is evicted from `clientChannels`.
+    - A client that fails to drain its channel within the broadcast timeout is evicted from `clientChannels` and its connection is closed, releasing its connection slot.
 
 As a sequence:
 
