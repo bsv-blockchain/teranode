@@ -504,6 +504,16 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *sett
 		return
 	}
 
+	if !tSettings.Aerospike.EnableClientMetrics {
+		// Gated by aerospike_enable_client_metrics. This skips only the
+		// client.Stats() polling goroutine below. client.EnableMetrics(nil) is
+		// disabled unconditionally (see the comment further down, pending #1001),
+		// so this flag has no effect on the per-batch nodeStats contention either
+		// way — it cannot be used to relieve it.
+		logger.Infof("[Aerospike] client metrics disabled (aerospike_enable_client_metrics=false)")
+		return
+	}
+
 	var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 	aerospikeStatsRefreshInterval := tSettings.Aerospike.StatsRefreshDuration

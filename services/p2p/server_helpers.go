@@ -29,7 +29,7 @@ type reputationCacheEntry struct {
 	expiresAt time.Time
 }
 
-func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
+func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) {
 	var (
 		blockMessage BlockMessage
 		hash         *chainhash.Hash
@@ -80,7 +80,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		}
 	} else {
 		var ok bool
-		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight())
+		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
 		if !ok {
 			return
 		}
@@ -108,8 +108,12 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 
 	now := time.Now().UTC()
 
-	// Store the peer ID that sent this block
-	s.storePeerMapEntry(&s.blockPeerMap, blockMessage.Hash, fromID, now)
+	// Store the peer ID that sent this block, keyed by the canonical hash
+	// string. Ban lookups (ReportInvalidBlock, processInvalidBlockMessage) use
+	// hash.String() from block validation, so keying by the raw message string
+	// would let a peer evade the invalid-block ban by announcing a
+	// non-canonical hex form (uppercase, truncated).
+	s.storePeerMapEntry(&s.blockPeerMap, hash.String(), fromID, now)
 
 	s.logger.Debugf("[handleBlockTopic] storing peer %s for block %s", fromID, blockMessage.Hash)
 
@@ -199,13 +203,20 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 	s.logger.Debugf("[handleSubtreeTopic] received subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
 
+	// Parse the hash before any use, mirroring handleBlockTopic: a malformed
+	// hash must not reach WebSocket subscribers or count as peer activity.
+	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
+	if err != nil {
+		return
+	}
+
 	now := time.Now().UTC()
 
 	select {
 	case s.notificationCh <- &notificationMsg{
 		Timestamp:  now.Format(isoFormat),
 		Type:       "subtree",
-		Hash:       subtreeMessage.Hash,
+		Hash:       hash.String(),
 		BaseURL:    subtreeMessage.DataHubURL,
 		PeerID:     subtreeMessage.PeerID,
 		ClientName: subtreeMessage.ClientName,
@@ -231,14 +242,11 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
-	if err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] error parsing hash: %v", err)
-		return
-	}
-
-	// Store the peer ID that sent this subtree
-	s.storePeerMapEntry(&s.subtreePeerMap, subtreeMessage.Hash, fromID, now)
+	// Store the peer ID that sent this subtree, keyed by the canonical hash
+	// string so the ReportInvalidSubtree lookup (which uses hash.String() from
+	// subtree validation) matches even when the announcer sent a non-canonical
+	// hex form.
+	s.storePeerMapEntry(&s.subtreePeerMap, hash.String(), fromID, now)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", fromID, subtreeMessage.Hash)
 
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
@@ -503,18 +511,58 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 	return ""
 }
 
-// getLocalHeight returns the current local blockchain height.
-func (s *Server) getLocalHeight() uint32 {
+// localHeightCacheTTL bounds how stale the cached local height may be. The
+// height only feeds advertised-tip sanitization caps and periodic sync
+// evaluation, both tolerant of a second of staleness. Failed reads are cached
+// with the shorter error TTL: long enough to shed the per-message RPC storm
+// during a blockchain outage, short enough that recovery is picked up quickly
+// (while an error entry is served, advertised tips are capped as if the local
+// height were 0).
+const (
+	localHeightCacheTTL      = time.Second
+	localHeightErrorCacheTTL = 200 * time.Millisecond
+)
+
+type localHeightCacheEntry struct {
+	height    uint32
+	ok        bool
+	fetchedAt time.Time
+}
+
+// getLocalHeight returns the current local blockchain height. The result is
+// cached briefly: gossip handlers call this per message (via
+// sanitizeAdvertisedTip) and must not issue a blockchain gRPC round-trip each
+// time. Failures are cached too (with a shorter TTL), so a blockchain outage
+// does not turn back into a per-message RPC storm. Cache misses issue one RPC
+// bounded by defaultRPCTimeout derived from the caller's ctx so a hung
+// blockchain service cannot stall the caller (the sync coordinator's monitor
+// loops reach this on every tick via its local-height callback).
+func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 	if s.blockchainClient == nil {
 		return 0
 	}
 
-	_, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx)
-	if err != nil || bhMeta == nil {
-		return 0
+	if e := s.localHeightCache.Load(); e != nil {
+		ttl := localHeightCacheTTL
+		if !e.ok {
+			ttl = localHeightErrorCacheTTL
+		}
+		if time.Since(e.fetchedAt) < ttl {
+			return e.height
+		}
 	}
 
-	return bhMeta.Height
+	rpcCtx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
+	defer cancel()
+
+	height, ok := uint32(0), false
+	if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(rpcCtx); err == nil && bhMeta != nil {
+		height, ok = bhMeta.Height, true
+	}
+
+	s.localHeightCache.Store(&localHeightCacheEntry{height: height, ok: ok, fetchedAt: time.Now()})
+
+	return height
 }
 
 func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
@@ -566,11 +614,19 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 }
 
 func (s *Server) addPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, false)
+		return
+	}
 	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
 }
 
 // addConnectedPeer adds a peer and marks it as directly connected
 func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, true)
+		return
+	}
 	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
 	if s.peerRegistry == nil {
 		return
@@ -600,6 +656,12 @@ func (s *Server) InjectPeerForTesting(peerID peer.ID, clientName, dataHubURL str
 }
 
 func (s *Server) removePeer(peerID peer.ID) {
+	// Clear batcher state first: pending updates for a removed peer are stale,
+	// and its next message must re-register it rather than being skipped as
+	// recently asserted.
+	if s.registryBatcher != nil {
+		s.registryBatcher.forget(peerID.String())
+	}
 	if s.peerRegistry != nil {
 		idStr := peerID.String()
 		if err := s.peerRegistry.UpdateConnectionState(s.gCtx, idStr, false); err != nil {
@@ -647,7 +709,14 @@ func (s *Server) getSyncPeer() peer.ID {
 
 // updateStorage updates peer storage mode in the centralized registry.
 func (s *Server) updateStorage(peerID peer.ID, mode string) {
-	if s.peerRegistry != nil && mode != "" {
+	if mode == "" {
+		return
+	}
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueStorage(peerID.String(), mode)
+		return
+	}
+	if s.peerRegistry != nil {
 		if err := s.peerRegistry.UpdateStorage(s.gCtx, peerID.String(), mode); err != nil {
 			s.logger.Warnf("[updateStorage] UpdateStorage %s failed: %v", peerID, err)
 		}
@@ -834,10 +903,25 @@ func (s *Server) cleanupPeerMaps() {
 		s.ipBanCache.Delete(key)
 	}
 
+	// Evict expired banStatusCache entries: shouldSkipBannedPeer inserts one
+	// entry per unique peer ID gossip is seen from.
+	var banStatusKeysToDelete []string
+	s.banStatusCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(banStatusCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				banStatusKeysToDelete = append(banStatusKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range banStatusKeysToDelete {
+		s.banStatusCache.Delete(key)
+	}
+
 	// Log cleanup stats
-	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 || len(ipBanKeysToDelete) > 0 {
-		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries, %d expired IP-ban entries",
-			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete), len(ipBanKeysToDelete))
+	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 || len(ipBanKeysToDelete) > 0 || len(banStatusKeysToDelete) > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries, %d expired IP-ban entries, %d expired ban-status entries",
+			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete), len(ipBanKeysToDelete), len(banStatusKeysToDelete))
 	}
 
 	// Second pass: enforce size limits if needed
@@ -904,15 +988,33 @@ func (s *Server) isOwnMessage(from string, peerID string) bool {
 // shouldSkipBannedPeer checks if we should skip a message from a banned peer:
 // score-based bans live in the centralized peer registry, operator IP/subnet
 // bans in the local ban list. Registry failures are tolerated (return false)
-// so a transient registry blip doesn't drop traffic silently.
+// so a transient registry blip doesn't drop traffic silently. Registry lookups
+// are cached for reputationCacheTTL to avoid a gRPC round-trip per gossip
+// message; local ban transitions (onPeerBanned) overwrite the cache entry
+// immediately.
 func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 	if s.peerRegistry != nil {
-		banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
-		if err != nil {
-			s.logger.Warnf("[%s] IsPeerBanned %s failed: %v", messageType, from, err)
-		} else if banned {
-			s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
-			return true
+		if banned, ok := s.cachedBanStatus(from); ok {
+			if banned {
+				s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+				return true
+			}
+		} else {
+			banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
+			if err != nil {
+				// Error breaker: cache the failure as not-banned (fail open,
+				// same staleness contract as the reputation cache) so a
+				// degraded registry is hit — and logged — at most once per
+				// TTL per peer instead of once per gossip message.
+				s.banStatusCache.Store(from, banStatusCacheEntry{banned: false, expiresAt: time.Now().Add(reputationCacheTTL)})
+				s.logger.Warnf("[%s] IsPeerBanned %s failed (treating as not banned for %s): %v", messageType, from, reputationCacheTTL, err)
+			} else {
+				s.banStatusCache.Store(from, banStatusCacheEntry{banned: banned, expiresAt: time.Now().Add(reputationCacheTTL)})
+				if banned {
+					s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+					return true
+				}
+			}
 		}
 	}
 
@@ -922,6 +1024,23 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 	}
 
 	return false
+}
+
+type banStatusCacheEntry struct {
+	banned    bool
+	expiresAt time.Time
+}
+
+// cachedBanStatus returns the cached registry ban status for the peer and
+// whether a fresh cache entry existed.
+func (s *Server) cachedBanStatus(peerID string) (bool, bool) {
+	if v, ok := s.banStatusCache.Load(peerID); ok {
+		entry := v.(banStatusCacheEntry)
+		if time.Now().Before(entry.expiresAt) {
+			return entry.banned, true
+		}
+	}
+	return false, false
 }
 
 type ipBanCacheEntry struct {

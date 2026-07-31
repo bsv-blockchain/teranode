@@ -254,7 +254,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		group:        group,
 	}
 
-	s.storeBatcher.PutCtx(ctx, item)
+	// Guard the enqueue: Store.Close closes the store batcher first, so a Create
+	// racing shutdown would otherwise panic. Complete the item so the shared wait
+	// below returns and the existing item.result read surfaces the error.
+	if enqueueErr := safeBatcherPutCtx(s.storeBatcher, ctx, item, "store"); enqueueErr != nil {
+		item.complete(enqueueErr)
+	}
 
 	// One shared wait for the item instead of a per-item timer + select.
 	// s.batcherWait <= 0 means unbounded (ctx-only) — Group.Wait treats a

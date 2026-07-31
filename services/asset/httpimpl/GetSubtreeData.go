@@ -78,8 +78,23 @@ func (h *HTTP) GetSubtreeData() func(c echo.Context) error {
 		}
 		defer r.Close()
 
+		// Count the outcome AFTER streaming, not before. Incrementing OK/200 up front
+		// filed every empty-source 500 in the success bucket, leaving no signal for
+		// "this node is serving 500s for subtree_data" — the first thing an operator
+		// would look at when validating the issue 1368 fix in production.
+		//
+		// Still not exact: streamOrAbort also returns nil on the mid-stream hijack path
+		// and on the client-gone-before-first-byte path, so those are counted as OK.
+		// Labelling them needs the helper to report which path it took, which is a
+		// bigger change than this metric fix warrants.
+		if err := streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r); err != nil {
+			prometheusAssetHTTPGetSubtreeData.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+
+			return err
+		}
+
 		prometheusAssetHTTPGetSubtreeData.WithLabelValues("OK", "200").Inc()
 
-		return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r)
+		return nil
 	}
 }

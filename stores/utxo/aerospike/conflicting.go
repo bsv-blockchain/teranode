@@ -86,14 +86,11 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 
 		// set the conflicting flag using a lua script in the batch
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(
-			batchUDFPolicy,
-			key,
-			LuaPackage,
-			"setConflicting",
-			aerospike.NewValue(setValue),
-			aerospike.NewIntegerValue(int(s.blockHeight.Load())),
-			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
+		batchRecords = append(batchRecords, s.teranodeBatchRecord(
+			batchUDFPolicy, LuaPackage, key, subOpSetConflicting, "setConflicting",
+			setValue,
+			int(s.blockHeight.Load()),
+			s.settings.GetUtxoStoreBlockHeightRetention(),
 		))
 
 		for i, input := range tx.Inputs {

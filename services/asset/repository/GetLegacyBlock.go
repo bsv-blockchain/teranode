@@ -84,8 +84,10 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 				return err
 			}
 
-			// close the writer after the coinbase tx has been streamed
-			_ = w.CloseWithError(io.ErrClosedPipe)
+			// Close cleanly so the consumer's read ends in io.EOF. CloseWithError(io.ErrClosedPipe)
+			// here reported a complete body as a failure, which made streamOrAbort hijack the
+			// connection and drop the chunked terminator on every successful block.
+			_ = w.Close()
 
 			return nil
 		}
@@ -182,8 +184,10 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 			}
 		}
 
-		// close the writer after all subtrees have been streamed
-		_ = w.CloseWithError(io.ErrClosedPipe)
+		// Close cleanly after all subtrees have been streamed, so the consumer's read ends
+		// in io.EOF and streamOrAbort takes the happy path. See the note on the
+		// no-subtrees close above; io.ErrClosedPipe stays reserved for genuine failures.
+		_ = w.Close()
 
 		return nil
 	})

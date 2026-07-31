@@ -124,20 +124,44 @@ type batcherIfc[T any] interface {
 	Close()
 }
 
-// safeBatcherPutCtx enqueues item into b, converting the "send on closed channel"
-// panic — which go-batcher v2.0.6 raises when Put is called after Close — into a
-// returned error. Store.Close closes the batchers during graceful shutdown while
-// external callers (block validation, assembly, …) may still be enqueuing; that
-// race must abort the operation, not crash the process. who labels the call site.
+// shutdownPanicText is the runtime's message when a send targets a closed
+// channel. That is how go-batcher v2 surfaces Put-after-Close; see
+// batcher.Batcher.Close, which documents that Put must not be called after it.
+const shutdownPanicText = "send on closed channel"
+
+// recoverBatcherShutdown turns the send-on-closed-channel panic into a returned
+// error and re-panics everything else. Store.Close closes the batchers during
+// graceful shutdown while external callers (block validation, assembly, …) may
+// still be enqueuing; that race must abort the operation rather than crash the
+// process. Any other panic — a nil batcher, a future go-batcher failure mode — is
+// a genuine bug and must not be relabelled as an orderly shutdown.
 //
-// The recovered value is pre-formatted with fmt.Sprintf: the runtime's panic
-// value is a runtime.plainError, which implements error, and errors.New consumes
-// a trailing error argument as the wrapped error rather than formatting it —
-// orphaning the %v verb and mislabelling the result as wrapping an UNKNOWN (0).
+// Matching is on the rendered text, not the concrete type: the runtime panics
+// with a runtime.plainError, so a type switch would pass in tests that fake the
+// panic with a string and miss in production. Rendering also has to happen before
+// the value reaches errors.New, which consumes a trailing error argument as the
+// wrapped error instead of formatting it — orphaning the %v verb and mislabelling
+// the result as wrapping an UNKNOWN (0).
+//
+// ERR_SERVICE_UNAVAILABLE is deliberate — it keeps this inside
+// errors.IsTransientLocalError so a shutdown is not reported to peers as an
+// invalid block. Do not align with handleSpendPanic's ERR_UNKNOWN.
+func recoverBatcherShutdown(r any, who string, err *error) {
+	text := fmt.Sprint(r)
+
+	if !strings.Contains(text, shutdownPanicText) {
+		panic(r)
+	}
+
+	*err = errors.NewServiceUnavailableError("[%s] aerospike batcher unavailable (store shutting down): %v", who, text)
+}
+
+// safeBatcherPutCtx enqueues item into b, converting a Put-after-Close panic into
+// a returned error. who labels the call site.
 func safeBatcherPutCtx[T any](b batcherIfc[T], ctx context.Context, item *T, who string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.NewServiceUnavailableError("[%s] aerospike batcher unavailable (store shutting down): %v", who, fmt.Sprintf("%v", r))
+			recoverBatcherShutdown(r, who, &err)
 		}
 	}()
 
@@ -150,11 +174,27 @@ func safeBatcherPutCtx[T any](b batcherIfc[T], ctx context.Context, item *T, who
 func safeBatcherPut[T any](b batcherIfc[T], item *T, who string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.NewServiceUnavailableError("[%s] aerospike batcher unavailable (store shutting down): %v", who, fmt.Sprintf("%v", r))
+			recoverBatcherShutdown(r, who, &err)
 		}
 	}()
 
 	b.Put(item)
+
+	return nil
+}
+
+// safeBatcherPutBatchCtx is the PutBatchCtx counterpart. PutBatch* enqueues the
+// whole group in a single channel send, so a rejected send rejects every item:
+// callers must complete all of them, or the shared group.Wait parks for its full
+// timeout and then reports a misleading timeout instead of the shutdown.
+func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items []*T, who string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			recoverBatcherShutdown(r, who, &err)
+		}
+	}()
+
+	b.PutBatchCtx(ctx, items)
 
 	return nil
 }
@@ -187,6 +227,24 @@ type Store struct {
 	indexMutex          sync.Mutex    // Mutex for index creation operations
 	indexOnce           sync.Once     // Ensures index creation/wait is only done once per process
 	spendLuaPackages    []string      // Pre-initialized array of Lua package names for spend operations
+
+	// useNativeTeranodeOps caches whether the store should issue mod-teranode
+	// invocations through the native operate-path (TeranodeModifyOp, wire op
+	// type 200) rather than the legacy UDF path. Both the Aerospike setting
+	// and a server-capability probe (see detectNativeTeranodeOpSupport) must
+	// agree; otherwise calls fall back to UDF transparently. Atomic because a
+	// runtime PARAMETER_ERROR demotes it back to false while batch goroutines
+	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
+	useNativeTeranodeOps atomic.Bool
+
+	// nativeOpBatchWritePolicy is the shared BatchWritePolicy used by every
+	// NewBatchWrite the native-op path constructs in teranodeBatchRecord.
+	// Allocated once in initNativeTeranodeOps; the Aerospike client only
+	// reads from it during BatchOperate, so concurrent reads from many
+	// goroutines are safe. Sharing one policy instead of allocating a
+	// fresh one per batch record reverses the per-record alloc the
+	// original PR-828 implementation introduced.
+	nativeOpBatchWritePolicy *aerospike.BatchWritePolicy
 
 	// batchKeysPool is a per-Store sync.Pool of *[]*aerospike.Key slices reused
 	// across SetMinedMulti calls. Per-Store scoping ensures the Key's intrinsic
@@ -312,6 +370,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 			s.spendLuaPackages[i] = LuaPackage + "_" + fmt.Sprintf("%d", i)
 		}
 	}
+
+	// Decide once whether to use the native operate-path for mod-teranode
+	// invocations. Falls back to UDF transparently if the setting is off
+	// or the cluster doesn't support the new opcode. See native_op.go.
+	s.initNativeTeranodeOps(ctx)
 
 	// Ensure index creation/wait is only done once per process
 	if pruner.IndexName != "" {
@@ -1062,33 +1125,40 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		aerospike.ExpBinExists(fields.PreserveUntil.String()),
 	)
 
-	batchRecords := make([]aerospike.BatchRecordIfc, len(txIDs))
+	// Build batchRecords via append so a failed NewKey doesn't leave a nil
+	// entry in the slice — client.BatchOperate can nil-deref on nil entries.
+	// recordTxIDs tracks the original txID for each surviving batch record so
+	// result-handling logs reference the right hash.
+	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
+	recordTxIDs := make([]chainhash.Hash, 0, len(txIDs))
 
 	var keyErrors int
-	for i, txID := range txIDs {
+	for _, txID := range txIDs {
 		key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
 		if err != nil {
 			keyErrors++
 			continue
 		}
 
-		batchRecords[i] = aerospike.NewBatchUDF(
-			batchUDFPolicy,
-			key,
-			LuaPackage,
-			"preserveUntil",
-			aerospike.NewIntegerValue(int(preserveUntilHeight)),
-		)
+		batchRecords = append(batchRecords, s.teranodeBatchRecord(
+			batchUDFPolicy, LuaPackage, key, subOpPreserveUntil, "preserveUntil",
+			int(preserveUntilHeight),
+		))
+		recordTxIDs = append(recordTxIDs, txID)
 	}
 
 	if keyErrors > 0 {
 		s.logger.Errorf("[PreserveTransactions] Failed to create keys for %d/%d transactions", keyErrors, len(txIDs))
 	}
 
+	if len(batchRecords) == 0 {
+		return nil
+	}
+
 	// Execute batch operation
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.NewStorageError("failed to preserve transactions", err)
+		return errors.NewStorageError("failed to preserve %d transactions: %s", len(txIDs), err.Error(), err)
 	}
 
 	// Check results and handle external transactions
@@ -1098,8 +1168,31 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	var skippedCount int
 
 	for i, record := range batchRecords {
+		if record == nil {
+			noResponseErrors++
+			s.logger.Warnf("[PreserveTransactions][%s] missing batch record; %s", recordTxIDs[i].String(), describeAerospikeBatchRecord(record))
+			continue
+		}
+
 		batchRecord := record.BatchRec()
+		if batchRecord == nil {
+			noResponseErrors++
+			s.logger.Warnf("[PreserveTransactions][%s] missing batch record; %s", recordTxIDs[i].String(), describeAerospikeBatchRecord(record))
+			continue
+		}
+
 		if batchRecord.Err != nil {
+			s.demoteNativeOnUnsupported(batchRecord.Err)
+
+			// Missing record: the UDF path reports this as a Lua TX_NOT_FOUND
+			// status, which the switch below deliberately does not count as an
+			// error. Under the native path's UPDATE_ONLY policy the same
+			// condition arrives as a per-record KEY_NOT_FOUND — skip it the
+			// same way.
+			if isKeyNotFound(batchRecord.Err) {
+				continue
+			}
+
 			// FILTERED_OUT: not prune-eligible (no deleteAtHeight and not already preserved) —
 			// a deliberate skip by the eligibility gate, not an error.
 			var aErr *aerospike.AerospikeError
@@ -1108,15 +1201,17 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 				continue
 			}
 
-			s.logger.Warnf("[PreserveTransactions] Failed to preserve tx %s: %v", txIDs[i].String(), batchRecord.Err)
+			s.logger.Warnf("[PreserveTransactions][%s] failed to preserve tx; %s: %v", recordTxIDs[i].String(), describeAerospikeBatchRecord(record), batchRecord.Err)
 			continue
 		}
 
 		response := batchRecord.Record
 		if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
-			res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
+			rawResponse := response.Bins[LuaSuccess.String()]
+			res, err := s.ParseLuaMapResponse(rawResponse)
 			if err != nil {
 				parseErrors++
+				s.logger.Warnf("[PreserveTransactions][%s] failed to parse response bin %q (value %s); %s: %v", recordTxIDs[i].String(), LuaSuccess.String(), describeAerospikeValue(rawResponse), describeAerospikeBatchRecord(record), err)
 				continue
 			}
 
@@ -1126,10 +1221,12 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 			case LuaStatusError:
 				if res.ErrorCode != LuaErrorCodeTxNotFound {
 					luaErrors++
+					s.logger.Warnf("[PreserveTransactions][%s] preserveUntil returned error: %s", recordTxIDs[i].String(), res.Message)
 				}
 			}
 		} else {
 			noResponseErrors++
+			s.logger.Warnf("[PreserveTransactions][%s] missing expected response bin %q; %s", recordTxIDs[i].String(), LuaSuccess.String(), describeAerospikeBatchRecord(record))
 		}
 	}
 
