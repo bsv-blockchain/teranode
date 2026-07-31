@@ -7354,6 +7354,20 @@
 <td>p2p_peer_map_cleanup_interval</td>
 <td>Peer map cleanup frequency</td>
 </tr>
+<tr>
+<td>PeerRegistryBatchInterval</td>
+<td>time.Duration</td>
+<td>1s</td>
+<td>p2p_peer_registry_batch_interval</td>
+<td>Flush interval for batched peer-registry updates from gossip handlers</td>
+</tr>
+<tr>
+<td>GossipHandlerConcurrency</td>
+<td>int</td>
+<td>4</td>
+<td>p2p_gossip_handler_concurrency</td>
+<td>Concurrent gossip handler workers per pubsub topic</td>
+</tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
