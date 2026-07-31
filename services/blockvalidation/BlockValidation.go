@@ -35,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -1636,14 +1637,30 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// difficulty checks must run first. It also means a peer cannot make us do
 		// full tx validation for a garbage header at zero cost.
 		//
+		// Checkpoint enforcement (defense-in-depth on the direct, non-catchup path):
+		// a block whose height matches a hardcoded checkpoint MUST match the
+		// checkpoint hash, mirroring the catchup header pipeline. Without this the
+		// difficulty-skip below would let a fabricated block AT a checkpoint height
+		// reach subtree validation with the expected-nBits check skipped and no
+		// checkpoint assertion. See gap-analysis #&NoBreak;4697. (Rejecting sub-checkpoint
+		// forks at non-checkpoint heights — the fork-depth rule — is a separate,
+		// broader change and is not done here.)
+		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
+			if !opts.IsRevalidation {
+				u.storeInvalidBlock(ctx, block, opts.PeerID, err.Error())
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
+		}
+
 		// Skip difficulty validation for blocks at or below the highest checkpoint:
 		// these blocks are already verified by checkpoints. NOTE: on this direct
-		// (non-catchup) path the checkpoint linkage itself is not verified here, so
-		// for heights at or below the checkpoint the zero-cost claim above does not
-		// hold — a fabricated low-height header reaches subtree validation without
-		// paying PoW. block.Valid still rejects such a block unconditionally
-		// (HasMetTargetDifficulty + checkParentsExistOnChain) before acceptance;
-		// the exposure is transient blessing only, same as the pre-option design.
+		// path only the checkpoint-height hash-match above is enforced; a fabricated
+		// header at a non-checkpoint height at or below the checkpoint still reaches
+		// subtree validation without paying PoW. block.Valid rejects such a block
+		// (HasMetTargetDifficulty + checkParentsExistOnChain) before acceptance and
+		// its trivial cumulative work cannot reorg the chain; the residual exposure
+		// is wasted validation work on a transient fork, same as the pre-option design.
 		highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 		skipDifficultyCheck := block.Height <= highestCheckpointHeight
 
