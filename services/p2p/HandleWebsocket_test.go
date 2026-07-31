@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -953,5 +955,137 @@ func TestStartNotificationProcessor_InitialStatusPrecedesBroadcasts(t *testing.T
 		require.Equal(t, "our-node", msg.PeerID, "first node_status must identify our own node")
 	case <-time.After(2 * time.Second):
 		t.Fatal("initial node_status never delivered")
+	}
+}
+
+// TestGetNodeStatusMessage_CarriesForwardLastKnownGoodOnFailure verifies that
+// failed lookups fall back to the corresponding fields of the last cached status
+// instead of zero values, both in the returned/broadcast message and in the
+// cache served to new websocket clients.
+func TestGetNodeStatusMessage_CarriesForwardLastKnownGoodOnFailure(t *testing.T) {
+	mockBlockchain := &blockchain.Mock{}
+
+	// First call: everything succeeds (except the block persister height, which
+	// is also allowed to fail without affecting the other fields).
+	meta100 := &model.BlockHeaderMeta{Height: 100, Miner: "miner-a"}
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, meta100, nil).Once()
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Once()
+
+	// Second call: the best-header and FSM lookups fail.
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, assert.AnError).Once()
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Once()
+
+	// Third call: the best header recovers at a new height while FSM still fails.
+	meta200 := &model.BlockHeaderMeta{Height: 200, Miner: "miner-b"}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, meta200, nil).Once()
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Once()
+
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError)
+
+	// Block assembly succeeds once, then fails for the remaining calls.
+	mockBlockAssembly := &blockassembly.Mock{}
+	mockBlockAssembly.On("GetBlockAssemblyState", mock.Anything).Return(&blockassembly_api.StateMessage{TxCount: 7, SubtreeCount: 3}, nil).Once()
+	mockBlockAssembly.On("GetBlockAssemblyState", mock.Anything).Return(nil, assert.AnError)
+
+	s := &Server{
+		logger:              &ulogger.TestLogger{},
+		settings:            &settings.Settings{},
+		blockchainClient:    mockBlockchain,
+		blockAssemblyClient: mockBlockAssembly,
+	}
+
+	first := s.getNodeStatusMessage(context.Background())
+	require.Equal(t, uint32(100), first.BestHeight)
+	require.Equal(t, "miner-a", first.MinerName)
+	require.Equal(t, "RUNNING", first.FSMState)
+	require.Equal(t, uint64(7), first.TxCount)
+	require.Equal(t, uint32(3), first.SubtreeCount)
+
+	second := s.getNodeStatusMessage(context.Background())
+	require.Equal(t, uint32(100), second.BestHeight, "failed best-header lookup must carry forward the cached height")
+	require.Equal(t, "miner-a", second.MinerName)
+	require.Equal(t, "RUNNING", second.FSMState, "failed FSM lookup must carry forward the cached state")
+	require.Equal(t, first.BestBlockHash, second.BestBlockHash)
+	require.Equal(t, uint64(7), second.TxCount, "failed block-assembly lookup must carry forward the cached counts")
+	require.Equal(t, uint32(3), second.SubtreeCount)
+	require.Equal(t, uint32(100), s.latestNodeStatus.Load().BestHeight, "cache must not regress to zero values")
+
+	third := s.getNodeStatusMessage(context.Background())
+	require.Equal(t, uint32(200), third.BestHeight, "recovered lookup must serve fresh values")
+	require.Equal(t, "miner-b", third.MinerName)
+	require.Equal(t, "RUNNING", third.FSMState, "still-failing FSM lookup keeps the cached state")
+	require.Equal(t, uint32(200), s.latestNodeStatus.Load().BestHeight)
+}
+
+// TestSendNodeStatusToClient_DropsWhenChannelFull verifies the non-blocking send:
+// a full client channel drops the status instead of blocking the caller.
+func TestSendNodeStatusToClient_DropsWhenChannelFull(t *testing.T) {
+	s := &Server{
+		logger:   &ulogger.TestLogger{},
+		settings: &settings.Settings{},
+	}
+
+	occupied := []byte("occupied")
+	clientCh := make(chan []byte, 1)
+	clientCh <- occupied
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.sendNodeStatusToClient(clientCh, &notificationMsg{Type: "node_status"})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("sendNodeStatusToClient blocked on a full channel")
+	}
+
+	require.Equal(t, occupied, <-clientCh, "the queued message must be untouched")
+	require.Empty(t, clientCh, "the status must have been dropped, not queued")
+}
+
+// TestPublishNodeStatus_BoundsEachTick verifies that every publish runs under a
+// per-tick deadline, so one wedged blockchain call cannot stall the publisher
+// (and freeze the node-status cache) forever.
+func TestPublishNodeStatus_BoundsEachTick(t *testing.T) {
+	deadlineSeen := make(chan bool, 1)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Run(func(args mock.Arguments) {
+		callCtx, ok := args.Get(0).(context.Context)
+		require.True(t, ok)
+		_, hasDeadline := callCtx.Deadline()
+		select {
+		case deadlineSeen <- hasDeadline:
+		default:
+		}
+	}).Return(nil, nil, assert.AnError)
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				// Silent mode keeps handleNodeStatusNotification off the P2P
+				// publish path, which needs a live P2P client.
+				ListenMode: settings.ListenModeSilent,
+			},
+		},
+		blockchainClient: mockBlockchain,
+	}
+
+	go s.publishNodeStatus(ctx)
+
+	select {
+	case hasDeadline := <-deadlineSeen:
+		require.True(t, hasDeadline, "publish tick must run under a bounded context")
+	case <-time.After(2 * time.Second):
+		t.Fatal("publishNodeStatus never issued the initial publish")
 	}
 }

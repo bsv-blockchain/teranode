@@ -639,8 +639,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// the asset service (centrifuge) and the dashboard pin the current node's
 	// identity to the first node_status they see.
 	warmCtx, warmCancel := context.WithTimeout(ctx, initialNodeStatusTimeout)
-	s.getNodeStatusMessage(warmCtx)
+	warmStatus := s.getNodeStatusMessage(warmCtx)
 	warmCancel()
+	s.logger.Infof("[Start] node status cache warmed (height=%d, fsm_state=%s, storage=%q)", warmStatus.BestHeight, warmStatus.FSMState, warmStatus.Storage)
 
 	s.e = s.setupHTTPServer()
 
@@ -1199,7 +1200,17 @@ func (s *Server) publishNodeStatus(ctx context.Context) {
 
 // getNodeStatusMessage creates a notification message with the current node's status.
 // This is used both for periodic broadcasts and for sending to newly connected WebSocket clients.
+//
+// Every fallible lookup carries forward the corresponding fields of the last
+// cached status when it fails: the zero-value defaults (height 0, fsm_state
+// UNKNOWN, storage "pruned", 0 counts) are indistinguishable from real values,
+// and this message is cached, broadcast to websocket clients, and published to
+// the gossip network, where peers use it for sync-peer selection. This also
+// covers a context deadline expiring mid-computation: the remaining lookups
+// fail and their fields fall back to the last known-good values.
 func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
+	cached := s.latestNodeStatus.Load()
+
 	// Get best block info
 	var bestBlockHeader *model.BlockHeader
 	var bestBlockMeta *model.BlockHeaderMeta
@@ -1209,12 +1220,18 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		bestBlockHeader, bestBlockMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 	}
 
-	degraded := err != nil
-	if degraded {
-		s.logger.Errorf("[handleNodeStatusNotification] error getting best block header: %s", err)
-		// Use genesis block as fallback when we can't get the best block
-		bestBlockHeader = model.GenesisBlockHeader
-		bestBlockMeta = model.GenesisBlockHeaderMeta
+	bestHeaderFailed := err != nil
+	if bestHeaderFailed {
+		s.logger.Errorf("[getNodeStatusMessage] error getting best block header: %s", err)
+		// The formatted best-block fields are backfilled from the cached status
+		// below; genesis is the fallback only when there is no cached status.
+		bestBlockHeader = nil
+		bestBlockMeta = nil
+
+		if cached == nil {
+			bestBlockHeader = model.GenesisBlockHeader
+			bestBlockMeta = model.GenesisBlockHeaderMeta
+		}
 	}
 
 	// Calculate uptime
@@ -1223,10 +1240,15 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Get FSM state from blockchain client
 	fsmState := "UNKNOWN"
 	if s.blockchainClient != nil {
-		currentState, err := s.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			s.logger.Warnf("[handleNodeStatusNotification] error getting FSM state: %s", err)
-		} else if currentState != nil {
+		currentState, fsmErr := s.blockchainClient.GetFSMCurrentState(ctx)
+		switch {
+		case fsmErr != nil:
+			s.logger.Warnf("[getNodeStatusMessage] error getting FSM state: %s", fsmErr)
+
+			if cached != nil {
+				fsmState = cached.FSMState
+			}
+		case currentState != nil:
 			// Convert FSMStateType to string
 			fsmState = currentState.String()
 		}
@@ -1265,6 +1287,14 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		chainWorkStr = hex.EncodeToString(bestBlockMeta.ChainWork)
 	}
 
+	// Carry forward the last known-good best-block fields when the lookup failed
+	if bestHeaderFailed && cached != nil {
+		blockHashStr = cached.BestBlockHash
+		height = cached.BestHeight
+		chainWorkStr = cached.ChainWork
+		minerName = cached.MinerName
+	}
+
 	// Get sync peer information
 	syncPeerID := ""
 	syncPeerHeight := uint32(0)
@@ -1283,7 +1313,7 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 			// First time connecting to this sync peer
 			syncConnectedAt = time.Now().Unix()
 			s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
-			s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
+			s.logger.Debugf("[getNodeStatusMessage] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
 		}
 
 		// Drop entries for previous sync peers so the map only tracks the current one
@@ -1386,9 +1416,13 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// gossiped/disconnected peers, so count only directly connected ones.
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
-		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
-		if err != nil {
-			s.logger.Warnf("[getNodeStatusMessage] ListPeers failed: %v", err)
+		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+		if listErr != nil {
+			s.logger.Warnf("[getNodeStatusMessage] ListPeers failed: %v", listErr)
+
+			if cached != nil {
+				connectedPeersCount = cached.ConnectedPeersCount
+			}
 		} else {
 			for _, p := range allPeers {
 				if p.IsConnected {
@@ -1402,19 +1436,31 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	txCount := uint64(0)
 	subtreeCount := uint32(0)
 	if s.blockAssemblyClient != nil {
-		if state, err := s.blockAssemblyClient.GetBlockAssemblyState(ctx); err == nil && state != nil {
+		if state, baErr := s.blockAssemblyClient.GetBlockAssemblyState(ctx); baErr == nil && state != nil {
 			txCount = state.TxCount
 			subtreeCount = state.SubtreeCount
-		} else if err != nil {
-			s.logger.Debugf("[getNodeStatusMessage] Failed to get block assembly state: %v", err)
+		} else if baErr != nil {
+			s.logger.Debugf("[getNodeStatusMessage] Failed to get block assembly state: %v", baErr)
+
+			if cached != nil {
+				txCount = cached.TxCount
+				subtreeCount = cached.SubtreeCount
+			}
 		}
 	}
 
 	// Determine storage mode (full vs pruned) based on block persister status
-	// Query block persister height from blockchain state
+	// Query block persister height from blockchain state. A lookup error keeps
+	// the cached storage mode below: the error is expected on nodes without a
+	// block persister (state key absent), and on transient failures recomputing
+	// from a zero height would misreport a full node as pruned.
 	var blockPersisterHeight uint32
+	persisterHeightFailed := false
 	if s.blockchainClient != nil {
-		if stateData, err := s.blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(stateData) >= 4 {
+		if stateData, stateErr := s.blockchainClient.GetState(ctx, "BlockPersisterHeight"); stateErr != nil {
+			persisterHeightFailed = true
+			s.logger.Debugf("[getNodeStatusMessage] BlockPersisterHeight state unavailable: %v", stateErr)
+		} else if len(stateData) >= 4 {
 			blockPersisterHeight = binary.LittleEndian.Uint32(stateData)
 		}
 	}
@@ -1430,6 +1476,10 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	}
 
 	storage := util.DetermineStorageMode(blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
+	if persisterHeightFailed && cached != nil {
+		storage = cached.Storage
+	}
+
 	s.logger.Debugf("[getNodeStatusMessage] Determined storage=%q for this node (persisterHeight=%d, bestHeight=%d, retention=%d, prunerTrigger=%s)",
 		storage, blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
 
@@ -1463,13 +1513,10 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	}
 
 	// Cache the status so sendInitialNodeStatuses can serve new websocket
-	// clients without blocking on blockchain gRPC. A degraded status (genesis
-	// fallback after a best-header failure) must not overwrite a good one, or a
-	// single transient blockchain error would misreport height 0 to every
-	// client connecting until the next successful refresh.
-	if !degraded || s.latestNodeStatus.Load() == nil {
-		s.latestNodeStatus.Store(msg)
-	}
+	// clients without blocking on blockchain gRPC. Failed lookups above carried
+	// forward the last known-good fields, so the cached copy never regresses to
+	// zero values, and the cache always matches what this call broadcasts.
+	s.latestNodeStatus.Store(msg)
 
 	return msg
 }
