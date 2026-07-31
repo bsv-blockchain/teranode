@@ -95,6 +95,9 @@ func TestPeerSelector_HealthChecks_ProbeEachURLOnceAcrossBothPasses(t *testing.T
 
 func TestPeerSelector_HealthChecks_CachedAcrossCalls(t *testing.T) {
 	ps := newHealthCheckSelectorForTest()
+	// Pin the tiebreak: peerA and peerB tie on every merit criterion, and the
+	// test needs both selections to pick the same peer to compare them.
+	ps.randIntN = func(int) int { return 0 }
 	peerA := newPeer("peer-a", 100, "full", 50, 0)
 	peerB := newPeer("peer-b", 100, "full", 50, 0)
 	peers := []*blockchain.PeerInfo{peerA, peerB}

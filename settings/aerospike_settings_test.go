@@ -40,3 +40,20 @@ func TestAerospikeOverloadRetry_Defaults(t *testing.T) {
 	require.Equal(t, 50*time.Millisecond, tSettings.Aerospike.OverloadRetryBaseBackoff)
 	require.Equal(t, 5*time.Second, tSettings.Aerospike.OverloadRetryMaxBackoff)
 }
+
+// TestAerospikeEnableClientMetrics_Default guards the same loader-vs-struct-tag
+// class of bug for the client-metrics toggle, which has the most damaging shape
+// of the three: the struct tag advertises default:"true", but a missing loader
+// entry leaves the field false, silently switching off Aerospike stats
+// collection in every deployment that does not set the key explicitly. The
+// failure is invisible — metrics simply stop being published.
+func TestAerospikeEnableClientMetrics_Default(t *testing.T) {
+	tSettings := NewSettings()
+
+	require.NotNil(t, tSettings)
+	require.True(t, tSettings.Aerospike.EnableClientMetrics,
+		"default EnableClientMetrics must be true. "+
+			"If this fails the loader in settings.go is missing the "+
+			`getBool("aerospike_enable_client_metrics", true, alternativeContext...)`+
+			" entry and Aerospike stats collection is silently disabled in prod.")
+}

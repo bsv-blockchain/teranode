@@ -69,6 +69,14 @@ const (
 	defaultPeerMapCleanupInterval = 1 * time.Minute  // Cleanup interval (reduced from 5min)
 	protocolIDVersion             = "1.0.0"          // Protocol version identifier
 
+	// syncCoordinatorStopTimeout is the sync coordinator's drain sub-budget
+	// inside Server.Stop. Coordinator RPCs are bounded at defaultRPCTimeout
+	// (5s), so a healthy drain completes well within it; the cap only bites
+	// when a goroutine is wedged in a non-context-aware call, and it must be
+	// well under the service manager's per-service stop budget so the Kafka
+	// producer flushes later in Server.Stop still get usable time.
+	syncCoordinatorStopTimeout = 10 * time.Second
+
 	// maxP2PMessageSize is the absolute upper bound on a pubsub message payload.
 	// Anything larger is dropped before parsing. Per-topic limits below should
 	// always be tighter than this; this is the safety net.
@@ -134,8 +142,8 @@ type Server struct {
 	invalidSubtreeTopicName           string                         // Kafka topic for invalid subtrees
 	nodeStatusTopicName               string                         // pubsub topic for node status messages
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map                       // Map to track which peer sent each block (hash -> peerMapEntry)
-	subtreePeerMap                    sync.Map                       // Map to track which peer sent each subtree (hash -> peerMapEntry)
+	blockPeerMap                      sync.Map                       // Map to track which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry)
+	subtreePeerMap                    sync.Map                       // Map to track which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry)
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -947,7 +955,7 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 	}
 }
 
-func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
+func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID string) {
 	// Check message size before parsing to prevent memory exhaustion
 	if len(m) > maxNodeStatusMessageSize {
 		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxNodeStatusMessageSize, peerID)
@@ -1005,7 +1013,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
 		var ok bool
-		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight())
+		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
 		if ok {
 			sanitizedTipOK = true
 			notificationBestHeight = sanitizedBestHeight
@@ -1714,6 +1722,19 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Stop the sync coordinator first: its monitor goroutines call into the
+	// registry and publish to the blocks Kafka producer, both of which are torn
+	// down below. The drain gets a sub-budget of the shutdown context rather
+	// than ctx itself: coordinator RPCs are bounded at defaultRPCTimeout, so a
+	// healthy drain finishes well within it, and a goroutine wedged in a
+	// non-context-aware call must not burn the whole per-service stop budget
+	// and hand the DC11 producer flushes below an already-expired ctx.
+	if s.syncCoordinator != nil {
+		coordCtx, coordCancel := context.WithTimeout(ctx, syncCoordinatorStopTimeout)
+		s.syncCoordinator.Stop(coordCtx)
+		coordCancel()
+	}
+
 	// Stop the underlying P2P node
 	if s.P2PClient != nil {
 		collect("stop P2P node", s.P2PClient.Close())
@@ -1785,27 +1806,30 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			return nil, errors.WrapGRPCPublic(errors.NewServiceError("list peers", err))
 		}
 
+		// Look up libp2p addresses once, not per registry peer.
+		addrByPeerID := make(map[string]string)
+		if s.P2PClient != nil {
+			for _, sp := range s.P2PClient.GetPeers() {
+				if len(sp.Addrs) > 0 {
+					addrByPeerID[sp.ID] = sp.Addrs[0]
+				}
+			}
+		}
+
 		resp := &p2p_api.GetPeersResponse{}
 		for _, p := range allPeers {
 			if !p.IsConnected {
 				continue
 			}
-			// Get address from libp2p if available.
-			addr := ""
-			if s.P2PClient != nil {
-				libp2pPeers := s.P2PClient.GetPeers()
-				for _, sp := range libp2pPeers {
-					if sp.ID == p.ID && len(sp.Addrs) > 0 {
-						addr = sp.Addrs[0]
-						break
-					}
-				}
-			}
+
+			addr := addrByPeerID[p.ID]
 
 			resp.Peers = append(resp.Peers, &p2p_api.Peer{
-				Id:       p.ID,
-				Addr:     addr,
-				Banscore: p.BanScore,
+				Id:            p.ID,
+				Addr:          addr,
+				Banscore:      p.BanScore,
+				CurrentHeight: p.Height,
+				BytesReceived: p.BytesReceived,
 			})
 		}
 

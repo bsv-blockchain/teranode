@@ -29,7 +29,7 @@ type reputationCacheEntry struct {
 	expiresAt time.Time
 }
 
-func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
+func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) {
 	var (
 		blockMessage BlockMessage
 		hash         *chainhash.Hash
@@ -80,7 +80,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		}
 	} else {
 		var ok bool
-		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight())
+		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
 		if !ok {
 			return
 		}
@@ -108,8 +108,12 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 
 	now := time.Now().UTC()
 
-	// Store the peer ID that sent this block
-	s.storePeerMapEntry(&s.blockPeerMap, blockMessage.Hash, fromID, now)
+	// Store the peer ID that sent this block, keyed by the canonical hash
+	// string. Ban lookups (ReportInvalidBlock, processInvalidBlockMessage) use
+	// hash.String() from block validation, so keying by the raw message string
+	// would let a peer evade the invalid-block ban by announcing a
+	// non-canonical hex form (uppercase, truncated).
+	s.storePeerMapEntry(&s.blockPeerMap, hash.String(), fromID, now)
 
 	s.logger.Debugf("[handleBlockTopic] storing peer %s for block %s", fromID, blockMessage.Hash)
 
@@ -199,13 +203,20 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 	s.logger.Debugf("[handleSubtreeTopic] received subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
 
+	// Parse the hash before any use, mirroring handleBlockTopic: a malformed
+	// hash must not reach WebSocket subscribers or count as peer activity.
+	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
+	if err != nil {
+		return
+	}
+
 	now := time.Now().UTC()
 
 	select {
 	case s.notificationCh <- &notificationMsg{
 		Timestamp:  now.Format(isoFormat),
 		Type:       "subtree",
-		Hash:       subtreeMessage.Hash,
+		Hash:       hash.String(),
 		BaseURL:    subtreeMessage.DataHubURL,
 		PeerID:     subtreeMessage.PeerID,
 		ClientName: subtreeMessage.ClientName,
@@ -231,14 +242,11 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
-	if err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] error parsing hash: %v", err)
-		return
-	}
-
-	// Store the peer ID that sent this subtree
-	s.storePeerMapEntry(&s.subtreePeerMap, subtreeMessage.Hash, fromID, now)
+	// Store the peer ID that sent this subtree, keyed by the canonical hash
+	// string so the ReportInvalidSubtree lookup (which uses hash.String() from
+	// subtree validation) matches even when the announcer sent a non-canonical
+	// hex form.
+	s.storePeerMapEntry(&s.subtreePeerMap, hash.String(), fromID, now)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", fromID, subtreeMessage.Hash)
 
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
@@ -503,13 +511,19 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 	return ""
 }
 
-// getLocalHeight returns the current local blockchain height.
-func (s *Server) getLocalHeight() uint32 {
+// getLocalHeight returns the current local blockchain height. The RPC is
+// bounded by defaultRPCTimeout derived from the caller's ctx so a hung
+// blockchain service cannot stall the caller (the sync coordinator's monitor
+// loops reach this on every tick via its local-height callback).
+func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 	if s.blockchainClient == nil {
 		return 0
 	}
 
-	_, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx)
+	ctx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
+	defer cancel()
+
+	_, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil || bhMeta == nil {
 		return 0
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -3900,28 +3901,112 @@ func (m *mockSubtreeStore) GetIoReader(ctx context.Context, key []byte, fileType
 	return nil, errors.NewBlobNotFoundError("mock error")
 }
 
-// createValidSubtreeMetadata creates valid subtree metadata that won't trigger retries
+// dummyParentTx is the stand-in parent that every non-coinbase node built by
+// createValidSubtreeMetadata / createSubtreeMetadataWithParents spends from.
+// Tests that expect validateSubtree to succeed must seed it via seedDummyParent;
+// leaving it unseeded is how a test asks for the missing-parent path.
+var (
+	dummyParentTx   = newTx(99)
+	dummyParentHash = *dummyParentTx.TxIDChainHash()
+)
+
+// oldParentTx is a second, distinct throwaway parent for tests that need to tell
+// which parent was actually checked — pointing a node at dummyParentHash would
+// match the fixture's own fallback and make the assertion blind to a wrong
+// nodeIndex.
+var (
+	oldParentTx   = newTx(98)
+	oldParentHash = *oldParentTx.TxIDChainHash()
+)
+
+// seedParent stores tx as mined into blockID so getParentTxMetaBlockIDs resolves it
+// instead of returning BlockIncompleteError. WithCreateOnly is required because these
+// throwaway parents' own inputs are not in the store; SpendAndCreate is used because
+// utxo.Store exposes it but not Create.
+func seedParent(t *testing.T, store utxo.Store, tx *bt.Tx, blockID uint32) {
+	t.Helper()
+
+	_, _, err := store.SpendAndCreate(context.Background(), tx, blockID,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: blockID}),
+		utxo.WithCreateOnly())
+	require.NoError(t, err)
+}
+
+// seedDummyParent stores the fixture's shared dummy parent at block ID 1.
+//
+// BlockID 1 is error-free for both map shapes these tests use: when
+// currentBlockHeaderIDsMap contains 1 the parent is found exactly once, and when
+// the map is empty the minBlockID > 0 branch defers to the validator — neither
+// reaches ErrCheckParentExistsOnChain.
+func seedDummyParent(t *testing.T, store utxo.Store) {
+	t.Helper()
+
+	seedParent(t, store, dummyParentTx, 1)
+}
+
+// dummyInpointsForNode builds a single-input TxInpoints spending dummyParentHash
+// at vout idx. Inpoint identity is {Hash, Index}, so varying the vout is what
+// keeps each node in a fixture distinct.
+func dummyInpointsForNode(idx int) (subtreepkg.TxInpoints, error) {
+	input := &bt.Input{PreviousTxOutIndex: uint32(idx)} // nolint:gosec
+	if err := input.PreviousTxIDAdd(&dummyParentHash); err != nil {
+		return subtreepkg.TxInpoints{}, err
+	}
+
+	return subtreepkg.NewTxInpointsFromInputs([]*bt.Input{input})
+}
+
+// createValidSubtreeMetadata creates subtree metadata that survives the whole
+// validateSubtree path. Two constraints shape it:
+//
+//   - Every non-coinbase node needs at least one parent inpoint. A zero-parent
+//     entry serializes fine — Serialize only rejects a nil ParentTxHashes, and
+//     NewTxInpoints returns a non-nil empty slice — but it round-trips back nil,
+//     because TxInpoints.deserializeFromReader returns early on parentCount == 0.
+//     validateTransaction then rejects the node with "could not be found in tx
+//     meta data" before any parent logic runs.
+//   - Each node's inpoint must be distinct. checkDuplicateInputs pushes every
+//     inpoint through parentSpendsMap.SetIfNotExists, so reusing one inpoint
+//     makes every node after the first fail with "has duplicate inputs".
+//
+// The coinbase placeholder at index 0 keeps an empty TxInpoints because
+// validateSubtree skips that node. Callers that want validation to succeed must
+// also seed the parent — see seedDummyParent.
 func createValidSubtreeMetadata(subtree *subtreepkg.Subtree) ([]byte, error) {
-	// Create SubtreeMeta with proper structure
 	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
-	// Initialize TxInpoints array for all nodes up to Length()
 	for i := 0; i < subtree.Length(); i++ {
-		// Create empty TxInpoints for all nodes (including root)
-		txInpoints := subtreepkg.NewTxInpoints()
+		if i == 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
+			continue
+		}
+
+		txInpoints, err := dummyInpointsForNode(i)
+		if err != nil {
+			return nil, err
+		}
+
 		subtreeMeta.TxInpoints[i] = txInpoints
 	}
 
-	// Serialize the metadata
 	return subtreeMeta.Serialize()
 }
 
-// createSubtreeMetadataWithParents creates subtree metadata with parent tx hashes
+// createSubtreeMetadataWithParents creates subtree metadata where nodeIndex spends
+// parentHashes. Every other non-coinbase node falls back to the shared dummy
+// parent rather than an empty TxInpoints — an empty entry round-trips back nil and
+// validateTransaction would reject that node before reaching nodeIndex at all. See
+// createValidSubtreeMetadata for the full reasoning.
 func createSubtreeMetadataWithParents(subtree *subtreepkg.Subtree, nodeIndex int, parentHashes []chainhash.Hash) ([]byte, error) {
 	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
 	// Initialize TxInpoints for all nodes
 	for i := 0; i < subtree.Length(); i++ {
+		if i == 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
+			continue
+		}
+
 		// Add parent hashes to specific node
 		if i == nodeIndex && len(parentHashes) > 0 {
 			// Build mock inputs — vout 0 for each parent hash.
@@ -3941,9 +4026,16 @@ func createSubtreeMetadataWithParents(subtree *subtreepkg.Subtree, nodeIndex int
 			}
 
 			subtreeMeta.TxInpoints[i] = txInpoints
-		} else {
-			subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
+
+			continue
 		}
+
+		txInpoints, err := dummyInpointsForNode(i)
+		if err != nil {
+			return nil, err
+		}
+
+		subtreeMeta.TxInpoints[i] = txInpoints
 	}
 
 	return subtreeMeta.Serialize()
@@ -4056,9 +4148,10 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 			parentSpendsMap:             NewSplitSyncedParentMap(4),
 		}
 
-		// Test - should pass since coinbase is skipped
+		// The only node is the coinbase placeholder, which validateSubtree skips, so
+		// there is nothing left to validate and no parent to resolve.
 		err = block.validateSubtree(context.Background(), ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
-		_ = err // May error but exercises the coinbase skip logic
+		require.NoError(t, err)
 	})
 }
 
@@ -4119,18 +4212,31 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		err = subtree.AddNode(*txHash, 1, 100)
 		require.NoError(t, err)
 
+		// validateTransaction rejects any node absent from txMap before it looks at
+		// parents, so the node has to be registered to reach the parent lookup.
+		err = block.txMap.Put(*txHash, 1)
+		require.NoError(t, err)
+
+		defer func() { block.txMap = txmap.NewSplitSwissMapUint64(10) }()
+
 		// Create valid subtree metadata that won't trigger retries
 		subtreeMetaSlice, err := createValidSubtreeMetadata(subtree)
 		require.NoError(t, err)
 
 		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
 
-		// This should not error but should handle the missing parent gracefully
-		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
+		// Fresh parent-spends map: production builds one per block validation, and
+		// sharing it across subtests makes the identical dummy inpoint collide.
+		subtestCtx := &validationContext{
+			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
+			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
+			parentSpendsMap:             NewSplitSyncedParentMap(4),
+		}
 
-		// The error handling depends on the actual implementation
-		// This test verifies the code path is exercised
-		_ = err // May or may not error depending on implementation details
+		// The dummy parent is deliberately not seeded, so it is absent from the store.
+		// getParentTxMetaBlockIDs classifies that as retryable rather than invalid.
+		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, subtestCtx, subtree, 0)
+		require.ErrorIs(t, err, errors.ErrBlockIncomplete)
 	})
 
 	t.Run("parent transaction ordering error", func(t *testing.T) {
@@ -4221,16 +4327,37 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		err = subtree.AddNode(*txHash, 1, 100)
 		require.NoError(t, err)
 
+		err = block.txMap.Put(*txHash, 1)
+		require.NoError(t, err)
+
+		defer func() { block.txMap = txmap.NewSplitSwissMapUint64(10) }()
+
 		// Create valid subtree metadata that won't trigger retries
 		subtreeMetaSlice, err := createValidSubtreeMetadata(subtree)
 		require.NoError(t, err)
 
 		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
 
-		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
+		// Seeding the dummy parent is what makes this the "no missing parents" case:
+		// every node's parent resolves, so validateSubtree completes cleanly.
+		seededStore := createTestUTXOStore(t)
+		seedDummyParent(t, seededStore)
 
-		// Should handle empty missing parents gracefully
-		_ = err // No missing parents to process
+		seededDeps := &validationDependencies{
+			txMetaStore:           seededStore,
+			subtreeStore:          mockStore,
+			currentBlockHeaderIDs: []uint32{1, 2},
+			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
+		}
+
+		subtestCtx := &validationContext{
+			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
+			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
+			parentSpendsMap:             NewSplitSyncedParentMap(4),
+		}
+
+		err = block.validateSubtree(ctx, ulogger.TestLogger{}, seededDeps, subtestCtx, subtree, 0)
+		require.NoError(t, err)
 	})
 
 	t.Run("multiple invalid parents", func(t *testing.T) {
@@ -4244,16 +4371,29 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		err = subtree.AddNode(*parentHash, 2, 100)
 		require.NoError(t, err)
 
+		err = block.txMap.Put(*txHash, 1)
+		require.NoError(t, err)
+		err = block.txMap.Put(*parentHash, 2)
+		require.NoError(t, err)
+
+		defer func() { block.txMap = txmap.NewSplitSwissMapUint64(10) }()
+
 		// Create valid subtree metadata that won't trigger retries
 		subtreeMetaSlice, err := createValidSubtreeMetadata(subtree)
 		require.NoError(t, err)
 
 		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
 
-		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
+		subtestCtx := &validationContext{
+			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
+			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
+			parentSpendsMap:             NewSplitSyncedParentMap(4),
+		}
 
-		// Should handle multiple parent validation errors
-		_ = err // Multiple validation paths
+		// Both nodes carry distinct inpoints, so they clear checkDuplicateInputs and
+		// both reach the parent lookup — where the unseeded parent is reported missing.
+		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, subtestCtx, subtree, 0)
+		require.ErrorIs(t, err, errors.ErrBlockIncomplete)
 	})
 }
 
@@ -4330,8 +4470,11 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 
 		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
 
+		utxoStore := createTestUTXOStore(t)
+		seedDummyParent(t, utxoStore)
+
 		deps := &validationDependencies{
-			txMetaStore:           createTestUTXOStore(t),
+			txMetaStore:           utxoStore,
 			subtreeStore:          mockStore,
 			currentChain:          []*BlockHeader{},
 			currentBlockHeaderIDs: []uint32{},
@@ -4344,11 +4487,11 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 			parentSpendsMap:             NewSplitSyncedParentMap(4),
 		}
 
-		// This should iterate through all 4 nodes in the subtree
+		// All 4 nodes must validate. A shared inpoint across nodes would stop this at
+		// node 1 with "has duplicate inputs", so a clean result is what proves the
+		// iteration actually reached every node.
 		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
-
-		// Test exercises the node iteration logic: subtreeNode := subtree.Nodes[snIdx]
-		_ = err // May succeed or fail but exercises the iteration
+		require.NoError(t, err)
 	})
 
 	t.Run("subtree with missing parents parallel processing", func(t *testing.T) {
@@ -4371,14 +4514,26 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 
 		defer func() { block.txMap = txmap.NewSplitSwissMapUint64(10) }()
 
-		// Create subtree metadata with parent tx hashes to trigger missing parent logic
-		subtreeMetaSlice, err := createSubtreeMetadataWithParents(subtree, 1, []chainhash.Hash{*tx2Hash})
+		// Node 0 (tx1Hash) spends tx3Hash, which is in neither txMap nor the store, so it
+		// becomes a missing parent. Node 1 (tx2Hash) takes the dummy-parent fallback, which
+		// is seeded below and resolves. Both nodes therefore contribute an entry to
+		// checkParentTxHashes and the group fans out over two parents with mixed outcomes —
+		// the accumulation across nodes that the single-node sibling subtest cannot reach.
+		//
+		// Do not attach a node's own hash here: a same-block parent whose txMap index is not
+		// greater than the child's takes the `continue` branch in checkParentTransactions,
+		// contributing nothing, which leaves the fan-out empty and validateSubtree returning
+		// nil no matter how the store is seeded.
+		subtreeMetaSlice, err := createSubtreeMetadataWithParents(subtree, 0, []chainhash.Hash{*tx3Hash})
 		require.NoError(t, err)
 
 		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
 
+		utxoStore := createTestUTXOStore(t)
+		seedDummyParent(t, utxoStore)
+
 		deps := &validationDependencies{
-			txMetaStore:           createTestUTXOStore(t),
+			txMetaStore:           utxoStore,
 			subtreeStore:          mockStore,
 			currentChain:          []*BlockHeader{},
 			currentBlockHeaderIDs: []uint32{1, 2},
@@ -4391,12 +4546,16 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 			parentSpendsMap:             NewSplitSyncedParentMap(4),
 		}
 
-		// This should trigger the parallel parent checking logic:
+		// Exercises the parallel parent checking logic:
 		// if len(checkParentTxHashes) > 0 { ... parentG.Go(...) ... }
 		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
+		require.ErrorIs(t, err, errors.ErrBlockIncomplete)
 
-		// Test exercises the parallel parent processing logic
-		_ = err // May succeed or fail but exercises the parallel processing
+		// tx3Hash is the parent that must be reported missing; the seeded fallback must not
+		// be, which is what proves the fan-out actually had a resolving member rather than
+		// bailing on node 0 alone.
+		require.Contains(t, err.Error(), tx3Hash.String())
+		require.NotContains(t, err.Error(), dummyParentHash.String())
 	})
 
 	t.Run("single node subtree", func(t *testing.T) {
@@ -4420,8 +4579,11 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 
 		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
 
+		utxoStore := createTestUTXOStore(t)
+		seedDummyParent(t, utxoStore)
+
 		deps := &validationDependencies{
-			txMetaStore:           createTestUTXOStore(t),
+			txMetaStore:           utxoStore,
 			subtreeStore:          mockStore,
 			currentChain:          []*BlockHeader{},
 			currentBlockHeaderIDs: []uint32{},
@@ -4434,11 +4596,9 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 			parentSpendsMap:             NewSplitSyncedParentMap(4),
 		}
 
-		// Should handle single node subtree gracefully
+		// The single node's parent resolves, so validation completes cleanly.
 		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
-
-		// Test exercises single node case
-		_ = err // Should handle single node subtree
+		require.NoError(t, err)
 	})
 
 	t.Run("parallel processing with multiple missing parents", func(t *testing.T) {
@@ -4455,8 +4615,10 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 
 		defer func() { block.txMap = txmap.NewSplitSwissMapUint64(10) }()
 
-		// Create subtree metadata with multiple parent hashes (simulate many missing parents)
-		subtreeMetaSlice, err := createSubtreeMetadataWithParents(subtree, 1, []chainhash.Hash{*tx2Hash, *tx3Hash})
+		// Create subtree metadata with multiple parent hashes (simulate many missing parents).
+		// nodeIndex is the subtree's only node: this subtree has length 1, so passing any
+		// other index would silently drop parentHashes and leave nothing to check.
+		subtreeMetaSlice, err := createSubtreeMetadataWithParents(subtree, 0, []chainhash.Hash{*tx2Hash, *tx3Hash})
 		require.NoError(t, err)
 
 		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
@@ -4475,12 +4637,20 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 			parentSpendsMap:             NewSplitSyncedParentMap(4),
 		}
 
-		// This should trigger parallel processing with multiple parent checks
-		// Tests: util.SafeSetLimit(parentG, 1024*32) and multiple parentG.Go() calls
+		// Neither parent is in txMap or the store, so both become missingParentTx entries
+		// and checkParentsExistOnChain fans them out over parentG. A missing parent is the
+		// retryable classification, so the group's first error is BlockIncomplete.
 		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
+		require.ErrorIs(t, err, errors.ErrBlockIncomplete)
 
-		// Test exercises the errgroup parallel processing with multiple parents
-		_ = err // May succeed or fail but exercises parallel processing
+		// Pin that the supplied parents were the ones checked. Without this the subtest
+		// passes even when nodeIndex misses every node and the fixture's fallback parent
+		// is validated instead — which is what made it vacuous before.
+		require.NotContains(t, err.Error(), dummyParentHash.String(),
+			"parentHashes were dropped; the fallback parent was validated instead")
+		require.True(t,
+			strings.Contains(err.Error(), tx2Hash.String()) || strings.Contains(err.Error(), tx3Hash.String()),
+			"expected the error to name one of the supplied parents, got: %v", err)
 	})
 
 	t.Run("oldBlockIDsMap population", func(t *testing.T) {
@@ -4497,14 +4667,21 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 
 		defer func() { block.txMap = txmap.NewSplitSwissMapUint64(10) }()
 
-		// Create subtree metadata with parent hash
-		subtreeMetaSlice, err := createSubtreeMetadataWithParents(subtree, 1, []chainhash.Hash{*tx2Hash})
+		// The parent must resolve in the store for this path to be reachable, so point the
+		// node at a seeded parent rather than a hash that is nowhere. nodeIndex 0 is the
+		// subtree's only node. oldParentTx rather than the dummy parent, so the block-ID
+		// assertion below can tell the two apart.
+		subtreeMetaSlice, err := createSubtreeMetadataWithParents(subtree, 0, []chainhash.Hash{oldParentHash})
 		require.NoError(t, err)
 
 		mockStore.data[string(subtree.RootHash()[:])] = subtreeMetaSlice
 
+		utxoStore := createTestUTXOStore(t)
+		seedDummyParent(t, utxoStore)
+		seedParent(t, utxoStore, oldParentTx, 5)
+
 		deps := &validationDependencies{
-			txMetaStore:           createTestUTXOStore(t),
+			txMetaStore:           utxoStore,
 			subtreeStore:          mockStore,
 			currentChain:          []*BlockHeader{},
 			currentBlockHeaderIDs: []uint32{10, 11}, // Higher block IDs
@@ -4517,11 +4694,18 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 			parentSpendsMap:             NewSplitSyncedParentMap(4),
 		}
 
-		// This should test the oldBlockIDsMap.Set() logic when old parent blocks are found
+		// The parent is mined into block 5, which is outside the cached {10, 11} set, so
+		// filterCurrentBlockHeaderIDsMap finds nothing but reports minBlockID 5. That takes
+		// the "defer to the validator" branch, which returns the parent's block IDs instead
+		// of an error and has checkParentsExistOnChain record them against the child tx.
 		err = block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
+		require.NoError(t, err)
 
-		// Test exercises: deps.oldBlockIDsMap.Set(parentTxStruct.txHash, oldParentBlockIDs)
-		_ = err // Tests oldBlockIDsMap population logic
+		// Block 5 is oldParentTx's; the fixture's fallback parent sits at block 1. Asserting
+		// the exact IDs is what makes this sensitive to nodeIndex dropping the parent list.
+		oldBlockIDs, ok := deps.oldBlockIDsMap.Get(*tx1Hash)
+		require.True(t, ok, "expected oldBlockIDsMap to be populated for the child tx")
+		require.Equal(t, []uint32{5}, oldBlockIDs)
 	})
 }
 
@@ -4814,28 +4998,6 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		_ = err
 		_ = missingParents
 	})
-}
-
-func CreateValidSubtreeMetadata(subtree *subtreepkg.Subtree) ([]byte, error) {
-	// Create new subtree metadata
-	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
-
-	// For any nodes that don't have TxInpoints set (except the root node at index 0),
-	// we need to ensure they have empty but valid TxInpoints to avoid serialization errors
-	for i := 0; i < subtree.Size(); i++ {
-		// Skip the root node (index 0) as it doesn't need parent tx hashes
-		if i == 0 {
-			continue
-		}
-
-		// If TxInpoints haven't been set for this node, create empty ones
-		if subtreeMeta.TxInpoints[i].ParentTxHashes == nil {
-			subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
-		}
-	}
-
-	// Serialize the metadata
-	return subtreeMeta.Serialize()
 }
 
 // TestCalculateMedianTimestamp tests the CalculateMedianTimestamp function
