@@ -142,6 +142,10 @@ const shutdownPanicText = "send on closed channel"
 // the value reaches errors.New, which consumes a trailing error argument as the
 // wrapped error instead of formatting it — orphaning the %v verb and mislabelling
 // the result as wrapping an UNKNOWN (0).
+//
+// ERR_SERVICE_UNAVAILABLE is deliberate — it keeps this inside
+// errors.IsTransientLocalError so a shutdown is not reported to peers as an
+// invalid block. Do not align with handleSpendPanic's ERR_UNKNOWN.
 func recoverBatcherShutdown(r any, who string, err *error) {
 	text := fmt.Sprint(r)
 

@@ -29,7 +29,7 @@ type reputationCacheEntry struct {
 	expiresAt time.Time
 }
 
-func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
+func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) {
 	var (
 		blockMessage BlockMessage
 		hash         *chainhash.Hash
@@ -80,7 +80,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		}
 	} else {
 		var ok bool
-		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight())
+		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
 		if !ok {
 			return
 		}
@@ -525,8 +525,11 @@ type localHeightCacheEntry struct {
 // cached briefly: gossip handlers call this per message (via
 // sanitizeAdvertisedTip) and must not issue a blockchain gRPC round-trip each
 // time. Failures are cached too (with a shorter TTL), so a blockchain outage
-// does not turn back into a per-message RPC storm.
-func (s *Server) getLocalHeight() uint32 {
+// does not turn back into a per-message RPC storm. Cache misses issue one RPC
+// bounded by defaultRPCTimeout derived from the caller's ctx so a hung
+// blockchain service cannot stall the caller (the sync coordinator's monitor
+// loops reach this on every tick via its local-height callback).
+func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 	if s.blockchainClient == nil {
 		return 0
 	}
@@ -541,8 +544,11 @@ func (s *Server) getLocalHeight() uint32 {
 		}
 	}
 
+	rpcCtx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
+	defer cancel()
+
 	height, ok := uint32(0), false
-	if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx); err == nil && bhMeta != nil {
+	if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(rpcCtx); err == nil && bhMeta != nil {
 		height, ok = bhMeta.Height, true
 	}
 
