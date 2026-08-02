@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
@@ -216,9 +217,54 @@ func TestServerHelpers_ShouldSkipBannedPeer_FlagsBanned(t *testing.T) {
 
 	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "no ban → don't skip")
 
+	// A purely registry-side ban is masked by the cached negative lookup until
+	// the entry expires (reputationCacheTTL).
 	reg.AddBanScore(pid.String(), "spam", 0)
 	reg.AddBanScore(pid.String(), "spam", 0)
-	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "score-banned peer is skipped")
+	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "cached negative lookup masks the ban briefly")
+
+	// Once the cache entry expires (simulated by dropping it), the ban is honored.
+	s.banStatusCache.Delete(pid.String())
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "score-banned peer is skipped after cache expiry")
+}
+
+// TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate verifies that a ban
+// applied through the local transition path (applyBanScore → onPeerBanned)
+// takes effect immediately, without waiting for the cached negative
+// IsPeerBanned lookup to expire.
+func TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = noopBanList{}
+	pid := mustNewPeerID(t)
+
+	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "no ban → don't skip (caches negative)")
+
+	// protocol_violation = 20 points; 6 hits cross the default 100 threshold
+	// and trigger onPeerBanned, which overwrites the cached negative entry.
+	for i := 0; i < 6; i++ {
+		s.applyBanScore(pid.String(), ReasonProtocolViolation)
+	}
+
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "locally banned peer must be skipped immediately")
+}
+
+// TestGetLocalHeight_ErrorCachedWithShorterTTL: failed blockchain reads are
+// cached (no per-message RPC storm during an outage) but with a shorter TTL
+// than successful reads, so recovery is picked up quickly.
+func TestGetLocalHeight_ErrorCachedWithShorterTTL(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.NewServiceError("blockchain down")).Once()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42}, nil)
+	s.blockchainClient = mockBlockchain
+
+	require.Equal(t, uint32(0), s.getLocalHeight(context.Background()), "failed read returns 0")
+	require.Equal(t, uint32(0), s.getLocalHeight(context.Background()), "failure must be served from cache within the error TTL")
+	mockBlockchain.AssertNumberOfCalls(t, "GetBestBlockHeader", 1)
+
+	time.Sleep(localHeightErrorCacheTTL + 50*time.Millisecond)
+	require.Equal(t, uint32(42), s.getLocalHeight(context.Background()), "recovery must be picked up after the error TTL")
 }
 
 func TestServerHelpers_ShouldSkipUnhealthyPeer(t *testing.T) {

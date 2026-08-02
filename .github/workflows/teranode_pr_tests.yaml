@@ -146,6 +146,47 @@ jobs:
       #   if: always()
       #   run: npx github-actions-ctrf ctrf-report.json
 
+  test-aerospike-native-ops:
+    name: test aerospike native-ops (fork image)
+    # Runs the aerospike store suite against the BSV fork of aerospike-server
+    # with aerospike_use_native_teranode_ops enabled, asserting the startup
+    # capability probe actually engages the native operate-path
+    # (AEROSPIKE_EXPECT_NATIVE_OPS=true fails the store tests if it does not).
+    # Gated on the AEROSPIKE_NATIVE_OPS_IMAGE repository variable so the job
+    # is inert until the fork image is published to a registry CI can reach.
+    if: vars.AEROSPIKE_NATIVE_OPS_IMAGE != ''
+    runs-on: teranode-runner-8-core-arm
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Login to GitHub Container Registry
+        if: startsWith(vars.AEROSPIKE_NATIVE_OPS_IMAGE, 'ghcr.io/')
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
+      - name: Run aerospike store suite with native ops
+        env:
+          AEROSPIKE_CONTAINER_IMAGE: ${{ vars.AEROSPIKE_NATIVE_OPS_IMAGE }}
+          AEROSPIKE_CONTAINER_PLATFORM: linux/arm64
+          AEROSPIKE_EXPECT_NATIVE_OPS: "true"
+          SETTINGS_CONTEXT: test
+        run: |
+          go test -race -tags "testtxmetacache" -count=1 -timeout=15m ./stores/utxo/aerospike/...
+
   filename-check-report:
     name: filename check report
     runs-on: ubuntu-latest
