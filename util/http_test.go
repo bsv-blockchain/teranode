@@ -1135,6 +1135,82 @@ func TestNewSSRFSafeDialContext_PerAttemptBudget(t *testing.T) {
 	_ = conn.Close()
 }
 
+// TestNewSSRFSafeHTTPClient_RedirectGuard covers the second hop: a peer-controlled server
+// answering with a redirect must not be able to steer the request at an internal address or
+// off http/https. Redirects to hostnames are caught by the dialer instead; this asserts the
+// policy CheckRedirect applies, which stops the connection being attempted at all.
+func TestNewSSRFSafeHTTPClient_RedirectGuard(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	client := NewSSRFSafeHTTPClient(2*time.Second, DefaultSSRFDialPolicy)
+
+	redirectTo := func(t *testing.T, rawURL string, hops int) error {
+		t.Helper()
+
+		target, err := url.Parse(rawURL)
+		require.NoError(t, err)
+
+		via := make([]*http.Request, hops)
+		for i := range via {
+			via[i] = &http.Request{}
+		}
+
+		return client.CheckRedirect(&http.Request{URL: target}, via)
+	}
+
+	err := redirectTo(t, "http://169.254.169.254/latest/meta-data/", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "link-local address")
+
+	err = redirectTo(t, "http://127.0.0.1:8090/admin", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loopback address")
+
+	err = redirectTo(t, "file:///etc/passwd", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid scheme")
+
+	err = redirectTo(t, "http://peer.example/api/v1", maxSSRFRedirects)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redirects")
+
+	require.NoError(t, redirectTo(t, "https://peer.example/api/v1", 1))
+}
+
+// TestNewSSRFSafeHTTPClient_RejectsInternalTargetEndToEnd drives a real request through the
+// client to prove the transport is wired to the guard, not just that the guard exists.
+func TestNewSSRFSafeHTTPClient_RejectsInternalTargetEndToEnd(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	var hits atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	_, port, err := net.SplitHostPort(parsed.Host)
+	require.NoError(t, err)
+
+	client := NewSSRFSafeHTTPClient(2*time.Second, DefaultSSRFDialPolicy)
+
+	// A hostname whose resolved address is internal: refused after resolution.
+	resp, err := client.Get("http://localhost:" + port + "/data")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loopback address")
+	require.Zero(t, hits.Load(), "the request must not reach the internal target")
+}
+
 func TestHTTPClient_RejectsRedirectToLinkLocal(t *testing.T) {
 	SetSSRFProtection(true)
 	defer SetSSRFProtection(false)

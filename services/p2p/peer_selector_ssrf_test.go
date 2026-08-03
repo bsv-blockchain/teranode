@@ -11,6 +11,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,6 +24,16 @@ func newSelectorWithPrivateIPs(t *testing.T, allowPrivateIPs bool) *PeerSelector
 			AllowPrivateIPs:    allowPrivateIPs,
 		},
 	})
+}
+
+// allowLoopbackProbes disables the dial guard for one test. No production configuration
+// permits probing loopback, so tests that need to reach an httptest server (which only ever
+// listens on 127.0.0.1) have to use the same global escape hatch the test daemons use.
+func allowLoopbackProbes(t *testing.T) {
+	t.Helper()
+
+	util.SetSSRFProtection(false)
+	t.Cleanup(func() { util.SetSSRFProtection(true) })
 }
 
 // TestPeerHealthCheck_RejectsHostnameResolvingToLoopback is the regression test for the
@@ -51,37 +62,20 @@ func TestPeerHealthCheck_RejectsHostnameResolvingToLoopback(t *testing.T) {
 	require.Zero(t, hits.Load(), "the probe must not reach the internal target")
 }
 
-// TestPeerHealthCheck_AllowPrivateIPsBypass verifies the escape hatch used by single-host
-// deployments still lets the probe through, and that a reachable peer is reported healthy
-// (i.e. the guarded client is otherwise a working HTTP client, hitting the right path).
-func TestPeerHealthCheck_AllowPrivateIPsBypass(t *testing.T) {
-	var path atomic.Value
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path.Store(r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	ps := newSelectorWithPrivateIPs(t, true)
-
-	// "localhost" may resolve to ::1 before 127.0.0.1 while httptest listens on 127.0.0.1
-	// only; the dialer's per-address failover is what makes this reach the server.
-	healthy, err := ps.checkPeerAvailability(context.Background(), "http://localhost:"+serverPort(t, server)+"/api/v1")
-	require.NoError(t, err)
-	require.True(t, healthy)
-	require.Equal(t, "/api/v1/bestblockheader", path.Load())
-}
-
-// TestPeerHealthCheck_RejectsInternalIPLiterals covers literals going through the same
-// dialer, so the guard does not depend on the static pre-check having run first.
-func TestPeerHealthCheck_RejectsInternalIPLiterals(t *testing.T) {
+// TestPeerHealthCheck_RejectsInternalAddresses covers every class the policy blocks,
+// including RFC1918 (named in the issue) and IPv6 forms, going through the real client so
+// the guard does not depend on the static pre-check having run first.
+func TestPeerHealthCheck_RejectsInternalAddresses(t *testing.T) {
 	tests := map[string]string{
-		"http://127.0.0.1:1/api/v1":     "loopback address",
-		"http://[::1]:1/api/v1":         "loopback address",
-		"http://169.254.169.254/api/v1": "link-local address",
-		"http://[fe80::1]:8090/api/v1":  "link-local address",
-		"http://0.0.0.0:8090/api/v1":    "unspecified address",
+		"http://127.0.0.1:1/api/v1":       "loopback address",
+		"http://[::1]:1/api/v1":           "loopback address",
+		"http://169.254.169.254/api/v1":   "link-local address",
+		"http://[fe80::1]:8090/api/v1":    "link-local address",
+		"http://0.0.0.0:8090/api/v1":      "unspecified address",
+		"http://10.0.0.5:8090/api/v1":     "private address",
+		"http://192.168.1.10:8090/api/v1": "private address",
+		"http://172.16.4.4:8090/api/v1":   "private address",
+		"http://[fc00::1]:8090/api/v1":    "private address",
 	}
 
 	ps := newSelectorWithPrivateIPs(t, false)
@@ -96,86 +90,94 @@ func TestPeerHealthCheck_RejectsInternalIPLiterals(t *testing.T) {
 	}
 }
 
-// TestPeerHealthCheck_AllowsPrivateAddresses pins the deliberate tradeoff: RFC1918 targets
-// stay allowed, matching the shared block/subtree fetch client. Blocking them here would
-// make peers on k8s or private miner networks permanently unselectable even though the
-// fetch path would talk to them happily.
-func TestPeerHealthCheck_AllowsPrivateAddresses(t *testing.T) {
-	ps := newSelectorWithPrivateIPs(t, false)
+// TestDataHubDialPolicy pins the policy itself: it must enforce the same address classes as
+// validateDataHubURL's isUnsafeIP, so a hostname cannot reach what a literal cannot.
+func TestDataHubDialPolicy(t *testing.T) {
+	strict := newSelectorWithPrivateIPs(t, false)
+
+	for ipStr, reason := range map[string]string{
+		"127.0.0.1":       "loopback address",
+		"::1":             "loopback address",
+		"169.254.169.254": "link-local address",
+		"fe80::1":         "link-local address",
+		"0.0.0.0":         "unspecified address",
+		"10.0.0.5":        "private address",
+		"192.168.1.10":    "private address",
+		"172.16.4.4":      "private address",
+		"fc00::1":         "private address",
+	} {
+		ip := net.ParseIP(ipStr)
+		require.NotNil(t, ip, ipStr)
+		require.Equal(t, reason, strict.dataHubDialPolicy(ip), "expected %s to be rejected", ipStr)
+		require.Equal(t, isUnsafeIP(ip), strict.dataHubDialPolicy(ip),
+			"the dial policy must agree with validateDataHubURL for %s", ipStr)
+	}
+
+	for _, ipStr := range []string{"8.8.8.8", "1.2.3.4", "2606:4700::1111"} {
+		ip := net.ParseIP(ipStr)
+		require.NotNil(t, ip, ipStr)
+		require.Empty(t, strict.dataHubDialPolicy(ip), "expected %s to be allowed", ipStr)
+	}
+}
+
+// TestDataHubDialPolicy_AllowPrivateIPs: the setting relaxes the private ranges (which the
+// fetch path also allows), but never loopback, link-local or unspecified - so no
+// configuration lets a peer steer the probe at a metadata endpoint or at localhost.
+func TestDataHubDialPolicy_AllowPrivateIPs(t *testing.T) {
+	permissive := newSelectorWithPrivateIPs(t, true)
 
 	for _, ipStr := range []string{"10.0.0.5", "192.168.1.10", "172.16.4.4", "fc00::1"} {
 		ip := net.ParseIP(ipStr)
 		require.NotNil(t, ip, ipStr)
-		require.Empty(t, ps.dataHubDialPolicy(ip), "expected %s to be allowed", ipStr)
+		require.Empty(t, permissive.dataHubDialPolicy(ip), "AllowPrivateIPs must allow %s", ipStr)
 	}
 
-	for _, ipStr := range []string{"8.8.8.8", "2606:4700::1111"} {
-		ip := net.ParseIP(ipStr)
-		require.NotNil(t, ip, ipStr)
-		require.Empty(t, ps.dataHubDialPolicy(ip), "expected %s to be allowed", ipStr)
-	}
-}
-
-// TestDataHubDialPolicy_AllowPrivateIPsKeepsMetadataBlocked: the local-dev bypass relaxes
-// loopback, but never the link-local range the cloud metadata endpoint lives in.
-func TestDataHubDialPolicy_AllowPrivateIPsKeepsMetadataBlocked(t *testing.T) {
-	permissive := newSelectorWithPrivateIPs(t, true)
-
-	require.Empty(t, permissive.dataHubDialPolicy(net.ParseIP("127.0.0.1")))
+	require.Equal(t, "loopback address", permissive.dataHubDialPolicy(net.ParseIP("127.0.0.1")))
 	require.Equal(t, "link-local address", permissive.dataHubDialPolicy(net.ParseIP("169.254.169.254")))
 	require.Equal(t, "link-local address", permissive.dataHubDialPolicy(net.ParseIP("fe80::1")))
 	require.Equal(t, "unspecified address", permissive.dataHubDialPolicy(net.ParseIP("0.0.0.0")))
 }
 
-// TestPeerHealthCheck_RejectsRedirectToInternal covers the second hop end-to-end: a
-// reachable peer that answers the probe with a redirect must not be able to steer it at
-// the metadata endpoint or off http/https. AllowPrivateIPs makes the loopback peer itself
-// reachable while leaving the redirect targets blocked.
-func TestPeerHealthCheck_RejectsRedirectToInternal(t *testing.T) {
-	var location atomic.Value
+// TestPeerHealthCheck_ProbesReachablePeer checks the guarded client is otherwise a working
+// HTTP client: right URL joining, and only a 2xx counts as available. The guard is disabled
+// here because no configuration allows probing the loopback address httptest listens on.
+func TestPeerHealthCheck_ProbesReachablePeer(t *testing.T) {
+	allowLoopbackProbes(t)
+
+	var path atomic.Value
+
+	status := atomic.Int64{}
+	status.Store(http.StatusOK)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, location.Load().(string), http.StatusFound)
+		path.Store(r.URL.Path)
+		w.WriteHeader(int(status.Load()))
 	}))
 	defer server.Close()
 
-	ps := newSelectorWithPrivateIPs(t, true)
+	ps := newSelectorWithPrivateIPs(t, false)
 	dataHubURL := "http://localhost:" + serverPort(t, server) + "/api/v1"
 
-	tests := map[string]string{
-		"http://169.254.169.254/latest/meta-data/": "link-local address",
-		"file:///etc/passwd":                       "invalid scheme",
-	}
-
-	for target, reason := range tests {
-		t.Run(target, func(t *testing.T) {
-			location.Store(target)
-
-			healthy, err := ps.checkPeerAvailability(context.Background(), dataHubURL)
-			require.False(t, healthy)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), reason)
-		})
-	}
-}
-
-func TestPeerHealthCheck_NonOKAndMalformedURLs(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	ps := newSelectorWithPrivateIPs(t, true)
+	healthy, err := ps.checkPeerAvailability(context.Background(), dataHubURL)
+	require.NoError(t, err)
+	require.True(t, healthy)
+	require.Equal(t, "/api/v1/bestblockheader", path.Load())
 
 	// A reachable peer answering non-2xx is unhealthy, and the reason must surface as an
 	// error rather than a bare nil the caller would log as "unhealthy: <nil>".
-	healthy, err := ps.checkPeerAvailability(context.Background(), "http://localhost:"+serverPort(t, server)+"/api/v1")
+	status.Store(http.StatusInternalServerError)
+
+	healthy, err = ps.checkPeerAvailability(context.Background(), dataHubURL)
 	require.False(t, healthy)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "500")
+}
+
+func TestPeerHealthCheck_EmptyAndMalformedURLs(t *testing.T) {
+	ps := newSelectorWithPrivateIPs(t, false)
 
 	// An empty URL is "no DataHub", not an error.
-	healthy, err = ps.checkPeerAvailability(context.Background(), "")
+	healthy, err := ps.checkPeerAvailability(context.Background(), "")
 	require.False(t, healthy)
 	require.NoError(t, err)
 

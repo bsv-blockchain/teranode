@@ -175,6 +175,11 @@ const maxSSRFRedirects = 10
 // leave http/https or name a blocked IP literal.
 //
 // timeout bounds the whole request; pass 0 to rely on the request context instead.
+//
+// Caveat: the transport keeps http.DefaultTransport's ProxyFromEnvironment, matching the
+// shared httpClient below. With HTTP_PROXY/HTTPS_PROXY set, connections are made to the
+// proxy - so policy validates the proxy's address and the proxy fetches the peer-supplied
+// target on our behalf, outside the reach of this check.
 func NewSSRFSafeHTTPClient(timeout time.Duration, policy SSRFDialPolicy) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = NewSSRFSafeDialContext(policy)

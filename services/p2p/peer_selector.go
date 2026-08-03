@@ -317,21 +317,26 @@ func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL st
 
 // dataHubDialPolicy is the SSRF policy applied to every address resolved while probing a
 // peer-supplied DataHub URL. Running after DNS resolution is the point: the static
-// validateDataHubURL check only inspects IP literals, so without this a hostname
-// resolving to an internal address would be probed.
+// validateDataHubURL check only inspects IP literals, so without this a hostname resolving
+// to an internal address would be probed.
 //
-// The blocked set matches the shared block/subtree fetch client
-// (util.DefaultSSRFDialPolicy) rather than validateDataHubURL's stricter literal rules.
-// Private ranges stay allowed on purpose: peers, k8s pods and private miner interconnects
-// legitimately live on RFC1918 networks, and rejecting them here would make a peer
-// permanently unselectable even though the fetch path would happily talk to it.
+// It enforces the same address classes as validateDataHubURL (isUnsafeIP), including
+// RFC1918: a probe reaching an internal host tells a peer whether that host is listening,
+// so accepting private targets for hostnames while rejecting them for literals would leave
+// exactly the literal-versus-hostname gap this guard exists to close. P2P.AllowPrivateIPs
+// relaxes the private ranges, matching its effect on validateDataHubURL.
 //
-// P2P.AllowPrivateIPs additionally allows loopback, so single-host local deployments keep
-// working. It deliberately does NOT relax link-local: no deployment needs to probe
-// 169.254.169.254, and that is the address an attacker is actually after.
+// Loopback, link-local and unspecified addresses are refused in every configuration. The
+// setting deliberately does not relax them: link-local is the cloud metadata range an
+// attacker is actually after, and loopback cannot work anyway, since block and subtree
+// fetches go through util's shared client, which refuses loopback regardless of settings.
 func (ps *PeerSelector) dataHubDialPolicy(ip net.IP) string {
-	if ip.IsLoopback() && ps.settings != nil && ps.settings.P2P.AllowPrivateIPs {
-		return ""
+	if ip.IsPrivate() {
+		if ps.settings != nil && ps.settings.P2P.AllowPrivateIPs {
+			return ""
+		}
+
+		return "private address"
 	}
 
 	return util.DefaultSSRFDialPolicy(ip)
