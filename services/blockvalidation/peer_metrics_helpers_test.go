@@ -89,3 +89,21 @@ func TestMarkCatchupFailureReported_TransparentToErrorCodes(t *testing.T) {
 	// An unmarked error must not read as already-reported.
 	require.False(t, catchupFailureAlreadyReported(errors.NewServiceError("http 429")))
 }
+
+// TestMarkedExternalError_SurvivesProductionWrapChain guards issue-1368 review
+// finding 3: catchupFailureAlreadyReported bails at the first non-native link, so
+// this pins that the exact production wrap chain — ErrExternal marked at the
+// source (fetchAndStoreSubtreeAndSubtreeData), then re-wrapped as ServiceError
+// (fetchSubtreeDataForBlock) and ProcessingError (orderedDelivery), both native
+// *errors.Error links — still carries the marker AND still matches ErrExternal by
+// the time it reaches releaseCatchupLock's switch and Server.go's dispatch. A
+// future refactor swapping in a foreign (non-native) wrapper anywhere in this
+// chain would silently break both and restore the primary-charging bug.
+func TestMarkedExternalError_SurvivesProductionWrapChain(t *testing.T) {
+	marked := markCatchupFailureReported(errors.NewExternalError("all peer attempts failed to fetch subtree abc"))
+	svcWrap := errors.NewServiceError("failed to fetch subtree data for block bb", marked)
+	chain := errors.NewProcessingError("worker failed for block bb", svcWrap)
+
+	require.True(t, errors.Is(chain, errors.ErrExternal), "ErrExternal classification must survive the production wrap chain")
+	require.True(t, catchupFailureAlreadyReported(chain), "the already-reported marker must survive the production wrap chain")
+}

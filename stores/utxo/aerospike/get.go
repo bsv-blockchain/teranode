@@ -409,13 +409,24 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Da
 // getBatcher for processing. It then waits on a shared completion.Group and reads
 // the result from the item's result slot once the wait returns.
 func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.FieldName) (*meta.Data, error) {
+	// Abort early on a cancelled context (e.g. graceful shutdown) before touching
+	// the batcher. Store.Close may have already closed the get batcher's input
+	// channel, and enqueuing into it then panics "send on closed channel". The
+	// putGetBatch guard below converts that panic into a returned error for the
+	// residual race where the store closes while this caller's context is live.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	var res batchGetItemData
 
 	group := completion.NewGroup(1)
 	item := &batchGetItem{hash: *hash, fields: bins, group: group, result: &res}
 
 	if s.getBatcher != nil {
-		s.getBatcher.PutCtx(ctx, item)
+		if err := s.putGetBatch(ctx, item); err != nil {
+			return nil, err
+		}
 	} else {
 		// if the batcher is disabled, we still want to process the request in a go routine
 		go func() {
@@ -454,6 +465,16 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	}
 
 	return res.Data, res.Err
+}
+
+// putGetBatch enqueues item into the get batcher, converting the
+// "send on closed channel" panic — which go-batcher v2.0.6 raises when Put is
+// called after Close — into a returned error. Store.Close closes the get batcher
+// during shutdown while external callers (e.g. an in-flight block-validation
+// goroutine in checkParentsExistOnChain) may still be calling Get. That race
+// must abort the read, not crash the process.
+func (s *Store) putGetBatch(ctx context.Context, item *batchGetItem) error {
+	return safeBatcherPutCtx(s.getBatcher, ctx, item, "get")
 }
 
 // getTxFromBins reconstructs a Bitcoin transaction from Aerospike bin data.
@@ -688,7 +709,6 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 	err = s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("error in aerospike map store batch records:\n%v\n%v", batchRecords, err)
 		return errors.NewStorageError("error in aerospike map store batch records", err)
 	}
 
@@ -1293,8 +1313,13 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 
 	for _, item := range items {
 		item.group = group
-		// Wrap the outpoint in OutpointRequest and put it in the batcher
-		s.outpointBatcher.Put(item)
+		// Guard the enqueue: Store.Close may have closed the outpoint batcher while
+		// this caller is still decorating during shutdown. safeBatcherPut converts a
+		// send-on-closed-channel panic into an error instead of crashing the process;
+		// complete the item so the shared group wait below does not hang on it.
+		if err := safeBatcherPut(s.outpointBatcher, item, "outpoint"); err != nil {
+			item.complete(err)
+		}
 	}
 
 	// One shared wait for the whole group, bounded so a wedged outpoint batcher

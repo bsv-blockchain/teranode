@@ -48,7 +48,7 @@ func newTestSyncCoordinatorWithSettings(t *testing.T, tSettings *settings.Settin
 		nil, // blockchainClient — only the FSM monitor needs it; not exercised here
 		nil, // kafka producer — only TriggerSync's send-to-kafka path uses it
 	)
-	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
 	return sc, reg
 }
 
@@ -92,7 +92,7 @@ func setSyncCoordinatorProbeBudget(sc *SyncCoordinator, budget int) {
 // filterEligiblePeersWithTip, mirroring the compact call form previously offered by the
 // (now-removed) production filterEligiblePeers helper, which had no non-test callers.
 func filterEligiblePeersForTest(sc *SyncCoordinator, peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32) []*blockchain.PeerInfo {
-	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe(sc.ctx)
+	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
 	if localWorkOK {
 		localHeight = tipHeight
 	}
@@ -183,6 +183,34 @@ func TestSyncCoordinator_IsCaughtUp_OnlyLowRepPeerIsCaughtUp(t *testing.T) {
 	reg.UpdateMetrics("low-rep", 0, 0, 0, false, false, true, 0)
 
 	require.True(t, sc.isCaughtUp())
+}
+
+// TestSyncCoordinator_IsCaughtUp_BlacklistedPeerIsCaughtUp: the caught-up
+// determination must agree with selection about the operator blacklist. A
+// blacklisted-but-ahead peer can never be selected by SelectSyncPeer, so if it
+// still counted as a viable sync candidate here the node would report
+// not-caught-up forever while every selection attempt fails.
+func TestSyncCoordinator_IsCaughtUp_BlacklistedPeerIsCaughtUp(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "ahead",
+		DataHubURL: "http://evil.example",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+	// Boost reputation past 20 so the peer is viable apart from the blacklist.
+	for i := 0; i < 5; i++ {
+		reg.UpdateMetrics("ahead", 0, 0, 0, true, false, false, 100)
+	}
+
+	// Control: the ahead peer keeps us not caught up while its host is allowed.
+	require.False(t, sc.isCaughtUp(), "precondition: ahead non-blacklisted peer means not caught up")
+
+	// Operator blacklists the host after the URL was stored in the registry.
+	sc.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	require.True(t, sc.isCaughtUp(), "blacklisted peer must not keep the node in a not-caught-up state")
 }
 
 func TestSyncCoordinator_HandlePeerDisconnected_RemovesPeer(t *testing.T) {
@@ -309,7 +337,7 @@ func TestSyncCoordinator_TriggerSync_NoEligiblePeersEntersBackoff(t *testing.T) 
 
 func TestSyncCoordinator_SelectNewSyncPeer_PrefersFullNode(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
-	sc.SetGetLocalHeightCallback(func() uint32 { return 50 })
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 50 })
 
 	reg.Register(&blockchain.PeerInfo{ID: "pruned", DataHubURL: "http://p", Height: 100, BlockHash: syncCoordinatorTestHash(t), Storage: "pruned"})
 	reg.Register(&blockchain.PeerInfo{ID: "full", DataHubURL: "http://f", Height: 100, BlockHash: syncCoordinatorTestHash(t), Storage: "full"})
@@ -320,6 +348,43 @@ func TestSyncCoordinator_SelectNewSyncPeer_PrefersFullNode(t *testing.T) {
 	}
 
 	require.Equal(t, "full", sc.selectNewSyncPeer())
+}
+
+func TestSyncCoordinator_SelectNewSyncPeer_MeritTiedSybilCannotCapture(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 10, []byte{0x02})
+
+	// One attacker ID that sorts lexicographically first among four peers tied
+	// on every merit criterion. Through the real coordinator selection path it
+	// must not win every round; the removed peer-ID tiebreak gave it 100%
+	// capture. P(some tied peer never wins in 100 rounds) <= 4 * 0.75^100,
+	// so this cannot flake.
+	ids := []string{"000000-attacker", "honest-a", "honest-b", "honest-c"}
+	for _, id := range ids {
+		reg.Register(&blockchain.PeerInfo{
+			ID:                 id,
+			DataHubURL:         "http://" + id,
+			Height:             100,
+			BlockHash:          syncCoordinatorTestHash(t),
+			Storage:            "full",
+			ValidatedHeight:    100,
+			ValidatedBlockHash: syncCoordinatorTestHash(t),
+			ValidatedChainWork: []byte{0x03},
+		})
+		for i := 0; i < 5; i++ {
+			reg.UpdateMetrics(id, 0, 0, 0, true, false, false, 100)
+		}
+	}
+
+	wins := map[string]int{}
+	for range 100 {
+		got := sc.selectNewSyncPeer()
+		require.Contains(t, ids, got)
+		wins[got]++
+	}
+	for _, id := range ids {
+		require.Positive(t, wins[id], "every merit-tied peer must win at least once, got %v", wins)
+	}
 }
 
 func TestSyncCoordinator_FilterEligiblePeers_DropsLowAndOldPeer(t *testing.T) {
@@ -451,7 +516,7 @@ func TestSyncCoordinator_SelectAndActivateNewPeer_StoresIDEvenIfSendFails(t *tes
 
 func TestSyncCoordinator_ColdStart_FarBehind_WithAdvertisedOnlyPeers_InitiatesSync(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
-	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
 	setSyncCoordinatorLocalTip(t, sc, 0, []byte{0x01})
 
 	reg.Register(&blockchain.PeerInfo{
@@ -472,7 +537,7 @@ func TestSyncCoordinator_ColdStart_FarBehind_WithAdvertisedOnlyPeers_InitiatesSy
 func TestSyncCoordinator_ColdStart_RealDefaultSettings_AdvertisedOnlyPeerIsNotCaughtUp(t *testing.T) {
 	tSettings := settings.NewSettings()
 	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
-	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
 	setSyncCoordinatorLocalTip(t, sc, 0, []byte{0x01})
 
 	reg.Register(&blockchain.PeerInfo{
@@ -489,7 +554,7 @@ func TestSyncCoordinator_ColdStart_RealDefaultSettings_AdvertisedOnlyPeerIsNotCa
 
 func TestSyncCoordinator_StartupLocalChainWorkUnavailable_UsesBoundedAdvertisedProbe(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
-	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
 	client := setSyncCoordinatorLocalTipError(t, sc, errors.NewProcessingError("chainwork unavailable"))
 	state := blockchain_api.FSMStateType_RUNNING
 	client.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
@@ -502,14 +567,14 @@ func TestSyncCoordinator_StartupLocalChainWorkUnavailable_UsesBoundedAdvertisedP
 		Storage:    "full",
 	})
 
-	sc.checkFSMState(context.Background())
+	sc.checkFSMState()
 
 	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
 }
 
 func TestSyncCoordinator_InflatedAdvertisedOnlyPeer_ConsumesProbeBudgetAndBacksOff(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
-	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
 	sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow = 1
 	setSyncCoordinatorProbeBudget(sc, 1)
 
@@ -535,7 +600,7 @@ func TestSyncCoordinator_InflatedAdvertisedOnlyPeer_ConsumesProbeBudgetAndBacksO
 
 func TestSyncCoordinator_ConcurrentActivation_ClaimsOnceAndConsumesOneProbe(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
-	sc.SetGetLocalHeightCallback(func() uint32 { return 0 })
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
 	sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow = 2
 	setSyncCoordinatorProbeBudget(sc, 2)
 	producer := kafka.NewKafkaAsyncProducerMock()
@@ -578,7 +643,7 @@ func TestSyncCoordinator_ProbeBudgetResetsAfterValidatedProgress(t *testing.T) {
 
 	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x03})
 
-	sc.refreshProbeBudgetFromLocalTip(context.Background())
+	sc.refreshProbeBudgetFromLocalTip()
 	require.Equal(t, sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow, syncCoordinatorProbeBudget(sc))
 }
 
@@ -1041,7 +1106,7 @@ func TestSyncCoordinator_PeerAheadByValidatedWork_PenaltyWindowSuppressesEligibi
 
 func TestSyncCoordinator_MaxUnvalidatedAdvertisedHeightLead_AllowsProbeAtTenThousand(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
-	sc.SetGetLocalHeightCallback(func() uint32 { return 100 })
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 100 })
 
 	reg.Register(&blockchain.PeerInfo{
 		ID:         "bounded",
@@ -1077,7 +1142,7 @@ func TestSyncCoordinator_StartStop_ExitsCleanly(t *testing.T) {
 
 	doneCh := make(chan struct{})
 	go func() {
-		sc.Stop()
+		sc.Stop(context.Background())
 		close(doneCh)
 	}()
 
@@ -1369,4 +1434,229 @@ func TestSyncCoordinator_ConcurrentSyncDecisions_NoDeadlock(t *testing.T) {
 		_, found := reg.Get(current)
 		require.True(t, found, "current sync peer %s must be a registered peer", current)
 	}
+}
+
+// TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL: the sync
+// trigger reads the peer's DataHub URL straight from the registry, bypassing
+// selection eligibility. A URL stored before its host was blacklisted (or
+// belonging to a forced sync peer) must not be handed to block validation -
+// the trigger is dropped instead.
+func TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	sc.blocksKafkaProducerClient = producer
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "peer",
+		DataHubURL: "http://evil.example",
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	// Control: without a blacklist entry the trigger is published.
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	select {
+	case <-producer.PublishChannel():
+	default:
+		t.Fatal("precondition: sync trigger must be published when the URL is not blacklisted")
+	}
+
+	// Operator blacklists the host after the URL was stored.
+	sc.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	select {
+	case published := <-producer.PublishChannel():
+		t.Fatalf("sync trigger with blacklisted DataHubURL must not be published: %+v", published)
+	default:
+	}
+}
+
+// blockingRegistry wraps a real registry client but blocks ListPeers until the
+// per-call context is done, recording whether that context carried a deadline.
+// It exercises the boundedRPCContext used by every registry wrapper.
+type blockingRegistry struct {
+	blockchain.PeerRegistryClientI
+	mu          sync.Mutex
+	hadDeadline bool
+}
+
+func (b *blockingRegistry) ListPeers(ctx context.Context, _ *blockchain_api.TransportType, _ float64, _ uint32, _, _ bool) ([]*blockchain.PeerInfo, error) {
+	_, ok := ctx.Deadline()
+	b.mu.Lock()
+	b.hadDeadline = ok
+	b.mu.Unlock()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (b *blockingRegistry) listPeersHadDeadline() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.hadDeadline
+}
+
+func TestSyncCoordinator_RegistryCallsAreTimeBounded(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	br := &blockingRegistry{PeerRegistryClientI: sc.registry}
+	sc.registry = br
+	sc.rpcTimeout = 50 * time.Millisecond
+
+	result := make(chan []*blockchain.PeerInfo, 1)
+	go func() {
+		result <- sc.listAllPeers()
+	}()
+
+	select {
+	case peers := <-result:
+		require.Nil(t, peers, "a timed-out registry call must degrade to no peers")
+	case <-time.After(5 * time.Second):
+		t.Fatal("listAllPeers did not return; registry RPC context is unbounded")
+	}
+	require.True(t, br.listPeersHadDeadline(), "registry RPC context must carry a deadline")
+}
+
+// TestSyncCoordinator_StopUnblocksInFlightRPC parks a monitor goroutine inside a
+// blockchain-client RPC that only returns on context cancellation, then verifies
+// Stop() aborts the in-flight call and drains the goroutines without depending
+// on the caller's context being cancelled or on the RPC timeout elapsing.
+func TestSyncCoordinator_StopUnblocksInFlightRPC(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	sc.rpcTimeout = time.Minute // prove Stop's cancel does the unblocking, not the timeout
+
+	inRPC := make(chan struct{})
+	var once sync.Once
+	client := &blockchain.Mock{}
+	client.On("GetBestBlockHeader", mock.Anything).Run(func(args mock.Arguments) {
+		once.Do(func() { close(inRPC) })
+		<-args.Get(0).(context.Context).Done()
+	}).Return(nil, nil, errors.NewServiceError("cancelled"))
+	sc.blockchainClient = client
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sc.Start(ctx)
+
+	select {
+	case <-inRPC: // monitorFSM's first tick is parked inside GetBestBlockHeader
+	case <-time.After(10 * time.Second):
+		t.Fatal("monitor goroutine never reached the blockchain RPC")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		sc.Stop(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not abort the in-flight RPC and drain the goroutines")
+	}
+}
+
+func TestSyncCoordinator_StopDrainsGoroutinesAndIsIdempotent(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sc.Start(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		sc.Stop(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not drain the coordinator goroutines")
+	}
+
+	require.NotPanics(t, func() { sc.Stop(context.Background()) }, "Stop must be idempotent")
+}
+
+func TestSyncCoordinator_StopBeforeStartReturns(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.NotPanics(t, func() { sc.Stop(context.Background()) })
+}
+
+// TestSyncCoordinator_StopHonorsContextDeadlineWhenGoroutineStuck simulates a
+// coordinator goroutine parked in a non-context-aware blocking call (e.g. a
+// wedged Kafka producer Publish, which neither stopCh nor context cancellation
+// can release) and verifies Stop returns when its context expires instead of
+// hanging the whole server shutdown on wg.Wait.
+func TestSyncCoordinator_StopHonorsContextDeadlineWhenGoroutineStuck(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	gate := make(chan struct{})
+	sc.wg.Add(1)
+	go func() {
+		defer sc.wg.Done()
+		<-gate // stands in for a blocking, non-context-aware call
+	}()
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		sc.Stop(stopCtx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop ignored its context deadline while a goroutine was stuck")
+	}
+
+	// A repeated Stop while still stuck must also time out (sharing the single
+	// wg watcher rather than leaking one per call) instead of blocking.
+	stopCtx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel2()
+	require.NotPanics(t, func() { sc.Stop(stopCtx2) })
+
+	// Release the stuck goroutine; a further Stop must now drain fully.
+	close(gate)
+	require.NotPanics(t, func() { sc.Stop(context.Background()) })
+}
+
+// TestSyncCoordinator_LocalHeightCallbackIsTimeBounded parks the local-height
+// callback against a hung RPC (blocking until its context is done, exactly as
+// Server.getLocalHeight behaves against a hung blockchain service) and asserts
+// a monitor-loop path through getLocalHeightSafe still returns, with the
+// callback context carrying a deadline. Guards the ChiR2 wedge: this callback
+// used to run an unbounded GetBestBlockHeader on the server-lifetime context.
+func TestSyncCoordinator_LocalHeightCallbackIsTimeBounded(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	sc.rpcTimeout = 50 * time.Millisecond
+
+	var mu sync.Mutex
+	hadDeadline := false
+	sc.SetGetLocalHeightCallback(func(ctx context.Context) uint32 {
+		_, ok := ctx.Deadline()
+		mu.Lock()
+		hadDeadline = ok
+		mu.Unlock()
+		<-ctx.Done()
+		return 0
+	})
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- sc.isCaughtUp() // monitor-loop path; reaches the callback via getLocalHeightSafe
+	}()
+
+	select {
+	case <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("isCaughtUp did not return; the local-height callback context is unbounded")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.True(t, hadDeadline, "local-height callback context must carry a deadline")
 }

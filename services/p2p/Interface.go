@@ -73,7 +73,7 @@ type PeerInfo struct {
 type ClientI interface {
 	// GetPeers retrieves a list of connected peers from the P2P network.
 	// It provides information about all active peer connections including their
-	// addresses, connection details, and network statistics.
+	// heights, ban scores, and network statistics.
 	//
 	// Parameters:
 	// - ctx: Context for the operation, allowing for cancellation and timeouts

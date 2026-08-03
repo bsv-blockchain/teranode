@@ -237,28 +237,106 @@ func (m *MockPeerServiceClient) GetPeer(ctx context.Context, in *p2p_api.GetPeer
 }
 
 func TestSimpleClientGetPeers(t *testing.T) {
-	mockClient := &MockPeerServiceClient{
-		GetPeersFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
-			return &p2p_api.GetPeersResponse{
-				Peers: []*p2p_api.Peer{
-					{Id: "peer1", Addr: "/ip4/127.0.0.1/tcp/9905"},
-					{Id: "peer2", Addr: "/ip4/127.0.0.2/tcp/9905"},
+	t.Run("ok", func(t *testing.T) {
+		mockClient := &MockPeerServiceClient{
+			GetPeersFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
+				return &p2p_api.GetPeersResponse{
+					Peers: []*p2p_api.Peer{
+						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Addr: "/ip4/127.0.0.1/tcp/9905", CurrentHeight: 101, Banscore: 7, BytesReceived: 2048},
+						{Id: "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw", Addr: "/ip4/127.0.0.2/tcp/9905", CurrentHeight: 99},
+					},
+				}, nil
+			},
+		}
+
+		client := &Client{
+			client: mockClient,
+			logger: ulogger.New("test"),
+		}
+
+		peers, err := client.GetPeers(context.Background())
+		require.NoError(t, err)
+		require.Len(t, peers, 2)
+		require.Equal(t, "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", peers[0].ID.String())
+		require.Equal(t, uint32(101), peers[0].Height)
+		require.Equal(t, 7, peers[0].BanScore)
+		require.Equal(t, uint64(2048), peers[0].BytesReceived)
+		require.True(t, peers[0].IsConnected)
+		require.Equal(t, uint32(99), peers[1].Height)
+	})
+
+	t.Run("grpc_error", func(t *testing.T) {
+		client := &Client{
+			client: &MockPeerServiceClient{
+				GetPeersFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
+					return nil, assert.AnError
 				},
-			}, nil
-		},
-	}
+			},
+			logger: ulogger.New("test"),
+		}
 
-	client := &Client{
-		client: mockClient,
-		logger: ulogger.New("test"),
-	}
+		_, err := client.GetPeers(context.Background())
+		require.Error(t, err)
+	})
 
-	ctx := context.Background()
-	resp, err := client.GetPeers(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	// GetPeers now returns empty slice as it uses legacy format
-	require.Len(t, resp, 0)
+	t.Run("invalid_peer_id_skipped", func(t *testing.T) {
+		client := &Client{
+			client: &MockPeerServiceClient{
+				GetPeersFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
+					return &p2p_api.GetPeersResponse{
+						Peers: []*p2p_api.Peer{
+							{Id: "not-a-valid-peer-id"},
+							{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", CurrentHeight: 55},
+						},
+					}, nil
+				},
+			},
+			logger: ulogger.New("test"),
+		}
+
+		peers, err := client.GetPeers(context.Background())
+		require.NoError(t, err)
+		require.Len(t, peers, 1, "invalid peer entry should be skipped, not fail the call")
+		require.Equal(t, uint32(55), peers[0].Height)
+	})
+}
+
+func TestConvertFromAPIPeerInfoErrors(t *testing.T) {
+	t.Run("invalid_peer_id_catchup", func(t *testing.T) {
+		_, err := convertFromAPIPeerInfo(&p2p_api.PeerInfoForCatchup{Id: "bogus"})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid peer ID")
+	})
+
+	t.Run("invalid_block_hash_catchup", func(t *testing.T) {
+		_, err := convertFromAPIPeerInfo(&p2p_api.PeerInfoForCatchup{
+			Id:        "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
+			BlockHash: "not-a-hash",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid block hash")
+	})
+
+	t.Run("invalid_peer_id_registry", func(t *testing.T) {
+		_, err := convertFromAPIPeerInfo(&p2p_api.PeerRegistryInfo{Id: "bogus"})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid peer ID")
+	})
+
+	t.Run("invalid_block_hash_registry", func(t *testing.T) {
+		_, err := convertFromAPIPeerInfo(&p2p_api.PeerRegistryInfo{
+			Id:        "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
+			BlockHash: "not-a-hash",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid block hash")
+	})
+
+	t.Run("unsupported_type", func(t *testing.T) {
+		_, err := convertFromAPIPeerInfo("not a peer message")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unsupported peer info type")
+	})
 }
 
 func TestSimpleClientBanPeer(t *testing.T) {

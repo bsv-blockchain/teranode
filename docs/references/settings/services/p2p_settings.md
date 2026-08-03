@@ -38,6 +38,8 @@
 | PeerMapMaxSize | int | 100000 | p2p_peer_map_max_size | Maximum entries in peer maps |
 | PeerMapTTL | time.Duration | 30m | p2p_peer_map_ttl | Peer map entry time-to-live |
 | PeerMapCleanupInterval | time.Duration | 5m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
+| PeerRegistryBatchInterval | time.Duration | 1s | p2p_peer_registry_batch_interval | Flush interval for batched peer-registry updates from gossip handlers |
+| GossipHandlerConcurrency | int | 4 | p2p_gossip_handler_concurrency | Concurrent gossip handler workers per pubsub topic |
 
 ## Configuration Dependencies
 

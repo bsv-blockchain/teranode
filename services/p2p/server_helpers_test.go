@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -19,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func newServerWithLocalRegistry(t *testing.T) (*Server, *blockchain.CentralizedPeerRegistry) {
@@ -213,9 +217,54 @@ func TestServerHelpers_ShouldSkipBannedPeer_FlagsBanned(t *testing.T) {
 
 	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "no ban → don't skip")
 
+	// A purely registry-side ban is masked by the cached negative lookup until
+	// the entry expires (reputationCacheTTL).
 	reg.AddBanScore(pid.String(), "spam", 0)
 	reg.AddBanScore(pid.String(), "spam", 0)
-	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "score-banned peer is skipped")
+	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "cached negative lookup masks the ban briefly")
+
+	// Once the cache entry expires (simulated by dropping it), the ban is honored.
+	s.banStatusCache.Delete(pid.String())
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "score-banned peer is skipped after cache expiry")
+}
+
+// TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate verifies that a ban
+// applied through the local transition path (applyBanScore → onPeerBanned)
+// takes effect immediately, without waiting for the cached negative
+// IsPeerBanned lookup to expire.
+func TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = noopBanList{}
+	pid := mustNewPeerID(t)
+
+	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "no ban → don't skip (caches negative)")
+
+	// protocol_violation = 20 points; 6 hits cross the default 100 threshold
+	// and trigger onPeerBanned, which overwrites the cached negative entry.
+	for i := 0; i < 6; i++ {
+		s.applyBanScore(pid.String(), ReasonProtocolViolation)
+	}
+
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "locally banned peer must be skipped immediately")
+}
+
+// TestGetLocalHeight_ErrorCachedWithShorterTTL: failed blockchain reads are
+// cached (no per-message RPC storm during an outage) but with a shorter TTL
+// than successful reads, so recovery is picked up quickly.
+func TestGetLocalHeight_ErrorCachedWithShorterTTL(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.NewServiceError("blockchain down")).Once()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42}, nil)
+	s.blockchainClient = mockBlockchain
+
+	require.Equal(t, uint32(0), s.getLocalHeight(context.Background()), "failed read returns 0")
+	require.Equal(t, uint32(0), s.getLocalHeight(context.Background()), "failure must be served from cache within the error TTL")
+	mockBlockchain.AssertNumberOfCalls(t, "GetBestBlockHeader", 1)
+
+	time.Sleep(localHeightErrorCacheTTL + 50*time.Millisecond)
+	require.Equal(t, uint32(42), s.getLocalHeight(context.Background()), "recovery must be picked up after the error TTL")
 }
 
 func TestServerHelpers_ShouldSkipUnhealthyPeer(t *testing.T) {
@@ -396,6 +445,160 @@ func TestHandleBlockTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 		t.Fatalf("unexpected Kafka publish for malformed hash: %+v", published)
 	default:
 	}
+
+	entries := 0
+	s.blockPeerMap.Range(func(_, _ any) bool { entries++; return true })
+	require.Zero(t, entries, "malformed hash must not create a blockPeerMap entry")
+}
+
+// chainhash.NewHashFromStr accepts non-canonical hex forms (uppercase,
+// truncated), while the ban lookups in ReportInvalidBlock and
+// processInvalidBlockMessage use the canonical hash.String() from block
+// validation. The blockPeerMap must therefore be keyed by the canonical form,
+// or a peer could evade the invalid-block ban by announcing the block with a
+// non-canonical hash string.
+func TestHandleBlockTopic_PeerMapKeyedByCanonicalHash(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	canonical := chainhash.HashH([]byte("canonical block key")).String()
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       strings.ToUpper(canonical),
+		Height:     101,
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+
+	peerID, err := s.getPeerFromMap(&s.blockPeerMap, canonical, "block")
+	require.NoError(t, err, "blockPeerMap must be keyed by the canonical hash string")
+	require.Equal(t, remote.String(), peerID)
+
+	_, err = s.getPeerFromMap(&s.blockPeerMap, strings.ToUpper(canonical), "block")
+	require.Error(t, err, "raw non-canonical announce string must not be a map key")
+}
+
+// Same canonical-key requirement as the block map: ReportInvalidSubtree looks
+// up subtreePeerMap with the canonical hash.String() from subtree validation.
+func TestHandleSubtreeTopic_PeerMapKeyedByCanonicalHash(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	canonical := chainhash.HashH([]byte("canonical subtree key")).String()
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       strings.ToUpper(canonical),
+	})
+	require.NoError(t, err)
+
+	s.handleSubtreeTopic(context.Background(), msgBytes, remote.String())
+
+	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, canonical, "subtree")
+	require.NoError(t, err, "subtreePeerMap must be keyed by the canonical hash string")
+	require.Equal(t, remote.String(), peerID)
+
+	_, err = s.getPeerFromMap(&s.subtreePeerMap, strings.ToUpper(canonical), "subtree")
+	require.Error(t, err, "raw non-canonical announce string must not be a map key")
+
+	select {
+	case notification := <-s.notificationCh:
+		require.Equal(t, canonical, notification.Hash,
+			"subtree notification must carry the canonical hash")
+	default:
+		t.Fatal("expected subtree notification")
+	}
+}
+
+// A malformed subtree hash must be rejected before any use: no WebSocket
+// notification, no peerMapEntry, and no peer-activity credit.
+func TestHandleSubtreeTopic_RejectsMalformedHash(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       "not-a-subtree-hash",
+	})
+	require.NoError(t, err)
+
+	s.handleSubtreeTopic(context.Background(), msgBytes, remote.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		t.Fatalf("unexpected subtree notification for malformed hash: %+v", notification)
+	default:
+	}
+
+	entries := 0
+	s.subtreePeerMap.Range(func(_, _ any) bool { entries++; return true })
+	require.Zero(t, entries, "malformed hash must not create a subtreePeerMap entry")
+
+	_, ok := reg.Get(remote.String())
+	require.False(t, ok, "malformed hash must not count as peer activity")
+}
+
+// End-to-end guard for the canonical-key fix: a peer that announces an
+// invalid block using a non-canonical hex form (uppercase) must still be
+// banned when block validation reports the block by its canonical hash.
+func TestHandleBlockTopic_NonCanonicalAnnouncerStillBanned(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	canonical := chainhash.HashH([]byte("invalid block announced uppercase")).String()
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remote.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       strings.ToUpper(canonical),
+		Height:     101,
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+
+	// Block validation reports the invalid block by its canonical hash.
+	invalidMsg := mustMarshalInvalidBlockMsg(t, canonical, "invalid block")
+	require.NoError(t, s.processInvalidBlockMessage(&kafka.KafkaMessage{Value: invalidMsg}))
+
+	info, ok := reg.Get(remote.String())
+	require.True(t, ok)
+	require.Positive(t, info.BanScore, "announcer of the invalid block must be banned")
+
+	_, stillThere := s.blockPeerMap.Load(canonical)
+	require.False(t, stillThere, "entry must be removed after the ban")
 }
 
 func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
@@ -639,6 +842,17 @@ func TestValidateDataHubURL(t *testing.T) {
 		{"localhost", "http://localhost/api", true, "localhost"},
 		{"localhost_port", "http://localhost:8080/api", true, "localhost"},
 		{"sub_localhost", "http://sub.localhost/api", true, "localhost"},
+
+		// Rooted FQDN (trailing dots, even multiple) must not bypass the checks
+		{"localhost_trailing_dot", "http://localhost./api", true, "localhost"},
+		{"loopback_trailing_dot", "http://127.0.0.1./api", true, "loopback"},
+		{"localhost_double_trailing_dot", "http://localhost../api", true, "localhost"},
+		{"loopback_double_trailing_dot", "http://127.0.0.1../api", true, "loopback"},
+
+		// Hostname case must not bypass the checks (DNS is case-insensitive)
+		{"localhost_uppercase", "http://LOCALHOST/api", true, "localhost"},
+		{"localhost_mixed_case_trailing_dot", "http://LocalHost./api", true, "localhost"},
+		{"sub_localhost_uppercase", "http://sub.LOCALHOST/api", true, "localhost"},
 	}
 
 	for _, tt := range tests {
@@ -722,4 +936,248 @@ func TestServerHelpers_SanitizeAdvertisedTip_ClampsAndOverflow(t *testing.T) {
 		require.Nil(t, hash)
 		require.Equal(t, uint32(0), height)
 	})
+}
+
+// TestHandleBlockTopic_RejectsBlacklistedDataHubURL guards the fix for block
+// announcements bypassing the DataHub URL blacklist that subtree announcements
+// enforce: a blacklisted host must be dropped before any WebSocket forwarding,
+// peer registration, or Kafka publish (which would otherwise trigger catchup
+// from the blacklisted host).
+func TestHandleBlockTopic_RejectsBlacklistedDataHubURL(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	s.blocksKafkaProducerClient = producer
+
+	for _, dataHubURL := range []string{
+		"http://evil.example:8080/path", // same host as blacklist entry, different port/path
+		"http://evil.example./path",     // rooted FQDN (trailing dot) must not bypass the blacklist
+	} {
+		remote := mustNewPeerID(t)
+		blockHash := chainhash.HashH([]byte("blacklisted block " + dataHubURL)).String()
+		msgBytes, err := json.Marshal(BlockMessage{
+			PeerID:     remote.String(),
+			ClientName: "client/1.0",
+			DataHubURL: dataHubURL,
+			Hash:       blockHash,
+			Height:     1,
+		})
+		require.NoError(t, err)
+
+		s.handleBlockTopic(context.Background(), msgBytes, remote.String())
+
+		select {
+		case notification := <-s.notificationCh:
+			t.Fatalf("unexpected block notification for blacklisted DataHubURL %s: %+v", dataHubURL, notification)
+		default:
+		}
+
+		_, ok := reg.Get(remote.String())
+		require.False(t, ok, "peer with blacklisted DataHubURL %s must not be registered", dataHubURL)
+
+		select {
+		case published := <-producer.PublishChannel():
+			t.Fatalf("unexpected Kafka publish for blacklisted DataHubURL %s: %+v", dataHubURL, published)
+		default:
+		}
+
+		require.False(t, s.shouldSkipBannedPeer(remote.String(), "test"),
+			"blacklist match is an operator choice, not a peer protocol violation")
+	}
+}
+
+// TestHandleSubtreeTopic_RejectsBlacklistedDataHubURL is a regression test:
+// the subtree handler enforced the blacklist before the checks were factored
+// into checkDataHubURL and must keep doing so.
+func TestHandleSubtreeTopic_RejectsBlacklistedDataHubURL(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	s.subtreeKafkaProducerClient = producer
+
+	for _, dataHubURL := range []string{
+		"http://evil.example",    // exact match
+		"http://evil.example./x", // rooted FQDN (trailing dot) must not bypass the blacklist
+	} {
+		remote := mustNewPeerID(t)
+		subtreeHash := chainhash.HashH([]byte("blacklisted subtree " + dataHubURL)).String()
+		msgBytes, err := json.Marshal(SubtreeMessage{
+			PeerID:     remote.String(),
+			ClientName: "client/1.0",
+			DataHubURL: dataHubURL,
+			Hash:       subtreeHash,
+		})
+		require.NoError(t, err)
+
+		s.handleSubtreeTopic(context.Background(), msgBytes, remote.String())
+
+		select {
+		case notification := <-s.notificationCh:
+			t.Fatalf("unexpected subtree notification for blacklisted DataHubURL %s: %+v", dataHubURL, notification)
+		default:
+		}
+
+		select {
+		case published := <-producer.PublishChannel():
+			t.Fatalf("unexpected Kafka publish for blacklisted DataHubURL %s: %+v", dataHubURL, published)
+		default:
+		}
+	}
+}
+
+// TestHandleNodeStatusTopic_StripsBlacklistedBaseURL: node_status stores the
+// announced BaseURL in the peer registry as the peer's DataHub URL (used by
+// catchup), so a blacklisted BaseURL must never be persisted. Unlike the
+// block/subtree handlers the message itself is telemetry and is kept: it is
+// still forwarded to WebSocket clients, just with the URL removed.
+func TestHandleNodeStatusTopic_StripsBlacklistedBaseURL(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	remote := mustNewPeerID(t)
+	blockHash := chainhash.HashH([]byte("blacklisted node status")).String()
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remote.String(),
+		ClientName:    "client/1.0",
+		BaseURL:       "http://evil.example./api", // rooted FQDN (trailing dot) must not bypass the blacklist
+		BestHeight:    101,
+		BestBlockHash: blockHash,
+	})
+	require.NoError(t, err)
+
+	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
+
+	select {
+	case notification := <-s.notificationCh:
+		require.Empty(t, notification.BaseURL, "blacklisted BaseURL must be stripped from the WebSocket notification")
+		require.Equal(t, remote.String(), notification.PeerID)
+	default:
+		t.Fatal("node_status telemetry must still be forwarded to WebSocket clients")
+	}
+
+	got, ok := reg.Get(remote.String())
+	require.True(t, ok, "peer telemetry must still be processed")
+	require.Empty(t, got.DataHubURL, "blacklisted BaseURL must not be stored in the peer registry")
+
+	require.False(t, s.shouldSkipBannedPeer(remote.String(), "test"),
+		"blacklist match is an operator choice, not a peer protocol violation")
+}
+
+// TestBlacklistedDataHubURL_StoredBeforeBlacklist_NotUsedForCatchup is the
+// regression for the primary operational case: a peer registers its DataHub
+// URL while the host is not yet blacklisted, the operator then blacklists it.
+// The node_status strip cannot evict the already-stored URL (the registry
+// ignores empty-URL updates), so the blacklist must be enforced at the point
+// of use - GetPeersForCatchup must stop surfacing the peer.
+func TestBlacklistedDataHubURL_StoredBeforeBlacklist_NotUsedForCatchup(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 4)
+
+	// Register the peer's URL BEFORE the host is blacklisted.
+	remote := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: remote.String(), DataHubURL: "http://evil.example", Storage: "full", Height: 100})
+
+	resp, err := s.GetPeersForCatchup(context.Background(), &p2p_api.GetPeersForCatchupRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.Peers, 1, "precondition: peer must be a catchup candidate before the blacklist entry")
+
+	// Operator blacklists the host.
+	s.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	// A subsequent node_status strips the URL but cannot clear the stored one.
+	blockHash := chainhash.HashH([]byte("stored before blacklist")).String()
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remote.String(),
+		ClientName:    "client/1.0",
+		BaseURL:       "http://evil.example",
+		BestHeight:    102,
+		BestBlockHash: blockHash,
+	})
+	require.NoError(t, err)
+	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
+
+	got, ok := reg.Get(remote.String())
+	require.True(t, ok)
+	require.Equal(t, "http://evil.example", got.DataHubURL,
+		"documented limitation: the stored URL survives the strip, which is why point-of-use filtering exists")
+
+	// Point of use: the peer must no longer be handed to catchup.
+	resp, err = s.GetPeersForCatchup(context.Background(), &p2p_api.GetPeersForCatchupRequest{})
+	require.NoError(t, err)
+	require.Empty(t, resp.Peers, "peer whose stored DataHubURL is now blacklisted must not be a catchup candidate")
+}
+
+// TestIsBaseURLBlacklisted covers the matcher directly, in particular the two
+// bypasses fixed after review: scheme-less blacklist entries ("evil.example"
+// parses as a URL path, so the entry silently never matched a real full-URL
+// announcement) and hostnames with multiple trailing dots.
+func TestIsBaseURLBlacklisted(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		entry   string
+		want    bool
+	}{
+		{"full_url_entry_exact", "http://evil.example", "http://evil.example", true},
+		{"full_url_entry_other_port_path", "http://evil.example:8080/path", "http://evil.example", true},
+		{"scheme_less_entry_full_url_announcement", "http://evil.example:8080/path", "evil.example", true},
+		{"scheme_less_entry_with_port", "https://evil.example/x", "evil.example:9000", true},
+		{"trailing_dot_announcement", "http://evil.example./x", "http://evil.example", true},
+		{"double_trailing_dot_announcement", "http://evil.example../x", "http://evil.example", true},
+		{"case_insensitive_host", "http://EVIL.example/x", "evil.example", true},
+		{"different_host_not_matched", "http://good.example/x", "evil.example", false},
+		{"unparseable_entry_exact_match_fallback", "http://[bad", "http://[bad", true},
+		{"unparseable_entry_no_match", "http://good.example", "http://[bad", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blacklist := map[string]struct{}{tt.entry: {}}
+			require.Equal(t, tt.want, isBaseURLBlacklisted(tt.baseURL, blacklist),
+				"baseURL %q vs blacklist entry %q", tt.baseURL, tt.entry)
+		})
+	}
+}
+
+func TestServerGetPeersReturnsConnectedPeersWithHeight(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	connectedPID := mustNewPeerID(t)
+	disconnectedPID := mustNewPeerID(t)
+
+	s.addConnectedPeer(connectedPID, "client/1.0", 123, nil, "")
+	s.addPeer(disconnectedPID, "client/1.0", 99, nil, "")
+
+	resp, err := s.GetPeers(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.Len(t, resp.Peers, 1, "disconnected peers must be excluded")
+	require.Equal(t, connectedPID.String(), resp.Peers[0].Id)
+	require.Equal(t, uint32(123), resp.Peers[0].CurrentHeight)
 }
