@@ -1562,6 +1562,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		// Use cached headers if available (during catchup), otherwise fetch from blockchain
 		var blockHeaders []*model.BlockHeader
+		// parentMeta holds the parent's locally-stored metadata. It is populated in
+		// both branches below and reused further down to derive a trusted block height
+		// (block.Height itself is peer-supplied and must not be trusted for checkpoint
+		// or difficulty decisions).
+		var parentMeta *model.BlockHeaderMeta
 		if opts.CachedHeaders != nil && len(opts.CachedHeaders) > 0 {
 			// Use provided cached headers
 			blockHeaders = opts.CachedHeaders
@@ -1574,7 +1579,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// Check if parent block is invalid - if so, child is automatically invalid
 			// This optimization skips expensive validation when parent is already invalid
 			// For catchup mode with cached headers, we need to query parent metadata
-			_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+			_, parentMeta, err = u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
 			if err != nil {
 				ctxLogger.Warnf("[ValidateBlock][%s] failed to get parent block metadata: %v, continuing with validation", block.Hash().String(), err)
 				// Continue with validation - this is defensive programming
@@ -1606,7 +1611,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			// Check if parent block is invalid using the metadata we just got
-			var parentMeta *model.BlockHeaderMeta
 			if len(parentBlockHeadersMeta) > 0 {
 				parentMeta = parentBlockHeadersMeta[0]
 			}
@@ -1637,16 +1641,34 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// difficulty checks must run first. It also means a peer cannot make us do
 		// full tx validation for a garbage header at zero cost.
 		//
-		// Checkpoint enforcement (defense-in-depth on the direct, non-catchup path):
-		// a block whose height matches a hardcoded checkpoint MUST match the
-		// checkpoint hash, mirroring the catchup header pipeline. Without this the
-		// difficulty-skip below would let a fabricated block AT a checkpoint height
-		// reach subtree validation with the expected-nBits check skipped and no
-		// checkpoint assertion. See gap-analysis #&NoBreak;4697. (Rejecting sub-checkpoint
-		// forks at non-checkpoint heights — the fork-depth rule — is a separate,
-		// broader change and is not done here.)
-		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
-			if !opts.IsRevalidation {
+		// Checkpoint enforcement (defense-in-depth): a block whose height matches a
+		// hardcoded checkpoint MUST match the checkpoint hash, mirroring the catchup
+		// header pipeline. Without this the difficulty-skip below would let a fabricated
+		// block AT a checkpoint height reach subtree validation with the expected-nBits
+		// check skipped and no checkpoint assertion. See gap-analysis 4697.
+		//
+		// The height used here is derived from the parent's locally-stored metadata,
+		// NOT block.Height: the latter is a peer-supplied varint in the block body that
+		// is not covered by the header hash, so a peer could relabel the honest tip with
+		// a checkpoint height and, since storeInvalidBlock keys on the header hash,
+		// persistently poison the real block. We fall back to block.Height only when the
+		// parent is not locally known (the block cannot be accepted then anyway) and
+		// never persist it invalid in that uncorroborated case.
+		//
+		// The check is unconditional rather than direct-path-only; on the catchup path
+		// the header was already checked, so this is a cheap, harmless re-assertion.
+		// (Rejecting sub-checkpoint forks at non-checkpoint heights — the fork-depth
+		// rule — is a separate, broader change and is not done here.)
+		blockHeight := block.Height
+		heightCorroborated := false
+
+		if parentMeta != nil {
+			blockHeight = parentMeta.Height + 1
+			heightCorroborated = true
+		}
+
+		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, blockHeight, u.settings.ChainCfgParams.Checkpoints); err != nil {
+			if heightCorroborated && !opts.IsRevalidation {
 				u.storeInvalidBlock(ctx, block, opts.PeerID, err.Error())
 			}
 
@@ -1654,13 +1676,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		}
 
 		// Skip difficulty validation for blocks at or below the highest checkpoint:
-		// these blocks are already verified by checkpoints. NOTE: on this direct
-		// path only the checkpoint-height hash-match above is enforced; a fabricated
-		// header at a non-checkpoint height at or below the checkpoint still reaches
-		// subtree validation without paying PoW. block.Valid rejects such a block
-		// (HasMetTargetDifficulty + checkParentsExistOnChain) before acceptance and
-		// its trivial cumulative work cannot reorg the chain; the residual exposure
-		// is wasted validation work on a transient fork, same as the pre-option design.
+		// these blocks are already verified by checkpoints. NOTE: a fabricated header
+		// at a non-checkpoint height at or below the checkpoint still reaches subtree
+		// validation without paying PoW. block.Valid rejects such a block
+		// (HasMetTargetDifficulty + checkParentsExistOnChain) before acceptance and its
+		// trivial cumulative work cannot reorg the chain; the residual exposure is wasted
+		// validation work on a transient fork, same as the pre-option design. Deriving
+		// this skip from the parent-corroborated height instead of block.Height is part
+		// of the deferred fork-depth change, not done here.
 		highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 		skipDifficultyCheck := block.Height <= highestCheckpointHeight
 

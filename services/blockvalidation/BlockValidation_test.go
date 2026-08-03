@@ -3936,7 +3936,9 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
-	// storeInvalidBlock persists the rejected block; the accept-path AddBlock must never fire.
+	// storeInvalidBlock persists the rejected block via AddBlock(WithInvalid(true)); we assert
+	// below that it fired. The accept-path AddBlock shares this mock, so we additionally assert
+	// the optimistic background path (GetBlockHeaderIDs) never ran to distinguish the two.
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	// GetBlockHeaderIDs is only reached inside the optimistic background goroutine, which must
 	// not start when the header is rejected synchronously.
@@ -3947,7 +3949,10 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	subChan := make(chan *blockchain_api.Notification, 1)
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
-	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	// Corroborate the block height from the parent's stored metadata (parent at checkpointHeight-1)
+	// so the gate uses a trusted height and reaches storeInvalidBlock.
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{{Height: checkpointHeight - 1}}, nil)
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
@@ -3966,6 +3971,112 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	// Rejection must happen before the optimistic AddBlock, so the background goroutine
 	// (which alone calls GetBlockHeaderIDs) never starts.
 	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
+
+	// The block was persisted invalid (storeInvalidBlock -> AddBlock with WithInvalid(true)),
+	// not accepted: AddBlock fired while the accept-path GetBlockHeaderIDs above did not.
+	mockBlockchain.AssertCalled(t, "AddBlock", mock.Anything, block, mock.Anything, mock.Anything)
+}
+
+// TestBlockValidation_DirectPath_SpoofedHeightDoesNotPoisonHonestTip is a regression test
+// for the height-corroboration guard. block.Height is a peer-supplied varint that is NOT
+// covered by the header hash, so a peer could relabel an honest block with a checkpoint
+// height; because storeInvalidBlock keys on the header hash, trusting that value would let
+// the peer persistently poison the honest block. The gate must derive the height from the
+// parent's metadata (parent.Height+1) instead, so a spoofed checkpoint height on a block
+// whose true height is not a checkpoint must NOT trigger the checkpoint rejection.
+func TestBlockValidation_DirectPath_SpoofedHeightDoesNotPoisonHonestTip(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = true
+
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	nBits, _ := model.NewNBitFromString("207fffff")
+	// A timestamp past the two-hour bound gives a deterministic rejection in block.Valid,
+	// after the checkpoint gate. It is independent of the difficulty-skip (which still keys
+	// off block.Height), so it works whether or not difficulty is skipped.
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Add(3 * time.Hour).Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	// Peer-supplied (spoofed) height equals the checkpoint height...
+	const spoofedCheckpointHeight = 100
+	block, _ := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()),  //nolint:gosec
+		uint64(coinbaseTx.Size()), //nolint:gosec
+		spoofedCheckpointHeight, 0,
+	)
+
+	// ...but the parent's corroborated height puts the real height well above any checkpoint.
+	const parentHeight = 500
+	otherHash, err := chainhash.NewHashFromStr("00000000000000000000000000000000000000000000000000000000deadbeef")
+	require.NoError(t, err)
+	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: spoofedCheckpointHeight, Hash: otherHash}}
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil).Maybe()
+	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	// Parent metadata corroborates the real height (parentHeight -> real height parentHeight+1).
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{{Height: parentHeight}}, nil)
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: parentHeight}, nil)
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
+
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
+	require.NoError(t, err)
+
+	err = bv.ValidateBlock(ctx, block, "test", false)
+	// The block is still rejected (for the future timestamp), but crucially NOT for a
+	// checkpoint conflict: the spoofed checkpoint height was ignored in favour of the
+	// parent-corroborated height. Pre-fix this returned the checkpoint-conflict error.
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "conflicts with hardcoded checkpoint")
+	require.Contains(t, err.Error(), "two hours in the future")
 }
 
 // TestBlockValidation_SetMined_UpdatesTxMeta ensures that after block validation, calling setTxMined marks all block transactions as mined in the txMetaStore.
