@@ -13,6 +13,7 @@ var (
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
+	ErrBlockCorrupt               = New(ERR_BLOCK_CORRUPT, "block corrupt")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
 	ErrBlockHeaderContext         = New(ERR_BLOCK_HEADER_CONTEXT, "block header context invalid")
@@ -213,6 +214,31 @@ func IsTransientBlockIncomplete(err error) bool {
 // NewBlockInvalidError creates a new error with the block invalid error code.
 func NewBlockInvalidError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_INVALID, message, params...)
+}
+
+// NewBlockCorruptError creates a new error for a block whose received body fails a
+// body-derived check before the body is bound to its header (see bitcoin-sv/teranode#4692). A
+// corrupt body is insufficient evidence to permanently condemn the block hash: it
+// cannot distinguish an honestly-mined block corrupted in transit from an attacker's
+// junk, so unlike NewBlockInvalidError it must NOT persist invalid=true. Callers
+// re-download from another peer and strike the serving connection, mirroring svnode's
+// CorruptionOrDoS stance (bitcoin-sv/src/consensus/validation.h). A dedicated code,
+// not ERR_BLOCK_INVALID, so it never matches errors.Is(err, ErrBlockInvalid) on the
+// poison paths (extends the transient-vs-invalid split from PR #1036 / a0790830b).
+func NewBlockCorruptError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_CORRUPT, message, params...)
+}
+
+// IsBlockCorrupt reports whether err (or anything it wraps, including across a gRPC
+// boundary) is a block-corrupt error. Callers gate the re-download / peer-strike path
+// on this and must check it BEFORE any generic ErrBlockInvalid handling so a corrupt
+// body is never routed onto a poison path.
+func IsBlockCorrupt(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlockCorrupt)
 }
 
 // NewBlockExistsError creates a new error with the block exists error code.
