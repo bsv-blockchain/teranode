@@ -1410,6 +1410,25 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	}, nil
 }
 
+// deriveBlockHeight settles a peer-supplied block height against the on-chain parent.
+//
+// block.Height is a varint in the block body (model.NewBlockFromBytes) and is not covered
+// by the header hash, so on the peer-fetched path it cannot be trusted. An honest peer sends
+// either the correct height or 0 (the field "can be left empty"); any other value is a lie
+// and the block is rejected. The returned height (parentHeight + 1) is authoritative and must
+// be written back onto the block before anything downstream reads block.Height — the
+// checkpoint guard, the difficulty skip, block-assembly gating and the coinbase subsidy all
+// key off it. Catchup (get_blocks.go) and the operator revalidation endpoint already carry
+// authoritative heights, so this settlement is only needed on the peer-fetched route.
+func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
+	derived := parentHeight + 1
+	if claimed != 0 && claimed != derived {
+		return 0, errors.NewBlockInvalidError("claimed height %d does not match parent height %d + 1", claimed, parentHeight)
+	}
+
+	return derived, nil
+}
+
 // processBlockFound processes a newly discovered block by validating it and managing
 // parent block dependencies. It handles block retrieval, validation sequencing,
 // and ensures proper processing order for blockchain consistency.
@@ -1482,6 +1501,22 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 
 		return nil
 	}
+
+	// Settle the peer-supplied height against the on-chain parent before anything reads
+	// block.Height (block-assembly gating and the unified-route decision below, and downstream
+	// the checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
+	// See deriveBlockHeight.
+	_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+	if err != nil {
+		return errors.NewServiceError("[processBlockFound][%s] failed to get parent header %s", hash.String(), block.Header.HashPrevBlock.String(), err)
+	}
+
+	settledHeight, err := deriveBlockHeight(block.Height, parentMeta.Height)
+	if err != nil {
+		return errors.NewBlockInvalidError("[processBlockFound][%s] rejecting block with peer-inconsistent height", hash.String(), err)
+	}
+
+	block.Height = settledHeight
 
 	// Wait for block assembly to be ready before processing the block
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {

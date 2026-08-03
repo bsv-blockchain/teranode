@@ -393,6 +393,18 @@ func Test_Server_processBlockFound(t *testing.T) {
 
 	blockchainStore := blockchain_store.NewMockStore()
 	blockchainStore.BlockExists[*block.Header.HashPrevBlock] = true
+	// processBlockFound now settles block.Height against the parent header, so the parent must
+	// be resolvable at parent height = block.Height - 1 (deriveBlockHeight). Give it a header
+	// with non-nil hashes so the MockStore's GetBlockHeaders walk terminates cleanly (it chases
+	// HashPrevBlock until a hash is absent from the Blocks map).
+	blockchainStore.Blocks[*block.Header.HashPrevBlock] = &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+		},
+		Height: block.Height - 1,
+	}
 
 	logger := ulogger.NewErrorTestLogger(t)
 
