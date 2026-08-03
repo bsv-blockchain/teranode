@@ -63,4 +63,9 @@ type P2PClientI interface {
 	// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
 	// This is called after downloading data (blocks, subtrees, etc.) from a peer's DataHub URL.
 	RecordBytesDownloaded(ctx context.Context, peerID string, bytesDownloaded uint64) error
+
+	// AddBanScore adds to a peer's ban score with the specified reason. Used to strike the
+	// peer that served a corrupt block body (bitcoin-sv/teranode#4692) without persisting the block
+	// as invalid; the registry maps the reason string to concrete penalty points.
+	AddBanScore(ctx context.Context, peerID string, reason string) error
 }
