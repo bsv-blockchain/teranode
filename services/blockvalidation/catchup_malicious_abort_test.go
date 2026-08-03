@@ -84,6 +84,9 @@ func (m *maliciousAbortP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (
 func (m *maliciousAbortP2PClient) RecordBytesDownloaded(_ context.Context, _ string, _ uint64) error {
 	return nil
 }
+func (m *maliciousAbortP2PClient) AddBanScore(_ context.Context, _ string, _ string) error {
+	return nil
+}
 
 // TestCatchup_MaliciousPeerAbortsCatchup verifies that a peer flagged malicious
 // by the P2P service aborts the catchup header loop instead of being treated

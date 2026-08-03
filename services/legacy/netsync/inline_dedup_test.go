@@ -124,6 +124,9 @@ func TestLegacyInline_DuplicateTxid_Rejected(t *testing.T) {
 
 	_, _, _, prepErr := sm.prepareSubtrees(ctx, block)
 	require.Error(t, prepErr, "a duplicated txid must be rejected on the inline path")
-	require.True(t, errors.Is(prepErr, errors.ErrBlockInvalid),
-		"duplicate-txid rejection must be a BlockInvalidError (CVE-2012-2459), got: %v", prepErr)
+	// bitcoin-sv/teranode#4692: a duplicate txid is body-derived corruption → corrupt (re-download),
+	// not invalid (poison).
+	require.True(t, errors.IsBlockCorrupt(prepErr),
+		"duplicate-txid rejection must be a BlockCorruptError (CVE-2012-2459), got: %v", prepErr)
+	require.False(t, errors.Is(prepErr, errors.ErrBlockInvalid))
 }

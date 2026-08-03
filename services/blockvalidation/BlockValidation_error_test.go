@@ -424,16 +424,20 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
-	// Wait for the goroutine to call InvalidateBlock
+	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), which is
+	// now a tier-2 CORRUPT body — not consensus-invalid. A corrupt body must NEVER be
+	// persisted invalid=true (the honest body for this hash may still arrive from another
+	// peer) and must NOT be routed to ReValidateBlock (which would re-run the same corrupt
+	// body). The optimistic background therefore strikes the serving peer and drops the body
+	// for re-download: it must neither InvalidateBlock nor publish it as invalid.
 	select {
 	case <-invalidateBlockCalled:
-		// Successfully received signal that InvalidateBlock was called
+		t.Fatal("corrupt block body must NOT be invalidated (bitcoin-sv/teranode#4692): it is re-downloaded, not poisoned")
 	case <-time.After(2 * time.Second):
-		t.Fatal("InvalidateBlock should be called in background goroutine")
+		// correct: a corrupt body is never invalidated
 	}
 
-	// Verify that Publish was called on the Kafka producer
-	require.True(t, mockKafka.IsPublishCalled(), "Kafka Publish should be called for invalid block")
+	require.False(t, mockKafka.IsPublishCalled(), "corrupt block body must not be published as invalid")
 }
 
 func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {

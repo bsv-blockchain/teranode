@@ -491,7 +491,9 @@ func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		// bitcoin-sv/teranode#4692: body-derived coinbase check → corrupt (re-download), not invalid.
+		require.True(t, errors.IsBlockCorrupt(err))
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	})
 
 	t.Run("too long (length Max+1) is rejected", func(t *testing.T) {
@@ -499,7 +501,8 @@ func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.True(t, errors.IsBlockCorrupt(err))
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	})
 
 	t.Run("boundary low (length exactly 2) passes", func(t *testing.T) {
@@ -519,7 +522,8 @@ func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.True(t, errors.IsBlockCorrupt(err))
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	})
 }
 
@@ -1620,7 +1624,9 @@ func TestBlock_Valid_DupTxDetected_NilSubtreeStore(t *testing.T) {
 	valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 	require.False(t, valid)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+	// bitcoin-sv/teranode#4692: duplicate tx is body-derived corruption → corrupt, not invalid.
+	require.True(t, errors.IsBlockCorrupt(err), "expected ErrBlockCorrupt, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "duplicate transaction")
 }
 
@@ -2815,7 +2821,9 @@ func TestBlock_CheckMerkleRoot_DuplicateSubtreeRoots(t *testing.T) {
 
 	err = block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	// bitcoin-sv/teranode#4692: duplicate subtree root is body-derived corruption → corrupt.
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "duplicate")
 	require.Contains(t, err.Error(), rootHash1.String())
 }
@@ -5658,7 +5666,9 @@ func TestBlock_Valid_DupTxDetected_DiskMapDirs(t *testing.T) {
 			valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 			require.False(t, valid)
 			require.Error(t, err)
-			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+			// bitcoin-sv/teranode#4692: duplicate tx is body-derived corruption → corrupt, not invalid.
+			require.True(t, errors.IsBlockCorrupt(err), "expected ErrBlockCorrupt, got %v", err)
+			require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 			require.Contains(t, err.Error(), "duplicate transaction")
 		})
 	}
@@ -5969,7 +5979,9 @@ func TestCheckMerkleRoot_RejectsMidStreamIncompleteSubtree(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	// bitcoin-sv/teranode#4692: subtree-shape check is body-derived → corrupt, not invalid.
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "only the final subtree may be incomplete")
 }
 
@@ -5983,7 +5995,8 @@ func TestCheckMerkleRoot_RejectsFinalSubtreeLargerThanFirst(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "final subtree exceeds first subtree size")
 }
 
@@ -6016,7 +6029,8 @@ func TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "first subtree leaf count is not a power of two")
 }
 

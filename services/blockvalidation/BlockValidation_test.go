@@ -1810,7 +1810,11 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test")
-	require.ErrorContains(t, err, "BLOCK_INVALID")
+	// bitcoin-sv/teranode#4692: bad coinbase length is a tier-2 body-derived check → BLOCK_CORRUPT
+	// (re-download + strike), not BLOCK_INVALID (poison).
+	require.ErrorContains(t, err, "BLOCK_CORRUPT")
+	require.True(t, errors.IsBlockCorrupt(err))
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 }
 
 func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore utxostore.Store, subtreeValidationClient subtreevalidation.Interface, blockchainClient blockchain.ClientI, txStore blob.Store, subtreeStore blob.Store) *model.Block {
@@ -3786,12 +3790,15 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
-	// Wait for the goroutine to call InvalidateBlock
+	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), which is
+	// now a tier-2 CORRUPT body, not consensus-invalid. The optimistic background must NOT
+	// invalidate it (re-download, not poison) and must not re-run the same body via
+	// ReValidateBlock — it strikes the serving peer and drops the body.
 	select {
 	case <-invalidateBlockCalled:
-		// Successfully received signal that InvalidateBlock was called
+		t.Fatal("corrupt block body must NOT be invalidated (bitcoin-sv/teranode#4692): it is re-downloaded, not poisoned")
 	case <-time.After(2 * time.Second):
-		t.Fatal("InvalidateBlock should be called in background goroutine")
+		// correct: a corrupt body is never invalidated
 	}
 }
 

@@ -246,10 +246,16 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	if preparedSubtreeSlices != nil {
 		teranodeBlock.SubtreeSlices = preparedSubtreeSlices
 		if err = teranodeBlock.CheckMerkleRoot(ctx); err != nil {
-			return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] merkle root mismatch on unified route", blockHashStr, blockHeight, err)
+			// Body-derived: the locally-built subtrees do not hash to the header's merkle
+			// root, so the wire body is not bound to the header and cannot condemn the hash.
+			// Classify corrupt so the caller drops it and allows a re-request, never
+			// invalid=true (bitcoin-sv/teranode#4692).
+			return errors.NewBlockCorruptError("[HandleBlockDirect][%s %d] merkle root mismatch on unified route", blockHashStr, blockHeight, err)
 		}
 		if err = model.CheckSubtreeSlicesForDuplicateTxs(preparedSubtreeSlices); err != nil {
-			return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] duplicate transaction on unified route", blockHashStr, blockHeight, err)
+			// CVE-2012-2459 duplicate in the received tx set — body-derived, classify corrupt
+			// (bitcoin-sv/teranode#4692).
+			return errors.NewBlockCorruptError("[HandleBlockDirect][%s %d] duplicate transaction on unified route", blockHashStr, blockHeight, err)
 		}
 		teranodeBlock.SubtreeSlices = nil
 	}
@@ -482,7 +488,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	// duplicate-last-when-odd rule, so CheckMerkleRoot alone would pass — this is
 	// the only thing that catches it.
 	if err = model.CheckSubtreeSlicesForDuplicateTxs(slices); err != nil {
-		return nil, nil, 0, errors.NewBlockInvalidError("[prepareSubtrees][%s %d] duplicate transaction in block (CVE-2012-2459)", bi.hash.String(), bi.height, err)
+		// Body-derived (CVE-2012-2459 duplicate in the received tx set): classify corrupt so
+		// the caller drops it and allows a re-request, never invalid=true (bitcoin-sv/teranode#4692).
+		return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees][%s %d] duplicate transaction in block (CVE-2012-2459)", bi.hash.String(), bi.height, err)
 	}
 
 	// Quick validation is safe whenever the block sits at/below the highest hard-coded

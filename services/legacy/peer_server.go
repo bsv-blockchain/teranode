@@ -1267,6 +1267,12 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 			if err != nil {
 				sp.server.logger.Errorf("block processing failed: %v", err)
 
+				// Corrupt block body (bitcoin-sv/teranode#4692): strike THIS serving peer — the legacy
+				// layer is where the peer identity actually lives (the netsync ProcessBlock
+				// path carries no usable peerID). Extracted to a method so the attribution is
+				// unit-testable without driving the whole read loop.
+				sp.strikeIfCorruptBlockBody(err)
+
 				if shouldDisconnectOnBlockErr(err) {
 					// Evict the whole association so the sync peer actually rotates; see
 					// disconnectMisbehaving (a bare sp disconnect misses the primary).
@@ -1385,6 +1391,31 @@ func preAdmitTimedOut(preAdmitCtx context.Context) bool {
 	return errors.Is(preAdmitCtx.Err(), context.DeadlineExceeded)
 }
 
+// banScoreCorruptBlockBody is the transient ban-score increment applied to a legacy
+// peer that served a corrupt block body (bitcoin-sv/teranode#4692). Deliberately modest (well
+// below the warn/ban thresholds for a single event) so an honest relay's one-off
+// transport corruption decays away, while a peer repeatedly serving corrupt bodies
+// accumulates toward a ban. Mirrors the modern p2p corrupt strike weight.
+const banScoreCorruptBlockBody = 10
+
+// strikeIfCorruptBlockBody applies the corrupt-body ban-score strike to THIS serving
+// peer when err (or anything it wraps, across the ProcessBlock gRPC boundary) is a
+// corrupt block body (bitcoin-sv/teranode#4692), and reports whether err was corrupt. Attribution
+// is inherent: sp is the peer whose blockProcessed result produced err, so the penalty
+// always lands on a real (non-empty) serving peer — unlike an out-of-band peerID that
+// the netsync ProcessBlock path leaves empty. A single strike stays below the ban
+// threshold (addBanScore only disconnects past it), so an honest one-off transport
+// corruption does not rotate the sync peer.
+func (sp *serverPeer) strikeIfCorruptBlockBody(err error) bool {
+	if !errors.IsBlockCorrupt(err) {
+		return false
+	}
+
+	sp.addBanScore(0, banScoreCorruptBlockBody, "corrupt block body")
+
+	return true
+}
+
 // shouldDisconnectOnBlockErr reports whether a block-processing error should
 // rotate the sync peer. Block validation failures disconnect the peer; transient
 // LOCAL conditions must not, since they would only cause unnecessary sync-peer
@@ -1397,6 +1428,15 @@ func preAdmitTimedOut(preAdmitCtx context.Context) bool {
 // cannot drift apart.
 func shouldDisconnectOnBlockErr(err error) bool {
 	if err == nil {
+		return false
+	}
+
+	// A corrupt block body (bitcoin-sv/teranode#4692) is not a clear peer fault — a body can be
+	// corrupted in transit by an honest relay — and is not a verdict on the hash. Do NOT
+	// disconnect (which would churn an otherwise-healthy sync peer); the block is simply
+	// dropped and re-requested. Kept in lock-step with the netsync reject/suppress skip in
+	// handleBlockMsg.
+	if errors.IsBlockCorrupt(err) {
 		return false
 	}
 
@@ -1549,6 +1589,13 @@ func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash 
 
 	if err != nil {
 		sp.server.logger.Errorf("block processing failed: %v", err)
+
+		// Corrupt block body (bitcoin-sv/teranode#4692): strike THIS serving peer on the async
+		// prefetch-ingestion completion path too — this is the DEFAULT path off regtest
+		// (UseBlockPrefetchIngestion = budget > 0 && net != RegTestNet), so without this a
+		// corrupt body would be dropped with no serving-peer score. Same modest, non-
+		// disconnecting strike as the synchronous OnBlock path.
+		sp.strikeIfCorruptBlockBody(err)
 
 		if shouldDisconnectOnBlockErr(err) {
 			// Evict the whole association so the sync peer actually rotates; see

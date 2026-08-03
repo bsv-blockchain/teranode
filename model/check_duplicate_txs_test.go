@@ -59,7 +59,10 @@ func TestCheckSubtreeSlicesForDuplicateTxs_DuplicateAcrossSubtrees(t *testing.T)
 
 	var terr *errors.Error
 	require.ErrorAs(t, err, &terr)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "error must be BlockInvalid")
+	// bitcoin-sv/teranode#4692: a duplicate in the received tx set is body-derived corruption, not a
+	// verdict on the block hash — corrupt (re-download), NOT invalid (poison).
+	require.True(t, errors.IsBlockCorrupt(err), "error must be BlockCorrupt")
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "must not be BlockInvalid")
 }
 
 // TestCheckSubtreeSlicesForDuplicateTxs_DuplicateWithinOneSubtree verifies that
@@ -73,7 +76,8 @@ func TestCheckSubtreeSlicesForDuplicateTxs_DuplicateWithinOneSubtree(t *testing.
 
 	err := CheckSubtreeSlicesForDuplicateTxs(slices)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	require.True(t, errors.IsBlockCorrupt(err))
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 }
 
 // TestCheckSubtreeSlicesForDuplicateTxs_CoinbasePlaceholderAllowed verifies that
@@ -226,6 +230,8 @@ func TestCVE20122459_MerklePassesDedupCatches(t *testing.T) {
 
 	err = CheckSubtreeSlicesForDuplicateTxs(mutatedBlock.SubtreeSlices)
 	require.Error(t, err, "dedup check must reject the mutated subtree slices")
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid),
-		"error must be a BlockInvalidError, got: %v", err)
+	// bitcoin-sv/teranode#4692: body-derived corruption → corrupt (re-download), not invalid (poison).
+	require.True(t, errors.IsBlockCorrupt(err),
+		"error must be a BlockCorruptError, got: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 }
