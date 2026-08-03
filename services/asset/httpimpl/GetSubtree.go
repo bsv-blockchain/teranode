@@ -124,7 +124,11 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
 		}
 
-		prometheusAssetHTTPGetSubtree.WithLabelValues("OK", "200").Inc()
+		// The outcome is counted per return path below rather than once up front. Counting
+		// OK/200 here filed every later failure — including the empty-source 500 the
+		// streaming modes can now return — in the success bucket. Every path that used to
+		// be counted by this single increment still increments exactly once; the two hash
+		// validation errors above return before it and were never counted, unchanged.
 
 		// sign the response, if the private key is set, ignore error
 		// do this before any output is sent to the client, this adds a signature to the response header
@@ -135,14 +139,20 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		if mode == JSON {
 			offset, limit, err := h.getLimitOffset(c)
 			if err != nil {
+				prometheusAssetHTTPGetSubtree.WithLabelValues("ERROR", http.StatusText(http.StatusBadRequest)).Inc()
+
 				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 			}
 
 			subtree, offset, totalNodes, err := h.repository.GetSubtreePage(ctx, hash, offset, limit)
 			if err != nil {
 				if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+					prometheusAssetHTTPGetSubtree.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
+
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
 				} else {
+					prometheusAssetHTTPGetSubtree.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 				}
 			}
@@ -163,10 +173,14 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				},
 			}
 
+			prometheusAssetHTTPGetSubtree.WithLabelValues("OK", "200").Inc()
+
 			return c.JSONPretty(200, response, "  ")
 		}
 
 		if mode != BINARY_STREAM && mode != HEX {
+			prometheusAssetHTTPGetSubtree.WithLabelValues("ERROR", http.StatusText(http.StatusBadRequest)).Inc()
+
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
 		}
 
@@ -175,21 +189,45 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		subtreeReader, err := h.repository.GetSubtreeNodeHashesReader(ctx, hash)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+				prometheusAssetHTTPGetSubtree.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
+
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
+				prometheusAssetHTTPGetSubtree.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
 		defer subtreeReader.Close()
 
 		if mode == BINARY_STREAM {
-			return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, subtreeReader)
+			// Outcome counted after streaming — see the note in GetSubtreeData for why, and
+			// for which cases this still labels as OK.
+			if err = streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, subtreeReader); err != nil {
+				prometheusAssetHTTPGetSubtree.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+
+				return err
+			}
+
+			prometheusAssetHTTPGetSubtree.WithLabelValues("OK", "200").Inc()
+
+			return nil
 		}
 
-		// mode == HEX (validated above)
+		// mode == HEX (validated above). This route commits the status line before its
+		// first byte, so it cannot report an empty source as anything but a 200 — see the
+		// scope note on streamOrAbort. It is outside the cached nginx location.
 		c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextPlainCharsetUTF8)
 		c.Response().WriteHeader(http.StatusOK)
-		_, err = io.Copy(hex.NewEncoder(c.Response()), subtreeReader)
-		return err
+
+		if _, err = io.Copy(hex.NewEncoder(c.Response()), subtreeReader); err != nil {
+			prometheusAssetHTTPGetSubtree.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+
+			return err
+		}
+
+		prometheusAssetHTTPGetSubtree.WithLabelValues("OK", "200").Inc()
+
+		return nil
 	}
 }

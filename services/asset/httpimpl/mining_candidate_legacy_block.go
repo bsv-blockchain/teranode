@@ -63,5 +63,9 @@ func (h *HTTP) handleMiningCandidateLegacyBlock(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
+	// See GetLegacyBlock: closing the pipe read end is what unblocks the producer
+	// goroutine when the response write failed and streamOrAbort hijacked.
+	defer r.Close()
+
 	return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r)
 }

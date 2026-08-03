@@ -31,7 +31,7 @@ func TestHandleBatchRecordError_Logic(t *testing.T) {
 			name:          "generic error",
 			err:           errors.NewError("some error"),
 			expectNilErr:  false,
-			errorContains: "aerospike batchRecord error",
+			errorContains: "aerospike setMined batchRecord error",
 		},
 	}
 
@@ -43,7 +43,7 @@ func TestHandleBatchRecordError_Logic(t *testing.T) {
 				return
 			}
 
-			err := s.handleBatchRecordError(tt.err, hash, false)
+			err := s.handleBatchRecordError(nil, tt.err, hash, false)
 			if tt.expectNilErr {
 				assert.Nil(t, err)
 			} else {
@@ -63,13 +63,13 @@ func TestHandleBatchRecordError_KeyNotFound(t *testing.T) {
 	keyNotFound := &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
 
 	t.Run("normal set-mined returns TxNotFoundError", func(t *testing.T) {
-		err := s.handleBatchRecordError(keyNotFound, hash, false /*unsetMined*/)
+		err := s.handleBatchRecordError(nil, keyNotFound, hash, false /*unsetMined*/)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "transaction not found")
 	})
 
 	t.Run("unset-mined tolerates missing record", func(t *testing.T) {
-		err := s.handleBatchRecordError(keyNotFound, hash, true /*unsetMined*/)
+		err := s.handleBatchRecordError(nil, keyNotFound, hash, true /*unsetMined*/)
 		assert.NoError(t, err)
 	})
 }

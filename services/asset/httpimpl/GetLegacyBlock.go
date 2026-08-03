@@ -84,9 +84,25 @@ func (h *HTTP) GetLegacyBlock() func(c echo.Context) error {
 			}
 		}
 
+		// The reader is a *io.PipeReader fed by a goroutine. Closing it unblocks that
+		// goroutine with io.ErrClosedPipe, which it already handles. Without this, a
+		// stream that fails because the write to the response failed (client gone) leaves
+		// the producer blocked in Write forever, holding its arena and any file-store read
+		// permit — streamOrAbort hijacks and returns nil in that case, so nothing else
+		// ever closes the read end.
+		defer r.Close()
+
+		// Outcome counted after streaming — see the note in GetSubtreeData for why, and
+		// for which cases this still labels as OK.
+		if err := streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r); err != nil {
+			prometheusAssetHTTPGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+
+			return err
+		}
+
 		prometheusAssetHTTPGetBlockLegacy.WithLabelValues("OK", "200").Inc()
 
-		return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r)
+		return nil
 	}
 }
 
@@ -140,8 +156,19 @@ func (h *HTTP) GetRestLegacyBlock() func(c echo.Context) error {
 			}
 		}
 
+		// See GetLegacyBlock: closing the pipe read end is what unblocks the producer
+		// goroutine when the response write failed and streamOrAbort hijacked.
+		defer r.Close()
+
+		// Outcome counted after streaming — see the note in GetSubtreeData.
+		if err := streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r); err != nil {
+			prometheusAssetHTTPGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+
+			return err
+		}
+
 		prometheusAssetHTTPGetBlockLegacy.WithLabelValues("OK", "200").Inc()
 
-		return streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r)
+		return nil
 	}
 }

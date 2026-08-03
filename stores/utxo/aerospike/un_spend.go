@@ -161,16 +161,25 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 
 	offset := s.calculateOffsetForOutput(spend.Vout)
 
+	// SpendingData is mandatory after #766 — unspend uses it to verify ownership
+	// before reversing the spend. It is forwarded verbatim as arg index 2.
+	//
+	// Unspend is FENCED to the UDF/Lua path: executeTeranodeOp routes subOpUnspend
+	// through the UDF executor even when aerospike_use_native_teranode_ops is on
+	// (see useNativeForSubOp). The UDF path always enforces the #766 ownership
+	// comparison, whereas the native subOpUnspend=3 dispatcher's enforcement cannot
+	// be verified from the client (#899) — so reversing a spend never depends on an
+	// unverifiable server build. The other sub-ops keep the native operate-path.
 	if spend.SpendingData == nil {
 		return errors.NewProcessingError("[Unspend] SpendingData is required for %s:%d", spend.TxID, spend.Vout)
 	}
 
-	ret, aErr := s.client.Execute(policy, key, LuaPackage, "unspend",
-		aerospike.NewIntegerValue(int(offset)),         // vout adjusted for utxoBatchSize
-		aerospike.NewValue(spend.UTXOHash[:]),          // utxo hash
-		aerospike.NewValue(spend.SpendingData.Bytes()), // expected stored spending data (mandatory ownership check)
-		aerospike.NewIntegerValue(int(s.blockHeight.Load())),
-		aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
+	ret, aErr := s.executeTeranodeOp(policy, key, subOpUnspend, "unspend",
+		int(offset),                // vout adjusted for utxoBatchSize
+		spend.UTXOHash[:],          // utxo hash
+		spend.SpendingData.Bytes(), // expected stored spending data (mandatory ownership check; #766)
+		int(s.blockHeight.Load()),
+		s.settings.GetUtxoStoreBlockHeightRetention(),
 	)
 	if aErr != nil {
 		if e, ok := aErr.(*aerospike.AerospikeError); ok {
@@ -184,7 +193,7 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 	res, err := s.ParseLuaMapResponse(ret)
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error parsing response").Inc()
-		return errors.NewProcessingError("error parsing response", err)
+		return errors.NewProcessingError("[unspend][%s] error parsing response (value %s): %s", describeUTXOSpend(spend), describeAerospikeValue(ret), err.Error(), err)
 	}
 
 	if res.Status == LuaStatusOK {

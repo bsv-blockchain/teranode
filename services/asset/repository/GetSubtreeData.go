@@ -34,6 +34,21 @@ func resetQuorumForTests() {
 	assetQuorum = nil
 }
 
+// countingWriter counts the bytes that pass through it. Used by
+// dualStreamWithFileCreation to tell "generated nothing" apart from "generated
+// something", which the writer chain itself cannot report.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+
+	return n, err
+}
+
 // semaphoreReadCloser wraps an io.ReadCloser and releases a semaphore permit when closed.
 type semaphoreReadCloser struct {
 	io.ReadCloser
@@ -237,8 +252,9 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 	// Create pipe for HTTP response
 	httpReader, httpWriter := io.Pipe()
 
-	// Use MultiWriter to write to both file storage and HTTP pipe simultaneously
-	multiWriter := io.MultiWriter(storer, httpWriter)
+	// Use MultiWriter to write to both file storage and HTTP pipe simultaneously.
+	// Counted so an empty generation can be rejected before the blob is finalised.
+	counted := &countingWriter{w: io.MultiWriter(storer, httpWriter)}
 
 	// Background goroutine: generate data and write to both destinations
 	g, gCtx := errgroup.WithContext(ctx)
@@ -250,8 +266,23 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 		}
 
 		// Write all transactions to both destinations
-		err := repo.writeTransactionsViaSubtreeStoreStreaming(gCtx, multiWriter, nil, subtreeHash)
+		err := repo.writeTransactionsViaSubtreeStoreStreaming(gCtx, counted, nil, subtreeHash)
+
+		// A successful pass that wrote nothing must not be committed. It happens when the
+		// subtree stream header reports numLeaves == 0 — a corrupt or truncated subtree
+		// file — where writeTransactionsViaSubtreeStoreStreaming short-circuits with nil,
+		// and FileStorer.Close then finalises a zero-byte blob. Exists would return true
+		// for that hash from then on, so every later request would take the stored-file
+		// branch and never retry generation: a transient generation fault would become a
+		// hard 500 for this hash until DAH pruning (~288 blocks). No endpoint can serve
+		// an empty subtreeData, so fail here instead and leave nothing behind — the
+		// handler's 500 then stays retryable.
+		if err == nil && counted.n == 0 {
+			err = errors.NewProcessingError("[GetSubtreeDataReader] generated subtreeData for %s is empty", subtreeHash.String())
+		}
+
 		if err != nil {
+			// Abort discards the temp file rather than finalising it.
 			storer.Abort(err)
 			_ = httpWriter.CloseWithError(err)
 			// "Client gone" — the HTTP client (or proxy) disconnected mid-stream, which
