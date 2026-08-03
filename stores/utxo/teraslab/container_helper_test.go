@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	teraslabDefaultImage = "ghcr.io/icellan/teraslab:0.6.1"
+	teraslabDefaultImage = "ghcr.io/icellan/teraslab:0.9.1"
 	teraslabWirePort     = "3300/tcp"
 	teraslabHTTPPort     = "9100/tcp"
 )

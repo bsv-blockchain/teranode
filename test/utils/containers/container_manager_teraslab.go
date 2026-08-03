@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	teraslabDefaultImage = "ghcr.io/icellan/teraslab:0.6.1"
+	teraslabDefaultImage = "ghcr.io/icellan/teraslab:0.9.1"
 	teraslabWirePort     = "3300/tcp"
 	teraslabHTTPPort     = "9100/tcp"
 )
@@ -40,7 +40,7 @@ device_size = 1073741824
 // initializeTeraslab starts a TeraSlab server container and returns a
 // teraslab:// URL pointing at the mapped wire port.
 //
-// The image defaults to ghcr.io/icellan/teraslab:0.6.1 and is always pulled so
+// The image defaults to ghcr.io/icellan/teraslab:0.9.1 and is always pulled so
 // CI exercises the published image. Set TERASLAB_IMAGE to use a locally-built
 // dev image not present in any registry (in which case the pull is skipped).
 func (cm *ContainerManager) initializeTeraslab(ctx context.Context) (*url.URL, error) {

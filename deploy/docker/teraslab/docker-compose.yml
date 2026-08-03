@@ -2,7 +2,7 @@ services:
   teraslab:
     container_name: teraslab
     # Override the version with TERASLAB_IMAGE if you want a different/local build.
-    image: ${TERASLAB_IMAGE:-ghcr.io/icellan/teraslab:0.6.1}
+    image: ${TERASLAB_IMAGE:-ghcr.io/icellan/teraslab:0.9.1}
     restart: unless-stopped
     # Give the server time to flush its checkpoint on shutdown.
     stop_grace_period: 60s

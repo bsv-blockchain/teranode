@@ -226,7 +226,7 @@ go test -v -timeout 600s ./stores/utxo/teraslab/...
 
 The container helper:
 
-- Uses image `ghcr.io/icellan/teraslab:0.6.1` (override with `TERASLAB_IMAGE` env var)
+- Uses image `ghcr.io/icellan/teraslab:0.9.1` (override with `TERASLAB_IMAGE` env var)
 - Exposes ports 3300 (wire) and 9100 (HTTP health)
 - Waits for `/health/live` on port 9100
 - Skips tests if the container fails to start (Docker not available, image not built)
