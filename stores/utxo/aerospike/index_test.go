@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
-	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +18,7 @@ func TestCreateIndexIfNotExists(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := runAerospikeTestContainer(ctx)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -75,7 +74,7 @@ func TestWaitForIndexReady(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := runAerospikeTestContainer(ctx)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -132,7 +131,7 @@ func TestIndexWaiterAdapter(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := runAerospikeTestContainer(ctx)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {

@@ -69,6 +69,18 @@ const (
 	defaultPeerMapCleanupInterval = 1 * time.Minute  // Cleanup interval (reduced from 5min)
 	protocolIDVersion             = "1.0.0"          // Protocol version identifier
 
+	// defaultGossipHandlerConcurrency is the per-topic worker pool size used
+	// when p2p_gossip_handler_concurrency is unset.
+	defaultGossipHandlerConcurrency = 4
+
+	// syncCoordinatorStopTimeout is the sync coordinator's drain sub-budget
+	// inside Server.Stop. Coordinator RPCs are bounded at defaultRPCTimeout
+	// (5s), so a healthy drain completes well within it; the cap only bites
+	// when a goroutine is wedged in a non-context-aware call, and it must be
+	// well under the service manager's per-service stop budget so the Kafka
+	// producer flushes later in Server.Stop still get usable time.
+	syncCoordinatorStopTimeout = 10 * time.Second
+
 	// maxP2PMessageSize is the absolute upper bound on a pubsub message payload.
 	// Anything larger is dropped before parsing. Per-topic limits below should
 	// always be tighter than this; this is the safety net.
@@ -134,8 +146,8 @@ type Server struct {
 	invalidSubtreeTopicName           string                         // Kafka topic for invalid subtrees
 	nodeStatusTopicName               string                         // pubsub topic for node status messages
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map                       // Map to track which peer sent each block (hash -> peerMapEntry)
-	subtreePeerMap                    sync.Map                       // Map to track which peer sent each subtree (hash -> peerMapEntry)
+	blockPeerMap                      sync.Map                       // Map to track which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry)
+	subtreePeerMap                    sync.Map                       // Map to track which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry)
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -156,6 +168,19 @@ type Server struct {
 	// shouldSkipUnhealthyPeer to avoid a gRPC round-trip per pubsub message.
 	// Entries expire after reputationCacheTTL; misses fall back to the registry.
 	reputationCache sync.Map // peerID string -> reputationCacheEntry
+	// banStatusCache is a short-lived cache of registry IsPeerBanned lookups
+	// used by shouldSkipBannedPeer, avoiding a gRPC round-trip per gossip
+	// message. Entries expire after reputationCacheTTL; local ban transitions
+	// (onPeerBanned) overwrite the entry immediately.
+	banStatusCache sync.Map // peerID string -> banStatusCacheEntry
+	// registryBatcher coalesces the per-message peer-registry writes from the
+	// gossip handlers into one batch of RPCs per peer per flush interval. Nil
+	// in tests that construct Server directly; helpers then fall back to
+	// synchronous registry calls.
+	registryBatcher *peerRegistryBatcher
+	// localHeightCache is a short-lived cache of the local best height used by
+	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
+	localHeightCache atomic.Pointer[localHeightCacheEntry]
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -241,6 +266,15 @@ func NewServer(
 	listenMode := tSettings.P2P.ListenMode
 	if listenMode != settings.ListenModeFull && listenMode != settings.ListenModeListenOnly && listenMode != settings.ListenModeSilent {
 		return nil, errors.NewConfigurationError("listen_mode must be one of '%s', '%s', or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, settings.ListenModeSilent, listenMode)
+	}
+
+	// Surface blacklist entries with no parseable host: they can only ever
+	// match an announcement byte-for-byte, so the operator almost certainly
+	// misconfigured them. Warn loudly instead of leaving the entry silently inert.
+	for blocked := range tSettings.SubtreeValidation.BlacklistedBaseURLs {
+		if blacklistEntryHost(blocked) == "" {
+			logger.Warnf("[P2P] blacklisted base URL %q has no parseable host and will only match announcements exactly equal to it", blocked)
+		}
 	}
 
 	banlist, banChan, err := GetBanList(ctx, logger, tSettings)
@@ -428,6 +462,15 @@ func NewServer(
 	// Use the centralized peer registry hosted by the blockchain service.
 	// Loading, persistence, ban scoring, and TTL/LRU eviction all live there now.
 	p2pServer.peerRegistry = peerRegistryClient
+	if peerRegistryClient != nil {
+		// Clamp to the default: <= 0 would select the batcher's synchronous
+		// test mode, which serializes every gossip handler on one mutex.
+		batchInterval := tSettings.P2P.PeerRegistryBatchInterval
+		if batchInterval <= 0 {
+			batchInterval = defaultRegistryBatchInterval
+		}
+		p2pServer.registryBatcher = newPeerRegistryBatcher(ctx, logger, peerRegistryClient, batchInterval)
+	}
 	p2pServer.peerSelector = NewPeerSelector(logger, tSettings)
 
 	p2pServer.syncCoordinator = NewSyncCoordinator(
@@ -651,6 +694,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		}
 	}()
 
+	// Start the peer-registry batcher before the topic subscriptions that feed it
+	if s.registryBatcher != nil {
+		s.registryBatcher.start()
+	}
+
 	// Subscribe to all topics
 	s.subscribeToTopic(ctx, s.blockTopicName, s.handleBlockTopic)
 	s.subscribeToTopic(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
@@ -719,15 +767,43 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 func (s *Server) subscribeToTopic(ctx context.Context, topicName string, handler func(context.Context, []byte, string)) {
 	topicChannel := s.P2PClient.Subscribe(topicName)
+
+	workers := defaultGossipHandlerConcurrency
+	if s.settings != nil && s.settings.P2P.GossipHandlerConcurrency > 0 {
+		workers = s.settings.P2P.GossipHandlerConcurrency
+	}
+
+	// A bounded pool of workers drains the topic so one slow message (or a
+	// slow downstream dependency) cannot stall every other message on the
+	// topic. Messages within a topic may be processed out of order.
+	// DO NOT check ctx.Done() here - context cancellation during operations like Kafka consumer recovery
+	// should not stop P2P message processing. The subscription ends when the topic channel closes.
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for msg := range topicChannel {
+				s.handleTopicMessage(ctx, topicName, handler, msg.Data, msg.FromID)
+			}
+		}()
+	}
 	go func() {
-		// Process messages until the topic channel is closed
-		// DO NOT check ctx.Done() here - context cancellation during operations like Kafka consumer recovery
-		// should not stop P2P message processing. The subscription ends when the topic channel closes.
-		for msg := range topicChannel {
-			handler(ctx, msg.Data, msg.FromID)
-		}
+		wg.Wait()
 		s.logger.Warnf("%s topic channel closed", topicName)
 	}()
+}
+
+// handleTopicMessage invokes a gossip handler with a per-message recover.
+// Handlers parse untrusted network input; without this, a single message that
+// drives a handler into a panic would crash the whole node.
+func (s *Server) handleTopicMessage(ctx context.Context, topicName string, handler func(context.Context, []byte, string), data []byte, fromID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("[%s] gossip handler panic recovered (peer %s): %v", topicName, fromID, r)
+		}
+	}()
+	handler(ctx, data, fromID)
 }
 
 func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
@@ -888,9 +964,7 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 	}
 
 	s.addConnectedPeer(senderID, "", 0, nil, "")
-	if err := s.peerRegistry.UpdateLastMessageTime(s.gCtx, senderID.String()); err != nil {
-		s.logger.Warnf("[updatePeerLastMessageTime] sender %s: %v", senderID, err)
-	}
+	s.touchLastMessageTime(senderID)
 
 	// Also update for the originator if different (gossiped message)
 	// The originator is not directly connected to us
@@ -902,10 +976,20 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 			}
 			// Add as gossiped peer (not connected) before updating last message time
 			s.addPeer(peerID, "", 0, nil, "")
-			if err := s.peerRegistry.UpdateLastMessageTime(s.gCtx, peerID.String()); err != nil {
-				s.logger.Warnf("[updatePeerLastMessageTime] originator %s: %v", peerID, err)
-			}
+			s.touchLastMessageTime(peerID)
 		}
+	}
+}
+
+// touchLastMessageTime records that a wire message was received from the peer,
+// via the batcher when present or synchronously otherwise.
+func (s *Server) touchLastMessageTime(peerID peer.ID) {
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueLastMessage(peerID.String())
+		return
+	}
+	if err := s.peerRegistry.UpdateLastMessageTime(s.gCtx, peerID.String()); err != nil {
+		s.logger.Warnf("[updatePeerLastMessageTime] %s: %v", peerID, err)
 	}
 }
 
@@ -922,23 +1006,31 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 		s.logger.Errorf("failed to decode sender peer ID %s: %v", from, err)
 		return
 	}
-	// Atomic delta increment via UpdatePeerMetrics — fixes the read-modify-write
-	// race the previous code had under concurrent gossip ingestion.
-	if err := s.peerRegistry.UpdatePeerMetrics(s.gCtx, senderID.String(), 0, 0, messageSize, false, false, false, 0); err != nil {
-		s.logger.Warnf("[updateBytesReceived] sender %s: %v", senderID, err)
-	}
+	s.recordBytesReceived(senderID, messageSize)
 
 	// Also update for the originator if different (gossiped message)
 	if originatorPeerID != "" {
 		if peerID, err := peer.Decode(originatorPeerID); err == nil && peerID != senderID {
-			if err := s.peerRegistry.UpdatePeerMetrics(s.gCtx, peerID.String(), 0, 0, messageSize, false, false, false, 0); err != nil {
-				s.logger.Warnf("[updateBytesReceived] originator %s: %v", peerID, err)
-			}
+			s.recordBytesReceived(peerID, messageSize)
 		}
 	}
 }
 
-func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
+// recordBytesReceived accumulates a received-bytes delta for the peer, via the
+// batcher when present or synchronously otherwise.
+func (s *Server) recordBytesReceived(peerID peer.ID, n uint64) {
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueBytesReceived(peerID.String(), n)
+		return
+	}
+	// Atomic delta increment via UpdatePeerMetrics — fixes the read-modify-write
+	// race the previous code had under concurrent gossip ingestion.
+	if err := s.peerRegistry.UpdatePeerMetrics(s.gCtx, peerID.String(), 0, 0, n, false, false, false, 0); err != nil {
+		s.logger.Warnf("[updateBytesReceived] %s: %v", peerID, err)
+	}
+}
+
+func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID string) {
 	// Check message size before parsing to prevent memory exhaustion
 	if len(m) > maxNodeStatusMessageSize {
 		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxNodeStatusMessageSize, peerID)
@@ -974,18 +1066,29 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 		return
 	}
 
-	// Validate BaseURL to prevent SSRF attacks
 	if nodeStatusMessage.BaseURL != "" {
+		// Validate BaseURL to prevent SSRF attacks
 		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
 			s.applyBanScore(peerID, ReasonProtocolViolation)
 			return
 		}
+
+		// A blacklisted BaseURL must not reach the peer registry, but
+		// node_status is telemetry: keep the message with the URL removed
+		// instead of hiding the peer from monitoring. This only stops fresh
+		// registrations; a URL stored before its host was blacklisted stays in
+		// the registry and is filtered at the point of use instead
+		// (GetPeersForCatchup and PeerSelector.isEligible).
+		if s.isBlacklistedBaseURL(nodeStatusMessage.BaseURL) {
+			s.logger.Warnf("[handleNodeStatusTopic] removed blacklisted BaseURL %s from node_status of peer %s", nodeStatusMessage.BaseURL, peerID)
+			nodeStatusMessage.BaseURL = ""
+		}
 	}
 
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
 		var ok bool
-		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight())
+		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
 		if ok {
 			sanitizedTipOK = true
 			notificationBestHeight = sanitizedBestHeight
@@ -1694,6 +1797,19 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Stop the sync coordinator first: its monitor goroutines call into the
+	// registry and publish to the blocks Kafka producer, both of which are torn
+	// down below. The drain gets a sub-budget of the shutdown context rather
+	// than ctx itself: coordinator RPCs are bounded at defaultRPCTimeout, so a
+	// healthy drain finishes well within it, and a goroutine wedged in a
+	// non-context-aware call must not burn the whole per-service stop budget
+	// and hand the DC11 producer flushes below an already-expired ctx.
+	if s.syncCoordinator != nil {
+		coordCtx, coordCancel := context.WithTimeout(ctx, syncCoordinatorStopTimeout)
+		s.syncCoordinator.Stop(coordCtx)
+		coordCancel()
+	}
+
 	// Stop the underlying P2P node
 	if s.P2PClient != nil {
 		collect("stop P2P node", s.P2PClient.Close())
@@ -1731,6 +1847,12 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
 	}
 
+	// Stop the registry batcher (performs a final flush of pending updates,
+	// bounded by the service manager's stop budget carried in ctx)
+	if s.registryBatcher != nil {
+		s.registryBatcher.stop(ctx)
+	}
+
 	// Peer registry cleanup ticker is gone — the centralized blockchain registry
 	// drives its own TTL/LRU eviction (deferred to PR2 in any case).
 
@@ -1765,27 +1887,30 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			return nil, errors.WrapGRPCPublic(errors.NewServiceError("list peers", err))
 		}
 
+		// Look up libp2p addresses once, not per registry peer.
+		addrByPeerID := make(map[string]string)
+		if s.P2PClient != nil {
+			for _, sp := range s.P2PClient.GetPeers() {
+				if len(sp.Addrs) > 0 {
+					addrByPeerID[sp.ID] = sp.Addrs[0]
+				}
+			}
+		}
+
 		resp := &p2p_api.GetPeersResponse{}
 		for _, p := range allPeers {
 			if !p.IsConnected {
 				continue
 			}
-			// Get address from libp2p if available.
-			addr := ""
-			if s.P2PClient != nil {
-				libp2pPeers := s.P2PClient.GetPeers()
-				for _, sp := range libp2pPeers {
-					if sp.ID == p.ID && len(sp.Addrs) > 0 {
-						addr = sp.Addrs[0]
-						break
-					}
-				}
-			}
+
+			addr := addrByPeerID[p.ID]
 
 			resp.Peers = append(resp.Peers, &p2p_api.Peer{
-				Id:       p.ID,
-				Addr:     addr,
-				Banscore: p.BanScore,
+				Id:            p.ID,
+				Addr:          addr,
+				Banscore:      p.BanScore,
+				CurrentHeight: p.Height,
+				BytesReceived: p.BytesReceived,
 			})
 		}
 
@@ -1968,6 +2093,10 @@ func (s *Server) onPeerBanned(peerID, reason string) {
 	until := time.Now().Add(banDuration)
 	s.logger.Infof("[onPeerBanned] Peer %s banned until %s for reason: %s", peerID, until.Format(time.RFC3339), reason)
 
+	// Make the ban effective for gossip filtering immediately, without waiting
+	// for the cached IsPeerBanned=false entry to expire.
+	s.banStatusCache.Store(peerID, banStatusCacheEntry{banned: true, expiresAt: time.Now().Add(reputationCacheTTL)})
+
 	pid, err := peer.Decode(peerID)
 	if err != nil {
 		s.logger.Errorf("[onPeerBanned] failed to decode peer ID %s: %v", peerID, err)
@@ -2033,9 +2162,16 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 		return nil, errors.WrapGRPCPublic(errors.NewServiceError("reset reputation", err))
 	}
 
+	// Drop cached ban statuses so a reset (which may unban) takes effect
+	// immediately instead of after the cache TTL.
 	if req.PeerId == "" {
+		s.banStatusCache.Range(func(key, _ interface{}) bool {
+			s.banStatusCache.Delete(key)
+			return true
+		})
 		s.logger.Infof("[ResetReputation] Reset reputation for all peers. Count: %d", peersReset)
 	} else {
+		s.banStatusCache.Delete(req.PeerId)
 		s.logger.Infof("[ResetReputation] Reset reputation for peer %s", req.PeerId)
 	}
 

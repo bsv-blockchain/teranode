@@ -57,6 +57,8 @@ package aerospike
 
 import (
 	_ "embed"
+	"math"
+	"reflect"
 	"sync"
 	"time"
 
@@ -347,7 +349,7 @@ func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, erro
 // This permits sync.Pool-backed reuse of LuaMapResponse across hot batch loops.
 func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResponse) error {
 	// Handle the expected map response
-	respMap, ok := response.(map[interface{}]interface{})
+	respMap, ok := luaResponseMap(response)
 	if !ok {
 		return errors.NewProcessingError("expected map response but got %T", response)
 	}
@@ -378,37 +380,23 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 		result.Signal = LuaSignal(signal)
 	}
 
-	// Parse blockIDs (can be list or []interface{}). Reuse the existing slice
-	// capacity if the caller obtained `result` from a pool and it had been used
-	// previously (Reset truncates to [:0]). The presence of the blockIDs key —
-	// even an empty list — must yield a non-nil result.BlockIDs to preserve the
-	// existing observable contract.
+	// Parse blockIDs from the Lua/native response slice. luaResponseIntSlice
+	// handles both the UDF path's []interface{} and the native dispatcher's
+	// typed integer slices (e.g. []int64), preserving compatibility across
+	// both transports. The presence of the blockIDs key — even an empty list
+	// — yields a non-nil result.BlockIDs (the helper returns make([]int, 0)
+	// for an empty input), matching the existing observable contract.
 	if blockIDs, ok := respMap["blockIDs"]; ok {
-		switch v := blockIDs.(type) {
-		case []interface{}:
-			switch {
-			case cap(result.BlockIDs) >= len(v) && result.BlockIDs != nil:
-				result.BlockIDs = result.BlockIDs[:len(v)]
-			case len(v) == 0:
-				result.BlockIDs = make([]int, 0)
-			default:
-				result.BlockIDs = make([]int, len(v))
-			}
-			for i, id := range v {
-				if idInt, ok := id.(int); ok {
-					result.BlockIDs[i] = idInt
-				} else {
-					return errors.NewProcessingError("invalid blockID at index %d", i)
-				}
-			}
-		default:
-			return errors.NewProcessingError("invalid blockIDs type: %T", blockIDs)
+		ids, err := luaResponseIntSlice(blockIDs)
+		if err != nil {
+			return err
 		}
+		result.BlockIDs = ids
 	}
 
 	// Parse errors map for spendMulti
 	if errorsField, ok := respMap["errors"]; ok {
-		errMap, ok := errorsField.(map[interface{}]interface{})
+		errMap, ok := luaResponseMap(errorsField)
 		if !ok {
 			return errors.NewProcessingError("invalid errors type: %T", errorsField)
 		}
@@ -417,12 +405,12 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 			result.Errors = make(map[int]LuaErrorInfo, len(errMap))
 		}
 		for k, v := range errMap {
-			offset, ok := k.(int)
+			offset, ok := luaResponseInt(k)
 			if !ok {
 				return errors.NewProcessingError("invalid error offset type: %T", k)
 			}
 
-			errorObj, ok := v.(map[interface{}]interface{})
+			errorObj, ok := luaResponseMap(v)
 			if !ok {
 				return errors.NewProcessingError("invalid error object type: %T", v)
 			}
@@ -453,10 +441,98 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 
 	// Parse childCount
 	if childCount, ok := respMap["childCount"]; ok {
-		if count, ok := childCount.(int); ok {
+		if count, ok := luaResponseInt(childCount); ok {
 			result.ChildCount = count
 		}
 	}
 
 	return nil
+}
+
+func luaResponseMap(v interface{}) (map[interface{}]interface{}, bool) {
+	switch m := v.(type) {
+	case map[interface{}]interface{}:
+		return m, true
+	case map[string]interface{}:
+		result := make(map[interface{}]interface{}, len(m))
+		for k, v := range m {
+			result[k] = v
+		}
+		return result, true
+	default:
+		rv := reflect.ValueOf(v)
+		if !rv.IsValid() || rv.Kind() != reflect.Map {
+			return nil, false
+		}
+
+		result := make(map[interface{}]interface{}, rv.Len())
+		for _, key := range rv.MapKeys() {
+			result[key.Interface()] = rv.MapIndex(key).Interface()
+		}
+		return result, true
+	}
+}
+
+func luaResponseIntSlice(v interface{}) ([]int, error) {
+	// Reject byte slices explicitly: a msgpack `bin`-encoded blockIDs would
+	// otherwise decode byte-by-byte into garbage block IDs and return success.
+	// blockIDs must arrive as a list of integers on both transports.
+	if _, isBytes := v.([]byte); isBytes {
+		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+	}
+
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || (rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array) {
+		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+	}
+
+	result := make([]int, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		idInt, ok := luaResponseInt(rv.Index(i).Interface())
+		if !ok {
+			return nil, errors.NewProcessingError("invalid blockID at index %d", i)
+		}
+		result[i] = idInt
+	}
+
+	return result, nil
+}
+
+func luaResponseInt(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int8:
+		return int(n), true
+	case int16:
+		return int(n), true
+	case int32:
+		return int(n), true
+	case int64:
+		if n < math.MinInt || n > math.MaxInt {
+			return 0, false
+		}
+		return int(n), true
+	case uint:
+		if uint64(n) > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(n), true
+	case uint8:
+		return int(n), true
+	case uint16:
+		return int(n), true
+	case uint32:
+		if uint64(n) > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(n), true
+	case uint64:
+		if n > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
+	}
 }

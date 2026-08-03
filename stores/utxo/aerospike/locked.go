@@ -84,7 +84,15 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 	// Enqueue all hashes as one ordered group via a single PutBatchCtx, instead
 	// of one PutCtx per hash — cutting the per-item channel-send and collector-
 	// select overhead to a single operation for the whole set.
-	s.lockedBatcher.PutBatchCtx(ctx, items)
+	// Guard the enqueue: Store.Close closes the locked batcher last, so a
+	// SetLocked racing shutdown would otherwise panic. One send carries the whole
+	// group, so a rejected send rejects every hash — completing each item also
+	// trips its onError/failFast, which cancels waitCtx and captures firstErr.
+	if enqueueErr := safeBatcherPutBatchCtx(s.lockedBatcher, ctx, items, "locked"); enqueueErr != nil {
+		for _, item := range items {
+			item.complete(enqueueErr)
+		}
+	}
 
 	// s.batcherWait <= 0 means unbounded (ctx-only) — Group.Wait treats a
 	// non-positive timeout the same way. waitCtx cancellation (from failFast on
@@ -162,12 +170,9 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 			continue
 		}
 
-		batchRecords[idx] = aerospike.NewBatchUDF(
-			batchUDFPolicy,
-			key,
-			LuaPackage,
-			"setLocked",
-			aerospike.NewValue(batchItem.setValue),
+		batchRecords[idx] = s.teranodeBatchRecord(
+			batchUDFPolicy, LuaPackage, key, subOpSetLocked, "setLocked",
+			batchItem.setValue,
 		)
 	}
 
@@ -177,8 +182,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				continue
 			}
 
-			var sendErr error = errors.NewProcessingError("could not batch write locked flag", err)
-			batchItem.complete(sendErr)
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] BatchOperate failed while setting locked=%t: %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), err.Error(), err))
 		}
 
 		return
@@ -199,51 +203,66 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 			continue
 		}
 
-		if recErr := batchRecord.BatchRec().Err; recErr != nil {
-			var sendErr error = errors.NewProcessingError("could not batch write locked flag", recErr)
-			batch[idx].complete(sendErr)
+		batchItem := batch[idx]
 
+		if batchRecord == nil {
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] missing batch record while setting locked=%t; %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord)))
 			continue
 		}
 
-		response := batchRecord.BatchRec().Record
+		batchRec := batchRecord.BatchRec()
+		if batchRec == nil {
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] missing batch record while setting locked=%t; %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord)))
+			continue
+		}
+
+		if batchRec.Err != nil {
+			s.demoteNativeOnUnsupported(batchRec.Err)
+
+			// Native UPDATE_ONLY reports a missing record as KEY_NOT_FOUND;
+			// map it to the TxNotFoundError the UDF path's TX_NOT_FOUND
+			// status produces below.
+			if isKeyNotFound(batchRec.Err) {
+				batchItem.complete(errors.NewTxNotFoundError("transaction not found: %s", describeLockedBatchItem(batchItem), batchRec.Err))
+				continue
+			}
+
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] batch record failed while setting locked=%t; %s: %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord), batchRec.Err.Error(), batchRec.Err))
+			continue
+		}
+
+		response := batchRec.Record
 		if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
-			// Previously this fell through without signalling — orphaning the
-			// submitter on any nil/missing-bin response. Signal an error instead.
-			var sendErr error = errors.NewProcessingError("setLocked: missing response for %s", batch[idx].txHash.String())
-			batch[idx].complete(sendErr)
-
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] missing expected response bin %q while setting locked=%t; %s", describeLockedBatchItem(batchItem), LuaSuccess.String(), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord)))
 			continue
 		}
 
-		res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
+		rawResponse := response.Bins[LuaSuccess.String()]
+		res, err := s.ParseLuaMapResponse(rawResponse)
 		if err != nil {
-			var sendErr error = errors.NewProcessingError("could not parse response", err)
-			batch[idx].complete(sendErr)
-
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] failed to parse response bin %q (value %s) while setting locked=%t; %s: %s", describeLockedBatchItem(batchItem), LuaSuccess.String(), describeAerospikeValue(rawResponse), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord), err.Error(), err))
 			continue
 		}
 
 		if res.Status != LuaStatusOK {
 			if res.ErrorCode == LuaErrorCodeTxNotFound {
-				var sendErr error = errors.NewTxNotFoundError("transaction not found: %s", batch[idx].txHash.String())
-				batch[idx].complete(sendErr)
+				batchItem.complete(errors.NewTxNotFoundError("transaction not found: %s", describeLockedBatchItem(batchItem)))
 			} else {
-				var sendErr error = errors.NewProcessingError("error from setLocked: %s", res.Message)
-				batch[idx].complete(sendErr)
+				batchItem.complete(errors.NewProcessingError("[setLocked][%s] error from setLocked while setting locked=%t: %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), res.Message))
 			}
-
 			continue
 		}
 
 		extraRecords := res.ChildCount
 		if extraRecords == 0 {
-			batch[idx].complete(nil)
-
+			batchItem.complete(nil)
 			continue
 		}
 
-		// Collect this item's child records for the inline batch below.
+		// Child/extra records are written inline by the pass below rather than
+		// re-queued into the lockedBatcher: re-entry from inside the batcher
+		// callback deadlocks a draining Close (see the function doc). Defer this
+		// item's completion to that pass via childErr (one terminal result each).
 		childErr[idx] = nil
 
 		for i := 1; i <= extraRecords; i++ {
@@ -251,16 +270,13 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 
 			key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 			if err != nil {
-				childErr[idx] = errors.NewProcessingError("could not create child key for locked flag", err)
+				childErr[idx] = errors.NewProcessingError("[setLocked][%s] could not create child key for locked flag", describeLockedBatchItem(batchItem), err)
 				break
 			}
 
-			childRecords = append(childRecords, aerospike.NewBatchUDF(
-				batchUDFPolicy,
-				key,
-				LuaPackage,
-				"setLocked",
-				aerospike.NewValue(batch[idx].setValue),
+			childRecords = append(childRecords, s.teranodeBatchRecord(
+				batchUDFPolicy, LuaPackage, key, subOpSetLocked, "setLocked",
+				batch[idx].setValue,
 			))
 			childOwner = append(childOwner, idx)
 		}
@@ -284,6 +300,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				}
 
 				if childRecord.BatchRec().Err != nil {
+					s.demoteNativeOnUnsupported(childRecord.BatchRec().Err)
 					childErr[idx] = errors.NewProcessingError("could not write locked child record", childRecord.BatchRec().Err)
 					continue
 				}
@@ -307,4 +324,18 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 	for idx, e := range childErr {
 		batch[idx].complete(e)
 	}
+}
+
+func describeLockedBatchItem(batchItem *batchLocked) string {
+	if batchItem == nil {
+		return "<nil>"
+	}
+	return batchItem.txHash.String()
+}
+
+func lockedBatchSetValue(batchItem *batchLocked) bool {
+	if batchItem == nil {
+		return false
+	}
+	return batchItem.setValue
 }

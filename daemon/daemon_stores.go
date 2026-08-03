@@ -24,6 +24,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 )
 
+const msgCreateBlockHeightTrackerCh = "could not create block height tracker channel"
+
 type Stores struct {
 	mainBlockPersisterStore     blob.Store
 	mainBlockStore              blob.Store
@@ -466,7 +468,7 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 
 	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+		return nil, errors.NewServiceError(msgCreateBlockHeightTrackerCh, err)
 	}
 
 	// Get blob deletion scheduler (blockchain client)
@@ -538,7 +540,7 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 
 	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+		return nil, errors.NewServiceError(msgCreateBlockHeightTrackerCh, err)
 	}
 
 	// Get blob deletion scheduler (blockchain client)
@@ -591,7 +593,7 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 
 	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+		return nil, errors.NewServiceError(msgCreateBlockHeightTrackerCh, err)
 	}
 
 	// Get blob deletion scheduler (blockchain client)
@@ -643,7 +645,7 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 
 	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+		return nil, errors.NewServiceError(msgCreateBlockHeightTrackerCh, err)
 	}
 
 	// Get blob deletion scheduler (blockchain client)

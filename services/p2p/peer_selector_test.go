@@ -265,6 +265,119 @@ func TestPeerSelector_SelectSyncPeer_StoragePenaltyDemotesFullClaim(t *testing.T
 	require.Equal(t, "full", got)
 }
 
+func TestPeerSelector_SelectFromCandidates_RandomTiebreakCoversWholeTopBand(t *testing.T) {
+	ps := newSelectorForTest()
+
+	// Three peers tied on every merit criterion, plus one strictly worse peer.
+	// Stubbing the random source proves each band member is reachable and the
+	// worse peer never is.
+	tied := []string{"tied-1", "tied-2", "tied-3"}
+	seen := map[string]bool{}
+	for want := range len(tied) {
+		peers := []*blockchain.PeerInfo{
+			newPeer("tied-2", 100, "full", 80, 0),
+			newPeer("tied-3", 100, "full", 80, 0),
+			newPeer("tied-1", 100, "full", 80, 0),
+			newPeer("worse", 100, "full", 50, 0),
+		}
+
+		ps.randIntN = func(n int) int {
+			require.Equal(t, 3, n, "top band must contain exactly the three tied peers")
+			return want
+		}
+
+		got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
+		require.Contains(t, tied, got)
+		require.NotEqual(t, "worse", got)
+		seen[got] = true
+	}
+	require.Len(t, seen, len(tied), "every band member must be reachable via the random index")
+}
+
+func TestPeerSelector_SelectSyncPeer_GrindableIDCannotCaptureSelection(t *testing.T) {
+	ps := newSelectorForTest()
+
+	// The attacker ID sorts lexicographically before every honest ID. With the
+	// old ID tiebreak it would win 100% of the time; with a uniform random
+	// tiebreak every one of the 4 tied peers must win at least once over 200
+	// rounds. P(some peer never wins) <= 4 * 0.75^200 ~ 1e-24, so this cannot
+	// flake, and it also catches any fixed-index selection, not just index 0.
+	ids := []string{"000000-ground-attacker-id", "honest-a", "honest-b", "honest-c"}
+	wins := map[string]int{}
+	const rounds = 200
+	for range rounds {
+		peers := []*blockchain.PeerInfo{
+			newPeer(ids[0], 100, "full", 80, 0),
+			newPeer(ids[1], 100, "full", 80, 0),
+			newPeer(ids[2], 100, "full", 80, 0),
+			newPeer(ids[3], 100, "full", 80, 0),
+		}
+		wins[ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))]++
+	}
+	for _, id := range ids {
+		require.Positive(t, wins[id], "every tied peer must win at least once, got %v", wins)
+	}
+	require.Less(t, wins[ids[0]], rounds, "attacker with lexicographically smallest ID must not win every selection")
+}
+
+func TestPeerSelector_SelectSyncPeer_PreviousPeerExcludedFromTiedTopBand(t *testing.T) {
+	ps := newSelectorForTest()
+
+	// Previous peer ties with two other candidates, so after it is excluded
+	// the random draw still runs over a band of two; it must never be re-drawn.
+	for range 50 {
+		peers := []*blockchain.PeerInfo{
+			newPeer("prev", 100, "full", 80, 0),
+			newPeer("other-a", 100, "full", 80, 0),
+			newPeer("other-b", 100, "full", 80, 0),
+		}
+		criteria := advertisedProbeCriteria(50)
+		criteria.PreviousPeer = "prev"
+		got := ps.SelectSyncPeer(peers, criteria)
+		require.Contains(t, []string{"other-a", "other-b"}, got)
+	}
+}
+
+func TestPeerSelector_ComparePeerCandidates_Antisymmetric(t *testing.T) {
+	ps := newSelectorForTest()
+	now := time.Now()
+	window := 24 * time.Hour
+
+	// Peers varying one criterion at a time plus mixed combinations; the
+	// hand-written three-way comparator must satisfy compare(a,b) == -compare(b,a)
+	// and compare(a,a) == 0 for sort.Slice and the band scan to be sound.
+	peers := []*blockchain.PeerInfo{
+		newPeer("base", 100, "full", 80, 0),
+		withRecentFullBlockDelivery(newPeer("proven", 100, "full", 80, 0)),
+		withValidatedWork(newPeer("more-work", 100, "full", 80, 0), 100, []byte{0x05}),
+		withValidatedWork(newPeer("less-work", 100, "full", 80, 0), 100, []byte{0x03}),
+		newPeer("high-rep", 100, "full", 95, 0),
+		newPeer("banned-ish", 100, "full", 80, 30),
+		withValidatedWork(newPeer("tall", 100, "full", 80, 0), 500, []byte{0x03}),
+		withRecentFullBlockDelivery(withValidatedWork(newPeer("mixed", 100, "full", 60, 10), 200, []byte{0x04})),
+	}
+	peers[4].AvgResponseTimeMs = 50
+	peers[5].AvgResponseTimeMs = 500
+
+	for _, a := range peers {
+		for _, b := range peers {
+			ab := ps.comparePeerCandidates(a, b, now, window)
+			ba := ps.comparePeerCandidates(b, a, now, window)
+			require.Equal(t, -ba, ab, "compare(%s,%s) must be antisymmetric", a.ID, b.ID)
+		}
+		require.Zero(t, ps.comparePeerCandidates(a, a, now, window), "compare(%s,%s) must be 0", a.ID, a.ID)
+	}
+}
+
+func TestPeerSelector_SelectSyncPeer_PreviousPeerKeptWhenOnlyCandidate(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{newPeer("prev", 100, "full", 80, 0)}
+	criteria := advertisedProbeCriteria(50)
+	criteria.PreviousPeer = "prev"
+	require.Equal(t, "prev", ps.SelectSyncPeer(peers, criteria), "sole candidate is selected even if it was the previous peer")
+}
+
 func TestPeerSelector_SelectSyncPeer_UnprovenProbeBudgetBoundsHeaderOnlyPeers(t *testing.T) {
 	ps := newSelectorForTest()
 	peers := []*blockchain.PeerInfo{
@@ -279,4 +392,29 @@ func TestPeerSelector_SelectSyncPeer_UnprovenProbeBudgetBoundsHeaderOnlyPeers(t 
 	boundedBudget := advertisedProbeCriteria(50)
 	boundedBudget.UnprovenProbeBudgetRemaining = 3
 	require.NotEmpty(t, ps.SelectSyncPeer(peers, boundedBudget))
+}
+
+// TestPeerSelector_SelectSyncPeer_SkipsBlacklistedDataHubURL: the operator
+// blacklist is enforced at sync-peer selection so a DataHub URL stored in the
+// registry before its host was blacklisted can never be chosen for catchup.
+func TestPeerSelector_SelectSyncPeer_SkipsBlacklistedDataHubURL(t *testing.T) {
+	ps := NewPeerSelector(ulogger.TestLogger{}, &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:     true,
+			FullDeliveryFreshnessWindow: 24 * time.Hour,
+		},
+		SubtreeValidation: settings.SubtreeValidationSettings{
+			BlacklistedBaseURLs: map[string]struct{}{"http://evil.example": {}},
+		},
+	})
+
+	good := newPeer("good", 100, "full", 60, 0)
+	bad := newPeer("bad", 200, "full", 90, 0)
+	bad.DataHubURL = "http://evil.example:8080/api" // same host as blacklist entry
+
+	got := ps.SelectSyncPeer([]*blockchain.PeerInfo{bad, good}, advertisedProbeCriteria(50))
+	require.Equal(t, "good", got, "peer with blacklisted DataHub URL must not win selection")
+
+	got = ps.SelectSyncPeer([]*blockchain.PeerInfo{bad}, advertisedProbeCriteria(50))
+	require.Empty(t, got, "a blacklisted peer must not be selected even as the only candidate")
 }

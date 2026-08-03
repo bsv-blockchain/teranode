@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"math/rand/v2"
 	"net/http"
 	"sort"
 	"time"
@@ -25,11 +26,14 @@ type SelectionCriteria struct {
 	SyncAttemptCooldown          time.Duration // Cooldown period before retrying a peer
 }
 
-// PeerSelector handles peer selection logic
-// This is a stateless, pure function component
+// PeerSelector handles peer selection logic.
+// It is stateless; selection among candidates that are equal on every merit
+// criterion is randomized so a Sybil attacker cannot capture selection by
+// grinding peer IDs.
 type PeerSelector struct {
 	logger   ulogger.Logger
 	settings *settings.Settings
+	randIntN func(n int) int // injectable for tests; must return a uniform value in [0, n)
 }
 
 // NewPeerSelector creates a new peer selector
@@ -37,16 +41,34 @@ func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSe
 	return &PeerSelector{
 		logger:   logger,
 		settings: settings,
+		// math/rand/v2 uses a per-thread ChaCha8 generator seeded from OS
+		// entropy; a remote attacker cannot observe or predict the stream, so
+		// crypto/rand is unnecessary for this tiebreak.
+		randIntN: rand.IntN,
 	}
+}
+
+// randomIndex returns a uniform value in [0, n), falling back to the package
+// default source if the selector was constructed without one.
+func (ps *PeerSelector) randomIndex(n int) int {
+	if ps.randIntN == nil {
+		return rand.IntN(n)
+	}
+	return ps.randIntN(n)
 }
 
 // SelectSyncPeer selects the best peer for syncing using two-phase selection:
 // Phase 1: Try to select from full nodes (nodes with complete block data)
 // Phase 2: If no full nodes and fallback enabled, select from non-full nodes
-// This is a pure function - no side effects, no network calls.
+// Ties among equally ranked candidates are broken randomly, never by peer ID.
+// May perform HTTP health checks when P2P.HealthCheckEnabled is set.
 // Peer IDs are canonical libp2p ID strings.
 func (ps *PeerSelector) SelectSyncPeer(peers []*blockchain.PeerInfo, criteria SelectionCriteria) string {
-	// Handle forced peer - always select it if it exists, regardless of eligibility
+	// Handle forced peer - always select it if it exists, regardless of
+	// eligibility. This deliberately skips the blacklist check in isEligible
+	// too, but a blacklisted DataHub URL is still refused downstream:
+	// sendSyncTriggerToKafka drops the trigger rather than handing the URL to
+	// block validation, so forcing a peer cannot override the blacklist.
 	if criteria.ForcedPeerID != "" {
 		for _, p := range peers {
 			if p.ID == criteria.ForcedPeerID {
@@ -123,47 +145,100 @@ func (ps *PeerSelector) getPrunedNodeCandidates(peers []*blockchain.PeerInfo, cr
 	return candidates
 }
 
+// comparePeerCandidates orders two candidates by merit: proven recent full-block
+// delivery, validated chain work, reputation, response time, ban score, then
+// validated height. Returns a negative value when a ranks before b, positive
+// when b ranks before a, and 0 when they are equal on every criterion. There is
+// deliberately no peer-ID tiebreak: peer IDs are attacker-grindable, so ties
+// are resolved by random selection in selectFromCandidates instead.
+func (ps *PeerSelector) comparePeerCandidates(a, b *blockchain.PeerInfo, now time.Time, freshnessWindow time.Duration) int {
+	aProven := peerHasRecentFullBlockDelivery(a, now, freshnessWindow)
+	bProven := peerHasRecentFullBlockDelivery(b, now, freshnessWindow)
+	if aProven != bProven {
+		if aProven {
+			return -1
+		}
+		return 1
+	}
+	if cmp := compareChainWork(a.ValidatedChainWork, b.ValidatedChainWork); cmp != 0 {
+		return -cmp
+	}
+	if a.ReputationScore != b.ReputationScore {
+		if a.ReputationScore > b.ReputationScore {
+			return -1
+		}
+		return 1
+	}
+	aHasTime := a.AvgResponseTimeMs > 0
+	bHasTime := b.AvgResponseTimeMs > 0
+	if aHasTime != bHasTime {
+		if aHasTime {
+			return -1
+		}
+		return 1
+	}
+	if aHasTime && bHasTime && a.AvgResponseTimeMs != b.AvgResponseTimeMs {
+		if a.AvgResponseTimeMs < b.AvgResponseTimeMs {
+			return -1
+		}
+		return 1
+	}
+	if a.BanScore != b.BanScore {
+		if a.BanScore < b.BanScore {
+			return -1
+		}
+		return 1
+	}
+	if a.ValidatedHeight != b.ValidatedHeight {
+		if a.ValidatedHeight > b.ValidatedHeight {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
 // selectFromCandidates selects the best peer from a list of candidates
 // using validation-gated delivery evidence and locally validated work.
+// Candidates that tie on every merit criterion form the top band, and the
+// winner is drawn uniformly at random from that band so an attacker cannot
+// deterministically capture selection by grinding peer IDs.
+// The candidates slice is consumed: it is reordered and may be filtered in
+// place, so callers must not reuse it afterwards.
 func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, criteria SelectionCriteria, isFullNode bool) string {
 	if len(candidates) == 0 {
 		return ""
 	}
 
+	// Rotate off the previously selected peer whenever an alternative exists,
+	// so a tied previous peer cannot be re-drawn from the top band.
+	if len(candidates) > 1 && criteria.PreviousPeer != "" {
+		filtered := candidates[:0]
+		for _, c := range candidates {
+			if c.ID != criteria.PreviousPeer {
+				filtered = append(filtered, c)
+			}
+		}
+		if len(filtered) > 0 && len(filtered) < len(candidates) {
+			ps.logger.Debugf("[PeerSelector] Excluding previous peer %s from selection", criteria.PreviousPeer)
+			candidates = filtered
+		}
+	}
+
 	now := time.Now()
 	sort.Slice(candidates, func(i, j int) bool {
-		iProven := peerHasRecentFullBlockDelivery(candidates[i], now, criteria.FullDeliveryFreshnessWindow)
-		jProven := peerHasRecentFullBlockDelivery(candidates[j], now, criteria.FullDeliveryFreshnessWindow)
-		if iProven != jProven {
-			return iProven
-		}
-		if cmp := compareChainWork(candidates[i].ValidatedChainWork, candidates[j].ValidatedChainWork); cmp != 0 {
-			return cmp > 0
-		}
-		if candidates[i].ReputationScore != candidates[j].ReputationScore {
-			return candidates[i].ReputationScore > candidates[j].ReputationScore
-		}
-		iHasTime := candidates[i].AvgResponseTimeMs > 0
-		jHasTime := candidates[j].AvgResponseTimeMs > 0
-		if iHasTime != jHasTime {
-			return iHasTime
-		}
-		if iHasTime && jHasTime && candidates[i].AvgResponseTimeMs != candidates[j].AvgResponseTimeMs {
-			return candidates[i].AvgResponseTimeMs < candidates[j].AvgResponseTimeMs
-		}
-		if candidates[i].BanScore != candidates[j].BanScore {
-			return candidates[i].BanScore < candidates[j].BanScore
-		}
-		if candidates[i].ValidatedHeight != candidates[j].ValidatedHeight {
-			return candidates[i].ValidatedHeight > candidates[j].ValidatedHeight
-		}
-		return candidates[i].ID < candidates[j].ID
+		return ps.comparePeerCandidates(candidates[i], candidates[j], now, criteria.FullDeliveryFreshnessWindow) < 0
 	})
 
+	topBandSize := 1
+	for topBandSize < len(candidates) &&
+		ps.comparePeerCandidates(candidates[0], candidates[topBandSize], now, criteria.FullDeliveryFreshnessWindow) == 0 {
+		topBandSize++
+	}
+
 	selectedIndex := 0
-	if len(candidates) > 1 && criteria.PreviousPeer != "" && candidates[0].ID == criteria.PreviousPeer {
-		selectedIndex = 1
-		ps.logger.Debugf("[PeerSelector] Previous peer %s was top candidate, selecting second", criteria.PreviousPeer)
+	if topBandSize > 1 {
+		selectedIndex = ps.randomIndex(topBandSize)
 	}
 
 	selected := candidates[selectedIndex]
@@ -171,8 +246,8 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 	if !isFullNode {
 		nodeType = "PRUNED"
 	}
-	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (index=%d)",
-		nodeType, selected.ID, selected.ValidatedHeight, selected.Height, selected.BanScore, selected.AvgResponseTimeMs, len(candidates), selectedIndex)
+	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (topBandSize=%d, index=%d)",
+		nodeType, selected.ID, selected.ValidatedHeight, selected.Height, selected.BanScore, selected.AvgResponseTimeMs, len(candidates), topBandSize, selectedIndex)
 
 	for i := 0; i < len(candidates) && i < 3; i++ {
 		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d, mode=%s, url=%s)",
@@ -193,6 +268,14 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, criteria SelectionCri
 	// Check DataHub URL requirement - this protects against listen-only nodes
 	if p.DataHubURL == "" {
 		ps.logger.Debugf("[PeerSelector] Peer %s has no DataHub URL (listen-only node)", p.ID)
+		return false
+	}
+
+	// Enforce the operator blacklist at the point of use: a URL stored in the
+	// registry before its host was blacklisted must never be selected for
+	// sync/catchup (gossip-time checks cannot evict already-stored URLs).
+	if ps.settings != nil && isBaseURLBlacklisted(p.DataHubURL, ps.settings.SubtreeValidation.BlacklistedBaseURLs) {
+		ps.logger.Debugf("[PeerSelector] Peer %s has blacklisted DataHub URL %s", p.ID, p.DataHubURL)
 		return false
 	}
 
