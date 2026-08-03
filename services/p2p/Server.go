@@ -1252,7 +1252,9 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 // nodeStatusPublishInterval is how often the node status is recomputed and
 // published. Each publish is bounded to this interval so one wedged blockchain
 // call cannot stall the publisher (and freeze the latestNodeStatus cache) forever.
-const nodeStatusPublishInterval = 10 * time.Second
+// Declared as a var (not const) so tests can shorten it; not exposed to settings
+// because it is an internal telemetry cadence, not a behavioural knob.
+var nodeStatusPublishInterval = 10 * time.Second
 
 func (s *Server) publishNodeStatus(ctx context.Context) {
 	ticker := time.NewTicker(nodeStatusPublishInterval)

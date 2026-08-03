@@ -3,7 +3,9 @@ package p2p
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,10 +17,12 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -958,6 +962,23 @@ func TestStartNotificationProcessor_InitialStatusPrecedesBroadcasts(t *testing.T
 	}
 }
 
+// flakyPeerRegistry satisfies PeerRegistryClientI via the embedded interface;
+// only ListPeers is implemented: it succeeds on the first call (one connected
+// and one disconnected peer) and fails on every call after that.
+type flakyPeerRegistry struct {
+	blockchain.PeerRegistryClientI
+	calls int
+}
+
+func (f *flakyPeerRegistry) ListPeers(context.Context, *blockchain_api.TransportType, float64, uint32, bool, bool) ([]*blockchain.PeerInfo, error) {
+	f.calls++
+	if f.calls == 1 {
+		return []*blockchain.PeerInfo{{ID: "peer-a", IsConnected: true}, {ID: "peer-b"}}, nil
+	}
+
+	return nil, assert.AnError
+}
+
 // TestGetNodeStatusMessage_CarriesForwardLastKnownGoodOnFailure verifies that
 // failed lookups fall back to the corresponding fields of the last cached status
 // instead of zero values, both in the returned/broadcast message and in the
@@ -967,7 +988,7 @@ func TestGetNodeStatusMessage_CarriesForwardLastKnownGoodOnFailure(t *testing.T)
 
 	// First call: everything succeeds (except the block persister height, which
 	// is also allowed to fail without affecting the other fields).
-	meta100 := &model.BlockHeaderMeta{Height: 100, Miner: "miner-a"}
+	meta100 := &model.BlockHeaderMeta{Height: 100, Miner: "miner-a", ChainWork: []byte{0x01, 0x02}}
 	runningState := blockchain.FSMStateRUNNING
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, meta100, nil).Once()
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Once()
@@ -981,7 +1002,11 @@ func TestGetNodeStatusMessage_CarriesForwardLastKnownGoodOnFailure(t *testing.T)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, meta200, nil).Once()
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Once()
 
-	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError)
+	// The block persister height lookup fails twice, then succeeds.
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Times(2)
+	persisterHeight := make([]byte, 4)
+	binary.LittleEndian.PutUint32(persisterHeight, 150)
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(persisterHeight, nil).Once()
 
 	// Block assembly succeeds once, then fails for the remaining calls.
 	mockBlockAssembly := &blockassembly.Mock{}
@@ -993,6 +1018,7 @@ func TestGetNodeStatusMessage_CarriesForwardLastKnownGoodOnFailure(t *testing.T)
 		settings:            &settings.Settings{},
 		blockchainClient:    mockBlockchain,
 		blockAssemblyClient: mockBlockAssembly,
+		peerRegistry:        &flakyPeerRegistry{},
 	}
 
 	first := s.getNodeStatusMessage(context.Background())
@@ -1001,14 +1027,17 @@ func TestGetNodeStatusMessage_CarriesForwardLastKnownGoodOnFailure(t *testing.T)
 	require.Equal(t, "RUNNING", first.FSMState)
 	require.Equal(t, uint64(7), first.TxCount)
 	require.Equal(t, uint32(3), first.SubtreeCount)
+	require.Equal(t, 1, first.ConnectedPeersCount)
 
 	second := s.getNodeStatusMessage(context.Background())
 	require.Equal(t, uint32(100), second.BestHeight, "failed best-header lookup must carry forward the cached height")
 	require.Equal(t, "miner-a", second.MinerName)
 	require.Equal(t, "RUNNING", second.FSMState, "failed FSM lookup must carry forward the cached state")
 	require.Equal(t, first.BestBlockHash, second.BestBlockHash)
+	require.Equal(t, "0102", second.ChainWork, "failed best-header lookup must carry forward the cached chainwork")
 	require.Equal(t, uint64(7), second.TxCount, "failed block-assembly lookup must carry forward the cached counts")
 	require.Equal(t, uint32(3), second.SubtreeCount)
+	require.Equal(t, 1, second.ConnectedPeersCount, "failed ListPeers lookup must carry forward the cached count")
 	require.Equal(t, uint32(100), s.latestNodeStatus.Load().BestHeight, "cache must not regress to zero values")
 
 	third := s.getNodeStatusMessage(context.Background())
@@ -1048,8 +1077,16 @@ func TestSendNodeStatusToClient_DropsWhenChannelFull(t *testing.T) {
 
 // TestPublishNodeStatus_BoundsEachTick verifies that every publish runs under a
 // per-tick deadline, so one wedged blockchain call cannot stall the publisher
-// (and freeze the node-status cache) forever.
+// (and freeze the node-status cache) forever; that a failed P2P publish is
+// logged and survived; and that the publisher shuts down on context cancellation.
 func TestPublishNodeStatus_BoundsEachTick(t *testing.T) {
+	// Shorten the publish interval so the ticker-driven publish path runs
+	// within the test; restored after the publisher goroutine has exited.
+	oldInterval := nodeStatusPublishInterval
+	nodeStatusPublishInterval = 20 * time.Millisecond
+
+	defer func() { nodeStatusPublishInterval = oldInterval }()
+
 	deadlineSeen := make(chan bool, 1)
 
 	mockBlockchain := &blockchain.Mock{}
@@ -1065,6 +1102,11 @@ func TestPublishNodeStatus_BoundsEachTick(t *testing.T) {
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
 	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
 
+	// A failing P2P publish makes handleNodeStatusNotification return an error,
+	// which the publisher must log and survive.
+	mockP2P := &MockServerP2PClient{peerID: peer.ID("test-peer")}
+	mockP2P.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1072,15 +1114,18 @@ func TestPublishNodeStatus_BoundsEachTick(t *testing.T) {
 		logger: &ulogger.TestLogger{},
 		settings: &settings.Settings{
 			P2P: settings.P2PSettings{
-				// Silent mode keeps handleNodeStatusNotification off the P2P
-				// publish path, which needs a live P2P client.
-				ListenMode: settings.ListenModeSilent,
+				ListenMode: settings.ListenModeFull,
 			},
 		},
 		blockchainClient: mockBlockchain,
+		P2PClient:        mockP2P,
 	}
 
-	go s.publishNodeStatus(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.publishNodeStatus(ctx)
+	}()
 
 	select {
 	case hasDeadline := <-deadlineSeen:
@@ -1088,4 +1133,34 @@ func TestPublishNodeStatus_BoundsEachTick(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("publishNodeStatus never issued the initial publish")
 	}
+
+	// A second event proves the ticker-driven publish path runs too.
+	select {
+	case hasDeadline := <-deadlineSeen:
+		require.True(t, hasDeadline, "ticker-driven publish must also run under a bounded context")
+	case <-time.After(2 * time.Second):
+		t.Fatal("publishNodeStatus never issued a ticker-driven publish")
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publishNodeStatus did not shut down on context cancellation")
+	}
+}
+
+// TestSendNodeStatusToClient_MarshalError verifies that a status that cannot be
+// marshaled (non-finite float) is dropped without sending anything.
+func TestSendNodeStatusToClient_MarshalError(t *testing.T) {
+	s := &Server{
+		logger:   &ulogger.TestLogger{},
+		settings: &settings.Settings{},
+	}
+
+	inf := math.Inf(1)
+	clientCh := make(chan []byte, 1)
+	s.sendNodeStatusToClient(clientCh, &notificationMsg{Type: "node_status", MinMiningTxFee: &inf})
+	require.Empty(t, clientCh, "an unmarshalable status must be dropped")
 }
