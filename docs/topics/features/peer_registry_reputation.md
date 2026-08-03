@@ -33,7 +33,7 @@ The Peer Registry and Reputation System is a comprehensive peer management frame
 The system consists of three main components:
 
 - **Peer Registry**: A thread-safe data store that tracks all peer information and interaction history
-- **Peer Selector**: A stateless component that selects optimal peers based on reputation and other criteria
+- **Peer Selector**: A component that selects optimal peers based on reputation and other criteria, optionally probing peer availability over HTTP (with a short-lived result cache)
 - **Reputation Scoring**: An algorithm that calculates peer reliability scores (0-100) based on success rates, response times, and behavior patterns
 
 This architecture enables intelligent peer selection for critical operations like blockchain synchronization (catchup), ensuring that Teranode preferentially interacts with reliable peers while avoiding problematic ones.
