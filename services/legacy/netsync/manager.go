@@ -1758,6 +1758,17 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				return nil
 			}
 
+			// Corrupt block body (bitcoin-sv/teranode#4692): a body-derived failure (merkle mismatch, CVE
+			// duplicate) that is not bound to the header, so it cannot condemn the hash and is not
+			// a clear peer fault (a body can be corrupted in transit). Drop it WITHOUT rejecting the
+			// block to the peer, WITHOUT marking it failed (which would suppress its descendants),
+			// and WITHOUT disconnecting (see shouldDisconnectOnBlockErr) — re-request is left free so
+			// an honest copy can arrive on the next delivery / sync-peer rotation. Never poison.
+			if errors.IsBlockCorrupt(err) {
+				sm.logger.Warnf("[handleBlockMsg][%s] corrupt block body from peer %s, dropping for re-download (not rejected, not stored invalid): %v", bmsg.blockHash, bmsg.peer, err)
+				return err
+			}
+
 			// Remember this block failed to store/validate so its already-queued
 			// descendants are short-circuited above rather than each failing their
 			// parent lookup and logging a misleading "previous block NOT_FOUND"

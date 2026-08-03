@@ -474,6 +474,15 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// processing errors here would stop charging peers that deserve it.
 			errorType = "local_header_context_error"
 			isPeerError = false
+		case errors.IsBlockCorrupt(*err):
+			// Corrupt block body (bitcoin-sv/teranode#4692): classify for the dashboard but do NOT flag
+			// the peer malicious and do NOT open a generic peer-error window here. The serving
+			// peer was already struck via AddBanScore at the corrupt site, and the block is
+			// re-downloaded; double-charging here would penalize a possibly-sole-source peer
+			// twice. Must precede the ErrBlockInvalid case (corrupt uses a dedicated sentinel,
+			// so it would not match it anyway).
+			errorType = "corrupt_block_body"
+			isPeerError = false
 		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
 			// Gated on the same predicate validateBlocksOnChannel and
 			// processCatchupChItem use, rather than on the case ordering above it.
@@ -1505,6 +1514,13 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					if errors.Is(err, errors.ErrBlockIncomplete) {
 						catchupCtx.incompleteBlockHash = block.Hash().String()
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+					} else if errors.IsBlockCorrupt(err) {
+						// Corrupt block body (bitcoin-sv/teranode#4692): the serving peer was already struck via
+						// AddBanScore inside ValidateBlockWithOptions and the block was NOT stored
+						// invalid. Do NOT report the peer malicious — an honest relay can forward a
+						// corrupted body. Abort so the shared dispatch re-downloads a fresh body from
+						// another peer (releaseCatchupLock classifies it as corrupt_block_body).
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s has a corrupt body, aborting for re-download", blockUpTo.Hash().String(), block.Hash().String(), peerID)
 					} else if shouldReportConsensusMalicious(err) {
 						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
@@ -1592,6 +1608,18 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		if errors.Is(err, errors.ErrBlockIncomplete) {
 			catchupCtx.incompleteBlockHash = block.Hash().String()
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s is incomplete (no coinbase), aborting catchup",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			return false, err
+		}
+
+		if errors.IsBlockCorrupt(err) {
+			// Corrupt body on the quick path (bitcoin-sv/teranode#4692). This path bypasses
+			// ValidateBlockWithOptions, so strike the serving peer here, then abort for a
+			// FRESH re-download from another peer — do NOT delete the .subtree files and
+			// re-run normal validation on the SAME corrupt body (it would just re-fail).
+			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "quick validation: corrupt block body")
+			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s has a corrupt body, aborting for re-download",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
 
 			return false, err

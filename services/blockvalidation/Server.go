@@ -603,6 +603,15 @@ func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.Em
 // hasn't caught up yet, not that the peer is faulty, so they must fall through to
 // alternative-peer retry. See issue #1031.
 func isUnvalidatablePeerError(err error) bool {
+	// A corrupt block body (bitcoin-sv/teranode#4692) is explicitly NOT unvalidatable: the received
+	// body is not bound to the header, so we must not give up on alternative sources —
+	// re-download from another peer instead. It already fails the ErrBlockInvalid check
+	// below (dedicated ERR_BLOCK_CORRUPT sentinel, no match), but guard explicitly so the
+	// don't-give-up intent survives future edits to this predicate.
+	if errors.IsBlockCorrupt(err) {
+		return false
+	}
+
 	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
 }
 
@@ -644,6 +653,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	if u.blockValidation == nil {
 		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
 	}
+
+	// Share the P2P client so block-validation can strike the peer that served a
+	// corrupt block body (bitcoin-sv/teranode#4692) with correct attribution to the serving peer.
+	u.blockValidation.p2pClient = u.p2pClient
 
 	go u.processBlockNotify.Start()
 	go u.catchupAlternatives.Start()
@@ -1409,6 +1422,14 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		if errors.Is(err, errors.ErrBlockIncomplete) {
 			return nil, errors.WrapGRPC(errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err))
 		}
+		// A corrupt block body (bitcoin-sv/teranode#4692) must NOT be surfaced as ERR_BLOCK_INVALID:
+		// wrapping it in NewBlockInvalidError would make errors.Is(err, ErrBlockInvalid) true
+		// across this stateless RPC boundary, defeating the dedicated sentinel. Preserve the
+		// corrupt classification (WrapGRPC keeps the chain; the caller's UnwrapGRPC/IsBlockCorrupt
+		// recovers it).
+		if errors.IsBlockCorrupt(err) {
+			return nil, errors.WrapGRPC(errors.NewBlockCorruptError("[ValidateBlock][%s] block body is corrupt", block.String(), err))
+		}
 
 		// Infrastructure failures are not verdicts on the block: a storage/service outage, or a
 		// parent-header run from our own store that was unanchored or unlinked (issue #1467),
@@ -1422,7 +1443,6 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrBlockHeaderContext) {
 			return nil, errors.WrapGRPC(err)
 		}
-
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
@@ -1561,15 +1581,29 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// quick-validation machinery as native catchup (default off).
 	if u.legacyUnifiedRoute(block, baseURL) {
 		u.logger.Debugf("[processBlockFound][%s] unified route: quick-validating legacy block at height %d", block.Hash().String(), block.Height)
+
+		// A corrupt result here (bitcoin-sv/teranode#4692) is returned to the legacy caller and struck at
+		// the legacy peer layer (peer_server.addBanScore via sp.blockProcessed), which owns the
+		// serving peer identity — the netsync ProcessBlock path carries no usable peerID here, so
+		// attributing the strike at that layer is the only correct attribution.
 		return u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
 	}
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseURL)
 
-	// Create validation options
+	// Create validation options.
+	//
+	// bitcoin-sv/teranode#4692: force this peer-serving (corruption-reachable) path non-optimistic.
+	// Optimistic mining AddBlocks the body BEFORE block.Valid runs in the background, so a
+	// corrupt body would be accepted first and then require rollback — but there is no
+	// non-poisoning removal primitive (only InvalidateBlock, which poisons). Disabling
+	// optimistic here makes block.Valid run monolithically before AddBlock, so no corrupt
+	// body is ever added, and the txMap lifetime is unchanged from today. Catchup already
+	// sets this (validateBlocksOnChannel). Remove this override once block.Valid is split so
+	// its integrity floor runs before the optimistic AddBlock.
 	opts := &ValidateBlockOptions{
-		DisableOptimisticMining: baseURL == "legacy",
+		DisableOptimisticMining: true,
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 		PeerID:                  peerID,
 	}
@@ -1789,6 +1823,18 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 						u.blockPriorityQueue.RequeueForRetry(retryBlock, PriorityDeepFork, 0)
 						u.logger.Infof("[BlockProcessing] Re-queued block %s for retry from any available peer", blockFound.hash.String())
 					}()
+				} else if errors.IsBlockCorrupt(err) {
+					// RUNNING corrupt body (bitcoin-sv/teranode#4692): the serving peer was already struck
+					// inside ValidateBlockWithOptions and nothing was persisted — no invalid=true,
+					// SetBlockExists never set, block never AddBlock'd. Clear the in-flight dedup
+					// marker so the same hash re-announced by an honest peer re-enters validation
+					// instead of being dropped as already-in-progress. Recovery is the natural
+					// re-announcement (many peers hold the honest block in RUNNING); the
+					// already-exists-as-invalid short-circuit never fires because we did not poison.
+					// If the corrupt peer was the sole announcer, no honest peer holds the hash and
+					// it correctly never connects.
+					u.logger.Warnf("[BlockProcessing] Block %s had a corrupt body, cleared for re-download from another peer", blockFound.hash.String())
+					u.processBlockNotify.Delete(*blockFound.hash)
 				}
 			} else {
 				// Update processed metric with success

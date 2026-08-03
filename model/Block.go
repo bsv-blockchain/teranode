@@ -763,12 +763,18 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	}
 
 	// 4. Check that the coinbase transaction is valid (reward checked later).
+	// A missing coinbase is missing data, not a verdict on the block hash — treat it
+	// as incomplete (like the outer no-coinbase path) so it is re-fetched, not poisoned.
 	if b.CoinbaseTx == nil {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block has no coinbase tx", b.String())
+		return false, errors.NewBlockIncompleteError("[BLOCK][%s] block has no coinbase tx", b.String())
 	}
 
+	// From here the coinbase/subtree/merkle checks are body-derived: on an unbound body
+	// they cannot distinguish an honest block corrupted in transit from an attacker's
+	// junk, so they classify corrupt (re-download + strike), never invalid=true. See
+	// bitcoin-sv/teranode#4692 and svnode's CorruptionOrDoS stance (bitcoin-sv/src/validation.cpp).
 	if !b.CoinbaseTx.IsCoinbase() {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
+		return false, errors.NewBlockCorruptError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
 	}
 
 	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
@@ -781,7 +787,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	}
 
 	if scriptSigLen < 2 || scriptSigLen > int(settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] bad coinbase length", b.String())
+		return false, errors.NewBlockCorruptError("[BLOCK][%s] bad coinbase length", b.String())
 	}
 
 	// https://en.bitcoin.it/wiki/BIP_0034
@@ -800,11 +806,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	if b.Height > 0 && heightAtOrAfterActivation(b.Height, settings.ChainCfgParams.BIP0034Height) {
 		height, err := b.ExtractCoinbaseHeight()
 		if err != nil {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height", b.String(), err)
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] error extracting coinbase height", b.String(), err)
 		}
 
 		if height != b.Height {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
 		}
 	}
 
@@ -825,7 +831,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 		// Verify that we have at least one subtree and that it has at least one node
 		if len(b.SubtreeSlices) == 0 {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] first subtree has no nodes", b.String())
 		}
 
 		// Capture the entry once. Nothing here holds subtreeSlicesMu, so a
@@ -837,12 +843,12 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 
 		if len(firstSubtree.Nodes) == 0 {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] first subtree has no nodes", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
 		if !firstSubtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), firstSubtree.Nodes[0].Hash.String())
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), firstSubtree.Nodes[0].Hash.String())
 		}
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
@@ -1278,7 +1284,7 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 		// in a tx map, Put is mutually exclusive, can only be called once per key
 		if err = b.txMap.Put(subtreeNode.Hash, idx64); err != nil {
 			if errors.Is(err, errors.ErrTxExists) || strings.Contains(err.Error(), "hash already exists in map") {
-				return errors.NewBlockInvalidError("[BLOCK][%s] block contains duplicate transaction %s", b.String(), subtreeNode.Hash.String())
+				return errors.NewBlockCorruptError("[BLOCK][%s] block contains duplicate transaction %s", b.String(), subtreeNode.Hash.String())
 			}
 
 			return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", b.String(), subtreeNode.Hash.String(), err)
@@ -1952,13 +1958,13 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		if subtree == nil {
 			// b.Hash().String(), not b.String(): we hold b.subtreeSlicesMu and
 			// String() takes it again — sync.RWMutex is not reentrant.
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
+			return errors.NewBlockCorruptError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
 		}
 		if sIdx == 0 {
 			subtreeSize = subtree.Length()
 		} else if subtree.Length() != subtreeSize && sIdx != nrOfSubtrees-1 {
 			// all subtrees need to be the same size as the first tree, except the last one
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.Hash().String(), b.ID, sIdx, subtree.Length(), subtreeSize)
+			return errors.NewBlockCorruptError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.Hash().String(), b.ID, sIdx, subtree.Length(), subtreeSize)
 		}
 	}
 
@@ -2131,7 +2137,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		// non-power-of-two first subtree (e.g. lengths [3, 2]) and produce a
 		// merkle root that a canonical SV Node validator would not agree with.
 		if !subtreepkg.IsPowerOfTwo(targetLength) {
-			return errors.NewBlockInvalidError(
+			return errors.NewBlockCorruptError(
 				"[BLOCK][%s] first subtree leaf count is not a power of two: %d",
 				b.String(), targetLength,
 			)
@@ -2145,14 +2151,14 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 			}
 
 			if !isLast && sub.Length() != targetLength {
-				return errors.NewBlockInvalidError(
+				return errors.NewBlockCorruptError(
 					"[BLOCK][%s] only the final subtree may be incomplete (index %d, length %d, targetLength %d)",
 					b.String(), i, sub.Length(), targetLength,
 				)
 			}
 
 			if isLast && sub.Length() > targetLength {
-				return errors.NewBlockInvalidError(
+				return errors.NewBlockCorruptError(
 					"[BLOCK][%s] final subtree exceeds first subtree size (length %d, targetLength %d)",
 					b.String(), sub.Length(), targetLength,
 				)
@@ -2192,7 +2198,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 		for _, hash := range hashes {
 			if _, dup := seen[hash]; dup {
-				return errors.NewBlockInvalidError("[BLOCK][%s] duplicate subtree root hash in top-level merkle tree: %s", b.String(), hash.String())
+				return errors.NewBlockCorruptError("[BLOCK][%s] duplicate subtree root hash in top-level merkle tree: %s", b.String(), hash.String())
 			}
 
 			seen[hash] = struct{}{}
@@ -2214,7 +2220,10 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	}
 
 	if !b.Header.HashMerkleRoot.IsEqual(calculatedMerkleRootHash) {
-		return errors.NewBlockInvalidError("[BLOCK][%s] merkle root does not match", b.String())
+		// The received body's subtrees do not hash to the header's merkle root: the body
+		// is not bound to the header, so this cannot condemn the hash — classify corrupt
+		// and re-download, never invalid=true (bitcoin-sv/teranode#4692).
+		return errors.NewBlockCorruptError("[BLOCK][%s] merkle root does not match", b.String())
 	}
 
 	return nil
