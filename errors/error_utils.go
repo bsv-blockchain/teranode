@@ -330,6 +330,11 @@ func errorCodeCategory(code ERR) string {
 		return "state"
 	case code >= 110 && code <= 119:
 		return "network"
+	// The original block decade (10-19) is full, so further block errors are numbered
+	// from 120 and must map to the same category — otherwise a block error would fall
+	// through to the empty default and be mis-bucketed.
+	case code >= 120 && code <= 129:
+		return "block"
 	default:
 		return ""
 	}
