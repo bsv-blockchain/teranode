@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/gorilla/websocket"
@@ -1039,8 +1039,21 @@ func TestHandleWebSocket_SlowClientEvicted(t *testing.T) {
 	})
 
 	t.Run("Reading client survives past pong deadline", func(t *testing.T) {
-		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-		require.NoError(t, err)
+		// Retry the dial: with a cap of 1, the previous subtest's probe
+		// connection releases its slot asynchronously (server-side teardown
+		// runs after the client-side Close returns), so a single immediate
+		// dial can race it and get a 503.
+		var ws *websocket.Conn
+
+		require.Eventually(t, func() bool {
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				return false
+			}
+			ws = conn
+
+			return true
+		}, 5*time.Second, 100*time.Millisecond, "Connection slot should free up once the previous subtest's teardown completes")
 
 		defer ws.Close()
 
