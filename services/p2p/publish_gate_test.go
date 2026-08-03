@@ -2,14 +2,18 @@ package p2p
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +56,26 @@ func TestOutboundTopicsAllowedCoversAllFSMStates(t *testing.T) {
 	}
 }
 
+// TestPublishGateIsOnlyPublishCallSite enforces the choke-point invariant:
+// every outbound publish must go through publishToNetwork so the FSM
+// allow-list applies.
+func TestPublishGateIsOnlyPublishCallSite(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") || f == "publish_gate.go" {
+			continue
+		}
+
+		src, err := os.ReadFile(f)
+		require.NoError(t, err)
+		require.NotContains(t, string(src), ".P2PClient.Publish(",
+			"%s calls P2PClient.Publish directly; route it through publishToNetwork so the FSM allow-list applies", f)
+	}
+}
+
 func TestPublishToNetworkPerState(t *testing.T) {
 	tests := []struct {
 		state     blockchain_api.FSMStateType
@@ -66,9 +90,10 @@ func TestPublishToNetworkPerState(t *testing.T) {
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, "test-subtree", false},
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, "test-rejected-tx", false},
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, "test-node_status", true},
-		{blockchain_api.FSMStateType_IDLE, "test-block", false},
-		{blockchain_api.FSMStateType_IDLE, "test-subtree", false},
-		{blockchain_api.FSMStateType_IDLE, "test-rejected-tx", false},
+		// IDLE stays permissive for gossip, matching pre-gate behavior.
+		{blockchain_api.FSMStateType_IDLE, "test-block", true},
+		{blockchain_api.FSMStateType_IDLE, "test-subtree", true},
+		{blockchain_api.FSMStateType_IDLE, "test-rejected-tx", true},
 		{blockchain_api.FSMStateType_IDLE, "test-node_status", true},
 	}
 
@@ -82,21 +107,77 @@ func TestPublishToNetworkPerState(t *testing.T) {
 			if tc.published {
 				p2pClient.AssertCalled(t, "Publish", mock.Anything, tc.topic, []byte("msg"))
 			} else {
-				p2pClient.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+				require.Empty(t, p2pClient.Calls, "expected no publish for %s in state %s", tc.topic, tc.state)
 			}
 		})
 	}
 }
 
-// TestPublishToNetworkUnknownTopicFailsClosed guards the fail-loud property:
-// a publish to a topic that was never registered in the allow-list is
-// dropped even when the node is RUNNING.
+// TestPublishToNetworkIncrementsBlockedCounter guards the fail-loud
+// property: a drop must be visible in the prometheus counter.
+func TestPublishToNetworkIncrementsBlockedCounter(t *testing.T) {
+	server, _ := newGateTestServer(t, mockBlockchainInState(blockchain_api.FSMStateType_CATCHINGBLOCKS))
+
+	counter := prometheusP2PPublishBlocked.WithLabelValues("block", "CATCHINGBLOCKS")
+	before := testutil.ToFloat64(counter)
+
+	require.NoError(t, server.publishToNetwork(context.Background(), "test-block", []byte("msg")))
+	require.Equal(t, before+1, testutil.ToFloat64(counter))
+}
+
+// TestPublishToNetworkUnknownTopicFailsClosed: a publish to a topic that was
+// never registered in the allow-list is dropped even when RUNNING.
 func TestPublishToNetworkUnknownTopicFailsClosed(t *testing.T) {
 	server, p2pClient := newGateTestServer(t, mockBlockchainInState(blockchain_api.FSMStateType_RUNNING))
 
 	err := server.publishToNetwork(context.Background(), "test-bogus", []byte("msg"))
 	require.NoError(t, err)
-	p2pClient.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+	require.Empty(t, p2pClient.Calls)
+}
+
+// TestPublishToNetworkUnknownFSMStateFallsBackToNodeStatusOnly: a state
+// added by a newer blockchain service must not silence node_status, and
+// must not leak gossip.
+func TestPublishToNetworkUnknownFSMStateFallsBackToNodeStatusOnly(t *testing.T) {
+	server, p2pClient := newGateTestServer(t, mockBlockchainInState(blockchain_api.FSMStateType(99)))
+
+	require.NoError(t, server.publishToNetwork(context.Background(), "test-block", []byte("msg")))
+	require.Empty(t, p2pClient.Calls)
+
+	require.NoError(t, server.publishToNetwork(context.Background(), "test-node_status", []byte("msg")))
+	p2pClient.AssertCalled(t, "Publish", mock.Anything, "test-node_status", []byte("msg"))
+}
+
+// TestPublishToNetworkListenMode: the choke point enforces listen-mode
+// policy centrally - silent publishes nothing, listen-only publishes only
+// node_status.
+func TestPublishToNetworkListenMode(t *testing.T) {
+	tests := []struct {
+		mode      string
+		topic     string
+		published bool
+	}{
+		{settings.ListenModeSilent, "test-block", false},
+		{settings.ListenModeSilent, "test-node_status", false},
+		{settings.ListenModeListenOnly, "test-block", false},
+		{settings.ListenModeListenOnly, "test-node_status", true},
+		{settings.ListenModeFull, "test-block", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.mode+"/"+tc.topic, func(t *testing.T) {
+			server, p2pClient := newGateTestServer(t, mockBlockchainInState(blockchain_api.FSMStateType_RUNNING))
+			server.settings = &settings.Settings{P2P: settings.P2PSettings{ListenMode: tc.mode}}
+
+			require.NoError(t, server.publishToNetwork(context.Background(), tc.topic, []byte("msg")))
+
+			if tc.published {
+				p2pClient.AssertCalled(t, "Publish", mock.Anything, tc.topic, []byte("msg"))
+			} else {
+				require.Empty(t, p2pClient.Calls)
+			}
+		})
+	}
 }
 
 // TestPublishToNetworkFailsOpenOnStateError: a briefly unreachable
@@ -122,6 +203,19 @@ func TestPublishToNetworkNilBlockchainClient(t *testing.T) {
 	p2pClient.AssertCalled(t, "Publish", mock.Anything, "test-block", []byte("msg"))
 }
 
+// TestPublishToNetworkWithLocalBlockchainClient exercises the gate against
+// the real LocalClient (sqlitememory-backed) rather than a mock.
+func TestPublishToNetworkWithLocalBlockchainClient(t *testing.T) {
+	setup := SetupTestBlockchain(t)
+	defer setup.Cleanup()
+
+	server, p2pClient := newGateTestServer(t, setup.Client)
+
+	err := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
+	require.NoError(t, err)
+	p2pClient.AssertCalled(t, "Publish", mock.Anything, "test-block", []byte("msg"))
+}
+
 func TestShouldSkipNotification(t *testing.T) {
 	tests := []struct {
 		state            blockchain_api.FSMStateType
@@ -131,9 +225,14 @@ func TestShouldSkipNotification(t *testing.T) {
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, model.NotificationType_Block, true},
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, model.NotificationType_Subtree, true},
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, model.NotificationType_PeerFailure, false},
+		// Types with no outbound announcement follow block gossip, preserving
+		// the previous blanket skip during catchup.
+		{blockchain_api.FSMStateType_CATCHINGBLOCKS, model.NotificationType_BlockSubtreesSet, true},
 		{blockchain_api.FSMStateType_RUNNING, model.NotificationType_Block, false},
 		{blockchain_api.FSMStateType_RUNNING, model.NotificationType_Subtree, false},
 		{blockchain_api.FSMStateType_RUNNING, model.NotificationType_PeerFailure, false},
+		{blockchain_api.FSMStateType_RUNNING, model.NotificationType_BlockSubtreesSet, false},
+		{blockchain_api.FSMStateType_IDLE, model.NotificationType_Block, false},
 	}
 
 	for _, tc := range tests {
@@ -143,18 +242,4 @@ func TestShouldSkipNotification(t *testing.T) {
 			require.Equal(t, tc.skip, server.shouldSkipNotification(context.Background(), tc.notificationType))
 		})
 	}
-}
-
-// TestCurrentFSMStateCache: with a non-zero TTL, repeated publishes reuse
-// the cached FSM state instead of calling the blockchain service each time.
-func TestCurrentFSMStateCache(t *testing.T) {
-	client := mockBlockchainInState(blockchain_api.FSMStateType_RUNNING)
-	server, _ := newGateTestServer(t, client)
-	server.fsmStateTTL = time.Minute
-
-	for range 3 {
-		require.NoError(t, server.publishToNetwork(context.Background(), "test-block", []byte("msg")))
-	}
-
-	client.AssertNumberOfCalls(t, "GetFSMCurrentState", 1)
 }

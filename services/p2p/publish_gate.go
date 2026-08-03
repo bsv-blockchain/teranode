@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/settings"
 )
 
 // topicKind identifies an outbound pubsub message class independent of the
@@ -22,11 +23,17 @@ const (
 // outboundTopicsAllowed declares, per blockchain FSM state, which outbound
 // pubsub message classes the node may emit. Every publish goes through
 // publishToNetwork, which drops (and counts) anything not listed here, so a
-// new code path cannot silently leak announcements while the node is idle or
+// new code path cannot silently leak announcements while the node is
 // catching up. node_status stays allowed in every state so peers can track
-// our height during catchup.
+// our height. IDLE stays permissive for gossip because the pre-gate code
+// only ever gated on CATCHINGBLOCKS and in IDLE no blocks or subtrees are
+// being processed anyway; tightening IDLE is a deliberate follow-up
+// decision, not a side effect of introducing the gate.
 var outboundTopicsAllowed = map[blockchain_api.FSMStateType]map[topicKind]bool{
 	blockchain_api.FSMStateType_IDLE: {
+		topicKindBlock:      true,
+		topicKindSubtree:    true,
+		topicKindRejectedTx: true,
 		topicKindNodeStatus: true,
 	},
 	blockchain_api.FSMStateType_CATCHINGBLOCKS: {
@@ -40,10 +47,20 @@ var outboundTopicsAllowed = map[blockchain_api.FSMStateType]map[topicKind]bool{
 	},
 }
 
-// fsmStateCacheTTL bounds GetFSMCurrentState calls from the publish path. A
-// state change can take up to this long to be enforced, which matches the
-// inherent check-then-publish race the previous per-call checks had.
-const fsmStateCacheTTL = time.Second
+// nodeStatusOnly is the fallback for FSM states with no entry in
+// outboundTopicsAllowed (e.g. an enum value added by a newer blockchain
+// service): let peers keep tracking our height, leak nothing else.
+var nodeStatusOnly = map[topicKind]bool{topicKindNodeStatus: true}
+
+// allowedTopicsForState returns the outbound allow-list for the given FSM
+// state, falling back to node_status-only for unrecognized states.
+func allowedTopicsForState(state blockchain_api.FSMStateType) map[topicKind]bool {
+	if allowed, ok := outboundTopicsAllowed[state]; ok {
+		return allowed
+	}
+
+	return nodeStatusOnly
+}
 
 // topicKindForName maps a wire topic name (with chain prefix) back to its
 // message class. Unknown names fail closed in publishToNetwork.
@@ -62,20 +79,15 @@ func (s *Server) topicKindForName(topicName string) (topicKind, bool) {
 	}
 }
 
-// currentFSMState returns the blockchain FSM state, cached for fsmStateTTL
-// (a zero TTL disables caching). A nil blockchain client reports RUNNING so
-// setups without a blockchain stay permissive, matching the previous
-// behavior of isBlockchainSyncingOrCatchingUp.
+// currentFSMState returns the blockchain FSM state. The blockchain client
+// keeps a push-updated local copy of the state, so this is normally a memory
+// read rather than a gRPC round-trip. A nil blockchain client reports
+// RUNNING so setups without a blockchain stay permissive, matching the
+// previous behavior of isBlockchainSyncingOrCatchingUp. The returned state
+// is meaningless when err is non-nil.
 func (s *Server) currentFSMState(ctx context.Context) (blockchain_api.FSMStateType, error) {
 	if s.blockchainClient == nil {
 		return blockchain_api.FSMStateType_RUNNING, nil
-	}
-
-	s.fsmStateMu.Lock()
-	defer s.fsmStateMu.Unlock()
-
-	if s.fsmStateTTL > 0 && time.Now().Before(s.fsmStateExpiry) {
-		return s.fsmStateCached, nil
 	}
 
 	fsmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -86,15 +98,13 @@ func (s *Server) currentFSMState(ctx context.Context) (blockchain_api.FSMStateTy
 		return blockchain_api.FSMStateType_IDLE, err
 	}
 
-	s.fsmStateCached = *state
-	s.fsmStateExpiry = time.Now().Add(s.fsmStateTTL)
-
 	return *state, nil
 }
 
 // canSendToNetwork reports whether messages of the given class may be
-// published in the current FSM state. State-fetch failures fail open so a
-// briefly unreachable blockchain service does not silence the node.
+// published in the current FSM state, counting suppressed classes in
+// prometheus. State-fetch failures fail open so a briefly unreachable
+// blockchain service does not silence the node.
 func (s *Server) canSendToNetwork(ctx context.Context, kind topicKind) bool {
 	state, err := s.currentFSMState(ctx)
 	if err != nil {
@@ -102,32 +112,48 @@ func (s *Server) canSendToNetwork(ctx context.Context, kind topicKind) bool {
 		return true
 	}
 
-	return outboundTopicsAllowed[state][kind]
-}
+	if !allowedTopicsForState(state)[kind] {
+		initPrometheusMetrics()
+		s.logger.Debugf("[canSendToNetwork] %s not allowed in FSM state %s", kind, state.String())
+		prometheusP2PPublishBlocked.WithLabelValues(string(kind), state.String()).Inc()
 
-// shouldSkipNotification applies the outbound allow-list before any work is
-// done for a blockchain notification that would end in a network publish.
-// Control notifications (e.g. PeerFailure, which drives peer switching
-// during catchup) are never skipped.
-func (s *Server) shouldSkipNotification(ctx context.Context, notificationType model.NotificationType) bool {
-	var kind topicKind
-
-	switch notificationType {
-	case model.NotificationType_Block:
-		kind = topicKindBlock
-	case model.NotificationType_Subtree:
-		kind = topicKindSubtree
-	default:
 		return false
 	}
 
-	return !s.canSendToNetwork(ctx, kind)
+	return true
+}
+
+// shouldSkipNotification applies the outbound allow-list before any work is
+// done for a blockchain notification. PeerFailure is never skipped: it
+// drives peer switching during catchup rather than outbound gossip.
+func (s *Server) shouldSkipNotification(ctx context.Context, notificationType model.NotificationType) bool {
+	switch notificationType {
+	case model.NotificationType_Block:
+		return !s.canSendToNetwork(ctx, topicKindBlock)
+	case model.NotificationType_Subtree:
+		return !s.canSendToNetwork(ctx, topicKindSubtree)
+	case model.NotificationType_PeerFailure:
+		return false
+	default:
+		// Types with no outbound announcement follow block gossip: processed
+		// when block announcements are allowed, skipped otherwise. This
+		// preserves the previous blanket "skip everything but PeerFailure
+		// while catching up" behavior without polluting the blocked-publish
+		// counter.
+		state, err := s.currentFSMState(ctx)
+		if err != nil {
+			return false
+		}
+
+		return !allowedTopicsForState(state)[topicKindBlock]
+	}
 }
 
 // publishToNetwork is the single choke point in front of P2PClient.Publish:
-// it drops any message whose class is not allowed in the current FSM state
-// (or whose topic is unknown - fail closed), logging the drop and counting
-// it in prometheus so a leaking code path is visible instead of silent.
+// it drops any message whose class is not allowed by the configured listen
+// mode or in the current FSM state (or whose topic is unknown - fail
+// closed), logging the drop and counting it in prometheus so a leaking code
+// path is visible instead of silent.
 func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgBytes []byte) error {
 	initPrometheusMetrics()
 
@@ -139,13 +165,24 @@ func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgByte
 		return nil
 	}
 
+	// Listen-mode policy, enforced centrally in addition to the handlers:
+	// silent nodes publish nothing, listen-only nodes publish only
+	// node_status (so they stay discoverable without relaying gossip).
+	if s.settings != nil {
+		mode := s.settings.P2P.ListenMode
+		if mode == settings.ListenModeSilent || (mode == settings.ListenModeListenOnly && kind != topicKindNodeStatus) {
+			s.logger.Debugf("[publishToNetwork] dropping %s publish in listen mode %s", kind, mode)
+			return nil
+		}
+	}
+
 	state, err := s.currentFSMState(ctx)
 	if err != nil {
 		s.logger.Warnf("[publishToNetwork] allowing %s publish, error getting blockchain FSM state: %v", kind, err)
 		return s.P2PClient.Publish(ctx, topicName, msgBytes)
 	}
 
-	if !outboundTopicsAllowed[state][kind] {
+	if !allowedTopicsForState(state)[kind] {
 		s.logger.Errorf("[publishToNetwork] dropping %s publish: not allowed in FSM state %s", kind, state.String())
 		prometheusP2PPublishBlocked.WithLabelValues(string(kind), state.String()).Inc()
 

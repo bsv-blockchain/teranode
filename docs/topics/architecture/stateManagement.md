@@ -167,6 +167,12 @@ Allowed Operations in Catching Blocks State:
 - ❌ Create subtrees (or propagate them)
 - ❌ Create blocks (mine candidates)
 
+Outbound P2P gossip is gated per FSM state by a declarative allow-list
+(`outboundTopicsAllowed` in `services/p2p/publish_gate.go`): while catching
+blocks, the node publishes only `node_status` messages (so peers can track its
+height) and suppresses block, subtree, and rejected-tx announcements. Suppressed
+publishes are counted in the `teranode_p2p_publish_blocked_total` metric.
+
 ##### Error Handling in Catching Blocks State
 
 When an error occurs during the catchup process, the FSM behavior has been updated to maintain state consistency:

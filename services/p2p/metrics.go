@@ -24,7 +24,7 @@ func _initPrometheusMetrics() {
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "p2p",
-			Name:      "publish_blocked",
+			Name:      "publish_blocked_total",
 			Help:      "Number of outbound P2P publishes dropped by the per-FSM-state allow-list, by topic and FSM state",
 		},
 		[]string{"topic", "fsm_state"},

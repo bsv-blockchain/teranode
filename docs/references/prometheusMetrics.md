@@ -195,6 +195,12 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 | `teranode_blockvalidation_queue_skip_count`                  | Histogram    | Number of times blocks were skipped before processing            |
 | `teranode_blockvalidation_queue_wait_seconds`                | Histogram    | Time blocks spend in queue before processing                     |
 
+## P2P Service Metrics
+
+| Metric Name                          | Type    | Labels              | Description                                                                 |
+|--------------------------------------|---------|---------------------|-----------------------------------------------------------------------------|
+| `teranode_p2p_publish_blocked_total` | Counter | `topic`, `fsm_state` | Number of outbound P2P publishes dropped by the per-FSM-state allow-list    |
+
 ## Legacy Peer Server Metrics
 
 Each metric measures "The time taken to handle a specific legacy action handler".

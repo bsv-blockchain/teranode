@@ -36,7 +36,6 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -182,13 +181,6 @@ type Server struct {
 	// localHeightCache is a short-lived cache of the local best height used by
 	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
 	localHeightCache atomic.Pointer[localHeightCacheEntry]
-
-	// fsmStateMu guards the cached FSM state below, used by the outbound
-	// publish gate (publish_gate.go) to bound GetFSMCurrentState round-trips.
-	fsmStateMu     sync.Mutex
-	fsmStateCached blockchain_api.FSMStateType
-	fsmStateExpiry time.Time
-	fsmStateTTL    time.Duration // 0 disables caching; NewServer sets fsmStateCacheTTL
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -457,8 +449,6 @@ func NewServer(
 		// Initialize cleanup configuration with defaults
 		peerMapMaxSize: defaultPeerMapMaxSize,
 		peerMapTTL:     defaultPeerMapTTL,
-
-		fsmStateTTL: fsmStateCacheTTL,
 	}
 
 	initPrometheusMetrics()
