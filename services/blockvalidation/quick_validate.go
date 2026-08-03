@@ -226,6 +226,12 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		// This function waits for all processing to complete before returning, ensuring block.ID is set
 		_, err = u.processBlockSubtrees(ctx, block, outpointOnly)
 		if err != nil {
+			// Preserve a corrupt-body verdict from validateSubtrees (bitcoin-sv/teranode#4692) instead
+			// of shadowing it with an outer ErrProcessing.
+			if errors.IsBlockCorrupt(err) {
+				return err
+			}
+
 			return errors.NewProcessingError("[quickValidateBlock][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
 
@@ -301,6 +307,13 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		}
 		_, err = u.processBlockSubtreesPipelineAsync(ctx, block, prefetchDepth, writeJobsChan, outpointOnly)
 		if err != nil {
+			// Preserve a corrupt-body verdict from validateSubtrees (bitcoin-sv/teranode#4692) instead
+			// of shadowing it with an outer ErrProcessing, so the caller re-downloads a
+			// fresh body rather than treating it as a transient processing error.
+			if errors.IsBlockCorrupt(err) {
+				return err
+			}
+
 			return errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
 	}
@@ -751,13 +764,21 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 		if i == 0 {
 			subtreeSize = block.SubtreeSlices[i].Length()
 		} else if block.SubtreeSlices[i].Length() != subtreeSize {
-			return 0, errors.NewProcessingError("[validateSubtrees][%s] subtree %d size mismatch", block.Hash().String(), i)
+			// Body-derived subtree-shape check on the quick path: return corrupt DIRECTLY
+			// (not wrapped in ErrProcessing, which would shadow it at ValidateBlock and
+			// route it as a transient processing error). The caller re-downloads a fresh
+			// body instead of poisoning the hash (bitcoin-sv/teranode#4692).
+			return 0, errors.NewBlockCorruptError("[validateSubtrees][%s] subtree %d size mismatch", block.Hash().String(), i)
 		}
 	}
 
 	// Verify merkle root
 	if err := block.CheckMerkleRoot(ctx); err != nil {
-		return 0, errors.NewProcessingError("[validateSubtrees][%s] merkle root mismatch", block.Hash().String(), err)
+		// CheckMerkleRoot already classifies its failures — corrupt for the tier-2
+		// merkle/subtree-shape checks, processing/storage for infrastructure. Return it
+		// unwrapped so a corrupt verdict is not shadowed by an outer ErrProcessing
+		// (bitcoin-sv/teranode#4692); a shadowed corrupt would be mis-routed as transient.
+		return 0, err
 	}
 
 	return existingBlockID, nil

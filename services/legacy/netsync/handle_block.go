@@ -391,7 +391,11 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	txCount := len(block.Transactions())
 	if txCount <= 1 {
 		if err = commitment.CheckMerkleRoot(ctx); err != nil {
-			return nil, nil, 0, errors.NewBlockInvalidError("[prepareSubtrees] merkle root mismatch", err)
+			// Body-derived: the coinbase-only body does not hash to the header's merkle root,
+			// so the wire body is not bound to the header and cannot condemn the hash. Classify
+			// corrupt so the caller drops it and allows a re-request, never invalid=true
+			// (bitcoin-sv/teranode#4692).
+			return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees] merkle root mismatch", err)
 		}
 		return subtrees, nil, blockID, nil
 	}
@@ -486,7 +490,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	// any UTXO or subtree write. Merkle padding can hide duplicated leaves even
 	// when the root matches, so the commitment check cannot replace this guard.
 	if err = model.CheckSubtreeSlicesForDuplicateTxs(slices); err != nil {
-		return nil, nil, 0, errors.NewBlockInvalidError("[prepareSubtrees][%s %d] duplicate transaction in block (CVE-2012-2459)", bi.hash.String(), bi.height, err)
+		// Body-derived (CVE-2012-2459 duplicate in the received tx set): classify corrupt so
+		// the caller drops it and allows a re-request, never invalid=true (bitcoin-sv/teranode#4692).
+		return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees][%s %d] duplicate transaction in block (CVE-2012-2459)", bi.hash.String(), bi.height, err)
 	}
 
 	// Header provenance authenticates only the header. Bind every transaction,
@@ -501,7 +507,11 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	commitment.Subtrees = subtrees
 	commitment.SubtreeSlices = slices
 	if err = commitment.CheckMerkleRoot(ctx); err != nil {
-		return nil, nil, 0, errors.NewBlockInvalidError("[prepareSubtrees][%s %d] merkle root mismatch", bi.hash.String(), bi.height, err)
+		// Body-derived: the locally-built subtrees do not hash to the header's merkle root,
+		// so the wire body is not bound to the header and cannot condemn the hash. Classify
+		// corrupt so the caller drops it and allows a re-request, never invalid=true
+		// (bitcoin-sv/teranode#4692).
+		return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees][%s %d] merkle root mismatch", bi.hash.String(), bi.height, err)
 	}
 	commitment.SubtreeSlices = nil
 

@@ -810,7 +810,10 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if _, dup := seen[txHash]; dup {
-			return nil, errors.NewBlockInvalidError("[ValidateSubtreeInternal][%s] duplicate transaction in subtree at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
+			// Body-derived (CVE-2012-2459 duplicate in the received tx set) and detected before
+			// the body is bound to the header: classify corrupt so the block is re-downloaded and
+			// the serving peer struck, never persisted invalid=true (bitcoin-sv/teranode#4692).
+			return nil, errors.NewBlockCorruptError("[ValidateSubtreeInternal][%s] duplicate transaction in subtree at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		seen[txHash] = struct{}{}
