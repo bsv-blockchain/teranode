@@ -7136,12 +7136,9 @@
 </span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="c1">// ConflictingTxID is the transaction ID that conflicts with this UTXO</span>
 </span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="nx">ConflictingTxID</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="w"> </span><span class="s">`json:&quot;conflictingTxId,omitempty&quot;`</span>
 </span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="c1">// BlockIDs is the list of blocks the transaction has been mined into</span>
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="nx">BlockIDs</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="w"> </span><span class="s">`json:&quot;blockIDs,omitempty&quot;`</span>
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">    </span><span class="c1">// error is the error that occurred during the spend operation</span>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">    </span><span class="nx">Err</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="s">`json:&quot;err,omitempty&quot;`</span>
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="p">}</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="c1">// error is the error that occurred during the spend operation</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="nx">Err</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="s">`json:&quot;err,omitempty&quot;`</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>The <code>Spend</code> struct also provides a <code>Clone()</code> method that creates a deep copy of the spend object.</p>
 <h3 id="spendresponse">SpendResponse<a class="headerlink" href="#spendresponse" title="Permanent link">&para;</a></h3>
