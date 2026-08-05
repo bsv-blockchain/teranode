@@ -149,6 +149,50 @@ func TestDoHTTPRequestNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+// TestBuildHTTPErrorBodyIsBounded pins the cap on the non-2xx error body.
+//
+// The body of a failed response is peer-supplied and is read on every failure path,
+// including the ones reached from DoHTTPRequestBounded. An unbounded read there lets
+// a hostile peer defeat that function's cap outright: answer with an error status,
+// then stream indefinitely. The bytes never reach the caller, but they are still
+// allocated, and they are interpolated into the error string.
+func TestBuildHTTPErrorBodyIsBounded(t *testing.T) {
+	// Markers at both ends: the head must survive, the tail must be cut. Asserting on
+	// both is what distinguishes a real truncation from a body that merely happened to
+	// be short.
+	const headMarker = "ERRBODYHEAD"
+	const tailMarker = "ERRBODYTAIL"
+
+	oversizedBody := headMarker + strings.Repeat("A", 4*maxHTTPErrorBodyBytes) + tailMarker
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, err := w.Write([]byte(oversizedBody))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+
+	t.Run("unbounded caller", func(t *testing.T) {
+		_, err := DoHTTPRequest(ctx, server.URL)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), headMarker, "the start of the body should still be diagnosable")
+		require.NotContains(t, err.Error(), tailMarker, "the body must be truncated, not read to completion")
+		require.Less(t, len(err.Error()), len(oversizedBody), "error must not retain the whole body")
+	})
+
+	t.Run("bounded caller keeps its cap on an error status", func(t *testing.T) {
+		// The response never reaches the body-cap logic in DoHTTPRequestBounded, because
+		// a non-2xx status short-circuits into buildHTTPError. Without the bound there,
+		// the maxBytes argument below would be meaningless.
+		_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), tailMarker, "an error status must not bypass the allocation cap")
+		require.Less(t, len(err.Error()), len(oversizedBody))
+	})
+}
+
 func TestDoHTTPRequestServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

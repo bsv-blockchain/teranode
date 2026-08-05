@@ -440,12 +440,22 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	return resp.Body, cancelFn, nil
 }
 
+// maxHTTPErrorBodyBytes bounds how much of a non-2xx response body is read for the
+// error message. The body is peer-supplied and is read on every failure path,
+// including the ones reached from DoHTTPRequestBounded: without a bound, a hostile
+// peer defeats that function's cap simply by answering with an error status and then
+// streaming indefinitely. An error message only needs enough to be diagnosable.
+const maxHTTPErrorBodyBytes = 8 * 1024
+
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
 //
 // The error type is chosen to let callers branch with errors.Is:
 //   - 404 → ErrNotFound
 //   - 503 → ErrServiceUnavailable (typically retryable; see DoHTTPRequestBodyReaderWithRetry)
 //   - other → generic ServiceError
+//
+// The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
+// rather than retained in the error string.
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
@@ -460,7 +470,7 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 			_ = resp.Body.Close()
 		}()
 
-		b, readErr := io.ReadAll(resp.Body)
+		b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes))
 		if readErr != nil {
 			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
 		}
