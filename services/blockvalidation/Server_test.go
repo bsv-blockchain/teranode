@@ -512,6 +512,30 @@ func TestServer_processBlockNotifyHasTTL(t *testing.T) {
 	require.True(t, item.ExpiresAt().After(time.Now()), "processBlockNotify entry expiry must be in the future")
 }
 
+// TestServer_processBlockNotifyDoesNotTouchOnHit pins the companion property to the
+// TTL above: the safety-net expiry only helps if reads cannot keep pushing it out.
+// The enqueue gate in addBlockToPriorityQueue reads this entry on every duplicate
+// announcement of an in-flight block, so with touch-on-hit a peer that keeps
+// announcing would hold the suppression open indefinitely and the TTL would never
+// fire. blockCatchupAttempts already disables touch-on-hit for the same reason.
+func TestServer_processBlockNotifyDoesNotTouchOnHit(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	s := New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	var hash chainhash.Hash
+	originalExpiry := s.processBlockNotify.Set(hash, true, ttlcache.DefaultTTL).ExpiresAt()
+
+	// Any non-zero gap is enough: touch-on-hit recomputes the expiry from "now", so a
+	// read after the clock has moved would push it out measurably.
+	time.Sleep(10 * time.Millisecond)
+
+	item := s.processBlockNotify.Get(hash)
+	require.NotNil(t, item, "entry must still be present")
+	require.Equal(t, originalExpiry, item.ExpiresAt(), "reads must not extend the suppression window")
+}
+
 func TestServer_processBlockFoundChannel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

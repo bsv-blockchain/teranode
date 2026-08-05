@@ -376,7 +376,14 @@ func New(
 		// when catchup completes or fails, but a missed Delete on any error/early-return
 		// branch would otherwise leak the entry permanently. Mirrors catchupAlternatives,
 		// the sibling cache for the same in-flight block.
-		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](ttlcache.WithTTL[chainhash.Hash, bool](10 * time.Minute)),
+		processBlockNotify: ttlcache.New[chainhash.Hash, bool](
+			ttlcache.WithTTL[chainhash.Hash, bool](10*time.Minute),
+			// Do not extend the window on reads, for the same reason as
+			// blockCatchupAttempts below: the enqueue gate reads this entry on every
+			// duplicate announcement, so touch-on-hit would let a stream of duplicates
+			// hold the suppression open past the safety-net TTL.
+			ttlcache.WithDisableTouchOnHit[chainhash.Hash, bool](),
+		),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),
