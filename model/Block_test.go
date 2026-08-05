@@ -327,6 +327,12 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		assert.False(t, valid)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no coinbase tx")
+		// bitcoin-sv/teranode#4692: a missing coinbase in an unbound received body is a body-integrity
+		// failure classified CORRUPT (re-download + strike), not Incomplete (which poisoned as a
+		// false "floater" when caught up). Corrupt matches neither ErrBlockInvalid nor
+		// ErrBlockIncomplete, so it is never persisted invalid.
+		require.True(t, errors.IsBlockCorrupt(err), "nil coinbase must be classified corrupt, not incomplete/invalid")
+		require.False(t, errors.Is(err, errors.ErrBlockIncomplete), "nil coinbase must no longer be ErrBlockIncomplete")
 	})
 
 	t.Run("block with median timestamp validation", func(t *testing.T) {

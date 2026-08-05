@@ -3706,13 +3706,21 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
+// TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute proves the invalidate-route
+// tradeoff on the opt-in optimistic-background path (bitcoin-sv/teranode#4692): a corrupt body that
+// was already AddBlock'd BEFORE block.Valid ran must NOT be left silently accepted. On this one
+// opt-in path (both optimistic flags set) it takes the invalidate route — InvalidateBlock is
+// called directly (poison-loudly, never silently accept) until the block.Valid integrity-floor
+// split lands and removes this path.
+func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
+	// Opt in to optimistic mining on peer paths so the add-before-validate path runs.
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3790,15 +3798,15 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
-	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), which is
-	// now a tier-2 CORRUPT body, not consensus-invalid. The optimistic background must NOT
-	// invalidate it (re-download, not poison) and must not re-run the same body via
-	// ReValidateBlock — it strikes the serving peer and drops the body.
+	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), a
+	// tier-2 CORRUPT body. On the opt-in optimistic-background path the body was already AddBlock'd
+	// before block.Valid ran, so leaving it accepted would be a silently-accepted corrupt tip. The
+	// guard therefore takes the invalidate route: InvalidateBlock is called.
 	select {
 	case <-invalidateBlockCalled:
-		t.Fatal("corrupt block body must NOT be invalidated (bitcoin-sv/teranode#4692): it is re-downloaded, not poisoned")
+		// correct: the optimistic-background corrupt body takes the invalidate route
 	case <-time.After(2 * time.Second):
-		// correct: a corrupt body is never invalidated
+		t.Fatal("corrupt body on the opt-in optimistic-background path must take the invalidate route (bitcoin-sv/teranode#4692): InvalidateBlock was not called")
 	}
 }
 

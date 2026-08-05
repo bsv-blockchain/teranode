@@ -775,10 +775,17 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 	// Verify merkle root
 	if err := block.CheckMerkleRoot(ctx); err != nil {
 		// CheckMerkleRoot already classifies its failures — corrupt for the tier-2
-		// merkle/subtree-shape checks, processing/storage for infrastructure. Return it
-		// unwrapped so a corrupt verdict is not shadowed by an outer ErrProcessing
-		// (bitcoin-sv/teranode#4692); a shadowed corrupt would be mis-routed as transient.
-		return 0, err
+		// merkle/subtree-shape checks, processing/storage for infrastructure. Return a
+		// corrupt verdict UNWRAPPED so it is not shadowed by an outer ErrProcessing
+		// (bitcoin-sv/teranode#4692); a shadowed corrupt would be mis-routed as transient. Wrap the
+		// non-corrupt (infrastructure) errors with the [validateSubtrees][hash] site context, as
+		// the sibling subtree-size check above does — the wrap keeps the infrastructure
+		// classification (ErrProcessing/ErrStorage) in the cause chain.
+		if errors.IsBlockCorrupt(err) {
+			return 0, err
+		}
+
+		return 0, errors.NewProcessingError("[validateSubtrees][%s] merkle root check failed", block.Hash().String(), err)
 	}
 
 	return existingBlockID, nil

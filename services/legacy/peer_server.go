@@ -1395,7 +1395,10 @@ func preAdmitTimedOut(preAdmitCtx context.Context) bool {
 // peer that served a corrupt block body (bitcoin-sv/teranode#4692). Deliberately modest (well
 // below the warn/ban thresholds for a single event) so an honest relay's one-off
 // transport corruption decays away, while a peer repeatedly serving corrupt bodies
-// accumulates toward a ban. Mirrors the modern p2p corrupt strike weight.
+// accumulates toward a ban. Mirrors the modern p2p corrupt strike weight — keep this in sync
+// with the "corrupt_block_body" ReasonPoints entry in services/blockchain/peer_registry.go
+// (both are 10). The two are intentionally not unified across the package boundary; a follow-up
+// tracks deduplicating them.
 const banScoreCorruptBlockBody = 10
 
 // strikeIfCorruptBlockBody applies the corrupt-body ban-score strike to THIS serving
