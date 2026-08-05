@@ -370,3 +370,40 @@ if res.Status == LuaStatusOK {
 ## Migration Notes
 
 This is a breaking change from the previous string-based response format. However, since Lua and Go changes are released together, no backward compatibility is maintained. All functions now consistently return map objects, making the interface more robust and easier to extend.
+
+## Create-First Two-Phase Commit (the `creating` flag)
+
+`SpendAndCreate`'s default (combined) path normally spends the inputs then creates the
+record — so a crash in that window leaves parent outputs marked spent by a record that
+never landed (a dangling spender reference). When `utxostore_useCreateFirstOrder` is
+enabled and the store reports `SupportsCreateFirst() == true` (Aerospike only), the
+shared `SequentialSpendAndCreate` instead runs **create-first**:
+
+1. **Create tentative** — the record is written with the `creating` bin set (via
+   `WithCreating(true)`); every spend of its outputs is rejected with `ErrTxCreating`
+   (Lua spend gate + expression filter) until the flag is cleared. Written only when
+   true; absence == not creating.
+2. **Spend inputs** — the transaction's parent outputs are spent.
+3. **Finalize** — `FinalizeTransaction(tx)` clears the `creating` bin (children first,
+   master last), making the outputs spendable.
+
+Because the record exists before its spends are written, a crash between steps 2 and 3
+leaves an inspectable, recoverable record instead of a dangling reference. There is **no
+native Aerospike TTL** on creating records — the record is the recovery WAL and must
+survive until finalize. `WithCreateOnly` / `WithSpendOnly` callers (coinbase, seeding,
+reorg/conflict helpers) are single-phase and bypass the create-first ordering.
+
+### Recovery paths (roll-forward everywhere)
+
+- **Retry** — a re-encounter hits `ErrTxExists` on a still-`creating` record; the pruner
+  sweeper rolls it forward.
+- **Pruner sweeper** — `QueryStaleCreatingTxs` (secondary index on `unminedSince` +
+  `creating` filter) finds abandoned creating records older than
+  `pruner_creatingTxSweepMinAgeBlocks`; the sweeper re-spends (`SpendAndCreate(WithSpendOnly)`)
+  and finalizes them, or marks double-spent losers conflicting and finalizes them.
+- **setMined** — mining a creating tx clears the flag as part of `setMined`.
+
+Creating records are excluded from the block-assembly unmined-restore iterator (default
+mode) and rejected as parents during parent-chain validation; the PRUNER-mode iterator
+still sees them so permanently-failed ones are eventually evicted. On a finalize failure
+after successful spends the seam logs-and-continues (`teranode_utxo_create_first_finalize_failed_total`).

@@ -3625,3 +3625,23 @@ func TestMinimalCreate_CoinbaseMaturity_OutpointOnlySpend(t *testing.T) {
 		utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
 	require.NoError(t, err, "spending at maturity height must succeed")
 }
+
+func TestSQLStore_CreateFirstNoOps(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///createfirst_noops")
+	require.NoError(t, err)
+
+	store, err := New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	// SQL is spend-first: no create-first support, finalize is a no-op, no stale creating txs.
+	require.False(t, store.SupportsCreateFirst())
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}))
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
+}

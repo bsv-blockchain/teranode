@@ -67,6 +67,13 @@ func (m *MockStore) Close(ctx context.Context) error {
 }
 
 func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
+func (m *MockStore) SupportsCreateFirst() bool       { return false }
+func (m *MockStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
+	return nil
+}
+func (m *MockStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
 
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
@@ -1075,4 +1082,17 @@ func TestInterfaceCompliance(t *testing.T) {
 	loggerStore, ok := store.(*Store)
 	require.True(t, ok)
 	require.NotNil(t, loggerStore)
+}
+
+func TestLoggerStore_CreateFirstDelegates(t *testing.T) {
+	inner := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, inner).(*Store)
+	ctx := context.Background()
+
+	require.False(t, store.SupportsCreateFirst())
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}))
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
 }

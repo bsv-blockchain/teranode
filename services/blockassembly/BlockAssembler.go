@@ -2045,7 +2045,7 @@ func (b *BlockAssembler) validateParentChain(
 			// Batch fetch all parent metadata at once
 			// Request only the fields we need for validation
 			err := b.utxoStore.BatchDecorate(ctx, unresolvedParents,
-				fields.BlockIDs, fields.UnminedSince, fields.Locked, fields.Conflicting)
+				fields.BlockIDs, fields.UnminedSince, fields.Locked, fields.Conflicting, fields.Creating)
 			if err != nil {
 				// Log the batch error but continue - individual errors are in UnresolvedMetaData
 				b.logger.Warnf("[BlockAssembler][validateParentChain] BatchDecorate error (will check individual results): %v", err)
@@ -2142,6 +2142,17 @@ func (b *BlockAssembler) validateParentChain(
 					if filteringEnabled {
 						conflictingDescendants[tx.Hash] = struct{}{}
 					}
+					break
+				}
+
+				if parentMeta.Creating {
+					// Parent is mid create-first flight: its own input spends are
+					// unconfirmed, so this child cannot be restored yet. Reject without
+					// marking conflicting; recovery finalizes the parent and the next
+					// restore picks the child up.
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s is still being created", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
 					break
 				}
 

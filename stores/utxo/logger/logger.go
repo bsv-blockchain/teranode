@@ -128,6 +128,21 @@ func (s *Store) SupportsOutpointOnlySpend() bool {
 	return s.store.SupportsOutpointOnlySpend()
 }
 
+// SupportsCreateFirst delegates to the wrapped store.
+func (s *Store) SupportsCreateFirst() bool {
+	return s.store.SupportsCreateFirst()
+}
+
+// FinalizeTransaction delegates to the wrapped store.
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
+	return s.store.FinalizeTransaction(ctx, tx)
+}
+
+// QueryStaleCreatingTxs delegates to the wrapped store.
+func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return s.store.QueryStaleCreatingTxs(ctx, unminedSinceBefore, limit)
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)

@@ -67,6 +67,23 @@ func TestPointerCache_SetStripsNonCachedFields(t *testing.T) {
 	require.Zero(t, got.CreatedAt, "CreatedAt is not part of the cached field set")
 }
 
+// TestPointerCache_PreservesCreating pins that the create-first Creating flag survives the
+// pointer cache. If it were dropped (as the flag-bearing fields Frozen/Conflicting/Locked
+// were kept but Creating was not), a mid-flight tx would be cached as Creating=false and
+// subtree validation would count it as validated — diverging from the byte backend, which
+// preserves the flag via meta bit 5.
+func TestPointerCache_PreservesCreating(t *testing.T) {
+	c, err := NewPointerCache(64 * 1024 * 1024)
+	require.NoError(t, err)
+
+	h := hashN(12)
+	require.NoError(t, c.Set(h, &meta.Data{Fee: 1, SizeInBytes: 1, Creating: true}))
+
+	got, ok := c.Get(*h)
+	require.True(t, ok)
+	require.True(t, got.Creating, "the Creating flag must survive the pointer cache")
+}
+
 func TestPointerCache_MissReturnsFalse(t *testing.T) {
 	c, err := NewPointerCache(64 * 1024 * 1024)
 	require.NoError(t, err)

@@ -48,3 +48,16 @@ func TestNullStoreSetLocked(t *testing.T) {
 
 	assert.NoError(t, err)
 }
+
+func TestNullStoreCreateFirstNoOps(t *testing.T) {
+	store := &NullStore{}
+	ctx := context.Background()
+	tx := &bt.Tx{}
+
+	assert.False(t, store.SupportsCreateFirst())
+	assert.NoError(t, store.FinalizeTransaction(ctx, tx))
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	assert.NoError(t, err)
+	assert.Nil(t, hashes)
+}

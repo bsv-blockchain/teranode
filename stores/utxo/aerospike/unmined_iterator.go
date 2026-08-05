@@ -246,6 +246,7 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			fields.SizeInBytes.String(),
 			fields.CreatedAt.String(),
 			fields.Conflicting.String(),
+			fields.Creating.String(),
 			fields.Locked.String(),
 			fields.BlockIDs.String(),
 			fields.UnminedSince.String(),
@@ -453,6 +454,17 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 			// Quick inline filtering checks
 			if conflictingVal := rec.Record.Bins[conflictingField]; conflictingVal != nil {
 				if conflicting, ok := conflictingVal.(bool); ok && conflicting {
+					continue
+				}
+			}
+
+			// A record still carrying the creating bin is mid create-first flight: its
+			// input spends are not confirmed done, so it must not be restored into block
+			// assembly. Recovery (validator roll-forward or the pruner sweeper) will
+			// finalize it; it becomes visible on the next restore. The PRUNER-mode path
+			// deliberately still sees creating records so permanently-failed ones are evicted.
+			if creatingVal := rec.Record.Bins[fields.Creating.String()]; creatingVal != nil {
+				if creating, ok := creatingVal.(bool); ok && creating {
 					continue
 				}
 			}

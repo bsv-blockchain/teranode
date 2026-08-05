@@ -18,6 +18,10 @@ var (
 	prunerCurrentHeight    prometheus.Gauge
 	prunerActive           prometheus.Gauge
 
+	// Create-first sweep metrics
+	prunerCreatingBacklog       prometheus.Gauge
+	prunerCreatingSweepFailures prometheus.Counter
+
 	// Blob deletion metrics
 	blobDeletionScheduledTotal  *prometheus.CounterVec
 	blobDeletionCancelledTotal  *prometheus.CounterVec
@@ -94,6 +98,20 @@ func _initPrometheusMetrics() {
 		prometheus.GaugeOpts{
 			Name: "pruner_active",
 			Help: "Whether the pruner is currently active (1) or idle (0)",
+		},
+	)
+
+	prunerCreatingBacklog = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "pruner_creating_backlog",
+			Help: "Number of stale create-first 'creating' transactions found by the most recent sweep pass (an approximation of the outstanding-creating backlog; capped at the per-pass limit)",
+		},
+	)
+
+	prunerCreatingSweepFailures = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pruner_creating_sweep_failures_total",
+			Help: "Total create-first records the sweep could not roll forward (left creating for a later pass); a sustained non-zero rate means records are stuck (e.g. a permanently locked or missing parent)",
 		},
 	)
 

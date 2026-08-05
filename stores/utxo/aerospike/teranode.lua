@@ -648,11 +648,14 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
         rec[BIN_LOCKED] = false
     end
 
-    -- Delete the creating bin entirely (nil removes it from record)
-    -- This saves storage space - absence means not creating
-    if rec[BIN_CREATING] then
-        rec[BIN_CREATING] = nil
-    end
+    -- create-first: do NOT clear the creating bin here. Clearing it makes the outputs
+    -- spendable, but setMined does not spend the tx's inputs — so a record still creating
+    -- at mine time (abandoned mid-flight, or reached here via block-invalidation/UnsetMined
+    -- or a flag rollback) would become spendable with its parents' outputs left unspent, the
+    -- exact #1214 shape. A properly finalized tx already has the bin absent (FinalizeTransaction
+    -- cleared it), and the create-first setMined pre-flight (set_mined.go) rolls a still-creating
+    -- record forward before this write. Leaving the bin here keeps the record gated and
+    -- discoverable for recovery in every path this write is reached by.
 
     -- Stamp the DAH relative to the height of the block this tx is mined into
     -- (blockHeight), NOT the caller's cached chain tip (currentBlockHeight). The

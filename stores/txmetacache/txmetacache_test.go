@@ -1298,3 +1298,24 @@ func TestTxMetaCacheSetMinedMulti_UnsetMinedToleratesGap(t *testing.T) {
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
+
+func TestTxMetaCache_CreateFirstDelegates(t *testing.T) {
+	ctx := context.Background()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///cf_delegates")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
+	require.NoError(t, err)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
+	require.NoError(t, err)
+
+	// Delegates to the wrapped SQL store (which is spend-first / no-op).
+	require.False(t, c.SupportsCreateFirst())
+	require.NoError(t, c.FinalizeTransaction(ctx, &bt.Tx{}))
+
+	hashes, err := c.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
+}

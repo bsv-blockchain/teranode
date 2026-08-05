@@ -285,8 +285,11 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 		aerospike.ListAppendWithPolicyOp(listPolicy, fields.SubtreeIdxs.String(), minedBlockInfo.SubtreeIdx),
 		// Clear locked flag
 		aerospike.PutOp(aerospike.NewBin(fields.Locked.String(), false)),
-		// Delete creating bin
-		aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil)),
+		// create-first: do NOT clear the creating bin here (mirrors teranode.lua). setMined
+		// does not spend the tx's inputs, so clearing creating would make a still-creating
+		// record's outputs spendable with its parents' outputs unspent (#1214 shape). A
+		// finalized tx already has the bin absent; a still-creating one is rolled forward by
+		// the setMined pre-flight or left gated and recoverable.
 	)
 
 	// Clear unminedSince if on longest chain

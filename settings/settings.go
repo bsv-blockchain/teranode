@@ -462,6 +462,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			LockedBatcherDurationMillis:             getInt("utxostore_lockedBatcherDurationMillis", 5, alternativeContext...),
 			LongestChainBatcherSize:                 getInt("utxostore_longestChainBatcherSize", 1024, alternativeContext...),
 			LongestChainBatcherDurationMillis:       getInt("utxostore_longestChainBatcherDurationMillis", 5, alternativeContext...),
+			UseCreateFirstOrder:                     getBool("utxostore_useCreateFirstOrder", false, alternativeContext...),
 			GetBatcherDrainMode:                     getBool("utxostore_getBatcherDrainMode", false, alternativeContext...),
 			SpendBatcherDrainMode:                   getBool("utxostore_spendBatcherDrainMode", false, alternativeContext...),
 			StoreBatcherDrainMode:                   getBool("utxostore_storeBatcherDrainMode", false, alternativeContext...),
@@ -593,6 +594,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipPreserveParents:            getBool("pruner_skipPreserveParents", false, alternativeContext...),                  // Skip Phase 1: preserve parents
 			SkipDeletions:                  getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
 			MinBlockHeight:                 getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
+			CreatingTxSweepMinAgeBlocks:    getUint32("pruner_creatingTxSweepMinAgeBlocks", 2, alternativeContext...),            // Roll forward create-first creating txs older than this many blocks (0 disables)
 			UTXOPrunedSetMaxEntries:        getInt("pruner_utxoPrunedSetMaxEntries", 10_000_000, alternativeContext...),          // Soft cap on PrunedTxSet entries; 0 = use built-in 2B default (NOT unlimited)
 		},
 		SubtreeValidation: SubtreeValidationSettings{

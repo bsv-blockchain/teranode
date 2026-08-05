@@ -172,3 +172,14 @@ func TestP2PSyncPeerNoProgressTimeout_EnvOverride(t *testing.T) {
 	require.NotNil(t, tSettings)
 	require.Equal(t, 12*time.Minute, tSettings.P2P.SyncPeerNoProgressTimeout)
 }
+
+// TestCreateFirstSettingsWired guards against the struct-tag-default trap: fields must be
+// populated via get* in NewSettings, not merely carry a `default` tag (docs-only).
+func TestCreateFirstSettingsWired(t *testing.T) {
+	tSettings := NewSettings()
+
+	require.Equal(t, uint32(2), tSettings.Pruner.CreatingTxSweepMinAgeBlocks,
+		"pruner_creatingTxSweepMinAgeBlocks must be wired in NewSettings (default 2), else the sweep is dead code")
+	require.False(t, tSettings.UtxoStore.UseCreateFirstOrder,
+		"utxostore_useCreateFirstOrder must be wired in NewSettings (default false)")
+}

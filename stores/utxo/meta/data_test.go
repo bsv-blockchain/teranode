@@ -113,6 +113,36 @@ func Test_InBlockFlagRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, d.InBlock)
 	})
+
+	t.Run("Bytes/NewDataFromBytes carries Creating", func(t *testing.T) {
+		data := &Data{
+			Fee:         100,
+			SizeInBytes: 200,
+			TxInpoints:  testInpointsHash3Hash4,
+			Tx:          &bt.Tx{},
+			Creating:    true,
+		}
+
+		b, err := data.Bytes()
+		require.NoError(t, err)
+
+		d, err := NewDataFromBytes(b)
+		require.NoError(t, err)
+		assert.True(t, d.Creating, "Bytes/NewDataFromBytes must round-trip the Creating flag")
+
+		// NewMetaDataFromBytes (the in-place decoder) must also read the flag.
+		var m Data
+		require.NoError(t, NewMetaDataFromBytes(b, &m))
+		assert.True(t, m.Creating)
+
+		// A non-creating tx must not spuriously read Creating=true.
+		data.Creating = false
+		b2, err := data.Bytes()
+		require.NoError(t, err)
+		d2, err := NewDataFromBytes(b2)
+		require.NoError(t, err)
+		assert.False(t, d2.Creating)
+	})
 }
 
 func Test_NewDataFromBytes(t *testing.T) {

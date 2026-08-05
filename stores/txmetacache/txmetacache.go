@@ -852,6 +852,26 @@ func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 	return t.utxoStore.SupportsOutpointOnlySpend()
 }
 
+// SupportsCreateFirst delegates to the wrapped store.
+func (t *TxMetaCache) SupportsCreateFirst() bool { return t.utxoStore.SupportsCreateFirst() }
+
+// FinalizeTransaction delegates and invalidates the cached meta so a stale
+// Creating=true entry cannot be served after the flag is cleared.
+func (t *TxMetaCache) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
+	if err := t.utxoStore.FinalizeTransaction(ctx, tx); err != nil {
+		return err
+	}
+
+	_ = t.Delete(ctx, tx.TxIDChainHash())
+
+	return nil
+}
+
+// QueryStaleCreatingTxs delegates to the wrapped store.
+func (t *TxMetaCache) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return t.utxoStore.QueryStaleCreatingTxs(ctx, unminedSinceBefore, limit)
+}
+
 // Close delegates to the wrapped UTXO store so its in-flight batched writes
 // are drained on shutdown. The cache itself holds only in-memory state; no
 // extra teardown is required here beyond letting it be garbage-collected

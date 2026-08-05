@@ -131,6 +131,12 @@ type BatchStoreItem struct {
 	// Locked indicates if this transaction is locked for spending
 	locked bool
 
+	// creating indicates this transaction is stored in the tentative create-first
+	// state: the creating bin is written and NOT cleared by the create phase-2 (the
+	// validator's FinalizeTransaction clears it), so its outputs stay unspendable
+	// until the inputs have been spent and the tx finalized.
+	creating bool
+
 	// group signals completion of the whole batch; the producer waits on it
 	// once instead of one channel receive per item.
 	group *completion.Group
@@ -200,6 +206,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	txMeta.Locked = createOptions.Locked
 
+	txMeta.Creating = createOptions.Creating
+
 	// when creating conflicting transactions, we must set the conflictingChildren in all the parents
 	// we should do this before we store the transaction, so we are sure the parents have been updated properly
 	if txMeta.Conflicting {
@@ -251,6 +259,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		subtreeIdxs:  subtreeIdxs,
 		conflicting:  createOptions.Conflicting,
 		locked:       createOptions.Locked,
+		creating:     createOptions.Creating,
 		group:        group,
 	}
 
@@ -417,7 +426,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			external = true
 		}
 
-		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, arena) // false is to say this is a normal record, not external.
+		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.creating, arena) // false is to say this is a normal record, not external.
 		if err != nil {
 			bItem.complete(errors.NewProcessingError("could not get bins to store", err))
 			resultHandledElsewhere[idx] = true
@@ -435,7 +444,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// that outlives sendStoreBatch (and the per-batch arena). Rebuild its
 			// bins with heap-owned backing (nil arena) so the deferred arena reset
 			// cannot corrupt the bytes the goroutine still references.
-			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, nil)
+			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.creating, nil)
 			if err != nil {
 				bItem.complete(errors.NewProcessingError("could not rebuild bins for external store", err))
 				resultHandledElsewhere[idx] = true
@@ -604,7 +613,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, nil) // true is to say this is a big record
+					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, batch[idx].creating, nil) // true is to say this is a big record
 					if err != nil {
 						batch[idx].complete(errors.NewProcessingError("could not get bins to store", err))
 						continue
@@ -814,7 +823,7 @@ func extendedTxSize(tx *bt.Tx) int {
 //   - Whether the transaction has UTXOs
 //   - Any error that occurred
 func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHeights []uint32, subtreeIdxs []int, external bool,
-	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool, arena *bt.Arena) ([][]*aerospike.Bin, error) {
+	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool, isCreating bool, arena *bt.Arena) ([][]*aerospike.Bin, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
@@ -902,6 +911,13 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 
 	// add the locked bin to all the records
 	commonBins = append(commonBins, aerospike.NewBin(fields.Locked.String(), isLocked))
+
+	// add the creating bin ONLY when set (bin absence == not creating; the flag is
+	// cleared by writing nil, never by writing false). The multi-record/external path
+	// forces this on via ensureCreatingBin regardless; this covers the single-record path.
+	if isCreating {
+		commonBins = append(commonBins, aerospike.NewBin(fields.Creating.String(), true))
+	}
 
 	// Split utxos into batches
 	batches := s.splitIntoBatches(utxos, commonBins)
@@ -1173,11 +1189,24 @@ func (s *Store) storeExternallyWithLock(
 		//
 		// Without this cleanup attempt, creating flags would remain set indefinitely, requiring
 		// manual intervention. This ensures eventual consistency through automatic recovery.
-		clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
-		if clearErr != nil {
-			s.logger.Warnf("[%s] Transaction %s exists but creating flag cleanup failed: %v", funcName, bItem.txHash, clearErr)
+		// Create-first: leave the creating flag set — the validator's
+		// FinalizeTransaction is the sole clearer, only after the inputs are spent.
+		if !bItem.creating {
+			clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
+			if clearErr != nil {
+				s.logger.Warnf("[%s] Transaction %s exists but creating flag cleanup failed: %v", funcName, bItem.txHash, clearErr)
+			}
 		}
 		bItem.complete(errors.NewTxExistsError("transaction already exists: %s", bItem.txHash))
+		return
+	}
+
+	// Create-first: skip phase-2 flag clearing. A WithCreating(true) tx must keep the
+	// creating flag until the validator finalizes it (after spending the inputs);
+	// otherwise the multi-record path would make its outputs spendable before the
+	// spend step, exactly the ordering create-first exists to prevent.
+	if bItem.creating {
+		bItem.complete(nil)
 		return
 	}
 

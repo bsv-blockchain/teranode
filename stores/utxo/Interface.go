@@ -245,6 +245,7 @@ type CreateOptions struct {
 	Frozen             bool
 	Conflicting        bool
 	Locked             bool
+	Creating           bool
 	SkipExtendedInputs bool
 
 	// SpendAndCreate-specific options.
@@ -297,6 +298,17 @@ func WithConflicting(b bool) CreateOption {
 func WithLocked(b bool) CreateOption {
 	return func(o *CreateOptions) {
 		o.Locked = b
+	}
+}
+
+// WithCreating creates the transaction in the tentative "creating" state: the
+// record exists (Get/GetMeta return it with meta.Data.Creating=true) but every
+// spend of its outputs is rejected with ErrTxCreating until FinalizeTransaction
+// clears the flag. Used by the create-first ordering inside SpendAndCreate
+// (create → spend inputs → finalize).
+func WithCreating(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.Creating = b
 	}
 }
 
@@ -380,6 +392,28 @@ type Store interface {
 	// fast-path support (e.g. Aerospike, pending Stage B) return false. Decorators
 	// delegate to the wrapped store.
 	SupportsOutpointOnlySpend() bool
+
+	// SupportsCreateFirst reports whether this store implements the tentative-create
+	// contract: SpendAndCreate's create phase honours CreateOptions.Creating (spends of
+	// the tx's outputs are rejected with ErrTxCreating while set), FinalizeTransaction
+	// clears the state, and QueryStaleCreatingTxs finds abandoned tentative records.
+	// SpendAndCreate only uses the create-first ordering when this returns true; stores
+	// that ignore CreateOptions.Creating MUST return false.
+	SupportsCreateFirst() bool
+
+	// FinalizeTransaction clears the tentative "creating" state set by the create-first
+	// phase of SpendAndCreate, making the transaction's outputs spendable. It takes the
+	// full tx so multi-record stores can derive the record count without a read.
+	// Idempotent; stores without create-first support return nil.
+	FinalizeTransaction(ctx context.Context, tx *bt.Tx) error
+
+	// QueryStaleCreatingTxs returns the hashes of transactions still in the "creating"
+	// state whose unminedSince height is strictly below unminedSinceBefore. Used by the
+	// pruner sweeper to roll forward abandoned tentative creates. When limit > 0 the
+	// result is bounded to that many hashes (the caller sweeps any remainder next pass)
+	// and the query is aborted early; limit <= 0 means unbounded. The context aborts an
+	// in-progress scan. Stores without create-first support return (nil, nil).
+	QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error)
 
 	// Close drains any in-flight batched writes (Create, Spend, Get, Unlock,
 	// or any other batched operations the implementation owns) and releases

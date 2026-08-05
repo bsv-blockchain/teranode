@@ -71,6 +71,17 @@ func (m *NullStore) GetBlockState() utxo.BlockState {
 // SupportsOutpointOnlySpend reports false: the null store performs no real UTXO work.
 func (m *NullStore) SupportsOutpointOnlySpend() bool { return false }
 
+// SupportsCreateFirst returns false: the null store has no tentative-create state.
+func (m *NullStore) SupportsCreateFirst() bool { return false }
+
+// FinalizeTransaction is a no-op: the null store has no tentative-create state.
+func (m *NullStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error { return nil }
+
+// QueryStaleCreatingTxs returns nothing: the null store has no tentative-create state.
+func (m *NullStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+
 func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "NullStore Store available", nil
 }

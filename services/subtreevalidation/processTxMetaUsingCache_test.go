@@ -108,6 +108,34 @@ func TestProcessTxMetaUsingCache_PartialEntryTreatedAsMiss(t *testing.T) {
 	require.False(t, txMetaSlice[0].isSet, "partial entry must not be marked as set")
 }
 
+func TestProcessTxMetaUsingCache_CreatingEntryTreatedAsMiss(t *testing.T) {
+	cache := setupTestCache(t)
+	server := setupCacheTestServer(t, cache, 1024, 4, 1000)
+	ctx := context.Background()
+
+	// A complete entry (valid parents) but still in the create-first "creating"
+	// state must be treated as a miss so the store fallback re-checks it — parity
+	// with the store path (processTxMetaUsingStore treats Creating=true as missing).
+	hash := chainhash.HashH([]byte("creating-cache-entry"))
+	creating := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 250,
+		// One parent, one vout (packed layout: count=1, vout=0).
+		TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{chainhash.HashH([]byte("parent"))}, []uint32{1, 0}),
+		BlockIDs:   []uint32{},
+		Creating:   true,
+	}
+	require.NoError(t, cache.SetCache(&hash, creating))
+
+	txHashes := []chainhash.Hash{hash}
+	txMetaSlice := make([]metaSliceItem, 1)
+
+	missed, err := server.processTxMetaUsingCache(ctx, txHashes, txMetaSlice, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, missed, "a Creating=true cache entry must be treated as a miss, matching the store path")
+	require.False(t, txMetaSlice[0].isSet, "a creating entry must not be served as a hit")
+}
+
 func TestProcessTxMetaUsingCache_CoinbaseEntryWithNoParentsIsHit(t *testing.T) {
 	cache := setupTestCache(t)
 	server := setupCacheTestServer(t, cache, 1024, 4, 1000)

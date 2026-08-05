@@ -54,6 +54,7 @@ var (
 	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
 	ErrTxCoinbaseImmature         = New(ERR_TX_COINBASE_IMMATURE, "coinbase is not spendable yet")
 	ErrTxConflicting              = New(ERR_TX_CONFLICTING, "tx conflicting")
+	ErrTxCreating                 = New(ERR_TX_CREATING, "tx creating")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrTxExists                   = New(ERR_TX_EXISTS, "tx already exists")
 	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")

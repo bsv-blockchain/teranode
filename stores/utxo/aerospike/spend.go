@@ -572,7 +572,16 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			if txAlreadyExists {
 				// we've previously validated that this tx already exists, no point doing a lookup again or logging anything
 				spend.Err = nil
-			} else if _, getErr := s.Get(ctx, tx.TxIDChainHash()); getErr == nil {
+			} else if md, getErr := s.Get(ctx, tx.TxIDChainHash(), fields.Creating, fields.BlockIDs); getErr == nil &&
+				!md.Creating &&
+				(len(md.BlockIDs) > 0 || !s.settings.UtxoStore.UseCreateFirstOrder) {
+				// Create-first inverts the old invariant: the child now exists (Creating=true)
+				// BEFORE its inputs are spent, so bare existence no longer implies the input was
+				// spent. The `!md.Creating` guard is create-first-specific but inert when the
+				// feature is off (no record is ever creating), so it is unconditional. The
+				// stricter "must be mined" requirement (BlockIDs>0) is gated on the feature flag,
+				// so a legacy spend-first node keeps its exact prior predicate (existence alone)
+				// and this does not narrow the reorg/rollback path for flag-off operators.
 				s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
 
 				spend.Err = nil

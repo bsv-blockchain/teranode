@@ -831,6 +831,29 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
 			}
 
+			// Under create-first, ErrTxExists no longer proves the tx was fully validated: a
+			// prior attempt (a TX_LOCKED retry, a crash, or a spend failure) can leave the
+			// record in the tentative "creating" state with its inputs NOT yet spent. Returning
+			// it as validated here would let a block be accepted whose parent outputs are still
+			// unspent — the mirror image of #1214. Roll the record forward before trusting it,
+			// and FAIL CLOSED if the roll-forward cannot complete every input spend.
+			//
+			// WithIgnoreLocked: the roll-forward completes a spend the node already committed to
+			// when it created the tentative record, so a locked parent must not turn recovery
+			// into a hard stop (the original combined spend also runs with the caller's
+			// ignore-locked on the block/subtree paths that reach here).
+			if txMetaData.Creating {
+				if rfErr := utxo.RollForwardCreating(decoupledCtx, v.utxoStore, tx, blockHeight, utxo.WithIgnoreLocked(true)); rfErr != nil {
+					return nil, errors.NewProcessingError("[Validate][%s] tx exists in creating state and roll-forward re-spend did not complete; not treating as validated", txID, rfErr)
+				}
+
+				// RollForwardCreating finalized and unlocked the record in the store; reflect
+				// that in the returned meta so downstream does not treat it as still creating
+				// or locked.
+				txMetaData.Creating = false
+				txMetaData.Locked = false
+			}
+
 			return txMetaData, nil
 		}
 

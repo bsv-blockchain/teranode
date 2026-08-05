@@ -118,7 +118,12 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 		// would later fail subtree-meta serialization and wedge the block. Treat
 		// it as a miss so the store fallback — which can reconstruct inpoints from
 		// the tx inputs — resolves it and self-heals the cache.
-		if found && (txMeta.IsCoinbase || len(txMeta.TxInpoints.ParentTxHashes) > 0) {
+		// A Creating=true entry is a create-first tx still mid-flight; the !txMeta.Creating
+		// guard below turns it into a miss so the store fallback re-checks it (and
+		// re-processing can trigger roll-forward), matching the store path
+		// (processTxMetaUsingStore). Because such an entry never reaches the copy below,
+		// only finalized (Creating=false) entries are ever written to the slice.
+		if found && !txMeta.Creating && (txMeta.IsCoinbase || len(txMeta.TxInpoints.ParentTxHashes) > 0) {
 			p.txMetaSlice[i+j] = metaSliceItem{
 				fee:         txMeta.Fee,
 				sizeInBytes: txMeta.SizeInBytes,

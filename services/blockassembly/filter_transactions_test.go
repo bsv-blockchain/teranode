@@ -617,3 +617,68 @@ func TestValidateParentChain_RecursivelyFiltersOtherInvalidDescendants(t *testin
 
 	mockStore.AssertExpectations(t)
 }
+
+// TestValidateParentChain_RejectsChildOfCreatingParent verifies that a child whose
+// parent is still in the create-first "creating" state is filtered out (the parent's
+// input spends are unconfirmed), and — unlike the conflicting case — the child is NOT
+// marked conflicting; recovery finalizes the parent and the next restore picks it up.
+func TestValidateParentChain_RejectsChildOfCreatingParent(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(utxo.MockUtxostore)
+	logger := ulogger.TestLogger{}
+
+	testSettings := &settings.Settings{}
+	testSettings.BlockAssembly.ParentValidationBatchSize = 50
+	testSettings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+
+	blockAssembler := &BlockAssembler{
+		utxoStore: mockStore,
+		settings:  testSettings,
+		logger:    logger,
+	}
+
+	var parentHash chainhash.Hash
+	for j := range parentHash {
+		parentHash[j] = 0xAA
+	}
+
+	var childHash chainhash.Hash
+	for j := range childHash {
+		childHash[j] = 0xBB
+	}
+
+	childTx := &utxo.UnminedTransaction{
+		Node: &subtree.Node{
+			Hash:        childHash,
+			Fee:         1000,
+			SizeInBytes: 250,
+		},
+		TxInpoints: singleParentInpointsPtr(parentHash, 0),
+		CreatedAt:  1,
+	}
+	unminedTxs := []*utxo.UnminedTransaction{childTx}
+
+	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			for _, unresolved := range args.Get(1).([]*utxo.UnresolvedMetaData) {
+				if unresolved.Hash.IsEqual(&parentHash) {
+					unresolved.Data = &meta.Data{
+						BlockIDs:     []uint32{},
+						UnminedSince: 1,
+						Creating:     true,
+					}
+				}
+			}
+		}).
+		Return(nil)
+
+	bestBlockHeaderIDsMap := map[uint32]bool{1: true}
+
+	validTxs, err := blockAssembler.validateParentChain(ctx, unminedTxs, bestBlockHeaderIDsMap)
+	require.NoError(t, err)
+	require.Empty(t, validTxs, "child of a creating parent must be filtered out")
+
+	// The creating-parent branch must NOT mark the child conflicting.
+	mockStore.AssertNotCalled(t, "SetConflicting", mock.Anything, mock.Anything, mock.Anything)
+}

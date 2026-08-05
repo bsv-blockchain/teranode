@@ -370,6 +370,18 @@ func (s *Store) Close(ctx context.Context) error {
 // outpoint-only fast path (SkipExtendedInputs on Create, SkipUTXOHashCheck on Spend).
 func (s *Store) SupportsOutpointOnlySpend() bool { return true }
 
+// SupportsCreateFirst returns false: the SQL store ignores CreateOptions.Creating,
+// so SpendAndCreate keeps spend-first order.
+func (s *Store) SupportsCreateFirst() bool { return false }
+
+// FinalizeTransaction is a no-op: the SQL store has no tentative-create state.
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error { return nil }
+
+// QueryStaleCreatingTxs returns nothing: the SQL store has no tentative-create state.
+func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+
 // Health checks the database connection and returns status information.
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	details := fmt.Sprintf("SQL Engine is %s", s.engine)
