@@ -302,7 +302,12 @@ func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
 	return mockBlockchain
 }
 
-func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
+// TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic drives the DEFAULT production
+// (non-optimistic) path with a corrupt-body fixture (zeroed merkle root). This is the true
+// "corrupt is re-downloaded, not poisoned" thesis on the path production runs by default
+// (bitcoin-sv/teranode#4692): the body is never AddBlock'd, so it is neither persisted invalid nor
+// invalidated, and ValidateBlock returns a corrupt error for the caller to re-download.
+func TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic(t *testing.T) {
 	initPrometheusMetrics()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -398,7 +403,9 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tSettings.BlockValidation.OptimisticMining = true
+	// Default production path is non-optimistic (bitcoin-sv/teranode#4692): the corrupt body must be
+	// caught by block.Valid BEFORE any AddBlock, so it is never added and never invalidated.
+	tSettings.BlockValidation.OptimisticMining = false
 	tSettings.Kafka.InvalidBlocks = "test-invalid-blocks" // Enable Kafka publishing
 
 	bv := &testBlockValidation{
@@ -421,19 +428,21 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	err = bv.ValidateBlock(ctx, block, "test", false)
-	require.NoError(t, err)
+	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), which
+	// is a tier-2 CORRUPT body — not consensus-invalid. On the non-optimistic default path the body
+	// is never AddBlock'd, so block.Valid returns corrupt and ValidateBlock surfaces it to the
+	// caller for re-download. The body must NEVER be persisted invalid=true (the honest body for
+	// this hash may still arrive from another peer) and must NOT be invalidated or published.
+	err = bv.ValidateBlock(ctx, block, "test", true)
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "a zeroed-merkle body is corrupt, not invalid")
 
-	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), which is
-	// now a tier-2 CORRUPT body — not consensus-invalid. A corrupt body must NEVER be
-	// persisted invalid=true (the honest body for this hash may still arrive from another
-	// peer) and must NOT be routed to ReValidateBlock (which would re-run the same corrupt
-	// body). The optimistic background therefore strikes the serving peer and drops the body
-	// for re-download: it must neither InvalidateBlock nor publish it as invalid.
+	// A corrupt body on the non-optimistic path is never invalidated (no AddBlock happened, so
+	// there is nothing to roll back). Give any stray background goroutine a brief window.
 	select {
 	case <-invalidateBlockCalled:
 		t.Fatal("corrupt block body must NOT be invalidated (bitcoin-sv/teranode#4692): it is re-downloaded, not poisoned")
-	case <-time.After(2 * time.Second):
+	case <-time.After(200 * time.Millisecond):
 		// correct: a corrupt body is never invalidated
 	}
 
