@@ -36,7 +36,6 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
-	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -1625,7 +1624,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// an oversized received body cannot condemn the block hash — it is not bound
 				// to the header and may not even be PoW-backed. Strike the serving peer and
 				// return corrupt for re-download; never persist invalid=true (bitcoin-sv/teranode#4692).
-				u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "block size exceeds excessiveblocksize")
+				// Skip the strike on revalidation: RevalidateBlock passes the ORIGINAL announcing
+				// peer's ID, which neither served this read nor is necessarily still connected.
+				// Mirrors the neighbouring storeInvalidBlock gating.
+				if !opts.IsRevalidation {
+					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "block size exceeds excessiveblocksize")
+				}
 
 				return errors.NewBlockCorruptError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 			}
@@ -1651,8 +1655,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		if len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(u.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
 			// Outer, pre-binding body check: a bad coinbase length in the received body
 			// cannot condemn the hash. Strike the serving peer and return corrupt for
-			// re-download; never persist invalid=true (bitcoin-sv/teranode#4692).
-			u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "bad coinbase length")
+			// re-download; never persist invalid=true (bitcoin-sv/teranode#4692). Skip the strike on
+			// revalidation (stale announcing-peer ID); mirrors the neighbouring storeInvalidBlock gating.
+			if !opts.IsRevalidation {
+				u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "bad coinbase length")
+			}
 
 			return errors.NewBlockCorruptError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
 		}
@@ -1833,7 +1840,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// serving peer and return corrupt for re-download; never persist invalid=true. The corrupt
 			// code survives the CheckBlockSubtrees gRPC boundary via WrapGRPC (IsBlockCorrupt unwraps it).
 			if errors.IsBlockCorrupt(err) {
-				u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "corrupt subtree body during subtree validation")
+				// Skip the strike on revalidation (stale announcing-peer ID, bitcoin-sv/teranode#4692);
+				// mirrors the neighbouring storeInvalidBlock gating on the ErrTxInvalid branch below.
+				if !opts.IsRevalidation {
+					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "corrupt subtree body during subtree validation")
+				}
 				return err
 			}
 
@@ -1964,15 +1975,29 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					// return pooled []Node slices before re-validation or invalidation.
 					releaseBlockNodes(block)
 
-					// Corrupt body (bitcoin-sv/teranode#4692): checked FIRST. The received body is not bound
-					// to the header, so it must NOT be persisted invalid (tier-2), and it must NOT
-					// be routed to ReValidateBlock — that re-runs the SAME in-memory corrupt body
-					// and would just re-fail. Strike the serving peer and drop; a fresh body comes
-					// from re-announcement / peer rotation. (In production the corruption-reachable
-					// paths run non-optimistically, so this guards a path reachable only via a direct
-					// optimistic ValidateBlock call.)
+					// Corrupt body (bitcoin-sv/teranode#4692): checked FIRST. This is the optimistic
+					// path, where the body was already AddBlock'd BEFORE block.Valid ran. Unlike the
+					// non-optimistic path (which never AddBlock'd, so it can simply strike + return
+					// corrupt for re-download), here the corrupt body is already accepted and there is
+					// no non-poisoning removal primitive. Leaving it accepted would be a silently
+					// accepted corrupt tip — worse than poisoning — so on this one opt-in path the
+					// corrupt body takes the INVALIDATE ROUTE (poison-loudly, never silently accept)
+					// until the block.Valid integrity-floor split lands and removes this path.
+					// InvalidateBlock is called directly (not markBlockAsInvalid) so no second,
+					// mis-attributed Kafka strike lands on the announcing peer — the serving peer is
+					// already struck above by penalizeCorruptBlockPeer.
 					if errors.IsBlockCorrupt(err) {
 						u.penalizeCorruptBlockPeer(decoupledCtx, opts.PeerID, block, err.Error())
+
+						if _, invErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invErr != nil {
+							// Invalidation failed → the block is still on-chain. Do NOT return silently.
+							// Re-queue revalidation to converge on invalidation once the store recovers.
+							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added and InvalidateBlock FAILED; re-queuing revalidation to avoid a silently-accepted corrupt tip: %v", block.String(), invErr)
+							u.ReValidateBlock(block, baseURL)
+						} else {
+							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added; invalidated (invalidate route, not silently accepted) — opt-in optimistic peer mining until the block.Valid integrity-floor split lands", block.String())
+						}
+
 						return
 					}
 
@@ -2085,7 +2110,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// another peer (block was never AddBlock'd on this non-optimistic path, and
 				// SetBlockExists was never set). Restores checkParentInvalid's cascade invariant.
 				if errors.IsBlockCorrupt(err) {
-					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, reason)
+					// Skip the strike on revalidation (stale announcing-peer ID, bitcoin-sv/teranode#4692);
+					// mirrors the neighbouring storeInvalidBlock gating below.
+					if !opts.IsRevalidation {
+						u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, reason)
+					}
 					return err
 				}
 
@@ -2317,7 +2346,7 @@ func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID s
 		return
 	}
 
-	if err := u.p2pClient.AddBanScore(ctx, peerID, p2p.ReasonCorruptBlockBody); err != nil {
+	if err := u.p2pClient.AddBanScore(ctx, peerID, p2pconstants.ReasonCorruptBlockBody.String()); err != nil {
 		u.logger.Warnf("[ValidateBlock][%s] failed to add ban score to peer %s for corrupt block body: %v", block.Hash().String(), peerID, err)
 	}
 }

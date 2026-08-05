@@ -443,6 +443,15 @@ type blockFailureState struct {
 	nextRetry time.Time
 }
 
+// corruptAttemptState is the per-hash corrupt re-download counter and its fixed cooldown window
+// (bitcoin-sv/teranode#4692). windowExpiry is set once from the first corrupt delivery and preserved
+// across subsequent deliveries so the window is not extended by re-delivery; once it lapses the
+// counter resets and an honest body is admitted again.
+type corruptAttemptState struct {
+	count        int
+	windowExpiry time.Time
+}
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -502,6 +511,16 @@ type SyncManager struct {
 	// deleted on successful (re)process. A skipped descendant records its own hash
 	// too, so the whole descendant chain is suppressed transitively.
 	recentlyFailedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	// blockCorruptAttempts bounds corrupt-body (bitcoin-sv/teranode#4692) re-downloads per block
+	// hash, independently of the ban score. Once a hash reaches MaxCorruptAttemptsPerBlock corrupt
+	// deliveries within a fixed cooldown window, the next delivery is dropped BEFORE the expensive
+	// HandleBlockDirect/decorate — without rejecting-to-peer, without poisoning (invalid is never
+	// set), and without setting recentlyFailedBlocks (so the recentlyFailedBlocks no-NOT_FOUND-cascade
+	// property is preserved). Unlike blockFailureBackoff (serviceError-gated, disjoint from corrupt) this is
+	// keyed only on corrupt failures. The window is fixed from the first corrupt delivery (stored in
+	// the value, not the map TTL), so re-delivery cannot extend it and once it lapses an honest body
+	// is admitted again (self-healing). Cleared on successful store.
+	blockCorruptAttempts *expiringmap.ExpiringMap[chainhash.Hash, *corruptAttemptState]
 	syncPeerMu           sync.RWMutex // protects syncPeer and syncPeerState
 	syncPeer             *peerpkg.Peer
 	syncPeerState        *syncPeerState
@@ -1478,6 +1497,73 @@ func (sm *SyncManager) recordBlockFailureBackoff(blockHash chainhash.Hash) {
 	})
 }
 
+// legacyCorruptAttemptCooldown returns the fixed cooldown window for the per-block corrupt
+// re-download cap (bitcoin-sv/teranode#4692), falling back to 10m when settings are nil or the
+// setting is unset or non-positive.
+func legacyCorruptAttemptCooldown(s *settings.Settings) time.Duration {
+	if s != nil {
+		if d := s.BlockValidation.CorruptAttemptCooldown; d > 0 {
+			return d
+		}
+	}
+
+	return 10 * time.Minute
+}
+
+// recordCorruptBlockAttempt increments and returns the per-hash corrupt-body failure count within
+// a fixed cooldown window (bitcoin-sv/teranode#4692). The window is set once from the first corrupt
+// delivery and preserved across subsequent deliveries (not extended), so once it lapses the
+// counter resets and an honest body is admitted again. Called ONLY on an actual corrupt failure.
+// Nil-safe (SyncManager struct-literal test fixtures that bypass New()): a nil map or nil settings
+// is a no-op returning 0, so the cap simply does not accrue rather than panicking.
+func (sm *SyncManager) recordCorruptBlockAttempt(blockHash chainhash.Hash) int {
+	if sm.blockCorruptAttempts == nil || sm.settings == nil {
+		return 0
+	}
+
+	now := time.Now()
+	if st, ok := sm.blockCorruptAttempts.Get(blockHash); ok && now.Before(st.windowExpiry) {
+		// Preserve the LOGICAL window (windowExpiry) so re-delivery cannot extend the cooldown;
+		// the Set re-extends only the map's retention TTL. A new struct avoids mutating shared state.
+		next := &corruptAttemptState{count: st.count + 1, windowExpiry: st.windowExpiry}
+		sm.blockCorruptAttempts.Set(blockHash, next)
+
+		return next.count
+	}
+
+	sm.blockCorruptAttempts.Set(blockHash, &corruptAttemptState{count: 1, windowExpiry: now.Add(legacyCorruptAttemptCooldown(sm.settings))})
+
+	return 1
+}
+
+// corruptBlockAttemptsExhausted reports whether a hash has reached the per-block corrupt
+// re-download cap and is within its cooldown window (bitcoin-sv/teranode#4692). A cap of <= 0
+// disables the bound (re-opens the corrupt-body bandwidth DoS). Nil-safe: a nil settings or nil map
+// (SyncManager struct-literal test fixtures that bypass New()) behaves as CAP DISABLED — it returns
+// false (never "exhausted"), so a missing config can never silently drop honest blocks.
+func (sm *SyncManager) corruptBlockAttemptsExhausted(blockHash chainhash.Hash) bool {
+	if sm.settings == nil || sm.blockCorruptAttempts == nil {
+		return false
+	}
+
+	maxAttempts := sm.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	st, ok := sm.blockCorruptAttempts.Get(blockHash)
+
+	return ok && st.count >= maxAttempts && time.Now().Before(st.windowExpiry)
+}
+
+// clearCorruptBlockAttempts drops a hash's corrupt counter on successful store so an honest body
+// after the window never inherits a stale count (bitcoin-sv/teranode#4692). Nil-safe.
+func (sm *SyncManager) clearCorruptBlockAttempts(blockHash chainhash.Hash) {
+	if sm.blockCorruptAttempts != nil {
+		sm.blockCorruptAttempts.Delete(blockHash)
+	}
+}
+
 // peerStateResolvingPrimary returns the sync state for peer, resolving a stream
 // sub-peer (e.g. a BlockPriority DATA1 stream, not itself registered in
 // peerStates) to its association's primary peer. It returns the resolved peer
@@ -1677,6 +1763,19 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
+	// Per-block-hash corrupt re-download cap (bitcoin-sv/teranode#4692): if this hash has already
+	// failed with a corrupt body MaxCorruptAttemptsPerBlock times within the cooldown window, drop
+	// this delivery BEFORE the expensive HandleBlockDirect/decorate. This is the ban-score-
+	// independent bound on corrupt re-download amplification. Drop quietly: do NOT reject the block
+	// to the peer, do NOT mark it failed (recentlyFailedBlocks) — preserving the recentlyFailedBlocks
+	// no-NOT_FOUND-cascade property — and do NOT poison. The peer's stall timer is deliberately NOT refreshed, so
+	// if a peer keeps serving the same corrupt hash the stall detector can rotate to one with an
+	// honest body. Once the fixed window lapses the counter resets and the honest body is admitted.
+	if sm.corruptBlockAttemptsExhausted(bmsg.blockHash) {
+		sm.logger.Warnf("[handleBlockMsg][%s] corrupt re-download cap reached; dropping delivery until the cooldown window expires (not rejected, not stored invalid)", bmsg.blockHash)
+		return nil
+	}
+
 	// Hand sole ownership of the decoded block to HandleBlockDirect. The
 	// blockHandler goroutine keeps *bmsg alive until the reply is sent, so
 	// leaving the field set would pin the multi-GB wire block (and its decode
@@ -1765,7 +1864,12 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			// and WITHOUT disconnecting (see shouldDisconnectOnBlockErr) — re-request is left free so
 			// an honest copy can arrive on the next delivery / sync-peer rotation. Never poison.
 			if errors.IsBlockCorrupt(err) {
-				sm.logger.Warnf("[handleBlockMsg][%s] corrupt block body from peer %s, dropping for re-download (not rejected, not stored invalid): %v", bmsg.blockHash, bmsg.peer, err)
+				// Count this corrupt failure toward the per-hash cap (bitcoin-sv/teranode#4692). Once
+				// the count reaches MaxCorruptAttemptsPerBlock the gate above drops further deliveries
+				// until the fixed window lapses. Recorded ONLY on an actual corrupt failure, so a
+				// below-cap corrupt is still re-downloaded as today.
+				attempts := sm.recordCorruptBlockAttempt(bmsg.blockHash)
+				sm.logger.Warnf("[handleBlockMsg][%s] corrupt block body from peer %s (attempt %d), dropping for re-download (not rejected, not stored invalid): %v", bmsg.blockHash, bmsg.peer, attempts, err)
 				return err
 			}
 
@@ -1812,6 +1916,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	if sm.blockFailureBackoff != nil {
 		sm.blockFailureBackoff.Delete(bmsg.blockHash)
 	}
+
+	// Also clear the per-hash corrupt counter (bitcoin-sv/teranode#4692) so an honest body after the
+	// window never inherits a stale corrupt count.
+	sm.clearCorruptBlockAttempts(bmsg.blockHash)
 
 	// Also clear any cascade-suppression marker (#1333): this hash now stores, so
 	// its descendants must no longer be short-circuited as children of a failure.
@@ -3087,6 +3195,10 @@ func (sm *SyncManager) Stop() error {
 		sm.recentlyFailedBlocks.Stop()
 	}
 
+	if sm.blockCorruptAttempts != nil {
+		sm.blockCorruptAttempts.Stop()
+	}
+
 	// DC15 / review C1: quiesce Put then drain the tx-announce batcher before
 	// tearing down transports.
 	sm.closeTxAnnounceBatcher()
@@ -3284,6 +3396,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// (#1333). Like blockFailureBackoff this starts a background eviction goroutine
 	// stopped only via Stop(), so build it after the last fallible step above.
 	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL).WithMaxSize(blockFailureBackoffMaxTracked)
+
+	// Per-hash corrupt re-download cap (bitcoin-sv/teranode#4692). The map's retention equals the
+	// cooldown window so an entry survives its own window even with no further deliveries; the
+	// LOGICAL fixed window lives in corruptAttemptState.windowExpiry (Set re-extends map retention
+	// but never the logical window). Like the maps above, started here after the last fallible step.
+	sm.blockCorruptAttempts = expiringmap.New[chainhash.Hash, *corruptAttemptState](legacyCorruptAttemptCooldown(tSettings)).WithMaxSize(blockFailureBackoffMaxTracked)
 
 	if !config.DisableCheckpoints {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)

@@ -1497,9 +1497,11 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 				// Standard validation path for blocks not verified by checkpoints
 				// Create validation options with cached headers
 				opts := &ValidateBlockOptions{
-					CachedHeaders:           cachedHeaders,
-					IsCatchupMode:           true,
-					DisableOptimisticMining: true,
+					CachedHeaders: cachedHeaders,
+					IsCatchupMode: true,
+					// bitcoin-sv/teranode#4692: non-optimistic unless the operator opts in via BOTH
+					// blockvalidation_optimistic_mining and blockvalidation_optimistic_mining_peer_blocks.
+					DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings),
 					PeerID:                  peerID,
 				}
 

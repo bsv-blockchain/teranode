@@ -182,6 +182,18 @@ type Server struct {
 	// block can be retried again later if better peers appear.
 	blockCatchupAttempts *ttlcache.Cache[chainhash.Hash, int]
 
+	// blockCorruptAttempts counts corrupt-body failures per block hash within a fixed
+	// cooldown window (bitcoin-sv/teranode#4692). Once a block reaches
+	// MaxCorruptAttemptsPerBlock its next RUNNING delivery is dropped before the
+	// expensive download/subtree-prepare/merkle work until the window expires — the
+	// ban-score-INDEPENDENT bound on the corrupt re-download amplification (holds even
+	// when p2pClient is nil, peerID is empty, or a single peer serves everything). The
+	// corrupt path persists nothing (no invalid=true, no SetBlockExists, no AddBlock),
+	// so the hash is only rate-limited, never condemned; once the window lapses an honest
+	// body flows through and is accepted. Same fixed-window/no-touch-on-hit shape as
+	// blockCatchupAttempts so gate reads can never extend the window (no wedge).
+	blockCorruptAttempts *ttlcache.Cache[chainhash.Hash, int]
+
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
 
@@ -390,6 +402,13 @@ func New(
 			// Do not extend the window on reads: the cooldown runs a fixed time from
 			// the first failed attempt, so the enqueue-gate's Get checks cannot keep a
 			// block suppressed forever.
+			ttlcache.WithDisableTouchOnHit[chainhash.Hash, int](),
+		),
+		blockCorruptAttempts: ttlcache.New[chainhash.Hash, int](
+			ttlcache.WithTTL[chainhash.Hash, int](corruptAttemptCooldown(tSettings)),
+			// Fixed window from the first corrupt failure; gate Get checks must never
+			// extend it, so a persistent attacker cannot suppress an honest body forever
+			// (bitcoin-sv/teranode#4692).
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, int](),
 		),
 		adaptiveFetch:       af,
@@ -664,6 +683,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	// call Init without initialising it (NewServer always does). Matches Stop().
 	if u.blockCatchupAttempts != nil {
 		go u.blockCatchupAttempts.Start()
+	}
+
+	if u.blockCorruptAttempts != nil {
+		go u.blockCorruptAttempts.Start()
 	}
 
 	// Start fork manager cleanup routine
@@ -1126,6 +1149,10 @@ func (u *Server) Stop(ctx context.Context) error {
 		u.blockCatchupAttempts.Stop()
 	}
 
+	if u.blockCorruptAttempts != nil {
+		u.blockCorruptAttempts.Stop()
+	}
+
 	// Wait for all background tasks in BlockValidation to complete, bounded by the
 	// caller's stop deadline (ctx) so a worker whose Init ctx was not cancelled first
 	// cannot hang shutdown indefinitely.
@@ -1485,6 +1512,18 @@ func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
 //   - baseURL: Base URL for block retrieval operations
 //   - useBlock: Optional pre-loaded block to avoid retrieval (variadic parameter)
 //
+// optimisticMiningDisabledForPeerPath reports whether optimistic mining must be disabled on the
+// peer-served new-block path (processBlockFound) and the catch-up path (validateBlocksOnChannel)
+// for this block (bitcoin-sv/teranode#4692). Optimistic mining is permitted on those paths ONLY
+// when BOTH the global OptimisticMining flag AND the dedicated OptimisticMiningPeerBlocks opt-in
+// are set, so the global opt-out always wins and the new peer-blocks flag can never bypass it.
+// Written explicitly at the gate rather than relying on the downstream useOptimisticMining seed
+// (belt-and-suspenders). Revalidation of an already-stored block (RevalidateBlock) is never
+// optimistic and does not use this gate.
+func optimisticMiningDisabledForPeerPath(s *settings.Settings) bool {
+	return !(s.BlockValidation.OptimisticMining && s.BlockValidation.OptimisticMiningPeerBlocks)
+}
+
 // Returns an error if block processing, validation, or dependency management fails
 func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockFound",
@@ -1508,6 +1547,18 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 
 	if exists {
 		u.logger.Warnf("[processBlockFound][%s] not processing block that already was found", hash.String())
+		return nil
+	}
+
+	// Per-block-hash corrupt re-download cap (bitcoin-sv/teranode#4692): once this hash has hit
+	// MaxCorruptAttemptsPerBlock corrupt-body failures within the cooldown window, skip the
+	// expensive download/subtree-prepare/merkle work until the fixed window lapses. This is the
+	// universal RUNNING chokepoint (worker, direct ProcessBlock RPC, retries all funnel here), so
+	// the drop happens before fetchSingleBlock below. The corrupt path persisted nothing, so this
+	// only rate-limits the hash — it never poisons it, and once the window expires an honest body
+	// flows through. return nil (skip), never an error/poison.
+	if u.corruptAttemptsExhausted(hash) {
+		u.logger.Warnf("[processBlockFound][%s] corrupt re-download cap reached; skipping re-download until the cooldown window expires", hash.String())
 		return nil
 	}
 
@@ -1586,7 +1637,10 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		// the legacy peer layer (peer_server.addBanScore via sp.blockProcessed), which owns the
 		// serving peer identity — the netsync ProcessBlock path carries no usable peerID here, so
 		// attributing the strike at that layer is the only correct attribution.
-		return u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
+		qErr := u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
+		u.accountCorruptAttempt(hash, qErr)
+
+		return qErr
 	}
 
 	// validate the block
@@ -1594,21 +1648,25 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 
 	// Create validation options.
 	//
-	// bitcoin-sv/teranode#4692: force this peer-serving (corruption-reachable) path non-optimistic.
+	// bitcoin-sv/teranode#4692: this peer-serving (corruption-reachable) path is non-optimistic
+	// UNLESS the operator opts in via BOTH blockvalidation_optimistic_mining and
+	// blockvalidation_optimistic_mining_peer_blocks (see optimisticMiningDisabledForPeerPath).
 	// Optimistic mining AddBlocks the body BEFORE block.Valid runs in the background, so a
 	// corrupt body would be accepted first and then require rollback — but there is no
-	// non-poisoning removal primitive (only InvalidateBlock, which poisons). Disabling
-	// optimistic here makes block.Valid run monolithically before AddBlock, so no corrupt
-	// body is ever added, and the txMap lifetime is unchanged from today. Catchup already
-	// sets this (validateBlocksOnChannel). Remove this override once block.Valid is split so
-	// its integrity floor runs before the optimistic AddBlock.
+	// non-poisoning removal primitive (only InvalidateBlock, which poisons). With the default
+	// (opt-out) gate, block.Valid runs monolithically before AddBlock, so no corrupt body is
+	// ever added. When opted in, a corrupt body on the optimistic-background path takes the
+	// invalidate route (see the block.Valid background handler). This gate is removed once
+	// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
 	opts := &ValidateBlockOptions{
-		DisableOptimisticMining: true,
+		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 		PeerID:                  peerID,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
+	u.accountCorruptAttempt(hash, err)
+
 	if err != nil {
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
@@ -1835,12 +1893,22 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 					// it correctly never connects.
 					u.logger.Warnf("[BlockProcessing] Block %s had a corrupt body, cleared for re-download from another peer", blockFound.hash.String())
 					u.processBlockNotify.Delete(*blockFound.hash)
+					// The per-hash corrupt cap (bitcoin-sv/teranode#4692) is accounted inside
+					// processBlockFound (accountCorruptAttempt), which both this worker route and the
+					// direct ProcessBlock route funnel through — so it is counted there exactly once,
+					// not here (which would double-count the worker route and miss the direct route).
 				}
 			} else {
 				// Update processed metric with success
 				if prometheusBlockPriorityQueueProcessed != nil {
 					prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "success").Inc()
 				}
+
+				// The per-hash corrupt counter (bitcoin-sv/teranode#4692) is cleared on a genuine
+				// validation success inside processBlockFound (accountCorruptAttempt). It is NOT
+				// cleared here: a worker "success" also covers the exists / catchup / cap-exhausted
+				// early returns (which return nil), and clearing on a cap-exhausted skip would reset
+				// the very cooldown the cap just enforced.
 			}
 		}
 	}
@@ -2169,6 +2237,100 @@ func (u *Server) catchupAttemptsExhausted(blockHash *chainhash.Hash) bool {
 	}
 
 	item := u.blockCatchupAttempts.Get(*blockHash)
+
+	return item != nil && item.Value() >= maxAttempts
+}
+
+// corruptAttemptCooldown returns the fixed cooldown window for the per-block corrupt
+// re-download cap (bitcoin-sv/teranode#4692), falling back to 10m when settings are nil or the
+// setting is unset or non-positive so the ttlcache always has a valid finite window.
+func corruptAttemptCooldown(s *settings.Settings) time.Duration {
+	if s != nil {
+		if d := s.BlockValidation.CorruptAttemptCooldown; d > 0 {
+			return d
+		}
+	}
+
+	return 10 * time.Minute
+}
+
+// recordCorruptAttempt increments and returns the corrupt-body failure count for a block
+// within the current fixed cooldown window (bitcoin-sv/teranode#4692). Mirrors
+// recordCatchupAttempt: the window starts at the FIRST corrupt failure and is not extended by
+// subsequent failures or by gate reads, so once it lapses an honest body is admitted again.
+// Called ONLY on an actual IsBlockCorrupt failure, never on every announcement. A nil cache
+// (Server literals in tests that don't wire it) degrades to no tracking.
+func (u *Server) recordCorruptAttempt(blockHash *chainhash.Hash) int {
+	if u.blockCorruptAttempts == nil {
+		return 0
+	}
+
+	// Preserve the ORIGINAL expiry: re-Set with the time REMAINING to the original expiry,
+	// not a fresh full window (see recordCatchupAttempt for the ttlcache semantics).
+	if item := u.blockCorruptAttempts.Get(*blockHash); item != nil {
+		remaining := time.Until(item.ExpiresAt())
+		if remaining <= 0 {
+			remaining = ttlcache.DefaultTTL
+		}
+
+		n := item.Value() + 1
+		u.blockCorruptAttempts.Set(*blockHash, n, remaining)
+
+		return n
+	}
+
+	u.blockCorruptAttempts.Set(*blockHash, 1, ttlcache.DefaultTTL)
+
+	return 1
+}
+
+// accountCorruptAttempt records or clears the per-hash corrupt re-download counter from a
+// block-validation OUTCOME in processBlockFound (bitcoin-sv/teranode#4692). This is the SINGLE
+// accounting point for every RUNNING delivery route: both the block-processing worker
+// (processBlockWithPriority) and the direct ProcessBlock gRPC handler funnel through
+// processBlockFound, so a corrupt delivery is counted exactly once regardless of route and the cap
+// cannot be bypassed by hammering ProcessBlock directly. A corrupt result records toward the cap; a
+// genuine success clears it (so an honest body resets the count). Only true validation outcomes
+// reach here — the exists / catchup / cap-exhausted early returns never call this, so a cap-hit
+// skip (which returns nil) can never clear its own cooldown. Non-corrupt errors (transient /
+// service / invalid) leave the counter untouched.
+func (u *Server) accountCorruptAttempt(blockHash *chainhash.Hash, validationErr error) {
+	if validationErr == nil {
+		u.clearCorruptAttempts(blockHash)
+		return
+	}
+
+	if errors.IsBlockCorrupt(validationErr) {
+		u.recordCorruptAttempt(blockHash)
+	}
+}
+
+// clearCorruptAttempts resets a block's per-block corrupt-attempt counter (and its cooldown
+// window). Called on the RUNNING success path so an honest re-try never drives the counter and a
+// later corruption starts fresh (bitcoin-sv/teranode#4692). Nil-safe.
+func (u *Server) clearCorruptAttempts(blockHash *chainhash.Hash) {
+	if u.blockCorruptAttempts != nil {
+		u.blockCorruptAttempts.Delete(*blockHash)
+	}
+}
+
+// corruptAttemptsExhausted reports whether a block has reached the per-block corrupt
+// re-download cap and is therefore in its cooldown window (bitcoin-sv/teranode#4692). A cap of
+// <= 0 disables the bound (re-opens the corrupt-body bandwidth DoS). Nil-safe: a nil settings or
+// nil cache (Server literals in tests that don't wire them) behaves as CAP DISABLED — it returns
+// false (never "exhausted"), so a missing config can never silently drop honest blocks. Returns a
+// bool — never an error — so the gate can never emit a poisoning result.
+func (u *Server) corruptAttemptsExhausted(blockHash *chainhash.Hash) bool {
+	if u.settings == nil || u.blockCorruptAttempts == nil {
+		return false
+	}
+
+	maxAttempts := u.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	item := u.blockCorruptAttempts.Get(*blockHash)
 
 	return item != nil && item.Value() >= maxAttempts
 }

@@ -1,5 +1,7 @@
 package p2p
 
+import p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
+
 // Ban reason strings used by P2P-internal callsites when reporting peer
 // misbehaviour to the centralized peer registry's AddBanScore RPC. The
 // blockchain-side BanConfig assigns concrete penalty points to each reason;
@@ -8,11 +10,10 @@ const (
 	ReasonProtocolViolation = "protocol_violation"
 	ReasonInvalidSubtree    = "invalid_subtree"
 	ReasonInvalidBlock      = "invalid_block"
-	// ReasonCorruptBlockBody scores a peer that served a corrupt block body for a valid
-	// block hash (bitcoin-sv/teranode#4692). Unlike ReasonInvalidBlock the block is NOT persisted
-	// invalid; the peer is struck and the body re-downloaded, mirroring svnode's
-	// CorruptionOrDoS stance of punishing the connection without failing the header.
-	ReasonCorruptBlockBody = "corrupt_block_body"
+	// ReasonCorruptBlockBody re-exports the single source of truth in interfaces/p2p so
+	// dependency-free callers can reference the corrupt-body strike reason without importing this
+	// server package (bitcoin-sv/teranode#4692). Same value: "corrupt_block_body".
+	ReasonCorruptBlockBody = string(p2pconstants.ReasonCorruptBlockBody)
 	ReasonSpam             = "spam"
 	ReasonUnknown          = "unknown"
 )

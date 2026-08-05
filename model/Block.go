@@ -763,10 +763,14 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	}
 
 	// 4. Check that the coinbase transaction is valid (reward checked later).
-	// A missing coinbase is missing data, not a verdict on the block hash — treat it
-	// as incomplete (like the outer no-coinbase path) so it is re-fetched, not poisoned.
+	// A missing coinbase in an unbound received body is a body-integrity failure, not a
+	// verdict on the block hash — and it is indistinguishable from transport corruption or
+	// attacker junk. Classify it corrupt (tier-2) like the body-derived checks that follow so
+	// it is re-downloaded and the serving peer struck, never poisoned (bitcoin-sv/teranode#4692).
+	// This also keeps ErrBlockIncomplete meaning only "floater" at the block.Valid handlers, so
+	// their "floater: parent not in block" reason string stays accurate.
 	if b.CoinbaseTx == nil {
-		return false, errors.NewBlockIncompleteError("[BLOCK][%s] block has no coinbase tx", b.String())
+		return false, errors.NewBlockCorruptError("[BLOCK][%s] block has no coinbase tx", b.String())
 	}
 
 	// From here the coinbase/subtree/merkle checks are body-derived: on an unbound body
