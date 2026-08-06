@@ -323,6 +323,16 @@ func (b *BlockAssembler) ConsumerExited() bool {
 	return b.subtreeProcessor.ConsumerExited()
 }
 
+// QueueHeadAge returns how long the oldest queued batch has been waiting.
+// It is a diagnostic gauge for dispatcher-stall visibility and returns 0 when
+// the queue is empty.
+//
+// Returns:
+//   - time.Duration: Age of the oldest queued batch, or 0 if empty
+func (b *BlockAssembler) QueueHeadAge() time.Duration {
+	return b.subtreeProcessor.QueueHeadAge()
+}
+
 // SubtreeCount returns the total number of subtrees.
 //
 // Returns:
@@ -1525,6 +1535,20 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 //   - txInpoints: Parent transaction references for each node
 func (b *BlockAssembler) AddTxBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	b.subtreeProcessor.AddBatch(nodes, txInpoints)
+}
+
+// AddTxBatchIfRoom adds a batch of transactions to the block assembler only if
+// the configured queue bound would not be exceeded, reporting whether it did.
+// When no bound is configured it never refuses, behaving as AddTxBatch.
+//
+// Parameters:
+//   - nodes: Transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//
+// Returns:
+//   - bool: true if the batch was enqueued, false if it was refused for room
+func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints)
 }
 
 // RemoveTx removes a transaction from the block assembler.

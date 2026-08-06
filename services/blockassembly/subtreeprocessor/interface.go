@@ -41,12 +41,26 @@ import (
 type Interface interface {
 	// AddBatch adds a batch of transaction nodes to the subtree processor for processing.
 	// The transactions will be organized into appropriate subtrees based on
-	// their dependencies and relationships with other transactions.
+	// their dependencies and relationships with other transactions. This path is
+	// unconditional: it bypasses any configured capacity bound and does not
+	// uphold the queueLength >= published-outstanding invariant.
 	//
 	// Parameters:
 	//   - nodes: The transaction nodes to add to processing
 	//   - txInpoints: Transaction input points for each node for dependency tracking
 	AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints)
+
+	// AddBatchIfRoom adds a batch only if the configured capacity bound would not
+	// be exceeded, reporting whether it did. When no bound is configured it never
+	// refuses and behaves identically to AddBatch.
+	//
+	// Parameters:
+	//   - nodes: The transaction nodes to add to processing
+	//   - txInpoints: Transaction input points for each node for dependency tracking
+	//
+	// Returns:
+	//   - bool: true if the batch was enqueued, false if it was refused for room
+	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.
@@ -294,10 +308,22 @@ type Interface interface {
 
 	// QueueLength returns the number of transactions currently queued, not
 	// the number of batches. This indicates the processor's current workload.
+	// For items added through the bounded AddBatchIfRoom path it counts
+	// reserved-or-published items and never reads below the published-outstanding
+	// count; the unbounded AddBatch path publishes before accounting, so it can
+	// transiently read below that count and does not participate in the cap.
 	//
 	// Returns:
 	//   - int64: Current queue length, in transactions
 	QueueLength() int64
+
+	// QueueHeadAge returns how long the oldest queued batch has been waiting.
+	// It is a diagnostic gauge for dispatcher-stall visibility and returns 0
+	// when the queue is empty.
+	//
+	// Returns:
+	//   - time.Duration: Age of the oldest queued batch, or 0 if empty
+	QueueHeadAge() time.Duration
 
 	// LastDequeueTime returns the wall-clock time the consumer goroutine last
 	// passed through the queue's dequeue branch. Combined with QueueLength,
