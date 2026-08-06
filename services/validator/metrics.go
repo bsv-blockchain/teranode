@@ -124,6 +124,15 @@ var (
 	// This histogram tracks database operations for storing and updating transaction metadata,
 	// including validation status, processing timestamps, and related transaction information. Units: seconds.
 	prometheusValidatorSetTxMeta prometheus.Histogram
+
+	// prometheusBlockAssemblyRecovered counts resubmits that re-drove a stranded
+	// block-assembly handoff for a transaction that existed but was still locked.
+	prometheusBlockAssemblyRecovered prometheus.Counter
+
+	// prometheusBlockAssemblyRecoveryFailed counts resubmit recoveries whose
+	// block-assembly send failed (e.g. the queue was still full), leaving the
+	// transaction locked for a later retry.
+	prometheusBlockAssemblyRecoveryFailed prometheus.Counter
 )
 
 // Synchronization primitives
@@ -332,6 +341,24 @@ func _initPrometheusMetrics() {
 			Name:      "set_tx_meta",
 			Help:      "Histogram of validator set tx meta",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyRecovered = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "block_assembly_recovered_total",
+			Help:      "Resubmits that re-drove a stranded block-assembly handoff for an existing-but-locked transaction",
+		},
+	)
+
+	prometheusBlockAssemblyRecoveryFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "block_assembly_recovery_failed_total",
+			Help:      "Resubmit recoveries whose block-assembly send failed, leaving the transaction locked for a later retry",
 		},
 	)
 }

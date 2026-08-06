@@ -1467,13 +1467,21 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 	err = utxoStore.SetMedianBlockTime(1700000000)
 	require.NoError(t, err)
 
+	// Contract change (validator resubmit-recovery): a resubmit of an already-
+	// Locked, unmined, non-conflicting transaction now re-drives the block-
+	// assembly handoff instead of silently returning success. That silent
+	// success was the stranded-lock defect the recovery path was added to fix —
+	// a client could resubmit forever and never learn the tx was not in a
+	// template. So a failing store now surfaces an error. The titular invariant
+	// is unchanged and still asserted below: because the send failed, the two-
+	// phase commit never ran, so the tx stays Locked for a later retry.
 	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
-	require.NoError(t, err)
+	require.Error(t, err, "a failed block-assembly re-drive on resubmit must surface, not silently succeed")
 
 	metaData := &meta.Data{}
 	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.True(t, metaData.Locked, "Flag should be set if block assembly did not store tx")
+	assert.True(t, metaData.Locked, "Flag should remain set if block assembly did not store tx")
 }
 
 func Test_serializeTxMetaBatch(t *testing.T) {
