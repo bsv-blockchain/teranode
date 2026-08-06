@@ -861,6 +861,49 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
 			}
 
+			// A transaction that exists but is still locked and unmined never
+			// completed its block-assembly handoff — the queue refused it, or
+			// the process died between create and the two-phase unlock. Re-drive
+			// the handoff so a resubmit is the recovery path. The gate is tight:
+			// a normally-accepted tx has already been unlocked by its own 2PC
+			// (so Locked is false and ordinary idempotent resubmits skip this),
+			// BlockIDs excludes mined transactions, and !Conflicting excludes the
+			// conflicting-cascade state. Ordering is send-then-unlock, matching
+			// the unmined-reload path, so a descendant can never enter the
+			// template ahead of this tx; a double-add is a no-op downstream.
+			if addToBlockAssembly && txMetaData.Locked && len(txMetaData.BlockIDs) == 0 && !txMetaData.Conflicting {
+				var txInpoints subtree.TxInpoints
+
+				if txMetaData.TxInpoints.ParentTxHashes != nil {
+					txInpoints = txMetaData.TxInpoints
+				} else {
+					txInpoints, err = subtree.NewTxInpointsFromTx(tx)
+					if err != nil {
+						return nil, errors.NewProcessingError("[Validate][%s] error getting tx inpoints for recovery", txID, err)
+					}
+				}
+
+				if err = v.sendToBlockAssembler(decoupledCtx, &blockassembly.Data{
+					TxIDChainHash: *tx.TxIDChainHash(),
+					Fee:           txMetaData.Fee,
+					Size:          uint64(tx.Size()), // nolint:gosec
+					TxInpoints:    txInpoints,
+				}, nil); err != nil {
+					prometheusBlockAssemblyRecoveryFailed.Inc()
+
+					// Still locked; the caller may retry once block assembly has room.
+					return txMetaData, err
+				}
+
+				if err = v.twoPhaseCommitTransaction(decoupledCtx, tx, txID); err != nil {
+					return txMetaData, err
+				}
+
+				txMetaData.Locked = false
+
+				prometheusBlockAssemblyRecovered.Inc()
+			}
+
 			return txMetaData, nil
 		}
 
@@ -1005,7 +1048,18 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			Size:          uint64(tx.Size()), // nolint:gosec
 			TxInpoints:    txInpoints,
 		}, spentUtxos); err != nil {
-			err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
+			// Preserve a queue-full shed's resource-exhausted classification so a
+			// first-submission shed surfaces to the caller as ResourceExhausted
+			// (queue full, retryable after §6.5.1 recovery) rather than being
+			// masked as Internal by a ProcessingError wrapper. Every other send
+			// failure keeps its processing wrapping. Control flow is unchanged:
+			// this early return still precedes the Kafka publish and the 2PC, so
+			// the tx stays Locked and unmined per §6.5 and §6.5.1 recovery applies
+			// on resubmit.
+			if !errors.Is(err, errors.ErrThresholdExceeded) {
+				err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
+			}
+
 			span.RecordError(err)
 
 			return nil, err
@@ -1607,6 +1661,16 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 	// }
 
 	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints); err != nil {
+		// A queue-full shed must keep its resource-exhausted classification so it
+		// surfaces as ResourceExhausted (retry gate skips it) rather than being
+		// masked as a generic service fault (Internal). Every other failure is a
+		// genuine service fault.
+		if errors.Is(err, errors.ErrThresholdExceeded) {
+			span.RecordError(err)
+
+			return err
+		}
+
 		e := errors.NewServiceError("error calling blockAssembler Store()", err)
 		span.RecordError(e)
 
