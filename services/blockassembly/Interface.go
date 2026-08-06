@@ -135,6 +135,18 @@ type ClientI interface {
 	//   - error: Any error encountered during retrieval
 	GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error)
 
+	// GetBlockAssemblyQueueStats retrieves a slim, atomic-only view of the ingest
+	// queue (depth + head-batch age) for high-frequency control reads. It never
+	// blocks on the subtree-processor main loop the way GetBlockAssemblyState can.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//
+	// Returns:
+	//   - *blockassembly_api.QueueStatsMessage: Queue depth and head-batch age
+	//   - error: Any error encountered during retrieval
+	GetBlockAssemblyQueueStats(ctx context.Context) (*blockassembly_api.QueueStatsMessage, error)
+
 	// GetBlockAssemblyBlockCandidate retrieves the block candidate for block assembly.
 	//
 	// Parameters:
