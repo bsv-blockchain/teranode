@@ -32,13 +32,14 @@ func TestHandleBlockMsg_CorruptCapDropsBeforeHandleBlockDirect(t *testing.T) {
 
 	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
 	sm.settings.BlockValidation.MaxCorruptAttemptsPerBlock = 2
-	sm.blockCorruptAttempts = expiringmap.New[chainhash.Hash, *corruptAttemptState](10 * time.Minute)
+	sm.blockCorruptAttempts = expiringmap.New[legacyCorruptAttemptKey, *corruptAttemptState](10 * time.Minute)
 	t.Cleanup(func() { sm.blockCorruptAttempts.Stop() })
 
-	// Drive the hash to the cap, exactly as repeated corrupt deliveries would.
-	require.Equal(t, 1, sm.recordCorruptBlockAttempt(blockHash))
-	require.Equal(t, 2, sm.recordCorruptBlockAttempt(blockHash))
-	require.True(t, sm.corruptBlockAttemptsExhausted(blockHash), "cap reached")
+	// Drive the hash to the cap for THIS serving peer, exactly as repeated corrupt deliveries would.
+	// The gate keys on (hash, peer address), so record against the same peer handleBlockMsg will read.
+	require.Equal(t, 1, sm.recordCorruptBlockAttempt(blockHash, p.Addr()))
+	require.Equal(t, 2, sm.recordCorruptBlockAttempt(blockHash, p.Addr()))
+	require.True(t, sm.corruptBlockAttemptsExhausted(blockHash, p.Addr()), "cap reached")
 
 	err := sm.handleBlockMsg(&blockQueueMsg{
 		block:       msgBlock,

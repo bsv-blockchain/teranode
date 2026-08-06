@@ -150,7 +150,7 @@ func TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals(t *testing.T) {
 		require.True(t, errors.IsBlockCorrupt(err), "delivery %d must surface a corrupt error, got: %v", i, err)
 	}
 
-	require.True(t, s.corruptAttemptsExhausted(block.Hash()), "cap reached after 2 corrupt deliveries")
+	require.True(t, s.corruptAttemptsExhausted(block.Hash(), ""), "cap reached after 2 corrupt deliveries")
 
 	// Past the cap the corrupt delivery is DROPPED before validation: it returns nil (the corrupt
 	// error is suppressed), proving the gate skipped the expensive work rather than re-running it.
@@ -159,8 +159,8 @@ func TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals(t *testing.T) {
 
 	// Self-heal: clearing the counter (as a genuine success would) re-admits the hash, so the same
 	// corrupt body is validated again and surfaces its error — the hash was rate-limited, never condemned.
-	s.clearCorruptAttempts(block.Hash())
-	require.False(t, s.corruptAttemptsExhausted(block.Hash()), "cleared counter reopens the gate")
+	s.clearCorruptAttempts(block.Hash(), "")
+	require.False(t, s.corruptAttemptsExhausted(block.Hash(), ""), "cleared counter reopens the gate")
 
 	err = s.processBlockFound(ctx, block.Hash(), "", "legacy", block)
 	require.Error(t, err)
@@ -186,5 +186,77 @@ func TestProcessBlockFound_CapDisabled_NeverDrops(t *testing.T) {
 		require.True(t, errors.IsBlockCorrupt(err), "delivery %d must surface a corrupt error, got: %v", i, err)
 	}
 
-	require.False(t, s.corruptAttemptsExhausted(block.Hash()), "cap <= 0 never reports exhausted")
+	require.False(t, s.corruptAttemptsExhausted(block.Hash(), ""), "cap <= 0 never reports exhausted")
+}
+
+// TestProcessBlockFound_CorruptCap_HonestPeerNotWedged drives the (hash, peerID) re-key end-to-end
+// through processBlockFound (bitcoin-sv/teranode#4692, ordishs' NEW finding): a bad peer that exhausts
+// its budget for the tip hash must NOT suppress that same hash when an HONEST peer serves it. Because
+// the honest peer keys a different (hash, peerID) bucket, its delivery is not dropped by the gate —
+// it reaches validation. Here the same corrupt body is used for both peers, so the honest delivery
+// still surfaces a corrupt error rather than nil: the point proven is that it was NOT gated out
+// (reached validation), which is exactly the honest-tip-not-wedged property.
+func TestProcessBlockFound_CorruptCap_HonestPeerNotWedged(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, _, block := newProcessBlockFoundHarness(ctx, t)
+	s.settings.BlockValidation.MaxCorruptAttemptsPerBlock = 2
+	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00})
+
+	const badPeer, honestPeer = "peerBad", "peerHonest"
+
+	// The bad peer exhausts its own budget for the tip hash.
+	for i := 1; i <= 2; i++ {
+		err := s.processBlockFound(ctx, block.Hash(), badPeer, "legacy", block)
+		require.Error(t, err)
+		require.True(t, errors.IsBlockCorrupt(err), "bad-peer delivery %d must reach validation, got: %v", i, err)
+	}
+	require.True(t, s.corruptAttemptsExhausted(block.Hash(), badPeer), "the bad peer is capped for this hash")
+	require.False(t, s.corruptAttemptsExhausted(block.Hash(), honestPeer), "the honest peer keeps a fresh budget")
+
+	// The honest peer serving the SAME hash is NOT gated out — its delivery reaches validation (and,
+	// with this deliberately-corrupt body, still surfaces the corrupt error rather than a silent nil
+	// drop). The bad peer never wedged the honest tip.
+	err := s.processBlockFound(ctx, block.Hash(), honestPeer, "legacy", block)
+	require.Error(t, err, "the honest peer must not be gated out by the bad peer's exhausted budget")
+	require.True(t, errors.IsBlockCorrupt(err), "the honest delivery reached validation, got: %v", err)
+}
+
+// TestProcessBlockFound_CorruptCap_HitNeitherClearsNorPoisons is §4 test 4 (bitcoin-sv/teranode#4692):
+// a cap-hit skip returns nil, does NOT clear its own counter (so the cooldown still bounds the peer),
+// sets no invalid=true, and leaves GetBlockExists false — the hash is rate-limited, never condemned.
+// When the window lapses (simulated by clearing) the honest body is admitted again (self-heal).
+func TestProcessBlockFound_CorruptCap_HitNeitherClearsNorPoisons(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, blockchainStore, block := newProcessBlockFoundHarness(ctx, t)
+	s.settings.BlockValidation.MaxCorruptAttemptsPerBlock = 2
+	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00})
+
+	const peerID = "peerCap"
+
+	// Reach the cap.
+	for i := 1; i <= 2; i++ {
+		err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+		require.Error(t, err)
+		require.True(t, errors.IsBlockCorrupt(err))
+	}
+	require.True(t, s.corruptAttemptsExhausted(block.Hash(), peerID), "cap reached")
+
+	// The cap-hit delivery returns nil (dropped) but must NOT clear the counter...
+	err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+	require.NoError(t, err, "a cap-hit delivery is dropped, returning nil")
+	require.True(t, s.corruptAttemptsExhausted(block.Hash(), peerID),
+		"the cap-hit skip must NOT clear its own counter (else the cooldown would not bound the peer)")
+
+	// ...and must NOT poison: the block was never stored invalid, and does not exist.
+	exists, err := blockchainStore.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, err)
+	require.False(t, exists, "a rate-limited corrupt hash must never be persisted (no poison)")
+
+	// Self-heal: once the window lapses (simulated), the honest body is admitted for validation again.
+	s.clearCorruptAttempts(block.Hash(), peerID)
+	require.False(t, s.corruptAttemptsExhausted(block.Hash(), peerID), "the window lapsing re-admits the hash")
 }
