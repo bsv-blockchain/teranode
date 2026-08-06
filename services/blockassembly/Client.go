@@ -745,6 +745,24 @@ func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.
 	return state, nil
 }
 
+// GetBlockAssemblyQueueStats retrieves a slim, atomic-only view of the ingest
+// queue (depth + head-batch age) for high-frequency control reads.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - *blockassembly_api.QueueStatsMessage: Queue depth and head-batch age
+//   - error: Any error encountered during retrieval
+func (s *Client) GetBlockAssemblyQueueStats(ctx context.Context) (*blockassembly_api.QueueStatsMessage, error) {
+	stats, err := s.client.GetBlockAssemblyQueueStats(ctx, &blockassembly_api.EmptyMessage{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return stats, nil
+}
+
 // BlockAssemblyAPIClient returns the underlying gRPC client for block assembly API.
 //
 // Returns:
