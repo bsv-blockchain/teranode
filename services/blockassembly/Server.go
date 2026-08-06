@@ -155,6 +155,13 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
 
+	// A negative queue-full wait is a misconfiguration, not a tiny wait; warn
+	// once and treat it as 0 (shed immediately). The item cap itself is
+	// normalized where the queue is constructed.
+	if tSettings.BlockAssembly.QueueFullWaitTimeout < 0 {
+		logger.Warnf("BlockAssembly.QueueFullWaitTimeout=%s is negative; treating as 0 (shed immediately)", tSettings.BlockAssembly.QueueFullWaitTimeout)
+	}
+
 	ba := &BlockAssembly{
 		logger:              logger,
 		stats:               gocore.NewStat("blockassembly"),
@@ -297,6 +304,13 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				return
 			case <-time.After(5 * time.Second):
 				stallState = ba.sampleBlockAssemblerMetrics(stallState, time.Now())
+
+				// Queue-head age is a standalone gauge, not an input to the stall
+				// signal, so it is sampled here rather than inside
+				// sampleBlockAssemblerMetrics - that function's contract is the
+				// stall-state computation, and its unit tests mock only the reads
+				// that computation makes.
+				prometheusBlockAssemblyQueueHeadAge.Set(ba.blockAssembler.QueueHeadAge().Seconds())
 			}
 		}
 	}()
@@ -1125,10 +1139,12 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTxBatch(
+		if err = ba.addTxBatchWithBackpressure(ctx,
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
-		)
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -1180,6 +1196,91 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
+}
+
+// queueFullPollInterval is how often the bounded wait rechecks for ingest-queue
+// room. It is short relative to the default 100ms wait so a freed slot is
+// picked up promptly, and coarse enough not to busy-spin.
+const queueFullPollInterval = 5 * time.Millisecond
+
+// addTxBatchWithBackpressure enqueues a batch into block assembly under the
+// configured capacity bound. It is the shared body of all three ingest
+// handlers, called only inside the enabled branch.
+//
+// On the fast path there is room and it returns immediately — this is also the
+// always-taken path when no bound is configured, so an unbounded node pays only
+// one atomic and no added latency. When the queue is full it waits up to
+// QueueFullWaitTimeout for the dispatcher to make room, polling on a short
+// ticker. If room never appears the batch is shed with a ResourceExhausted-
+// mapped error; the transactions stay locked in the UTXO store and a client
+// resubmit re-drives the handoff.
+//
+// Caller cancellation (ctx.Done) is NOT a shed: it returns a context-cancelled
+// error without incrementing the shed counter and without the resource-exhausted
+// class, whose locked-shed recovery semantics do not apply to a cancelled call.
+//
+// The wait is strictly bounded so it can never wedge the validator, whose
+// block-assembly client waits on an untimed, un-cancellable group.
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) error {
+	if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+		return nil
+	}
+
+	start := time.Now()
+
+	if ba.settings.BlockAssembly.QueueFullWaitTimeout > 0 {
+		ticker := time.NewTicker(queueFullPollInterval)
+		defer ticker.Stop()
+
+		timeout := time.After(ba.settings.BlockAssembly.QueueFullWaitTimeout)
+
+		for {
+			select {
+			case <-ctx.Done():
+				prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+				return ba.contextCancelledDuringIngest(ctx)
+			case <-timeout:
+				return ba.shed(start)
+			case <-ticker.C:
+				if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+					return nil
+				}
+			}
+		}
+	}
+
+	// No wait configured: shed immediately, but still honour an already-cancelled
+	// caller rather than mislabelling it as a shed.
+	if ctx.Err() != nil {
+		return ba.contextCancelledDuringIngest(ctx)
+	}
+
+	return ba.shed(start)
+}
+
+// shed records and returns the queue-full shed outcome: a ResourceExhausted-
+// mapped error the retry interceptor does not retry, whose locked-shed recovery
+// is a client resubmit.
+func (ba *BlockAssembly) shed(start time.Time) error {
+	prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+	prometheusBlockAssemblyQueueShed.Inc()
+
+	return errors.WrapGRPC(errors.NewThresholdExceededError(
+		"block assembly queue full: %d items queued, limit %d",
+		ba.blockAssembler.QueueLength(), ba.settings.BlockAssembly.MaxQueueItems))
+}
+
+// contextCancelledDuringIngest maps a cancelled/deadline-exceeded ingest wait to
+// the repo's context-cancelled error class. It is deliberately distinct from a
+// shed: no shed counter, no resource-exhausted class.
+func (ba *BlockAssembly) contextCancelledDuringIngest(ctx context.Context) error {
+	// Pass ctx.Err() as a string, not a trailing error: the errors constructor
+	// would otherwise extract it as a wrapped cause, and a wrapped cause changes
+	// how WrapGRPC serialises the status. The context-cancelled class is carried
+	// by the ERR_CONTEXT_CANCELED code alone.
+	return errors.WrapGRPC(errors.NewContextCanceledError(
+		"block assembly ingest cancelled while waiting for queue room: %s", ctx.Err().Error()))
 }
 
 // AddTxBatch processes a batch of transactions for block assembly.
@@ -1243,7 +1344,9 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+			return nil, err
+		}
 	}
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
@@ -1421,7 +1524,9 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 
 	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 
-	ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+		return nil, err
+	}
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
 }
