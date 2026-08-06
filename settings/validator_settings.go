@@ -60,7 +60,7 @@ type ValidatorKafkaBackpressureSettings struct {
 	PollInterval    time.Duration `key:"validator_kafkaBackpressurePollInterval" desc:"Controller poll cadence" default:"50ms" category:"Validator" usage:"How often the controller reads the queue-head age" type:"duration" longdesc:"### Purpose\nHow often the controller reads the slim queue-stats RPC and re-evaluates the pause/resume decision.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
 	ReadTimeout     time.Duration `key:"validator_kafkaBackpressureReadTimeout" desc:"Per-poll RPC deadline for the queue-stats read" default:"100ms" category:"Validator" usage:"Bounds each queue-stats read so the controller can't inherit a downstream stall" type:"duration" longdesc:"### Purpose\nPer-poll context deadline applied to each GetBlockAssemblyQueueStats read so the controller never blocks on a downstream stall.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
 	MaxPause        time.Duration `key:"validator_kafkaBackpressureMaxPause" desc:"Safety cap on how long a single pause may last" default:"30s" category:"Validator" usage:"Fail-open resume after this long even if still hot" type:"duration" longdesc:"### Purpose\nHard cap on the duration of any single pause. When a pause has lasted this long the controller resumes (fail-open) even if the queue is still hot, bounding Kafka retention exposure and lag-alert duration.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
-	StaleErrorLimit int           `key:"validator_kafkaBackpressureStaleErrorLimit" desc:"Consecutive read errors tolerated before fail-open resume" default:"3" category:"Validator" usage:"Resume if the queue signal is unavailable this many polls in a row" type:"int" longdesc:"### Purpose\nNumber of consecutive queue-stats read errors (or timeouts) tolerated before the controller fails open and resumes a paused consumer. A successful read resets the counter.\n\n### Constraints\nClamped to a minimum of 1 at load so a single transient error can never immediately fail open."`
+	StaleErrorLimit int           `key:"validator_kafkaBackpressureStaleErrorLimit" desc:"Consecutive read errors tolerated before fail-open resume" default:"3" category:"Validator" usage:"Resume if the queue signal is unavailable this many polls in a row" type:"int" longdesc:"### Purpose\nNumber of consecutive queue-stats read errors (or timeouts) after which the controller fails open and resumes a paused consumer (the Nth consecutive failure triggers the resume). A successful read resets the counter.\n\n### Constraints\nClamped to a minimum of 1 at load: a non-positive value is meaningless. The default of 3 rides out brief transient read failures before failing open."`
 }
 
 // loadValidatorKafkaBackpressureSettings reads the backpressure keys and returns
@@ -137,7 +137,8 @@ func (s ValidatorKafkaBackpressureSettings) validated() ValidatorKafkaBackpressu
 		s.ResumeQueueAge = 0
 	}
 
-	// A non-positive limit would fail open on the first transient read error.
+	// A non-positive limit is meaningless (the streak is compared with >=); floor
+	// it at 1 so the smallest configured value is a single tolerated failure.
 	if s.StaleErrorLimit < 1 {
 		if s.Enabled {
 			warn(fmt.Sprintf("staleErrorLimit=%d must be >= 1; clamping to 1", s.StaleErrorLimit))
