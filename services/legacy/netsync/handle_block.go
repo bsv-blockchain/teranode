@@ -391,11 +391,19 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	txCount := len(block.Transactions())
 	if txCount <= 1 {
 		if err = commitment.CheckMerkleRoot(ctx); err != nil {
-			// Body-derived: the coinbase-only body does not hash to the header's merkle root,
-			// so the wire body is not bound to the header and cannot condemn the hash. Classify
-			// corrupt so the caller drops it and allows a re-request, never invalid=true
-			// (bitcoin-sv/teranode#4692).
-			return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees] merkle root mismatch", err)
+			// CheckMerkleRoot returns BOTH body-derived corrupt verdicts AND local storage/processing
+			// errors (bitcoin-sv/teranode#4692). Only a genuinely corrupt (body-derived) result may be
+			// classified corrupt — then the coinbase-only body does not hash to the header's merkle
+			// root, so the wire body is not bound to the header and cannot condemn the hash; the caller
+			// drops it and allows a re-request, never invalid=true. A local storage/processing error is
+			// OUR failure, not the peer's: return it UNWRAPPED so it keeps its own classification and
+			// the caller neither strikes the serving peer nor skips the transient-failure backoff.
+			// Mirrors the sibling gate in quick_validate.go's validateSubtrees.
+			if errors.IsBlockCorrupt(err) {
+				return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees] merkle root mismatch", err)
+			}
+
+			return nil, nil, 0, err
 		}
 		return subtrees, nil, blockID, nil
 	}
@@ -507,11 +515,19 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	commitment.Subtrees = subtrees
 	commitment.SubtreeSlices = slices
 	if err = commitment.CheckMerkleRoot(ctx); err != nil {
-		// Body-derived: the locally-built subtrees do not hash to the header's merkle root,
-		// so the wire body is not bound to the header and cannot condemn the hash. Classify
-		// corrupt so the caller drops it and allows a re-request, never invalid=true
-		// (bitcoin-sv/teranode#4692).
-		return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees][%s %d] merkle root mismatch", bi.hash.String(), bi.height, err)
+		// CheckMerkleRoot returns BOTH body-derived corrupt verdicts AND local storage/processing
+		// errors (bitcoin-sv/teranode#4692). Only a genuinely corrupt (body-derived) result may be
+		// classified corrupt — then the locally-built subtrees do not hash to the header's merkle
+		// root, so the wire body is not bound to the header and cannot condemn the hash; the caller
+		// drops it and allows a re-request, never invalid=true. A local storage/processing error is
+		// OUR failure, not the peer's: return it UNWRAPPED so it keeps its own classification and
+		// the caller neither strikes the serving peer nor skips the transient-failure backoff.
+		// Mirrors the sibling gate in quick_validate.go's validateSubtrees.
+		if errors.IsBlockCorrupt(err) {
+			return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees][%s %d] merkle root mismatch", bi.hash.String(), bi.height, err)
+		}
+
+		return nil, nil, 0, err
 	}
 	commitment.SubtreeSlices = nil
 
