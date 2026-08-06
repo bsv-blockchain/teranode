@@ -445,7 +445,11 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 // including the ones reached from DoHTTPRequestBounded: without a bound, a hostile
 // peer defeats that function's cap simply by answering with an error status and then
 // streaming indefinitely. An error message only needs enough to be diagnosable.
-const maxHTTPErrorBodyBytes = 8 * 1024
+//
+// Kept small because the snippet is %q-escaped below, and escaping expands: a body of
+// control bytes becomes up to four characters each, so this is the bound on bytes read,
+// not on the length of the resulting message.
+const maxHTTPErrorBodyBytes = 2 * 1024
 
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
 //
@@ -455,7 +459,10 @@ const maxHTTPErrorBodyBytes = 8 * 1024
 //   - other → generic ServiceError
 //
 // The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
-// rather than retained in the error string.
+// rather than retained in the error string. The snippet is %q-escaped because this
+// message is logged verbatim and forwarded to the peer registry: raw peer bytes would
+// otherwise let a peer embed newlines to forge log lines, or terminal escapes, and
+// would break the single-line log convention.
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
@@ -476,7 +483,7 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 		}
 
 		if b != nil {
-			return errFn("http request [%s] returned status code [%d] with body [%s]", rawURL, resp.StatusCode, string(b))
+			return errFn("http request [%s] returned status code [%d] with body %q", rawURL, resp.StatusCode, string(b))
 		}
 	}
 
