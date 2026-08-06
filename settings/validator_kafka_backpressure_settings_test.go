@@ -60,8 +60,8 @@ func TestValidatorKafkaBackpressureSettings_ResumeClamp(t *testing.T) {
 }
 
 // TestValidatorKafkaBackpressureSettings_StaleErrorLimitFloor verifies a
-// non-positive stale-error limit is floored at 1 so a single transient read
-// error can never immediately fail open.
+// non-positive stale-error limit is floored at 1 so the threshold is always a
+// meaningful positive count.
 func TestValidatorKafkaBackpressureSettings_StaleErrorLimitFloor(t *testing.T) {
 	t.Setenv("validator_kafkaBackpressureEnabled", "true")
 	t.Setenv("validator_kafkaBackpressureStaleErrorLimit", "0")
