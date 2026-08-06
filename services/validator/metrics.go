@@ -133,6 +133,25 @@ var (
 	// block-assembly send failed (e.g. the queue was still full), leaving the
 	// transaction locked for a later retry.
 	prometheusBlockAssemblyRecoveryFailed prometheus.Counter
+
+	// prometheusKafkaBackpressurePaused is 1 while the backpressure controller
+	// has the tx Kafka consumer paused, 0 otherwise.
+	prometheusKafkaBackpressurePaused prometheus.Gauge
+
+	// prometheusKafkaBackpressurePauseTotal counts pause transitions.
+	prometheusKafkaBackpressurePauseTotal prometheus.Counter
+
+	// prometheusKafkaBackpressureResumeTotal counts resume transitions (including
+	// fail-open and max-pause resumes).
+	prometheusKafkaBackpressureResumeTotal prometheus.Counter
+
+	// prometheusKafkaBackpressurePausedSecondsTotal accumulates total seconds the
+	// consumer has spent paused by the controller.
+	prometheusKafkaBackpressurePausedSecondsTotal prometheus.Counter
+
+	// prometheusKafkaBackpressureReadErrors tracks the current consecutive
+	// queue-stats read-error streak (resets to 0 on a good read).
+	prometheusKafkaBackpressureReadErrors prometheus.Gauge
 )
 
 // Synchronization primitives
@@ -359,6 +378,51 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "block_assembly_recovery_failed_total",
 			Help:      "Resubmit recoveries whose block-assembly send failed, leaving the transaction locked for a later retry",
+		},
+	)
+
+	prometheusKafkaBackpressurePaused = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_paused",
+			Help:      "1 while the backpressure controller has the tx Kafka consumer paused, 0 otherwise",
+		},
+	)
+
+	prometheusKafkaBackpressurePauseTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_pause_total",
+			Help:      "Number of times the backpressure controller paused the tx Kafka consumer",
+		},
+	)
+
+	prometheusKafkaBackpressureResumeTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_resume_total",
+			Help:      "Number of times the backpressure controller resumed the tx Kafka consumer (including fail-open and max-pause resumes)",
+		},
+	)
+
+	prometheusKafkaBackpressurePausedSecondsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_paused_seconds_total",
+			Help:      "Total seconds the tx Kafka consumer has spent paused by the backpressure controller",
+		},
+	)
+
+	prometheusKafkaBackpressureReadErrors = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_read_errors",
+			Help:      "Current consecutive queue-stats read-error streak (resets to 0 on a good read)",
 		},
 	)
 }
