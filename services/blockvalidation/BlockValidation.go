@@ -1648,6 +1648,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// Use BlockIncomplete rather than BlockInvalid — a missing coinbase likely means the peer
 			// doesn't have full block data (e.g. seeded peer). Don't store as invalid so we can
 			// accept the valid version from another peer later.
+			//
+			// This is the ABSENT-DATA ErrBlockIncomplete, distinct from the FLOATER ErrBlockIncomplete
+			// that the caught-up handlers poison (bitcoin-sv/teranode#4692). This return is an outer
+			// pre-check that fires BEFORE block.Valid runs, so it never reaches the isCaughtUp->poison
+			// sites below (those live in the block.Valid result handler, which this early return
+			// bypasses); its callers treat it as re-fetch/retry (no invalid=true, no peer strike). So
+			// the "ErrBlockIncomplete means only a floater at the block.Valid handlers" invariant reads
+			// honestly: this absent-coinbase case is a separate, gentler path.
 			return errors.NewBlockIncompleteError("[ValidateBlock][%s] coinbase tx is nil or empty", block.Header.Hash().String())
 		}
 
@@ -2365,6 +2373,14 @@ func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID s
 // Reason-based classification is not possible here anyway: BlockHeaderMeta carries no
 // invalid-reason field. Do not "fix" this to suppress cascades without first re-checking
 // that invariant.
+//
+// EXCEPTION (bitcoin-sv/teranode#4692): the invariant "a corrupt body never becomes an invalid
+// parent" holds on every default path but NOT on the opt-in optimistic peer/catch-up route. When
+// the operator sets blockvalidation_optimistic_mining_peer_blocks, a corrupt body found by the
+// background block.Valid AFTER the optimistic AddBlock takes the invalidate route (InvalidateBlock),
+// so it CAN become an invalid parent and legitimately cascade to descendants. That tradeoff is
+// documented on the setting's longdesc; it is deliberate and disabled by default. It disappears once
+// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
 //
 // Parameters:
 //   - parentMeta: Metadata of the parent block (can be nil)
