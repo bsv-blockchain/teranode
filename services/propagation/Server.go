@@ -773,6 +773,11 @@ func httpStatusForTxError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, errors.ErrTxMissingParent):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, errors.ErrThresholdExceeded):
+		// Block assembly shed the tx because its ingest queue is full. The tx is
+		// durably stored but not yet in a template; a resubmit re-drives the
+		// handoff, so this is a retryable overload, not a permanent failure.
+		return http.StatusServiceUnavailable
 	case errors.Is(err, errors.ErrInvalidArgument),
 		errors.Is(err, errors.ErrTxInvalid),
 		errors.Is(err, errors.ErrTxLockTime),

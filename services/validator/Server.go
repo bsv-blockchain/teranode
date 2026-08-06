@@ -855,6 +855,19 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 	return blockHeight, options
 }
 
+// httpStatusForTxError maps a transaction-processing error to an HTTP status.
+// A block-assembly overload shed surfaces as ErrThresholdExceeded and is a
+// retryable 503 Service Unavailable, not a 500: the transaction is durably
+// stored and a resubmit re-drives the handoff once block assembly has room.
+// Every other error stays a 500.
+func httpStatusForTxError(err error) int {
+	if errors.Is(err, errors.ErrThresholdExceeded) {
+		return http.StatusServiceUnavailable
+	}
+
+	return http.StatusInternalServerError
+}
+
 // handleSingleTx handles a single transaction request on the /tx endpoint.
 // This method implements an HTTP handler for validating a single Bitcoin transaction
 // submitted via POST request. It reads the raw transaction bytes from the request body,
@@ -919,7 +932,7 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 		response, err := v.validateTransaction(ctx, req)
 		if err != nil {
 			errors.AttachHTTPError(c.Response().Header(), err)
-			return c.String(http.StatusInternalServerError, "[handleSingleTx] Failed to process transaction: "+err.Error())
+			return c.String(httpStatusForTxError(err), "[handleSingleTx] Failed to process transaction: "+err.Error())
 		}
 
 		if !response.Valid {
@@ -979,7 +992,7 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 
 			response, err := v.validateTransaction(ctx, req)
 			if err != nil {
-				return c.String(http.StatusInternalServerError, "[handleMultipleTx] Failed to process transaction: "+err.Error())
+				return c.String(httpStatusForTxError(err), "[handleMultipleTx] Failed to process transaction: "+err.Error())
 			}
 
 			if !response.Valid {
