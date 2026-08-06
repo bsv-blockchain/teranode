@@ -379,6 +379,11 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
 	}
 
+	// Arm the queue-age-driven Kafka backpressure controller (disabled by
+	// default; safe no-op when disabled or when a client is nil). It resumes the
+	// consumer on ctx cancel, so shutdown never inherits a paused consumer.
+	v.startKafkaBackpressure(ctx)
+
 	if err = v.startHTTPServer(ctx, v.settings.Validator.HTTPListenAddress); err != nil {
 		return err
 	}
