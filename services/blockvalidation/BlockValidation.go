@@ -1620,18 +1620,16 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			if block.SizeInBytes > excessiveBlockSizeUint64 {
-				// Outer, pre-binding body check (runs before PoW/difficulty is established):
-				// an oversized received body cannot condemn the block hash — it is not bound
-				// to the header and may not even be PoW-backed. Strike the serving peer and
-				// return corrupt for re-download; never persist invalid=true (bitcoin-sv/teranode#4692).
-				// Skip the strike on revalidation: RevalidateBlock passes the ORIGINAL announcing
-				// peer's ID, which neither served this read nor is necessarily still connected.
-				// Mirrors the neighbouring storeInvalidBlock gating.
-				if !opts.IsRevalidation {
-					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "block size exceeds excessiveblocksize")
-				}
-
-				return errors.NewBlockCorruptError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
+				// excessiveblocksize is a local POLICY knob (settings/policy_settings.go), not a
+				// consensus rule: a block other miners have legitimately mined and proven with real
+				// work may still exceed THIS node's limit. So this is a plain policy decline, not
+				// evidence about the block or the peer (bitcoin-sv/teranode#4692): NO peer strike (the
+				// peer served the honest chain), NOT corrupt (no re-download — a fresh copy is the same
+				// size and is not counted toward the corrupt cap), and NOT invalid=true (never poison
+				// the hash). It also does not condemn the block: the size judged here is still the
+				// peer-supplied block.SizeInBytes; the authoritative size is recomputed post-subtree-load
+				// (model.Block, from the loaded body).
+				return errors.NewBlockError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d (local policy)", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 			}
 		}
 

@@ -1867,13 +1867,33 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 					prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "failure").Inc()
 				}
 
-				// If the error indicates the block couldn't be fetched (network error, malicious node, etc),
-				// we should retry the block later rather than dropping it completely
-				// TODO: We might want to limit the number of retries per block to avoid infinite loops
-				// For now, we'll just re-queue it with deepFork priority to ensure it gets retried eventually
-				// Note: This could lead to blocks being retried indefinitely if they are always failing to fetch
-				// A more robust solution would involve tracking retry counts and eventually giving up after a threshold
-				if errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err) {
+				// IsBlockCorrupt is tested BEFORE the network/malicious pair (bitcoin-sv/teranode#4692):
+				// IsMaliciousResponseError substring-matches the word "corrupt" in the rendered error
+				// text, so an ERR_BLOCK_CORRUPT error would otherwise always match the malicious branch
+				// and this dedicated corrupt-recovery branch would be dead code.
+				if errors.IsBlockCorrupt(err) {
+					// RUNNING corrupt body (bitcoin-sv/teranode#4692): the serving peer was already struck
+					// inside ValidateBlockWithOptions and nothing was persisted — no invalid=true,
+					// SetBlockExists never set, block never AddBlock'd. Clear the in-flight dedup
+					// marker so the same hash re-announced by an honest peer re-enters validation
+					// instead of being dropped as already-in-progress. Recovery is the natural
+					// re-announcement (many peers hold the honest block in RUNNING); the
+					// already-exists-as-invalid short-circuit never fires because we did not poison.
+					// If the corrupt peer was the sole announcer, no honest peer holds the hash and
+					// it correctly never connects.
+					u.logger.Warnf("[BlockProcessing] Block %s had a corrupt body, cleared for re-download from another peer", blockFound.hash.String())
+					u.processBlockNotify.Delete(*blockFound.hash)
+					// The per-(hash, peerID) corrupt cap (bitcoin-sv/teranode#4692) is accounted inside
+					// processBlockFound (accountCorruptAttempt), which both this worker route and the
+					// direct ProcessBlock route funnel through — so it is counted there exactly once,
+					// not here (which would double-count the worker route and miss the direct route).
+				} else if errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err) {
+					// If the error indicates the block couldn't be fetched (network error, malicious node, etc),
+					// we should retry the block later rather than dropping it completely
+					// TODO: We might want to limit the number of retries per block to avoid infinite loops
+					// For now, we'll just re-queue it with deepFork priority to ensure it gets retried eventually
+					// Note: This could lead to blocks being retried indefinitely if they are always failing to fetch
+					// A more robust solution would involve tracking retry counts and eventually giving up after a threshold
 					u.logger.Warnf("[BlockProcessing] Block %s fetch failed, will retry later", blockFound.hash.String())
 					// Re-add the block to the queue for retry
 					// We need to get the block metadata (height and priority) for re-queuing
@@ -1891,22 +1911,6 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 						u.blockPriorityQueue.RequeueForRetry(retryBlock, PriorityDeepFork, 0)
 						u.logger.Infof("[BlockProcessing] Re-queued block %s for retry from any available peer", blockFound.hash.String())
 					}()
-				} else if errors.IsBlockCorrupt(err) {
-					// RUNNING corrupt body (bitcoin-sv/teranode#4692): the serving peer was already struck
-					// inside ValidateBlockWithOptions and nothing was persisted — no invalid=true,
-					// SetBlockExists never set, block never AddBlock'd. Clear the in-flight dedup
-					// marker so the same hash re-announced by an honest peer re-enters validation
-					// instead of being dropped as already-in-progress. Recovery is the natural
-					// re-announcement (many peers hold the honest block in RUNNING); the
-					// already-exists-as-invalid short-circuit never fires because we did not poison.
-					// If the corrupt peer was the sole announcer, no honest peer holds the hash and
-					// it correctly never connects.
-					u.logger.Warnf("[BlockProcessing] Block %s had a corrupt body, cleared for re-download from another peer", blockFound.hash.String())
-					u.processBlockNotify.Delete(*blockFound.hash)
-					// The per-(hash, peerID) corrupt cap (bitcoin-sv/teranode#4692) is accounted inside
-					// processBlockFound (accountCorruptAttempt), which both this worker route and the
-					// direct ProcessBlock route funnel through — so it is counted there exactly once,
-					// not here (which would double-count the worker route and miss the direct route).
 				}
 			} else {
 				// Update processed metric with success
@@ -2544,6 +2548,15 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 
 	// Try to process with the primary source
 	err := u.processBlockFound(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+
+	// A corrupt body (bitcoin-sv/teranode#4692) is NOT a fetch failure: the peer served bytes that
+	// failed a body-integrity check. Do not walk alternative sources here (that loop is for
+	// network/malicious fetch failures) — return so the worker's corrupt-recovery branch clears the
+	// dedup marker and the per-(hash, peerID) cap bounds re-download. Tested BEFORE the
+	// network/malicious pair because IsMaliciousResponseError substring-matches "corrupt".
+	if err != nil && errors.IsBlockCorrupt(err) {
+		return err
+	}
 
 	// If fetch failed and it's not a validation error, try alternative sources
 	if err != nil && (errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)) {

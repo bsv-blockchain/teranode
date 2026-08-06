@@ -794,30 +794,6 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		return false, errors.NewBlockCorruptError("[BLOCK][%s] bad coinbase length", b.String())
 	}
 
-	// https://en.bitcoin.it/wiki/BIP_0034
-	// BIP-34 forces miners to encode the block height in the coinbase tx. It activates per network
-	// at ChainCfgParams.BIP0034Height; before that height the coinbase need not encode the height, so
-	// the check below is skipped. Enforcement is height-driven and version-independent — blocks below
-	// the mandatory version floor are already rejected above by CheckBlockVersion.
-
-	// 5. Check that the coinbase transaction includes the correct block height (BIP34).
-	// Parity with bitcoin-sv ContextualCheckBlock: enforced for every block at/after BIP34Height.
-	// Version < 2 blocks are already rejected above (bad-version), so no version sub-condition here.
-	// The explicit b.Height > 0 guard is MANDATORY: on teratestnet/tstn BIP0034Height == 0, so
-	// heightAtOrAfterActivation(0, 0) is true and a height-0 (genesis-like) block driven through
-	// Valid() would otherwise attempt ExtractCoinbaseHeight — contradicting the genesis exemption
-	// that CheckBlockVersion already applies. svnode never runs this check on genesis.
-	if b.Height > 0 && heightAtOrAfterActivation(b.Height, settings.ChainCfgParams.BIP0034Height) {
-		height, err := b.ExtractCoinbaseHeight()
-		if err != nil {
-			return false, errors.NewBlockCorruptError("[BLOCK][%s] error extracting coinbase height", b.String(), err)
-		}
-
-		if height != b.Height {
-			return false, errors.NewBlockCorruptError("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
-		}
-	}
-
 	// merkleRootChecked records that CheckMerkleRoot (step 8) actually ran and bound
 	// the block body to the header. Block.Valid enforces this as a precondition for
 	// skipping validOrderAndBlessed below the checkpoint (step 12): the skip's safety
@@ -862,6 +838,45 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 
 		merkleRootChecked = true
+	}
+
+	// BIP34 (https://en.bitcoin.it/wiki/BIP_0034) forces miners to encode the block height in the
+	// coinbase tx; it activates per network at ChainCfgParams.BIP0034Height (skipped below that
+	// height). This check deliberately runs AFTER the merkle binding above (freemans13 item 3 /
+	// bitcoin-sv/teranode#4692): the coinbase is committed by the merkle root, so only once the body is
+	// merkle-bound is a wrong BIP34 height genuine consensus invalidity, condemnable once. An attacker
+	// cannot forge a merkle-matching body with a bad coinbase (the root commits the exact coinbase
+	// bytes); a transit-corrupted coinbase changes the coinbase txid so CheckMerkleRoot fails first
+	// (corrupt -> re-download). On an UNBOUND body (coinbase-only / no subtrees, merkleRootChecked
+	// false) the failure stays corrupt so it is re-downloaded, never poisoned — preserving the
+	// bound-before-poisoning rule. This mirrors svnode, where bad-cb-height lives in
+	// ContextualCheckBlock, after the merkle binding in CheckBlock. BIP34 depends only on the coinbase
+	// (checked above) and b.Height, so it evaluates correctly in this position.
+	//
+	// The explicit b.Height > 0 guard is MANDATORY: on teratestnet/tstn BIP0034Height == 0, so
+	// heightAtOrAfterActivation(0, 0) is true and a height-0 (genesis-like) block would otherwise
+	// attempt ExtractCoinbaseHeight — contradicting the genesis exemption CheckBlockVersion applies.
+	// Version < 2 blocks are already rejected above (bad-version), so no version sub-condition here.
+	if b.Height > 0 && heightAtOrAfterActivation(b.Height, settings.ChainCfgParams.BIP0034Height) {
+		// bindErr classifies a BIP34 failure by whether the body was merkle-bound: a bound body's
+		// coinbase IS the miner's committed coinbase (wrong height -> genuine invalidity, condemn);
+		// an unbound body can only be corrupt (re-download, never poison).
+		bindErr := func(format string, args ...interface{}) error {
+			if merkleRootChecked {
+				return errors.NewBlockInvalidError(format, args...)
+			}
+
+			return errors.NewBlockCorruptError(format, args...)
+		}
+
+		height, err := b.ExtractCoinbaseHeight()
+		if err != nil {
+			return false, bindErr("[BLOCK][%s] error extracting coinbase height", b.String(), err)
+		}
+
+		if height != b.Height {
+			return false, bindErr("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
+		}
 	}
 
 	// 9. Check that the total fees of the block are less than or equal to the block reward.
@@ -1960,8 +1975,9 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		if subtree == nil {
-			// b.Hash().String(), not b.String(): we hold b.subtreeSlicesMu and
-			// String() takes it again — sync.RWMutex is not reentrant.
+			// Use b.Hash() rather than b.String(): String() takes subtreeSlicesMu, which is
+			// already held for the whole of this function, and sync.RWMutex is not reentrant
+			// (a second Lock on an already-held RWMutex deadlocks).
 			return errors.NewBlockCorruptError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
 		}
 		if sIdx == 0 {

@@ -1618,11 +1618,20 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		if errors.IsBlockCorrupt(err) {
 			// Corrupt body on the quick path (bitcoin-sv/teranode#4692). This path bypasses
 			// ValidateBlockWithOptions, so strike the serving peer here, then abort for a
-			// FRESH re-download from another peer — do NOT delete the .subtree files and
-			// re-run normal validation on the SAME corrupt body (it would just re-fail).
+			// FRESH re-download from another peer — do NOT re-run normal validation on the SAME
+			// corrupt body (it would just re-fail).
 			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "quick validation: corrupt block body")
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s has a corrupt body, aborting for re-download",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			// Delete the peer-supplied .subtree blobs before aborting (freemans13 item 9): the quick
+			// path already wrote them (writeSubtreeFilesForBatch) under what readSubtree treats as an
+			// "already validated" marker. Keeping data that just FAILED its integrity check would let
+			// attacker-supplied content sit in the store and be re-applied on every retry. The fresh
+			// re-download re-writes them, so removal is safe.
+			if delErr := u.removeCatchupSubtreeFiles(ctx, block); delErr != nil {
+				return false, delErr
+			}
 
 			return false, err
 		}
@@ -1632,13 +1641,8 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 		// since the quick validation failed, we will have to remove the .subtree files, which will trigger
 		// the normal validation to re-create the UTXOs and validate the transactions
-		for _, subtreeHash := range block.Subtrees {
-			if err = u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtree); err != nil {
-				if !errors.Is(err, errors.ErrNotFound) {
-					return false, errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to remove subtree file %s",
-						catchupCtx.blockUpTo.Hash().String(), subtreeHash.String(), err)
-				}
-			}
+		if delErr := u.removeCatchupSubtreeFiles(ctx, block); delErr != nil {
+			return false, delErr
 		}
 		// Quick validation failed, try normal validation
 		return true, nil
@@ -1646,6 +1650,24 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// Quick validation succeeded, skip normal validation
 	return false, nil
+}
+
+// removeCatchupSubtreeFiles deletes the block's .subtree blobs from the store on a failed quick
+// validation (bitcoin-sv/teranode#4692). Used on BOTH the plain quick-validation failure (before
+// falling back to normal validation, which re-creates the files) and the corrupt-body path (which
+// aborts for a fresh re-download from another peer; freemans13 item 9). Retaining data that FAILED
+// its integrity check would otherwise let peer-supplied content sit under readSubtree's "already
+// validated" marker and be re-applied on every retry. A missing file is not an error.
+func (u *Server) removeCatchupSubtreeFiles(ctx context.Context, block *model.Block) error {
+	for _, subtreeHash := range block.Subtrees {
+		if err := u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtree); err != nil {
+			if !errors.Is(err, errors.ErrNotFound) {
+				return errors.NewProcessingError("[catchup] failed to remove subtree file %s", subtreeHash.String(), err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // getLowestCheckpointHeight returns the height of the lowest checkpoint

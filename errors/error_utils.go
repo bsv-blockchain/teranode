@@ -151,7 +151,15 @@ func IsMaliciousResponseError(err error) bool {
 		}
 	}
 
-	// Check for patterns that might indicate malicious behavior
+	// Check for patterns that might indicate malicious behavior.
+	//
+	// CAUTION: this is substring matching over the RENDERED error text, and Teranode renders each
+	// error's code name into its own message (see Error.Error). Any error code whose name contains
+	// one of these ordinary English words therefore matches here — e.g. ERR_BLOCK_CORRUPT renders
+	// "BLOCK_CORRUPT" and matches "corrupt". Callers that must distinguish such a code (e.g. the
+	// corrupt-body re-download recovery, bitcoin-sv/teranode#4692) MUST test the specific classifier
+	// (errors.IsBlockCorrupt) BEFORE calling IsMaliciousResponseError, or their branch is dead.
+	// Prefer a specific code check over adding words here.
 	errStr := strings.ToLower(err.Error())
 	maliciousStrings := []string{
 		"invalid header",

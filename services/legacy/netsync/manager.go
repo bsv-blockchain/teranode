@@ -1891,6 +1891,18 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				// on an actual corrupt failure, so a below-cap corrupt is still re-downloaded as today.
 				attempts := sm.recordCorruptBlockAttempt(bmsg.blockHash, bmsg.peer.Addr())
 				sm.logger.Warnf("[handleBlockMsg][%s] corrupt block body from peer %s (attempt %d), dropping for re-download (not rejected, not stored invalid): %v", bmsg.blockHash, bmsg.peer, attempts, err)
+
+				// Headers-first: refill the download pipeline before returning so a corrupt drop does
+				// not stall headers-first sync for ~180s (bitcoin-sv/teranode#4692). Pipeline maintenance
+				// ONLY — the corrupt branch must NOT run any accepted-block bookkeeping (rejected-tx
+				// clear, peer-height update, FSM RUN, fee-filter reset), so it calls the extracted refill
+				// rather than falling through the acceptance footer.
+				if sm.headersFirstMode.Load() {
+					if refillErr := sm.refillHeaderBlockPipeline(peer, state); refillErr != nil {
+						sm.logger.Warnf("[handleBlockMsg][%s] header-block pipeline refill after corrupt body failed: %v", bmsg.blockHash, refillErr)
+					}
+				}
+
 				return err
 			}
 
@@ -2022,21 +2034,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// request more blocks using the header list to maintain the pipeline
 	// at the dynamic max limit (adjusts based on block size).
 	if !isCheckpointBlock {
-		dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
-		if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
-			sm.fetchHeaderBlocks()
-		} else if !sm.current() && state.requestedBlocks.Len() == 0 {
-			sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
-
-			latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
-			if err != nil {
-				return errors.NewServiceError("Failed to get best block header", err)
-			}
-
-			locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
-			if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
-				return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
-			}
+		if err = sm.refillHeaderBlockPipeline(peer, state); err != nil {
+			return err
 		}
 
 		return nil
@@ -2080,6 +2079,34 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	locator := blockchain.BlockLocator([]*chainhash.Hash{&bmsg.blockHash})
 	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
 		return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
+	}
+
+	return nil
+}
+
+// refillHeaderBlockPipeline tops up the headers-first download pipeline so it stays at the dynamic
+// in-flight limit, requesting the next batch of block downloads (bitcoin-sv/teranode#4692). It does
+// ONLY pipeline maintenance — no accepted-block bookkeeping (no rejected-tx clear, no peer-height
+// update, no FSM RUN, no fee-filter reset) — so it is safe to call on a FAILED delivery too. On the
+// corrupt-body drop it is called before returning: without it a headers-first corrupt drop never
+// refills, the in-flight blocks drain each failing on their missing parent, and recovery waits ~180s
+// for the stall timer (freemans13 item 7). Returns an error only if the getblocks fallback fails.
+func (sm *SyncManager) refillHeaderBlockPipeline(peer *peerpkg.Peer, state *peerSyncState) error {
+	dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
+	if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
+		sm.fetchHeaderBlocks()
+	} else if !sm.current() && state.requestedBlocks.Len() == 0 {
+		sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
+
+		latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+		if err != nil {
+			return errors.NewServiceError("Failed to get best block header", err)
+		}
+
+		locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
+		if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
+			return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
+		}
 	}
 
 	return nil

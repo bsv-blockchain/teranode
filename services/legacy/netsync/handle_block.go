@@ -246,11 +246,19 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	if preparedSubtreeSlices != nil {
 		teranodeBlock.SubtreeSlices = preparedSubtreeSlices
 		if err = teranodeBlock.CheckMerkleRoot(ctx); err != nil {
-			// Body-derived: the locally-built subtrees do not hash to the header's merkle
-			// root, so the wire body is not bound to the header and cannot condemn the hash.
-			// Classify corrupt so the caller drops it and allows a re-request, never
-			// invalid=true (bitcoin-sv/teranode#4692).
-			return errors.NewBlockCorruptError("[HandleBlockDirect][%s %d] merkle root mismatch on unified route", blockHashStr, blockHeight, err)
+			// CheckMerkleRoot returns BOTH body-derived corrupt verdicts AND local storage/processing
+			// errors (bitcoin-sv/teranode#4692). Only a genuinely corrupt (body-derived) result may be
+			// classified corrupt — then the locally-built subtrees do not hash to the header's merkle
+			// root, so the wire body is not bound to the header and cannot condemn the hash; the caller
+			// drops it and allows a re-request, never invalid=true. A local storage/processing error is
+			// OUR failure, not the peer's: return it UNWRAPPED so it keeps its own classification and
+			// the caller neither strikes the serving peer nor skips the transient-failure backoff.
+			// Mirrors the sibling gate in quick_validate.go's validateSubtrees.
+			if errors.IsBlockCorrupt(err) {
+				return errors.NewBlockCorruptError("[HandleBlockDirect][%s %d] merkle root mismatch on unified route", blockHashStr, blockHeight, err)
+			}
+
+			return err
 		}
 		if err = model.CheckSubtreeSlicesForDuplicateTxs(preparedSubtreeSlices); err != nil {
 			// CVE-2012-2459 duplicate in the received tx set — body-derived, classify corrupt
