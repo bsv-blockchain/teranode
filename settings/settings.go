@@ -314,6 +314,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SplitMapBuckets:                      getInt("blockassembly_splitMapBuckets", 16*1024, alternativeContext...),
 			StoreTxInpointsForSubtreeMeta:        getBool("blockassembly_storeTxInpointsForSubtreeMeta", true, alternativeContext...),
 			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
+			MaxQueueItems:                        getInt64("blockassembly_maxQueueItems", 0, alternativeContext...),
+			QueueFullWaitTimeout:                 getDuration("blockassembly_queueFullWaitTimeout", 100*time.Millisecond, alternativeContext...),
 		},
 
 		BlockChain: BlockChainSettings{
