@@ -1,6 +1,11 @@
 package settings
 
-import "net/url"
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"time"
+)
 
 // ValidatorSettings configures the transaction validation service.
 type ValidatorSettings struct {
@@ -27,4 +32,119 @@ type ValidatorSettings struct {
 	TxLockedMaxRetries                   int      `key:"validator_txlocked_maxRetries" desc:"Maximum retries when a parent tx is still committing (TX_LOCKED or TX_CREATING)" default:"3" category:"Validator" usage:"Retries while the parent tx is still completing its own commit" type:"int" longdesc:"### Purpose\nControls the number of retry attempts when a transaction cannot spend a parent output yet because the parent is still completing its own commit — either TX_LOCKED or TX_CREATING. Both share this one budget.\n\n### How It Works\nTX_LOCKED occurs when a parent and child transaction arrive nearly simultaneously and the parent has not yet completed its two-phase commit (unlock). TX_CREATING is the same situation for a parent large enough to be written across several records, which is still being written. Either way the condition clears on its own, or once the parent is mined. The validator retries the same transaction with exponential backoff, starting at 10ms and doubling on each retry (e.g. 10ms, 20ms, 40ms, 80ms, ...) until the configured maximum is reached or the lock clears. Values above 10 are clamped to prevent excessive backoff (2^10 * 10ms ≈ 10s max sleep).\n\n### Values\n- **3** (default) - Retries up to 3 times with 10/20/40ms backoff (70ms total)\n- **0** - Disables retry; both TX_LOCKED and TX_CREATING are returned immediately to the caller. Note BSV has no mempool, so a rejected child is not held anywhere on the client-facing intake paths — nothing will re-submit it\n\n### Recommendations\n- **3** for production deployments where parent/child tx timing races are expected\n- **0** for testing environments where these conditions should propagate to the caller\n\n### Observability\nWatch teranode_validator_parent_commit_retries and teranode_validator_parent_commit_exhausted (both labelled by condition). The exhausted counter marks a valid transaction the node lost -- nothing holds it on the client-facing or Kafka intake paths (legacy p2p relay is the exception; it parks the tx in the orphan pool) -- so a non-zero rate there means this budget is too short for the node's load."`
 	TxMetaWireFormat                     string   `key:"validator_txmeta_wireFormat" desc:"Wire format for txmeta Kafka messages" default:"v1" category:"Validator" usage:"v1 (legacy) or v2 (partition-aligned)" type:"string" longdesc:"### Purpose\nSelects the wire format used when publishing transaction metadata batches to Kafka.\n\n### Format options\n- **v1** (default) - Legacy format. One Kafka message per batch, key = first tx hash, partition picked by StickyKeyPartitioner.\n- **v2** - Partition-aligned format. Producer pre-computes xxhash(txhash), groups items by partition such that each Kafka partition's records map to a disjoint range of receiver cache buckets, and emits one message per non-empty partition. Each entry carries its xxhash on the wire so the receiver can skip xxhash on receive.\n\n### When to use v2\nEnable on producers and receivers together once the receiver build is known to support v2 parsing. The receiver in this repo auto-detects via the v2 magic byte (0xFF) so it can consume v1 and v2 simultaneously during rollout.\n\n### Operational notes\n- v2 requires the Kafka topic's partition count to match validator_txmeta_numPartitions and to divide the receiver's BucketsCount (8192 in production builds).\n- v2 switches the txmeta async producer to ManualPartitioner. Every record carries an explicit partition number — there is no fallback if Partition is unset.\n\n### Recommendations\n- Leave at **v1** until both producers and consumers are on a build that supports v2.\n- Switch one producer at a time and watch txmeta consumer lag."`
 	TxMetaNumPartitions                  int      `key:"validator_txmeta_numPartitions" desc:"Kafka partition count used when wireFormat=v2" default:"32" category:"Validator" usage:"Must match topic partition count and divide BucketsCount" type:"int" longdesc:"### Purpose\nNumber of Kafka partitions on the txmeta topic. Used only when validator_txmeta_wireFormat=v2.\n\n### Constraints\n- Must equal the Kafka topic's actual partition count.\n- Must evenly divide the receiver's BucketsCount (8192 in production builds). Valid values: 16, 32, 64, 128, 256.\n\n### How It Works\nThe producer routes each tx to partition = (xxhash(hash) %% BucketsCount) * NumPartitions / BucketsCount. Each partition therefore owns a disjoint contiguous range of BucketsCount/NumPartitions cache buckets on the receiver, eliminating cross-partition lock contention.\n\n### Recommendations\n- **32** (default) - Reasonable default for 32-core receiver pods.\n- Set to match the actual topic partition count. Verify with kafka-topics --describe."`
+
+	// KafkaBackpressure configures the queue-age-driven Kafka ingest backpressure
+	// controller. Disabled by default; see ValidatorKafkaBackpressureSettings.
+	KafkaBackpressure ValidatorKafkaBackpressureSettings
+}
+
+// ValidatorKafkaBackpressureSettings configures the validator's Kafka ingest
+// backpressure controller. It is disabled by default and opt-in per deployment.
+//
+// When enabled, a controller goroutine periodically reads the block-assembly
+// ingest queue's head-batch age (via the slim GetBlockAssemblyQueueStats RPC)
+// and pauses the validator's transaction Kafka consumer while that age is at or
+// above PauseQueueAge, resuming it only once the age falls back to at or below
+// ResumeQueueAge. Bursts therefore ride on Kafka's durable log instead of the
+// in-heap block-assembly queue, and fewer transactions hit the hard-shed path.
+//
+// The controller fails open: on a read error/timeout or a stale signal it
+// resumes rather than staying paused, and any single pause is capped at MaxPause
+// so a dark signal can never wedge ingest indefinitely. It never substitutes for
+// the block-assembly queue cap (blockassembly_maxQueueItems) — it reduces shed
+// churn, it does not bound memory on its own.
+type ValidatorKafkaBackpressureSettings struct {
+	Enabled         bool          `key:"validator_kafkaBackpressureEnabled" desc:"Enable queue-age-driven Kafka ingest backpressure" default:"false" category:"Validator" usage:"Pause the tx Kafka consumer when block assembly is backlogged" type:"bool" longdesc:"### Purpose\nEnables the validator-side Kafka backpressure controller that pauses transaction consumption while the block-assembly ingest queue is backlogged.\n\n### How It Works\nWhen enabled and both the Kafka consumer and block-assembly client are available, a controller goroutine polls the block-assembly queue-head age and pauses/resumes the tx consumer with hysteresis. When disabled (default) no goroutine is started and behaviour is unchanged.\n\n### Recommendations\n- Ship **false** until pause/resume watermarks are validated on a real overload trace.\n- This is not a memory guardrail: also set blockassembly_maxQueueItems to a positive value."`
+	PauseQueueAge   time.Duration `key:"validator_kafkaBackpressurePauseQueueAge" desc:"Queue-head age high-watermark that triggers a pause" default:"500ms" category:"Validator" usage:"Pause the tx consumer at or above this queue-head age" type:"duration" longdesc:"### Purpose\nHigh-watermark on the block-assembly queue-head age. When the age reaches this value the controller pauses the tx Kafka consumer.\n\n### Constraints\nMust be > 0, and strictly greater than ResumeQueueAge, or the controller is disabled/clamped at load."`
+	ResumeQueueAge  time.Duration `key:"validator_kafkaBackpressureResumeQueueAge" desc:"Queue-head age low-watermark that triggers a resume" default:"100ms" category:"Validator" usage:"Resume the tx consumer at or below this queue-head age" type:"duration" longdesc:"### Purpose\nLow-watermark on the block-assembly queue-head age. Once paused, the controller resumes the tx Kafka consumer when the age falls back to this value.\n\n### Constraints\nMust be strictly less than PauseQueueAge (the hysteresis gap). If not, it is clamped to half the pause watermark at load."`
+	PollInterval    time.Duration `key:"validator_kafkaBackpressurePollInterval" desc:"Controller poll cadence" default:"50ms" category:"Validator" usage:"How often the controller reads the queue-head age" type:"duration" longdesc:"### Purpose\nHow often the controller reads the slim queue-stats RPC and re-evaluates the pause/resume decision.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
+	ReadTimeout     time.Duration `key:"validator_kafkaBackpressureReadTimeout" desc:"Per-poll RPC deadline for the queue-stats read" default:"100ms" category:"Validator" usage:"Bounds each queue-stats read so the controller can't inherit a downstream stall" type:"duration" longdesc:"### Purpose\nPer-poll context deadline applied to each GetBlockAssemblyQueueStats read so the controller never blocks on a downstream stall.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
+	MaxPause        time.Duration `key:"validator_kafkaBackpressureMaxPause" desc:"Safety cap on how long a single pause may last" default:"30s" category:"Validator" usage:"Fail-open resume after this long even if still hot" type:"duration" longdesc:"### Purpose\nHard cap on the duration of any single pause. When a pause has lasted this long the controller resumes (fail-open) even if the queue is still hot, bounding Kafka retention exposure and lag-alert duration.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
+	StaleErrorLimit int           `key:"validator_kafkaBackpressureStaleErrorLimit" desc:"Consecutive read errors tolerated before fail-open resume" default:"3" category:"Validator" usage:"Resume if the queue signal is unavailable this many polls in a row" type:"int" longdesc:"### Purpose\nNumber of consecutive queue-stats read errors (or timeouts) tolerated before the controller fails open and resumes a paused consumer. A successful read resets the counter.\n\n### Constraints\nClamped to a minimum of 1 at load so a single transient error can never immediately fail open."`
+}
+
+// loadValidatorKafkaBackpressureSettings reads the backpressure keys and returns
+// a validated configuration. Relationship checks run at load: incoherent timing
+// knobs (non-positive pause watermark, poll interval, read timeout or max-pause)
+// force the controller off; a resume watermark not strictly below the pause
+// watermark is clamped to half the pause watermark; the stale-error limit is
+// floored at 1. Violations warn on stderr while the process still has no logger.
+func loadValidatorKafkaBackpressureSettings(alternativeContext ...string) ValidatorKafkaBackpressureSettings {
+	s := ValidatorKafkaBackpressureSettings{
+		Enabled:         getBool("validator_kafkaBackpressureEnabled", false, alternativeContext...),
+		PauseQueueAge:   getDuration("validator_kafkaBackpressurePauseQueueAge", 500*time.Millisecond, alternativeContext...),
+		ResumeQueueAge:  getDuration("validator_kafkaBackpressureResumeQueueAge", 100*time.Millisecond, alternativeContext...),
+		PollInterval:    getDuration("validator_kafkaBackpressurePollInterval", 50*time.Millisecond, alternativeContext...),
+		ReadTimeout:     getDuration("validator_kafkaBackpressureReadTimeout", 100*time.Millisecond, alternativeContext...),
+		MaxPause:        getDuration("validator_kafkaBackpressureMaxPause", 30*time.Second, alternativeContext...),
+		StaleErrorLimit: getInt("validator_kafkaBackpressureStaleErrorLimit", 3, alternativeContext...),
+	}
+
+	return s.validated()
+}
+
+// validated applies the relationship rules described on
+// loadValidatorKafkaBackpressureSettings and returns the corrected config.
+func (s ValidatorKafkaBackpressureSettings) validated() ValidatorKafkaBackpressureSettings {
+	warn := func(msg string) {
+		fmt.Fprintln(os.Stderr, "[settings] validator kafka backpressure: "+msg)
+	}
+
+	if s.PauseQueueAge <= 0 {
+		if s.Enabled {
+			warn(fmt.Sprintf("pauseQueueAge=%s must be > 0; disabling controller", s.PauseQueueAge))
+		}
+
+		s.Enabled = false
+	}
+
+	if s.PollInterval <= 0 {
+		if s.Enabled {
+			warn(fmt.Sprintf("pollInterval=%s must be > 0; disabling controller", s.PollInterval))
+		}
+
+		s.Enabled = false
+	}
+
+	if s.ReadTimeout <= 0 {
+		if s.Enabled {
+			warn(fmt.Sprintf("readTimeout=%s must be > 0; disabling controller", s.ReadTimeout))
+		}
+
+		s.Enabled = false
+	}
+
+	if s.MaxPause <= 0 {
+		if s.Enabled {
+			warn(fmt.Sprintf("maxPause=%s must be > 0; disabling controller", s.MaxPause))
+		}
+
+		s.Enabled = false
+	}
+
+	// Resume must sit strictly below pause so hysteresis has a gap; otherwise
+	// clamp it to half the pause watermark and keep running.
+	if s.ResumeQueueAge >= s.PauseQueueAge {
+		clamped := s.PauseQueueAge / 2
+		if s.Enabled {
+			warn(fmt.Sprintf("resumeQueueAge=%s must be < pauseQueueAge=%s; clamping resume to %s", s.ResumeQueueAge, s.PauseQueueAge, clamped))
+		}
+
+		s.ResumeQueueAge = clamped
+	}
+
+	if s.ResumeQueueAge < 0 {
+		s.ResumeQueueAge = 0
+	}
+
+	// A non-positive limit would fail open on the first transient read error.
+	if s.StaleErrorLimit < 1 {
+		if s.Enabled {
+			warn(fmt.Sprintf("staleErrorLimit=%d must be >= 1; clamping to 1", s.StaleErrorLimit))
+		}
+
+		s.StaleErrorLimit = 1
+	}
+
+	return s
 }
