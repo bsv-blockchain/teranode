@@ -1270,6 +1270,152 @@ func TestBlock_Bytes(t *testing.T) {
 	})
 }
 
+func TestReadTransactionAllocationSafe_Parity(t *testing.T) {
+	standard := []byte{1, 0, 0, 0, 1}
+	standard = append(standard, make([]byte, 36)...)
+	standard = append(standard, 0)
+	standard = append(standard, make([]byte, 4)...)
+	standard = append(standard, 1)
+	standard = append(standard, make([]byte, 8)...)
+	standard = append(standard, 0)
+	standard = append(standard, make([]byte, 4)...)
+
+	nonCanonical := append([]byte{1, 0, 0, 0, 0xfd, 1, 0}, standard[5:]...)
+	empty := []byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+
+	extended := []byte{1, 0, 0, 0, 0, 0}
+	extended = append(extended, 0, 0, 0, 0xef, 1)
+	extended = append(extended, make([]byte, 36)...)
+	extended = append(extended, 0)
+	extended = append(extended, make([]byte, 4)...)
+	extended = append(extended, make([]byte, 8)...)
+	extended = append(extended, 0)
+	extended = append(extended, 1)
+	extended = append(extended, make([]byte, 8)...)
+	extended = append(extended, 0)
+	extended = append(extended, make([]byte, 4)...)
+
+	for name, raw := range map[string][]byte{
+		"standard":            standard,
+		"noncanonical varint": nonCanonical,
+		"empty":               empty,
+		"extended":            extended,
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := new(bt.Tx)
+			_, err := want.ReadFrom(bytes.NewReader(raw))
+			require.NoError(t, err)
+
+			got, err := readTransactionAllocationSafe(bytes.NewReader(raw), int64(bt.MaxArenaAlloc))
+			require.NoError(t, err)
+			require.Equal(t, want.Bytes(), got.Bytes())
+		})
+	}
+}
+
+// TestReadTransactionAllocationSafe_BudgetRejectsOversized proves the maxBytes budget bounds the
+// buffered transaction: a tx larger than the budget is rejected before go-bt decodes it. This is
+// what caps the coinbase on the untrusted transport path (the budget threaded in from
+// decodeBoundedBlock) so a delivered giant coinbase can't drive the allocator.
+func TestReadTransactionAllocationSafe_BudgetRejectsOversized(t *testing.T) {
+	standard := []byte{1, 0, 0, 0, 1}
+	standard = append(standard, make([]byte, 36)...)
+	standard = append(standard, 0)
+	standard = append(standard, make([]byte, 4)...)
+	standard = append(standard, 1)
+	standard = append(standard, make([]byte, 8)...)
+	standard = append(standard, 0)
+	standard = append(standard, make([]byte, 4)...)
+
+	_, err := readTransactionAllocationSafe(bytes.NewReader(standard), int64(bt.MaxArenaAlloc))
+	require.NoError(t, err, "a generous budget accepts a normal tx")
+
+	_, err = readTransactionAllocationSafe(bytes.NewReader(standard), int64(len(standard)-1))
+	require.Error(t, err, "a budget below the tx size must reject before decode")
+
+	_, err = readTransactionAllocationSafe(bytes.NewReader(standard), 0)
+	require.NoError(t, err, "a non-positive budget means unbounded and must accept")
+}
+
+// TestNewBlockFromBytes_LargeCoinbaseDecodes is the consensus regression for review finding 2:
+// the transport-only 8 MiB coinbase cap must not leak onto the trusted decode paths. A coinbase
+// with 300k standard P2PKH outputs (~10 MB) is consensus-valid and accepted by SVNode, so
+// model.NewBlockFromBytes — the store read-back and consensus-validation decode path — must
+// decode it. Before the fix this returned ErrBlockInvalid, letting a miner fork Teranode off the
+// longest chain for ~10 MB of block space and making persisted blocks unreadable.
+func TestNewBlockFromBytes_LargeCoinbaseDecodes(t *testing.T) {
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+
+	// Standard 25-byte P2PKH output script (OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG).
+	p2pkh := &bscript.Script{0x76, 0xa9, 0x14}
+	*p2pkh = append(*p2pkh, make([]byte, 20)...)
+	*p2pkh = append(*p2pkh, 0x88, 0xac)
+	const extraOutputs = 300_000
+	for i := 0; i < extraOutputs; i++ {
+		coinbase.AddOutput(&bt.Output{Satoshis: 1, LockingScript: p2pkh})
+	}
+	coinbaseBytes := coinbase.Bytes()
+	require.Greater(t, len(coinbaseBytes), 8<<20, "fixture coinbase must exceed the old 8 MiB cap to exercise the regression")
+
+	blockHeaderBytes, err := hex.DecodeString(block1Header)
+	require.NoError(t, err)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+
+	block := &Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+		SizeInBytes:      uint64(len(coinbaseBytes)) + 80 + util.VarintSize(1),
+		Subtrees:         []*chainhash.Hash{},
+		Height:           800000,
+	}
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	got, err := NewBlockFromBytes(blockBytes)
+	require.NoError(t, err, "trusted decode path must accept a consensus-valid large coinbase")
+	require.Equal(t, extraOutputs+1, got.CoinbaseTx.OutputCount())
+}
+
+// FuzzReadTransactionAllocationSafe locks the parity the allocation-safe pre-scan relies on:
+// whenever go-bt can decode a transaction from the input, readTransactionAllocationSafe must accept
+// it too and yield byte-identical output. A scanner stricter than go-bt would reject a legitimate
+// coinbase and needlessly fail a block over to another peer (availability, not consensus), so this
+// guards the hand-rolled scan against future go-bt encoding changes. The pre-scan's accept-set is a
+// subset of go-bt's by construction (the real decode is bt.NewTxFromBytes on the scanned bytes), so
+// only the "go-bt accepts => scan must accept identically" direction needs asserting.
+func FuzzReadTransactionAllocationSafe(f *testing.F) {
+	standard := []byte{1, 0, 0, 0, 1}
+	standard = append(standard, make([]byte, 36)...)
+	standard = append(standard, 0)
+	standard = append(standard, make([]byte, 4)...)
+	standard = append(standard, 1)
+	standard = append(standard, make([]byte, 8)...)
+	standard = append(standard, 0)
+	standard = append(standard, make([]byte, 4)...)
+	f.Add(standard)
+	f.Add(append([]byte{1, 0, 0, 0, 0xfd, 1, 0}, standard[5:]...)) // non-canonical varint
+	f.Add([]byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0})                    // empty
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		want := new(bt.Tx)
+		n, err := want.ReadFrom(bytes.NewReader(data))
+		if err != nil {
+			return // go-bt can't decode a tx here; nothing to assert (accept-set is a subset)
+		}
+		if n > int64(bt.MaxArenaAlloc) {
+			return // beyond the allocation budget the scan is intended to reject — not a parity case
+		}
+
+		got, err := readTransactionAllocationSafe(bytes.NewReader(data), int64(bt.MaxArenaAlloc))
+		require.NoError(t, err, "go-bt accepted a %d-byte tx but the allocation-safe scan rejected it", n)
+		require.Equal(t, want.Bytes(), got.Bytes(), "allocation-safe scan must decode identically to go-bt")
+	})
+}
+
 func TestMedianTimestamp(t *testing.T) {
 	timestamps := make([]time.Time, 11)
 	for i := range timestamps {

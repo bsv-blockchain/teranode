@@ -45,6 +45,10 @@ func getInt32(key string, defaultValue int32, alternativeContext ...string) int3
 }
 
 func getInt64(key string, defaultValue int64, alternativeContext ...string) int64 {
+	// Swallow parse errors and fall back (matches getInt/getInt32/getUint32) so a malformed
+	// value on any int64 setting can't panic NewSettings() at boot for every service. A bad
+	// blockvalidation_max_incoming_block_bytes yields 0, which validateCatchupSettings rejects
+	// loudly at blockvalidation Init — the fail-fast scoped to the one service that owns it.
 	value, _ := gocore.Config(alternativeContext...).GetInt64(key, defaultValue)
 
 	return value

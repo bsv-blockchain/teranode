@@ -6,7 +6,19 @@ import (
 	"time"
 
 	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/require"
 )
+
+func TestGetInt64OverflowYieldsZero(t *testing.T) {
+	const key = "test_int64_overflow"
+	gocore.Config().Set(key, "9223372036854775808") // 2^63, overflows int64
+	t.Cleanup(func() { gocore.Config().Unset(key) })
+
+	// A malformed/overflowing int64 must NOT panic the shared helper (it loads unrelated
+	// settings for every service at boot). It yields 0, which validateCatchupSettings rejects
+	// loudly for the one setting that owns the fail-fast.
+	require.Equal(t, int64(0), getInt64(key, 8*1024*1024*1024))
+}
 
 func TestGetString(t *testing.T) {
 	gocore.Config().Set("test_string", "hello")

@@ -304,6 +304,11 @@ func TestIsLocalError(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "configuration error",
+			err:      NewConfigurationError("test"),
+			expected: true,
+		},
+		{
 			name:     "network error - should retry with other peers",
 			err:      NewNetworkTimeoutError("test"),
 			expected: false,

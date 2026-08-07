@@ -224,9 +224,63 @@ func TestSyncCoordinator_HandlePeerDisconnected_RemovesPeer(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestSyncCoordinator_HandleCatchupFailure_NoSyncPeer(t *testing.T) {
-	sc, _ := newTestSyncCoordinator(t)
-	require.NotPanics(t, func() { sc.HandleCatchupFailure("test") })
+func TestSyncCoordinator_HandleCatchupFailureForPeer(t *testing.T) {
+	t.Run("ignores failure for non-current peer", func(t *testing.T) {
+		sc, _ := newTestSyncCoordinator(t)
+		sc.mu.Lock()
+		sc.currentSyncPeer = "current"
+		sc.mu.Unlock()
+
+		sc.HandleCatchupFailureForPeer("alternative", "subtree failed")
+
+		require.Equal(t, "current", sc.GetCurrentSyncPeer())
+	})
+
+	t.Run("clears matching current peer", func(t *testing.T) {
+		sc, reg := newTestSyncCoordinator(t)
+		reg.Register(&blockchain.PeerInfo{ID: "current", IsBanned: true})
+		before, found := reg.Get("current")
+		require.True(t, found)
+		beforeScore := before.ReputationScore
+		sc.mu.Lock()
+		sc.currentSyncPeer = "current"
+		sc.mu.Unlock()
+
+		sc.HandleCatchupFailureForPeer("current", "catchup failed")
+
+		require.Empty(t, sc.GetCurrentSyncPeer())
+		after, found := reg.Get("current")
+		require.True(t, found)
+		require.Equal(t, beforeScore, after.ReputationScore,
+			"operation-level notification must not double-count the direct peer failure metric")
+	})
+
+	t.Run("serializes compare clear and trigger", func(t *testing.T) {
+		sc, _ := newTestSyncCoordinator(t)
+		sc.mu.Lock()
+		sc.currentSyncPeer = "current"
+		sc.mu.Unlock()
+
+		sc.decisionMu.Lock()
+		done := make(chan struct{})
+		go func() {
+			sc.HandleCatchupFailureForPeer("current", "catchup failed")
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			t.Fatal("peer transition bypassed trigger serialization")
+		case <-time.After(25 * time.Millisecond):
+		}
+		require.Equal(t, "current", sc.GetCurrentSyncPeer(), "compare-clear must wait for transition lock")
+		sc.decisionMu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("serialized peer transition did not complete")
+		}
+	})
 }
 
 func TestSyncCoordinator_GetPeer_ByLibp2pID(t *testing.T) {
@@ -1360,14 +1414,14 @@ func TestSyncCoordinator_HandleCatchupFailure_WaitsForInFlightDecision(t *testin
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		sc.HandleCatchupFailure("test failure")
+		sc.HandleCatchupFailureForPeer("peer-a", "test failure")
 	}()
 
-	// Give HandleCatchupFailure ample time to (wrongly) run its clear if it is not
+	// Give HandleCatchupFailureForPeer ample time to (wrongly) run its clear if it is not
 	// serialised behind the in-flight decision.
 	time.Sleep(100 * time.Millisecond)
 	require.Equal(t, "peer-a", sc.GetCurrentSyncPeer(),
-		"HandleCatchupFailure must not clear the sync peer while another decision is in flight")
+		"HandleCatchupFailureForPeer must not clear the sync peer while another decision is in flight")
 
 	close(gate)
 
@@ -1411,7 +1465,7 @@ func TestSyncCoordinator_ConcurrentSyncDecisions_NoDeadlock(t *testing.T) {
 			for i := 0; i < 25; i++ {
 				_ = sc.TriggerSync()
 				sc.evaluateSyncPeer()
-				sc.HandleCatchupFailure("stress")
+				sc.HandleCatchupFailureForPeer(pid.String(), "stress")
 				sc.UpdateBanStatus(pid)
 				sc.ClearSyncPeer()
 			}

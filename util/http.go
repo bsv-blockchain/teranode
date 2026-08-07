@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -176,26 +177,54 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 		}
 	}()
 
-	// Read body with context deadline support
-	// Create a channel to handle the read operation
-	done := make(chan struct{})
-	var blockBytes []byte
-	var readErr error
+	return readBodyWithCtx(ctx, url, bodyReaderCloser, -1)
+}
 
+// readBodyWithCtx reads r fully while honoring ctx during the read (a slow/stalled peer
+// can't block past the request deadline), with ONE shared cancel-vs-deadline
+// classification so every caller agrees: a context deadline (peer too slow) → a non-local
+// network timeout (the peer is at fault); a cancel (e.g. shutdown) → a local context error
+// (we are at fault, don't blame the peer). Any other read error → a generic service error.
+// maxBytes < 0 means unbounded; otherwise the body is capped and ErrExternal is returned if
+// the peer streams more than the cap.
+func readBodyWithCtx(ctx context.Context, url string, r io.Reader, maxBytes int64) ([]byte, error) {
+	// url is used only for error text here (the request already happened). Redact it to
+	// scheme://host so peer-gossiped path/query bytes never reach logs or the substring-matching
+	// error classifiers (IsNetworkError, IsMaliciousResponseError). See RedactPeerURL.
+	url = RedactPeerURL(url)
+
+	if maxBytes >= 0 {
+		r = io.LimitReader(r, maxBytes+1)
+	}
+
+	done := make(chan struct{})
+	var b []byte
+	var readErr error
 	go func() {
-		blockBytes, readErr = io.ReadAll(bodyReaderCloser)
+		b, readErr = io.ReadAll(r)
 		close(done)
 	}()
 
-	// Wait for either read completion or context timeout
 	select {
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, errors.NewContextCanceledError("http request [%s] canceled while reading body", url, context.Canceled)
+		}
 		return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", url)
 	case <-done:
 		if readErr != nil {
+			if errors.Is(readErr, context.DeadlineExceeded) {
+				return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", url)
+			}
+			if errors.Is(readErr, context.Canceled) {
+				return nil, errors.NewContextCanceledError("http request [%s] canceled while reading body", url, context.Canceled)
+			}
 			return nil, errors.NewServiceError("http request [%s] failed to read body", url, readErr)
 		}
-		return blockBytes, nil
+		if maxBytes >= 0 && int64(len(b)) > maxBytes {
+			return nil, errors.NewExternalError("http request [%s] response body exceeds %d bytes", url, maxBytes)
+		}
+		return b, nil
 	}
 }
 
@@ -221,31 +250,7 @@ func DoHTTPRequestBounded(ctx context.Context, url string, maxBytes int64, reque
 		}
 	}()
 
-	bounded := io.LimitReader(bodyReaderCloser, maxBytes+1)
-
-	done := make(chan struct{})
-	var blockBytes []byte
-	var readErr error
-
-	go func() {
-		blockBytes, readErr = io.ReadAll(bounded)
-		close(done)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", url)
-	case <-done:
-		if readErr != nil {
-			return nil, errors.NewServiceError("http request [%s] failed to read body", url, readErr)
-		}
-
-		if int64(len(blockBytes)) > maxBytes {
-			return nil, errors.NewExternalError("http request [%s] response body exceeds %d bytes", url, maxBytes)
-		}
-
-		return blockBytes, nil
-	}
+	return readBodyWithCtx(ctx, url, bodyReaderCloser, maxBytes)
 }
 
 // readCloserWithCancel wraps an io.ReadCloser and calls a cancel function when closed.
@@ -392,15 +397,22 @@ func isBlockedIP(ip net.IP) bool {
 	return false
 }
 
-// executeHTTPRequest performs the actual HTTP request with the given context.
-func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+// newSignedRequest builds a validated, optionally-signed *http.Request for rawURL.
+// GET by default; POST with an octet-stream body when requestBody is provided.
+//
+// This is the single request-builder shared by both the one-shot (executeHTTPRequest)
+// and retrying (doRequestReaderWithRetryAfter) paths, so request signing, body
+// Content-Type, and URL validation can never diverge between them — a divergence
+// previously sent retrying catchup fetches unsigned and lost the peer rate-limit
+// exemption.
+func newSignedRequest(ctx context.Context, rawURL string, requestBody ...[]byte) (*http.Request, error) {
 	if err := ValidateURL(rawURL); err != nil {
-		return nil, cancelFn, err
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, cancelFn, errors.NewServiceError("failed to create http request", err)
+		return nil, errors.NewServiceError("failed to create http request", err)
 	}
 
 	// If there is a request body assume we want a POST and write request body.
@@ -419,6 +431,16 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	// Sign the request if a signer is configured (silently skip on error)
 	if signer := loadHTTPRequestSigner(); signer != nil {
 		_ = signer.SignRequest(req)
+	}
+
+	return req, nil
+}
+
+// executeHTTPRequest performs the actual HTTP request with the given context.
+func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+	req, err := newSignedRequest(ctx, rawURL, requestBody...)
+	if err != nil {
+		return nil, cancelFn, err
 	}
 
 	var resp *http.Response
@@ -440,35 +462,57 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	return resp.Body, cancelFn, nil
 }
 
-// maxHTTPErrorBodyBytes bounds how much of a non-2xx response body is read for the
-// error message. The body is peer-supplied and is read on every failure path,
-// including the ones reached from DoHTTPRequestBounded: without a bound, a hostile
-// peer defeats that function's cap simply by answering with an error status and then
-// streaming indefinitely. An error message only needs enough to be diagnosable.
+// maxErrorBodyBytes caps how much of a non-OK response body is drained on error paths.
+// The body is peer-controlled and is NOT embedded in the error message (see buildHTTPError),
+// so this only bounds the drain read used to keep the connection reusable. Sized generously
+// (64 KiB): real 429/503 error bodies from the asset server are tiny, and draining them in full
+// lets net/http return the connection to the pool instead of forcing a fresh TCP+TLS handshake on
+// the next backoff retry. A body larger than this is anomalous/hostile and its connection is
+// intentionally left undrained (dropped rather than reused).
 //
-// Kept small because the snippet is %q-escaped below, and escaping expands: a body of
-// control bytes becomes up to four characters each, so this is the bound on bytes read,
-// not on the length of the resulting message.
-const maxHTTPErrorBodyBytes = 2 * 1024
+// NB: this deliberately diverges from upstream's body-in-message form. Embedding the peer body
+// (even %q-escaped) feeds it into (*Error).Is's substring classification at the catchup gates, so a
+// peer body containing "context canceled" could forge a local classification. Draining without
+// embedding closes that channel while still bounding the read against a hostile infinite stream.
+const maxErrorBodyBytes = 64 << 10 // 64 KiB
+
+// RedactPeerURL reduces a possibly peer-supplied URL to scheme://host[:port], dropping path/query.
+// A peer-gossiped DataHubURL is validated for scheme + SSRF host only, so its path can carry
+// arbitrary bytes; interpolating the raw string into an error that feeds (*Error).Is substring
+// classification lets a peer forge a "local" verdict (e.g. a path containing "context canceled").
+// Returns "[redacted url]" when the input can't be parsed into a host.
+func RedactPeerURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "[redacted url]"
+	}
+	return u.Scheme + "://" + u.Host
+}
 
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
 //
 // The error type is chosen to let callers branch with errors.Is:
 //   - 404 → ErrNotFound
 //   - 503 → ErrServiceUnavailable (typically retryable; see DoHTTPRequestBodyReaderWithRetry)
+//   - 429 → ErrServiceUnavailable (rate limited; same retryable class so the retry
+//     helpers back off rather than fail the caller — see the *WithRetry helpers)
 //   - other → generic ServiceError
 //
-// The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
-// rather than retained in the error string. The snippet is %q-escaped because this
-// message is logged verbatim and forwarded to the peer registry: raw peer bytes would
-// otherwise let a peer embed newlines to forge log lines, or terminal escapes, and
-// would break the single-line log convention.
+// The body is drained up to maxErrorBodyBytes (bounding a hostile peer that answers with an error
+// status and then streams indefinitely) but is NOT embedded in the message — only the status code,
+// the caller-supplied URL and the drained byte count. The body is peer-controlled and this error
+// feeds substring-based classification at the catchup gates, so echoing it (even escaped) would let
+// a peer forge a "local" classification. Callers on peer-controlled paths should redact the URL too.
 func buildHTTPError(resp *http.Response, rawURL string) error {
+	// Redact to scheme://host: rawURL may be a peer-gossiped DataHubURL whose crafted path (e.g.
+	// one containing "context canceled") would otherwise ride into this message and be substring-
+	// matched by the catchup classifiers.
+	rawURL = RedactPeerURL(rawURL)
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
 	case http.StatusNotFound:
 		errFn = errors.NewNotFoundError
-	case http.StatusServiceUnavailable:
+	case http.StatusServiceUnavailable, http.StatusTooManyRequests:
 		errFn = errors.NewServiceUnavailableError
 	}
 
@@ -477,13 +521,18 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 			_ = resp.Body.Close()
 		}()
 
-		b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes))
-		if readErr != nil {
-			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
-		}
-
-		if b != nil {
-			return errFn("http request [%s] returned status code [%d] with body %q", rawURL, resp.StatusCode, string(b))
+		// Drain a bounded amount of the body (helps keep-alive connection reuse) but do
+		// NOT embed the peer-controlled content in the error message. This error feeds
+		// substring-based classification at the catchup reputation gates (IsContextError /
+		// releaseCatchupLock's strings.Contains checks). A hostile or unlucky peer whose
+		// body contained e.g. "context deadline exceeded" or "block assembly is behind"
+		// could otherwise forge a "local" classification — clearing its reputation penalty
+		// AND halting failover to honest peers, re-opening the #1174 wedge. Only the
+		// status code and body length go into the message (plus rawURL, which callers
+		// on peer-controlled paths must redact — see buildHTTPError callers).
+		n, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodyBytes))
+		if n > 0 {
+			return errFn("http request [%s] returned status code [%d] (%d body bytes, omitted)", rawURL, resp.StatusCode, n)
 		}
 	}
 
@@ -505,6 +554,12 @@ func parseRetryAfter(h string) time.Duration {
 	if err != nil || secs <= 0 {
 		return 0
 	}
+	// Clamp so secs*time.Second cannot overflow int64 (which would wrap to a negative duration
+	// and be silently dropped). retryHTTP clamps again to its own ceiling before use.
+	const maxRetryAfterSeconds = 1 << 33 // ~272 years
+	if secs > maxRetryAfterSeconds {
+		secs = maxRetryAfterSeconds
+	}
 	return time.Duration(secs) * time.Second
 }
 
@@ -514,59 +569,125 @@ type retryConfig struct {
 	maxAttempts  int
 	initialDelay time.Duration
 	maxDelay     time.Duration
+	// maxRetryAfter caps an honored server Retry-After hint. It is deliberately larger than
+	// maxDelay (which bounds the jittered exponential backoff): a legitimate peer whose advertised
+	// backoff exceeds the 5s backoff cap must still be honored rather than re-hit every 5s. Zero
+	// falls back to maxDelay (keeps shrunk test configs valid).
+	maxRetryAfter time.Duration
+	// maxBackoffTotal bounds the CUMULATIVE time spent sleeping between attempts of one call
+	// (both exponential backoff and honored Retry-After waits). Without it, a peer answering
+	// every request with a max-ceiling Retry-After could pin a single fetch for
+	// maxAttempts*maxRetryAfter before failover. When the next wait would breach the budget the
+	// loop stops and returns the terminal error rather than sleeping a truncated wait. Zero = no
+	// cumulative bound (attempt-count only), keeping shrunk test configs valid.
+	maxBackoffTotal time.Duration
 }
 
 var defaultRetryConfig = retryConfig{
-	maxAttempts:  6,
-	initialDelay: 250 * time.Millisecond,
-	maxDelay:     5 * time.Second,
+	maxAttempts:     6,
+	initialDelay:    250 * time.Millisecond,
+	maxDelay:        5 * time.Second,
+	maxRetryAfter:   30 * time.Second,
+	maxBackoffTotal: 60 * time.Second,
 }
 
-// DoHTTPRequestBodyReaderWithRetry behaves like DoHTTPRequestBodyReader but retries on
-// HTTP 503 (Service Unavailable) with exponential backoff. Used for endpoints where the
-// server signals admission-control rejection (e.g. asset /subtree_data) and the right
-// behavior is to back off and retry rather than fail the caller.
-//
-// Behavior:
-//   - Retries only on errors satisfying errors.Is(err, errors.ErrServiceUnavailable).
-//   - Other errors (404, 500, network errors) are returned immediately — they are not
-//     transient admission rejections.
-//   - Backoff is exponential starting at 250ms, doubling, capped at 5s. Up to 6 attempts.
-//   - Honors the server's Retry-After header on each 503 (clamped to maxDelay).
-//   - ctx cancellation aborts the retry loop and returns the parent ctx error.
-//
-// Each attempt is a fresh GET — for POST callers passing requestBody, the body is re-sent
-// each time. Make sure that's idempotent before using this helper for non-GET workloads.
-func DoHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
-	return doHTTPRequestBodyReaderWithRetry(ctx, url, defaultRetryConfig, requestBody...)
+// jitterDelay returns a randomised duration in [d/2, d] — i.e. "equal jitter"
+// (half fixed, half random), not "full jitter" ([0, d]). The d/2 floor is
+// deliberate: it avoids waking too early and re-bursting into the per-peer rate
+// limiter. De-synchronising the backoff matters
+// during p2p catchup: many heavy fetches hit the same per-peer rate limiter at
+// once, so without jitter every retry wakes on the same tick and re-bursts into
+// the limiter. Guarded so rand.Int64N never receives 0.
+func jitterDelay(d time.Duration) time.Duration {
+	half := d / 2
+	if half <= 0 {
+		return d
+	}
+	return half + time.Duration(rand.Int64N(int64(half)+1))
 }
 
-func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retryConfig, requestBody ...[]byte) (io.ReadCloser, error) {
+// retryHTTP runs attempt with exponential backoff + equal jitter (see jitterDelay), retrying only
+// while attempt returns an error of the retryable transient class
+// (errors.Is(err, errors.ErrServiceUnavailable) — which buildHTTPError assigns
+// to both HTTP 503 and HTTP 429). Any other error is returned immediately.
+//
+// attempt returns its result T, an optional server Retry-After hint (0 if none),
+// and an error. A positive Retry-After is honored (jittered upward, clamped to
+// maxRetryAfter); otherwise the jittered exponential backoff is used. ctx
+// cancellation aborts the loop and returns the ctx error.
+func retryHTTP[T any](ctx context.Context, cfg retryConfig, attempt func(context.Context) (T, time.Duration, error)) (T, error) {
+	var zero T
 	delay := cfg.initialDelay
 	var lastErr error
+	var sleptTotal time.Duration
+	attemptsMade := 0
 
-	for attempt := 1; attempt <= cfg.maxAttempts; attempt++ {
-		body, retryAfter, err := doHTTPRequestForStreamingWithRetryAfter(ctx, url, requestBody...)
+	for n := 1; n <= cfg.maxAttempts; n++ {
+		attemptsMade = n
+		res, retryAfter, err := attempt(ctx)
 		if err == nil {
-			return body, nil
+			return res, nil
 		}
 		if !errors.Is(err, errors.ErrServiceUnavailable) {
-			return nil, err
+			return zero, err
 		}
 		lastErr = err
 
-		if attempt == cfg.maxAttempts {
+		if n == cfg.maxAttempts {
 			break
 		}
 
-		sleepFor := delay
-		if retryAfter > 0 && retryAfter <= cfg.maxDelay {
-			sleepFor = retryAfter
+		sleepFor := jitterDelay(delay)
+		if retryAfter > 0 {
+			// Server named a minimum — honor it (never wake earlier), and add UPWARD jitter
+			// ([retryAfter, 1.5*retryAfter]) so a fan-out of concurrent same-peer fetches doesn't all
+			// re-issue on the same tick. The de-sync is effective for hints comfortably below the
+			// ceiling and shrinks to zero at exactly maxRetryAfter — at the ceiling there is no
+			// headroom to wait longer without exceeding our own cap, and we will not wait less than
+			// the server's stated minimum, so that case is unavoidably deterministic. Clamp to
+			// maxRetryAfter (an absolute ceiling above the backoff cap maxDelay) so an honest-but-busy
+			// peer whose hint exceeds maxDelay is honored while a hostile hint can't stall us.
+			ceiling := cfg.maxRetryAfter
+			if ceiling <= 0 {
+				ceiling = cfg.maxDelay
+			}
+			// Clamp the hint to the ceiling BEFORE adding jitter: a hostile Retry-After can put
+			// retryAfter within 2^63 ns of overflow, where retryAfter+jitter wraps negative and
+			// time.After(negative) fires immediately (no backoff at all). With retryAfter <= ceiling,
+			// retryAfter + retryAfter/2 + 1 cannot overflow.
+			if retryAfter > ceiling {
+				retryAfter = ceiling
+			}
+			sleepFor = retryAfter + time.Duration(rand.Int64N(int64(retryAfter/2)+1))
+			if sleepFor > ceiling {
+				sleepFor = ceiling
+			}
 		}
+
+		// Bound the CUMULATIVE backoff so a peer answering every attempt with a max-ceiling
+		// Retry-After can't pin one fetch for maxAttempts*ceiling. When the next wait would breach
+		// the budget, stop and fail over rather than sleep a truncated (sub-minimum) wait —
+		// catchup always has other peers.
+		if cfg.maxBackoffTotal > 0 && sleptTotal+sleepFor > cfg.maxBackoffTotal {
+			break
+		}
+		sleptTotal += sleepFor
 
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			// If the deadline expired while we were backing off from a real retryable
+			// peer fault, attribute it to the peer (it stalled us out) rather than
+			// returning a bare local context error — otherwise a peer that 429-spams us
+			// until our fetch budget runs out evades any reputation penalty. A cancel
+			// (e.g. shutdown), or a deadline with no prior peer fault, stays local.
+			if lastErr != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				// Peer too slow / rate-limiting ran out our budget. Use a network-timeout
+				// (classified as a peer fault by error CODE, not by a fragile message
+				// substring) so the reputation gates blame the peer. lastErr is carried as
+				// the wrapped error, so no trailing format verb (would render %!v(MISSING)).
+				return zero, errors.NewNetworkTimeoutError("http request aborted after %d attempt(s) (peer too slow or rate-limiting)", n, lastErr)
+			}
+			return zero, ctx.Err()
 		case <-time.After(sleepFor):
 		}
 
@@ -576,37 +697,159 @@ func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retry
 		}
 	}
 
-	return nil, errors.NewServiceUnavailableError("http request [%s] still 503 after %d attempts: %v", url, cfg.maxAttempts, lastErr)
+	return zero, errors.NewServiceUnavailableError("http request still failing after %d attempt(s)", attemptsMade, lastErr)
+}
+
+// DoHTTPRequestBodyReaderWithRetry behaves like DoHTTPRequestBodyReader but retries on
+// HTTP 503/429 with exponential backoff. Used for endpoints where the server signals
+// admission-control rejection or rate limiting (e.g. asset /subtree_data) and the right
+// behavior is to back off and retry rather than fail the caller.
+//
+// Behavior:
+//   - Retries only on errors satisfying errors.Is(err, errors.ErrServiceUnavailable)
+//     (HTTP 503 and 429).
+//   - Other errors (404, 500, network errors) are returned immediately — they are not
+//     transient admission rejections.
+//   - Backoff is exponential starting at 250ms, doubling, capped at 5s, with equal jitter ([d/2,d]).
+//     Up to 6 attempts.
+//   - Honors the server's Retry-After header when present (jittered upward, clamped to
+//     maxRetryAfter, default 30s — deliberately above the 5s backoff cap).
+//   - ctx cancellation aborts the retry loop and returns the parent ctx error.
+//
+// Each attempt is a fresh GET — for POST callers passing requestBody, the body is re-sent
+// each time. Make sure that's idempotent before using this helper for non-GET workloads.
+func DoHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
+	return doHTTPRequestBodyReaderWithRetry(ctx, url, defaultRetryConfig, nil, requestBody...)
+}
+
+// DoHTTPRequestBodyReaderWithRetryFunc is DoHTTPRequestBodyReaderWithRetry with a
+// per-attempt hook (e.g. a per-peer rate-limit wait) run before every attempt, so the
+// limiter meters retries too, not just the first issuance. A nil hook is a no-op.
+func DoHTTPRequestBodyReaderWithRetryFunc(ctx context.Context, url string, beforeAttempt func(context.Context) error, requestBody ...[]byte) (io.ReadCloser, error) {
+	return doHTTPRequestBodyReaderWithRetry(ctx, url, defaultRetryConfig, beforeAttempt, requestBody...)
+}
+
+func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retryConfig, beforeAttempt func(context.Context) error, requestBody ...[]byte) (io.ReadCloser, error) {
+	return retryHTTP(ctx, cfg, func(c context.Context) (io.ReadCloser, time.Duration, error) {
+		if beforeAttempt != nil {
+			if err := beforeAttempt(c); err != nil {
+				return nil, 0, err
+			}
+		}
+		return doHTTPRequestForStreamingWithRetryAfter(c, url, requestBody...)
+	})
+}
+
+// doHTTPRequestWithRetry behaves like DoHTTPRequest (reads the full body into memory)
+// but retries on HTTP 503/429 with jittered exponential backoff. Intended for catchup
+// heavy fetches (e.g. /blocks batches, single blocks) that must back off when a peer's
+// asset endpoint rate-limits, instead of re-bursting and re-tripping the limiter.
+// beforeAttempt (nil = no-op) runs before every attempt, e.g. a per-peer rate-limit wait.
+func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, beforeAttempt func(context.Context) error, requestBody ...[]byte) ([]byte, error) {
+	return retryHTTP(ctx, cfg, func(c context.Context) ([]byte, time.Duration, error) {
+		if beforeAttempt != nil {
+			if err := beforeAttempt(c); err != nil {
+				return nil, 0, err
+			}
+		}
+		return readBodyWithRetryAfter(c, url, -1, requestBody...)
+	})
+}
+
+// DoHTTPRequestBoundedWithRetry behaves like DoHTTPRequestBounded (caps the body at
+// maxBytes) but retries on HTTP 503/429 with jittered exponential backoff. Intended for
+// catchup subtree fetches against peer-controlled asset endpoints.
+// beforeAttempt (nil = no-op) runs before every attempt, e.g. a per-peer rate-limit wait.
+func DoHTTPRequestBoundedWithRetry(ctx context.Context, url string, maxBytes int64, beforeAttempt func(context.Context) error, requestBody ...[]byte) ([]byte, error) {
+	return doHTTPRequestBoundedWithRetry(ctx, url, maxBytes, defaultRetryConfig, beforeAttempt, requestBody...)
+}
+
+func doHTTPRequestBoundedWithRetry(ctx context.Context, url string, maxBytes int64, cfg retryConfig, beforeAttempt func(context.Context) error, requestBody ...[]byte) ([]byte, error) {
+	return retryHTTP(ctx, cfg, func(c context.Context) ([]byte, time.Duration, error) {
+		if beforeAttempt != nil {
+			if err := beforeAttempt(c); err != nil {
+				return nil, 0, err
+			}
+		}
+		return readBodyWithRetryAfter(c, url, maxBytes, requestBody...)
+	})
+}
+
+// readBodyWithRetryAfter performs a single HTTP request and reads the full response body
+// into memory, returning any server Retry-After hint alongside the error so retryHTTP can
+// honor it. maxBytes < 0 means unbounded; maxBytes >= 0 caps the body and returns
+// ErrExternal if the peer streams more than the cap (mirrors DoHTTPRequestBounded).
+//
+// The body read is guarded by ctx.Done() (mirroring DoHTTPRequest/DoHTTPRequestBounded):
+// a context timeout/cancel during the read returns NewNetworkTimeoutError — a non-local
+// error — so a peer stalling mid-stream is correctly attributed to the peer rather than
+// classified as a local error and silently absolved.
+func readBodyWithRetryAfter(ctx context.Context, url string, maxBytes int64, requestBody ...[]byte) ([]byte, time.Duration, error) {
+	// Use the standard request timeout (not the streaming timeout) to preserve the
+	// behavior of the non-retry DoHTTPRequest/DoHTTPRequestBounded these helpers replace.
+	reader, retryAfter, err := doRequestReaderWithRetryAfter(ctx, time.Duration(httpRequestTimeout)*time.Millisecond, url, requestBody...)
+	if err != nil {
+		return nil, retryAfter, err
+	}
+	defer func() { _ = reader.Close() }()
+
+	// Shared body read + cancel-vs-deadline classification (see readBodyWithCtx).
+	b, err := readBodyWithCtx(ctx, url, reader, maxBytes)
+	return b, 0, err
 }
 
 // doHTTPRequestForStreamingWithRetryAfter is doHTTPRequestForStreaming + extracts
 // the Retry-After header on non-OK responses. On success returns (body, 0, nil).
+// Uses the longer streaming timeout, appropriate for large body-reader downloads.
 func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, error) {
+	return doRequestReaderWithRetryAfter(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond, rawURL, requestBody...)
+}
+
+// doRequestReaderWithRetryAfter performs a single GET/POST and returns the body
+// reader plus any server Retry-After hint (extracted on non-OK responses). The
+// timeout is applied only when ctx has no deadline. Callers choose the timeout so
+// streaming downloads get the longer http_streaming_timeout while bounded/whole-body
+// byte fetches keep the shorter http_timeout they had before retries were added.
+func doRequestReaderWithRetryAfter(ctx context.Context, timeout time.Duration, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, error) {
+	// displayURL is the redacted (scheme://host) form for error text; rawURL itself is still used
+	// to build the request. Peer-gossiped path/query bytes must never reach error messages, both to
+	// avoid leaking them and to keep them out of the substring-matching error classifiers.
+	displayURL := RedactPeerURL(rawURL)
+
 	cancelFn := func() {}
 	if _, ok := ctx.Deadline(); !ok {
-		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond)
+		ctx, cancelFn = context.WithTimeout(ctx, timeout)
 	}
 
-	if err := ValidateURL(rawURL); err != nil {
-		cancelFn()
-		return nil, 0, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	// Shared builder: validates, sets body Content-Type, and signs (the retry path
+	// must sign too, or peers reject the request and we lose the rate-limit exemption).
+	req, err := newSignedRequest(ctx, rawURL, requestBody...)
 	if err != nil {
 		cancelFn()
-		return nil, 0, errors.NewServiceError("failed to create http request", err)
-	}
-	if len(requestBody) > 0 && requestBody[0] != nil {
-		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
-		req.Method = http.MethodPost
-		req.Header.Set("Content-Type", "application/json")
+		return nil, 0, err
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		cancelFn()
-		return nil, 0, errors.NewServiceError("failed to do http request", err)
+		// Classify context-derived failures the same way as the body-read path: a
+		// deadline before the response (connect/TLS/header stall) means the peer was
+		// too slow — a peer fault, surfaced as a non-local network timeout so the
+		// reputation gate blames the peer and catchup keeps failing over. A cancel
+		// (e.g. node shutdown) is local. Other Do errors stay generic ServiceErrors.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, 0, errors.NewNetworkTimeoutError("http request [%s] timed out before response", displayURL)
+		}
+		if errors.Is(err, context.Canceled) {
+			return nil, 0, errors.NewContextCanceledError("http request [%s] canceled before response", displayURL, context.Canceled)
+		}
+		// *url.Error renders as `Get "<full rawURL>": <cause>`, embedding the peer path/query.
+		// Unwrap to the cause and attach only the redacted display URL ourselves.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return nil, 0, errors.NewServiceError("http request [%s] failed", displayURL, err)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -619,7 +862,7 @@ func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string,
 	ct := strings.ToLower(resp.Header.Get("content-type"))
 	if strings.HasPrefix(ct, "text/html") {
 		cancelFn()
-		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
+		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", displayURL)
 	}
 
 	return &readCloserWithCancel{ReadCloser: resp.Body, cancelFn: cancelFn}, 0, nil

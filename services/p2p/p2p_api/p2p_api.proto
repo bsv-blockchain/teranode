@@ -177,6 +177,7 @@ message AddBanScoreRequest {
     int64 catchup_attempts = 6;
     int64 catchup_successes = 7;
     int64 catchup_failures = 8;
+    string storage = 9;
   }
 
   message GetPeersForCatchupResponse {
@@ -351,4 +352,3 @@ message AddBanScoreRequest {
     // Get single peer information by peer ID
     rpc GetPeer(GetPeerRequest) returns (GetPeerResponse) {}
   }
-  

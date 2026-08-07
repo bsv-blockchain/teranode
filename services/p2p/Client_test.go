@@ -775,19 +775,20 @@ func TestSimpleClientResetReputation(t *testing.T) {
 
 func TestSimpleClientGetPeersForCatchup(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
+		apiPeer := &p2p_api.PeerInfoForCatchup{
+			Id:                     "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
+			Height:                 42,
+			CatchupReputationScore: 88.5,
+			CatchupAttempts:        3,
+			CatchupSuccesses:       2,
+			CatchupFailures:        1,
+			Storage:                "pruned",
+		}
+
 		client := newClientWithMock(&MockPeerServiceClient{
 			GetPeersForCatchupFunc: func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error) {
 				return &p2p_api.GetPeersForCatchupResponse{
-					Peers: []*p2p_api.PeerInfoForCatchup{
-						{
-							Id:                     "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
-							Height:                 42,
-							CatchupReputationScore: 88.5,
-							CatchupAttempts:        3,
-							CatchupSuccesses:       2,
-							CatchupFailures:        1,
-						},
-					},
+					Peers: []*p2p_api.PeerInfoForCatchup{apiPeer},
 				}, nil
 			},
 		})
@@ -799,6 +800,7 @@ func TestSimpleClientGetPeersForCatchup(t *testing.T) {
 		require.Equal(t, int64(3), peers[0].CatchupAttempts)
 		require.Equal(t, int64(2), peers[0].CatchupSuccesses)
 		require.Equal(t, int64(1), peers[0].CatchupFailures)
+		require.Equal(t, "pruned", peers[0].Storage)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{

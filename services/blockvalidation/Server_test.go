@@ -2103,3 +2103,18 @@ func TestIsUnvalidatablePeerError(t *testing.T) {
 	require.False(t, isUnvalidatablePeerError(errors.NewServiceError("service down")))
 	require.False(t, isUnvalidatablePeerError(nil))
 }
+
+func TestValidateCatchupSettings(t *testing.T) {
+	// Default (8 GiB) is accepted.
+	require.NoError(t, validateCatchupSettings(test.CreateBaseTestSettings(t)))
+
+	// A non-positive transport cap fails loudly at startup rather than stalling every fetch.
+	for _, bad := range []int64{0, -1} {
+		s := test.CreateBaseTestSettings(t)
+		s.BlockValidation.MaxIncomingBlockBytes = bad
+		err := validateCatchupSettings(s)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrConfiguration), "must be a configuration error for %d", bad)
+		require.Contains(t, err.Error(), "blockvalidation_max_incoming_block_bytes")
+	}
+}

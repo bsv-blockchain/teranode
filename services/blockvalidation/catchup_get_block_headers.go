@@ -286,8 +286,12 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				circuitBreaker.RecordFailure()
 			}
 
-			// Report failed request to P2P service
-			u.reportCatchupFailure(ctx, identifier)
+			// Report failed request to P2P service — but not for a local error (e.g. a
+			// shutdown context cancel), which isn't the peer's fault. (The slow-peer
+			// timeout branch above is a genuine peer fault and is still reported.)
+			if !errors.IsLocalError(err) {
+				u.reportCatchupFailure(ctx, identifier)
+			}
 
 			// Check if this is a malicious response. Both returns below are marked
 			// as already-reported (the failure was recorded just above) so the

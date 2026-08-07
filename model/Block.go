@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"runtime"
 	"sort"
 	"strings"
@@ -322,6 +323,19 @@ func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
 }
 
 func NewBlockFromReader(blockReader io.Reader) (block *Block, err error) {
+	return newBlockFromReader(blockReader, 0, false, 0)
+}
+
+// NewBlockFromReaderWithDeclaredSizeLimit decodes a block while rejecting a
+// declared Bitcoin block size above maxDeclaredBytes before reading subtree or
+// coinbase payloads, and bounds the buffered coinbase to maxCoinbaseBytes
+// (0 = unbounded). Both bounds belong to the untrusted transport path; the
+// transport reader remains responsible for its overall byte cap.
+func NewBlockFromReaderWithDeclaredSizeLimit(blockReader io.Reader, maxDeclaredBytes uint64, maxCoinbaseBytes int64) (block *Block, err error) {
+	return newBlockFromReader(blockReader, maxDeclaredBytes, true, maxCoinbaseBytes)
+}
+
+func newBlockFromReader(blockReader io.Reader, maxDeclaredBytes uint64, enforceDeclaredSize bool, maxCoinbaseBytes int64) (block *Block, err error) {
 	startTime := time.Now()
 
 	defer func() {
@@ -347,10 +361,14 @@ func NewBlockFromReader(blockReader io.Reader) (block *Block, err error) {
 		return nil, errors.NewBlockInvalidError("invalid block header", err)
 	}
 
-	return readBlockFromReader(block, blockReader)
+	return readBlockFromReaderWithLimits(block, blockReader, maxDeclaredBytes, enforceDeclaredSize, maxCoinbaseBytes)
 }
 
 func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
+	return readBlockFromReaderWithLimits(block, buf, 0, false, 0)
+}
+
+func readBlockFromReaderWithLimits(block *Block, buf io.Reader, maxDeclaredBytes uint64, enforceDeclaredSize bool, maxCoinbaseBytes int64) (*Block, error) {
 	var err error
 
 	// read the transaction count
@@ -363,6 +381,9 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 	block.SizeInBytes, err = wire.ReadVarInt(buf, 0)
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("error reading size in bytes", err)
+	}
+	if enforceDeclaredSize && block.SizeInBytes > maxDeclaredBytes {
+		return nil, errors.NewBlockInvalidError("block declared size %d exceeds limit %d", block.SizeInBytes, maxDeclaredBytes)
 	}
 
 	// read the length of the subtree list
@@ -404,8 +425,8 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		return nil, errors.NewBlockInvalidError("block subtree length mismatch, expected %d, actual %d", block.subtreeLength, block.Subtrees)
 	}
 
-	coinbaseTx := new(bt.Tx)
-	if _, err = coinbaseTx.ReadFrom(buf); err != nil {
+	coinbaseTx, err := readTransactionAllocationSafe(buf, maxCoinbaseBytes)
+	if err != nil {
 		return nil, errors.NewBlockInvalidError("error reading coinbase tx", err)
 	}
 
@@ -441,6 +462,165 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 	}
 
 	return block, nil
+}
+
+// readTransactionAllocationSafe consumes one serialized transaction without allocating
+// directly from attacker-controlled count or script-length prefixes. Raw bytes are buffered
+// only as they are actually received, then decoded by go-bt after every advertised field has
+// been proven present inside the reader's remaining transport budget.
+//
+// maxBytes caps the buffered transaction (and hence the derived allocation) on top of any
+// tighter remaining transport budget already on the reader. maxBytes <= 0 means "no explicit
+// cap" — used by the trusted decode paths (store read-back, gRPC-bounded consensus entry
+// points), which must accept any consensus-valid coinbase; a positive cap belongs only to the
+// untrusted transport path, threaded in from decodeBoundedBlock. A blanket cap here is a
+// consensus bug: BSV bounds neither coinbase output count nor output-script size, so a
+// consensus-valid ~10 MB coinbase must still decode.
+func readTransactionAllocationSafe(r io.Reader, maxBytes int64) (*bt.Tx, error) {
+	transactionBudget := maxBytes
+	if transactionBudget <= 0 {
+		transactionBudget = math.MaxInt64 // unbounded: only the reader's own budget / go-bt arena bound the read
+	}
+	if outer, ok := r.(*io.LimitedReader); ok && outer.N < transactionBudget {
+		transactionBudget = outer.N
+	}
+	limited := &io.LimitedReader{R: r, N: transactionBudget}
+
+	var raw bytes.Buffer
+	tee := io.TeeReader(limited, &raw)
+	if err := scanSerializedTransaction(tee, limited); err != nil {
+		return nil, err
+	}
+
+	tx, err := bt.NewTxFromBytes(raw.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	return tx, nil
+}
+
+func scanSerializedTransaction(r io.Reader, budgetReader io.Reader) error {
+	var version [4]byte
+	if _, err := io.ReadFull(r, version[:]); err != nil {
+		return err
+	}
+
+	inputCount, err := readBTVarInt(r)
+	if err != nil {
+		return err
+	}
+
+	var outputCount uint64
+	extended := false
+	if inputCount == 0 {
+		outputCount, err = readBTVarInt(r)
+		if err != nil {
+			return err
+		}
+		if outputCount == 0 {
+			var markerOrLockTime [4]byte
+			if _, err = io.ReadFull(r, markerOrLockTime[:]); err != nil {
+				return err
+			}
+			if binary.BigEndian.Uint32(markerOrLockTime[:]) != 0xEF {
+				return nil
+			}
+			extended = true
+			inputCount, err = readBTVarInt(r)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	if err = validateTransactionElementCount(inputCount, remainingReaderBudget(budgetReader), 41, "input"); err != nil {
+		return err
+	}
+	for i := uint64(0); i < inputCount; i++ {
+		if err = discardExact(r, 36); err != nil { // previous hash + output index
+			return err
+		}
+		if err = discardSerializedScript(r, budgetReader, "unlocking script"); err != nil {
+			return err
+		}
+		if err = discardExact(r, 4); err != nil { // sequence
+			return err
+		}
+		if extended {
+			if err = discardExact(r, 8); err != nil { // previous satoshis
+				return err
+			}
+			if err = discardSerializedScript(r, budgetReader, "previous transaction script"); err != nil {
+				return err
+			}
+		}
+	}
+
+	if inputCount > 0 || extended {
+		outputCount, err = readBTVarInt(r)
+		if err != nil {
+			return err
+		}
+	}
+	if err = validateTransactionElementCount(outputCount, remainingReaderBudget(budgetReader), 9, "output"); err != nil {
+		return err
+	}
+	for i := uint64(0); i < outputCount; i++ {
+		if err = discardExact(r, 8); err != nil { // satoshis
+			return err
+		}
+		if err = discardSerializedScript(r, budgetReader, "locking script"); err != nil {
+			return err
+		}
+	}
+
+	return discardExact(r, 4) // lock time
+}
+
+func discardSerializedScript(r io.Reader, budgetReader io.Reader, label string) error {
+	scriptLength, err := readBTVarInt(r)
+	if err != nil {
+		return err
+	}
+	remaining := remainingReaderBudget(budgetReader)
+	if scriptLength > uint64(bt.MaxArenaAlloc) {
+		return errors.NewBlockInvalidError("%s length %d exceeds go-bt MaxArenaAlloc %d", label, scriptLength, bt.MaxArenaAlloc)
+	}
+	if scriptLength > uint64(math.MaxInt64) || scriptLength > remaining {
+		return errors.NewBlockInvalidError("%s length %d exceeds remaining transport budget %d", label, scriptLength, remaining)
+	}
+	return discardExact(r, int64(scriptLength))
+}
+
+func readBTVarInt(r io.Reader) (uint64, error) {
+	var value bt.VarInt
+	_, err := value.ReadFrom(r)
+	return uint64(value), err
+}
+
+func discardExact(r io.Reader, n int64) error {
+	read, err := io.CopyN(io.Discard, r, n)
+	if err != nil {
+		return errors.NewBlockInvalidError("expected %d bytes, got %d", n, read, err)
+	}
+	return nil
+}
+
+func remainingReaderBudget(r io.Reader) uint64 {
+	if limited, ok := r.(*io.LimitedReader); ok {
+		if limited.N <= 0 {
+			return 0
+		}
+		return uint64(limited.N)
+	}
+	return math.MaxUint64
+}
+
+func validateTransactionElementCount(count, remaining, minimumSize uint64, label string) error {
+	if minimumSize > 0 && count > remaining/minimumSize {
+		return errors.NewBlockInvalidError("transaction %s count %d exceeds remaining transport budget %d", label, count, remaining)
+	}
+	return nil
 }
 
 // GetHash calculates the hash of the block header and caches it.

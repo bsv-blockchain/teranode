@@ -232,7 +232,14 @@ func IsContextError(err error) bool {
 		}
 	}
 
-	// Check if the wrapped error is a context error
+	// Check if the wrapped error is a context error. This includes a strings.Contains fallback in
+	// (*Error).Is for the stdlib sentinels, which is load-bearing: gRPC surfaces cancellation as
+	// `rpc error: code = Canceled desc = context canceled` that is frequently STRINGIFIED into a
+	// teranode error carrying neither ERR_CONTEXT nor a live gRPC status, so only the message text
+	// remains — and 15+ service shutdown gates rely on detecting it to exit cleanly. Peer-controlled
+	// text cannot forge this: every peer URL is redacted to scheme://host before entering an error
+	// (util.RedactPeerURL) and peer response bodies are never embedded, so no peer bytes can carry a
+	// space-delimited sentinel like "context canceled" into the rendered chain. See review of #1454.
 	if Is(err, context.Canceled) || Is(err, context.DeadlineExceeded) {
 		return true
 	}
@@ -262,6 +269,11 @@ func IsLocalError(err error) bool {
 
 	// Storage errors indicate local resource issues
 	if Is(err, ErrStorageError) {
+		return true
+	}
+
+	// Configuration errors originate from this node, never from a peer.
+	if Is(err, ErrConfiguration) {
 		return true
 	}
 

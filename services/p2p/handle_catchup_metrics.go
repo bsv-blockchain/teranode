@@ -244,6 +244,7 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 			CatchupAttempts:        p.CatchupAttempts,
 			CatchupSuccesses:       p.CatchupSuccesses,
 			CatchupFailures:        p.CatchupFailures,
+			Storage:                p.Storage,
 		})
 	}
 

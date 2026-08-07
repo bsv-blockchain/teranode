@@ -141,6 +141,10 @@ func (rl *tieredRateLimiter) limiterFor(c echo.Context) *rate.Limiter {
 func (rl *tieredRateLimiter) allowAtBucket(c echo.Context, next echo.HandlerFunc, lim *rate.Limiter) error {
 	if !lim.Allow() {
 		prometheusAssetHTTPRateLimited.WithLabelValues(rl.tierLabel).Inc()
+		// Advertise a Retry-After so backing-off clients pace their retries instead
+		// of re-bursting into the limiter (the IBD wedge in #1174). The heavy-route
+		// bucket refills at the configured rate; 1s is a safe, coarse lower bound.
+		c.Response().Header().Set("Retry-After", "1")
 		return c.JSON(http.StatusTooManyRequests, map[string]string{"message": "rate limit exceeded"})
 	}
 	return next(c)

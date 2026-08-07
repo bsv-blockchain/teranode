@@ -1677,6 +1677,7 @@ type PeerInfoForCatchup struct {
 	CatchupAttempts        int64                  `protobuf:"varint,6,opt,name=catchup_attempts,json=catchupAttempts,proto3" json:"catchup_attempts,omitempty"`
 	CatchupSuccesses       int64                  `protobuf:"varint,7,opt,name=catchup_successes,json=catchupSuccesses,proto3" json:"catchup_successes,omitempty"`
 	CatchupFailures        int64                  `protobuf:"varint,8,opt,name=catchup_failures,json=catchupFailures,proto3" json:"catchup_failures,omitempty"`
+	Storage                string                 `protobuf:"bytes,9,opt,name=storage,proto3" json:"storage,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -1765,6 +1766,13 @@ func (x *PeerInfoForCatchup) GetCatchupFailures() int64 {
 		return x.CatchupFailures
 	}
 	return 0
+}
+
+func (x *PeerInfoForCatchup) GetStorage() string {
+	if x != nil {
+		return x.Storage
+	}
+	return ""
 }
 
 type GetPeersForCatchupResponse struct {
@@ -3054,7 +3062,7 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1f\n" +
 	"\vpeers_reset\x18\x02 \x01(\x05R\n" +
 	"peersReset\"\x1b\n" +
-	"\x19GetPeersForCatchupRequest\"\xba\x02\n" +
+	"\x19GetPeersForCatchupRequest\"\xd4\x02\n" +
 	"\x12PeerInfoForCatchup\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x1d\n" +
@@ -3065,7 +3073,8 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x18catchup_reputation_score\x18\x05 \x01(\x01R\x16catchupReputationScore\x12)\n" +
 	"\x10catchup_attempts\x18\x06 \x01(\x03R\x0fcatchupAttempts\x12+\n" +
 	"\x11catchup_successes\x18\a \x01(\x03R\x10catchupSuccesses\x12)\n" +
-	"\x10catchup_failures\x18\b \x01(\x03R\x0fcatchupFailures\"O\n" +
+	"\x10catchup_failures\x18\b \x01(\x03R\x0fcatchupFailures\x12\x18\n" +
+	"\astorage\x18\t \x01(\tR\astorage\"O\n" +
 	"\x1aGetPeersForCatchupResponse\x121\n" +
 	"\x05peers\x18\x01 \x03(\v2\x1b.p2p_api.PeerInfoForCatchupR\x05peers\"W\n" +
 	"\x19ReportValidSubtreeRequest\x12\x17\n" +

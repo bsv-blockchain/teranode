@@ -298,6 +298,15 @@ func TestGetPeersForCatchup_FiltersAndSorts(t *testing.T) {
 	ids := []string{resp.Peers[0].Id, resp.Peers[1].Id}
 	require.ElementsMatch(t, []string{"full", "pruned"}, ids)
 	require.Equal(t, "full", resp.Peers[0].Id, "full must sort ahead of pruned")
+
+	storageByID := make(map[string]string, len(resp.Peers))
+	for _, gotPeer := range resp.Peers {
+		storageField := gotPeer.ProtoReflect().Descriptor().Fields().ByName("storage")
+		require.NotNil(t, storageField)
+		storageByID[gotPeer.Id] = gotPeer.ProtoReflect().Get(storageField).String()
+	}
+	require.Equal(t, "full", storageByID["full"])
+	require.Equal(t, "pruned", storageByID["pruned"])
 }
 
 func TestGetPeersForCatchup_UsesCatchupSpecificCounters(t *testing.T) {

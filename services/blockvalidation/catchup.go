@@ -390,6 +390,13 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		// TODO: all of these should be using error types, and not checking the strings (!)
 		switch {
+		case errors.IsLocalError(*err):
+			// Local errors (our own context cancel / per-peer rate-wait budget, storage)
+			// are not the peer's fault. Checked FIRST so a URL-bearing local error (its
+			// message contains "http...") isn't misclassified as a network/peer error by
+			// the substring-matching IsNetworkError case below.
+			errorType = "local_error"
+			isPeerError = false
 		case errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid):
 			errorType = "validation_failure"
 			// Mark peer as malicious for validation failure (reported after unlock)

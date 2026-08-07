@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 )
 
@@ -51,6 +52,7 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 
 	// Convert PeerInfo to our internal type
 	peers := make([]PeerForCatchup, 0, len(peerInfos))
+	var prunedFallback []PeerForCatchup // pruned peers held back, used only if no others qualify
 	for _, p := range peerInfos {
 		// Filter out peers that don't have the target height yet
 		// (we only want peers that are at or above our target)
@@ -65,7 +67,7 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 			continue
 		}
 
-		peers = append(peers, PeerForCatchup{
+		candidate := PeerForCatchup{
 			ID:                     p.ID.String(),
 			Storage:                p.Storage,
 			DataHubURL:             p.DataHubURL,
@@ -75,7 +77,24 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 			CatchupAttempts:        p.CatchupAttempts,
 			CatchupSuccesses:       p.CatchupSuccesses,
 			CatchupFailures:        p.CatchupFailures,
-		})
+		}
+
+		// Deprioritise pruned peers as catchup primaries: they 404 on archival subtree
+		// data during IBD, wasting a fetch attempt per block before failover. They are
+		// held back as a fallback rather than hard-excluded, so an all-pruned peer set
+		// still gets an attempt (and a diagnosable 404) instead of stranding the node.
+		if isPrunedPeer(p.Storage) {
+			prunedFallback = append(prunedFallback, candidate)
+			continue
+		}
+
+		peers = append(peers, candidate)
+	}
+
+	// Fall back to pruned peers only when no full/unknown peer qualifies.
+	if len(peers) == 0 && len(prunedFallback) > 0 {
+		u.logger.Warnf("[peer_selection] No non-pruned peers for catchup; falling back to %d pruned peer(s)", len(prunedFallback))
+		peers = prunedFallback
 	}
 
 	u.logger.Infof("[peer_selection] Selected %d peers for catchup (from %d total)", len(peers), len(peerInfos))
@@ -129,6 +148,16 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 			u.processBlockNotify.Delete(*blockHash)
 			u.catchupAlternatives.Delete(*blockHash)
 			return true
+		}
+
+		// break, not continue: the only local errors that reach here are a global cancel
+		// (shutdown / catchup ctx done — no other peer helps) or a local StorageError (a
+		// blob-backend outage — failing over would re-run full catchup against every peer).
+		// There is no per-peer, ctx-live local error on this path (no deadline is set here),
+		// so continuing to the next alternative is never correct. Don't degrade reputation.
+		if errors.IsLocalError(altErr) {
+			u.logger.Warnf("[catchup] Local error trying peer %s for block %s, not blaming peer, stopping alternatives: %v", bestPeer.ID, blockHash.String(), altErr)
+			break
 		}
 
 		u.logger.Warnf("[catchup] Peer %s failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
