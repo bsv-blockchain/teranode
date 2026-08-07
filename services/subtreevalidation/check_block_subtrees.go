@@ -1096,10 +1096,13 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		return errors.NewProcessingError("[processTransactionsInLevels] failed to pre-load MTP store: %v", err)
 	}
 
-	// Track validation results
+	// Track validation results. firstErr keeps the first swallowed per-tx error so
+	// the summary error below can chain a cause instead of only reporting counts.
 	var (
 		errorsFound         atomic.Uint64
 		missingParentErrors atomic.Uint64
+		firstErrMu          sync.Mutex
+		firstErr            error
 	)
 
 	// Process each level in series, but all transactions within a level in parallel
@@ -1198,8 +1201,20 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 						// possible because phase 3 revalidation can't resolve these.
 						u.logger.Warnf("[processTransactionsInLevels] Invalid transaction detected: %s: %v", tx.TxIDChainHash().String(), err)
 						return err
+					} else if errors.Is(err, errors.ErrUtxoWalkLimitExceeded) {
+						// The conflicting-walk budget is deterministic for this block: every
+						// remaining conflicting tx would re-derive the same failure, so fail
+						// the level immediately (issue 1391).
+						u.logger.Errorf("[processTransactionsInLevels] Conflicting-walk limit exceeded for transaction %s: %v", tx.TxIDChainHash().String(), err)
+						return err
 					} else {
 						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v", tx.TxIDChainHash().String(), err)
+
+						firstErrMu.Lock()
+						if firstErr == nil {
+							firstErr = err
+						}
+						firstErrMu.Unlock()
 					}
 
 					return nil // Don't fail the entire level
@@ -1245,6 +1260,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			u.logger.Infof("[processTransactionsInLevels] %d missing-parent errors (deferred to sequential revalidation)", errorsFound.Load())
 			return nil
 		}
+		if firstErr != nil {
+			return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load(), firstErr)
+		}
+
 		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load())
 	}
 
