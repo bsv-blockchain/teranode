@@ -88,7 +88,7 @@ func testBackpressureConfig() settings.ValidatorKafkaBackpressureSettings {
 
 func newTestController(reader queueStatsReader, consumer pausableConsumer) *kafkaBackpressureController {
 	initPrometheusMetrics()
-	return newKafkaBackpressureController(ulogger.TestLogger{}, testBackpressureConfig(), reader, consumer)
+	return newKafkaBackpressureController(ulogger.TestLogger{}, testBackpressureConfig(), 0, reader, consumer)
 }
 
 // TestBackpressure_HysteresisPauseThenResume covers the core watermark logic
@@ -146,6 +146,92 @@ func TestBackpressure_MaxPauseForcesResume(t *testing.T) {
 	c.evaluate(600 * time.Millisecond)
 	require.Equal(t, 1, consumer.resumeCount())
 	require.False(t, c.paused.Load())
+}
+
+// TestBackpressure_DoubleSpendWindowExcludedFromControl verifies the control
+// decision is based on the head age PAST the double-spend drain floor: a healthy
+// hold-back (head aged only up to the floor plus a small epsilon) must not pause,
+// while a genuine stall past the floor must.
+func TestBackpressure_DoubleSpendWindowExcludedFromControl(t *testing.T) {
+	consumer := &fakeConsumer{}
+	c := newTestController(&fakeReader{}, consumer)
+	c.doubleSpendWindow = 1000 * time.Millisecond
+
+	// Healthy hold-back: raw head age = window + 50ms → effectiveAge 50ms, below
+	// the 500ms pause watermark. Must not pause.
+	c.evaluate(1050 * time.Millisecond)
+	require.Equal(t, 0, consumer.pauseCount(), "a healthy hold-back at the drain floor must not pause")
+	require.False(t, c.paused.Load())
+
+	// Genuine stall: raw head age = window + 600ms → effectiveAge 600ms, above
+	// the pause watermark. Must pause.
+	c.evaluate(1600 * time.Millisecond)
+	require.Equal(t, 1, consumer.pauseCount(), "a stall past the drain floor must pause")
+	require.True(t, c.paused.Load())
+}
+
+// TestBackpressure_MaxPauseCooldownBoundsDutyCycle verifies that after a
+// max-pause fail-open resume the controller does not immediately re-pause while
+// the signal stays hot: it must wait out a MaxPause-long cooldown, bounding the
+// pathological duty cycle to ~50% instead of ~99.8%.
+func TestBackpressure_MaxPauseCooldownBoundsDutyCycle(t *testing.T) {
+	consumer := &fakeConsumer{}
+	c := newTestController(&fakeReader{}, consumer)
+
+	base := time.Unix(2000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	// Hot → pause.
+	c.evaluate(600 * time.Millisecond)
+	require.True(t, c.paused.Load())
+	require.Equal(t, 1, consumer.pauseCount())
+
+	// Held hot past MaxPause → fail-open resume, cooldown armed.
+	now = base.Add(31 * time.Second)
+	c.evaluate(600 * time.Millisecond)
+	require.False(t, c.paused.Load())
+	require.Equal(t, 1, consumer.resumeCount())
+
+	// Still hot but inside the cooldown → must NOT re-pause.
+	now = base.Add(41 * time.Second)
+	c.evaluate(600 * time.Millisecond)
+	require.False(t, c.paused.Load())
+	require.Equal(t, 1, consumer.pauseCount(), "must not re-pause during the cooldown")
+
+	// Cooldown (one MaxPause after the resume) elapsed → re-pause allowed.
+	now = base.Add(61 * time.Second)
+	c.evaluate(600 * time.Millisecond)
+	require.True(t, c.paused.Load())
+	require.Equal(t, 2, consumer.pauseCount(), "re-pause allowed once the cooldown elapses")
+}
+
+// TestBackpressure_MaxPauseCooldownClearedByDrain verifies a genuine drain to
+// the resume watermark clears the cooldown latch immediately, re-arming normal
+// pause behaviour without waiting out the full cooldown.
+func TestBackpressure_MaxPauseCooldownClearedByDrain(t *testing.T) {
+	consumer := &fakeConsumer{}
+	c := newTestController(&fakeReader{}, consumer)
+
+	base := time.Unix(3000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	c.evaluate(600 * time.Millisecond)
+	require.True(t, c.paused.Load())
+
+	now = base.Add(31 * time.Second)
+	c.evaluate(600 * time.Millisecond)
+	require.False(t, c.paused.Load())
+
+	// A genuine drain to the low watermark clears the latch.
+	now = base.Add(32 * time.Second)
+	c.evaluate(50 * time.Millisecond)
+	require.False(t, c.paused.Load())
+
+	// Immediately hot again → pause allowed (latch cleared by the drain).
+	c.evaluate(600 * time.Millisecond)
+	require.True(t, c.paused.Load(), "a drain clears the cooldown so a later spike can pause again")
 }
 
 // TestBackpressure_FailOpenOnStaleSignal verifies that after StaleErrorLimit

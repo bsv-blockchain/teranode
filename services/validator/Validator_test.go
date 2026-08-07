@@ -1457,9 +1457,6 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(false, errors.New(errors.ERR_PROCESSING, "tx rejected")).Once()
-
 	opts := &Options{AddTXToBlockAssembly: true}
 
 	err = utxoStore.SetBlockHeight(2) // We need to set this for the SQL implementation
@@ -1467,16 +1464,17 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 	err = utxoStore.SetMedianBlockTime(1700000000)
 	require.NoError(t, err)
 
-	// Contract change (validator resubmit-recovery): a resubmit of an already-
-	// Locked, unmined, non-conflicting transaction now re-drives the block-
-	// assembly handoff instead of silently returning success. That silent
-	// success was the stranded-lock defect the recovery path was added to fix —
-	// a client could resubmit forever and never learn the tx was not in a
-	// template. So a failing store now surfaces an error. The titular invariant
-	// is unchanged and still asserted below: because the send failed, the two-
-	// phase commit never ran, so the tx stays Locked for a later retry.
+	// Idempotent-resubmit contract: a resubmit of an already-existing (Locked,
+	// unmined, non-conflicting) transaction returns success without re-driving
+	// the block-assembly handoff or mutating lock state. Propagation maps
+	// ErrTxExists to HTTP 200, so a resubmit must not surface as a failure for a
+	// transaction that is already durably accepted; a first-submission shed
+	// self-recovers via the in-place Kafka-ingest retry, not on resubmit. The
+	// titular invariant still holds: the tx stays Locked (its 2PC never re-ran).
 	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
-	require.Error(t, err, "a failed block-assembly re-drive on resubmit must surface, not silently succeed")
+	require.NoError(t, err, "an idempotent resubmit of an existing tx returns success")
+
+	blockAsmMock.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	metaData := &meta.Data{}
 	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)

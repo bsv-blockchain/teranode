@@ -136,6 +136,17 @@ type Server struct {
 	// synchronous validation path for clients. This server is used to process HTTP
 	// requests and return validation results.
 	httpServer *echo.Echo
+
+	// consumerCtx is a cancellable child of the Start context that the Kafka
+	// message handler passes into ValidateWithOptions. Cancelling it aborts an
+	// in-place block-assembly handoff retry (WaitForBlockAssembly) promptly at
+	// shutdown, regardless of caller ordering, so a wedged block assembly can
+	// never keep a consumer goroutine spinning past Stop.
+	consumerCtx context.Context
+
+	// consumerCancel cancels consumerCtx; called first in Stop, before the
+	// consumer is closed.
+	consumerCancel context.CancelFunc
 }
 
 // NewServer creates and initializes a new validator server instance with the specified components.
@@ -339,6 +350,11 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
+	// Derive a cancellable context the Kafka handler observes, so the in-place
+	// block-assembly handoff retry (WaitForBlockAssembly) aborts promptly at
+	// shutdown even if Stop is called without cancelling the Start context.
+	v.consumerCtx, v.consumerCancel = context.WithCancel(ctx)
+
 	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
 		var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
 		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
@@ -362,10 +378,14 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			AddTXToBlockAssembly: kafkaMsg.Options.AddTXToBlockAssembly,
 			SkipPolicyChecks:     kafkaMsg.Options.SkipPolicyChecks,
 			CreateConflicting:    kafkaMsg.Options.CreateConflicting,
+			// A queue-full shed on the ingest path must not advance the offset
+			// past an un-handed-off tx; retry the handoff in place until it
+			// drains or the consumer context is cancelled.
+			WaitForBlockAssembly: true,
 		}
 
 		// should not pass in a height when validating from Kafka, should just be current utxo store height
-		if _, err = v.validator.ValidateWithOptions(ctx, tx, height, options); err != nil {
+		if _, err = v.validator.ValidateWithOptions(v.consumerCtx, tx, height, options); err != nil {
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 
@@ -376,7 +396,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	if v.consumerClient != nil {
-		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
+		v.consumerClient.Start(v.consumerCtx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
 	}
 
 	// Arm the queue-age-driven Kafka backpressure controller (disabled by
@@ -417,6 +437,12 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 func (v *Server) Stop(ctx context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
+	}
+
+	// Cancel the consumer context first so any in-flight ingest handoff retry
+	// aborts before the consumer is closed.
+	if v.consumerCancel != nil {
+		v.consumerCancel()
 	}
 
 	if v.consumerClient != nil {

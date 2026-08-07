@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -20,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
@@ -43,24 +45,22 @@ func (s *unlockSpy) SetLocked(ctx context.Context, txHashes []chainhash.Hash, va
 }
 
 // recoveryBAStore is a controllable blockassembly.Store. It records how many
-// times Store was called and whether the transaction was still locked at the
-// moment of the send (used to assert send-then-unlock ordering), and returns a
+// times Store was called, sheds (ErrThresholdExceeded) the first shedFirst
+// calls to model a queue that is full then drains, and otherwise returns a
 // configurable error.
 type recoveryBAStore struct {
-	store        utxostore.Store
-	err          error
-	calls        int
-	lockedAtSend bool
+	err       error
+	calls     int
+	shedFirst int
 }
 
 var _ blockassembly.Store = (*recoveryBAStore)(nil)
 
-func (f *recoveryBAStore) Store(ctx context.Context, hash *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
+func (f *recoveryBAStore) Store(_ context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
 	f.calls++
 
-	md := &meta.Data{}
-	if getErr := f.store.GetMeta(ctx, hash, md); getErr == nil {
-		f.lockedAtSend = md.Locked
+	if f.calls <= f.shedFirst {
+		return false, errors.NewThresholdExceededError("block assembly queue full")
 	}
 
 	if f.err != nil {
@@ -102,7 +102,7 @@ func recoverySetup(t *testing.T, dbName string) (*Validator, *unlockSpy, *recove
 	v, ok := vi.(*Validator)
 	require.True(t, ok)
 
-	baStore := &recoveryBAStore{store: spy}
+	baStore := &recoveryBAStore{}
 	v.blockAssembler = baStore
 
 	priv, pub := bec.PrivateKeyFromBytes([]byte("QUEUE_SHED_RECOVERY_TESTKEY_1234"))
@@ -133,10 +133,12 @@ func metaLocked(t *testing.T, store utxostore.Store, hash *chainhash.Hash) *meta
 	return md
 }
 
-// Test 11 — the shed path leaves the transaction locked. A block-assembly send
-// that fails with ThresholdExceeded must NOT unlock the transaction (the
-// withdrawn §6.5): its Locked flag is the only interlock keeping descendants out
-// of the template ahead of it.
+// Test 11 — the synchronous shed path leaves the transaction locked. With
+// WaitForBlockAssembly unset, a block-assembly send that fails with
+// ThresholdExceeded surfaces the shed and must NOT unlock the transaction: its
+// Locked flag is the only interlock keeping descendants out of the template
+// ahead of it, and the unmined reload on the next block-assembly start recovers
+// it.
 func TestValidate_ShedLeavesTxLocked(t *testing.T) {
 	ctx := context.Background()
 	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_locked")
@@ -151,10 +153,12 @@ func TestValidate_ShedLeavesTxLocked(t *testing.T) {
 	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the transaction stays locked")
 }
 
-// Test 12 — gate tightness. An ordinary duplicate (existing, not locked) does
-// not re-drive the handoff; nor does a locked-but-mined or locked-but-conflicting
-// transaction. None of them triggers a block-assembly send.
-func TestValidate_RecoveryGateTightness(t *testing.T) {
+// Test 12 — a resubmit of an existing transaction is never re-sent. Whether it
+// is an ordinary duplicate (existing, not locked), locked-but-mined, or
+// locked-but-conflicting, an idempotent resubmit returns success and never
+// triggers a block-assembly send: the resubmit-recovery branch was removed, so
+// a resubmit cannot re-drive the handoff or mutate lock state.
+func TestValidate_ExistingTxNotResent(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("ordinary duplicate is not resent", func(t *testing.T) {
@@ -202,43 +206,58 @@ func TestValidate_RecoveryGateTightness(t *testing.T) {
 	})
 }
 
-// Test 13 — recovery works. A resubmit of an existing, locked, unmined,
-// non-conflicting transaction re-drives the handoff (a send) and then unlocks
-// it (the two-phase commit), in that order: at send time the tx is still locked,
-// and afterwards it is unlocked.
-func TestValidate_RecoveryReDrivesHandoff(t *testing.T) {
+// Test 13 — Kafka ingest path: the handoff is retried in place until it
+// succeeds. WaitForBlockAssembly makes a queue-full shed retry rather than
+// surface; once the queue drains, the send succeeds and the tx falls through to
+// the txmeta publish and the 2PC unlock. Exactly one successful handoff, one
+// txmeta message, one unlock — and the tx ends unlocked and unmined.
+func TestValidate_KafkaIngestRetriesUntilHandoffSucceeds(t *testing.T) {
 	ctx := context.Background()
-	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_recover")
+	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_kafka_retry")
 
-	_, err := realStore.Create(ctx, childTx, 100, utxostore.WithLocked(true))
-	require.NoError(t, err)
+	producer := kafka.NewKafkaAsyncProducerMock()
+	v.txmetaKafkaProducerClient = producer
 
-	_, err = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
-	require.NoError(t, err)
+	// The first send sheds (queue full); the retry then succeeds.
+	baStore.shedFirst = 1
 
-	require.Equal(t, 1, baStore.calls, "recovery re-drives exactly one send")
-	require.True(t, baStore.lockedAtSend, "ordering: the tx is still locked at the moment of the send")
-	require.Equal(t, 1, spy.unlockCalls, "recovery unlocks after the send")
-	require.False(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the transaction ends unlocked")
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+	require.NoError(t, err, "the Kafka ingest path retries the shed until the handoff succeeds")
+
+	require.Equal(t, 2, baStore.calls, "one shed then one successful handoff")
+	require.Equal(t, 1, spy.unlockCalls, "the 2PC unlock runs after a successful handoff")
+
+	md := metaLocked(t, realStore, childTx.TxIDChainHash())
+	require.False(t, md.Locked, "the tx ends unlocked")
+	require.Empty(t, md.BlockIDs, "the tx remains unmined until it is actually mined")
+
+	require.Len(t, producer.PublishChannel(), 1, "exactly one txmeta message is published on the successful handoff")
 }
 
-// Test 14 — recovery fails safely. If the queue is still full on resubmit, the
-// send errors and the transaction is left locked (no unlock).
-func TestValidate_RecoveryFailsSafely(t *testing.T) {
-	ctx := context.Background()
-	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_recover_fail")
+// Test 14 — Kafka ingest path: a context cancel mid-retry aborts promptly and
+// leaves the tx durably Locked and unmined (the precondition for the unmined
+// reload on the next block-assembly start). No 2PC unlock runs.
+func TestValidate_KafkaIngestCtxCancelLeavesTxLocked(t *testing.T) {
+	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_kafka_cancel")
 
-	_, err := realStore.Create(ctx, childTx, 100, utxostore.WithLocked(true))
-	require.NoError(t, err)
+	// The queue stays full forever; the retry must abort on ctx cancel.
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
 
-	baStore.err = errors.NewThresholdExceededError("block assembly queue still full")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
-	require.Error(t, err, "a still-full queue surfaces as an error")
+	// Cancel once validation has reached the retry loop.
+	time.AfterFunc(100*time.Millisecond, cancel)
 
-	require.Equal(t, 1, baStore.calls, "recovery attempted the send once")
-	require.Equal(t, 0, spy.unlockCalls, "a failed recovery must not unlock the transaction")
-	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the transaction stays locked for a later retry")
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+	require.Error(t, err, "a cancelled retry surfaces as an error")
+
+	require.GreaterOrEqual(t, baStore.calls, 1, "the send was attempted at least once")
+	require.Equal(t, 0, spy.unlockCalls, "no 2PC unlock runs when the retry is cancelled")
+
+	md := metaLocked(t, realStore, childTx.TxIDChainHash())
+	require.True(t, md.Locked, "the tx is left locked for the unmined-reload backstop")
+	require.Empty(t, md.BlockIDs, "the tx is left unmined")
 }
 
 // Test 15 — the validator gRPC ValidateTransaction surfaces a shed as
@@ -265,52 +284,12 @@ func TestValidateTransactionGRPC_SurfacesResourceExhausted(t *testing.T) {
 	require.Equal(t, codes.ResourceExhausted, status.Code(err))
 }
 
-// Test 15 (production path) — the same ResourceExhausted surface, but proven
-// through the real chain: Server.ValidateTransaction -> real Validator ->
-// sendToBlockAssembler -> blockassembly.Store returns ErrThresholdExceeded ->
-// WrapGRPC. This exercises the actual wrapping shape rather than a MockValidator
-// shortcut, and confirms the classification is not masked as a service fault.
-func TestValidateTransactionGRPC_ProductionPathSurfacesResourceExhausted(t *testing.T) {
-	ctx := context.Background()
-	v, _, baStore, realStore, childTx := recoverySetup(t, "queue_shed_grpc_prod")
-
-	// Strand the child (existing, locked, unmined) so a resubmit re-drives the
-	// handoff, and keep the queue full so that send fails with the shed error.
-	_, err := realStore.Create(ctx, childTx, 100, utxostore.WithLocked(true))
-	require.NoError(t, err)
-
-	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
-
-	initPrometheusMetrics()
-
-	srv := &Server{
-		logger:    &ulogger.TestLogger{},
-		validator: v,
-		settings:  test.CreateBaseTestSettings(t),
-	}
-
-	skipPolicy := true
-
-	resp, err := srv.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-		TransactionData:  childTx.ExtendedBytes(),
-		BlockHeight:      100,
-		SkipPolicyChecks: &skipPolicy,
-	})
-
-	require.Error(t, err)
-	require.NotNil(t, resp)
-	require.False(t, resp.Valid)
-	require.Equal(t, codes.ResourceExhausted, status.Code(err),
-		"a shed must surface as ResourceExhausted through the real sendToBlockAssembler/WrapGRPC path, not be masked as a service fault")
-	require.Equal(t, 1, baStore.calls, "the recovery send was attempted")
-}
-
-// Test 15 (fresh main path) — a first-submission shed. A brand-new transaction
-// validates, spends and is created (Locked), and its block-assembly send fails
-// with the queue full. Driven through the real Server.ValidateTransaction, this
-// must surface as codes.ResourceExhausted (not Internal) — the common case plan
-// section 6.6 targets — and must leave the tx Locked and unmined (section 6.5)
-// so a resubmit can recover it (section 6.5.1).
+// Test 15 (fresh main path) — a first-submission synchronous shed. A brand-new
+// transaction validates, spends and is created (Locked), and its block-assembly
+// send fails with the queue full. Driven through the real
+// Server.ValidateTransaction with WaitForBlockAssembly unset, this must surface
+// as codes.ResourceExhausted (not Internal) and must leave the tx Locked and
+// unmined so the unmined reload on the next block-assembly start recovers it.
 func TestValidateTransactionGRPC_FreshMainPathShedSurfacesResourceExhausted(t *testing.T) {
 	ctx := context.Background()
 	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_grpc_fresh")
@@ -341,8 +320,8 @@ func TestValidateTransactionGRPC_FreshMainPathShedSurfacesResourceExhausted(t *t
 		"a fresh first-submission shed must surface as ResourceExhausted, not Internal")
 	require.GreaterOrEqual(t, baStore.calls, 1, "the send was attempted")
 
-	// Section 6.5: the shed transaction stays Locked and unmined, and its 2PC
-	// unlock never ran — so section 6.5.1 recovery still applies on resubmit.
+	// The shed transaction stays Locked and unmined, and its 2PC unlock never
+	// ran — so the unmined reload on the next block-assembly start recovers it.
 	md := metaLocked(t, realStore, childTx.TxIDChainHash())
 	require.True(t, md.Locked, "a shed tx stays locked")
 	require.Empty(t, md.BlockIDs, "a shed tx stays unmined")

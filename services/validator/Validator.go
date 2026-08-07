@@ -57,6 +57,12 @@ const (
 	// every errors.Is on it quadratic. See errors.JoinCapped.
 	maxAggregatedSpendErrs = 10
 
+	// kafkaShedRetryBackoff is the pause between in-place block-assembly handoff
+	// retries on the Kafka ingest path when the queue is full. Short so the
+	// transaction reaches a mining template promptly once the queue drains,
+	// while the loop selects on the request context so shutdown aborts it.
+	kafkaShedRetryBackoff = 5 * time.Millisecond
+
 	// coinbaseTxID represents the special transaction ID used for coinbase transactions.
 	// Coinbase transactions are the first transaction in each block and create new bitcoins as mining rewards.
 	// This constant is used to identify and handle coinbase transactions differently from regular transactions
@@ -861,49 +867,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
 			}
 
-			// A transaction that exists but is still locked and unmined never
-			// completed its block-assembly handoff — the queue refused it, or
-			// the process died between create and the two-phase unlock. Re-drive
-			// the handoff so a resubmit is the recovery path. The gate is tight:
-			// a normally-accepted tx has already been unlocked by its own 2PC
-			// (so Locked is false and ordinary idempotent resubmits skip this),
-			// BlockIDs excludes mined transactions, and !Conflicting excludes the
-			// conflicting-cascade state. Ordering is send-then-unlock, matching
-			// the unmined-reload path, so a descendant can never enter the
-			// template ahead of this tx; a double-add is a no-op downstream.
-			if addToBlockAssembly && txMetaData.Locked && len(txMetaData.BlockIDs) == 0 && !txMetaData.Conflicting {
-				var txInpoints subtree.TxInpoints
-
-				if txMetaData.TxInpoints.ParentTxHashes != nil {
-					txInpoints = txMetaData.TxInpoints
-				} else {
-					txInpoints, err = subtree.NewTxInpointsFromTx(tx)
-					if err != nil {
-						return nil, errors.NewProcessingError("[Validate][%s] error getting tx inpoints for recovery", txID, err)
-					}
-				}
-
-				if err = v.sendToBlockAssembler(decoupledCtx, &blockassembly.Data{
-					TxIDChainHash: *tx.TxIDChainHash(),
-					Fee:           txMetaData.Fee,
-					Size:          uint64(tx.Size()), // nolint:gosec
-					TxInpoints:    txInpoints,
-				}, nil); err != nil {
-					prometheusBlockAssemblyRecoveryFailed.Inc()
-
-					// Still locked; the caller may retry once block assembly has room.
-					return txMetaData, err
-				}
-
-				if err = v.twoPhaseCommitTransaction(decoupledCtx, tx, txID); err != nil {
-					return txMetaData, err
-				}
-
-				txMetaData.Locked = false
-
-				prometheusBlockAssemblyRecovered.Inc()
-			}
-
+			// The transaction is already durably present; a resubmit is an
+			// idempotent success and must not mutate lock state. It does not
+			// re-drive the block-assembly handoff: an existing lock may belong to
+			// an in-flight conflict resolution (process_conflicting locks honest
+			// parents), and a queue-full first-submission shed self-recovers on
+			// the Kafka ingest path via the in-place retry below rather than on
+			// resubmit.
 			return txMetaData, nil
 		}
 
@@ -1041,21 +1011,48 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 		}
 
-		// send the tx to the block assembler
-		if err = v.sendToBlockAssembler(decoupledCtx, &blockassembly.Data{
+		blockAssemblyData := &blockassembly.Data{
 			TxIDChainHash: *tx.TxIDChainHash(),
 			Fee:           txMetaData.Fee,
 			Size:          uint64(tx.Size()), // nolint:gosec
 			TxInpoints:    txInpoints,
-		}, spentUtxos); err != nil {
+		}
+
+		// send the tx to the block assembler
+		err = v.sendToBlockAssembler(decoupledCtx, blockAssemblyData, spentUtxos)
+
+		// On the Kafka ingest path a queue-full shed must not be silently lost:
+		// committing the consumer offset past a transaction that never reached a
+		// mining template would strand it (locked, in no template) until block
+		// assembly is restarted. Retry the handoff in place until the queue
+		// drains or the request context is cancelled at shutdown, then fall
+		// through to the txmeta publish and the 2PC unlock. ErrThresholdExceeded
+		// is a queue-depth condition independent of this transaction, so it
+		// always clears as the dispatcher drains batches into mining candidates;
+		// a genuinely invalid transaction fails earlier with a different,
+		// non-retried error. Synchronous callers leave WaitForBlockAssembly false
+		// and surface the shed immediately.
+		for err != nil && validationOptions.WaitForBlockAssembly && errors.Is(err, errors.ErrThresholdExceeded) {
+			select {
+			case <-ctx.Done():
+				err = errors.NewProcessingError("[Validate][%s] context cancelled while waiting for block assembly", txID, ctx.Err())
+				span.RecordError(err)
+
+				return nil, err
+			case <-time.After(kafkaShedRetryBackoff):
+			}
+
+			err = v.sendToBlockAssembler(decoupledCtx, blockAssemblyData, spentUtxos)
+		}
+
+		if err != nil {
 			// Preserve a queue-full shed's resource-exhausted classification so a
-			// first-submission shed surfaces to the caller as ResourceExhausted
-			// (queue full, retryable after §6.5.1 recovery) rather than being
-			// masked as Internal by a ProcessingError wrapper. Every other send
-			// failure keeps its processing wrapping. Control flow is unchanged:
-			// this early return still precedes the Kafka publish and the 2PC, so
-			// the tx stays Locked and unmined per §6.5 and §6.5.1 recovery applies
-			// on resubmit.
+			// first-submission shed surfaces to a synchronous caller as
+			// ResourceExhausted (queue full, retryable) rather than being masked
+			// as Internal by a ProcessingError wrapper. Every other send failure
+			// keeps its processing wrapping. This early return precedes the Kafka
+			// publish and the 2PC, so the tx stays Locked and unmined and is
+			// re-added by the unmined reload on the next block-assembly start.
 			if !errors.Is(err, errors.ErrThresholdExceeded) {
 				err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
 			}
