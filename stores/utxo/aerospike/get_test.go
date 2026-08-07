@@ -79,6 +79,11 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 		s.SetNamespace(aerospikeNamespace)
 		s.SetName(aerospikeSet)
 		s.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
+		// The outpoint reconstruction has its own cache — it holds a different
+		// shape for the same txid, so it must never share with the full-tx cache.
+		// New() creates both; a hand-built Store has to wire both too, or this
+		// subtest's coalescing assertion has no cache to coalesce through.
+		s.SetExternalOutpointsCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
 
 		// read a sample transaction from testdata and store it in the external store
 		f, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")

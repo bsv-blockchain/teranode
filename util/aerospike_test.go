@@ -93,6 +93,21 @@ func TestGetQueryBool(t *testing.T) {
 	}
 }
 
+// TestWritePoliciesPinCommitAll guards teranode's own durability contract: every
+// consumer of these two builders (UTXO record creation, the tx-creation lock, the
+// conflict WAL, setMined, unspend, preserve/DAH writes) is a write whose loss is
+// not self-healing, so the commit level is deliberately NOT configurable here.
+// The pruner relaxes its own removals instead — see
+// stores/utxo/aerospike/pruner/prune_policies.go.
+func TestWritePoliciesPinCommitAll(t *testing.T) {
+	tSettings := &settings.Settings{
+		Aerospike: settings.AerospikeSettings{UseDefaultPolicies: false},
+	}
+
+	require.Equal(t, aerospike.COMMIT_ALL, GetAerospikeWritePolicy(tSettings, 0).CommitLevel)
+	require.Equal(t, aerospike.COMMIT_ALL, GetAerospikeBatchWritePolicy(tSettings).CommitLevel)
+}
+
 func TestGetQueryInt(t *testing.T) {
 	logger := ulogger.New("test")
 

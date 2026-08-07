@@ -262,9 +262,14 @@ func TestCreateSubtreeDataFileStreaming_NoCoinbasePlaceholder(t *testing.T) {
 
 	txCount := 4
 	txs := make([]*bt.Tx, txCount)
+	// Each fixture tx needs an input: every real transaction has at least one,
+	// and an input-less tx is the shape a UTXO-set snapshot reconstruction takes,
+	// which the persister now refuses to serialize.
 	for i := 0; i < txCount; i++ {
 		txs[i] = bt.NewTx()
-		err := txs[i].AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000)
+		err := txs[i].From("0000000000000000000000000000000000000000000000000000000000000001", uint32(i), "76a914000000000000000000000000000000000000000088ac", 2000)
+		require.NoError(t, err)
+		err = txs[i].AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000)
 		require.NoError(t, err)
 	}
 
