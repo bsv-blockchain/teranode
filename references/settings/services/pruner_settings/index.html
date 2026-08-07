@@ -6207,6 +6207,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pruner_relaxremovalcommitlevel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_relaxRemovalCommitLevel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pruner_skipblobdeletion" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7519,6 +7530,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pruner_relaxremovalcommitlevel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_relaxRemovalCommitLevel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pruner_skipblobdeletion" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8306,6 +8328,49 @@
 <p><strong>Environment Variable</strong>: <code>pruner_utxoSetTTL</code></p>
 <p><strong>Description</strong>: Use TTL expiration instead of hard delete for UTXO records</p>
 <p>When enabled, sets Aerospike record TTL to 1 second instead of hard deleting. This produces optimized tombstones and reduces write amplification.</p>
+<h3 id="pruner_relaxremovalcommitlevel">pruner_relaxRemovalCommitLevel<a class="headerlink" href="#pruner_relaxremovalcommitlevel" title="Permanent link">&para;</a></h3>
+<p><strong>Type</strong>: Boolean</p>
+<p><strong>Default</strong>: <code>true</code></p>
+<p><strong>Environment Variable</strong>: <code>pruner_relaxRemovalCommitLevel</code></p>
+<p><strong>Description</strong>: Acknowledge the pruner's own record removals from the master replica only</p>
+<p>Controls the Aerospike commit level for the pruner's record removals — hard deletes, and
+the 1-second TTL touches used when <code>pruner_utxoSetTTL</code> is enabled.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>true</code> (default)</td>
+<td><code>COMMIT_MASTER</code> — the call returns once the master replica has the removal; replicas catch up asynchronously.</td>
+</tr>
+<tr>
+<td><code>false</code></td>
+<td><code>COMMIT_ALL</code> — wait for every replica, the same as every other Teranode write.</td>
+</tr>
+</tbody>
+</table>
+<p>Relaxing is safe here because pruning is idempotent and self-healing: the pruner only
+removes records that are already provably safe to drop, and a replica that misses a
+removal is re-found by the <code>delete_at_height</code> partition scan on the next session and
+re-pruned. Waiting for a full-replication ACK buys no correctness, only latency in the
+per-block removal burst.</p>
+<p><strong>Scope</strong> — record removal only:</p>
+<ul>
+<li>Pruner <strong>parent updates</strong> (the <code>deletedChildren</code> map writes and the <code>addDeletedChildren</code>
+  UDF) mutate records that survive the prune and always use <code>COMMIT_ALL</code>.</li>
+<li>Every write <strong>outside</strong> the pruner always uses <code>COMMIT_ALL</code>. There is no cluster-wide
+  commit-level setting: UTXO record creation, the transaction-creation lock, the conflict
+  WAL, setMined, unspend and the preserve / delete-at-height writes are none of them
+  self-healing, so relaxing them would trade a resync for throughput.</li>
+<li>Only has an effect on namespaces with <code>replication-factor</code> &gt; 1. On a single-copy
+  namespace both values behave identically.</li>
+</ul>
+<p><strong>When to set <code>false</code></strong>: only to rule the relaxation out while diagnosing missing-record
+or replication issues.</p>
 <h3 id="pruner_skipblobdeletion">pruner_skipBlobDeletion<a class="headerlink" href="#pruner_skipblobdeletion" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
