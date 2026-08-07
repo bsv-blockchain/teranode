@@ -1044,6 +1044,11 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		return
 	}
 
+	// Bound the peer-controlled display strings before they reach WebSocket
+	// clients or the peer registry. Everything below this point works with the
+	// sanitized values.
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
+
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 

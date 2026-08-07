@@ -4,6 +4,7 @@
   import { onMount } from 'svelte'
   import { humanTime } from '$internal/utils/format'
   import { getMessageFields } from './utils'
+  import { formatJSON } from './json-highlight'
   import { MessageType } from './types'
   import type { Message, P2PMessage, StatusMessage, MessageSource, MsgDisplayField } from './types'
   import i18n from '../../i18n'
@@ -26,30 +27,6 @@
 
   let age = $state('')
   let fields: MsgDisplayField[] = []
-
-  // Format JSON with syntax highlighting
-  function formatJSON(obj: any): string {
-    try {
-      let json = JSON.stringify(obj, null, 2)
-      
-      // Basic syntax highlighting
-      json = json
-        // Strings (but not property names)
-        .replace(/: "([^"]*)"/g, ': <span class="json-string">"$1"</span>')
-        // Numbers
-        .replace(/: (\d+)/g, ': <span class="json-number">$1</span>')
-        // Booleans
-        .replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')
-        // Null
-        .replace(/: (null)/g, ': <span class="json-null">$1</span>')
-        // Property names
-        .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
-        
-      return json
-    } catch (e) {
-      return '{}'
-    }
-  }
 
   function getMsgDateMillis(source: MessageSource, msg: Message) {
     if (source === 'p2p') {
