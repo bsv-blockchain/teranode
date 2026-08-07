@@ -2,6 +2,12 @@ package settings
 
 import "time"
 
+// DefaultSubtreeDataFetchTimeout is the default bound on one detached subtree_data
+// fetch. Declared here so the value used to populate the setting and the fail-closed
+// fallback in the block validation service cannot drift apart. The struct tag below
+// repeats it as a literal only because tags cannot reference constants.
+const DefaultSubtreeDataFetchTimeout = 10 * time.Minute
+
 // BlockValidationSettings configures the block validation service.
 type BlockValidationSettings struct {
 	MaxRetries                                int           `key:"blockValidationMaxRetries" desc:"Maximum retry attempts for block validation" default:"3" category:"BlockValidation" usage:"Retries on transient failures" type:"int" longdesc:"### Purpose\nControls how many times block validation operations will retry on transient failures.\n\n### How It Works\n- Applies to transient failures like network timeouts or temporary service unavailability\n- Permanent failures (invalid blocks) fail immediately without retry\n- Each retry adds latency but improves reliability\n\n### Recommendations\n- **3** (default) - Provides reasonable reliability for most environments\n- Lower values for faster failure detection in stable environments\n- Higher values for unreliable networks"`

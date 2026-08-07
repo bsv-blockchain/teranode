@@ -21,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -936,6 +937,32 @@ func TestFetchSingleBlock_RejectsSubstitutedBlock(t *testing.T) {
 	require.Contains(t, err.Error(), substitutedHash.String(), "error should name what was actually served")
 }
 
+// TestSubtreeDataFetchTimeout_FailsClosed pins the resolution of the bound.
+//
+// The value guards a peer-controlled fetch, so "unset" and "unparsed" must not resolve
+// to "unbounded". Every non-positive input, and a nil settings object, has to land on
+// the default instead.
+func TestSubtreeDataFetchTimeout_FailsClosed(t *testing.T) {
+	t.Run("configured value is used", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.SubtreeDataFetchTimeout = 42 * time.Second
+		require.Equal(t, 42*time.Second, subtreeDataFetchTimeout(tSettings))
+	})
+
+	t.Run("non-positive falls back to the default", func(t *testing.T) {
+		for _, configured := range []time.Duration{0, -1, -time.Hour} {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockValidation.SubtreeDataFetchTimeout = configured
+			require.Equal(t, settings.DefaultSubtreeDataFetchTimeout, subtreeDataFetchTimeout(tSettings),
+				"a %s setting must not mean unbounded", configured)
+		}
+	})
+
+	t.Run("nil settings falls back to the default", func(t *testing.T) {
+		require.Equal(t, settings.DefaultSubtreeDataFetchTimeout, subtreeDataFetchTimeout(nil))
+	})
+}
+
 // TestFetchAndStoreSubtreeData_DetachedFetchIsBounded pins the deadline on the
 // detached subtree_data fetch.
 //
@@ -983,6 +1010,17 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	// The full backoff chain is 250ms+500ms+1s+2s+4s = 7.75s of sleeping alone, so an
 	// unbounded run cannot finish anywhere near this.
 	require.Less(t, elapsed, 5*time.Second, "the whole fetch must be bounded by one deadline, not one per attempt")
+
+	// The duration is only half of what matters. A bound that fires as a context error
+	// reads as a LOCAL failure to errors.IsLocalError, which suppresses alternative-peer
+	// failover in fetchAndStoreSubtreeAndSubtreeData and stops recordCatchupPeerFailure
+	// charging the peer, so the stalling peer would stay in rotation unrecorded. Before
+	// the bound existed this same peer exhausted the retry loop and surfaced as
+	// ErrServiceUnavailable, which is attributable, so losing that would be a regression
+	// in exactly the case the bound exists to contain.
+	require.False(t, errors.IsLocalError(err), "a peer that exhausts the bound must stay attributable, not read as a local failure")
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Contains(t, err.Error(), "exceeded the")
 }
 
 // Phase 2: Tests for optimized batch fetching and ordered delivery
