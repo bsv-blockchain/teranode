@@ -35,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -1559,6 +1560,25 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
 		}
 
+		// Checkpoint enforcement (defense-in-depth): a block whose height matches a hardcoded
+		// checkpoint MUST match the checkpoint hash, mirroring the catchup header pipeline.
+		// Without this the difficulty-skip below would let a fabricated block AT a checkpoint
+		// height reach subtree validation with the expected-nBits check skipped and no
+		// checkpoint assertion. See gap-analysis 4697. block.Height is settled against the
+		// parent before this function runs (Server.deriveBlockHeight on the peer route; catchup
+		// and the operator revalidation endpoint carry authoritative heights), so this reads a
+		// trusted height. Run before the (expensive) header/subtree work so a checkpoint-
+		// conflicting block costs nothing. On the catchup path the header was already checked,
+		// so this is a cheap, harmless re-assertion. (Rejecting sub-checkpoint forks at
+		// non-checkpoint heights — the fork-depth rule — is a separate, broader change.)
+		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
+			if !opts.IsRevalidation {
+				u.storeInvalidBlock(ctx, block, opts.PeerID, err.Error())
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
+		}
+
 		// Use cached headers if available (during catchup), otherwise fetch from blockchain
 		var blockHeaders []*model.BlockHeader
 		if opts.CachedHeaders != nil && len(opts.CachedHeaders) > 0 {
@@ -1637,19 +1657,17 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// full tx validation for a garbage header at zero cost.
 		//
 		// Skip difficulty validation for blocks at or below the highest checkpoint:
-		// these blocks are already verified by checkpoints. NOTE: on this direct
-		// (non-catchup) path the checkpoint linkage itself is not verified here, so
-		// for heights at or below the checkpoint the zero-cost claim above does not
-		// hold — a fabricated low-height header reaches subtree validation without
-		// paying PoW. block.Valid still rejects such a block unconditionally
-		// (HasMetTargetDifficulty + checkParentsExistOnChain) before acceptance;
-		// the exposure is transient blessing only, same as the pre-option design.
-		highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
-		skipDifficultyCheck := block.Height <= highestCheckpointHeight
+		// these blocks are already verified by checkpoints. block.Height is settled
+		// against the parent before this function runs (Server.deriveBlockHeight on the
+		// peer route; catchup and the operator revalidation endpoint carry authoritative
+		// heights), and BelowCheckpoint applies the mandatory height > 0 guard, so a peer
+		// cannot obtain the skip by declaring height 0 or a fabricated sub-checkpoint
+		// height. The checkpoint hash-match itself was asserted above.
+		skipDifficultyCheck := model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height)
 
 		if skipDifficultyCheck {
-			ctxLogger.Debugf("[ValidateBlock][%s] skipping difficulty validation for block at height %d (at or below checkpoint height %d)",
-				block.Header.Hash().String(), block.Height, highestCheckpointHeight)
+			ctxLogger.Debugf("[ValidateBlock][%s] skipping difficulty validation for block at height %d (at or below highest checkpoint height %d)",
+				block.Header.Hash().String(), block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
 		} else {
 			// First check that the nBits (difficulty target) is correct for this block
 			expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
@@ -2276,14 +2294,23 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	)
 	defer deferFn()
 
+	// Checkpoint enforcement, mirroring ValidateBlockWithOptions: this path is reachable
+	// before that guard runs (the GetBlockHeaders-failure branch enqueues here) and carries
+	// the same difficulty skip, so assert the checkpoint hash-match here too. block.Height is
+	// already settled against the parent by the time a block reaches this worker (every
+	// ReValidateBlock call site sits inside ValidateBlockWithOptions, downstream of
+	// Server.deriveBlockHeight). No storeInvalidBlock: this is a revalidation path.
+	if err := catchup.ValidateHeaderAgainstCheckpoints(blockData.block.Header, blockData.block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] block conflicts with hardcoded checkpoint", blockData.block.Hash().String(), err)
+	}
+
 	// Skip difficulty validation for blocks at or below the highest checkpoint
 	// These blocks are already verified by checkpoints, so we don't need to validate difficulty
-	highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
-	skipDifficultyCheck := blockData.block.Height <= highestCheckpointHeight
+	skipDifficultyCheck := model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, blockData.block.Height)
 
 	if skipDifficultyCheck {
-		u.logger.Debugf("[reValidateBlock][%s] skipping difficulty validation for block at height %d (at or below checkpoint height %d)",
-			blockData.block.Header.Hash().String(), blockData.block.Height, highestCheckpointHeight)
+		u.logger.Debugf("[reValidateBlock][%s] skipping difficulty validation for block at height %d (at or below highest checkpoint height %d)",
+			blockData.block.Header.Hash().String(), blockData.block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
 	} else {
 		// First check that the nBits (difficulty target) is correct for this block
 		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock, int64(blockData.block.Header.Timestamp))

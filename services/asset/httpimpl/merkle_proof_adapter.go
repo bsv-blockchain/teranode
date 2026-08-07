@@ -5,6 +5,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/util/merkleproof"
@@ -32,6 +33,12 @@ func (a *merkleProofAdapter) GetTxMeta(txHash *chainhash.Hash) (*merkleproof.TxM
 	txMeta, err := a.repo.GetTxMeta(a.ctx, txHash)
 	if err != nil {
 		return nil, err
+	}
+
+	// The store can return no metadata and no error — the aerospike batch path
+	// does that for the coinbase placeholder hash.
+	if txMeta == nil {
+		return nil, errors.NewTxNotFoundError("%s not found", txHash.String())
 	}
 
 	// Convert to simplified format

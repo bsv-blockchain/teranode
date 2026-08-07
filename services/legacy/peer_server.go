@@ -2005,6 +2005,27 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 		return err
 	}
 
+	// A node bootstrapped from a UTXO-set snapshot stores transactions as their
+	// live outputs only, and the UTXO store hands that shape straight back for a
+	// reader that asked for fields.Tx. Bytes() below either panics on a nil output
+	// hole — swallowed by the deferred recover above, leaving the peer with silence
+	// — or serializes cleanly into a short, 0-input transaction that does not hash
+	// to what the peer asked for, which would then go on the wire as if it did.
+	// Same gate as the asset boundary (services/asset/repository.isRequestedTransaction):
+	// the predicate must come first, because TxIDChainHash() dereferences the same
+	// nil *bt.Output.
+	if !txMeta.TxIsSerializable() || !txMeta.Tx.TxIDChainHash().IsEqual(hash) {
+		err = fmt.Errorf("[pushTxMsg] tx %v is not retained in full by this node", hash)
+
+		sp.server.logger.Warnf("%s", err.Error())
+
+		if doneChan != nil {
+			doneChan <- struct{}{}
+		}
+
+		return err
+	}
+
 	tx, err := bsvutil.NewTxFromBytes(txMeta.Tx.Bytes())
 	if err != nil {
 		sp.server.logger.Warnf("[pushTxMsg] Unable to deserialize tx %v: %v", hash, err)

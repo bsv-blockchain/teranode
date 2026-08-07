@@ -149,6 +149,80 @@ func TestDoHTTPRequestNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+// TestBuildHTTPErrorBodyIsBounded pins the cap on the non-2xx error body.
+//
+// The body of a failed response is peer-supplied and is read on every failure path,
+// including the ones reached from DoHTTPRequestBounded. An unbounded read there lets
+// a hostile peer defeat that function's cap outright: answer with an error status,
+// then stream indefinitely. The bytes never reach the caller, but they are still
+// allocated, and they are interpolated into the error string.
+func TestBuildHTTPErrorBodyIsBounded(t *testing.T) {
+	// Markers at both ends: the head must survive, the tail must be cut. Asserting on
+	// both is what distinguishes a real truncation from a body that merely happened to
+	// be short.
+	const headMarker = "ERRBODYHEAD"
+	const tailMarker = "ERRBODYTAIL"
+
+	oversizedBody := headMarker + strings.Repeat("A", 4*maxHTTPErrorBodyBytes) + tailMarker
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, err := w.Write([]byte(oversizedBody))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+
+	t.Run("unbounded caller", func(t *testing.T) {
+		_, err := DoHTTPRequest(ctx, server.URL)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), headMarker, "the start of the body should still be diagnosable")
+		require.NotContains(t, err.Error(), tailMarker, "the body must be truncated, not read to completion")
+		require.Less(t, len(err.Error()), len(oversizedBody), "error must not retain the whole body")
+	})
+
+	t.Run("bounded caller keeps its cap on an error status", func(t *testing.T) {
+		// The response never reaches the body-cap logic in DoHTTPRequestBounded, because
+		// a non-2xx status short-circuits into buildHTTPError. Without the bound there,
+		// the maxBytes argument below would be meaningless.
+		_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), tailMarker, "an error status must not bypass the allocation cap")
+		require.Less(t, len(err.Error()), len(oversizedBody))
+	})
+}
+
+// TestBuildHTTPErrorBodyIsEscaped pins the companion property to the size bound: the
+// snippet is peer-controlled, and this error string is logged verbatim and forwarded
+// to the peer registry. Bounding the length without escaping the content still lets a
+// peer embed newlines to forge log lines, or terminal escapes, and breaks the
+// project's single-line log convention.
+func TestBuildHTTPErrorBodyIsEscaped(t *testing.T) {
+	// A forged log line, an ANSI escape, and a NUL, in a body well under the cap so
+	// this test can only fail on escaping, never on truncation.
+	hostileBody := "real\nERROR forged log line\x1b[31m\x00tail"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, err := w.Write([]byte(hostileBody))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	_, err := DoHTTPRequest(context.Background(), server.URL)
+	require.Error(t, err)
+
+	msg := err.Error()
+	require.NotContains(t, msg, "\n", "a peer must not be able to split the message across log lines")
+	require.NotContains(t, msg, "\x1b", "terminal escapes must not survive into operator logs")
+	require.NotContains(t, msg, "\x00", "control bytes must not survive into operator logs")
+
+	// The content is still present, just escaped, so the message stays diagnosable.
+	require.Contains(t, msg, `\n`, "the newline should appear in escaped form")
+	require.Contains(t, msg, "forged log line")
+}
+
 func TestDoHTTPRequestServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -177,8 +251,8 @@ func TestDoHTTPRequestServerErrorNoBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
-	// When body is empty, it still shows "with body []"
-	assert.Contains(t, err.Error(), "with body []")
+	// An empty body is %q-escaped to an empty quoted string.
+	assert.Contains(t, err.Error(), `with body ""`)
 }
 
 func TestDoHTTPRequestHTMLResponse(t *testing.T) {
@@ -471,8 +545,8 @@ func TestDoHTTPRequestServerErrorWithNilBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
-	// Should not contain "with body" since body is effectively nil
-	assert.Contains(t, err.Error(), "with body []")
+	// An effectively-nil body is %q-escaped to an empty quoted string.
+	assert.Contains(t, err.Error(), `with body ""`)
 }
 
 func TestDoHTTPRequestLargeResponse(t *testing.T) {
@@ -781,8 +855,8 @@ func TestDoHTTPRequest_ErrorResponseNilBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
-	// Empty body still creates "with body []" message
-	assert.Contains(t, err.Error(), "with body []")
+	// An empty body is %q-escaped to an empty quoted string.
+	assert.Contains(t, err.Error(), `with body ""`)
 }
 
 func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
