@@ -288,7 +288,15 @@ func (repo *Repository) Health(ctx context.Context, checkLiveness bool) (int, st
 //   - *meta.Data: Transaction metadata containing block height, confirmation details, and other information
 //   - error: Any error encountered during metadata retrieval, including transaction not found errors
 func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return repo.UtxoStore.Get(ctx, hash)
+	txMeta, err := repo.UtxoStore.Get(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	// Drop a transaction that is not the complete requested one, so it cannot
+	// reach a JSON marshaller — see withoutUnserializableTx. The metadata itself
+	// is still returned.
+	return withoutUnserializableTx(txMeta, hash), nil
 }
 
 // GetTransaction retrieves transaction data by its hash.
@@ -310,11 +318,23 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 	repo.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
 	txMeta, err := repo.UtxoStore.Get(ctx, hash)
-	if err == nil && txMeta != nil {
+	if err == nil && txMeta != nil && isRequestedTransaction(txMeta, hash) {
 		return txMeta.Tx.ExtendedBytes(), nil
 	}
 
-	repo.logger.Warnf("[Repository] GetTransaction: %s not found in txmeta store: %v", hash.String(), err)
+	if err != nil {
+		repo.logger.Warnf("[Repository] GetTransaction: %s not found in txmeta store: %v", hash.String(), err)
+	} else {
+		// The record exists but does not carry the transaction we were asked for
+		// — a nil Tx, or a reconstruction from a UTXO-set snapshot, which retains
+		// no inputs, version or locktime and so cannot reproduce the txid.
+		//
+		// Debug, not Warn: on a snapshot-seeded node this is permanent and true of
+		// every pre-snapshot transaction, and POST /subtree/:hash/txs calls this
+		// once per txid in the request body under a 1024-way fan-out. At Warn a
+		// single request buries the genuinely exceptional err != nil line above.
+		repo.logger.Debugf("[Repository] GetTransaction: %s found in txmeta store but the full transaction is not retained", hash.String())
+	}
 
 	tx, err := repo.TxStore.Get(ctx, hash.CloneBytes(), fileformat.FileTypeTx)
 	if err != nil {
@@ -322,6 +342,35 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 	}
 
 	return tx, nil
+}
+
+// isRequestedTransaction reports whether txMeta carries the complete transaction
+// identified by hash, and so may be serialized and handed to a caller.
+//
+// A node bootstrapped from a UTXO-set snapshot (cmd/seeder) stores transactions
+// with no inputs and nil outputs at every index that was not a live UTXO at
+// snapshot time, and the UTXO store returns that shape for a reader that asked
+// for fields.Tx. That is correct for the callers which only read a specific live
+// output index to extend a spend — services/validator and the aerospike outpoint
+// decoration both rely on it — but it must never leave this boundary: the
+// snapshot blob retains no inputs, version or locktime, so the reconstruction
+// does not hash to the requested txid even when every output survived.
+//
+// Both checks are required, in this order:
+//
+//   - TxIsSerializable is what rejects every *incomplete* snapshot reconstruction,
+//     including the one with no nil hole at all — a seeded coinbase whose trailing
+//     output was spent, which is simply short. All of them are input-less, and that
+//     is the check that catches them. It has to come first regardless, because
+//     TxIDChainHash() dereferences the same nil *bt.Output the predicate rejects.
+//   - The txid comparison is a key-vs-value guard, not a second snapshot filter. It
+//     adds no rejection power over a snapshot shape: exactly one carries inputs, a
+//     coinbase restored by cmd/seeder's restoreCoinbaseInput, and the seeder installs
+//     that input only after checking the txid itself — so it is the genuine article
+//     and this comparison correctly passes it. What the comparison does catch is a
+//     complete transaction filed under the wrong key, which nothing else here would.
+func isRequestedTransaction(txMeta *meta.Data, hash *chainhash.Hash) bool {
+	return txMeta.TxIsSerializable() && txMeta.Tx.TxIDChainHash().IsEqual(hash)
 }
 
 // GetBlockStats retrieves statistical information about the blockchain blocks.
@@ -373,7 +422,34 @@ func (repo *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.
 		return nil, err
 	}
 
-	return txMeta, nil
+	return withoutUnserializableTx(txMeta, hash), nil
+}
+
+// withoutUnserializableTx clears Tx when it is not the complete requested
+// transaction, leaving the rest of the metadata intact.
+//
+// Unlike GetTransaction, the metadata endpoints have plenty to return when only
+// the transaction body is missing — fee, size, block IDs, block heights, subtree
+// indexes, the coinbase flag. Failing the whole response would discard all of it
+// to avoid a problem in one field. But Tx cannot be passed through either: the
+// JSON handlers marshal it, and MarshalJSON reaches the same nil dereference
+// that ExtendedBytes does.
+func withoutUnserializableTx(txMeta *meta.Data, hash *chainhash.Hash) *meta.Data {
+	if txMeta == nil || txMeta.Tx == nil {
+		return txMeta
+	}
+
+	if isRequestedTransaction(txMeta, hash) {
+		return txMeta
+	}
+
+	// Copy before clearing: the store may hand out a shared/cached *meta.Data,
+	// and the transaction is still valid for the readers that only index live
+	// output positions.
+	shallow := *txMeta
+	shallow.Tx = nil
+
+	return &shallow
 }
 
 // GetBlockByHash retrieves a block by its hash.

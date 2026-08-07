@@ -1524,7 +1524,8 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 // mining height, used to apply the era-aware unspendable rule (see
 // getExternalOutpoints).
 //
-// The reconstruction is cached by txid (externalTxCache). That is correct
+// The reconstruction is cached by txid (externalOutpointsCache — never the full
+// transaction's cache; see the field comments on Store). That is correct
 // because the era-filtered output set is fixed per tx once the parent is mined,
 // and an unmined parent is necessarily post-Genesis on production networks
 // (mainnet/testnet/teratestnet activation heights sit far below any live tip),
@@ -1544,8 +1545,11 @@ func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHas
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
 
-	if s.externalTxCache != nil {
-		return s.externalTxCache.GetOrSet(previousTxHash, func() (*bt.Tx, bool, error) {
+	// Deliberately a different cache from GetTxFromExternalStore's: the value here
+	// has its inputs stripped and its era-unspendable outputs nil'd, so sharing a
+	// cache keyed on the txid would let either reader receive the other's shape.
+	if s.externalOutpointsCache != nil {
+		return s.externalOutpointsCache.GetOrSet(previousTxHash, func() (*bt.Tx, bool, error) {
 			tx, numberOfActiveOutputs, err := s.getExternalOutpoints(ctx, previousTxHash, creationHeight)
 			if err != nil {
 				return nil, false, err

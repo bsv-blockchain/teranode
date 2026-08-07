@@ -304,22 +304,14 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		require.NoError(t, os.WriteFile(lockFilePath, []byte("locked"), 0600))
 		defer os.Remove(lockFilePath)
 
-		// Keep the lock file fresh so it never becomes stale
-		stopRefresh := make(chan struct{})
-		defer close(stopRefresh)
-		go func() {
-			ticker := time.NewTicker(shortQuorumOpTimeout / 4)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-stopRefresh:
-					return
-				case <-ticker.C:
-					now := time.Now()
-					_ = os.Chtimes(lockFilePath, now, now)
-				}
-			}
-		}()
+		// Keep the lock permanently fresh by setting its mtime in the future.
+		// A ticker-based refresher goroutine is racy under full-suite -race load:
+		// staleness is mtime age > q.timeout (50ms here), so any scheduler
+		// starvation beyond that expires the lock mid-test and the lock IS
+		// acquired. A future mtime makes freshness deterministic with no
+		// goroutine to starve.
+		fresh := time.Now().Add(time.Hour)
+		require.NoError(t, os.Chtimes(lockFilePath, fresh, fresh))
 
 		ctx := context.Background()
 
