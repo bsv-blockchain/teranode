@@ -9,6 +9,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -21,6 +22,12 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
 )
+
+// defaultSubtreeDataFetchTimeout is the fallback bound on a detached subtree_data
+// fetch when BlockValidation.SubtreeDataFetchTimeout is unset or non-positive. It
+// must match the default declared for that setting; it exists only so a
+// misconfigured value cannot leave a peer-controlled fetch unbounded.
+const defaultSubtreeDataFetchTimeout = 10 * time.Minute
 
 // Work item represents a block with its position for ordered delivery
 type workItem struct {
@@ -556,12 +563,30 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	// subtree_data download in the batch — and each cancellation closes the upstream
 	// connection, causing the peer to abort its on-demand creation (storer.Abort) and
 	// throw away Aerospike work that was already paid for. Detaching here lets each
-	// fetch run to completion (or hit its own http_streaming_timeout) so the peer can
-	// finish writing its subtreeData file. The existence check above still respects
-	// the original ctx, so a pre-cancelled call still exits early.
+	// fetch run to completion so the peer can finish writing its subtreeData file. The
+	// existence check above still respects the original ctx, so a pre-cancelled call
+	// still exits early.
 	//
-	// See companion fix in services/subtreevalidation/check_block_subtrees.go.
-	ctx = context.WithoutCancel(ctx)
+	// The deadline is what keeps that detachment bounded, and it must be applied here
+	// rather than left to the HTTP layer. context.WithoutCancel returns a context with
+	// no deadline AND a nil Done channel, which has two consequences downstream in
+	// DoHTTPRequestBodyReaderWithRetry: its `case <-ctx.Done()` abort can never be
+	// selected, so the retry loop always runs to maxAttempts, and each attempt sees no
+	// deadline and installs a *fresh* http_streaming_timeout of its own. A hostile peer
+	// answering 503 and then dripping bytes therefore held one fetch for maxAttempts ×
+	// http_streaming_timeout. Setting a deadline here fixes both at once: Done() fires
+	// again for the retry guard, and because the per-attempt timeout is only installed
+	// when the context has no deadline, every attempt now shares this single bound.
+	timeout := u.settings.BlockValidation.SubtreeDataFetchTimeout
+	if timeout <= 0 {
+		// Fail closed. A misconfigured or unparsed value must not silently restore an
+		// unbounded peer-controlled fetch, so fall back to the default rather than
+		// treating "no value" as "no limit".
+		timeout = defaultSubtreeDataFetchTimeout
+	}
+
+	ctx, cancelDetached := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancelDetached()
 
 	subtreeDataReader, err := u.fetchSubtreeDataFromPeer(ctx, subtreeHash, peerID, baseURL, bypassCache)
 	if err != nil {

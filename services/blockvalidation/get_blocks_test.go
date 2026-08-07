@@ -936,6 +936,55 @@ func TestFetchSingleBlock_RejectsSubstitutedBlock(t *testing.T) {
 	require.Contains(t, err.Error(), substitutedHash.String(), "error should name what was actually served")
 }
 
+// TestFetchAndStoreSubtreeData_DetachedFetchIsBounded pins the deadline on the
+// detached subtree_data fetch.
+//
+// fetchAndStoreSubtreeData detaches from sibling cancellation on purpose, so that one
+// failing subtree in a batch does not abort the others. context.WithoutCancel also
+// strips the deadline and yields a nil Done channel, which left the fetch unbounded in
+// two compounding ways: the retry loop's `case <-ctx.Done()` abort could never be
+// selected, so every attempt ran, and each attempt saw no deadline and installed a
+// fresh http_streaming_timeout of its own. A peer answering 503 and then stalling held
+// one fetch for maxAttempts x that timeout.
+//
+// The bound is asserted through the attempt count rather than wall-clock alone: a
+// timing-only assertion would still pass if the loop ran to completion quickly.
+func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Short enough that the retry backoff (250ms, then doubling) crosses it after the
+	// first couple of attempts, instead of waiting on the production default.
+	suite.Server.settings.BlockValidation.SubtreeDataFetchTimeout = 600 * time.Millisecond
+
+	blocks := testhelpers.CreateTestBlockChain(t, 1)
+	subtreeHash := &chainhash.Hash{0xab, 0xcd}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	// 503 is the only status the retry loop iterates on, so this is the shape that
+	// reaches all six attempts.
+	url := fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String())
+	httpmock.RegisterResponder("GET", url, httpmock.NewStringResponder(503, "unavailable"))
+
+	start := time.Now()
+	// subtree is nil because the fetch fails before it is used; the parameter only
+	// matters once bytes come back.
+	err := suite.Server.fetchAndStoreSubtreeData(suite.Ctx, blocks[0], subtreeHash, nil, "test-peer-id", "http://test-peer", false)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+
+	calls := httpmock.GetCallCountInfo()["GET "+url]
+	require.GreaterOrEqual(t, calls, 1, "the fetch should have been attempted at least once")
+	require.Less(t, calls, 6, "the retry loop must abort on the deadline rather than running every attempt")
+
+	// The full backoff chain is 250ms+500ms+1s+2s+4s = 7.75s of sleeping alone, so an
+	// unbounded run cannot finish anywhere near this.
+	require.Less(t, elapsed, 5*time.Second, "the whole fetch must be bounded by one deadline, not one per attempt")
+}
+
 // Phase 2: Tests for optimized batch fetching and ordered delivery
 func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 	t.Run("Ordered_Delivery_With_Batching", func(t *testing.T) {
