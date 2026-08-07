@@ -2,7 +2,10 @@ package utxo
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -1328,4 +1331,368 @@ func stubCounterConflictingWalk(mockStore *MockUtxostore, rootTx *bt.Tx, spender
 		Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&spenderTxHash, 0)}}, nil).Once()
 	mockStore.On("GetConflictingChildren", mock.Anything, spenderTxHash).
 		Return([]chainhash.Hash{}, nil).Once()
+}
+
+// TestGetCounterConflictingTxHashes_DedupesSpenderWalks pins the per-input walk
+// dedupe of issue 1391: a tx whose inputs are all counter-spent by the same
+// transaction must walk that spender's descendant cone exactly once, not once
+// per input.
+func TestGetCounterConflictingTxHashes_DedupesSpenderWalks(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &MockUtxostore{}
+	mockStore.Test(t)
+
+	txHash := createTestHash("dedupe-tx")
+	parentTxHash := createTestHash("dedupe-parent")
+	spenderHash := createTestHash("dedupe-spender")
+	childHash := createTestHash("dedupe-spender-child")
+
+	// tx spends three outputs of the same parent, all counter-spent by the same tx
+	testTx := bt.NewTx()
+
+	for vout := uint32(0); vout < 3; vout++ {
+		input := &bt.Input{PreviousTxOutIndex: vout}
+		_ = input.PreviousTxIDAdd(&parentTxHash)
+		testTx.Inputs = append(testTx.Inputs, input)
+	}
+
+	testTx.Outputs = append(testTx.Outputs, &bt.Output{Satoshis: 1000})
+
+	mockStore.On("Get", mock.Anything, &txHash, mock.Anything).
+		Return(&meta.Data{Tx: testTx}, nil)
+	mockStore.On("Get", mock.Anything, &parentTxHash, mock.Anything).
+		Return(&meta.Data{
+			SpendingDatas: []*spend.SpendingData{
+				{TxID: &spenderHash},
+				{TxID: &spenderHash},
+				{TxID: &spenderHash},
+			},
+		}, nil)
+
+	// exactly ONE walk of the unique counter-spender, not one per input
+	mockStore.On("GetConflictingChildren", mock.Anything, spenderHash).
+		Return([]chainhash.Hash{childHash}, nil).Once()
+
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, txHash)
+	assert.Contains(t, result, spenderHash)
+	assert.Contains(t, result, childHash)
+	assert.Len(t, result, 3)
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNumberOfCalls(t, "GetConflictingChildren", 1)
+}
+
+// TestGetConflictingChildren_ReapedMarkOrIsOrderIndependent pins the fix for the
+// first-writer-wins reapedByParent verdict. A reaped descendant reachable from
+// two in-cone parents must fail closed even when only the parent that did NOT
+// enqueue it carries the deletedChildren mark; the pre-fix walk recorded the
+// first parent's verdict and silently tolerated the descendant as a ghost,
+// which lets ProcessConflicting clear a settled, mined spend.
+func TestGetConflictingChildren_ReapedMarkOrIsOrderIndependent(t *testing.T) {
+	rootHash := createTestHash("reaped-root")
+	parentAHash := createTestHash("reaped-parent-a")
+	parentBHash := createTestHash("reaped-parent-b")
+	childHash := createTestHash("reaped-child")
+
+	// markOn selects which of the two parents carries the deletedChildren mark.
+	// Both orderings must fail closed; only "b" is red before the fix.
+	newStore := func(markOn string) *MockUtxostore {
+		mockStore := &MockUtxostore{}
+		mockStore.Test(t)
+
+		mockStore.On("Get", mock.Anything, &rootHash, mock.Anything).
+			Return(&meta.Data{
+				SpendingDatas: []*spend.SpendingData{{TxID: &parentAHash}, {TxID: &parentBHash}},
+			}, nil)
+
+		deleted := func(marked bool) map[chainhash.Hash]bool {
+			if !marked {
+				return nil
+			}
+
+			return map[chainhash.Hash]bool{childHash: true}
+		}
+
+		mockStore.On("Get", mock.Anything, &parentAHash, mock.Anything).
+			Return(&meta.Data{
+				SpendingDatas:   []*spend.SpendingData{{TxID: &childHash}},
+				DeletedChildren: deleted(markOn == "a"),
+			}, nil)
+		mockStore.On("Get", mock.Anything, &parentBHash, mock.Anything).
+			Return(&meta.Data{
+				SpendingDatas:   []*spend.SpendingData{{TxID: &childHash}},
+				DeletedChildren: deleted(markOn == "b"),
+			}, nil)
+
+		// the reaped descendant's own record is gone
+		mockStore.On("Get", mock.Anything, &childHash, mock.Anything).
+			Return(nil, errors.NewTxNotFoundError("%v not found", childHash))
+
+		return mockStore
+	}
+
+	for _, markOn := range []string{"a", "b"} {
+		t.Run("mark on parent "+markOn, func(t *testing.T) {
+			result, err := GetConflictingChildren(context.Background(), newStore(markOn), rootHash)
+			require.Error(t, err)
+			assert.Nil(t, result)
+			assert.Contains(t, err.Error(), "was reaped after being mined")
+		})
+	}
+}
+
+// TestGetConflictingChildren_ConflictingChildrenTraversal covers the
+// ConflictingChildren edge of the walk. The scaling and frozen tests link their
+// cones entirely through SpendingDatas, so without this the branch production
+// uses for explicitly-marked conflicting descendants is never exercised.
+func TestGetConflictingChildren_ConflictingChildrenTraversal(t *testing.T) {
+	rootHash := createTestHash("cc-root")
+	midHash := createTestHash("cc-mid")
+	leafHash := createTestHash("cc-leaf")
+
+	mockStore := &MockUtxostore{}
+	mockStore.Test(t)
+
+	mockStore.On("Get", mock.Anything, &rootHash, mock.Anything).
+		Return(&meta.Data{ConflictingChildren: []chainhash.Hash{midHash}}, nil)
+	mockStore.On("Get", mock.Anything, &midHash, mock.Anything).
+		Return(&meta.Data{ConflictingChildren: []chainhash.Hash{leafHash}}, nil)
+	mockStore.On("Get", mock.Anything, &leafHash, mock.Anything).
+		Return(&meta.Data{}, nil)
+
+	result, err := GetConflictingChildren(context.Background(), mockStore, rootHash)
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []chainhash.Hash{midHash, leafHash}, result)
+}
+
+// fanOutProbeStore serves a fixed descendant graph and records the peak number
+// of concurrent Get calls, so the per-level errgroup ceiling can be asserted
+// rather than assumed. Only Get is exercised by the walk; the embedded Store is
+// nil and must stay unused.
+type fanOutProbeStore struct {
+	Store
+	children map[chainhash.Hash][]chainhash.Hash
+	inFlight atomic.Int32
+	peak     atomic.Int32
+}
+
+func (f *fanOutProbeStore) Get(_ context.Context, hash *chainhash.Hash, _ ...fields.FieldName) (*meta.Data, error) {
+	cur := f.inFlight.Add(1)
+	defer f.inFlight.Add(-1)
+
+	for {
+		peak := f.peak.Load()
+		if cur <= peak || f.peak.CompareAndSwap(peak, cur) {
+			break
+		}
+	}
+
+	// hold the slot long enough that a level wider than the ceiling actually
+	// overlaps, otherwise the peak measurement is vacuous
+	time.Sleep(2 * time.Millisecond)
+
+	kids := f.children[*hash]
+	spendingDatas := make([]*spend.SpendingData, 0, len(kids))
+
+	for i := range kids {
+		spendingDatas = append(spendingDatas, &spend.SpendingData{TxID: &kids[i]})
+	}
+
+	return &meta.Data{SpendingDatas: spendingDatas}, nil
+}
+
+// TestGetConflictingChildren_FanOutCapped pins the per-level ceiling. Deleting
+// the SafeSetLimit call leaves every other test in these packages green, because
+// their cones are linear (BFS level width 1) — this is the only case with a
+// level wide enough for the cap to matter.
+func TestGetConflictingChildren_FanOutCapped(t *testing.T) {
+	const levelWidth = ConflictingWalkFanOut * 3
+
+	rootHash := createTestHash("fanout-root")
+
+	kids := make([]chainhash.Hash, levelWidth)
+	for i := range kids {
+		kids[i] = createTestHash(fmt.Sprintf("fanout-child-%d", i))
+	}
+
+	store := &fanOutProbeStore{children: map[chainhash.Hash][]chainhash.Hash{rootHash: kids}}
+
+	result, err := GetConflictingChildren(context.Background(), store, rootHash)
+	require.NoError(t, err)
+	require.Len(t, result, levelWidth)
+
+	peak := store.peak.Load()
+	require.LessOrEqualf(t, peak, int32(ConflictingWalkFanOut),
+		"per-level fan-out must stay at or below %d, peaked at %d", ConflictingWalkFanOut, peak)
+	require.Greaterf(t, peak, int32(1),
+		"the probe never observed concurrent reads (peak %d), so the ceiling assertion above proves nothing", peak)
+}
+
+// TestGetCounterConflictingTxHashes_MemoDoesNotCacheErrors pins that the
+// per-spender walk memo caches successes only. A spender briefly unreadable
+// while the first input is processed and readable by the second used to resolve
+// on the second walk; caching the error replayed a stale NOT_FOUND, the
+// un-memoised probe below then found the record present, and the whole call
+// failed closed on an error that no longer reflected the store.
+func TestGetCounterConflictingTxHashes_MemoDoesNotCacheErrors(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &MockUtxostore{}
+	mockStore.Test(t)
+
+	txHash := createTestHash("memo-tx")
+	parentTxHash := createTestHash("memo-parent")
+	spenderHash := createTestHash("memo-spender")
+	childHash := createTestHash("memo-spender-child")
+
+	// one tx spending two outputs of the same parent, both counter-spent by the
+	// same transaction — so both inputs route through the same memo entry
+	testTx := bt.NewTx()
+
+	for vout := uint32(0); vout < 2; vout++ {
+		input := &bt.Input{PreviousTxOutIndex: vout}
+		_ = input.PreviousTxIDAdd(&parentTxHash)
+		testTx.Inputs = append(testTx.Inputs, input)
+	}
+
+	testTx.Outputs = append(testTx.Outputs, &bt.Output{Satoshis: 1000})
+
+	parentTx := bt.NewTx()
+	for range 2 {
+		parentTx.Outputs = append(parentTx.Outputs, &bt.Output{
+			Satoshis:      1000,
+			LockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE}),
+		})
+	}
+
+	mockStore.On("Get", mock.Anything, &txHash, []fields.FieldName{fields.Tx}).
+		Return(&meta.Data{Tx: testTx}, nil)
+	mockStore.On("Get", mock.Anything, &parentTxHash, []fields.FieldName{fields.Utxos, fields.DeletedChildren}).
+		Return(&meta.Data{
+			SpendingDatas: []*spend.SpendingData{{TxID: &spenderHash}, {TxID: &spenderHash}},
+		}, nil)
+
+	// the walk fails once, then succeeds — the record showed up in between
+	mockStore.On("GetConflictingChildren", mock.Anything, spenderHash).
+		Return(([]chainhash.Hash)(nil), errors.NewTxNotFoundError("%v not found", spenderHash)).Once()
+	mockStore.On("GetConflictingChildren", mock.Anything, spenderHash).
+		Return([]chainhash.Hash{childHash}, nil).Once()
+
+	// the ghost probe agrees with the walk the first time, then sees the record
+	mockStore.On("Get", mock.Anything, &spenderHash, []fields.FieldName{fields.Conflicting}).
+		Return(nil, errors.NewTxNotFoundError("%v not found", spenderHash)).Once()
+	mockStore.On("Get", mock.Anything, &spenderHash, []fields.FieldName{fields.Conflicting}).
+		Return(&meta.Data{}, nil)
+
+	// input 0 is tolerated as a ghost, which builds a slot-clearing spend
+	mockStore.On("Get", mock.Anything, &parentTxHash, []fields.FieldName{fields.Tx}).
+		Return(&meta.Data{Tx: parentTx}, nil)
+
+	result, ghostSpends, err := getCounterConflictingTxHashesAndGhostSpends(ctx, mockStore, txHash)
+	require.NoError(t, err)
+
+	// input 1's fresh walk found the spender, so it is in the counter set
+	assert.Contains(t, result, txHash)
+	assert.Contains(t, result, spenderHash)
+	assert.Contains(t, result, childHash)
+
+	// input 0 still emitted exactly one ghost slot clear
+	assert.Len(t, ghostSpends, 1)
+	assert.Equal(t, uint32(0), ghostSpends[0].Vout)
+}
+
+// TestGetConflictingChildren_ReapedMarkSameLevelParent pins the harder half of
+// the order-independence property: the parent carrying the deletedChildren mark
+// sits on the SAME BFS level as the reaped descendant, so the mark is not known
+// when the level's goroutines classify the NOT_FOUND.
+//
+// Cone: root spends to A and to X, and X also spends an output of A. Both land
+// on level 1, A lists X in deletedChildren, and X's record was reaped after
+// being mined. Classifying absence inside the goroutine tolerated X as a ghost
+// whenever A happened to be iterated after X was dropped — the verdict flipped
+// on SpendingDatas ordering.
+func TestGetConflictingChildren_ReapedMarkSameLevelParent(t *testing.T) {
+	rootHash := createTestHash("samelevel-root")
+	parentHash := createTestHash("samelevel-parent")
+	reapedHash := createTestHash("samelevel-reaped")
+
+	// both orderings of the root's spending data must reach the same verdict
+	orderings := map[string][]*spend.SpendingData{
+		"parent enqueued first": {{TxID: &parentHash}, {TxID: &reapedHash}},
+		"reaped enqueued first": {{TxID: &reapedHash}, {TxID: &parentHash}},
+	}
+
+	for name, rootSpends := range orderings {
+		t.Run(name, func(t *testing.T) {
+			mockStore := &MockUtxostore{}
+			mockStore.Test(t)
+
+			mockStore.On("Get", mock.Anything, &rootHash, mock.Anything).
+				Return(&meta.Data{SpendingDatas: rootSpends}, nil)
+
+			// the marking parent is on the same level as the reaped descendant
+			mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
+				Return(&meta.Data{
+					SpendingDatas:   []*spend.SpendingData{{TxID: &reapedHash}},
+					DeletedChildren: map[chainhash.Hash]bool{reapedHash: true},
+				}, nil)
+
+			mockStore.On("Get", mock.Anything, &reapedHash, mock.Anything).
+				Return(nil, errors.NewTxNotFoundError("%v not found", reapedHash))
+
+			result, err := GetConflictingChildren(context.Background(), mockStore, rootHash)
+			require.Error(t, err, "a reaped, marked descendant must fail closed regardless of level ordering")
+			assert.Nil(t, result)
+			assert.Contains(t, err.Error(), "was reaped after being mined")
+		})
+	}
+}
+
+// TestConflictingWalks_NilSpendingDataTxID pins the nil-TxID guard on both
+// descendant walks. SpendingData.Clone handles a nil TxID and the counter walk
+// checks it, so the codebase treats it as reachable; dereferencing it inside a
+// BFS goroutine is an unrecovered panic that takes the process down rather than
+// failing the block. The entry is skipped, matching the counter walk.
+func TestConflictingWalks_NilSpendingDataTxID(t *testing.T) {
+	rootHash := createTestHash("niltxid-root")
+	childHash := createTestHash("niltxid-child")
+
+	newStore := func() *MockUtxostore {
+		mockStore := &MockUtxostore{}
+		mockStore.Test(t)
+
+		mockStore.On("Get", mock.Anything, &rootHash, mock.Anything).
+			Return(&meta.Data{
+				SpendingDatas: []*spend.SpendingData{
+					{TxID: nil, Vin: 0}, // frozen/unset slot with no spender recorded
+					{TxID: &childHash, Vin: 1},
+				},
+			}, nil)
+		mockStore.On("Get", mock.Anything, &childHash, mock.Anything).
+			Return(&meta.Data{}, nil)
+
+		return mockStore
+	}
+
+	t.Run("GetConflictingChildren", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			result, err := GetConflictingChildren(context.Background(), newStore(), rootHash)
+			require.NoError(t, err)
+			assert.Equal(t, []chainhash.Hash{childHash}, result)
+		})
+	})
+
+	t.Run("GetAndLockChildren", func(t *testing.T) {
+		store := newStore()
+		store.On("SetLocked", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		require.NotPanics(t, func() {
+			result, err := GetAndLockChildren(context.Background(), store, rootHash)
+			require.NoError(t, err)
+			assert.Contains(t, result, childHash)
+		})
+	})
 }

@@ -26,6 +26,29 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// ConflictingWalkFanOut caps the per-level width of the conflicting-descendant
+// BFS, which previously opened one concurrent store read per level member with
+// no ceiling. 128 matches main, where #1393 landed it. It is exported so the
+// counter-conflicting GetMeta errgroup in subtreevalidation shares it rather than
+// restating the literal — the two are deliberately equal and a tuning pass must
+// move both together.
+//
+// The value is chosen for the SQL backend:
+// Store.get falls back to getUnbatched whenever the requested bins include
+// ConflictingChildren or Utxos (stores/utxo/sql/sql.go) — exactly the fields this
+// walk requests — so every level member is a concurrent unbatched query against
+// postgres_maxOpenConns (50 by default). A ceiling near the Aerospike get-batcher
+// size would oversubscribe that pool by orders of magnitude, and a waiter still
+// queued when the CheckBlockSubtrees deadline fires returns DeadlineExceeded,
+// which isNotFoundErr does not match — a hard error that fails the block.
+//
+// Known tradeoff, accepted deliberately: on Aerospike a wide level fills the
+// getBatcher (utxostore_getBatcherSize 4096) in ~N/128 timer-triggered waves
+// rather than ~N/4096 fill-triggered flushes, so very wide cones walk slower
+// than a batcher-matched ceiling would allow. The incident cone was fully linear
+// (one node per level), where the ceiling is moot either way.
+const ConflictingWalkFanOut = 128
+
 // prometheusUtxoCounterConflictingGhostSpends counts every confirmed ghost spender
 // tolerated by the counter-conflicting walk: a parent output that still records a
 // spender whose own record no longer exists (e.g. a never-mined conflicting loser
@@ -969,7 +992,10 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 
 			if txMeta.SpendingDatas != nil {
 				for _, spendingData := range txMeta.SpendingDatas {
-					if spendingData != nil {
+					// same nil-TxID guard as the conflicting walk: dereferencing a
+					// nil TxID here panics an errgroup goroutine and takes the
+					// process down
+					if spendingData != nil && spendingData.TxID != nil {
 						child := *spendingData.TxID
 						if _, ok := visited[child]; ok {
 							continue
@@ -1013,15 +1039,31 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 	visited[hash] = struct{}{}
 	currentLevel := []chainhash.Hash{hash}
 
-	// reapedByParent records, per enqueued child, whether the node that
-	// enqueued it lists it in deletedChildren — i.e. the pruner deleted the
-	// child's record after it was mined and fully spent. Written between
-	// levels, read only by the next level's goroutines.
+	// reapedByParent records, per reachable child, whether any in-cone parent
+	// lists it in deletedChildren — i.e. the pruner deleted the child's record
+	// after it was mined and fully spent.
+	//
+	// Only the Aerospike store populates DeletedChildren (written by the pruner,
+	// read back in aerospike/get.go); the SQL stores delete transaction rows at
+	// DAH without recording anything on the parents, so on those backends this
+	// map stays empty and every absent descendant takes the ghost-tolerance
+	// branch below. The reaped gate is therefore an Aerospike-only protection,
+	// not a general one.
 	reapedByParent := make(map[chainhash.Hash]bool)
 
 	for len(currentLevel) > 0 {
 		results := make([]*meta.Data, len(currentLevel))
+
+		// absentErrs[i] holds the NOT_FOUND for a descendant whose record is
+		// gone. Classification (reaped-and-mined versus never-created ghost) is
+		// deliberately NOT done in the goroutine: it depends on deletedChildren
+		// marks contributed by parents that may sit on this very level, which are
+		// not collected until the enqueue pass below has run. Deciding early made
+		// the verdict depend on iteration order.
+		absentErrs := make([]error, len(currentLevel))
+
 		g, gCtx := errgroup.WithContext(ctx)
+		util.SafeSetLimit(g, ConflictingWalkFanOut)
 
 		for i, current := range currentLevel {
 			i := i
@@ -1036,19 +1078,10 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 						return err
 					}
 
-					// An absent descendant its parent lists in deletedChildren
-					// was reaped after being mined — the subtree holds settled
-					// history and must not be treated as demotable. Fail closed,
-					// mirroring the counter walk's reaped-spender gate.
-					if reapedByParent[current] {
-						return errors.NewProcessingError("[GetConflictingChildren][%s] descendant %s was reaped after being mined (listed in its parent's deletedChildren)", hash.String(), current.String(), err)
-					}
+					// Defer the reaped-versus-ghost decision to the classification
+					// pass below, once this level's deletedChildren marks are in.
+					absentErrs[i] = err
 
-					// A confirmed-absent ghost descendant (spends applied, record
-					// never created): it cannot be demoted and has no readable
-					// descendants — skip it instead of wedging every consumer of
-					// this walk. results[i] stays nil and the hash is dropped
-					// from the visited set below.
 					return nil
 				}
 				results[i] = txMeta
@@ -1061,54 +1094,94 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 		}
 
 		var nextLevel []chainhash.Hash
-		for i, txMeta := range results {
+
+		// enqueue records one child of parent on the walk.
+		//
+		// The reaped mark is OR-ed across every in-cone parent that lists the
+		// child, not just the first one to reach it. reapedByParent decides
+		// settled-mined-spend (fail closed) versus tolerated ghost (silently
+		// dropped from the result), so a first-writer-wins verdict let a child
+		// whose deletedChildren mark lives only on another parent be demoted as a
+		// ghost — clearing a settled spend. Any parent saying "reaped" wins.
+		//
+		// Marks from a parent on a LATER level still arrive after the child was
+		// classified; those are caught because a tolerated ghost is removed from
+		// visited, so the later parent re-enqueues it and the next level re-reads
+		// it with the mark set.
+		enqueue := func(child chainhash.Hash, parent *meta.Data) {
+			if parent.DeletedChildren[child] {
+				reapedByParent[child] = true
+			}
+
+			if _, ok := visited[child]; ok {
+				return
+			}
+
+			visited[child] = struct{}{}
+
+			// The frozen / coinbase-placeholder sentinel is a record-less
+			// pseudo-hash marking a frozen output. It must stay in the result set
+			// so callers' frozen-child checks fire, but must never be recursed
+			// into: a Get would return NOT_FOUND and the ghost tolerance would
+			// silently swallow it, defeating frozen-tx rejection during conflict
+			// resolution.
+			if child.Equal(subtree.CoinbasePlaceholderHashValue) {
+				return
+			}
+
+			nextLevel = append(nextLevel, child)
+		}
+
+		// Pass 1: collect every deletedChildren mark this level contributes,
+		// before anything absent is classified. A parent on this level can be the
+		// only node marking a sibling on the same level as reaped.
+		for _, txMeta := range results {
 			if txMeta == nil {
-				// tolerated ghost descendant — exclude it from the result set
-				delete(visited, currentLevel[i])
 				continue
 			}
 
-			if txMeta.ConflictingChildren != nil {
-				for _, child := range txMeta.ConflictingChildren {
-					if _, ok := visited[child]; !ok {
-						visited[child] = struct{}{}
-
-						// The frozen / coinbase-placeholder sentinel is a record-less
-						// pseudo-hash marking a frozen output. It must stay in the
-						// result set so callers' frozen-child checks fire, but must
-						// never be recursed into: a Get would return NOT_FOUND and the
-						// ghost tolerance would silently swallow it, defeating frozen-tx
-						// rejection during conflict resolution.
-						if child.Equal(subtree.CoinbasePlaceholderHashValue) {
-							continue
-						}
-
-						reapedByParent[child] = txMeta.DeletedChildren[child]
-						nextLevel = append(nextLevel, child)
-					}
-				}
+			for _, child := range txMeta.ConflictingChildren {
+				enqueue(child, txMeta)
 			}
 
-			if txMeta.SpendingDatas != nil {
-				for _, spendingData := range txMeta.SpendingDatas {
-					if spendingData != nil {
-						child := *spendingData.TxID
-						if _, ok := visited[child]; !ok {
-							visited[child] = struct{}{}
-
-							// Frozen output sentinel: keep it in the result for the
-							// caller's frozen check, but do not recurse (see above).
-							if child.Equal(subtree.CoinbasePlaceholderHashValue) {
-								continue
-							}
-
-							reapedByParent[child] = txMeta.DeletedChildren[child]
-							nextLevel = append(nextLevel, child)
-						}
-					}
+			for _, spendingData := range txMeta.SpendingDatas {
+				// TxID is guarded as well as the slot: SpendingData.Clone handles a
+				// nil TxID and the counter walk below checks both, so the codebase
+				// treats it as reachable. Dereferencing it here would panic inside
+				// an errgroup goroutine — an unrecovered panic that takes the
+				// process down, not just the block. Skipping matches the counter
+				// walk's handling of the same shape.
+				if spendingData != nil && spendingData.TxID != nil {
+					enqueue(*spendingData.TxID, txMeta)
 				}
 			}
 		}
+
+		// Pass 2: the marks are now complete for this level, so absence can be
+		// classified deterministically.
+		for i, absentErr := range absentErrs {
+			if absentErr == nil {
+				continue
+			}
+
+			current := currentLevel[i]
+
+			// An absent descendant that some in-cone parent lists in
+			// deletedChildren was reaped after being mined — the subtree holds
+			// settled history and must not be treated as demotable. Fail closed,
+			// mirroring the counter walk's reaped-spender gate.
+			if reapedByParent[current] {
+				return nil, errors.NewProcessingError("[GetConflictingChildren][%s] descendant %s was reaped after being mined (listed in its parent's deletedChildren)", hash.String(), current.String(), absentErr)
+			}
+
+			// A confirmed-absent ghost descendant (spends applied, record never
+			// created): it cannot be demoted and has no readable descendants — drop
+			// it instead of wedging every consumer of this walk. Removing it from
+			// visited also lets a later-level parent re-enqueue it, so a mark that
+			// only shows up further down still gets its re-check.
+			delete(visited, current)
+		}
+
 		currentLevel = nextLevel
 	}
 
@@ -1179,6 +1252,36 @@ func getCounterConflictingTxHashesAndGhostSpends(ctx context.Context, s Store, t
 
 	var ghostSpends []*Spend
 
+	// Several inputs are commonly spent by the same counter-conflicting tx. The
+	// descendant walk is by far the expensive part and its result does not depend
+	// on which input reached the spender, so memoise it per unique spender: one
+	// walk instead of one per input (issue 1391).
+	//
+	// Successes only. Caching a failure would replay it for every later input
+	// sharing the spender, and the ghost probe below is deliberately not
+	// memoised — so a spender that was briefly unreadable on the first input and
+	// is readable by the second would hit a cached NOT_FOUND, pass the probe, and
+	// fail the whole call closed on a stale error. Re-walking on error preserves
+	// the per-input independence the ghost tolerance (#1325) was built on, and
+	// costs nothing in the case the memo exists for: a large cone that reads
+	// successfully is walked exactly once.
+	spenderWalks := make(map[chainhash.Hash][]chainhash.Hash, len(txMeta.Tx.Inputs))
+
+	walkSpender := func(spendingTxID chainhash.Hash) ([]chainhash.Hash, error) {
+		if cached, ok := spenderWalks[spendingTxID]; ok {
+			return cached, nil
+		}
+
+		children, err := s.GetConflictingChildren(ctx, spendingTxID)
+		if err != nil {
+			return nil, err
+		}
+
+		spenderWalks[spendingTxID] = children
+
+		return children, nil
+	}
+
 	for _, input := range txMeta.Tx.Inputs {
 		parentTxMeta, ok := parentTxs[*input.PreviousTxIDChainHash()]
 		if ok {
@@ -1193,7 +1296,7 @@ func getCounterConflictingTxHashesAndGhostSpends(ctx context.Context, s Store, t
 			if spendingData != nil && spendingData.TxID != nil {
 				spendingTxID := spendingData.TxID
 
-				childHashes, err := s.GetConflictingChildren(ctx, *spendingTxID)
+				childHashes, err := walkSpender(*spendingTxID)
 				if err != nil {
 					if !isNotFoundErr(err) {
 						return nil, nil, err
