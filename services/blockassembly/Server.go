@@ -1260,15 +1260,16 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 }
 
 // shed records and returns the queue-full shed outcome: a ResourceExhausted-
-// mapped error the retry interceptor does not retry, whose locked-shed recovery
-// is a client resubmit.
+// mapped error the retry interceptor does not retry. The reported limit is the
+// enforced (normalized) cap, which can be clamped up from the raw configured
+// value, so operators see the limit actually in force.
 func (ba *BlockAssembly) shed(start time.Time) error {
 	prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
 	prometheusBlockAssemblyQueueShed.Inc()
 
 	return errors.WrapGRPC(errors.NewThresholdExceededError(
 		"block assembly queue full: %d items queued, limit %d",
-		ba.blockAssembler.QueueLength(), ba.settings.BlockAssembly.MaxQueueItems))
+		ba.blockAssembler.QueueLength(), ba.blockAssembler.QueueMaxItems()))
 }
 
 // contextCancelledDuringIngest maps a cancelled/deadline-exceeded ingest wait to

@@ -142,8 +142,15 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 	// Mark the oldest pending timestamp on the empty->non-empty transition so
 	// the head-age gauge reads a real age rather than 0. The consumer resets it
 	// to 0 when it drains the last batch, so a CAS from 0 succeeds exactly for
-	// the batch that becomes the new head-of-line. This is a diagnostic gauge,
-	// not a control input, so a transient miss under a drain race is harmless.
+	// the batch that becomes the new head-of-line.
+	//
+	// The gauge is now a control input (the validator's ingest backpressure
+	// decides on it) as well as the stall alert, so it must not read 0 while a
+	// backlog is present. Two mechanisms keep it consistent under the drain race
+	// without a lock or a timestamp comparison: this CAS sets it whenever the
+	// queue was empty, and the consumer's empty-clear re-reads head.next after
+	// storing 0 (updateOldestPending) so a batch linked during that window is
+	// picked up by value. Every interleaving converges to the linked head's time.
 	q.oldestPendingMillis.CompareAndSwap(0, batch.time)
 }
 
@@ -230,6 +237,14 @@ func (q *LockFreeQueue) dequeueBatch(validFromMillis int64) (*TxBatch, bool) {
 	}
 
 	if validFromMillis > 0 && next.time >= validFromMillis {
+		// The head-of-line batch is queued but held back by the double-spend
+		// window (not yet drainable). Refresh the gauge to its true age so a
+		// transient stale 0 (from an earlier empty-clear that raced a producer)
+		// cannot persist for the whole hold-back: the drain loop calls
+		// dequeueBatch every idle-sleep, so this collapses any stale 0 to at most
+		// one loop iteration. next is the current head-of-line, so its time is
+		// the authoritative oldest-pending value.
+		q.oldestPendingMillis.Store(next.time)
 		return nil, false
 	}
 
@@ -276,11 +291,25 @@ func (q *LockFreeQueue) dequeueBatchUntil(maxTimeMillis int64) (*TxBatch, bool) 
 // advances head. It reads q.head, so it MUST only be called from the single
 // consumer goroutine (the same constraint as dequeue). A monitoring goroutine
 // must read headAgeMillis, never q.head.
+//
+// On the empty-clear it stores 0 and then re-reads head.next: a producer may
+// have linked a new head between the two loads, and this recheck picks it up by
+// value so the gauge never latches a stale 0 while a batch is present. The
+// recheck compares no timestamps, so two batches sharing a millisecond can never
+// be confused; if the producer has not linked yet, head.next is still nil
+// (correctly 0) and the producer's own CAS(0, time) sets the gauge when it links.
 func (q *LockFreeQueue) updateOldestPending() {
 	if following := q.head.next.Load(); following != nil {
 		q.oldestPendingMillis.Store(following.time)
-	} else {
-		q.oldestPendingMillis.Store(0)
+		return
+	}
+
+	q.oldestPendingMillis.Store(0)
+
+	// Re-read: a producer linking a new head between the load above and the
+	// Store(0) would otherwise leave the gauge at 0 with a batch present.
+	if following := q.head.next.Load(); following != nil {
+		q.oldestPendingMillis.Store(following.time)
 	}
 }
 
@@ -305,6 +334,17 @@ func (q *LockFreeQueue) headAgeMillis(now int64) int64 {
 	}
 
 	return 0
+}
+
+// MaxItems returns the enforced (normalized) hard ceiling on published-or-
+// reserved items, or a value <= 0 when the queue is unbounded. It is the cap the
+// ingest reservation actually enforces, which the shed message reports so
+// operators see the real limit rather than the raw configured value.
+//
+// Returns:
+//   - int64: The enforced item cap (<= 0 when unbounded)
+func (q *LockFreeQueue) MaxItems() int64 {
+	return q.maxItems
 }
 
 // IsEmpty checks if the queue contains any batches.

@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -14,9 +13,10 @@ import (
 // queueStatsReader is the slim signal source the controller reads each tick. It
 // is satisfied by blockassembly.ClientI and deliberately narrow so the read can
 // never touch the subtree-processor main loop (GetBlockAssemblyQueueStats is
-// backed by atomic loads only).
+// backed by atomic loads only). It returns native Go types, so the controller
+// never imports the block-assembly protobuf.
 type queueStatsReader interface {
-	GetBlockAssemblyQueueStats(ctx context.Context) (*blockassembly_api.QueueStatsMessage, error)
+	GetBlockAssemblyQueueStats(ctx context.Context) (queueCount int64, headAge time.Duration, err error)
 }
 
 // pausableConsumer is the lever the controller pulls. It is satisfied by
@@ -114,10 +114,10 @@ func (c *kafkaBackpressureController) run(ctx context.Context) {
 // deadline so the controller can never inherit a downstream stall.
 func (c *kafkaBackpressureController) tick(ctx context.Context) {
 	readCtx, cancel := context.WithTimeout(ctx, c.cfg.ReadTimeout)
-	stats, err := c.reader.GetBlockAssemblyQueueStats(readCtx)
+	_, headAge, err := c.reader.GetBlockAssemblyQueueStats(readCtx)
 	cancel()
 
-	if err != nil || stats == nil {
+	if err != nil {
 		c.onReadError(err)
 		return
 	}
@@ -126,8 +126,7 @@ func (c *kafkaBackpressureController) tick(ctx context.Context) {
 	c.consecutiveErrors = 0
 	prometheusKafkaBackpressureReadErrors.Set(0)
 
-	age := time.Duration(stats.QueueHeadAgeMillis) * time.Millisecond
-	c.evaluate(age)
+	c.evaluate(headAge)
 }
 
 // onReadError applies the fail-open policy: after StaleErrorLimit consecutive

@@ -323,6 +323,15 @@ func (b *BlockAssembler) ConsumerExited() bool {
 	return b.subtreeProcessor.ConsumerExited()
 }
 
+// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or a
+// value <= 0 when the queue is unbounded.
+//
+// Returns:
+//   - int64: The enforced item cap (<= 0 when unbounded)
+func (b *BlockAssembler) QueueMaxItems() int64 {
+	return b.subtreeProcessor.QueueMaxItems()
+}
+
 // QueueHeadAge returns how long the oldest queued batch has been waiting.
 // It is a diagnostic gauge for dispatcher-stall visibility and returns 0 when
 // the queue is empty.

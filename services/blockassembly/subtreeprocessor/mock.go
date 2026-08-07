@@ -152,6 +152,11 @@ func (m *MockSubtreeProcessor) ConsumerExited() bool {
 	return args.Bool(0)
 }
 
+func (m *MockSubtreeProcessor) QueueMaxItems() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
 // QueueHeadAge implements Interface.QueueHeadAge
 func (m *MockSubtreeProcessor) QueueHeadAge() time.Duration {
 	args := m.Called()

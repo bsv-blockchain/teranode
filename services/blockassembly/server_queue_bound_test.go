@@ -74,6 +74,7 @@ func TestAddTxBatch_ShedsWhenQueueFull(t *testing.T) {
 	stp := &subtreeprocessor.MockSubtreeProcessor{}
 	stp.On("AddBatchIfRoom", mock.Anything, mock.Anything).Return(false)
 	stp.On("QueueLength").Return(int64(150)).Maybe()
+	stp.On("QueueMaxItems").Return(int64(100)).Maybe()
 
 	ba := baWithProcessor(t, func(s *settings.Settings) {
 		s.BlockAssembly.MaxQueueItems = 100
