@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // publicPeerServiceMethods are the PeerService RPCs deliberately reachable
@@ -83,7 +84,15 @@ func TestAuthProtectedMethodsCoverAllRPCs(t *testing.T) {
 // readOnlyMethodsByField lists, per guarded Server field, the methods a public
 // RPC handler may call on it. Anything absent counts as a write, so a new
 // registry or ban-list method is treated as mutating until it is deliberately
-// listed here.
+// listed here. Fields that reach peer state only through writes (the batcher,
+// the sync coordinator, the gossip caches, the ban channel) get an empty
+// allow-list: touching them at all from a public handler is a finding.
+//
+// The guard is a source-level approximation, not a proof. It follows calls on
+// the receiver within this package only; mutation reached through an interface
+// value, a function that takes *Server as a parameter, or another package is
+// invisible to it. Treat a pass as "no obvious write", and keep reviewing new
+// public handlers by hand.
 var readOnlyMethodsByField = map[string]map[string]bool{
 	"peerRegistry": {
 		"GetPeer":         true,
@@ -95,6 +104,16 @@ var readOnlyMethodsByField = map[string]map[string]bool{
 		"IsBanned":   true,
 		"ListBanned": true,
 	},
+	"registryBatcher":  {},
+	"syncCoordinator":  {},
+	"peerSelector":     {},
+	"banChan":          {},
+	"banStatusCache":   {},
+	"reputationCache":  {},
+	"ipBanCache":       {},
+	"blockPeerMap":     {},
+	"subtreePeerMap":   {},
+	"localHeightCache": {},
 }
 
 // TestPublicRPCsDoNotMutateRegistry proves from the handler source that every
@@ -185,7 +204,10 @@ func parsePackageFuncs(t *testing.T) map[string]*ast.FuncDecl {
 				continue
 			}
 
-			if serverReceiverName(fn) != "" {
+			// Index Server methods whatever the receiver is called, and whether
+			// it is a pointer or value receiver, so recursion never silently
+			// stops at an unconventionally declared helper.
+			if isServerMethod(fn) {
 				fns["Server."+fn.Name.Name] = fn
 			}
 		}
@@ -194,27 +216,51 @@ func parsePackageFuncs(t *testing.T) map[string]*ast.FuncDecl {
 	return fns
 }
 
-// serverReceiverName returns the receiver identifier of a (*Server) method, or
-// "" if the function is not a *Server method or the receiver is unnamed.
-func serverReceiverName(fn *ast.FuncDecl) string {
-	if fn.Recv == nil || len(fn.Recv.List) != 1 {
-		return ""
+// isServerType reports whether an AST type expression is Server or *Server.
+func isServerType(expr ast.Expr) bool {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
 	}
 
-	star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
-	if !ok {
-		return ""
+	ident, ok := expr.(*ast.Ident)
+
+	return ok && ident.Name == "Server"
+}
+
+// isServerMethod reports whether fn is a method on Server or *Server.
+func isServerMethod(fn *ast.FuncDecl) bool {
+	return fn.Recv != nil && len(fn.Recv.List) == 1 && isServerType(fn.Recv.List[0].Type)
+}
+
+// serverIdents returns every identifier inside fn that names a Server: the
+// receiver and any parameter of type Server or *Server. Parameters matter
+// because a plain function taking *Server can write the registry just as easily
+// as a method can.
+func serverIdents(fn *ast.FuncDecl) map[string]bool {
+	names := make(map[string]bool)
+
+	collect := func(fields *ast.FieldList) {
+		if fields == nil {
+			return
+		}
+
+		for _, field := range fields.List {
+			if !isServerType(field.Type) {
+				continue
+			}
+
+			for _, name := range field.Names {
+				if name.Name != "_" {
+					names[name.Name] = true
+				}
+			}
+		}
 	}
 
-	if ident, ok := star.X.(*ast.Ident); !ok || ident.Name != "Server" {
-		return ""
-	}
+	collect(fn.Recv)
+	collect(fn.Type.Params)
 
-	if len(fn.Recv.List[0].Names) != 1 {
-		return ""
-	}
-
-	return fn.Recv.List[0].Names[0].Name
+	return names
 }
 
 // findGuardedWrites walks fn and every same-package function it calls, and
@@ -222,17 +268,17 @@ func serverReceiverName(fn *ast.FuncDecl) string {
 // read-only - the field escaping into a call argument or a local variable - is
 // reported too, so the guard fails closed.
 func findGuardedWrites(fns map[string]*ast.FuncDecl, fn *ast.FuncDecl, seen map[string]bool) []string {
-	recv := serverReceiverName(fn)
+	servers := serverIdents(fn)
 
-	// isGuarded reports whether expr is `<recv>.<guardedField>`.
-	isGuarded := func(expr ast.Expr) (string, bool) {
+	// guardedField reports whether expr is `<server>.<guardedField>`.
+	guardedField := func(expr ast.Expr) (string, bool) {
 		sel, ok := expr.(*ast.SelectorExpr)
 		if !ok {
 			return "", false
 		}
 
 		ident, ok := sel.X.(*ast.Ident)
-		if !ok || recv == "" || ident.Name != recv {
+		if !ok || !servers[ident.Name] {
 			return "", false
 		}
 
@@ -243,19 +289,38 @@ func findGuardedWrites(fns map[string]*ast.FuncDecl, fn *ast.FuncDecl, seen map[
 		return sel.Sel.Name, true
 	}
 
+	// unwrap strips &x / *x so `&s.peerRegistry` is still recognised.
+	unwrap := func(expr ast.Expr) ast.Expr {
+		for {
+			switch e := expr.(type) {
+			case *ast.UnaryExpr:
+				expr = e.X
+			case *ast.StarExpr:
+				expr = e.X
+			case *ast.ParenExpr:
+				expr = e.X
+			default:
+				return expr
+			}
+		}
+	}
+
 	var writes []string
 
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		switch node := n.(type) {
-		case *ast.CallExpr:
-			sel, ok := node.Fun.(*ast.SelectorExpr)
-			if ok {
-				if field, guarded := isGuarded(sel.X); guarded && !readOnlyMethodsByField[field][sel.Sel.Name] {
-					writes = append(writes, fn.Name.Name+" -> "+field+"."+sel.Sel.Name)
-				}
+		// Any selection off a guarded field that is not on its read-only list:
+		// a call, a method value, or a nested field. Checking the selector
+		// rather than the call covers `f := s.peerRegistry.Ban` too.
+		case *ast.SelectorExpr:
+			if field, guarded := guardedField(node.X); guarded && !readOnlyMethodsByField[field][node.Sel.Name] {
+				writes = append(writes, fn.Name.Name+" -> "+field+"."+node.Sel.Name)
+			}
 
-				// A call on the receiver itself (s.helper(...)) may write on our behalf.
-				if ident, ok := sel.X.(*ast.Ident); ok && recv != "" && ident.Name == recv {
+		case *ast.CallExpr:
+			// A call on a Server value (s.helper(...)) may write on our behalf.
+			if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+				if ident, ok := sel.X.(*ast.Ident); ok && servers[ident.Name] {
 					writes = append(writes, callee(fns, "Server."+sel.Sel.Name, seen)...)
 				}
 			}
@@ -266,16 +331,27 @@ func findGuardedWrites(fns map[string]*ast.FuncDecl, fn *ast.FuncDecl, seen map[
 
 			// Handing a guarded field to another function loses track of it.
 			for _, arg := range node.Args {
-				if field, guarded := isGuarded(arg); guarded {
+				if field, guarded := guardedField(unwrap(arg)); guarded {
 					writes = append(writes, fn.Name.Name+" -> passes "+field+" to a call")
 				}
 			}
 
 		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				if field, guarded := guardedField(unwrap(lhs)); guarded {
+					writes = append(writes, fn.Name.Name+" -> replaces "+field)
+				}
+			}
+
 			for _, rhs := range node.Rhs {
-				if field, guarded := isGuarded(rhs); guarded {
+				if field, guarded := guardedField(unwrap(rhs)); guarded {
 					writes = append(writes, fn.Name.Name+" -> aliases "+field+" into a local")
 				}
+			}
+
+		case *ast.SendStmt:
+			if field, guarded := guardedField(unwrap(node.Chan)); guarded {
+				writes = append(writes, fn.Name.Name+" -> sends on "+field)
 			}
 		}
 
@@ -283,6 +359,74 @@ func findGuardedWrites(fns map[string]*ast.FuncDecl, fn *ast.FuncDecl, seen map[
 	})
 
 	return writes
+}
+
+// TestFindGuardedWritesDetectsEscapes keeps the source guard honest. A walker
+// that silently stopped matching would make TestPublicRPCsDoNotMutateRegistry
+// pass vacuously, so each way a handler can reach guarded state gets a synthetic
+// case here.
+func TestFindGuardedWritesDetectsEscapes(t *testing.T) {
+	const src = `package p2p
+
+func (s *Server) readOnlyDirect()      { s.peerRegistry.GetPeer(nil, "id") }
+func (s *Server) readOnlyBanList()     { s.banList.IsBanned("ip") }
+func (s *Server) unrelatedField()      { s.logger.Debugf("hi") }
+
+func (s *Server) writeDirect()         { s.peerRegistry.RemovePeer(nil, "id") }
+func (s *Server) writeViaHelper()      { s.helper() }
+func (s *Server) helper()              { s.peerRegistry.RemovePeer(nil, "id") }
+func (s *Server) writeViaFreeFunc()    { freeWriter(s) }
+func freeWriter(s *Server)             { s.peerRegistry.RemovePeer(nil, "id") }
+func (s *Server) writeViaBatcher()     { s.registryBatcher.enqueue("id") }
+func (s *Server) writeViaCache()       { s.banStatusCache.Store("id", true) }
+func (s *Server) writeViaChannel()     { s.banChan <- BanEvent{} }
+func (s *Server) writeInGoroutine()    { go func() { s.peerRegistry.RemovePeer(nil, "id") }() }
+func (s *Server) writeViaMethodValue() { f := s.peerRegistry.RemovePeer; _ = f }
+func (s *Server) replacesField()       { s.banList = nil }
+func (s *Server) escapesAsArgument()   { sink(s.peerRegistry) }
+func (s *Server) escapesViaPointer()   { sink(&s.banStatusCache) }
+func (s *Server) aliasesIntoLocal()    { reg := s.peerRegistry; _ = reg }
+func (v Server) valueReceiverWrite()   { v.peerRegistry.RemovePeer(nil, "id") }
+func sink(any interface{})             {}
+`
+
+	file, err := parser.ParseFile(token.NewFileSet(), "synthetic.go", src, 0)
+	require.NoError(t, err)
+
+	fns := make(map[string]*ast.FuncDecl)
+
+	for _, d := range file.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+
+		if fn.Recv == nil {
+			fns[fn.Name.Name] = fn
+		} else if isServerMethod(fn) {
+			fns["Server."+fn.Name.Name] = fn
+		}
+	}
+
+	clean := []string{"readOnlyDirect", "readOnlyBanList", "unrelatedField"}
+	dirty := []string{
+		"writeDirect", "writeViaHelper", "writeViaFreeFunc", "writeViaBatcher",
+		"writeViaCache", "writeViaChannel", "writeInGoroutine", "writeViaMethodValue",
+		"replacesField", "escapesAsArgument", "escapesViaPointer", "aliasesIntoLocal",
+		"valueReceiverWrite",
+	}
+
+	for _, name := range clean {
+		fn, ok := fns["Server."+name]
+		require.True(t, ok, "%s not indexed", name)
+		require.Empty(t, findGuardedWrites(fns, fn, map[string]bool{}), "%s must be read-only", name)
+	}
+
+	for _, name := range dirty {
+		fn, ok := fns["Server."+name]
+		require.True(t, ok, "%s not indexed", name)
+		require.NotEmpty(t, findGuardedWrites(fns, fn, map[string]bool{}), "%s must be flagged as a write", name)
+	}
 }
 
 // callee recurses into a same-package function, guarding against cycles.
@@ -347,6 +491,40 @@ func TestAuthInterceptorProtectsMutatingMethods(t *testing.T) {
 		require.NoError(t, err, "public method %s must not require a key", method)
 		require.True(t, handlerCalled, "public method %s handler must run", method)
 	}
+}
+
+// TestGRPCAuthOptionsProtectEveryMutatingRPC pins the wiring Start hands to
+// util.StartGRPCServer. Without it, dropping ProtectedMethods from the auth
+// options would leave every other test in this file green while shipping the
+// vulnerability again.
+func TestGRPCAuthOptionsProtectEveryMutatingRPC(t *testing.T) {
+	t.Run("configured key is used", func(t *testing.T) {
+		tSettings := settings.NewSettings()
+		tSettings.GRPCAdminAPIKey = "a-configured-key"
+
+		s := &Server{settings: tSettings, logger: ulogger.TestLogger{}}
+
+		opts, err := s.grpcAuthOptions()
+		require.NoError(t, err)
+		require.Equal(t, "a-configured-key", opts.APIKey)
+		require.Equal(t, authProtectedMethods(), opts.ProtectedMethods)
+	})
+
+	t.Run("missing key falls closed, not open", func(t *testing.T) {
+		tSettings := settings.NewSettings()
+		tSettings.GRPCAdminAPIKey = ""
+
+		s := &Server{settings: tSettings, logger: ulogger.TestLogger{}}
+
+		opts, err := s.grpcAuthOptions()
+		require.NoError(t, err)
+
+		// A non-empty key matters twice over: util.StartGRPCServer installs no
+		// auth interceptor at all for an empty key, and the generated one is
+		// unguessable, so protected RPCs reject rather than admit everyone.
+		require.NotEmpty(t, opts.APIKey)
+		require.Equal(t, authProtectedMethods(), opts.ProtectedMethods)
+	})
 }
 
 func TestBindsAllInterfaces(t *testing.T) {
@@ -500,4 +678,22 @@ func TestRecordCatchupMaliciousRequiresAuth(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, int64(1), info.MaliciousCount)
 	require.False(t, selector.isEligible(info, criteria), "a malicious flag must remove the peer from selection")
+}
+
+// TestPublicRPCsStayAnonymousOverTheWire checks the other half of the contract
+// over a real connection: closing the mutators must not have closed the
+// read-only queries that operators and dashboards depend on.
+func TestPublicRPCsStayAnonymousOverTheWire(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	_, anon := startAuthedPeerService(t, s)
+
+	registry, err := anon.GetPeerRegistry(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.Len(t, registry.Peers, 1)
+
+	banned, err := anon.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.False(t, banned.IsMalicious)
 }

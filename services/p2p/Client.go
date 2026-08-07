@@ -61,6 +61,11 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	apiKey := tSettings.GRPCAdminAPIKey
 	if apiKey != "" {
 		logger.Infof("[P2P Client] Using API key for authentication")
+	} else {
+		// Every state-mutating PeerService RPC needs the key, including the
+		// catchup and validation reporters this client sends on the hot path.
+		// Warn here as well as server-side: this is where the rejections surface.
+		logger.Warnf("[P2P Client] grpc_admin_api_key is not set; peer reporting and admin calls to the P2P service will be rejected as unauthenticated")
 	}
 
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
@@ -465,7 +470,6 @@ func (c *Client) UpdateCatchupError(ctx context.Context, peerID string, errorMsg
 
 	return nil
 }
-
 
 // ResetReputation resets reputation metrics for a peer or all peers.
 // If peerID is empty, resets all peers. Returns the number of peers reset.

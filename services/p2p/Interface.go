@@ -179,7 +179,6 @@ type ClientI interface {
 	// This helps track why catchup failed for specific peers.
 	UpdateCatchupError(ctx context.Context, peerID string, errorMsg string) error
 
-
 	// ResetReputation resets reputation metrics for a peer or all peers.
 	// If peerID is empty, resets all peers. Returns the number of peers reset.
 	ResetReputation(ctx context.Context, peerID string) (int, error)

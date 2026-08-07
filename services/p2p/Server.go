@@ -757,23 +757,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Start node status publisher
 	go s.publishNodeStatus(ctx)
 
-	apiKey := s.settings.GRPCAdminAPIKey
-	if apiKey == "" {
-		// Generate a random API key if not provided
-		apiKey, err = generateRandomKey()
-		if err != nil {
-			return errors.NewServiceError("error generating random API key", err)
-		}
-
-		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated, so every state-mutating PeerService RPC (bans, reputation, connect/disconnect, and the catchup/validation reporters called by block and subtree validation) will reject callers until a key is configured")
-	}
-
-	s.warnIfGRPCExposed(s.settings.P2P.GRPCListenAddress, s.settings.GRPCAdminAPIKey)
-
-	// Create auth options
-	authOptions := &util.AuthOptions{
-		APIKey:           apiKey,
-		ProtectedMethods: authProtectedMethods(),
+	authOptions, err := s.grpcAuthOptions()
+	if err != nil {
+		return err
 	}
 
 	// this will block
@@ -929,32 +915,76 @@ func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 	s.disconnectPeersOnBanList(ctx, "banned before startup")
 }
 
-// placeholderAdminAPIKey is the value settings.conf ships so local and CI
-// deployments work out of the box. It is public, so it authenticates nobody.
-const placeholderAdminAPIKey = "testkey"
+// grpcAuthOptions builds the auth configuration for the PeerService listener.
+// When no key is configured a random one is generated, which leaves every
+// protected RPC unreachable rather than open - the safe direction, since these
+// RPCs steer sync-peer selection.
+func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
+	apiKey := s.settings.GRPCAdminAPIKey
+	if apiKey == "" {
+		var err error
+
+		apiKey, err = generateRandomKey()
+		if err != nil {
+			return nil, errors.NewServiceError("error generating random API key", err)
+		}
+
+		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated, so every state-mutating PeerService RPC (bans, reputation, connect/disconnect, and the catchup/validation reporters called by block and subtree validation) will reject callers until a key is configured")
+	}
+
+	s.warnIfGRPCExposed(s.settings.P2P.GRPCListenAddress, s.settings.GRPCAdminAPIKey)
+
+	return &util.AuthOptions{
+		APIKey:           apiKey,
+		ProtectedMethods: authProtectedMethods(),
+	}, nil
+}
+
+const (
+	// placeholderAdminAPIKey is the value settings.conf ships so local and CI
+	// deployments work out of the box. It is public, so it authenticates nobody.
+	placeholderAdminAPIKey = "testkey"
+
+	// minStrongAdminAPIKeyLen matches the threshold cmd/diagnose flags as weak.
+	minStrongAdminAPIKeyLen = 16
+)
 
 // warnIfGRPCExposed flags the one combination the auth interceptor cannot save:
-// a listener bound to every interface while the API key is still the shipped
-// placeholder. Anyone who can reach the port then holds a valid key, and the
-// protected RPCs decide sync-peer selection and peer reputation.
+// a listener bound to every interface while the API key is guessable. Anyone who
+// can reach the port then holds a valid key, and the protected RPCs decide
+// sync-peer selection and peer reputation.
 func (s *Server) warnIfGRPCExposed(listenAddress, configuredKey string) {
-	if !bindsAllInterfaces(listenAddress) || configuredKey != placeholderAdminAPIKey {
+	if !bindsAllInterfaces(listenAddress) || !weakAdminAPIKey(configuredKey) {
 		return
 	}
 
-	s.logger.Warnf("[P2P] gRPC is listening on all interfaces (%s) with the placeholder grpc_admin_api_key; set a strong key and restrict the port, or anyone who can reach it can forge peer reputation and validated chain progress", listenAddress)
+	s.logger.Warnf("[P2P] gRPC is listening on all interfaces (%s) with a placeholder or short grpc_admin_api_key; set a strong key (%d+ chars) and restrict the port, or anyone who can reach it can forge peer reputation and validated chain progress", listenAddress, minStrongAdminAPIKeyLen)
 }
 
-// bindsAllInterfaces reports whether a listen address has no host part, or a
-// wildcard one. A specific non-loopback IP is deliberately not flagged: that is
-// an operator naming an interface on purpose.
+// weakAdminAPIKey reports whether the configured key offers no real protection.
+// An empty key is excluded: the caller has already generated a random one and
+// warned separately, and that key is not guessable.
+func weakAdminAPIKey(configuredKey string) bool {
+	return configuredKey != "" &&
+		(configuredKey == placeholderAdminAPIKey || len(configuredKey) < minStrongAdminAPIKeyLen)
+}
+
+// bindsAllInterfaces reports whether a listen address has no host part, or an
+// unspecified one in any of its spellings. A specific non-loopback IP is
+// deliberately not flagged: that is an operator naming an interface on purpose.
 func bindsAllInterfaces(listenAddress string) bool {
 	host, _, err := net.SplitHostPort(listenAddress)
 	if err != nil {
 		return false
 	}
 
-	return host == "" || host == "0.0.0.0" || host == "::"
+	if host == "" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsUnspecified()
 }
 
 // authProtectedMethods returns the full gRPC method paths of every

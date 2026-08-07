@@ -655,7 +655,9 @@ The reporters are authenticated because they write peer reputation and validated
 
 Only read-only queries (`GetPeers`, `GetPeer`, `GetPeerRegistry`, `GetPeersForCatchup`, `IsBanned`, `ListBanned`, `IsPeerMalicious`, `IsPeerUnhealthy`) are reachable without the key. The classification is enforced by tests that parse the handler sources, so an RPC that gains a write can no longer stay on the public list.
 
-`p2p_grpcListenAddress` binds to loopback by default; widen it only when the service is reached from another container or pod, and set a strong `grpc_admin_api_key` when you do.
+`p2p_grpcListenAddress` binds to loopback by default; widen it only when the service is reached from another container or pod, and set a strong `grpc_admin_api_key` when you do. The shipped `docker.m`, `docker.ss` and `operator` contexts widen it because those topologies run P2P in its own container or pod.
+
+Note that the read-only RPCs are still a reconnaissance surface: `GetPeerRegistry` and `GetPeersForCatchup` return the full peer set including peer IDs, DataHub URLs, heights, reputation and ban state. Where the bind is widened - in particular the `operator` context, which fronts the peer gRPC port with an ingress - keep the port reachable only from inside the cluster.
 
 ## Related Documents
 

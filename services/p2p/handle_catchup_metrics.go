@@ -177,7 +177,6 @@ func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.Record
 	return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
 }
 
-
 // UpdateCatchupError records the most recent catchup error reported against a peer.
 func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error) {
 	if s.peerRegistry == nil {
