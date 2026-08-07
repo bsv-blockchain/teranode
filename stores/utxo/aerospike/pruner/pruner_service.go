@@ -205,6 +205,10 @@ type Service struct {
 	connectionPoolWarningThreshold float64 // Threshold for connection pool auto-adjustment (0.0-1.0)
 	utxoSetTTL                     bool    // Use TTL expiration instead of hard delete
 
+	// Commit level for the pruner's own record removals only. Parent updates and
+	// every write outside the pruner stay on COMMIT_ALL — see prune_policies.go.
+	removalCommitLevel aerospike.CommitLevel
+
 	// Persisted across prune sessions so that parents pruned in earlier blocks can still be
 	// recognised when their children reach the prune horizon a session or more later.
 	// Nil when defensiveEnabled is true.
@@ -382,6 +386,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		partitionQueries:               settings.Pruner.UTXOPartitionQueries,
 		connectionPoolWarningThreshold: settings.Pruner.ConnectionPoolWarningThreshold,
 		utxoSetTTL:                     settings.Pruner.UTXOSetTTL,
+		removalCommitLevel:             removalCommitLevel(settings.Pruner.RelaxRemovalCommitLevel),
 		fieldTxID:                      fields.TxID.String(),
 		fieldUtxos:                     fields.Utxos.String(),
 		fieldInputs:                    fields.Inputs.String(),
@@ -1707,21 +1712,11 @@ func (s *Service) buildCombinedCleanupRecords(updates map[string]*parentUpdateIn
 
 	parentEnd = len(batchRecords)
 
-	// Child deletions — TTL touch (utxoSetTTL=true) or hard delete.
+	// Child deletions — TTL touch (utxoSetTTL=true) or hard delete. These carry
+	// removalCommitLevel; the parent updates above keep COMMIT_ALL. CommitLevel is
+	// carried per record, so mixing both in one BatchOperate is safe.
 	if len(keys) > 0 {
-		if s.utxoSetTTL {
-			ttlWritePolicy := aerospike.NewBatchWritePolicy()
-			ttlWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-			ttlWritePolicy.Expiration = 1
-			for _, key := range keys {
-				batchRecords = append(batchRecords, aerospike.NewBatchWrite(ttlWritePolicy, key, aerospike.TouchOp()))
-			}
-		} else {
-			batchDeletePolicy := aerospike.NewBatchDeletePolicy()
-			for _, key := range keys {
-				batchRecords = append(batchRecords, aerospike.NewBatchDelete(batchDeletePolicy, key))
-			}
-		}
+		batchRecords = append(batchRecords, buildDeletionBatchRecords(keys, s.utxoSetTTL, s.removalCommitLevel)...)
 	}
 
 	return batchRecords, parentEnd, parentUsesModTeranode
@@ -2191,22 +2186,7 @@ func (s *Service) executeBatchDeletions(ctx context.Context, keys []*aerospike.K
 		return nil
 	}
 
-	batchRecords := make([]aerospike.BatchRecordIfc, len(keys))
-
-	if s.utxoSetTTL {
-		ttlWritePolicy := aerospike.NewBatchWritePolicy()
-		ttlWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-		ttlWritePolicy.Expiration = 1
-
-		for i, key := range keys {
-			batchRecords[i] = aerospike.NewBatchWrite(ttlWritePolicy, key, aerospike.TouchOp())
-		}
-	} else {
-		batchDeletePolicy := aerospike.NewBatchDeletePolicy()
-		for i, key := range keys {
-			batchRecords[i] = aerospike.NewBatchDelete(batchDeletePolicy, key)
-		}
-	}
+	batchRecords := buildDeletionBatchRecords(keys, s.utxoSetTTL, s.removalCommitLevel)
 
 	// Check context before expensive operation
 	select {

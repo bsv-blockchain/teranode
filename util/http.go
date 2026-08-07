@@ -440,12 +440,29 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	return resp.Body, cancelFn, nil
 }
 
+// maxHTTPErrorBodyBytes bounds how much of a non-2xx response body is read for the
+// error message. The body is peer-supplied and is read on every failure path,
+// including the ones reached from DoHTTPRequestBounded: without a bound, a hostile
+// peer defeats that function's cap simply by answering with an error status and then
+// streaming indefinitely. An error message only needs enough to be diagnosable.
+//
+// Kept small because the snippet is %q-escaped below, and escaping expands: a body of
+// control bytes becomes up to four characters each, so this is the bound on bytes read,
+// not on the length of the resulting message.
+const maxHTTPErrorBodyBytes = 2 * 1024
+
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
 //
 // The error type is chosen to let callers branch with errors.Is:
 //   - 404 → ErrNotFound
 //   - 503 → ErrServiceUnavailable (typically retryable; see DoHTTPRequestBodyReaderWithRetry)
 //   - other → generic ServiceError
+//
+// The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
+// rather than retained in the error string. The snippet is %q-escaped because this
+// message is logged verbatim and forwarded to the peer registry: raw peer bytes would
+// otherwise let a peer embed newlines to forge log lines, or terminal escapes, and
+// would break the single-line log convention.
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
@@ -460,13 +477,13 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 			_ = resp.Body.Close()
 		}()
 
-		b, readErr := io.ReadAll(resp.Body)
+		b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes))
 		if readErr != nil {
 			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
 		}
 
 		if b != nil {
-			return errFn("http request [%s] returned status code [%d] with body [%s]", rawURL, resp.StatusCode, string(b))
+			return errFn("http request [%s] returned status code [%d] with body %q", rawURL, resp.StatusCode, string(b))
 		}
 	}
 

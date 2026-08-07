@@ -120,6 +120,13 @@ func (h *HTTP) GetTransactionMeta(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
+		// The store can return no metadata and no error — the aerospike batch
+		// path does exactly that for the coinbase placeholder hash. Treat it as
+		// not-found rather than dereferencing nil below.
+		if meta == nil {
+			return echo.NewHTTPError(http.StatusNotFound, errors.NewTxNotFoundError("%s not found", hash.String()).Error())
+		}
+
 		// Fetch block hashes and subtree hashes
 		// Note: We assume BlockIDs, SubtreeIdxs, and BlockHeights have the same length and correspond to each other
 		h.logger.Debugf("Transaction %s has BlockIDs: %v, SubtreeIdxs: %v", hash.String(), meta.BlockIDs, meta.SubtreeIdxs)
@@ -197,9 +204,16 @@ func (h *HTTP) GetTransactionMeta(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		// Create enhanced response with block hashes and subtree hashes
+		// Create enhanced response with block hashes and subtree hashes.
+		//
+		// "tx" is null when this node does not retain the full transaction — a
+		// node bootstrapped from a UTXO-set snapshot keeps only the live outputs,
+		// which cannot reproduce the transaction. Every other field is still
+		// accurate, so the response stays a 200 and txAvailable tells the caller
+		// which case it is looking at without having to inspect "tx".
 		response := map[string]interface{}{
 			"tx":             meta.Tx,
+			"txAvailable":    meta.Tx != nil,
 			"parentTxHashes": meta.TxInpoints.ParentTxHashes,
 			"blockIDs":       meta.BlockIDs,
 			"blockHashes":    blockHashes,

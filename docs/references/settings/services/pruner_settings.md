@@ -209,6 +209,44 @@ When enabled, uses Block notifications with mined_set=true instead of BlockPersi
 
 When enabled, sets Aerospike record TTL to 1 second instead of hard deleting. This produces optimized tombstones and reduces write amplification.
 
+### pruner_relaxRemovalCommitLevel
+
+**Type**: Boolean
+
+**Default**: `true`
+
+**Environment Variable**: `pruner_relaxRemovalCommitLevel`
+
+**Description**: Acknowledge the pruner's own record removals from the master replica only
+
+Controls the Aerospike commit level for the pruner's record removals — hard deletes, and
+the 1-second TTL touches used when `pruner_utxoSetTTL` is enabled.
+
+| Value | Behaviour |
+|-------|-----------|
+| `true` (default) | `COMMIT_MASTER` — the call returns once the master replica has the removal; replicas catch up asynchronously. |
+| `false` | `COMMIT_ALL` — wait for every replica, the same as every other Teranode write. |
+
+Relaxing is safe here because pruning is idempotent and self-healing: the pruner only
+removes records that are already provably safe to drop, and a replica that misses a
+removal is re-found by the `delete_at_height` partition scan on the next session and
+re-pruned. Waiting for a full-replication ACK buys no correctness, only latency in the
+per-block removal burst.
+
+**Scope** — record removal only:
+
+- Pruner **parent updates** (the `deletedChildren` map writes and the `addDeletedChildren`
+  UDF) mutate records that survive the prune and always use `COMMIT_ALL`.
+- Every write **outside** the pruner always uses `COMMIT_ALL`. There is no cluster-wide
+  commit-level setting: UTXO record creation, the transaction-creation lock, the conflict
+  WAL, setMined, unspend and the preserve / delete-at-height writes are none of them
+  self-healing, so relaxing them would trade a resync for throughput.
+- Only has an effect on namespaces with `replication-factor` > 1. On a single-copy
+  namespace both values behave identically.
+
+**When to set `false`**: only to rule the relaxation out while diagnosing missing-record
+or replication issues.
+
 ### pruner_skipBlobDeletion
 
 **Type**: Boolean

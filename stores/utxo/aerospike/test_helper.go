@@ -148,6 +148,14 @@ func (s *Store) SetExternalTxCache(c *util.ExpiringConcurrentCache[chainhash.Has
 	s.externalTxCache = c
 }
 
+// SetExternalOutpointsCache sets the cache for the outpoint-resolution
+// reconstruction. It is deliberately separate from the full-transaction cache —
+// see the field comments on Store — so tests that exercise both readers must wire
+// both.
+func (s *Store) SetExternalOutpointsCache(c *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]) {
+	s.externalOutpointsCache = c
+}
+
 // //////////////////////////////////////////////////////////////////////////////////////////////
 // //////////////////////////////////////////////////////////////////////////////////////////////
 
