@@ -336,17 +336,6 @@ Marks a peer as malicious after detecting invalid data during catchup. This seve
 - `peer_id` (string): The peer identifier
 
 ```go
-func (s *Server) UpdateCatchupReputation(ctx context.Context, req *p2p_api.UpdateCatchupReputationRequest) (*p2p_api.UpdateCatchupReputationResponse, error)
-```
-
-Directly sets a peer's reputation score. Use sparingly as this bypasses the normal reputation calculation algorithm.
-
-**Parameters**:
-
-- `peer_id` (string): The peer identifier
-- `score` (double): Reputation score value (0-100 range)
-
-```go
 func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error)
 ```
 
@@ -657,6 +646,16 @@ The server uses goroutines for handling concurrent operations, such as message p
 ## Security
 
 The server supports both HTTP and HTTPS configurations based on the `securityLevelHTTP` setting. When using HTTPS, it requires certificate and key files to be specified in the configuration.
+
+### gRPC authentication
+
+Every state-mutating `PeerService` RPC requires the `grpc_admin_api_key` value in the `x-api-key` metadata header. That covers the operator-facing admin calls (`BanPeer`, `UnbanPeer`, `ClearBanned`, `AddBanScore`, `ResetReputation`, `ConnectPeer`, `DisconnectPeer`) *and* the internal data-plane reporters called by block and subtree validation (`RecordCatchupAttempt`, `RecordCatchupSuccess`, `RecordCatchupFailure`, `RecordCatchupMalicious`, `UpdateCatchupError`, `ReportValidSubtree`, `ReportValidBlock`, `ReportValidBlockHeaders`, `ReportValidatedChainProgress`, `RecordBytesDownloaded`).
+
+The reporters are authenticated because they write peer reputation and validated chain progress against a caller-supplied peer ID, and peer IDs are cheap to mint offline. `ReportValidatedChainProgress` in particular feeds sync-peer selection, so an unauthenticated caller could nominate a Sybil as sync peer and flag every honest peer malicious. Internal callers construct their client through `p2p.NewClient`, which attaches the key automatically, so they need no special handling.
+
+Only read-only queries (`GetPeers`, `GetPeer`, `GetPeerRegistry`, `GetPeersForCatchup`, `IsBanned`, `ListBanned`, `IsPeerMalicious`, `IsPeerUnhealthy`) are reachable without the key. The classification is enforced by tests that parse the handler sources, so an RPC that gains a write can no longer stay on the public list.
+
+`p2p_grpcListenAddress` binds to loopback by default; widen it only when the service is reached from another container or pod, and set a strong `grpc_admin_api_key` when you do.
 
 ## Related Documents
 

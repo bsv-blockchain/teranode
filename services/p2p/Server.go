@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -764,13 +765,15 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			return errors.NewServiceError("error generating random API key", err)
 		}
 
-		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban, clear bans, ban score, reputation reset, connect/disconnect peer) are unreachable until a key is configured")
+		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated, so every state-mutating PeerService RPC (bans, reputation, connect/disconnect, and the catchup/validation reporters called by block and subtree validation) will reject callers until a key is configured")
 	}
+
+	s.warnIfGRPCExposed(s.settings.P2P.GRPCListenAddress, s.settings.GRPCAdminAPIKey)
 
 	// Create auth options
 	authOptions := &util.AuthOptions{
 		APIKey:           apiKey,
-		ProtectedMethods: adminProtectedMethods(),
+		ProtectedMethods: authProtectedMethods(),
 	}
 
 	// this will block
@@ -926,15 +929,52 @@ func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 	s.disconnectPeersOnBanList(ctx, "banned before startup")
 }
 
-// adminProtectedMethods returns the full gRPC method paths of every
-// state-mutating admin RPC on the PeerService; the auth interceptor requires
-// the admin API key for these. Read-only queries and internal data-plane
-// reporting RPCs (catchup metrics, valid block/subtree reports, bytes
-// downloaded) stay unauthenticated because other services call them without
-// admin credentials. Any new mutating admin RPC must be added here; the
-// classification is enforced by TestAdminProtectedMethodsCoverAllRPCs.
-func adminProtectedMethods() map[string]bool {
+// placeholderAdminAPIKey is the value settings.conf ships so local and CI
+// deployments work out of the box. It is public, so it authenticates nobody.
+const placeholderAdminAPIKey = "testkey"
+
+// warnIfGRPCExposed flags the one combination the auth interceptor cannot save:
+// a listener bound to every interface while the API key is still the shipped
+// placeholder. Anyone who can reach the port then holds a valid key, and the
+// protected RPCs decide sync-peer selection and peer reputation.
+func (s *Server) warnIfGRPCExposed(listenAddress, configuredKey string) {
+	if !bindsAllInterfaces(listenAddress) || configuredKey != placeholderAdminAPIKey {
+		return
+	}
+
+	s.logger.Warnf("[P2P] gRPC is listening on all interfaces (%s) with the placeholder grpc_admin_api_key; set a strong key and restrict the port, or anyone who can reach it can forge peer reputation and validated chain progress", listenAddress)
+}
+
+// bindsAllInterfaces reports whether a listen address has no host part, or a
+// wildcard one. A specific non-loopback IP is deliberately not flagged: that is
+// an operator naming an interface on purpose.
+func bindsAllInterfaces(listenAddress string) bool {
+	host, _, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		return false
+	}
+
+	return host == "" || host == "0.0.0.0" || host == "::"
+}
+
+// authProtectedMethods returns the full gRPC method paths of every
+// state-mutating RPC on the PeerService; the auth interceptor requires the API
+// key for these. Only read-only queries stay unauthenticated.
+//
+// The data-plane reporters are in here too, not just the operator-facing admin
+// RPCs. They mutate peer reputation and validated-chain-progress state from a
+// caller-supplied peer ID, and a peer ID is cheap to mint offline, so leaving
+// them open let anyone who could reach the gRPC port forge chain progress for a
+// Sybil and flag every honest peer malicious - which decides sync-peer
+// selection. They are called by block/subtree validation inside the deployment,
+// which already presents grpc_admin_api_key via p2p.NewClient, so protecting
+// them costs those callers nothing.
+//
+// Any new mutating RPC must be added here; the classification is enforced by
+// TestAuthProtectedMethodsCoverAllRPCs and TestPublicRPCsDoNotMutateRegistry.
+func authProtectedMethods() map[string]bool {
 	return map[string]bool{
+		// Operator-facing admin RPCs.
 		"/p2p_api.PeerService/BanPeer":         true,
 		"/p2p_api.PeerService/UnbanPeer":       true,
 		"/p2p_api.PeerService/ClearBanned":     true,
@@ -942,6 +982,18 @@ func adminProtectedMethods() map[string]bool {
 		"/p2p_api.PeerService/ResetReputation": true,
 		"/p2p_api.PeerService/ConnectPeer":     true,
 		"/p2p_api.PeerService/DisconnectPeer":  true,
+
+		// Internal data-plane reporters (block/subtree validation).
+		"/p2p_api.PeerService/RecordCatchupAttempt":         true,
+		"/p2p_api.PeerService/RecordCatchupSuccess":         true,
+		"/p2p_api.PeerService/RecordCatchupFailure":         true,
+		"/p2p_api.PeerService/RecordCatchupMalicious":       true,
+		"/p2p_api.PeerService/UpdateCatchupError":           true,
+		"/p2p_api.PeerService/ReportValidSubtree":           true,
+		"/p2p_api.PeerService/ReportValidBlock":             true,
+		"/p2p_api.PeerService/ReportValidBlockHeaders":      true,
+		"/p2p_api.PeerService/ReportValidatedChainProgress": true,
+		"/p2p_api.PeerService/RecordBytesDownloaded":        true,
 	}
 }
 

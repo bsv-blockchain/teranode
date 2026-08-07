@@ -60,7 +60,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	// Include the admin API key in the connection options
 	apiKey := tSettings.GRPCAdminAPIKey
 	if apiKey != "" {
-		logger.Infof("[Legacy Client] Using API key for authentication")
+		logger.Infof("[P2P Client] Using API key for authentication")
 	}
 
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
@@ -466,31 +466,6 @@ func (c *Client) UpdateCatchupError(ctx context.Context, peerID string, errorMsg
 	return nil
 }
 
-// UpdateCatchupReputation updates the reputation score for a peer.
-// Parameters:
-//   - ctx: Context for the operation
-//   - peerID: The peer ID to update reputation for
-//   - score: Reputation score between 0 and 100
-//
-// Returns:
-//   - error: Any error encountered during the operation
-func (c *Client) UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error {
-	req := &p2p_api.UpdateCatchupReputationRequest{
-		PeerId: peerID,
-		Score:  score,
-	}
-
-	resp, err := c.client.UpdateCatchupReputation(ctx, req)
-	if err != nil {
-		return err
-	}
-
-	if resp != nil && !resp.Ok {
-		return errors.NewServiceError("failed to update catchup reputation")
-	}
-
-	return nil
-}
 
 // ResetReputation resets reputation metrics for a peer or all peers.
 // If peerID is empty, resets all peers. Returns the number of peers reset.

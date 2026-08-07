@@ -59,9 +59,6 @@ func (m *maliciousAbortP2PClient) RecordCatchupMalicious(_ context.Context, _ st
 func (m *maliciousAbortP2PClient) UpdateCatchupError(_ context.Context, _ string, _ string) error {
 	return nil
 }
-func (m *maliciousAbortP2PClient) UpdateCatchupReputation(_ context.Context, _ string, _ float64) error {
-	return nil
-}
 func (m *maliciousAbortP2PClient) GetPeersForCatchup(_ context.Context) ([]*p2p.PeerInfo, error) {
 	return nil, nil
 }
