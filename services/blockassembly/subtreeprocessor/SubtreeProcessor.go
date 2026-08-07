@@ -2021,6 +2021,16 @@ func (stp *SubtreeProcessor) ConsumerExited() bool {
 	return stp.stopped.Load()
 }
 
+// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or a
+// value <= 0 when the queue is unbounded. It is the cap the reservation path
+// actually enforces, reported in the queue-full shed message.
+//
+// Returns:
+//   - int64: The enforced item cap (<= 0 when unbounded)
+func (stp *SubtreeProcessor) QueueMaxItems() int64 {
+	return stp.queue.MaxItems()
+}
+
 // QueueHeadAge returns how long the oldest batch still in the ingest queue has
 // been waiting. It is a diagnostic gauge for dispatcher-stall visibility and is
 // safe to call from a monitoring goroutine; it returns 0 when the queue is empty.

@@ -317,6 +317,14 @@ type Interface interface {
 	//   - int64: Current queue length, in transactions
 	QueueLength() int64
 
+	// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or
+	// a value <= 0 when the queue is unbounded. It is the cap the reservation
+	// path actually enforces, reported in the queue-full shed message.
+	//
+	// Returns:
+	//   - int64: The enforced item cap (<= 0 when unbounded)
+	QueueMaxItems() int64
+
 	// QueueHeadAge returns how long the oldest queued batch has been waiting.
 	// It is a diagnostic gauge for dispatcher-stall visibility and returns 0
 	// when the queue is empty.

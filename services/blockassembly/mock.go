@@ -8,6 +8,7 @@ package blockassembly
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -157,14 +158,14 @@ func (m *Mock) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.St
 	return args.Get(0).(*blockassembly_api.StateMessage), nil
 }
 
-func (m *Mock) GetBlockAssemblyQueueStats(ctx context.Context) (*blockassembly_api.QueueStatsMessage, error) {
+func (m *Mock) GetBlockAssemblyQueueStats(ctx context.Context) (int64, time.Duration, error) {
 	args := m.Called(ctx)
 
-	if args.Error(1) != nil {
-		return nil, args.Error(1)
+	if args.Error(2) != nil {
+		return 0, 0, args.Error(2)
 	}
 
-	return args.Get(0).(*blockassembly_api.QueueStatsMessage), nil
+	return args.Get(0).(int64), args.Get(1).(time.Duration), nil
 }
 
 func (m *Mock) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error) {

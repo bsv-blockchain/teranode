@@ -10,7 +10,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
-	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -63,15 +62,15 @@ func (f *fakeReader) set(ageMillis int64, err error) {
 	f.mu.Unlock()
 }
 
-func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (*blockassembly_api.QueueStatsMessage, error) {
+func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (int64, time.Duration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if f.err != nil {
-		return nil, f.err
+		return 0, 0, f.err
 	}
 
-	return &blockassembly_api.QueueStatsMessage{QueueHeadAgeMillis: f.ageMillis}, nil
+	return 0, time.Duration(f.ageMillis) * time.Millisecond, nil
 }
 
 func testBackpressureConfig() settings.ValidatorKafkaBackpressureSettings {

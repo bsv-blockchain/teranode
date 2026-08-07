@@ -10,6 +10,7 @@ package blockassembly
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -138,14 +139,16 @@ type ClientI interface {
 	// GetBlockAssemblyQueueStats retrieves a slim, atomic-only view of the ingest
 	// queue (depth + head-batch age) for high-frequency control reads. It never
 	// blocks on the subtree-processor main loop the way GetBlockAssemblyState can.
+	// Native Go return types keep the protobuf inside the client.
 	//
 	// Parameters:
 	//   - ctx: Context for cancellation
 	//
 	// Returns:
-	//   - *blockassembly_api.QueueStatsMessage: Queue depth and head-batch age
+	//   - int64: Current ingest-queue depth in items
+	//   - time.Duration: How long the oldest queued batch has waited (0 when empty)
 	//   - error: Any error encountered during retrieval
-	GetBlockAssemblyQueueStats(ctx context.Context) (*blockassembly_api.QueueStatsMessage, error)
+	GetBlockAssemblyQueueStats(ctx context.Context) (queueCount int64, headAge time.Duration, err error)
 
 	// GetBlockAssemblyBlockCandidate retrieves the block candidate for block assembly.
 	//
