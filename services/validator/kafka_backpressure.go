@@ -45,6 +45,14 @@ type kafkaBackpressureController struct {
 	reader   queueStatsReader
 	consumer pausableConsumer
 
+	// doubleSpendWindow is the block-assembly drain floor: the ingest queue
+	// refuses to drain a batch until it is older than this, so under load the
+	// head age structurally includes this hold-back. The control decision must
+	// be based on how long the head has waited PAST that floor, so it is
+	// subtracted from the raw head age before the pause/resume watermarks are
+	// applied. The raw age is left untouched in the gauge/stall alert.
+	doubleSpendWindow time.Duration
+
 	// now supplies the current time; overridable in tests for deterministic
 	// max-pause behaviour.
 	now func() time.Time
@@ -56,6 +64,13 @@ type kafkaBackpressureController struct {
 	// pauseStart is when the current pause began; valid only while paused.
 	pauseStart time.Time
 
+	// maxPauseResumeAt is when the last max-pause fail-open resume happened;
+	// zero when no cooldown is armed. While within a MaxPause-long cooldown of
+	// this time the controller suppresses a new pause, so a persistently dark or
+	// hot signal cannot re-pause on the very next tick and wedge ingest to a
+	// near-zero duty cycle. A genuine drain to the resume watermark clears it.
+	maxPauseResumeAt time.Time
+
 	// consecutiveErrors counts back-to-back failed reads for fail-open.
 	consecutiveErrors int
 }
@@ -63,13 +78,14 @@ type kafkaBackpressureController struct {
 // newKafkaBackpressureController builds a controller. It does not start any
 // goroutine; call run to begin.
 func newKafkaBackpressureController(logger ulogger.Logger, cfg settings.ValidatorKafkaBackpressureSettings,
-	reader queueStatsReader, consumer pausableConsumer) *kafkaBackpressureController {
+	doubleSpendWindow time.Duration, reader queueStatsReader, consumer pausableConsumer) *kafkaBackpressureController {
 	return &kafkaBackpressureController{
-		logger:   logger,
-		cfg:      cfg,
-		reader:   reader,
-		consumer: consumer,
-		now:      time.Now,
+		logger:            logger,
+		cfg:               cfg,
+		doubleSpendWindow: doubleSpendWindow,
+		reader:            reader,
+		consumer:          consumer,
+		now:               time.Now,
 	}
 }
 
@@ -130,10 +146,30 @@ func (c *kafkaBackpressureController) onReadError(err error) {
 }
 
 // evaluate applies the hysteresis decision to a freshly-read queue-head age.
+// The control decision is based on the effective age — the raw head age minus
+// the double-spend drain floor — so a healthy hold-back (head aged only up to
+// the floor) does not read as a stall.
 func (c *kafkaBackpressureController) evaluate(age time.Duration) {
+	effectiveAge := age - c.doubleSpendWindow
+	if effectiveAge < 0 {
+		effectiveAge = 0
+	}
+
 	if !c.paused.Load() {
-		if age >= c.cfg.PauseQueueAge {
-			c.pause(age)
+		// Within the post-max-pause cooldown: suppress a new pause so a
+		// persistently dark/hot signal cannot re-pause every tick. Clear the
+		// latch on a genuine drain to the resume watermark or once the cooldown
+		// (one MaxPause) elapses, then fall through to normal evaluation.
+		if !c.maxPauseResumeAt.IsZero() {
+			if effectiveAge <= c.cfg.ResumeQueueAge || c.now().Sub(c.maxPauseResumeAt) >= c.cfg.MaxPause {
+				c.maxPauseResumeAt = time.Time{}
+			} else {
+				return
+			}
+		}
+
+		if effectiveAge >= c.cfg.PauseQueueAge {
+			c.pause(effectiveAge)
 		}
 
 		return
@@ -141,13 +177,16 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 
 	// Already paused: resume on the low watermark, or when the pause has run
 	// past its hard cap (fail-open) even if the queue is still hot.
-	if age <= c.cfg.ResumeQueueAge {
-		c.resume(fmt.Sprintf("queue-head age %s fell to resume watermark %s", age, c.cfg.ResumeQueueAge))
+	if effectiveAge <= c.cfg.ResumeQueueAge {
+		c.resume(fmt.Sprintf("queue-head age %s fell to resume watermark %s", effectiveAge, c.cfg.ResumeQueueAge))
 		return
 	}
 
 	if pausedFor := c.now().Sub(c.pauseStart); pausedFor >= c.cfg.MaxPause {
-		c.resume(fmt.Sprintf("max-pause %s reached while age still %s", c.cfg.MaxPause, age))
+		// Arm the re-pause cooldown so the forced fail-open gets at least one
+		// MaxPause-long real drain window before it may pause again.
+		c.maxPauseResumeAt = c.now()
+		c.resume(fmt.Sprintf("max-pause %s reached while age still %s", c.cfg.MaxPause, effectiveAge))
 	}
 }
 
@@ -203,6 +242,6 @@ func (v *Server) startKafkaBackpressure(ctx context.Context) {
 		return
 	}
 
-	controller := newKafkaBackpressureController(v.logger, cfg, v.blockAssemblyClient, v.consumerClient)
+	controller := newKafkaBackpressureController(v.logger, cfg, v.settings.BlockAssembly.DoubleSpendWindow, v.blockAssemblyClient, v.consumerClient)
 	go controller.run(ctx)
 }
