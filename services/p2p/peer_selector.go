@@ -444,7 +444,9 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 			prunedURLs = append(prunedURLs, p.DataHubURL)
 		}
 	}
-	urls := append(fullURLs, prunedURLs...)
+	urls := make([]string, 0, len(fullURLs)+len(prunedURLs))
+	urls = append(urls, fullURLs...)
+	urls = append(urls, prunedURLs...)
 
 	results := make(map[string]bool, len(urls))
 	pending := make([]string, 0, len(urls))
@@ -470,6 +472,7 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 	type probeResult struct {
 		healthy   bool
 		cacheable bool
+		checkedAt time.Time
 	}
 
 	probeResults := make([]probeResult, len(pending))
@@ -497,26 +500,33 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 				}
 
 				// Don't cache a negative result caused by ctx or the budget expiring:
-				// the peer wasn't actually probed to completion.
-				probeResults[i] = probeResult{healthy: healthy, cacheable: healthy || probeCtx.Err() == nil}
+				// the peer wasn't actually probed to completion. Stamp each result
+				// as its own probe completes, not when the whole round ends, so a
+				// fast probe's cache entry doesn't inherit the slowest probe's
+				// finish time and outlive the TTL.
+				probeResults[i] = probeResult{
+					healthy:   healthy,
+					cacheable: healthy || probeCtx.Err() == nil,
+					checkedAt: time.Now(),
+				}
 			}
 		})
 	}
 
 	wg.Wait()
 
-	checkedAt := time.Now()
+	pruneCutoff := time.Now()
 
 	ps.healthMu.Lock()
 	for i, r := range probeResults {
 		results[pending[i]] = r.healthy
 		if r.cacheable {
-			ps.healthCache[pending[i]] = peerHealthCacheEntry{healthy: r.healthy, checkedAt: checkedAt}
+			ps.healthCache[pending[i]] = peerHealthCacheEntry{healthy: r.healthy, checkedAt: r.checkedAt}
 		}
 	}
 	// Drop expired entries so churning peer URLs don't grow the cache unboundedly.
 	for url, entry := range ps.healthCache {
-		if checkedAt.Sub(entry.checkedAt) >= peerHealthCacheTTL {
+		if pruneCutoff.Sub(entry.checkedAt) >= peerHealthCacheTTL {
 			delete(ps.healthCache, url)
 		}
 	}

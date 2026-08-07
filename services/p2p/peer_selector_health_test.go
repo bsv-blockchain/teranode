@@ -114,6 +114,81 @@ func TestPeerSelector_HealthChecks_CachedAcrossCalls(t *testing.T) {
 	require.Equal(t, 2, stub.totalCalls(), "second selection within the TTL must not re-probe")
 }
 
+func TestPeerSelector_HealthChecks_UnhealthyResultCachedAcrossCalls(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	peerA := newPeer("peer-a", 100, "full", 50, 0)
+	peers := []*blockchain.PeerInfo{peerA}
+
+	// The probe completes (no ctx expiry) with an unhealthy verdict, so it is
+	// cacheable and must not be re-probed within the TTL.
+	stub := newCountingHealthStub(peerA.DataHubURL)
+	ps.checkHealth = stub.check
+
+	require.Empty(t, ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50)))
+	require.Equal(t, 1, stub.callsFor(peerA.DataHubURL))
+
+	require.Empty(t, ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50)))
+	require.Equal(t, 1, stub.callsFor(peerA.DataHubURL), "a completed unhealthy probe must be served from cache within the TTL")
+}
+
+func TestPeerSelector_HealthChecks_DisabledSkipsProbes(t *testing.T) {
+	ps := NewPeerSelector(ulogger.TestLogger{}, &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:     true,
+			FullDeliveryFreshnessWindow: 24 * time.Hour,
+			HealthCheckEnabled:          false,
+		},
+	})
+
+	stub := newCountingHealthStub()
+	ps.checkHealth = stub.check
+
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{newPeer("peer-a", 100, "full", 50, 0)}, advertisedProbeCriteria(50))
+	require.Equal(t, "peer-a", got, "selection must still work with health checking disabled")
+	require.Zero(t, stub.totalCalls(), "no probes may run when health checking is disabled")
+}
+
+func TestPeerSelector_HealthChecks_SharedURLProbedOnce(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	peerA := newPeer("peer-a", 100, "full", 50, 0)
+	peerB := newPeer("peer-b", 100, "full", 50, 0)
+	peerB.DataHubURL = peerA.DataHubURL
+
+	stub := newCountingHealthStub()
+	ps.checkHealth = stub.check
+
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{peerA, peerB}, advertisedProbeCriteria(50))
+	require.NotEmpty(t, got)
+	require.Equal(t, 1, stub.totalCalls(), "peers sharing one DataHub URL must be probed once")
+}
+
+func TestPeerSelector_HealthChecks_ExpiredEntriesPruned(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	peerA := newPeer("peer-a", 100, "full", 50, 0)
+	peerB := newPeer("peer-b", 100, "full", 50, 0)
+
+	stub := newCountingHealthStub()
+	ps.checkHealth = stub.check
+
+	ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{peerA}, advertisedProbeCriteria(50))
+
+	// Age peerA's entry past the TTL, then run a selection that no longer
+	// offers its URL; the probe round must prune the stale entry so churning
+	// peer URLs cannot grow the cache unboundedly.
+	ps.healthMu.Lock()
+	entry := ps.healthCache[peerA.DataHubURL]
+	entry.checkedAt = entry.checkedAt.Add(-2 * peerHealthCacheTTL)
+	ps.healthCache[peerA.DataHubURL] = entry
+	ps.healthMu.Unlock()
+
+	ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{peerB}, advertisedProbeCriteria(50))
+
+	ps.healthMu.Lock()
+	_, stillCached := ps.healthCache[peerA.DataHubURL]
+	ps.healthMu.Unlock()
+	require.False(t, stillCached, "expired entry for a churned peer URL must be pruned")
+}
+
 func TestPeerSelector_HealthChecks_CacheExpires(t *testing.T) {
 	ps := newHealthCheckSelectorForTest()
 	peerA := newPeer("peer-a", 100, "full", 50, 0)
