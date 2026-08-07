@@ -41,6 +41,19 @@ describe('formatJSON', () => {
     expect(tagsIn(html).every((tag) => ALLOWED_TAG.test(tag))).toBe(true)
   })
 
+  // These reach the highlighter unchanged even with the service-side sanitizer
+  // in front of it, and a quote-unaware highlighter splices its own span markup
+  // apart on them.
+  it.each([
+    [':evil', { client_name: ':evil' }],
+    ['quote-escaped token', { client_name: 'x": 1, ":z' }],
+    ['token inside a string', { client_name: 'a: true b: 12 c: null' }],
+    ['lone quote', { client_name: '"' }],
+    ['backslash before quote', { client_name: 'a\\' }],
+  ])('emits only highlighting spans for %s', (_name, message) => {
+    expect(tagsIn(formatJSON(message)).every((tag) => ALLOWED_TAG.test(tag))).toBe(true)
+  })
+
   it('emits only highlighting spans for every hostile field of a gossip message', () => {
     // Every peer-controlled string the p2p service forwards to /p2p-ws.
     const hostile = `</span><svg/onload=alert(1)>`

@@ -10,10 +10,9 @@
 /**
  * Escapes the characters that let text become markup.
  *
- * `"` is deliberately left as-is. The escaped text is only ever interpolated
+ * `"` is deliberately left as-is: the escaped text is only ever interpolated
  * into element content, never into an attribute value, so a quote there is
- * inert - and keeping it lets highlightJSON below still recognise JSON string
- * delimiters. Escaping `&` first is what stops `&lt;` in the input from being
+ * inert. Escaping `&` first is what stops `&lt;` in the input from being
  * decoded back into `<` by the browser.
  */
 export function escapeHtml(value: string): string {
@@ -21,24 +20,51 @@ export function escapeHtml(value: string): string {
 }
 
 /**
- * Wraps JSON tokens in styling spans. Only ever called on escaped text, which
- * is what makes it safe: with no `<` or `&` left in the input, the only tags in
- * the output are the ones added here.
+ * Matches one JSON token: a quoted string (optionally followed by the `:` that
+ * makes it a property name), a literal, or a number.
+ *
+ * The string alternative comes first and consumes escape pairs, so a token-like
+ * substring inside a string value - `"a: true"`, `"x\": 1"` - is swallowed by
+ * the surrounding string rather than matched on its own.
  */
-function highlightJSON(escaped: string): string {
-  return (
-    escaped
-      // Strings (but not property names)
-      .replace(/: "([^"]*)"/g, ': <span class="json-string">"$1"</span>')
-      // Numbers
-      .replace(/: (\d+)/g, ': <span class="json-number">$1</span>')
-      // Booleans
-      .replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')
-      // Null
-      .replace(/: (null)/g, ': <span class="json-null">$1</span>')
-      // Property names
-      .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
-  )
+const JSON_TOKEN = /("(?:\\.|[^"\\])*")(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g
+
+/**
+ * Wraps JSON tokens in styling spans.
+ *
+ * This walks the raw JSON once and escapes every fragment as it is emitted, so
+ * the spans are placed structurally rather than by rewriting text that already
+ * contains markup. That is what makes the invariant hold: the only tags in the
+ * output are the ones written here, and no attacker-controlled text can ever
+ * land inside one of their class attributes.
+ */
+function highlightJSON(json: string): string {
+  let out = ''
+  let last = 0
+
+  for (const match of json.matchAll(JSON_TOKEN)) {
+    const [token, quoted, colon] = match
+    const start = match.index
+
+    out += escapeHtml(json.slice(last, start))
+
+    if (quoted !== undefined) {
+      out +=
+        colon === undefined
+          ? `<span class="json-string">${escapeHtml(quoted)}</span>`
+          : `<span class="json-key">${escapeHtml(quoted)}</span>${escapeHtml(colon)}`
+    } else if (token === 'true' || token === 'false') {
+      out += `<span class="json-boolean">${token}</span>`
+    } else if (token === 'null') {
+      out += `<span class="json-null">${token}</span>`
+    } else {
+      out += `<span class="json-number">${token}</span>`
+    }
+
+    last = start + token.length
+  }
+
+  return out + escapeHtml(json.slice(last))
 }
 
 export function formatJSON(obj: unknown): string {
@@ -55,5 +81,5 @@ export function formatJSON(obj: unknown): string {
     return '{}'
   }
 
-  return highlightJSON(escapeHtml(json))
+  return highlightJSON(json)
 }

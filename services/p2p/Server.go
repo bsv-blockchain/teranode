@@ -1053,7 +1053,11 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	isSelf := peerID == s.P2PClient.GetID()
 
 	notificationBestHeight := nodeStatusMessage.BestHeight
-	notificationBestBlockHash := nodeStatusMessage.BestBlockHash
+	// sanitizeAdvertisedTip below replaces this with a parsed hash, but only
+	// when BestHeight > 0; otherwise this raw string is what reaches WebSocket
+	// clients. It is bounded here rather than in sanitizeNodeStatusMessage so
+	// that sanitizeAdvertisedTip still sees the value the peer actually sent.
+	notificationBestBlockHash := sanitizePeerHexString(nodeStatusMessage.BestBlockHash, maxPeerHexStringLen)
 	sanitizedBestHeight := nodeStatusMessage.BestHeight
 	var sanitizedBestBlockHash *chainhash.Hash
 	sanitizedTipOK := false
@@ -1296,10 +1300,13 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		clientName = s.settings.ClientName
 	}
 
-	// Get miner name from the best block metadata
+	// Get miner name from the best block metadata. This is extracted from the
+	// coinbase scriptSig, so it is chosen by whoever mined the block rather than
+	// by us - bound it like any other untrusted display string before it is
+	// forwarded to WebSocket clients and published to peers.
 	minerName := ""
 	if bestBlockMeta != nil {
-		minerName = bestBlockMeta.Miner
+		minerName = sanitizePeerDisplayString(bestBlockMeta.Miner, maxPeerDisplayStringLen)
 	}
 
 	// Get block hash string

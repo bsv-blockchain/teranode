@@ -14,9 +14,12 @@ import (
 // operator's browser, independently of how carefully any one consumer escapes.
 const (
 	// maxPeerDisplayStringLen bounds free-form peer-supplied display strings.
-	// Real values (a semver, a short commit, "client/1.0", a miner name) are
-	// far below this.
-	maxPeerDisplayStringLen = 64
+	// Matches the peer registry's own cap for client names
+	// (blockchain.sanitizeClientName) so the same value is not bounded to two
+	// different lengths depending on which path it took. Real values (a semver,
+	// a short commit, "client/1.0", a coinbase miner tag - the genesis one is
+	// 69 characters) fit inside it.
+	maxPeerDisplayStringLen = 128
 
 	// maxPeerHexStringLen bounds peer-supplied hex fields. A chain work value
 	// is a 256-bit big-endian integer, so 64 hex digits is the natural maximum.
@@ -54,9 +57,10 @@ func sanitizePeerDisplayString(value string, maxLen int) string {
 			continue
 		}
 
-		// Characters that let text become markup or break out of an attribute.
+		// Characters that let text become markup, break out of an attribute, or
+		// act as an escape once the value is embedded somewhere else.
 		switch r {
-		case '<', '>', '&', '"', '\'', '`':
+		case '<', '>', '&', '"', '\'', '`', '\\':
 			continue
 		}
 
@@ -105,7 +109,12 @@ func sanitizePeerEnum(value string, allowed ...string) string {
 //
 // PeerID and BaseURL are left alone: PeerID is already pinned to the sender's
 // libp2p identity by the anti-spoofing check, and BaseURL has its own SSRF and
-// blacklist validation.
+// blacklist validation. Type and PropagationURL are never read off a received
+// message. BestBlockHash is handled by the caller instead: sanitizeAdvertisedTip
+// must see the value the peer actually sent so it can still reject a malformed
+// tip outright, so handleNodeStatusTopic bounds it where it seeds the
+// notification. TestSanitizeNodeStatusMessage_CoversEveryStringField pins that
+// list so a newly added field cannot be forgotten here.
 func sanitizeNodeStatusMessage(msg *NodeStatusMessage) {
 	msg.Version = sanitizePeerDisplayString(msg.Version, maxPeerDisplayStringLen)
 	msg.CommitHash = sanitizePeerDisplayString(msg.CommitHash, maxPeerDisplayStringLen)
