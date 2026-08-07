@@ -39,9 +39,6 @@ type Spend struct {
     // ConflictingTxID is the transaction ID that conflicts with this UTXO
     ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
 
-    // BlockIDs is the list of blocks the transaction has been mined into
-    BlockIDs []uint32 `json:"blockIDs,omitempty"`
-
     // error is the error that occurred during the spend operation
     Err error `json:"err,omitempty"`
 }

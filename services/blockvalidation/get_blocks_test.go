@@ -898,6 +898,44 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 	})
 }
 
+// TestFetchSingleBlock_RejectsSubstitutedBlock pins the requested-hash check.
+//
+// The response body is entirely peer-chosen, so parsing to a well-formed block says
+// nothing about it being the block that was asked for. Returning a substituted block
+// is not a cosmetic mismatch: callers key the in-flight catchup marker on the
+// requested hash but every later lookup on the served block, so accepting one leaves
+// that marker undeletable and silently suppresses every subsequent honest
+// announcement of the requested hash.
+func TestFetchSingleBlock_RejectsSubstitutedBlock(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	blocks := testhelpers.CreateTestBlockChain(t, 3)
+	requestedHash := blocks[2].Header.Hash()
+	substitutedHash := blocks[1].Header.Hash()
+	require.False(t, requestedHash.IsEqual(substitutedHash), "test needs two distinct blocks")
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	// The peer answers the request for blocks[2] with a valid, parseable block that is
+	// simply a different one.
+	substitutedBytes, err := blocks[1].Bytes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		fmt.Sprintf("http://test-peer/block/%s", requestedHash.String()),
+		httpmock.NewBytesResponder(200, substitutedBytes),
+	)
+
+	fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, requestedHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+	require.Error(t, err)
+	require.Nil(t, fetchedBlock, "a substituted block must not reach the caller")
+	require.Contains(t, err.Error(), "for a different hash")
+	require.Contains(t, err.Error(), substitutedHash.String(), "error should name what was actually served")
+}
+
 // Phase 2: Tests for optimized batch fetching and ordered delivery
 func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 	t.Run("Ordered_Delivery_With_Batching", func(t *testing.T) {
