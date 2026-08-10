@@ -12,7 +12,10 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/testutil"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -458,6 +461,238 @@ func TestSubmitMiningSolution_NoCurrentBlock(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, resp)
 	require.Contains(t, err.Error(), "no current best block")
+}
+
+// requirePastFloorGuard asserts that a submission got past the median-time-past
+// guard, and does so durably.
+//
+// The accept direction cannot assert success: these fixtures carry no real
+// subtrees or nBits, so the submission always dies further down. Asserting only
+// "the error does not mention the floor" would pass just as happily if a future
+// fixture change made it die *above* the guard, or stop erroring at all — the
+// assertion would be vacuous and nothing would say so. Pinning the specific
+// downstream failure keeps it honest: if the fixture stops dying exactly there,
+// this fails loudly and whoever changed it re-checks that the guard is still on
+// the path being exercised.
+func requirePastFloorGuard(t *testing.T, err error) {
+	t.Helper()
+
+	require.Error(t, err, "fixture is expected to fail below the guard; if it now succeeds, the guard may no longer be on this path")
+	require.NotContains(t, err.Error(), "median-time-past floor", "the floor guard must not be what stopped this submission")
+	require.Contains(t, err.Error(), "failed to convert bits", "expected the known downstream failure; a different one means the path above the guard changed and this assertion may no longer prove anything")
+}
+
+// TestSubmitMiningSolution_NTimeFloor pins the submit-path guard against a
+// miner-supplied timestamp below the parent chain's median-time-past. The
+// block.Valid call further down passes no currentChain, so it skips the
+// median-time rule entirely — without this guard an ntime-rolling miner, or a
+// pool restamping from its own lagging clock, reintroduces exactly the
+// locally-accepted, peer-rejected block that the candidate-time floor exists to
+// prevent. The floor is read from the memo candidateTime populated, so the check
+// costs no round-trip.
+func TestSubmitMiningSolution_NTimeFloor(t *testing.T) {
+	const floor = int64(1_700_000_000)
+
+	parent := &chainhash.Hash{9}
+
+	// setup returns a server whose job is built on parent, with the floor already
+	// memoized for that parent — the state a real submit arrives in.
+	setup := func(t *testing.T) (*BlockAssembly, []byte) {
+		t.Helper()
+
+		s, common := newServerForChanTest(t)
+
+		// The zero-value assembler newServerForChanTest wires has no settings,
+		// which the coinbase rebuild below the guard dereferences. The test
+		// harness runs regtest, where GenerateSupported downgrades the
+		// median-time rule to a warning and the guard therefore stands down —
+		// so pin the chain params to the enforcing case explicitly. The advisory
+		// case is covered by TestSubmitMiningSolution_NTimeFloorAdvisoryChain.
+		tSettings := *common.Settings
+		params := *common.Settings.ChainCfgParams
+		params.GenerateSupported = false
+		tSettings.ChainCfgParams = &params
+		s.blockAssembler.settings = &tSettings
+
+		// A best block whose parent differs from the job's, so the candidate is
+		// not stale and execution reaches the nTime guard.
+		s.blockAssembler.bestBlock.Store(&BestBlockInfo{
+			Header: &model.BlockHeader{HashPrevBlock: &chainhash.Hash{7}},
+			Height: 100,
+		})
+		s.blockAssembler.mtpFloorMemo[0].Store(&mtpFloorEntry{parent: *parent, minTime: floor})
+
+		idBytes := make([]byte, 32)
+		idBytes[0] = 0x01
+
+		id, err := chainhash.NewHash(idBytes)
+		require.NoError(t, err)
+
+		s.jobStore.Set(*id, &subtreeprocessor.Job{
+			ID: id,
+			MiningCandidate: &model.MiningCandidate{
+				Id:           idBytes,
+				PreviousHash: parent[:],
+				Time:         uint32(floor),
+			},
+		}, time.Minute)
+
+		return s, idBytes
+	}
+
+	submit := func(t *testing.T, s *BlockAssembly, idBytes []byte, nTime *uint32) error {
+		t.Helper()
+
+		_, err := s.submitMiningSolution(context.Background(), &BlockSubmissionRequest{
+			SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{Id: idBytes, Time: nTime},
+		})
+
+		return err
+	}
+
+	t.Run("rejects an nTime below the floor", func(t *testing.T) {
+		s, idBytes := setup(t)
+		below := uint32(floor - 1)
+
+		err := submit(t, s, idBytes, &below)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "median-time-past floor")
+	})
+
+	t.Run("accepts an nTime at the floor", func(t *testing.T) {
+		// Rolling ntime back within a job is normal pool behaviour, so the
+		// comparison must be against the consensus floor, not the candidate's
+		// own wall-clock Time. This submission fails later for unrelated
+		// reasons — the point is that it is not the floor that stops it.
+		s, idBytes := setup(t)
+		at := uint32(floor)
+
+		requirePastFloorGuard(t, submit(t, s, idBytes, &at))
+	})
+
+	t.Run("warns when the rejected nTime is the one this node served", func(t *testing.T) {
+		// The guard's usual subject is a miner-supplied timestamp. But it also
+		// fires on a candidate this node served unfloored — the floor lookup was
+		// failing when the job was built, memoized nothing, and a later poll on
+		// the same parent then succeeded and memoized the floor. Rejecting is
+		// right, that block is peer-invalid, but "we served bad work" is a
+		// different operator problem from "a miner sent a bad ntime" and the log
+		// has to tell them apart.
+		s, idBytes := setup(t)
+
+		logger := &warnCountingLogger{}
+		s.logger = logger
+
+		id, err := chainhash.NewHash(idBytes)
+		require.NoError(t, err)
+
+		// Re-stamp the stored job below the floor and submit with no nTime of our
+		// own, so the offending timestamp is provably the candidate's own.
+		s.jobStore.Set(*id, &subtreeprocessor.Job{
+			ID: id,
+			MiningCandidate: &model.MiningCandidate{
+				Id:           idBytes,
+				PreviousHash: parent[:],
+				Time:         uint32(floor - 1),
+			},
+		}, time.Minute)
+
+		err = submit(t, s, idBytes, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "median-time-past floor")
+		require.Equal(t, 1, logger.countMatching("this node served"), "a candidate we served below the floor must be reported as ours, not as a miner's bad ntime")
+	})
+
+	t.Run("does not blame this node for a miner's own bad nTime", func(t *testing.T) {
+		s, idBytes := setup(t)
+
+		logger := &warnCountingLogger{}
+		s.logger = logger
+
+		below := uint32(floor - 1)
+
+		err := submit(t, s, idBytes, &below)
+		require.Error(t, err)
+		require.Equal(t, 0, logger.countMatching("this node served"), "the candidate this node served was at the floor; only the miner's replacement was below it")
+	})
+
+	t.Run("enforces nothing when no floor is known for the parent", func(t *testing.T) {
+		s, idBytes := setup(t)
+		s.blockAssembler.mtpFloorMemo[0].Store(nil)
+
+		below := uint32(floor - 1)
+
+		requirePastFloorGuard(t, submit(t, s, idBytes, &below))
+	})
+}
+
+// TestSubmitMiningSolution_NTimeFloorAdvisoryChain pins the seam between the two
+// mechanisms: on chains where GenerateSupported downgrades the median-time rule
+// to a warning, candidateTime's two-hour-ceiling branch deliberately serves an
+// unfloored wall-clock candidate — while the memo entry it read still carries a
+// minTime above now+2h. mining.Mine copies the candidate's own time into the
+// solution unconditionally, so a submit guard that enforced that memoized floor
+// would refuse every solution against a candidate this package chose to hand
+// out, turning the carve-out that keeps rapid generation working into the thing
+// that stops it. This drives the real carve-out rather than seeding the memo by
+// hand, which is why the two tests either side of it did not catch the pair.
+func TestSubmitMiningSolution_NTimeFloorAdvisoryChain(t *testing.T) {
+	s, common := newServerForChanTest(t)
+
+	tSettings := *common.Settings
+	params := *common.Settings.ChainCfgParams
+	params.GenerateSupported = true
+	tSettings.ChainCfgParams = &params
+
+	// Stamped five hours ahead so median+1 lands above now+2h and candidateTime
+	// takes the ceiling branch.
+	baseTime := uint32(time.Now().Add(5 * time.Hour).Unix())
+	headers := linkedHeaders(t, 11, baseTime)
+	parentHeader := headers[0]
+
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetBlockHeaders", mock.Anything, parentHeader.Hash(), mock.Anything).Return(headers, []*model.BlockHeaderMeta{}, nil)
+
+	s.blockAssembler.settings = &tSettings
+	s.blockAssembler.logger = ulogger.TestLogger{}
+	s.blockAssembler.blockchainClient = mockClient
+	s.blockAssembler.bestBlock.Store(&BestBlockInfo{
+		Header: &model.BlockHeader{HashPrevBlock: &chainhash.Hash{7}},
+		Height: 100,
+	})
+
+	// Go through the real producer: it must serve the wall clock, not the floor.
+	candidateTime, err := s.blockAssembler.candidateTime(t.Context(), parentHeader)
+	require.NoError(t, err)
+	require.Less(t, candidateTime, int64(baseTime+5)+1, "the carve-out must serve the unfloored wall clock")
+
+	// And the submit path must have nothing to enforce for that parent.
+	_, ok := s.blockAssembler.MinCandidateTime(parentHeader.Hash())
+	require.False(t, ok, "an advisory-median chain must expose no floor to the submit path")
+
+	idBytes := make([]byte, 32)
+	idBytes[0] = 0x01
+
+	id, err := chainhash.NewHash(idBytes)
+	require.NoError(t, err)
+
+	parentHash := parentHeader.Hash()
+	s.jobStore.Set(*id, &subtreeprocessor.Job{
+		ID: id,
+		MiningCandidate: &model.MiningCandidate{
+			Id:           idBytes,
+			PreviousHash: parentHash[:],
+			Time:         uint32(candidateTime),
+		},
+	}, time.Minute)
+
+	// mining.Mine forwards candidate.Time as req.Time, so submit the same value.
+	nTime := uint32(candidateTime)
+	_, err = s.submitMiningSolution(context.Background(), &BlockSubmissionRequest{
+		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{Id: idBytes, Time: &nTime},
+	})
+
+	requirePastFloorGuard(t, err)
 }
 
 // TestWaitForBestBlockHeaderUpdate_ToleratesNilCurrentBlock verifies that the polling
