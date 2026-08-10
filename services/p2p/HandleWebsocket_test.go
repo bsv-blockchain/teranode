@@ -1038,6 +1038,7 @@ func TestGetNodeStatusMessage_CarriesForwardLastKnownGoodOnFailure(t *testing.T)
 	require.Equal(t, uint64(7), second.TxCount, "failed block-assembly lookup must carry forward the cached counts")
 	require.Equal(t, uint32(3), second.SubtreeCount)
 	require.Equal(t, 1, second.ConnectedPeersCount, "failed ListPeers lookup must carry forward the cached count")
+	require.Equal(t, first.Storage, second.Storage, "failed persister-height lookup must carry forward the cached storage mode")
 	require.Equal(t, uint32(100), s.latestNodeStatus.Load().BestHeight, "cache must not regress to zero values")
 
 	third := s.getNodeStatusMessage(context.Background())
@@ -1163,4 +1164,98 @@ func TestSendNodeStatusToClient_MarshalError(t *testing.T) {
 	clientCh := make(chan []byte, 1)
 	s.sendNodeStatusToClient(clientCh, &notificationMsg{Type: "node_status", MinMiningTxFee: &inf})
 	require.Empty(t, clientCh, "an unmarshalable status must be dropped")
+}
+
+// TestHandleNodeStatusNotification_FanOutSurvivesPublishFailure verifies that a
+// failed P2P publish still fans the status out to local websocket clients:
+// otherwise long-lived clients freeze on their last status while newly
+// connecting clients are served a fresh copy from the cache.
+func TestHandleNodeStatusNotification_FanOutSurvivesPublishFailure(t *testing.T) {
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
+
+	mockP2P := &MockServerP2PClient{peerID: peer.ID("test-peer")}
+	mockP2P.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
+
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode: settings.ListenModeFull,
+			},
+		},
+		blockchainClient: mockBlockchain,
+		P2PClient:        mockP2P,
+		notificationCh:   make(chan *notificationMsg, 1),
+	}
+
+	err := s.handleNodeStatusNotification(context.Background())
+	require.Error(t, err, "the publish failure must still be reported to the caller")
+
+	select {
+	case got := <-s.notificationCh:
+		require.Equal(t, "node_status", got.Type)
+	default:
+		t.Fatal("local websocket clients did not receive the status when the P2P publish failed")
+	}
+}
+
+// TestHandleNodeStatusNotification_PublishBudgetSurvivesSlowCompute verifies the
+// compute/publish budget split: a blockchain call that wedges until its context
+// expires must not hand Publish an already-expired context, because the status
+// computation is bounded to a fraction of the tick.
+func TestHandleNodeStatusNotification_PublishBudgetSurvivesSlowCompute(t *testing.T) {
+	oldInterval := nodeStatusPublishInterval
+	nodeStatusPublishInterval = 200 * time.Millisecond
+
+	defer func() { nodeStatusPublishInterval = oldInterval }()
+
+	mockBlockchain := &blockchain.Mock{}
+	// Wedge the best-header call until its (compute) context expires.
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Run(func(args mock.Arguments) {
+		callCtx, ok := args.Get(0).(context.Context)
+		require.True(t, ok)
+		<-callCtx.Done()
+	}).Return(nil, nil, assert.AnError)
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
+
+	publishCtxAlive := make(chan bool, 1)
+	mockP2P := &MockServerP2PClient{peerID: peer.ID("test-peer")}
+	mockP2P.On("Publish", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		callCtx, ok := args.Get(0).(context.Context)
+		require.True(t, ok)
+		select {
+		case publishCtxAlive <- callCtx.Err() == nil:
+		default:
+		}
+	}).Return(nil)
+
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode: settings.ListenModeFull,
+			},
+		},
+		blockchainClient: mockBlockchain,
+		P2PClient:        mockP2P,
+		notificationCh:   make(chan *notificationMsg, 1),
+	}
+
+	// Mirror publish(): the whole tick runs under one deadline; the status
+	// computation may only consume half of it.
+	tickCtx, cancel := context.WithTimeout(context.Background(), nodeStatusPublishInterval)
+	defer cancel()
+
+	require.NoError(t, s.handleNodeStatusNotification(tickCtx))
+
+	select {
+	case alive := <-publishCtxAlive:
+		require.True(t, alive, "Publish must receive a context with budget left after a wedged computation")
+	default:
+		t.Fatal("Publish was never called")
+	}
 }

@@ -1607,10 +1607,32 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 }
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
-	// Get the node status message
-	msg := s.getNodeStatusMessage(ctx)
+	// Bound the status computation to a fraction of the publish interval so a
+	// wedged blockchain call cannot consume the whole tick budget and hand the
+	// P2P publish below an already-expired context.
+	computeCtx, cancelCompute := context.WithTimeout(ctx, nodeStatusPublishInterval/2)
+	msg := s.getNodeStatusMessage(computeCtx)
+
+	cancelCompute()
+
 	if msg == nil {
 		return errors.NewError("failed to get node status message", nil)
+	}
+
+	// Send to local WebSocket clients before attempting the P2P publish: local
+	// monitoring must not depend on gossip succeeding, and the cache inside
+	// getNodeStatusMessage serves newly connecting clients this same message,
+	// so already-connected clients must receive it too.
+	select {
+	case s.notificationCh <- msg:
+	default:
+		s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
+	}
+
+	// In silent mode, skip publishing to the P2P network so the node remains undiscoverable.
+	if s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		s.logger.Debugf("[handleNodeStatusNotification] Silent mode - skipping P2P publish, forwarded to WebSocket only")
+		return nil
 	}
 
 	// Create the NodeStatusMessage for P2P publishing
@@ -1642,18 +1664,6 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Storage:             msg.Storage,
 	}
 
-	// In silent mode, skip publishing to the P2P network so the node remains undiscoverable,
-	// but still forward to local WebSocket clients for monitoring purposes.
-	if s.settings.P2P.ListenMode == settings.ListenModeSilent {
-		s.logger.Debugf("[handleNodeStatusNotification] Silent mode - skipping P2P publish, forwarding to WebSocket only")
-		select {
-		case s.notificationCh <- msg:
-		default:
-			s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
-		}
-		return nil
-	}
-
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
 		return errors.NewError("nodeStatusMessage - json marshal error", err)
@@ -1667,13 +1677,6 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	}
 
 	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
-
-	// Send to local WebSocket clients
-	select {
-	case s.notificationCh <- msg:
-	default:
-		s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
-	}
 
 	return nil
 }
