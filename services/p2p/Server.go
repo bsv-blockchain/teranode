@@ -687,6 +687,16 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 	e.HideBanner = true
 	e.HidePort = true
 
+	// Bound the request/header phase and idle keep-alives so slow or stalled
+	// clients cannot hold connections (and their goroutines/fds) forever.
+	// WriteTimeout is deliberately left unset: it would cap the lifetime of the
+	// long-lived /p2p-ws stream; the websocket handler applies its own
+	// per-connection write deadlines instead. ReadTimeout is safe for /p2p-ws
+	// because gorilla/websocket clears the connection deadlines on upgrade.
+	e.Server.ReadHeaderTimeout = 10 * time.Second
+	e.Server.ReadTimeout = 30 * time.Second
+	e.Server.IdleTimeout = 120 * time.Second
+
 	e.Use(middleware.Recover())
 
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
