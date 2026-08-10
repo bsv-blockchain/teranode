@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestIsRetryableError(t *testing.T) {
@@ -380,6 +383,60 @@ func TestGetErrorCategory(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := GetErrorCategory(tt.err)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestIsGRPCMessageTooLarge pins the predicate that separates a transport-level
+// oversized-message ResourceExhausted from a block-assembly queue-full shed, which
+// reuses the same gRPC code. Only the former is fixable by re-sending over HTTP, so
+// the two must not be conflated at any client site.
+func TestIsGRPCMessageTooLarge(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "non-status error",
+			err:      NewProcessingError("connection reset by peer"),
+			expected: false,
+		},
+		{
+			name:     "status error with a different code",
+			err:      status.Error(codes.Unavailable, "service unavailable"),
+			expected: false,
+		},
+		{
+			name:     "bare ResourceExhausted is an oversized message",
+			err:      status.Error(codes.ResourceExhausted, "grpc: received message larger than max"),
+			expected: true,
+		},
+		{
+			name:     "WrapGRPC of a threshold-exceeded shed",
+			err:      WrapGRPC(NewThresholdExceededError("block assembly queue full")),
+			expected: false,
+		},
+		{
+			name:     "WrapGRPCPublic of a threshold-exceeded shed",
+			err:      WrapGRPCPublic(NewThresholdExceededError("block assembly queue full")),
+			expected: false,
+		},
+		{
+			name:     "WrapGRPC of an unrelated error is not a size problem",
+			err:      WrapGRPC(NewProcessingError("something else went wrong")),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, IsGRPCMessageTooLarge(tt.err))
 		})
 	}
 }
