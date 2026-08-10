@@ -414,7 +414,9 @@ func (ps *PeerSelector) isEligible(p *blockchain.PeerInfo, basicEligible map[str
 // peerHealthCacheTTL. A probe cut short by ctx or the budget counts as
 // unhealthy for this selection but is not cached, so a slow peer is not
 // remembered as down. Concurrent calls may probe the same URL twice (the
-// cache only dedupes completed probes); today every caller serialises behind
+// cache only dedupes completed probes); the write-back keeps whichever
+// probe completed later, so a slower round cannot overwrite a fresher entry
+// with a staler one. Today every caller serialises behind
 // SyncCoordinator.decisionMu.
 func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*blockchain.PeerInfo, basicEligible map[string]struct{}) map[string]bool {
 	if ps.settings == nil || !ps.settings.P2P.HealthCheckEnabled {
@@ -466,7 +468,12 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 		return results
 	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, ps.healthCheckBudget)
+	budget := ps.healthCheckBudget
+	if budget <= 0 {
+		budget = peerHealthCheckBudget
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	type probeResult struct {
@@ -520,7 +527,12 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 	ps.healthMu.Lock()
 	for i, r := range probeResults {
 		results[pending[i]] = r.healthy
-		if r.cacheable {
+		if !r.cacheable {
+			continue
+		}
+		// Keep the newer entry if a concurrent round already wrote one, so a
+		// slower round cannot overwrite a fresher result with a staler one.
+		if existing, ok := ps.healthCache[pending[i]]; !ok || r.checkedAt.After(existing.checkedAt) {
 			ps.healthCache[pending[i]] = peerHealthCacheEntry{healthy: r.healthy, checkedAt: r.checkedAt}
 		}
 	}

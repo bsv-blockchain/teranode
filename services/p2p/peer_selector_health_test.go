@@ -189,6 +189,74 @@ func TestPeerSelector_HealthChecks_ExpiredEntriesPruned(t *testing.T) {
 	require.False(t, stillCached, "expired entry for a churned peer URL must be pruned")
 }
 
+func TestPeerSelector_HealthChecks_CacheEntriesStampedPerProbe(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+	fast := newPeer("peer-fast", 100, "full", 50, 0)
+	slow := newPeer("peer-slow", 100, "full", 50, 0)
+
+	// One fast and one slow probe in the same round: each cache entry must
+	// carry its own probe's completion time, not the round's end time, or the
+	// fast entry would outlive its TTL by the slow probe's duration.
+	const slowDelay = 250 * time.Millisecond
+	ps.checkHealth = func(ctx context.Context, url string) (bool, error) {
+		if url == slow.DataHubURL {
+			select {
+			case <-time.After(slowDelay):
+			case <-ctx.Done():
+			}
+		}
+		return true, nil
+	}
+
+	ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{fast, slow}, advertisedProbeCriteria(50))
+
+	ps.healthMu.Lock()
+	fastEntry, fastCached := ps.healthCache[fast.DataHubURL]
+	slowEntry, slowCached := ps.healthCache[slow.DataHubURL]
+	ps.healthMu.Unlock()
+
+	require.True(t, fastCached)
+	require.True(t, slowCached)
+	gap := slowEntry.checkedAt.Sub(fastEntry.checkedAt)
+	require.GreaterOrEqual(t, gap, slowDelay/2,
+		"the fast probe's entry must be stamped at its own completion, not at the end of the round")
+}
+
+func TestPeerSelector_HealthChecks_ConcurrentSelectionsAreSafe(t *testing.T) {
+	ps := newHealthCheckSelectorForTest()
+
+	peers := make([]*blockchain.PeerInfo, 0, 8)
+	for i := range 8 {
+		peers = append(peers, newPeer(fmt.Sprintf("peer-%d", i), 100, "full", 50, 0))
+	}
+
+	ps.checkHealth = func(ctx context.Context, _ string) (bool, error) {
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-ctx.Done():
+		}
+		return true, nil
+	}
+
+	// The godoc permits concurrent SelectSyncPeer calls (double-probing at
+	// worst); drive several rounds from several goroutines so healthMu and the
+	// cache write-back are exercised across rounds under the race detector.
+	var emptySelections atomic.Int32
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for range 5 {
+				if ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50)) == "" {
+					emptySelections.Add(1)
+				}
+			}
+		})
+	}
+	wg.Wait()
+
+	require.Zero(t, emptySelections.Load(), "every concurrent selection must find a healthy peer")
+}
+
 func TestPeerSelector_HealthChecks_CacheExpires(t *testing.T) {
 	ps := newHealthCheckSelectorForTest()
 	peerA := newPeer("peer-a", 100, "full", 50, 0)
