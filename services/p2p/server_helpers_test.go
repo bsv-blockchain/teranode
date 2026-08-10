@@ -612,6 +612,9 @@ func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 	s.notificationCh = make(chan *notificationMsg, 1)
 
 	remote := mustNewPeerID(t)
+	// Pre-register so the ban-score sync onto PeerInfo is observable; the
+	// handler itself must not write anything for this message.
+	reg.Register(&blockchain.PeerInfo{ID: remote.String()})
 	msgBytes, err := json.Marshal(NodeStatusMessage{
 		PeerID:        remote.String(),
 		ClientName:    "client/1.0",
@@ -623,12 +626,13 @@ func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 
 	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
 
+	// A non-hex best_block_hash breaches the per-field charset bound, so the
+	// whole message is dropped as a protocol violation: no WebSocket
+	// notification, no registry write, and the sender is scored.
 	select {
 	case notification := <-s.notificationCh:
-		require.Equal(t, uint32(0), notification.BestHeight)
-		require.Empty(t, notification.BestBlockHash)
+		t.Fatalf("node_status with malformed hash must not be forwarded (got %s notification)", notification.Type)
 	default:
-		t.Fatal("expected node_status notification")
 	}
 
 	got, ok := reg.Get(remote.String())
@@ -637,6 +641,7 @@ func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 	require.Nil(t, got.BlockHash)
 	require.Empty(t, got.ClientName)
 	require.Empty(t, got.DataHubURL)
+	require.Positive(t, got.BanScore, "malformed advertised hash must be scored as a protocol violation")
 }
 
 func TestServerHelpers_AddProtocolViolation_AccumulatesScore(t *testing.T) {

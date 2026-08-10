@@ -92,13 +92,16 @@ const (
 	//
 	// Block / subtree messages carry: hash (64 chars), height, DataHub URL,
 	// peer ID, 80B block header, client name. Realistic size is < 1KB.
+	// Block keeps extra headroom for the optional hex-encoded coinbase tx.
 	maxBlockMessageSize   = 32 * 1024 // 32KB
-	maxSubtreeMessageSize = 32 * 1024 // 32KB
-	// node_status messages are NodeStatusMessage JSON (~846B) plus connected
-	// peers list. Allow generous headroom for very large meshes.
-	maxNodeStatusMessageSize = 64 * 1024 // 64KB
-	// rejected_tx messages carry: tx hash, short reason string, peer ID.
-	maxRejectedTxMessageSize = 16 * 1024 // 16KB
+	maxSubtreeMessageSize = 8 * 1024  // 8KB
+	// node_status messages are NodeStatusMessage JSON, realistically ~1KB; the
+	// per-field bounds in gossip_field_validation.go cap the sum of all string
+	// fields at ~6KB, so 16KB leaves room for future fields while limiting
+	// padding smuggled in unknown JSON keys.
+	maxNodeStatusMessageSize = 16 * 1024 // 16KB
+	// rejected_tx messages carry: tx hash, reason string, peer ID.
+	maxRejectedTxMessageSize = 4 * 1024 // 4KB
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -885,7 +888,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 
 		rejectedTxMessage := RejectedTxMessage{
 			TxID:   hash.String(),
-			Reason: m.Reason,
+			Reason: sanitizeGossipString(m.Reason, maxGossipReasonLen),
 			PeerID: s.P2PClient.GetID(),
 		}
 
@@ -1060,6 +1063,18 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		return
 	}
 
+	// Bound every peer-controlled string field before any side effect (registry
+	// write, WebSocket fan-out, logging). A violation is a protocol violation,
+	// same as a spoofed peer ID — except for our own loopback message, which is
+	// dropped without self-penalising.
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
+		if !isSelf {
+			s.applyBanScore(peerID, ReasonProtocolViolation)
+		}
+		return
+	}
+
 	// Drop messages from banned peers before any registration, WebSocket
 	// forwarding, or further processing.
 	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
@@ -1209,7 +1224,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PClient.GetID(),
 		Header:     hex.EncodeToString(h.Bytes()),
-		ClientName: s.settings.ClientName,
+		ClientName: sanitizeGossipString(s.settings.ClientName, maxGossipClientNameLen),
 	}
 
 	msgBytes, err = json.Marshal(blockMessage)
@@ -1285,16 +1300,18 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		}
 	}
 
-	// Get client name from settings
+	// Get client name from settings. Sanitized so a locally misconfigured
+	// value cannot make remote peers score us for a protocol violation.
 	clientName := ""
 	if s.settings != nil {
-		clientName = s.settings.ClientName
+		clientName = sanitizeGossipString(s.settings.ClientName, maxGossipClientNameLen)
 	}
 
-	// Get miner name from the best block metadata
+	// Get miner name from the best block metadata. Sanitized because it embeds
+	// third-party coinbase text.
 	minerName := ""
 	if bestBlockMeta != nil {
-		minerName = bestBlockMeta.Miner
+		minerName = sanitizeGossipString(bestBlockMeta.Miner, maxGossipMinerNameLen)
 	}
 
 	// Get block hash string
@@ -1600,7 +1617,7 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		Hash:       hash.String(),
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PClient.GetID(),
-		ClientName: s.settings.ClientName,
+		ClientName: sanitizeGossipString(s.settings.ClientName, maxGossipClientNameLen),
 	}
 
 	msgBytes, err := json.Marshal(subtreeMessage)

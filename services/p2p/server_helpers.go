@@ -57,6 +57,18 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		return
 	}
 
+	// Bound every peer-controlled string field before any side effect (logging,
+	// registry write, WebSocket fan-out). A violation is a protocol violation,
+	// except for our own loopback message, which is dropped without
+	// self-penalising.
+	if err = blockMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleBlockTopic] invalid block message field from peer %s: %v", fromID, err)
+		if !s.isOwnMessage(fromID, blockMessage.PeerID) {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+
 	// Drop messages from banned peers before any registration, WebSocket
 	// forwarding, or further processing. Own messages skip the registry
 	// round-trip; they return at the isOwnMessage check below.
@@ -186,6 +198,15 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	if fromID != subtreeMessage.PeerID {
 		s.logger.Errorf("[handleSubtreeTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, subtreeMessage.PeerID)
 		s.addProtocolViolation(fromID)
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect.
+	if err = subtreeMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleSubtreeTopic] invalid subtree message field from peer %s: %v", fromID, err)
+		if !s.isOwnMessage(fromID, subtreeMessage.PeerID) {
+			s.addProtocolViolation(fromID)
+		}
 		return
 	}
 
@@ -461,6 +482,15 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 	if fromID != rejectedTxMessage.PeerID {
 		s.logger.Errorf("[handleRejectedTxTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, rejectedTxMessage.PeerID)
 		s.addProtocolViolation(fromID)
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect.
+	if err = rejectedTxMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleRejectedTxTopic] invalid rejected tx message field from peer %s: %v", fromID, err)
+		if !s.isOwnMessage(fromID, rejectedTxMessage.PeerID) {
+			s.addProtocolViolation(fromID)
+		}
 		return
 	}
 
