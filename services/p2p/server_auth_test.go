@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -524,6 +525,97 @@ func TestGRPCAuthOptionsProtectEveryMutatingRPC(t *testing.T) {
 		// unguessable, so protected RPCs reject rather than admit everyone.
 		require.NotEmpty(t, opts.APIKey)
 		require.Equal(t, authProtectedMethods(), opts.ProtectedMethods)
+	})
+}
+
+// warnRecorder captures Warnf output so the exposure warnings can be asserted
+// rather than merely executed. Everything else falls through to TestLogger.
+type warnRecorder struct {
+	ulogger.TestLogger
+	warnings []string
+}
+
+func (l *warnRecorder) Warnf(format string, args ...interface{}) {
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
+
+// TestWarnIfGRPCExposed covers the case the API key cannot defend: a listener on
+// every interface with a key an attacker already knows or can guess. The
+// warning is the only signal an operator gets, so it must fire exactly when the
+// combination is dangerous and stay quiet otherwise.
+func TestWarnIfGRPCExposed(t *testing.T) {
+	// Deliberately readable rather than a random-looking hex blob: the test only
+	// needs a key that is neither the placeholder nor shorter than the minimum,
+	// and a high-entropy literal here trips secret scanners for no reason.
+	const strongKey = "not-a-real-key-just-long-enough"
+
+	tests := []struct {
+		name       string
+		listenAddr string
+		apiKey     string
+		wantWarn   bool
+	}{
+		{"wide bind with placeholder key", ":9904", placeholderAdminAPIKey, true},
+		{"wide bind with short key", ":9904", "short-key", true},
+		{"wildcard IPv4 with placeholder key", "0.0.0.0:9904", placeholderAdminAPIKey, true},
+		{"wildcard IPv6 with placeholder key", "[::]:9904", placeholderAdminAPIKey, true},
+		{"wide bind with strong key", ":9904", strongKey, false},
+		{"loopback with placeholder key", "localhost:9904", placeholderAdminAPIKey, false},
+		{"specific interface with placeholder key", "10.0.1.50:9904", placeholderAdminAPIKey, false},
+		// An empty key means a random one was generated, which is not guessable;
+		// grpcAuthOptions warns about that case separately.
+		{"wide bind with no configured key", ":9904", "", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logger := &warnRecorder{}
+			s := &Server{logger: logger}
+
+			s.warnIfGRPCExposed(tc.listenAddr, tc.apiKey)
+
+			if !tc.wantWarn {
+				require.Empty(t, logger.warnings)
+				return
+			}
+
+			require.Len(t, logger.warnings, 1)
+			require.Contains(t, logger.warnings[0], tc.listenAddr)
+			require.NotContains(t, logger.warnings[0], tc.apiKey, "the warning must not leak the key")
+		})
+	}
+}
+
+// TestNewClientWarnsWhenAPIKeyMissing covers the caller side of the same
+// failure: with no key configured, every mutating report this client sends is
+// rejected, and the warning is where an operator finds out. grpc.NewClient is
+// lazy, so no server is needed.
+func TestNewClientWarnsWhenAPIKeyMissing(t *testing.T) {
+	t.Run("missing key warns", func(t *testing.T) {
+		tSettings := settings.NewSettings()
+		tSettings.GRPCAdminAPIKey = ""
+
+		logger := &warnRecorder{}
+
+		client, err := NewClientWithAddress(context.Background(), logger, "localhost:19906", tSettings)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = client.(*Client).Close() })
+
+		require.Len(t, logger.warnings, 1)
+		require.Contains(t, logger.warnings[0], "grpc_admin_api_key is not set")
+	})
+
+	t.Run("configured key does not warn", func(t *testing.T) {
+		tSettings := settings.NewSettings()
+		tSettings.GRPCAdminAPIKey = "a-configured-key"
+
+		logger := &warnRecorder{}
+
+		client, err := NewClientWithAddress(context.Background(), logger, "localhost:19906", tSettings)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = client.(*Client).Close() })
+
+		require.Empty(t, logger.warnings)
 	})
 }
 

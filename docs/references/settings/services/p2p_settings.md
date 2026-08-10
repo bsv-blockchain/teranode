@@ -8,7 +8,7 @@
 |---------|------|---------|---------------------|-------|
 | BootstrapPeers | []string | [] (settings.conf ships with `/dnsaddr/${network}.bootstrap.teranode.bsvb.tech`) | p2p_bootstrap_peers | Peer discovery entry points (required for dht_mode "off" and "client") |
 | GRPCAddress | string | "" | p2p_grpcAddress | gRPC client connections |
-| GRPCListenAddress | string | "localhost:9906" (Go default; overridden to `localhost:9904` by `settings.conf` via `P2P_GRPC_PORT`, and widened to `:9904` in the `docker.m` and `operator` contexts) | p2p_grpcListenAddress | **CRITICAL** - gRPC server binding; loopback by default |
+| GRPCListenAddress | string | "localhost:9906" (Go default; overridden to `localhost:9904` by `settings.conf` via `P2P_GRPC_PORT`, and widened to `:9904` in the `docker.m`, `docker.ss` and `operator` contexts, plus the generated split-mode compose contexts) | p2p_grpcListenAddress | **CRITICAL** - gRPC server binding; loopback by default |
 | HTTPAddress | string | "localhost:9906" | p2p_httpAddress | HTTP client connections |
 | HTTPListenAddress | string | "" | p2p_httpListenAddress | HTTP server binding |
 | ListenAddresses | []string | [] | p2p_listen_addresses | P2P network interfaces |
