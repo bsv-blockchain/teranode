@@ -145,12 +145,24 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 	// the batch that becomes the new head-of-line.
 	//
 	// The gauge is now a control input (the validator's ingest backpressure
-	// decides on it) as well as the stall alert, so it must not read 0 while a
-	// backlog is present. Two mechanisms keep it consistent under the drain race
-	// without a lock or a timestamp comparison: this CAS sets it whenever the
-	// queue was empty, and the consumer's empty-clear re-reads head.next after
-	// storing 0 (updateOldestPending) so a batch linked during that window is
-	// picked up by value. Every interleaving converges to the linked head's time.
+	// decides on it) as well as the stall alert, so it must read neither 0 while a
+	// backlog is present NOR non-zero while the queue is empty. Three mechanisms
+	// keep it consistent under the drain race without a lock or a timestamp
+	// comparison:
+	//
+	//  1. this CAS sets it whenever the queue was empty;
+	//  2. the consumer's empty-clear re-reads head.next after storing 0
+	//     (updateOldestPending), so a batch linked during that window is picked up
+	//     by value;
+	//  3. the consumer's EMPTY OBSERVATION — dequeueBatch/dequeueBatchUntil finding
+	//     head.next == nil — also runs that store-then-recheck, so a value this CAS
+	//     wrote after a drain had already emptied the queue cannot latch.
+	//
+	// Every interleaving converges to the linked head's time, or to 0 when there is
+	// no linked head. Without (3), the link-then-CAS gap here left a non-zero age
+	// on an empty queue permanently: the drain loop's later passes all take the
+	// head.next == nil early return. With it, staleness is bounded by at most one
+	// drain-loop iteration (SubtreeProcessor's idle-sleep cadence).
 	q.oldestPendingMillis.CompareAndSwap(0, batch.time)
 }
 
@@ -233,6 +245,16 @@ func (q *LockFreeQueue) dequeueBatch(validFromMillis int64) (*TxBatch, bool) {
 	next := q.head.next.Load()
 
 	if next == nil {
+		// Make the empty observation authoritative. publish links a batch BEFORE
+		// its CAS(0, time), so a drain landing in that window clears the gauge and
+		// the producer's CAS then sets it with nothing left to dequeue — a non-zero
+		// head age latched on an empty queue, which no later dequeue would clear
+		// because they all take this early return. updateOldestPending stores 0 and
+		// re-reads head.next, so every interleaving converges: a batch already
+		// linked is picked up by value, and one not yet linked is set by the
+		// producer's own CAS.
+		q.updateOldestPending()
+
 		return nil, false
 	}
 
@@ -276,7 +298,21 @@ func (q *LockFreeQueue) dequeueBatch(validFromMillis int64) (*TxBatch, bool) {
 //   - bool: True iff a batch was dequeued.
 func (q *LockFreeQueue) dequeueBatchUntil(maxTimeMillis int64) (*TxBatch, bool) {
 	next := q.head.next.Load()
-	if next == nil || next.time > maxTimeMillis {
+
+	if next == nil {
+		// Empty observation: clear the gauge with the store-then-recheck, exactly as
+		// dequeueBatch does. See its comment for the latched-stale-age race.
+		q.updateOldestPending()
+
+		return nil, false
+	}
+
+	if next.time > maxTimeMillis {
+		// The head is queued but beyond the caller's time boundary. next is the
+		// authoritative oldest-pending batch, so refresh the gauge to its true age
+		// rather than leaving a stale value — mirroring dequeueBatch's hold-back arm.
+		q.oldestPendingMillis.Store(next.time)
+
 		return nil, false
 	}
 
@@ -288,7 +324,10 @@ func (q *LockFreeQueue) dequeueBatchUntil(maxTimeMillis int64) (*TxBatch, bool) 
 }
 
 // updateOldestPending refreshes the oldest-pending timestamp after the consumer
-// advances head. It reads q.head, so it MUST only be called from the single
+// advances head, and is also the consumer's EMPTY-OBSERVATION clear: both
+// dequeue paths call it when they find head.next == nil, which is what stops a
+// producer CAS that landed just after a drain from latching a non-zero age on an
+// empty queue. It reads q.head, so it MUST only be called from the single
 // consumer goroutine (the same constraint as dequeue). A monitoring goroutine
 // must read headAgeMillis, never q.head.
 //

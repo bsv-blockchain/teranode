@@ -21,9 +21,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -31,9 +33,23 @@ import (
 
 // unlockSpy wraps a real utxo store and counts SetLocked(..., false) calls so a
 // test can assert whether a transaction was unlocked (its two-phase commit ran).
+//
+// It also counts Unspend calls and can be told to fail Delete, or to LIE about it —
+// report success while leaving the record readable, which is exactly TxMetaCache's
+// documented cache-only behaviour. Those two knobs are what exercise the shed
+// unwind's failure arm and its verify-after-delete guard against an otherwise real
+// sqlitememory store rather than a fully synthetic double.
 type unlockSpy struct {
 	utxostore.Store
-	unlockCalls int
+	unlockCalls  int
+	unspendCalls int
+
+	// deleteErr, when set, is returned by Delete instead of delegating.
+	deleteErr error
+
+	// deleteIsCacheOnly models a decorator whose Delete reports success without
+	// removing the underlying record.
+	deleteIsCacheOnly bool
 }
 
 func (s *unlockSpy) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
@@ -42,6 +58,50 @@ func (s *unlockSpy) SetLocked(ctx context.Context, txHashes []chainhash.Hash, va
 	}
 
 	return s.Store.SetLocked(ctx, txHashes, value)
+}
+
+func (s *unlockSpy) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+
+	if s.deleteIsCacheOnly {
+		return nil
+	}
+
+	return s.Store.Delete(ctx, hash)
+}
+
+func (s *unlockSpy) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsLocked ...bool) error {
+	s.unspendCalls++
+
+	return s.Store.Unspend(ctx, spends, flagAsLocked...)
+}
+
+// parentOutpointSpent reports whether output 0 of parentTx reads as spent — the
+// observable that distinguishes a shed unwind's Unspend from a no-op.
+func parentOutpointSpent(t *testing.T, store utxostore.Store, parentTx *bt.Tx) bool {
+	t.Helper()
+
+	utxoHash, err := util.UTXOHashFromOutput(parentTx.TxIDChainHash(), parentTx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	resp, err := store.GetSpend(context.Background(), &utxostore.Spend{
+		TxID:     parentTx.TxIDChainHash(),
+		Vout:     0,
+		UTXOHash: utxoHash,
+	})
+	require.NoError(t, err)
+
+	return resp.Status == int(utxostore.Status_SPENT)
+}
+
+// requireTxAbsent asserts the transaction has no record left in the store.
+func requireTxAbsent(t *testing.T, store utxostore.Store, hash *chainhash.Hash) {
+	t.Helper()
+
+	require.ErrorIs(t, store.GetMeta(context.Background(), hash, &meta.Data{}), errors.ErrTxNotFound,
+		"a shed transaction must leave no record behind")
 }
 
 // recoveryBAStore is a controllable blockassembly.Store. It records how many
@@ -75,9 +135,10 @@ func (f *recoveryBAStore) RemoveTx(_ context.Context, _ *chainhash.Hash) error {
 // recoverySetup builds a validator backed by a real sqlitememory store (wrapped
 // in unlockSpy) and a controllable block-assembly store, plus a confirmed parent
 // tx and a child spending it. The child is not yet stored, so a caller decides
-// whether to pre-create it (to exercise the ErrTxExists recovery gate) or to
-// validate it fresh.
-func recoverySetup(t *testing.T, dbName string) (*Validator, *unlockSpy, *recoveryBAStore, *sql.Store, *bt.Tx) {
+// whether to pre-create it (to exercise the ErrTxExists gate) or to validate it
+// fresh. The parent is returned so a caller can assert on its outpoint's spent
+// state, which is how a shed unwind's Unspend is observed.
+func recoverySetup(t *testing.T, dbName string) (*Validator, *unlockSpy, *recoveryBAStore, *sql.Store, *bt.Tx, *bt.Tx) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -121,7 +182,7 @@ func recoverySetup(t *testing.T, dbName string) (*Validator, *unlockSpy, *recove
 		transactions.WithP2PKHOutputs(1, 90_000, pub),
 	)
 
-	return v, spy, baStore, realStore, childTx
+	return v, spy, baStore, realStore, childTx, parentTx
 }
 
 func metaLocked(t *testing.T, store utxostore.Store, hash *chainhash.Hash) *meta.Data {
@@ -133,36 +194,164 @@ func metaLocked(t *testing.T, store utxostore.Store, hash *chainhash.Hash) *meta
 	return md
 }
 
-// Test 11 — the synchronous shed path leaves the transaction locked. With
-// WaitForBlockAssembly unset, a block-assembly send that fails with
-// ThresholdExceeded surfaces the shed and must NOT unlock the transaction: its
-// Locked flag is the only interlock keeping descendants out of the template
-// ahead of it, and the unmined reload on the next block-assembly start recovers
-// it.
-func TestValidate_ShedLeavesTxLocked(t *testing.T) {
+// Test 11 — a shed unwinds its own work. With WaitForBlockAssembly unset, a
+// block-assembly send that fails with ThresholdExceeded surfaces the shed AND
+// undoes this call's store work: the record is deleted and the parent's output is
+// unspent, so nothing is left in the store for a resubmit to trip over or for the
+// unmined reload to lift into a template. The 2PC unlock must NOT run — we delete
+// the record, we do not unlock it.
+func TestValidate_ShedUnwindsItsWork(t *testing.T) {
 	ctx := context.Background()
-	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_locked")
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_unwind")
 
 	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
 
+	unwindsBefore := testutil.ToFloat64(prometheusValidatorShedUnwindTotal)
+
 	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
 	require.Error(t, err, "a shed on the send path must surface as an error")
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
 
 	require.GreaterOrEqual(t, baStore.calls, 1, "the send was attempted")
-	require.Equal(t, 0, spy.unlockCalls, "SetLocked(false) must not be called when the send failed")
-	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the transaction stays locked")
+	require.Equal(t, 0, spy.unlockCalls, "the unwind deletes the record; it must not unlock it")
+
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the unwind unspends the parent's output")
+	require.Equal(t, 1, spy.unspendCalls, "the unwind unspends exactly once")
+
+	require.Equal(t, unwindsBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindTotal))
 }
 
-// Test 12 — a resubmit of an existing transaction is never re-sent. Whether it
-// is an ordinary duplicate (existing, not locked), locked-but-mined, or
-// locked-but-conflicting, an idempotent resubmit returns success and never
-// triggers a block-assembly send: the resubmit-recovery branch was removed, so
-// a resubmit cannot re-drive the handoff or mutate lock state.
-func TestValidate_ExistingTxNotResent(t *testing.T) {
+// Test 11a — the resubmit arm. After a shed has unwound, a resubmit is an ORDINARY
+// FIRST SUBMISSION, not an already-exists success: once the queue drains it spends,
+// creates, hands off exactly once and unlocks, ending unlocked and unmined. This is
+// the coverage the earlier resubmit-recovery test provided and that its removal
+// lost; it is what makes the "a shed is a clean rejection" design observable
+// end-to-end through the real gRPC production path.
+func TestValidateTransactionGRPC_ResubmitAfterShedIsFirstSubmission(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_resubmit")
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	v.txmetaKafkaProducerClient = producer
+
+	initPrometheusMetrics()
+
+	srv := &Server{
+		logger:    &ulogger.TestLogger{},
+		validator: v,
+		settings:  test.CreateBaseTestSettings(t),
+	}
+
+	skipPolicy := true
+	req := &validator_api.ValidateTransactionRequest{
+		TransactionData:  childTx.ExtendedBytes(),
+		BlockHeight:      100,
+		SkipPolicyChecks: &skipPolicy,
+	}
+
+	// First submission: the queue is full, so it is shed and unwound.
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	resp, err := srv.ValidateTransaction(ctx, req)
+	require.Error(t, err)
+	require.NotNil(t, resp)
+	require.False(t, resp.Valid)
+	require.Equal(t, codes.ResourceExhausted, status.Code(err), "a shed surfaces as ResourceExhausted, telling the client to retry")
+
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the shed left the parent's output spendable")
+	require.Equal(t, 0, spy.unlockCalls)
+
+	// The queue drains; the resubmit is an ordinary first submission.
+	baStore.err = nil
+	callsAfterShed := baStore.calls
+
+	resp, err = srv.ValidateTransaction(ctx, req)
+	require.NoError(t, err, "the resubmit succeeds for real, not by way of an already-exists shortcut")
+	require.NotNil(t, resp)
+	require.True(t, resp.Valid)
+
+	require.Equal(t, callsAfterShed+1, baStore.calls, "exactly one block-assembly handoff on the resubmit")
+	require.Equal(t, 1, spy.unlockCalls, "the 2PC unlock runs exactly once, on the successful submission")
+
+	md := metaLocked(t, realStore, childTx.TxIDChainHash())
+	require.False(t, md.Locked, "the accepted tx ends unlocked")
+	require.Empty(t, md.BlockIDs, "the accepted tx is unmined until it is actually mined")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the accepted tx spends the parent's output")
+}
+
+// Test 11b — the unwind is best-effort and never changes the answer. When Delete
+// fails, the caller still receives the shed, the transaction is left Locked (the
+// unmined-reload backstop is intact), the inputs are NOT unspent — the ordering
+// invariant: never free the inputs of a record that still exists — and the failure
+// metric moves.
+func TestValidate_ShedUnwindFailureLeavesTxLockedAndStillSheds(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_unwind_fail")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+	spy.deleteErr = errors.NewStorageError("utxo store unavailable")
+
+	initPrometheusMetrics()
+
+	failuresBefore := testutil.ToFloat64(prometheusValidatorShedUnwindFailures)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "an unwind failure must not change the error the caller sees")
+
+	require.Equal(t, failuresBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindFailures))
+
+	require.Equal(t, 0, spy.unspendCalls, "a failed Delete must not be followed by an Unspend")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the parent's output stays spent while the record survives")
+	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the tx is left locked for the unmined-reload backstop")
+	require.Equal(t, 0, spy.unlockCalls)
+}
+
+// Test 11c — the verify-after-delete guard. A store whose Delete returns nil while
+// leaving the record readable (exactly TxMetaCache's documented cache-only
+// behaviour) must NOT get its inputs unspent: that is the one intermediate state
+// the ordering was chosen to avoid, because it frees the inputs of a record that
+// still exists and can still be lifted into a mining template. The unwind aborts,
+// the abort is counted distinctly from a failure, and the caller still sees the
+// shed.
+func TestValidate_ShedUnwindAbortsWhenRecordSurvivesDelete(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_unwind_abort")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+	spy.deleteIsCacheOnly = true
+
+	initPrometheusMetrics()
+
+	abortedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindAborted)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	require.Equal(t, abortedBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindAborted),
+		"a store that reports a delete it did not perform must be visible as an abort, not a failure")
+
+	require.Equal(t, 0, spy.unspendCalls, "Unspend must never run when the record survived the delete")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the inputs stay spent, so no competing spend can take them")
+	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the tx is left exactly as the shed found it")
+	require.Equal(t, 0, spy.unlockCalls)
+}
+
+// Test 12 — how a resubmit of an EXISTING transaction is handled. An ordinary
+// duplicate (existing, not locked), locked-but-mined and locked-but-conflicting are
+// all legitimate idempotent duplicates: they return success and never re-drive the
+// handoff or mutate lock state. The fourth case — locked, unmined and NOT
+// conflicting — is the residual stranded state; after the shed unwind it can only
+// come from an interrupted submission or an in-flight conflict resolution, which
+// are indistinguishable in the store and both recovered by the unmined reload, so
+// it too returns success but is now counted and logged rather than passing
+// unnoticed.
+func TestValidate_ExistingTxHandling(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("ordinary duplicate is not resent", func(t *testing.T) {
-		v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_dup")
+		v, spy, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_dup")
 
 		// Create the child already unlocked, as a normally-accepted tx would be
 		// after its own two-phase commit.
@@ -176,7 +365,7 @@ func TestValidate_ExistingTxNotResent(t *testing.T) {
 	})
 
 	t.Run("locked but mined is not resent", func(t *testing.T) {
-		v, _, baStore, realStore, childTx := recoverySetup(t, "queue_shed_mined")
+		v, _, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_mined")
 
 		_, err := realStore.Create(ctx, childTx, 100,
 			utxostore.WithLocked(true),
@@ -191,7 +380,7 @@ func TestValidate_ExistingTxNotResent(t *testing.T) {
 	})
 
 	t.Run("locked but conflicting is not resent", func(t *testing.T) {
-		v, _, baStore, realStore, childTx := recoverySetup(t, "queue_shed_conflicting")
+		v, _, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_conflicting")
 
 		_, err := realStore.Create(ctx, childTx, 100,
 			utxostore.WithLocked(true),
@@ -204,6 +393,30 @@ func TestValidate_ExistingTxNotResent(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, baStore.calls, "a conflicting transaction must not be resent")
 	})
+
+	t.Run("locked, unmined and not conflicting is still success, but observed", func(t *testing.T) {
+		v, spy, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_locked_unmined")
+
+		_, err := realStore.Create(ctx, childTx, 100, utxostore.WithLocked(true))
+		require.NoError(t, err)
+
+		md := metaLocked(t, realStore, childTx.TxIDChainHash())
+		require.True(t, md.Locked, "precondition: tx is locked")
+		require.Empty(t, md.BlockIDs, "precondition: tx is unmined")
+		require.False(t, md.Conflicting, "precondition: tx is not conflicting")
+
+		initPrometheusMetrics()
+
+		observedBefore := testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined)
+
+		_, err = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+		require.NoError(t, err, "the contract is unchanged: the resubmit still returns success")
+		require.Equal(t, 0, baStore.calls, "the resubmit must not re-drive the handoff")
+		require.Equal(t, 0, spy.unlockCalls, "the resubmit must not mutate lock state")
+
+		require.Equal(t, observedBefore+1, testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined),
+			"the stranded state must be observable to an operator")
+	})
 }
 
 // Test 13 — Kafka ingest path: the handoff is retried in place until it
@@ -213,7 +426,7 @@ func TestValidate_ExistingTxNotResent(t *testing.T) {
 // txmeta message, one unlock — and the tx ends unlocked and unmined.
 func TestValidate_KafkaIngestRetriesUntilHandoffSucceeds(t *testing.T) {
 	ctx := context.Background()
-	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_kafka_retry")
+	v, spy, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_kafka_retry")
 
 	producer := kafka.NewKafkaAsyncProducerMock()
 	v.txmetaKafkaProducerClient = producer
@@ -234,11 +447,44 @@ func TestValidate_KafkaIngestRetriesUntilHandoffSucceeds(t *testing.T) {
 	require.Len(t, producer.PublishChannel(), 1, "exactly one txmeta message is published on the successful handoff")
 }
 
+// Test 13a — the retry is BOUNDED. With the queue permanently full, the in-place
+// retry gives up after BlockAssemblyShedRetryTimeout instead of parking the ingest
+// goroutine (and the Kafka record batch it holds) for the whole stall, then falls
+// through to the unwind. The transaction is dropped cleanly: no record, no held
+// parent lock, no store residue — which is what makes the drop safe to describe as
+// clean rather than lossless.
+func TestValidate_KafkaIngestRetryTimesOutThenUnwinds(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_kafka_timeout")
+
+	// The queue stays full forever.
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	// A short bound keeps the test fast while still exercising the real deadline
+	// arithmetic (several 5ms backoff iterations).
+	v.settings.Validator.BlockAssemblyShedRetryTimeout = 50 * time.Millisecond
+
+	start := time.Now()
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+	elapsed := time.Since(start)
+
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "on timeout the shed is returned, not retried forever")
+	require.Greater(t, baStore.calls, 1, "the handoff was retried before giving up")
+	require.Less(t, elapsed, 5*time.Second, "the retry must be bounded by the configured window, not by the stall")
+
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the timed-out shed unwinds like any other")
+	require.Equal(t, 0, spy.unlockCalls)
+}
+
 // Test 14 — Kafka ingest path: a context cancel mid-retry aborts promptly and
 // leaves the tx durably Locked and unmined (the precondition for the unmined
-// reload on the next block-assembly start). No 2PC unlock runs.
+// reload on the next block-assembly start) — deliberately NOT unwound, because the
+// redelivered Kafka record or the unmined reload needs the record to still be
+// there. No 2PC unlock runs.
 func TestValidate_KafkaIngestCtxCancelLeavesTxLocked(t *testing.T) {
-	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_kafka_cancel")
+	v, spy, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_kafka_cancel")
 
 	// The queue stays full forever; the retry must abort on ctx cancel.
 	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
@@ -288,11 +534,12 @@ func TestValidateTransactionGRPC_SurfacesResourceExhausted(t *testing.T) {
 // transaction validates, spends and is created (Locked), and its block-assembly
 // send fails with the queue full. Driven through the real
 // Server.ValidateTransaction with WaitForBlockAssembly unset, this must surface
-// as codes.ResourceExhausted (not Internal) and must leave the tx Locked and
-// unmined so the unmined reload on the next block-assembly start recovers it.
+// as codes.ResourceExhausted (not Internal) and must leave NO trace in the store:
+// the record is deleted and the parent's output unspent, so the 503 the client
+// receives is a truthful rejection it can simply retry.
 func TestValidateTransactionGRPC_FreshMainPathShedSurfacesResourceExhausted(t *testing.T) {
 	ctx := context.Background()
-	v, spy, baStore, realStore, childTx := recoverySetup(t, "queue_shed_grpc_fresh")
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_grpc_fresh")
 
 	// Fresh child — NOT pre-created. The send fails after spend/create.
 	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
@@ -320,12 +567,12 @@ func TestValidateTransactionGRPC_FreshMainPathShedSurfacesResourceExhausted(t *t
 		"a fresh first-submission shed must surface as ResourceExhausted, not Internal")
 	require.GreaterOrEqual(t, baStore.calls, 1, "the send was attempted")
 
-	// The shed transaction stays Locked and unmined, and its 2PC unlock never
-	// ran — so the unmined reload on the next block-assembly start recovers it.
-	md := metaLocked(t, realStore, childTx.TxIDChainHash())
-	require.True(t, md.Locked, "a shed tx stays locked")
-	require.Empty(t, md.BlockIDs, "a shed tx stays unmined")
-	require.Equal(t, 0, spy.unlockCalls, "no 2PC unlock runs on a main-path shed")
+	// The shed left no trace: the record is gone and the parent's output is
+	// spendable again. The 2PC unlock never ran — the unwind deletes the record
+	// rather than unlocking it, so there is nothing left to unlock.
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "a shed tx's inputs are unspent again")
+	require.Equal(t, 0, spy.unlockCalls, "the unwind deletes rather than unlocks; no 2PC unlock runs on a main-path shed")
 }
 
 // Test 16 — the validator HTTP /tx surface maps a shed to 503, not 500.

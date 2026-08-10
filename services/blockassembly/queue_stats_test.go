@@ -80,6 +80,42 @@ func TestGetBlockAssemblyQueueStats(t *testing.T) {
 	mockStp.AssertNotCalled(t, "GetSubtreeHashes", mock.Anything)
 }
 
+// TestGetBlockAssemblyQueueStats_ReportsDoubleSpendWindow pins that the slim RPC
+// carries the drain floor the head age is measured against, read from the same
+// setting the drain loop applies.
+//
+// This is what makes the signal self-describing. The reader that subtracts the
+// hold-back from the head age lives in a different process with its own settings
+// context, and the two used to be assumed equal: block assembly at 10s with the
+// reader at 0 left the effective age permanently above the pause watermark and
+// wedged ingest, while the reverse silently disabled the control. Reporting it here
+// means the reader never has to assume.
+func TestGetBlockAssemblyQueueStats_ReportsDoubleSpendWindow(t *testing.T) {
+	initPrometheusMetrics()
+
+	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+	mockStp.On("QueueLength").Return(int64(2))
+	mockStp.On("QueueHeadAge").Return(1500 * time.Millisecond)
+
+	ba := newQueueStatsTestServer(t, mockStp)
+	ba.settings.BlockAssembly.DoubleSpendWindow = 750 * time.Millisecond
+
+	resp, err := ba.GetBlockAssemblyQueueStats(context.Background(), &blockassembly_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, int64(750), resp.DoubleSpendWindowMillis,
+		"the reported window must come from the setting the drain loop actually uses")
+	require.Equal(t, int64(1500), resp.QueueHeadAgeMillis, "the head age stays raw, hold-back included")
+
+	// The disabled default must report zero explicitly rather than be omitted in a
+	// way a reader could confuse with "unknown".
+	ba.settings.BlockAssembly.DoubleSpendWindow = 0
+
+	resp, err = ba.GetBlockAssemblyQueueStats(context.Background(), &blockassembly_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), resp.DoubleSpendWindowMillis)
+}
+
 // TestGetBlockAssemblyState_QueueHeadAge verifies the head-batch age is now
 // surfaced on the full state RPC alongside the existing queue depth.
 func TestGetBlockAssemblyState_QueueHeadAge(t *testing.T) {

@@ -63,6 +63,12 @@ const (
 	// while the loop selects on the request context so shutdown aborts it.
 	kafkaShedRetryBackoff = 5 * time.Millisecond
 
+	// defaultBlockAssemblyShedRetryTimeout bounds the in-place handoff retry when
+	// Validator.BlockAssemblyShedRetryTimeout is unset. It mirrors the setting's
+	// documented default so a Settings struct built directly in a test still gets
+	// a bounded retry rather than none at all.
+	defaultBlockAssemblyShedRetryTimeout = 2 * time.Second
+
 	// coinbaseTxID represents the special transaction ID used for coinbase transactions.
 	// Coinbase transactions are the first transaction in each block and create new bitcoins as mining rewards.
 	// This constant is used to identify and handle coinbase transactions differently from regular transactions
@@ -869,11 +875,24 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			// The transaction is already durably present; a resubmit is an
 			// idempotent success and must not mutate lock state. It does not
-			// re-drive the block-assembly handoff: an existing lock may belong to
-			// an in-flight conflict resolution (process_conflicting locks honest
-			// parents), and a queue-full first-submission shed self-recovers on
-			// the Kafka ingest path via the in-place retry below rather than on
-			// resubmit.
+			// re-drive the block-assembly handoff.
+			//
+			// A queue-full shed no longer leaves a record behind (see unwindShed),
+			// so reaching here means a genuine duplicate rather than shed residue.
+			// A record that IS locked and unmined here belongs to something a
+			// resubmit must not touch: an in-flight conflict resolution, which
+			// locks honest losing parents without marking them conflicting; or a
+			// submission interrupted between the create and the hand-off (shutdown
+			// mid-retry, or an unwind that itself failed). Those causes are
+			// bit-for-bit indistinguishable in the store, and the unmined reload on
+			// the next block-assembly start recovers all of them — so the state is
+			// counted and logged rather than answered differently.
+			if txMetaData.Locked && len(txMetaData.BlockIDs) == 0 && !txMetaData.Conflicting {
+				prometheusValidatorExistingTxLockedUnmined.Inc()
+
+				v.logger.Warnf("[Validate][%s] resubmit of an existing transaction that is locked and unmined; returning success, recovery is the unmined reload (cause is indistinguishable between conflict resolution and an interrupted submission)", txID)
+			}
+
 			return txMetaData, nil
 		}
 
@@ -1021,28 +1040,45 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// send the tx to the block assembler
 		err = v.sendToBlockAssembler(decoupledCtx, blockAssemblyData, spentUtxos)
 
-		// On the Kafka ingest path a queue-full shed must not be silently lost:
-		// committing the consumer offset past a transaction that never reached a
-		// mining template would strand it (locked, in no template) until block
-		// assembly is restarted. Retry the handoff in place until the queue
-		// drains or the request context is cancelled at shutdown, then fall
-		// through to the txmeta publish and the 2PC unlock. ErrThresholdExceeded
-		// is a queue-depth condition independent of this transaction, so it
-		// always clears as the dispatcher drains batches into mining candidates;
-		// a genuinely invalid transaction fails earlier with a different,
-		// non-retried error. Synchronous callers leave WaitForBlockAssembly false
-		// and surface the shed immediately.
-		for err != nil && validationOptions.WaitForBlockAssembly && errors.Is(err, errors.ErrThresholdExceeded) {
-			select {
-			case <-ctx.Done():
-				err = errors.NewProcessingError("[Validate][%s] context cancelled while waiting for block assembly", txID, ctx.Err())
-				span.RecordError(err)
+		// On the Kafka ingest path a queue-full shed is worth waiting out rather
+		// than dropping: ErrThresholdExceeded is a queue-depth condition
+		// independent of this transaction, and block assembly drains a batch per
+		// loop iteration, so a full queue normally clears in milliseconds (a
+		// genuinely invalid transaction fails earlier with a different,
+		// non-retried error). Retry the handoff in place, then fall through to the
+		// txmeta publish and the 2PC unlock.
+		//
+		// The wait is BOUNDED by BlockAssemblyShedRetryTimeout. Parking here for
+		// the whole duration of a stall relocated the growth the block-assembly
+		// queue cap removed into the validator's Kafka consumer — the puller does
+		// not wait for the per-partition goroutines, so every parked goroutine
+		// keeps holding its fetched record batch — and it held this transaction's
+		// parent Locked long enough for children on other partitions to exhaust
+		// their TX_LOCKED retries and be committed past. Retention is now
+		// proportional to a window this node controls, not to how long an operator
+		// takes to notice.
+		//
+		// Synchronous callers leave WaitForBlockAssembly false and surface the
+		// shed immediately.
+		if err != nil && validationOptions.WaitForBlockAssembly && errors.Is(err, errors.ErrThresholdExceeded) {
+			retryDeadline := time.Now().Add(v.shedRetryTimeout())
 
-				return nil, err
-			case <-time.After(kafkaShedRetryBackoff):
+			for err != nil && errors.Is(err, errors.ErrThresholdExceeded) && time.Now().Before(retryDeadline) {
+				select {
+				case <-ctx.Done():
+					// Shutdown: do NOT unwind. The record must survive so the
+					// redelivered Kafka message (the offset is left uncommitted by
+					// WithLogErrorAndMoveOn's cancelled carve-out) or the unmined
+					// reload can recover it.
+					err = errors.NewProcessingError("[Validate][%s] context cancelled while waiting for block assembly", txID, ctx.Err())
+					span.RecordError(err)
+
+					return nil, err
+				case <-time.After(kafkaShedRetryBackoff):
+				}
+
+				err = v.sendToBlockAssembler(decoupledCtx, blockAssemblyData, spentUtxos)
 			}
-
-			err = v.sendToBlockAssembler(decoupledCtx, blockAssemblyData, spentUtxos)
 		}
 
 		if err != nil {
@@ -1050,10 +1086,21 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// first-submission shed surfaces to a synchronous caller as
 			// ResourceExhausted (queue full, retryable) rather than being masked
 			// as Internal by a ProcessingError wrapper. Every other send failure
-			// keeps its processing wrapping. This early return precedes the Kafka
-			// publish and the 2PC, so the tx stays Locked and unmined and is
-			// re-added by the unmined reload on the next block-assembly start.
-			if !errors.Is(err, errors.ErrThresholdExceeded) {
+			// keeps its processing wrapping.
+			if errors.Is(err, errors.ErrThresholdExceeded) {
+				// A shed leaves no trace: the transaction is either fully accepted
+				// (spent, created, handed off, unlocked) or not accepted at all. Undo
+				// this call's store work so a resubmit is an ordinary first
+				// submission rather than an already-exists success for a transaction
+				// that is in no subtree and no template, and so descendants get a
+				// clean missing-parent answer instead of TX_LOCKED.
+				//
+				// The outcome is logged and metered inside unwindShed; the error the
+				// caller receives stays the shed either way, because an unwind failure
+				// degrades to today's behaviour (record left Locked, recovered by the
+				// unmined reload) rather than changing the answer.
+				_ = v.unwindShed(decoupledCtx, tx, txID, spentUtxos, !validationOptions.SkipUtxoCreation)
+			} else {
 				err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
 			}
 
@@ -1675,6 +1722,131 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 	}
 
 	return nil
+}
+
+// shedRetryTimeout returns the bound on the in-place block-assembly handoff
+// retry, falling back to the documented default when the setting is unset or
+// nonsensical (tests build Settings structs directly, and a zero value would turn
+// the bounded retry into no retry at all).
+func (v *Validator) shedRetryTimeout() time.Duration {
+	if t := v.settings.Validator.BlockAssemblyShedRetryTimeout; t > 0 {
+		return t
+	}
+
+	return defaultBlockAssemblyShedRetryTimeout
+}
+
+// unwindShed reverses this call's UTXO-store work after a queue-full shed, so a
+// shed leaves no trace: the transaction is either fully accepted (spent, created,
+// handed off, unlocked) or not accepted at all, and a resubmit is then an
+// ordinary first submission rather than an already-exists success for a
+// transaction that reached no subtree and no template.
+//
+// # Ordering is load-bearing: Delete the record FIRST, then Unspend the inputs
+//
+//	Unspend -> Delete   inputs are free while the record T still exists and is
+//	                    Locked. If the Delete then fails, a competing double-spend
+//	                    T' can take those inputs while T survives as a record the
+//	                    unmined reload can still lift into a mining template. That
+//	                    is an invalid template: consensus-visible.
+//	Delete -> Unspend   record T is gone while its inputs still read spent-by-T.
+//	                    If the Unspend then fails those UTXOs are temporarily
+//	                    unspendable, but no record can re-enter a template. An
+//	                    operator can recover from the logged outpoints. Never
+//	                    consensus-visible.
+//
+// # Verify-after-delete
+//
+// The ordering argument only holds if Delete actually deleted. This method holds
+// a utxo.Store INTERFACE, and utxo.Store.Delete is not a trustworthy contract:
+// TxMetaCache advertises the full interface but implements Delete as a cache
+// eviction that never reaches the underlying record, while its spend and unspend
+// DO delegate. Trusting a nil return there would convert the safe intermediate
+// state into the dangerous one, and believe it succeeded. So the record is read
+// back, and anything other than "genuinely gone" aborts before unspending —
+// including an unexpected read error, which fails closed.
+//
+// Aborting leaves the transaction exactly as the shed found it (present, Locked,
+// inputs spent), which is the pre-change behaviour with the unmined reload as its
+// backstop. That makes the unwind correct through every decorator in the stack,
+// including ones not yet written, at the cost of one GetMeta on a path that only
+// runs when the node is already shedding.
+//
+// # Preconditions (all hold by construction on this path)
+//
+//   - Only this call's own work is ever undone: the already-exists branch returns
+//     before the hand-off, so an existing record from another submitter is
+//     unreachable from here.
+//   - No descendant can have spent T's outputs: T is Locked for its whole
+//     lifetime up to this point and a locked transaction cannot be spent.
+//   - Only the addToBlockAssembly branch reaches this, which is the only path
+//     that can produce a shed. Block-context callers (block validation, subtree
+//     validation, legacy sync) set AddTXToBlockAssembly=false and can never
+//     unwind a transaction that arrived as part of a block.
+//   - createdRecord is false on the spend-only shape (SkipUtxoCreation), where
+//     there is no record to delete; Unspend of an empty spend set is a no-op.
+//
+// Failure is best-effort and never fatal: it is logged with the txid and the
+// outpoints, metered, and falls back to leaving the transaction Locked. The error
+// returned to the validation caller stays the shed in every case, so the 503
+// mapping is unchanged. The returned error is for callers that want to observe
+// the unwind outcome; the shed path deliberately ignores it.
+func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spentUtxos []*utxo.Spend, createdRecord bool) error {
+	prometheusValidatorShedUnwindTotal.Inc()
+
+	txHash := tx.TxIDChainHash()
+
+	if createdRecord {
+		if err := v.utxoStore.Delete(ctx, txHash); err != nil {
+			prometheusValidatorShedUnwindFailures.Inc()
+			v.logger.Errorf("[unwindShed][%s] failed to delete the shed transaction record; leaving it locked for the unmined reload, inputs stay spent: %v", txID, err)
+
+			return err
+		}
+
+		// Verify-after-delete: only unspend once the record is provably gone.
+		verify := &meta.Data{}
+		if err := v.utxoStore.GetMeta(ctx, txHash, verify); err == nil {
+			prometheusValidatorShedUnwindAborted.Inc()
+			v.logger.Errorf("[unwindShed][%s] store reported a successful delete but the record is still readable; aborting before unspend to avoid freeing the inputs of a surviving record", txID)
+
+			return errors.NewProcessingError("[unwindShed][%s] record survived a successful delete", txID)
+		} else if !errors.Is(err, errors.ErrTxNotFound) {
+			prometheusValidatorShedUnwindAborted.Inc()
+			v.logger.Errorf("[unwindShed][%s] could not confirm the shed transaction record was deleted; aborting before unspend (fail closed): %v", txID, err)
+
+			return err
+		}
+	}
+
+	if len(spentUtxos) == 0 {
+		return nil
+	}
+
+	if err := v.utxoStore.Unspend(ctx, spentUtxos); err != nil {
+		prometheusValidatorShedUnwindFailures.Inc()
+		v.logger.Errorf("[unwindShed][%s] failed to unspend %d input(s) of a shed transaction; outpoints %s are temporarily unspendable and need operator recovery: %v", txID, len(spentUtxos), unwindOutpoints(spentUtxos), err)
+
+		return err
+	}
+
+	return nil
+}
+
+// unwindOutpoints renders a spend set as a single-line, comma-separated
+// txid:vout list for the recovery log line an operator acts on.
+func unwindOutpoints(spends []*utxo.Spend) string {
+	parts := make([]string, 0, len(spends))
+
+	for _, s := range spends {
+		if s == nil || s.TxID == nil {
+			continue
+		}
+
+		parts = append(parts, fmt.Sprintf("%s:%d", s.TxID.String(), s.Vout))
+	}
+
+	return strings.Join(parts, ",")
 }
 
 // extendTransaction adds previous output information to transaction inputs.

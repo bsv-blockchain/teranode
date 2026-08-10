@@ -577,6 +577,26 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 // not on the length of the resulting message.
 const maxHTTPErrorBodyBytes = 2 * 1024
 
+// maxHTTPErrorBodyDrainBytes bounds how much of the REMAINDER of an error body is
+// drained, after the snippet above has been read, purely so the connection can go
+// back into http.Transport's idle pool.
+//
+// The trade-off is deliberate. A body must be read to EOF for the connection to be
+// reusable, so capping the read at maxHTTPErrorBodyBytes and closing turned every
+// error larger than 2 KiB into a fresh TCP (+TLS) handshake — on the high-rate
+// failure path, which is exactly when handshakes hurt most. An unbounded
+// io.Copy(io.Discard, ...) would restore reuse but reopen the hole the snippet cap
+// was added to close: a hostile peer answering with an error status and streaming
+// forever. So the drain is itself bounded. A body whose remainder fits is drained
+// and its connection reused; anything larger is abandoned and Close tears the
+// connection down, which is the correct outcome for a peer that streams
+// unboundedly on an error status.
+//
+// The budget is measured from wherever the snippet read stopped, so bodies just
+// over the snippet cap — the common case for a verbose error page — are fully
+// drained.
+const maxHTTPErrorBodyDrainBytes = 64 * 1024
+
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
 //
 // The error type is chosen to let callers branch with errors.Is:
@@ -585,10 +605,15 @@ const maxHTTPErrorBodyBytes = 2 * 1024
 //   - other → generic ServiceError
 //
 // The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
-// rather than retained in the error string. The snippet is %q-escaped because this
-// message is logged verbatim and forwarded to the peer registry: raw peer bytes would
-// otherwise let a peer embed newlines to forge log lines, or terminal escapes, and
-// would break the single-line log convention.
+// rather than retained in the error string, and the message says so. The snippet is
+// %q-escaped because this message is logged verbatim and forwarded to the peer
+// registry: raw peer bytes would otherwise let a peer embed newlines to forge log
+// lines, or terminal escapes, and would break the single-line log convention.
+//
+// The remainder of the body is then drained, bounded by maxHTTPErrorBodyDrainBytes,
+// before Close, so the connection can be reused. The drain is in the deferred
+// function so it also covers the early return on a read error and any future early
+// return added here.
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
@@ -600,15 +625,36 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 
 	if resp.Body != nil {
 		defer func() {
+			// Drain before Close: http.Transport only returns a connection to the
+			// idle pool once its body has been read to EOF.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPErrorBodyDrainBytes))
 			_ = resp.Body.Close()
 		}()
 
-		b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes))
+		// Read one byte past the cap so truncation is detected by arrival of that
+		// byte, not by a length equality: io.LimitReader(body, max) returns exactly
+		// max bytes both for a body of exactly max and for a longer one, so
+		// len(b) == max would report complete peer errors as cut short — a false
+		// diagnostic in the very place an operator is trying to diagnose something.
+		// The extra byte is never rendered, so the %q-expansion bound documented on
+		// maxHTTPErrorBodyBytes is unchanged.
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes+1))
 		if readErr != nil {
 			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
 		}
 
+		b := raw
+		truncated := len(raw) > maxHTTPErrorBodyBytes
+
+		if truncated {
+			b = raw[:maxHTTPErrorBodyBytes]
+		}
+
 		if b != nil {
+			if truncated {
+				return errFn("http request [%s] returned status code [%d] with body %q (truncated)", rawURL, resp.StatusCode, string(b))
+			}
+
 			return errFn("http request [%s] returned status code [%d] with body %q", rawURL, resp.StatusCode, string(b))
 		}
 	}

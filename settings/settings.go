@@ -437,6 +437,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxLockedMaxRetries:                   getInt("validator_txlocked_maxRetries", 3, alternativeContext...),
 			TxMetaWireFormat:                     getString("validator_txmeta_wireFormat", "v1", alternativeContext...),
 			TxMetaNumPartitions:                  getInt("validator_txmeta_numPartitions", 32, alternativeContext...),
+			BlockAssemblyShedRetryTimeout:        getDuration("validator_blockAssemblyShedRetryTimeout", 2*time.Second, alternativeContext...),
 			KafkaBackpressure:                    loadValidatorKafkaBackpressureSettings(alternativeContext...),
 		},
 		Region: RegionSettings{

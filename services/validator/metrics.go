@@ -143,6 +143,29 @@ var (
 	// prometheusKafkaBackpressureReadErrors tracks the current consecutive
 	// queue-stats read-error streak (resets to 0 on a good read).
 	prometheusKafkaBackpressureReadErrors prometheus.Gauge
+
+	// prometheusValidatorShedUnwindTotal counts attempted unwinds of a queue-full
+	// shed's store work (delete the record, then unspend the inputs).
+	prometheusValidatorShedUnwindTotal prometheus.Counter
+
+	// prometheusValidatorShedUnwindFailures counts unwinds whose delete or unspend
+	// failed. A non-zero value means a transaction was left locked, or its inputs
+	// left spent; the error log carries the txid and the outpoints to recover from.
+	prometheusValidatorShedUnwindFailures prometheus.Counter
+
+	// prometheusValidatorShedUnwindAborted counts unwinds abandoned by the
+	// verify-after-delete guard: the store reported a successful delete but the
+	// record was still readable, or its absence could not be confirmed. Kept
+	// distinct from the failure counter so "the store did not honour Delete" is
+	// visibly different from "the unspend failed".
+	prometheusValidatorShedUnwindAborted prometheus.Counter
+
+	// prometheusValidatorExistingTxLockedUnmined counts resubmits that found an
+	// existing record locked, unmined and not conflicting — the residual stranded
+	// state. Field data from this counter is what should decide whether that state
+	// ever needs a behavioural answer, since the store cannot distinguish its
+	// causes.
+	prometheusValidatorExistingTxLockedUnmined prometheus.Counter
 )
 
 // Synchronization primitives
@@ -396,6 +419,42 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "kafka_backpressure_read_errors",
 			Help:      "Current consecutive queue-stats read-error streak (resets to 0 on a good read)",
+		},
+	)
+
+	prometheusValidatorShedUnwindTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_total",
+			Help:      "Number of times a queue-full shed's store work was unwound (record deleted, then inputs unspent)",
+		},
+	)
+
+	prometheusValidatorShedUnwindFailures = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_failures_total",
+			Help:      "Number of shed unwinds whose delete or unspend failed, leaving the transaction locked or its inputs spent",
+		},
+	)
+
+	prometheusValidatorShedUnwindAborted = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_aborted_total",
+			Help:      "Number of shed unwinds abandoned because the record could not be confirmed deleted (the store did not honour Delete)",
+		},
+	)
+
+	prometheusValidatorExistingTxLockedUnmined = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "existing_tx_locked_unmined_total",
+			Help:      "Number of resubmits that found an existing transaction record locked, unmined and not conflicting",
 		},
 	)
 }

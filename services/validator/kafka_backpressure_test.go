@@ -48,11 +48,14 @@ func (f *fakeConsumer) resumeCount() int {
 	return f.resumes
 }
 
-// fakeReader is a controllable queue-stats source.
+// fakeReader is a controllable queue-stats source. windowMillis is the
+// double-spend window the "producer" reports, which is the value the controller
+// must base its control decision on.
 type fakeReader struct {
-	mu        sync.Mutex
-	ageMillis int64
-	err       error
+	mu           sync.Mutex
+	ageMillis    int64
+	windowMillis int64
+	err          error
 }
 
 func (f *fakeReader) set(ageMillis int64, err error) {
@@ -62,26 +65,39 @@ func (f *fakeReader) set(ageMillis int64, err error) {
 	f.mu.Unlock()
 }
 
-func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (int64, time.Duration, error) {
+// setWithWindow sets the reported head age and the reported drain floor together.
+func (f *fakeReader) setWithWindow(ageMillis, windowMillis int64, err error) {
+	f.mu.Lock()
+	f.ageMillis = ageMillis
+	f.windowMillis = windowMillis
+	f.err = err
+	f.mu.Unlock()
+}
+
+func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (blockassembly.QueueStats, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if f.err != nil {
-		return 0, 0, f.err
+		return blockassembly.QueueStats{}, f.err
 	}
 
-	return 0, time.Duration(f.ageMillis) * time.Millisecond, nil
+	return blockassembly.QueueStats{
+		HeadAge:           time.Duration(f.ageMillis) * time.Millisecond,
+		DoubleSpendWindow: time.Duration(f.windowMillis) * time.Millisecond,
+	}, nil
 }
 
 func testBackpressureConfig() settings.ValidatorKafkaBackpressureSettings {
 	return settings.ValidatorKafkaBackpressureSettings{
-		Enabled:         true,
-		PauseQueueAge:   500 * time.Millisecond,
-		ResumeQueueAge:  100 * time.Millisecond,
-		PollInterval:    5 * time.Millisecond,
-		ReadTimeout:     100 * time.Millisecond,
-		MaxPause:        30 * time.Second,
-		StaleErrorLimit: 3,
+		Enabled:             true,
+		PauseQueueAge:       500 * time.Millisecond,
+		ResumeQueueAge:      100 * time.Millisecond,
+		PollInterval:        5 * time.Millisecond,
+		ReadTimeout:         100 * time.Millisecond,
+		MaxPause:            30 * time.Second,
+		MaxFailOpenCooldown: time.Second,
+		StaleErrorLimit:     3,
 	}
 }
 
@@ -151,28 +167,123 @@ func TestBackpressure_MaxPauseForcesResume(t *testing.T) {
 // decision is based on the head age PAST the double-spend drain floor: a healthy
 // hold-back (head aged only up to the floor plus a small epsilon) must not pause,
 // while a genuine stall past the floor must.
+//
+// It is driven through tick() with the window carried by the READ, because that —
+// not the reader's own setting — is now the control input.
 func TestBackpressure_DoubleSpendWindowExcludedFromControl(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
 	consumer := &fakeConsumer{}
-	c := newTestController(&fakeReader{}, consumer)
-	c.doubleSpendWindow = 1000 * time.Millisecond
+	c := newTestController(reader, consumer)
 
 	// Healthy hold-back: raw head age = window + 50ms → effectiveAge 50ms, below
 	// the 500ms pause watermark. Must not pause.
-	c.evaluate(1050 * time.Millisecond)
+	reader.setWithWindow(1050, 1000, nil)
+	c.tick(ctx)
 	require.Equal(t, 0, consumer.pauseCount(), "a healthy hold-back at the drain floor must not pause")
 	require.False(t, c.paused.Load())
 
 	// Genuine stall: raw head age = window + 600ms → effectiveAge 600ms, above
 	// the pause watermark. Must pause.
-	c.evaluate(1600 * time.Millisecond)
+	reader.setWithWindow(1600, 1000, nil)
+	c.tick(ctx)
 	require.Equal(t, 1, consumer.pauseCount(), "a stall past the drain floor must pause")
 	require.True(t, c.paused.Load())
 }
 
+// TestBackpressure_UsesReportedDoubleSpendWindow pins that the REPORTED window is
+// what the control decision subtracts, not the reader's own setting.
+//
+// The two live in independent per-process settings contexts, and a mismatch used to
+// break the feature silently in both directions: block assembly at 10s with the
+// validator at 0 left the effective age permanently above the pause watermark, so
+// the controller paused on the first tick and stayed in the pause/max-pause cycle
+// forever; the reverse clamped the effective age to 0 and made the feature inert.
+func TestBackpressure_UsesReportedDoubleSpendWindow(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newTestController(reader, consumer)
+
+	// The reader's own idea of the window is zero (the default), while the producer
+	// reports 500ms. Head age 600ms → effective 100ms, which is below the 500ms
+	// pause watermark: no pause. Keying on the local value would have paused here.
+	require.Equal(t, time.Duration(0), c.localDoubleSpendWindow, "precondition: the local setting disagrees")
+
+	reader.setWithWindow(600, 500, nil)
+	c.tick(ctx)
+
+	require.Equal(t, 0, consumer.pauseCount(), "the reported window must be subtracted, not the local one")
+	require.False(t, c.paused.Load())
+
+	// A stall past the REPORTED floor still pauses, so the feature is not merely
+	// disabled by the subtraction.
+	reader.setWithWindow(1100, 500, nil)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+}
+
+// TestBackpressure_LogsWindowMismatchOnce pins that a persistent mismatch is
+// operator-visible without spamming at the 50ms poll cadence: one line the first
+// time, and one more only when the REPORTED value changes.
+func TestBackpressure_LogsWindowMismatchOnce(t *testing.T) {
+	consumer := &fakeConsumer{}
+	c := newTestController(&fakeReader{}, consumer)
+	c.localDoubleSpendWindow = 10 * time.Second
+
+	// First disagreement: logged.
+	require.Equal(t, 500*time.Millisecond, c.observeReportedWindow(500*time.Millisecond))
+	require.True(t, c.windowMismatchLogged, "the first mismatch must be logged")
+
+	// Same reported value over many ticks: not logged again.
+	for i := 0; i < 100; i++ {
+		c.observeReportedWindow(500 * time.Millisecond)
+		require.True(t, c.windowMismatchLogged, "a persistent mismatch must not re-log every tick")
+	}
+
+	// The reported value changes: the latch resets so the new disagreement is
+	// logged once.
+	c.observeReportedWindow(2 * time.Second)
+	require.True(t, c.windowMismatchLogged)
+	require.Equal(t, 2*time.Second, c.lastReportedWindow)
+
+	// Agreement clears nothing but must not be reported as a mismatch.
+	c.observeReportedWindow(10 * time.Second)
+	require.False(t, c.windowMismatchLogged, "matching values must not be reported as a mismatch")
+}
+
+// TestBackpressure_NegativeReportedWindowClampedToZero pins the trust boundary: a
+// negative reported window would be ADDED to the effective age by the subtraction
+// in evaluate and could invert the control decision, so a bad peer must not be able
+// to steer it.
+func TestBackpressure_NegativeReportedWindowClampedToZero(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newTestController(reader, consumer)
+
+	require.Equal(t, time.Duration(0), c.observeReportedWindow(-5*time.Second))
+
+	// Head age below the watermark with a negative reported window: the clamp means
+	// the effective age stays 400ms and no pause happens. Without it, 400ms minus a
+	// negative 5s would read as 5.4s and pause.
+	reader.setWithWindow(400, -5000, nil)
+	c.tick(ctx)
+
+	require.Equal(t, 0, consumer.pauseCount(), "a negative reported window must not be able to force a pause")
+	require.Equal(t, time.Duration(0), c.reportedWindow)
+}
+
 // TestBackpressure_MaxPauseCooldownBoundsDutyCycle verifies that after a
 // max-pause fail-open resume the controller does not immediately re-pause while
-// the signal stays hot: it must wait out a MaxPause-long cooldown, bounding the
-// pathological duty cycle to ~50% instead of ~99.8%.
+// the signal stays hot — and that the suppression is PROPORTIONAL and CAPPED rather
+// than lasting a full MaxPause.
+//
+// The old behaviour suppressed backpressure for a whole MaxPause (30s by default).
+// During a sustained stall that is 30s of hard shedding with a positive queue cap,
+// or 30s of unbounded growth toward the very OOM the feature exists to prevent with
+// the default unbounded queue. A 30s pause now yields
+// min(30s/4, MaxFailOpenCooldown) = min(7.5s, 1s) = 1s of suppression.
 func TestBackpressure_MaxPauseCooldownBoundsDutyCycle(t *testing.T) {
 	consumer := &fakeConsumer{}
 	c := newTestController(&fakeReader{}, consumer)
@@ -186,23 +297,103 @@ func TestBackpressure_MaxPauseCooldownBoundsDutyCycle(t *testing.T) {
 	require.True(t, c.paused.Load())
 	require.Equal(t, 1, consumer.pauseCount())
 
-	// Held hot past MaxPause → fail-open resume, cooldown armed.
+	// Held hot past MaxPause → fail-open resume, proportional cooldown armed.
 	now = base.Add(31 * time.Second)
 	c.evaluate(600 * time.Millisecond)
 	require.False(t, c.paused.Load())
 	require.Equal(t, 1, consumer.resumeCount())
+	require.Equal(t, time.Second, c.failOpenCooldown,
+		"31s/4 = 7.75s, capped by MaxFailOpenCooldown to 1s - not a full MaxPause")
 
 	// Still hot but inside the cooldown → must NOT re-pause.
-	now = base.Add(41 * time.Second)
+	now = base.Add(31*time.Second + 900*time.Millisecond)
 	c.evaluate(600 * time.Millisecond)
 	require.False(t, c.paused.Load())
 	require.Equal(t, 1, consumer.pauseCount(), "must not re-pause during the cooldown")
 
-	// Cooldown (one MaxPause after the resume) elapsed → re-pause allowed.
-	now = base.Add(61 * time.Second)
+	// First tick at or after the cooldown → re-pause allowed. Under the old
+	// MaxPause-long latch the queue would have been unprotected for another 29s.
+	now = base.Add(32 * time.Second)
 	c.evaluate(600 * time.Millisecond)
 	require.True(t, c.paused.Load())
-	require.Equal(t, 2, consumer.pauseCount(), "re-pause allowed once the cooldown elapses")
+	require.Equal(t, 2, consumer.pauseCount(), "re-pause allowed once the proportional cooldown elapses")
+}
+
+// TestBackpressure_StaleSignalResumeArmsCooldown is the A7 regression guard.
+//
+// The stale-signal fail-open resume used to arm no cooldown at all, so a flapping
+// stats endpoint cycled StaleErrorLimit error ticks paused, one tick resumed, then
+// re-paused on the very next hot read — a ~75% paused duty cycle with the default
+// limit of 3, which is precisely the wedge the controller's comment claimed could
+// not happen. That resume is a fail-open, not an observed drain, so it must arm the
+// same cooldown the max-pause resume does.
+func TestBackpressure_StaleSignalResumeArmsCooldown(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newTestController(reader, consumer)
+
+	base := time.Unix(4000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	// A hot read pauses the consumer.
+	reader.set(600, nil)
+	c.tick(ctx)
+	require.True(t, c.paused.Load())
+	require.Equal(t, 1, consumer.pauseCount())
+
+	// StaleErrorLimit consecutive read errors → fail-open resume.
+	readErr := errors.NewProcessingError("queue stats unavailable")
+	reader.set(0, readErr)
+
+	for i := 0; i < c.cfg.StaleErrorLimit; i++ {
+		now = now.Add(c.cfg.PollInterval)
+		c.tick(ctx)
+	}
+
+	require.False(t, c.paused.Load(), "the stale signal fails open")
+	require.Equal(t, 1, consumer.resumeCount())
+	require.NotZero(t, c.failOpenCooldown, "a stale-signal resume must arm a cooldown, not resume bare")
+
+	// A hot read on the very next tick must NOT re-pause. This is the assertion that
+	// fails without the fix.
+	now = now.Add(c.cfg.PollInterval)
+	reader.set(600, nil)
+	c.tick(ctx)
+
+	require.False(t, c.paused.Load(), "a hot read on the tick after a fail-open resume must not re-pause")
+	require.Equal(t, 1, consumer.pauseCount())
+
+	// Past the cooldown, protection returns.
+	now = now.Add(c.failOpenCooldown)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load(), "protection must return once the cooldown elapses")
+	require.Equal(t, 2, consumer.pauseCount())
+}
+
+// TestBackpressure_CooldownFlooredAtTwicePollInterval pins the other end of the
+// clamp: a very short pause still arms at least two poll intervals of cooldown, so
+// a fast-flapping signal cannot busy-toggle pause/resume on consecutive ticks.
+func TestBackpressure_CooldownFlooredAtTwicePollInterval(t *testing.T) {
+	consumer := &fakeConsumer{}
+	c := newTestController(&fakeReader{}, consumer)
+
+	base := time.Unix(5000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	c.pauseStart = base
+	c.paused.Store(true)
+
+	// A 4ms pause would yield 1ms of cooldown on the raw formula — less than a
+	// single poll interval, i.e. no suppression at all in practice.
+	now = base.Add(4 * time.Millisecond)
+	c.armFailOpenCooldown()
+
+	require.Equal(t, 2*c.cfg.PollInterval, c.failOpenCooldown,
+		"a tiny pause must still arm the anti-busy-toggle floor")
 }
 
 // TestBackpressure_MaxPauseCooldownClearedByDrain verifies a genuine drain to
@@ -222,11 +413,15 @@ func TestBackpressure_MaxPauseCooldownClearedByDrain(t *testing.T) {
 	now = base.Add(31 * time.Second)
 	c.evaluate(600 * time.Millisecond)
 	require.False(t, c.paused.Load())
+	require.NotZero(t, c.failOpenCooldown, "precondition: a cooldown is armed")
 
-	// A genuine drain to the low watermark clears the latch.
-	now = base.Add(32 * time.Second)
+	// A genuine drain to the low watermark clears the latch. The timestamp is kept
+	// strictly INSIDE the armed cooldown, so this proves the drain cleared it rather
+	// than the cooldown having simply elapsed.
+	now = base.Add(31*time.Second + 100*time.Millisecond)
 	c.evaluate(50 * time.Millisecond)
 	require.False(t, c.paused.Load())
+	require.Zero(t, c.failOpenCooldown, "a genuine drain clears the cooldown early")
 
 	// Immediately hot again → pause allowed (latch cleared by the drain).
 	c.evaluate(600 * time.Millisecond)

@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
@@ -1636,4 +1637,102 @@ func SpendAndCreateSpendErrorSurfacesPerInput(t *testing.T, db utxostore.Store) 
 func SpendAndCreateInvalidOptions(t *testing.T, db utxostore.Store) {
 	_, _, err := db.SpendAndCreate(context.Background(), Tx, 1000, utxostore.WithCreateOnly(), utxostore.WithSpendOnly())
 	require.ErrorIs(t, err, errors.ErrInvalidArgument)
+}
+
+// DeleteThenUnspendRestoresParent proves the store-level contract the validator's
+// shed unwind depends on, in the exact order the unwind performs it.
+//
+// The unwind's correctness is a STORE property, not a validator one, so it is
+// proved here — once per backend — rather than only through validator spies. The
+// ordering (Delete the record first, THEN Unspend its inputs) is deliberate: the
+// reverse order has an intermediate state in which the inputs are free while the
+// record still exists and is Locked, so a partial failure lets a competing spend
+// take those inputs while the surviving record can still be lifted into a mining
+// template by the unmined reload. The order proved here has an intermediate state
+// that is merely inconvenient — inputs temporarily unspendable, no record able to
+// re-enter a template.
+//
+// Asserted, in order:
+//   - SpendAndCreate: parent outpoint reads spent, child record present and Locked;
+//   - Delete(child): child GetMeta returns ErrTxNotFound while the parent outpoint
+//     STILL reads spent — the safe intermediate state;
+//   - Unspend: the parent outpoint is spendable again and a different spender wins;
+//   - a second Unspend is a no-op and a second Delete does not error — both are
+//     relied on by the best-effort retry semantics of the unwind;
+//   - Unspend(nil) is a no-op — the SkipUtxoCreation / spend-only shape.
+//
+// Intended for REAL store backends. Cache decorators whose Delete is documented as
+// cache-only cannot satisfy it by design; the validator guards against those with
+// a read-back after Delete rather than by trusting the returned nil.
+func DeleteThenUnspendRestoresParent(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	// The parent whose output the child will spend.
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	child := newSpendAndCreateTx(t, 4, 5001)
+	_ = db.Delete(ctx, child.TxIDChainHash())
+
+	utxoHash4, err := util.UTXOHashFromOutput(Tx.TxIDChainHash(), Tx.Outputs[4], 4)
+	require.NoError(t, err)
+
+	parentOutpoint := &utxostore.Spend{TxID: Tx.TxIDChainHash(), Vout: 4, UTXOHash: utxoHash4}
+
+	// Step 0 — the shape the validator creates on the block-assembly path: spend
+	// the inputs, create the record, marked Locked.
+	md, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Len(t, spends, 1)
+
+	resp, err := db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "precondition: the parent output is spent by the child")
+
+	childMeta := &meta.Data{}
+	require.NoError(t, db.GetMeta(ctx, child.TxIDChainHash(), childMeta))
+	require.True(t, childMeta.Locked, "precondition: the child record is created Locked")
+
+	// Step 1 — Delete the record. The parent output must STILL read spent: that is
+	// the safe intermediate state the ordering exists to guarantee.
+	require.NoError(t, db.Delete(ctx, child.TxIDChainHash()))
+
+	require.ErrorIs(t, db.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
+		"after Delete the child record must be gone")
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status,
+		"between Delete and Unspend the parent output must still read spent - no record may re-enter a template while its inputs are free")
+
+	// Step 2 — Unspend restores the parent output.
+	require.NoError(t, db.Unspend(ctx, spends))
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.NotEqual(t, int(utxostore.Status_SPENT), resp.Status, "after Unspend the parent output is spendable again")
+
+	// Step 3 — idempotency of both primitives, relied on by the best-effort retry.
+	require.NoError(t, db.Unspend(ctx, spends), "re-unspending an already-unspent output must be a no-op")
+	require.NoError(t, db.Delete(ctx, child.TxIDChainHash()), "deleting an already-deleted record must not error")
+
+	// Step 4 — Unspend(nil) is a no-op: the spend-only / coinbase unwind shape
+	// passes no spends at all.
+	require.NoError(t, db.Unspend(ctx, nil))
+
+	// Step 5 — the restored output is genuinely reusable: a different spender wins
+	// it, which is what makes a resubmit an ordinary first submission.
+	other := newSpendAndCreateTx(t, 4, 5002)
+	_ = db.Delete(ctx, other.TxIDChainHash())
+
+	_, otherSpends, err := db.SpendAndCreate(ctx, other, db.GetBlockHeight()+1)
+	require.NoError(t, err, "a fresh spender must be able to take the restored output")
+	require.Len(t, otherSpends, 1)
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
+	require.NotNil(t, resp.SpendingData)
+	require.Equal(t, other.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 }

@@ -400,8 +400,12 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	// Arm the queue-age-driven Kafka backpressure controller (disabled by
-	// default; safe no-op when disabled or when a client is nil). It resumes the
-	// consumer on ctx cancel, so shutdown never inherits a paused consumer.
+	// default; safe no-op when disabled or when a client is nil). It binds itself
+	// to v.consumerCtx, so it shares by construction the lifetime of the consumer
+	// it controls: Stop's consumerCancel — which runs BEFORE the consumer is
+	// closed, so the final resume still reaches a live client — is what ends the
+	// controller goroutine and runs its resume-on-exit. Shutdown therefore never
+	// inherits a paused consumer, and a Start/Stop cycle leaks no goroutine.
 	v.startKafkaBackpressure(ctx)
 
 	if err = v.startHTTPServer(ctx, v.settings.Validator.HTTPListenAddress); err != nil {
