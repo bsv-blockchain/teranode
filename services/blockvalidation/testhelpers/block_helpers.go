@@ -31,17 +31,22 @@ func CreateTestBlocksWithPrev(t *testing.T, count int, prevHash *chainhash.Hash)
 	}
 
 	for i := 0; i < count; i++ {
+		coinbaseTx := CreateSimpleCoinbaseTx(uint32(i)) // golint:nolint
+
+		// These blocks carry no subtrees, i.e. they claim to hold only the coinbase. For a
+		// single-transaction block the header merkle root IS the coinbase txid, and block validation
+		// checks that identity — a body claiming no subtrees whose root does not match is treated as
+		// a corrupt (truncated) delivery. So the root must be derived from the coinbase rather than
+		// synthesised, and the header mined afterwards.
 		header := &model.BlockHeader{
 			Version:        1,
 			HashPrevBlock:  prevHash,
-			HashMerkleRoot: GenerateMerkleRoot(i),
+			HashMerkleRoot: coinbaseTx.TxIDChainHash(),
 			Timestamp:      uint32(1600000000 + i*600), // 10 minutes apart
 			Bits:           *nBits,
 			Nonce:          0,
 		}
 		MineHeader(header)
-
-		coinbaseTx := CreateSimpleCoinbaseTx(uint32(i)) // golint:nolint
 
 		blocks[i] = &model.Block{
 			Header:     header,
@@ -223,18 +228,44 @@ func CreateTestHeaderAtHeight(height int) *model.BlockHeader {
 	return header
 }
 
-// CreateSyntheticChainFrom creates a synthetic chain starting from a given header
+// CreateSyntheticChainFrom creates a synthetic chain starting from a given header, with the first
+// block at height 1 — the convention the block-serving responders in the catchup tests use.
 func CreateSyntheticChainFrom(prevHeader *model.BlockHeader, length int) []*model.BlockHeader {
+	return CreateSyntheticChainFromAtHeight(prevHeader, length, 1)
+}
+
+// CreateSyntheticChainFromAtHeight creates a synthetic chain starting from a given header, with the
+// first block at startHeight.
+//
+// Each header is bound to the coinbase a coinbase-only body at that height would carry
+// (CreateSimpleCoinbaseTx). Block validation checks that a body claiming no subtrees has the
+// coinbase txid as its merkle root, so a synthetic root here would make every served body look like
+// a truncated delivery. Callers that serve bodies for these headers must therefore build the
+// coinbase with the SAME height.
+//
+// Timestamps are PARENT-RELATIVE and strictly increasing — each header is one second after the one
+// before it, starting one second after prevHeader. Both properties are load-bearing, and no absolute
+// anchor satisfies them for every caller: anchoring the base at now puts a long chain past the
+// two-hours-in-the-future bound, while anchoring the tip at now puts the early blocks BEFORE a
+// recent parent, which fails the median-time-past rule (a block must be strictly after the median of
+// the headers preceding it). Walking one second at a time from the parent holds for an ancient
+// parent and a just-mined one alike, and cannot reach the future bound for any parent at or before
+// now.
+func CreateSyntheticChainFromAtHeight(prevHeader *model.BlockHeader, length int, startHeight uint32) []*model.BlockHeader {
 	headers := make([]*model.BlockHeader, length)
 	prevHash := prevHeader.Hash()
 	nBits, _ := model.NewNBitFromString("207fffff")
+	timestamp := prevHeader.Timestamp
 
 	for i := 0; i < length; i++ {
+		coinbaseTx := CreateSimpleCoinbaseTx(startHeight + uint32(i)) // golint:nolint
+		timestamp++
+
 		header := &model.BlockHeader{
 			Version:        1,
 			HashPrevBlock:  prevHash,
-			HashMerkleRoot: GenerateMerkleRoot(i),
-			Timestamp:      uint32(time.Now().Unix() + int64(i*600)),
+			HashMerkleRoot: coinbaseTx.TxIDChainHash(),
+			Timestamp:      timestamp,
 			Bits:           *nBits,
 			Nonce:          0,
 		}

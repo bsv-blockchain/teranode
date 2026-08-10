@@ -2147,6 +2147,14 @@ func (b *Block) GetSubtreeSlicesCount() int {
 }
 
 func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.Meta, error) {
+	// An internal-block caller can reach validOrderAndBlessed with no subtree store at all (subtrees
+	// declared, nil store — the one shape that leaves the body unbound to the header). Report that as
+	// an error rather than dereferencing a nil interface, so the caller can fall back to the meta
+	// regenerator and, failing that, surface a diagnosable failure instead of a panic.
+	if subtreeStore == nil {
+		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to get subtree meta: no subtree store", b.String(), subtreeHash.String())
+	}
+
 	// get subtree meta
 	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	if err != nil {

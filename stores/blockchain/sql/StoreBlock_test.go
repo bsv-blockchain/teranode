@@ -860,7 +860,7 @@ func TestValidateCoinbaseHeight_ChainCfgDriven(t *testing.T) {
 // (bitcoin-sv/teranode#4692).
 func TestStoreBlock_CoinbaseHeightGuardSkippedForInvalidWrites(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	// Activate BIP34 at height 1 so a height-2 block runs the coinbase-height guard.
+	// Activate BIP34 at height 1 so the very first stored block runs the coinbase-height guard.
 	params := chaincfg.RegressionNetParams
 	params.BIP0034Height = 1
 	tSettings.ChainCfgParams = &params
@@ -874,50 +874,60 @@ func TestStoreBlock_CoinbaseHeightGuardSkippedForInvalidWrites(t *testing.T) {
 
 	ctx := context.Background()
 
-	// A well-formed post-BIP34 block still stores normally with no options: block1's coinbase encodes
-	// height 1 and the store settles it at height 1.
+	// block1 settles at height 1 and its coinbase pushes that height as three bytes (01 00 00), which
+	// is not the minimal encoding — so ExtractCoinbaseHeight REJECTS it and the guard fails before it
+	// ever compares heights. That is deliberately the shape used here: the skip has to cover the whole
+	// guard, not merely the height comparison, or a block whose coinbase height cannot even be parsed
+	// stays unrecordable.
+	_, _, err = s.StoreBlock(ctx, block1, "test-peer")
+	require.Error(t, err, "the guard must stay intact for a normal write")
+	require.Contains(t, err.Error(), "failed to extract coinbase height")
+
+	exists, err := s.GetBlockExists(ctx, block1.Hash())
+	require.NoError(t, err)
+	require.False(t, exists, "a normal write must still be refused, and must leave no row behind")
+
+	// The same block written as invalid: the guard is not consulted at all, so the unparseable
+	// coinbase height never blocks the record of the verdict.
+	_, height, err := s.StoreBlock(ctx, block1, "test-peer", options.WithInvalid(true))
+	require.NoError(t, err, "recording a consensus failure must not re-apply the rule it records")
+	require.Equal(t, uint32(1), height)
+
+	exists, err = s.GetBlockExists(ctx, block1.Hash())
+	require.NoError(t, err)
+	require.True(t, exists, "the invalid write must be accepted so the verdict is remembered")
+
+	_, meta, err := s.GetBlockHeader(ctx, block1.Hash())
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+	require.True(t, meta.Invalid, "the stored row must carry the invalid verdict")
+}
+
+// TestStoreBlock_CoinbaseHeightGuardDoesNotApplyBelowBIP34Activation is the negative half: with the
+// guard inactive for the height being written, the same block stores normally with no options.
+// Together with the test above this pins that the skip is scoped to invalid writes and has not
+// disabled the guard outright.
+func TestStoreBlock_CoinbaseHeightGuardDoesNotApplyBelowBIP34Activation(t *testing.T) {
+	// Default regtest params put BIP34 activation far above these heights, so the guard short-circuits
+	// before inspecting the coinbase and block1 is a perfectly ordinary write.
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	ctx := context.Background()
+
 	_, height, err := s.StoreBlock(ctx, block1, "test-peer")
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), height)
 
-	// A child of block1 settles at height 2 but carries block1's coinbase, which encodes height 1 —
-	// exactly the bad-BIP34 condition.
-	badBIP34Block := &model.Block{
-		Header: &model.BlockHeader{
-			Version:        4,
-			Timestamp:      1729259728,
-			Nonce:          77,
-			HashPrevBlock:  block1.Hash(),
-			HashMerkleRoot: hashMerkleRoot,
-			Bits:           *bits,
-		},
-		Height:           2,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{subtree},
-	}
-
-	// The guard is intact for a normal write.
-	_, _, err = s.StoreBlock(ctx, badBIP34Block, "test-peer")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "coinbase transaction height")
-
-	exists, err := s.GetBlockExists(ctx, badBIP34Block.Hash())
+	exists, err := s.GetBlockExists(ctx, block1.Hash())
 	require.NoError(t, err)
-	require.False(t, exists, "a normal write of a bad-BIP34 block must still be refused")
-
-	// The guard is skipped for an invalid write, so the verdict becomes durable.
-	_, _, err = s.StoreBlock(ctx, badBIP34Block, "test-peer", options.WithInvalid(true))
-	require.NoError(t, err)
-
-	exists, err = s.GetBlockExists(ctx, badBIP34Block.Hash())
-	require.NoError(t, err)
-	require.True(t, exists, "an invalid write of a bad-BIP34 block must be accepted so the verdict is remembered")
-
-	_, meta, err := s.GetBlockHeader(ctx, badBIP34Block.Hash())
-	require.NoError(t, err)
-	require.NotNil(t, meta)
-	require.True(t, meta.Invalid, "the stored row must carry the invalid verdict")
+	require.True(t, exists)
 }
 
 func TestStoreBlock_SubtreeProcessing(t *testing.T) {
