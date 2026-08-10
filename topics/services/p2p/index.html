@@ -7954,7 +7954,7 @@
 <p>The system consists of three main components:</p>
 <ul>
 <li><strong>Peer Registry</strong>: A thread-safe data store maintaining all peer information and interaction history</li>
-<li><strong>Peer Selector</strong>: A stateless component that selects optimal peers based on reputation and criteria</li>
+<li><strong>Peer Selector</strong>: A component that selects optimal peers based on reputation and criteria, optionally probing peer availability over HTTP (with a short-lived result cache)</li>
 <li><strong>Reputation Scoring</strong>: An algorithm calculating peer reliability scores (0-100)</li>
 </ul>
 <h4 id="282-peer-information-tracking">2.8.2. Peer Information Tracking<a class="headerlink" href="#282-peer-information-tracking" title="Permanent link">&para;</a></h4>

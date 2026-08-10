@@ -7509,7 +7509,7 @@
 <p>The system consists of three main components:</p>
 <ul>
 <li><strong>Peer Registry</strong>: A thread-safe data store that tracks all peer information and interaction history</li>
-<li><strong>Peer Selector</strong>: A stateless component that selects optimal peers based on reputation and other criteria</li>
+<li><strong>Peer Selector</strong>: A component that selects optimal peers based on reputation and other criteria, optionally probing peer availability over HTTP (with a short-lived result cache)</li>
 <li><strong>Reputation Scoring</strong>: An algorithm that calculates peer reliability scores (0-100) based on success rates, response times, and behavior patterns</li>
 </ul>
 <p>This architecture enables intelligent peer selection for critical operations like blockchain synchronization (catchup), ensuring that Teranode preferentially interacts with reliable peers while avoiding problematic ones.</p>
@@ -7652,7 +7652,7 @@
 </tbody>
 </table>
 <h3 id="32-peer-selector">3.2. Peer Selector<a class="headerlink" href="#32-peer-selector" title="Permanent link">&para;</a></h3>
-<p>The <code>PeerSelector</code> is a stateless, pure-function component that implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation.</p>
+<p>The <code>PeerSelector</code> implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation. When HTTP health checking is enabled it probes candidate DataHub URLs before selecting (concurrently, with an overall deadline) and keeps a short-lived cache of probe results, so it is not a pure function.</p>
 <p><strong>Selection Criteria:</strong></p>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SelectionCriteria</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="nx">LocalHeight</span><span class="w">         </span><span class="kt">int32</span><span class="w">         </span><span class="c1">// Current local blockchain height</span>
