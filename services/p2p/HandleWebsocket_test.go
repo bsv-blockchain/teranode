@@ -1354,6 +1354,10 @@ func TestSetupHTTPServer_Hardening(t *testing.T) {
 	t.Run("HTTP server timeouts set", func(t *testing.T) {
 		require.Positive(t, e.Server.ReadHeaderTimeout,
 			"ReadHeaderTimeout must be set or slow-header clients bypass the connection cap")
+		require.Positive(t, e.Server.ReadTimeout,
+			"ReadTimeout must be set or a withheld request body parks the post-handler drain forever")
+		require.Positive(t, e.Server.WriteTimeout,
+			"WriteTimeout must bound non-hijacked response writes")
 		require.Positive(t, e.Server.IdleTimeout,
 			"IdleTimeout must bound idle keep-alive connections")
 	})

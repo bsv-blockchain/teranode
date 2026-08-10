@@ -608,12 +608,18 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 	e.HideBanner = true
 	e.HidePort = true
 
-	// Bound the pre-handler phases of every request: without ReadHeaderTimeout
-	// a client dribbling header bytes holds an fd and a net/http goroutine
-	// forever, bypassing the websocket connection cap entirely (slow-loris).
-	// Hijacked websocket connections are unaffected - net/http clears its
+	// Bound every non-hijacked phase of a request (all four timeouts, mirroring
+	// the asset service): without ReadHeaderTimeout a client dribbling header
+	// bytes holds an fd and a net/http goroutine forever (slow-loris), and
+	// without ReadTimeout the same applies to a withheld request body - after
+	// the headers the header deadline is disarmed, and net/http's post-handler
+	// body drain (e.g. GET /health with an unsent Content-Length byte) blocks
+	// with no deadline. Neither is counted against the websocket connection
+	// cap. Hijacked websocket connections are unaffected - net/http clears its
 	// deadlines on hijack and the websocket path manages its own.
 	e.Server.ReadHeaderTimeout = 10 * time.Second
+	e.Server.ReadTimeout = 30 * time.Second
+	e.Server.WriteTimeout = 120 * time.Second
 	e.Server.IdleTimeout = 120 * time.Second
 
 	e.Use(middleware.Recover())
