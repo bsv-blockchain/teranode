@@ -40,6 +40,7 @@ var (
 	ErrUtxoHashMismatch           = New(ERR_UTXO_MISMATCH, "utxo hash mismatch")
 	ErrUtxoInvalidSize            = New(ERR_UTXO_INVALID_SIZE, "utxo invalid size")
 	ErrUtxoUnspent                = New(ERR_UTXO_UNSPENT, "utxo is unspent")
+	ErrUtxoWalkLimitExceeded      = New(ERR_UTXO_WALK_LIMIT_EXCEEDED, "utxo walk limit exceeded")
 	ErrUtxoError                  = New(ERR_UTXO_ERROR, "utxo error")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -325,6 +326,16 @@ func NewUtxoInvalidSize(message string, params ...interface{}) *Error {
 // success by retry-safe callers like validator.reverseSpends.
 func NewUtxoUnspentError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_UNSPENT, message, params...)
+}
+
+// NewUtxoWalkLimitExceededError creates a new error indicating a UTXO
+// descendant-graph walk exceeded its node budget. Fail-closed guard on the
+// conflicting-children BFS (issue 1391): the walk is aborted deterministically
+// instead of stalling for the lifetime of the request context. Deliberately
+// distinct from ERR_THRESHOLD_EXCEEDED (missing-tx retry semantics) and never
+// matched by ErrTxInvalid/ErrTxNotFound classification.
+func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_WALK_LIMIT_EXCEEDED, message, params...)
 }
 
 // NewUtxoError creates a new generic utxo error.

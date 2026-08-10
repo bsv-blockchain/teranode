@@ -213,6 +213,45 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 	return d, nil
 }
 
+// TxIsSerializable reports whether d.Tx can safely be turned back into bytes.
+//
+// It is false for a transaction reconstructed from a UTXO-set snapshot. A node
+// bootstrapped by cmd/seeder stores such transactions with no inputs and with
+// nil outputs at every index that was not a live UTXO at snapshot time, and the
+// UTXO store hands that shape straight back out — from the external .outputs
+// blob (stores/utxo/aerospike/get.go getExternalTransaction) or from the inline
+// bins (getTxFromBins). Serializing it panics inside go-bt, whose Output.Size()
+// and Output.appendTo() dereference the nil *Output; Tx.TxIDChainHash() and
+// Tx.MarshalJSON() reach the same fault.
+//
+// nil is the store's deliberate encoding of "not a live UTXO", and callers that
+// only read specific output indices rely on it — see the guards at
+// stores/utxo/aerospike/get.go and services/validator/Validator.go, which error
+// out rather than fabricate a placeholder. So this predicate is for the callers
+// that serialize, and it must not be used to decide whether the transaction is
+// the one that was asked for: the snapshot blob retains no inputs, version or
+// locktime, so a reconstruction never hashes back to its own txid even when
+// every output survived. Callers that need that guarantee must compare
+// TxIDChainHash() against the requested hash — gated by this predicate, since
+// TxIDChainHash() panics on the same shape.
+func (d *Data) TxIsSerializable() bool {
+	// An input-less transaction is the snapshot signature: every real
+	// transaction, coinbase included, carries at least one input. Test the
+	// length, not nil-ness — getTxFromBins allocates a non-nil empty slice,
+	// which is enough to make bt.Tx.IsExtended() report true.
+	if d == nil || d.Tx == nil || len(d.Tx.Inputs) == 0 {
+		return false
+	}
+
+	for _, output := range d.Tx.Outputs {
+		if output == nil || output.LockingScript == nil {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Bytes returns the Data object as a byte slice.
 // This method provides a binary serialization of the complete Data object,
 // including the transaction data and all metadata. It's the inverse operation

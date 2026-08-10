@@ -49,6 +49,25 @@ func UTXOHashFromInput(input *bt.Input) (*chainhash.Hash, error) {
 }
 
 // UTXOHashFromOutput returns the hash of the UTXO for the given output.
+//
+// output may be nil: the UTXO store encodes "this output is not a live UTXO" as a
+// nil entry in the output vector, and a caller that walks the whole vector rather
+// than a chosen index can hand one straight over. stores/utxo/sql SetConflicting
+// does exactly that — it ranges over txMeta.Tx.Outputs with no nil check and
+// passes a precomputed hash — so this guard turns a nil-deref panic there into an
+// error return.
+//
+// It is only defence-in-depth for the callers that pass tx.TxIDChainHash() as the
+// hash argument (services/alert/node.go, stores/utxo/aerospike/conflicting.go):
+// Go evaluates that argument first, and it faults on the same nil-holed vector
+// before this function is entered, so the guard is unreachable for them until
+// bsv-blockchain/go-bt#162 is fixed upstream. Reject nil regardless, rather than
+// letting the field access fault before UTXOHashInto's own nil check can report
+// it.
 func UTXOHashFromOutput(hash *chainhash.Hash, output *bt.Output, vOut uint32) (*chainhash.Hash, error) {
+	if output == nil {
+		return nil, errors.NewProcessingError("output is nil")
+	}
+
 	return UTXOHash(hash, vOut, output.LockingScript, output.Satoshis)
 }

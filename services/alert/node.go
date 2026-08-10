@@ -314,8 +314,15 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
-		// calculate the utxo hash from the output script
-		utxoHash, err := util.UTXOHashFromOutput(parentTxMeta.Tx.TxIDChainHash(), parentTxMeta.Tx.Outputs[vout], vout)
+		// Calculate the utxo hash from the output script, keyed on the txid the
+		// caller asked to freeze — NOT the stored transaction's own hash. The two
+		// agree only while the stored transaction is byte-faithful. A node
+		// bootstrapped from a UTXO-set snapshot stores input-less reconstructions
+		// that retain no inputs, version or locktime, so they hash to something
+		// else entirely; the UTXO hash derived from them matches nothing in the
+		// store, and the freeze then reports success while blacklisting nothing.
+		// The Spend below is filed under txHash, so the hash must be too.
+		utxoHash, err := util.UTXOHashFromOutput(txHash, parentTxMeta.Tx.Outputs[vout], vout)
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
