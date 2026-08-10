@@ -30,7 +30,11 @@ func TestSanitizePeerDisplayString(t *testing.T) {
 		{"strips ampersand and angle bracket, keeps the rest", "a&lt;b", "alt;b"},
 		{"strips control characters", "a\x00b\x1bc", "abc"},
 		{"strips newlines (log injection)", "ok\nlevel=fatal msg=pwned", "oklevel=fatal msg=pwned"},
-		{"strips non-ascii", "teranode‮en", "teranodeen"},
+		{"strips non-ascii letters", "teran\u00f8de", "terande"},
+		// U+202E RIGHT-TO-LEFT OVERRIDE. Written as an escape rather than the
+		// literal character so this file stays pure ASCII: a bidi control in
+		// source renders differently from how it executes.
+		{"strips bidi override", "teranode\u202e" + "en", "teranodeen"},
 	}
 
 	for _, tt := range tests {
