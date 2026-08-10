@@ -3475,6 +3475,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#clock-skew-stopping-block-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clock Skew Stopping Block Production
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#utxo-store-unavailability" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7411,6 +7422,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#clock-skew-stopping-block-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clock Skew Stopping Block Production
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#utxo-store-unavailability" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8157,6 +8179,14 @@
 <li><strong>Transaction Recovery</strong>: Non-conflicting transactions are automatically re-added to new subtrees</li>
 <li><strong>Deep Reorg Protection</strong>: Reorganizations affecting more than the coinbase maturity threshold (typically 100 blocks) trigger a full service reset for safety</li>
 </ul>
+<h4 id="clock-skew-stopping-block-production">Clock Skew Stopping Block Production<a class="headerlink" href="#clock-skew-stopping-block-production" title="Permanent link">&para;</a></h4>
+<p>Every block's timestamp must be strictly greater than the median timestamp of the previous 11 blocks, and no more than two hours ahead of local time. Block assembly floors each mining candidate at median-time-past+1 so it never hands miners work the network would refuse. When the local clock falls far enough behind the parent chain, that floor rises above the two-hour ceiling and <strong>no</strong> timestamp satisfies both rules.</p>
+<ul>
+<li><strong>Symptom</strong>: <code>GetMiningCandidate</code> starts failing for every miner, and block production stops. The counter <code>teranode_blockassembly_block_assembler_candidate_time_clock_skew</code> becomes non-zero and keeps climbing; a single log line names the parent block and the size of the gap.</li>
+<li><strong>Cause</strong>: either this node's clock is behind the network, or the parent chain carries headers stamped into the future by an upstream miner. The node cannot tell which from its own view — the log line names both.</li>
+<li><strong>Remedy</strong>: check NTP on the node first, since a local clock is the common case and the one you control. If the clock is correct, inspect the tip's recent header timestamps for a future-stamped run from upstream; the condition clears by itself once wall-clock time passes the floor.</li>
+<li><strong>Why it fails rather than degrades</strong>: emitting an unfloored candidate would make every solution fail the local submit path, which treats an invalid block as a subtree-processor fault and resets block assembly. Refusing the poll is the smaller failure. On chains where the median rule is advisory (regtest), the wall-clock candidate is still valid and is served instead.</li>
+</ul>
 <h4 id="utxo-store-unavailability">UTXO Store Unavailability<a class="headerlink" href="#utxo-store-unavailability" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong>Connection Monitoring</strong>: The service monitors UTXO store connectivity and handles temporary unavailability</li>
@@ -8176,6 +8206,7 @@
 <ul>
 <li><code>teranode_blockassembly_get_mining_candidate</code>: Mining candidate requests</li>
 <li><code>teranode_blockassembly_submit_mining_solution</code>: Mining solution submissions</li>
+<li><code>teranode_blockassembly_block_assembler_candidate_time_clock_skew</code>: Mining candidates refused because no timestamp satisfies both consensus rules. Alert on any non-zero rate — block production has stopped (see <a href="#clock-skew-stopping-block-production">Clock Skew Stopping Block Production</a>)</li>
 <li>Duration histograms for critical operations with microsecond precision</li>
 </ul>
 <h4 id="state-monitoring">State Monitoring<a class="headerlink" href="#state-monitoring" title="Permanent link">&para;</a></h4>
