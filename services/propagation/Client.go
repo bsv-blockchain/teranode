@@ -53,7 +53,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -310,14 +309,22 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 		return nil
 	}
 
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if ok && st.Code() == codes.ResourceExhausted {
-		// Log the fallback
+	// Only an oversized gRPC message is fixable by re-sending over HTTP. A
+	// block-assembly queue-full shed reuses the same ResourceExhausted code (via
+	// ERR_THRESHOLD_EXCEEDED), and re-sending it would drive a second full
+	// validation against a node that has just reported itself saturated. This
+	// server currently collapses a shed to codes.Internal before it reaches here,
+	// so the gate is defensive — it pins the client behaviour for when that changes.
+	if errors.IsGRPCMessageTooLarge(err) {
+		// Log the fallback. The gate guarantees this really is a size problem.
 		c.logger.Warnf("[ProcessTransaction][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
-			tx.TxID(), st.Message())
+			tx.TxID(), status.Convert(err).Message())
 
 		return c.sendTransactionViaHTTP(ctx, txBytes, *tx.TxIDChainHash())
+	}
+
+	if errors.Is(errors.UnwrapGRPC(err), errors.ErrThresholdExceeded) {
+		c.logger.Warnf("[ProcessTransaction][%s] block assembly shed the transaction (queue full); not retrying over HTTP", tx.TxID())
 	}
 
 	// For any other types of errors, return the unwrapped gRPC error
@@ -598,12 +605,16 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		return nil
 	}
 
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if ok && st.Code() == codes.ResourceExhausted {
-		// Log the fallback
+	// Only an oversized batch is fixable by re-sending over HTTP. A block-assembly
+	// queue-full shed reuses the same ResourceExhausted code (via
+	// ERR_THRESHOLD_EXCEEDED), and re-sending would drive a full HTTP validation for
+	// every transaction in the batch against a node that has just reported itself
+	// saturated — a shed batch amplified into N validations. Same gate as the
+	// single-transaction path above, so the two cannot drift.
+	if errors.IsGRPCMessageTooLarge(err) {
+		// Log the fallback. The gate guarantees this really is a size problem.
 		c.logger.Warnf("[ProcessTransactionBatch] Batch exceeds gRPC message limit, falling back to validator /txs endpoint: %s",
-			st.Message())
+			status.Convert(err).Message())
 
 		return c.processBatchViaHTTP(ctx, batch, items)
 	}
@@ -611,6 +622,10 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 	// Any other gRPC error - unwrap it according to our error handling rule
 	// and propagate to all transactions in batch
 	unwrappedErr := errors.UnwrapGRPC(err)
+
+	if errors.Is(unwrappedErr, errors.ErrThresholdExceeded) {
+		c.logger.Warnf("[ProcessTransactionBatch] block assembly shed the batch (queue full); not retrying over HTTP")
+	}
 
 	return c.handleBatchError(batch, unwrappedErr, "[ProcessTransactionBatch] Failed to process transaction batch")
 }
