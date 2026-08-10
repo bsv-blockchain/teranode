@@ -90,10 +90,11 @@ func TestPublishToNetworkPerState(t *testing.T) {
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, "test-subtree", false},
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, "test-rejected-tx", false},
 		{blockchain_api.FSMStateType_CATCHINGBLOCKS, "test-node_status", true},
-		// IDLE stays permissive for gossip, matching pre-gate behavior.
-		{blockchain_api.FSMStateType_IDLE, "test-block", true},
-		{blockchain_api.FSMStateType_IDLE, "test-subtree", true},
-		{blockchain_api.FSMStateType_IDLE, "test-rejected-tx", true},
+		// IDLE means "stopped" or "state unknown" (the blockchain client's
+		// safety fallback): only node_status may go out.
+		{blockchain_api.FSMStateType_IDLE, "test-block", false},
+		{blockchain_api.FSMStateType_IDLE, "test-subtree", false},
+		{blockchain_api.FSMStateType_IDLE, "test-rejected-tx", false},
 		{blockchain_api.FSMStateType_IDLE, "test-node_status", true},
 	}
 
@@ -232,7 +233,8 @@ func TestShouldSkipNotification(t *testing.T) {
 		{blockchain_api.FSMStateType_RUNNING, model.NotificationType_Subtree, false},
 		{blockchain_api.FSMStateType_RUNNING, model.NotificationType_PeerFailure, false},
 		{blockchain_api.FSMStateType_RUNNING, model.NotificationType_BlockSubtreesSet, false},
-		{blockchain_api.FSMStateType_IDLE, model.NotificationType_Block, false},
+		{blockchain_api.FSMStateType_IDLE, model.NotificationType_Block, true},
+		{blockchain_api.FSMStateType_IDLE, model.NotificationType_PeerFailure, false},
 	}
 
 	for _, tc := range tests {

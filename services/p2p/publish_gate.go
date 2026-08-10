@@ -25,15 +25,14 @@ const (
 // publishToNetwork, which drops (and counts) anything not listed here, so a
 // new code path cannot silently leak announcements while the node is
 // catching up. node_status stays allowed in every state so peers can track
-// our height. IDLE stays permissive for gossip because the pre-gate code
-// only ever gated on CATCHINGBLOCKS and in IDLE no blocks or subtrees are
-// being processed anyway; tightening IDLE is a deliberate follow-up
-// decision, not a side effect of introducing the gate.
+// our height.
 var outboundTopicsAllowed = map[blockchain_api.FSMStateType]map[topicKind]bool{
+	// IDLE means either a deliberate Stop (docs: the node must not
+	// participate in the network at all) or "state unknown" - the blockchain
+	// client stores IDLE as its safety fallback when the FSM fetch or the
+	// heartbeat fails, and reports it without an error. Either way, publish
+	// nothing but node_status.
 	blockchain_api.FSMStateType_IDLE: {
-		topicKindBlock:      true,
-		topicKindSubtree:    true,
-		topicKindRejectedTx: true,
 		topicKindNodeStatus: true,
 	},
 	blockchain_api.FSMStateType_CATCHINGBLOCKS: {
