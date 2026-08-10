@@ -19,6 +19,7 @@ func TestValidatorKafkaBackpressureSettings_Defaults(t *testing.T) {
 	require.Equal(t, 50*time.Millisecond, kbp.PollInterval)
 	require.Equal(t, 100*time.Millisecond, kbp.ReadTimeout)
 	require.Equal(t, 30*time.Second, kbp.MaxPause)
+	require.Equal(t, time.Second, kbp.MaxFailOpenCooldown)
 	require.Equal(t, 3, kbp.StaleErrorLimit)
 }
 
@@ -32,6 +33,7 @@ func TestValidatorKafkaBackpressureSettings_LoaderReadsKeys(t *testing.T) {
 	t.Setenv("validator_kafkaBackpressurePollInterval", "20ms")
 	t.Setenv("validator_kafkaBackpressureReadTimeout", "80ms")
 	t.Setenv("validator_kafkaBackpressureMaxPause", "45s")
+	t.Setenv("validator_kafkaBackpressureMaxFailOpenCooldown", "2s")
 	t.Setenv("validator_kafkaBackpressureStaleErrorLimit", "5")
 
 	kbp := NewSettings().Validator.KafkaBackpressure
@@ -42,7 +44,44 @@ func TestValidatorKafkaBackpressureSettings_LoaderReadsKeys(t *testing.T) {
 	require.Equal(t, 20*time.Millisecond, kbp.PollInterval)
 	require.Equal(t, 80*time.Millisecond, kbp.ReadTimeout)
 	require.Equal(t, 45*time.Second, kbp.MaxPause)
+	require.Equal(t, 2*time.Second, kbp.MaxFailOpenCooldown)
 	require.Equal(t, 5, kbp.StaleErrorLimit)
+}
+
+// TestValidatorKafkaBackpressureSettings_MaxFailOpenCooldownFloor verifies the cap
+// is floored at twice the poll interval.
+//
+// The floor is what stops a flapping signal busy-toggling pause/resume on
+// consecutive ticks: a cap below one poll interval would leave the cooldown unable
+// to span even a single tick, so the suppression would be no suppression at all. It
+// is a floor on the CAP; the controller applies the same floor to each armed
+// cooldown.
+func TestValidatorKafkaBackpressureSettings_MaxFailOpenCooldownFloor(t *testing.T) {
+	t.Setenv("validator_kafkaBackpressureEnabled", "true")
+	t.Setenv("validator_kafkaBackpressurePollInterval", "50ms")
+	t.Setenv("validator_kafkaBackpressureMaxFailOpenCooldown", "10ms")
+
+	kbp := NewSettings().Validator.KafkaBackpressure
+
+	require.True(t, kbp.Enabled, "a clampable cooldown cap keeps the controller enabled")
+	require.Equal(t, 100*time.Millisecond, kbp.MaxFailOpenCooldown, "clamped up to 2 x pollInterval")
+}
+
+// TestValidatorSettings_BlockAssemblyShedRetryTimeout pins the default and the
+// loader for the bound on the in-place block-assembly handoff retry. Without a
+// bound, an ingest goroutine parks for the whole duration of a stall while still
+// holding its Kafka record batch, so the growth the block-assembly queue cap removed
+// reappears in the validator.
+func TestValidatorSettings_BlockAssemblyShedRetryTimeout(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		require.Equal(t, 2*time.Second, NewSettings().Validator.BlockAssemblyShedRetryTimeout)
+	})
+
+	t.Run("loader reads the key", func(t *testing.T) {
+		t.Setenv("validator_blockAssemblyShedRetryTimeout", "750ms")
+
+		require.Equal(t, 750*time.Millisecond, NewSettings().Validator.BlockAssemblyShedRetryTimeout)
+	})
 }
 
 // TestValidatorKafkaBackpressureSettings_ResumeClamp verifies a resume watermark

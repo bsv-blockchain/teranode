@@ -1705,6 +1705,13 @@ func TestSmokeTests(t *testing.T) {
 		tests.SpendAndCreateInvalidOptions(t, store)
 	})
 
+	t.Run("aerospike_delete_then_unspend_restores_parent", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.DeleteThenUnspendRestoresParent(t, store)
+	})
+
 	t.Run("aerospike_conflict_WAL_crash_recovery", func(t *testing.T) {
 		tests.ConflictWALCrashRecovery(t, store)
 	})

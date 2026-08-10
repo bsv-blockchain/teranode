@@ -746,24 +746,27 @@ func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.
 }
 
 // GetBlockAssemblyQueueStats retrieves a slim, atomic-only view of the ingest
-// queue (depth + head-batch age) for high-frequency control reads. It unwraps
-// the protobuf response into native Go types so callers never import the
-// generated package.
+// queue (depth, head-batch age, and the drain floor the age is measured against)
+// for high-frequency control reads. It unwraps the protobuf response into native
+// Go types so callers never import the generated package.
 //
 // Parameters:
 //   - ctx: Context for cancellation
 //
 // Returns:
-//   - int64: Current ingest-queue depth in items
-//   - time.Duration: How long the oldest queued batch has waited (0 when empty)
+//   - QueueStats: Queue depth, head-batch age and the reported double-spend window
 //   - error: Any error encountered during retrieval
-func (s *Client) GetBlockAssemblyQueueStats(ctx context.Context) (int64, time.Duration, error) {
+func (s *Client) GetBlockAssemblyQueueStats(ctx context.Context) (QueueStats, error) {
 	stats, err := s.client.GetBlockAssemblyQueueStats(ctx, &blockassembly_api.EmptyMessage{})
 	if err != nil {
-		return 0, 0, errors.UnwrapGRPC(err)
+		return QueueStats{}, errors.UnwrapGRPC(err)
 	}
 
-	return stats.QueueCount, time.Duration(stats.QueueHeadAgeMillis) * time.Millisecond, nil
+	return QueueStats{
+		Count:             stats.QueueCount,
+		HeadAge:           time.Duration(stats.QueueHeadAgeMillis) * time.Millisecond,
+		DoubleSpendWindow: time.Duration(stats.DoubleSpendWindowMillis) * time.Millisecond,
+	}, nil
 }
 
 // BlockAssemblyAPIClient returns the underlying gRPC client for block assembly API.

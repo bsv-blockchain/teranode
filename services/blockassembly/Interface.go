@@ -18,6 +18,29 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 )
 
+// QueueStats is a native-types snapshot of the block-assembly ingest queue,
+// returned by GetBlockAssemblyQueueStats.
+//
+// It is a struct rather than a tuple of return values deliberately: HeadAge and
+// DoubleSpendWindow are both durations with entirely different meanings, and as
+// adjacent positional returns they would be silently swappable at every call
+// site. Naming them costs a type declaration and removes that class of bug.
+type QueueStats struct {
+	// Count is the current ingest-queue depth in items.
+	Count int64
+
+	// HeadAge is how long the oldest queued batch has waited (0 when empty).
+	// It is the raw age, hold-back included.
+	HeadAge time.Duration
+
+	// DoubleSpendWindow is the drain floor the reporting process applies before
+	// a queued batch becomes eligible to dequeue. Under load HeadAge
+	// structurally includes it, so a reader deciding on the age must subtract
+	// this reported value rather than its own setting: the two live in
+	// independent settings contexts and cannot be assumed equal.
+	DoubleSpendWindow time.Duration
+}
+
 // ClientI defines the interface for block assembly client operations.
 // This interface provides methods for external components to interact with the block assembly service,
 // including transaction submission, mining operations, and service management functions.
@@ -137,18 +160,18 @@ type ClientI interface {
 	GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error)
 
 	// GetBlockAssemblyQueueStats retrieves a slim, atomic-only view of the ingest
-	// queue (depth + head-batch age) for high-frequency control reads. It never
-	// blocks on the subtree-processor main loop the way GetBlockAssemblyState can.
-	// Native Go return types keep the protobuf inside the client.
+	// queue (depth, head-batch age, and the drain floor the age is measured
+	// against) for high-frequency control reads. It never blocks on the
+	// subtree-processor main loop the way GetBlockAssemblyState can. Native Go
+	// return types keep the protobuf inside the client.
 	//
 	// Parameters:
 	//   - ctx: Context for cancellation
 	//
 	// Returns:
-	//   - int64: Current ingest-queue depth in items
-	//   - time.Duration: How long the oldest queued batch has waited (0 when empty)
+	//   - QueueStats: Queue depth, head-batch age and the reported double-spend window
 	//   - error: Any error encountered during retrieval
-	GetBlockAssemblyQueueStats(ctx context.Context) (queueCount int64, headAge time.Duration, err error)
+	GetBlockAssemblyQueueStats(ctx context.Context) (QueueStats, error)
 
 	// GetBlockAssemblyBlockCandidate retrieves the block candidate for block assembly.
 	//

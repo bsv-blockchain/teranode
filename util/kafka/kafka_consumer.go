@@ -207,6 +207,11 @@ func (k *KafkaConsumerGroup) Close() error {
 	}
 
 	if k.isInMemory {
+		// Mark closed before the Close() call and regardless of its outcome, so a
+		// late PauseAll/ResumeAll from a caller with its own lifecycle cannot reach
+		// a consumer that is being torn down.
+		k.markClosed()
+
 		if k.inMemoryConsumer != nil {
 			if err := k.inMemoryConsumer.Close(); err != nil {
 				k.Config.Logger.Errorf("[Kafka] %s: error closing in-memory consumer for topic %s: %v", k.Config.ConsumerGroupID, k.Config.Topic, err)
@@ -233,6 +238,27 @@ func (k *KafkaConsumerGroup) closeClient() {
 	}
 	k.closed = true
 	k.Config.Logger.Infof("[Kafka] %s: successfully closed consumer group for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
+}
+
+// markClosed sets the closed flag without touching a franz-go client. It is the
+// in-memory arm's counterpart to closeClient, so isClosed() is authoritative for
+// both consumer kinds.
+func (k *KafkaConsumerGroup) markClosed() {
+	k.closeMu.Lock()
+	defer k.closeMu.Unlock()
+
+	k.closed = true
+}
+
+// isClosed reports whether Close() has run. Note that k.client is deliberately
+// NOT nilled on close — that would race the in-flight PollFetches in the consume
+// loop — so this flag, not a nil check, is what tells a caller the consumer is
+// inert.
+func (k *KafkaConsumerGroup) isClosed() bool {
+	k.closeMu.Lock()
+	defer k.closeMu.Unlock()
+
+	return k.closed
 }
 
 // NewKafkaConsumerGroup creates a new Kafka consumer group using franz-go
@@ -470,6 +496,17 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 		// Handlers that depend on strict cross-fetch ordering must enforce it
 		// themselves. txmeta entries are independent (and DELETE is sync inside
 		// txmetaHandler) so the txmeta hot path is fine.
+		//
+		// HANDLER CONTRACT — handlers MUST bound their own blocking. Because the
+		// puller does not wait, every parked per-partition goroutine keeps holding
+		// the []*kgo.Record it was dispatched with while PollFetches keeps
+		// returning more. A handler that blocks for an unbounded time therefore
+		// reintroduces unbounded goroutine and record retention here, no matter what
+		// bound the downstream service enforces on itself: retention becomes
+		// proportional to the stall duration rather than to anything this process
+		// controls. Nothing in this loop enforces the contract — it is the handler's
+		// job (see the validator's bounded block-assembly handoff retry,
+		// validator_blockAssemblyShedRetryTimeout, for the shape).
 		go func() {
 			k.Config.Logger.Debugf("[kafka] starting consumer for group %s on topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
 
@@ -684,7 +721,18 @@ func (k *KafkaConsumerGroup) BrokersURL() []string {
 }
 
 // PauseAll suspends fetching from all partitions.
+//
+// A closed consumer is inert: closeClient deliberately does not nil k.client
+// (that would race the in-flight PollFetches in the consume loop), so a nil check
+// alone would let a pause land on a closed franz-go client. Callers with their own
+// lifecycle — the validator's backpressure controller is one — should be bound to
+// the consumer's context; this guard is the backstop for when they are not.
 func (k *KafkaConsumerGroup) PauseAll() {
+	if k.isClosed() {
+		k.Config.Logger.Debugf("[Kafka] %s: ignoring PauseAll on a closed consumer for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
+		return
+	}
+
 	if k.isInMemory {
 		k.inMemoryConsumer.PauseAll()
 		return
@@ -695,8 +743,14 @@ func (k *KafkaConsumerGroup) PauseAll() {
 	}
 }
 
-// ResumeAll resumes all partitions which have been paused.
+// ResumeAll resumes all partitions which have been paused. Like PauseAll it is a
+// no-op once the consumer is closed.
 func (k *KafkaConsumerGroup) ResumeAll() {
+	if k.isClosed() {
+		k.Config.Logger.Debugf("[Kafka] %s: ignoring ResumeAll on a closed consumer for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
+		return
+	}
+
 	if k.isInMemory {
 		k.inMemoryConsumer.ResumeAll()
 		return
@@ -792,6 +846,29 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
 			if err := originalFn(msg); err != nil {
+				// Shutdown carve-out, matching the one both retry wrappers above
+				// already carry: return the error so the record is NOT committed and
+				// is redelivered after a restart. Without it, a handler that failed
+				// only because it was cancelled mid-processing had its offset
+				// committed by the shutdown drain, permanently losing a record whose
+				// side effects were half-applied (e.g. a transaction spent and created
+				// in the UTXO store but never handed to block assembly).
+				//
+				// Two arms: ctx.Err() is the consumer's own internal context, covering
+				// both caller cancellation and Close(); IsContextError covers a
+				// per-request deadline that expired inside the handler, which must not
+				// be committed past either.
+				//
+				// Scope, deliberately narrow: "uncommitted" is a guarantee against the
+				// shutdown drain, not at-least-once redelivery in a running consumer —
+				// MarkCommitRecords commits the highest marked offset per partition, so
+				// a later successful record still advances past an earlier failed one.
+				if ctx.Err() != nil || errors.IsContextError(err) {
+					logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s) while cancelled, leaving it uncommitted for redelivery: %v", topic, messageKey(msg), err)
+
+					return err
+				}
+
 				logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping: %v", topic, messageKey(msg), err)
 			}
 			return nil

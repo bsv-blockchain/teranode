@@ -882,8 +882,15 @@ type QueueStatsMessage struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	QueueCount         int64                  `protobuf:"varint,1,opt,name=queueCount,proto3" json:"queueCount,omitempty"`                 // the current depth of the ingest queue
 	QueueHeadAgeMillis int64                  `protobuf:"varint,2,opt,name=queueHeadAgeMillis,proto3" json:"queueHeadAgeMillis,omitempty"` // how long the oldest queued batch has been waiting, in milliseconds (0 when empty)
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// The drain floor this producer applies before a queued batch is eligible to
+	// be dequeued, in milliseconds. Under load the head age structurally includes
+	// this hold-back, so a reader that makes a control decision on the age must
+	// subtract the value reported here rather than its own setting: the two
+	// settings contexts are independent processes, and a mismatch would otherwise
+	// either pause ingest forever or disable the control entirely, silently.
+	DoubleSpendWindowMillis int64 `protobuf:"varint,3,opt,name=doubleSpendWindowMillis,proto3" json:"doubleSpendWindowMillis,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *QueueStatsMessage) Reset() {
@@ -926,6 +933,13 @@ func (x *QueueStatsMessage) GetQueueCount() int64 {
 func (x *QueueStatsMessage) GetQueueHeadAgeMillis() int64 {
 	if x != nil {
 		return x.QueueHeadAgeMillis
+	}
+	return 0
+}
+
+func (x *QueueStatsMessage) GetDoubleSpendWindowMillis() int64 {
+	if x != nil {
+		return x.DoubleSpendWindowMillis
 	}
 	return 0
 }
@@ -1328,12 +1342,13 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x0eremoveMapCount\x18\t \x01(\rR\x0eremoveMapCount\x12\x1a\n" +
 	"\bsubtrees\x18\n" +
 	" \x03(\tR\bsubtrees\x12.\n" +
-	"\x12queueHeadAgeMillis\x18\v \x01(\x03R\x12queueHeadAgeMillis\"c\n" +
+	"\x12queueHeadAgeMillis\x18\v \x01(\x03R\x12queueHeadAgeMillis\"\x9d\x01\n" +
 	"\x11QueueStatsMessage\x12\x1e\n" +
 	"\n" +
 	"queueCount\x18\x01 \x01(\x03R\n" +
 	"queueCount\x12.\n" +
-	"\x12queueHeadAgeMillis\x18\x02 \x01(\x03R\x12queueHeadAgeMillis\"\\\n" +
+	"\x12queueHeadAgeMillis\x18\x02 \x01(\x03R\x12queueHeadAgeMillis\x128\n" +
+	"\x17doubleSpendWindowMillis\x18\x03 \x01(\x03R\x17doubleSpendWindowMillis\"\\\n" +
 	"\x1cGetCurrentDifficultyResponse\x12\x1e\n" +
 	"\n" +
 	"difficulty\x18\x01 \x01(\x01R\n" +
