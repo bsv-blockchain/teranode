@@ -83,15 +83,22 @@ func bip34Coinbase(t *testing.T) *bt.Tx {
 // block.Valid). It proves the reorder's CLASSIFICATION consequence at the service boundary, so it
 // FAILS if the reorder is reverted (block.Valid would then return corrupt for the merkle-bound
 // block, and the service would strike + re-download instead of condemning it invalid):
-//   - a merkle-BOUND block with a wrong BIP34 height is condemned INVALID (not corrupt);
-//   - a coinbase-only (unbound) block with a wrong BIP34 height is CORRUPT (not invalid).
+//   - a block bound by its subtree merkle root, with a wrong BIP34 height, is condemned INVALID
+//     (not corrupt);
+//   - a coinbase-only block is bound by the coinbase txid (for a single-transaction block the
+//     header merkle root IS the coinbase txid), so a wrong BIP34 height on it is equally INVALID.
 //
-// Neither is persisted, and for a distinct reason each: the corrupt one is never stored (corrupt
-// bodies are re-downloaded, not stored), and the invalid one CANNOT be stored — StoreBlock's
-// validateCoinbaseHeight (stores/blockchain/sql/StoreBlock.go) independently re-derives the height
-// and rejects any block whose coinbase height != derived height, which is exactly the bad-BIP34
-// condition. So condemning a bad-BIP34 block invalid does not achieve DB poison; see the note at the
-// BIP34 reorder in model/Block.go. The revert-failure property lives entirely in the classification.
+// Both are persisted with invalid=true. StoreBlock's validateCoinbaseHeight
+// (stores/blockchain/sql/StoreBlock.go) re-derives the height and rejects exactly the bad-BIP34
+// condition, but it is skipped for blocks written as invalid — recording that a block failed a
+// consensus rule must not re-apply the rule it records — so the invalid verdict is durable and a
+// re-announcement is answered from the store instead of a full re-validation. The revert-failure
+// property lives in the classification: reverting the merkle-first reorder makes block.Valid return
+// corrupt here instead, and nothing is stored.
+//
+// The no-poison rule for an UNBOUND body is pinned elsewhere: at the service boundary by the
+// emptied-subtree-list case (a body claiming no subtrees whose header merkle root is not the
+// coinbase txid is corrupt and never stored), and at the model level by the nil-subtree-store case.
 //
 // CheckBlockSubtrees is mocked to succeed so the only failure comes from block.Valid's BIP34 gate;
 // the merkle binding itself runs for real against the stored subtree.
@@ -102,7 +109,7 @@ func TestValidateBlock_BIP34Reorder_Service(t *testing.T) {
 	params := chaincfg.RegressionNetParams
 	params.BIP0034Height = 1
 
-	t.Run("merkle-bound bad-BIP34 -> condemned invalid (not corrupt); store refuses to persist it", func(t *testing.T) {
+	t.Run("merkle-bound bad-BIP34 -> condemned invalid (not corrupt) and persisted as invalid", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -160,18 +167,22 @@ func TestValidateBlock_BIP34Reorder_Service(t *testing.T) {
 			"a merkle-bound wrong BIP34 height must be condemned invalid, got: %v", err)
 		require.False(t, errors.IsBlockCorrupt(err), "must NOT be corrupt")
 
-		// Persistence is NOT achievable and the test asserts that honestly: the service classifies the
-		// block invalid and ATTEMPTS storeInvalidBlock, but StoreBlock.validateCoinbaseHeight
-		// (stores/blockchain/sql/StoreBlock.go:898) re-derives the height and rejects any block whose
-		// coinbase height != derived height — precisely the bad-BIP34 condition. The store error is
-		// logged and swallowed, so the block is never persisted. A bad-BIP34 block therefore cannot be
-		// DB-poisoned; the invalid verdict only stops the corrupt re-download/strike path.
+		// The invalid verdict is REMEMBERED. storeInvalidBlock writes the block with invalid=true, and
+		// the store's own coinbase-height guard (StoreBlock.validateCoinbaseHeight) is skipped for
+		// invalid writes, so the write no longer fails on the very rule it is recording. Without that
+		// skip the store error is logged and swallowed and the block is re-validated at full cost on
+		// every re-announcement.
 		exists, existsErr := blockchainClient.GetBlockExists(ctx, block.Header.Hash())
 		require.NoError(t, existsErr)
-		require.False(t, exists, "the store refuses to persist a bad-BIP34 block, so it is NOT poisoned in the DB")
+		require.True(t, exists, "a condemned bad-BIP34 block must be persisted so the verdict is remembered")
+
+		_, meta, metaErr := blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
+		require.NoError(t, metaErr)
+		require.NotNil(t, meta)
+		require.True(t, meta.Invalid, "the stored row must carry the invalid verdict, not just exist")
 	})
 
-	t.Run("coinbase-only bad-BIP34 -> corrupt, NOT persisted (never poison an unbound body)", func(t *testing.T) {
+	t.Run("coinbase-only bad-BIP34 -> bound by the coinbase txid, condemned invalid and persisted", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -192,8 +203,12 @@ func TestValidateBlock_BIP34Reorder_Service(t *testing.T) {
 
 		coinbaseTx := bip34Coinbase(t)
 
-		// No subtrees: block.Valid's merkle block is skipped, merkleRootChecked stays false, so BIP34
-		// runs on an UNBOUND body and must classify corrupt — never invalid=true.
+		// No subtrees, and the header merkle root IS the coinbase txid — the body's claim that the
+		// block holds only the coinbase, checked against the header. That is a real merkle binding
+		// (a single-transaction block's merkle root is its coinbase txid), so the body is BOUND and a
+		// wrong BIP34 height on it is genuine consensus invalidity, exactly as for a subtree-bound
+		// body. A coinbase-only body whose merkle root does NOT match is corrupt before BIP34 ever
+		// runs, which is what keeps a truncated subtree list from being poisoned.
 		hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, coinbaseTx.TxIDChainHash())
 		block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{}, 1, uint64(coinbaseTx.Size()), 100, 0) //nolint:gosec
 		require.NoError(t, err)
@@ -205,14 +220,19 @@ func TestValidateBlock_BIP34Reorder_Service(t *testing.T) {
 		// Reached the height-COMPARISON, not the extraction error.
 		require.False(t, errors.Is(err, errors.ErrBlockCoinbaseMissingHeight),
 			"must reach the height-mismatch check, not fail coinbase-height extraction, got: %v", err)
-		// Classification: unbound → corrupt, never invalid (merkleRootChecked false).
-		require.True(t, errors.IsBlockCorrupt(err),
-			"an unbound (coinbase-only) wrong BIP34 height must be corrupt (re-download), got: %v", err)
-		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "an unbound body must never be poisoned on a BIP34 failure")
+		// Classification: bound by the coinbase txid → invalid, never corrupt.
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid),
+			"a coinbase-only body is bound by the coinbase txid, so a wrong BIP34 height must be condemned invalid, got: %v", err)
+		require.False(t, errors.IsBlockCorrupt(err), "a bound body must not be classified corrupt")
 
-		// No-poison outcome.
+		// The verdict is remembered, for the same reason as the subtree-bound case above.
 		exists, existsErr := blockchainClient.GetBlockExists(ctx, block.Header.Hash())
 		require.NoError(t, existsErr)
-		require.False(t, exists, "an unbound bad-BIP34 body must NOT be persisted (no poison)")
+		require.True(t, exists, "a condemned bad-BIP34 block must be persisted so the verdict is remembered")
+
+		_, meta, metaErr := blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
+		require.NoError(t, metaErr)
+		require.NotNil(t, meta)
+		require.True(t, meta.Invalid, "the stored row must carry the invalid verdict, not just exist")
 	})
 }

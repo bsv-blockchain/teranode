@@ -853,15 +853,14 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// ContextualCheckBlock, after the merkle binding in CheckBlock. BIP34 depends only on the coinbase
 	// (checked above) and b.Height, so it evaluates correctly in this position.
 	//
-	// Persistence limitation (do not be misled by "condemn"): classifying a merkle-bound bad-BIP34
-	// block invalid is the correct consensus verdict and stops the corrupt re-download/strike path,
-	// but it does NOT achieve DB poison. The blockchain store's own coinbase-height guard
-	// (StoreBlock.validateCoinbaseHeight, stores/blockchain/sql/StoreBlock.go) re-derives the height
-	// and rejects any block whose coinbase height != derived height — exactly this condition — so the
-	// downstream storeInvalidBlock -> AddBlock fails, the store error is logged and swallowed, and the
-	// block is never persisted. A bad-BIP34 block thus cannot be remembered as invalid; it is
-	// re-validated (and re-rejected here) on each re-announcement instead. This is a store-layer
-	// property, not fixable at this site.
+	// Persistence: a merkle-bound bad-BIP34 block is condemned invalid and IS persisted. The
+	// blockchain store's own coinbase-height guard (StoreBlock.validateCoinbaseHeight,
+	// stores/blockchain/sql/StoreBlock.go) re-derives the height and rejects exactly this condition,
+	// but it is deliberately skipped when a block is written as invalid: storing invalid=true is the
+	// act of recording that the block failed a consensus rule, so re-applying that same rule as a
+	// precondition on the write would make the failure unrecordable. The downstream storeInvalidBlock
+	// -> AddBlock therefore succeeds, and a re-announcement of the same hash is answered from the
+	// stored invalid verdict instead of a full re-validation (bitcoin-sv/teranode#4692).
 	//
 	// The explicit b.Height > 0 guard is MANDATORY: on teratestnet/tstn BIP0034Height == 0, so
 	// heightAtOrAfterActivation(0, 0) is true and a height-0 (genesis-like) block would otherwise
