@@ -169,7 +169,8 @@ The `Start` function is responsible for commencing the P2P service:
 2. **HTTP Endpoints**:
 
     - Sets up a health check endpoint (`/health`) that responds with "OK".
-    - Adds a WebSocket endpoint (`/ws`) for real-time communication via `s.HandleWebSocket`.
+    - Adds a WebSocket endpoint (`/p2p-ws`) for real-time communication via `s.HandleWebSocket`.
+    - Configures HTTP server timeouts (read header, read, write, idle) so slow or stalled clients cannot hold connections open indefinitely; established WebSocket connections are exempt because connection deadlines are cleared on upgrade.
 
 3. **Start HTTP Server**:
 
