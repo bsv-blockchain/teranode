@@ -781,29 +781,41 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		return false, errors.NewBlockCorruptError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
 	}
 
-	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
-	// Parity with bitcoin-sv CheckCoinbase (bad-cb-length): inclusive 2 <= size <= MaxCoinbaseScriptSigSize.
-	// IsCoinbase() above guarantees exactly one input, so Inputs[0] is safe to index; a nil
-	// UnlockingScript is treated as length 0 and fails the lower bound, matching an empty scriptSig.
-	scriptSigLen := 0
-	if us := b.CoinbaseTx.Inputs[0].UnlockingScript; us != nil {
-		scriptSigLen = len(*us)
-	}
-
-	if scriptSigLen < 2 || scriptSigLen > int(settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
-		return false, errors.NewBlockCorruptError("[BLOCK][%s] bad coinbase length", b.String())
-	}
-
-	// merkleRootChecked records that CheckMerkleRoot (step 8) actually ran and bound
-	// the block body to the header. Block.Valid enforces this as a precondition for
-	// skipping validOrderAndBlessed below the checkpoint (step 12): the skip's safety
-	// rests entirely on that binding, so a caller that did not run it (nil
-	// subtreeStore, or no subtrees) must never take the skip.
+	// merkleRootChecked records that the block body was bound to the header — either by
+	// CheckMerkleRoot (step 8) over the loaded subtrees, or by the coinbase-only binding
+	// below. Block.Valid enforces this as a precondition for skipping validOrderAndBlessed
+	// below the checkpoint (step 12): the skip's safety rests entirely on that binding, so
+	// a caller that did not obtain it (nil subtreeStore with subtrees present) must never
+	// take the skip. It also selects the classification of every body-derived consensus
+	// failure below, via bindErr.
 	merkleRootChecked := false
 
-	// only do the subtree checks if we have a subtree store
-	// missing the subtreeStore should only happen when we are validating an internal block
-	if subtreeStore != nil && len(b.Subtrees) > 0 {
+	if len(b.Subtrees) == 0 {
+		// A body with no subtrees claims the block holds only the coinbase. That claim is
+		// checkable against the header with no subtree store at all: for a single-transaction
+		// block the merkle root IS the coinbase txid (svnode BlockMerkleRoot over a one-element
+		// vector). So this is a real merkle binding, and it is what closes the truncated-subtree-list
+		// hole (freemans13 item 1 / bitcoin-sv/teranode#4692): an honest multi-transaction hash
+		// served with an emptied subtree list fails here as CORRUPT and is re-downloaded, instead of
+		// reaching the fee arithmetic (which would poison the honest hash) or passing it (which would
+		// accept a body with no transactions at all).
+		if !b.Header.HashMerkleRoot.IsEqual(b.CoinbaseTx.TxIDChainHash()) {
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but the header merkle root is not the coinbase txid", b.String())
+		}
+
+		// Defence in depth: a self-contradictory body (no subtrees but a transaction count above
+		// one). This is NOT the bound — TransactionCount is the same untrusted wire varint the
+		// emptied subtree list came from, so an attacker can simply set it to 1 — but it is a free
+		// consistency check on a shape that can never be honest.
+		if b.TransactionCount > 1 {
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
+		}
+
+		merkleRootChecked = true
+	} else if subtreeStore != nil {
+		// only do the subtree checks if we have a subtree store
+		// missing the subtreeStore should only happen when we are validating an internal block
+		//
 		// 6. Get and validate any missing subtrees.
 		if err = b.GetAndValidateSubtrees(ctx, logger, subtreeStore, settings.Block.GetAndValidateSubtreesConcurrency); err != nil {
 			return false, err
@@ -840,75 +852,23 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		merkleRootChecked = true
 	}
 
-	// BIP34 (https://en.bitcoin.it/wiki/BIP_0034) forces miners to encode the block height in the
-	// coinbase tx; it activates per network at ChainCfgParams.BIP0034Height (skipped below that
-	// height). This check deliberately runs AFTER the merkle binding above (freemans13 item 3 /
-	// bitcoin-sv/teranode#4692): the coinbase is committed by the merkle root, so only once the body is
-	// merkle-bound is a wrong BIP34 height genuine consensus invalidity, condemnable once. An attacker
-	// cannot forge a merkle-matching body with a bad coinbase (the root commits the exact coinbase
-	// bytes); a transit-corrupted coinbase changes the coinbase txid so CheckMerkleRoot fails first
-	// (corrupt -> re-download). On an UNBOUND body (coinbase-only / no subtrees, merkleRootChecked
-	// false) the failure stays corrupt so it is re-downloaded, never poisoned — preserving the
-	// bound-before-poisoning rule. This mirrors svnode, where bad-cb-height lives in
-	// ContextualCheckBlock, after the merkle binding in CheckBlock. BIP34 depends only on the coinbase
-	// (checked above) and b.Height, so it evaluates correctly in this position.
-	//
-	// Persistence: a merkle-bound bad-BIP34 block is condemned invalid and IS persisted. The
-	// blockchain store's own coinbase-height guard (StoreBlock.validateCoinbaseHeight,
-	// stores/blockchain/sql/StoreBlock.go) re-derives the height and rejects exactly this condition,
-	// but it is deliberately skipped when a block is written as invalid: storing invalid=true is the
-	// act of recording that the block failed a consensus rule, so re-applying that same rule as a
-	// precondition on the write would make the failure unrecordable. The downstream storeInvalidBlock
-	// -> AddBlock therefore succeeds, and a re-announcement of the same hash is answered from the
-	// stored invalid verdict instead of a full re-validation (bitcoin-sv/teranode#4692).
-	//
-	// The explicit b.Height > 0 guard is MANDATORY: on teratestnet/tstn BIP0034Height == 0, so
-	// heightAtOrAfterActivation(0, 0) is true and a height-0 (genesis-like) block would otherwise
-	// attempt ExtractCoinbaseHeight — contradicting the genesis exemption CheckBlockVersion applies.
-	// Version < 2 blocks are already rejected above (bad-version), so no version sub-condition here.
-	if b.Height > 0 && heightAtOrAfterActivation(b.Height, settings.ChainCfgParams.BIP0034Height) {
-		// bindErr classifies a BIP34 failure by whether the body was merkle-bound: a bound body's
-		// coinbase IS the miner's committed coinbase (wrong height -> genuine invalidity, condemn);
-		// an unbound body can only be corrupt (re-download, never poison).
-		bindErr := func(format string, args ...interface{}) error {
-			if merkleRootChecked {
-				return errors.NewBlockInvalidError(format, args...)
-			}
-
-			return errors.NewBlockCorruptError(format, args...)
-		}
-
-		height, err := b.ExtractCoinbaseHeight()
-		if err != nil {
-			return false, bindErr("[BLOCK][%s] error extracting coinbase height", b.String(), err)
-		}
-
-		if height != b.Height {
-			return false, bindErr("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
-		}
-	}
-
-	// 9. Check that the total fees of the block are less than or equal to the block reward.
-	// 10. Check that the coinbase transaction includes the correct block reward.
-	if b.Height > 0 {
-		// The below-checkpoint fee=0 skip is only tolerated on a store that can actually
-		// produce those blocks (the outpoint-only fast path); every other store keeps full
-		// no-inflation enforcement below the checkpoint. Computed here because model cannot
-		// see the store type directly. checkpointConfirmedAncestor is the caller-supplied
-		// ancestry predicate (SetCheckpointConfirmedAncestor); it defaults false, so a caller
-		// that does not set it gets full enforcement.
-		storeSupportsOutpointOnly := txMetaStore != nil && txMetaStore.SupportsOutpointOnlySpend()
-
-		err = b.checkBlockRewardAndFees(settings.ChainCfgParams, storeSupportsOutpointOnly, b.checkpointConfirmedAncestor)
-		if err != nil {
-			return false, err
-		}
+	// bindErr is the single classifier for every body-derived consensus failure from here on:
+	// a bound body IS the miner's committed body, so the failure is genuine invalidity and the
+	// hash can be condemned once; an unbound body is equally consistent with transport corruption
+	// or attacker junk, so it stays corrupt (re-download, strike the serving peer, never poison).
+	bindErr := func(format string, args ...interface{}) error {
+		return bindClassifiedError(merkleRootChecked, format, args...)
 	}
 
 	// 11. Check that there are no duplicate transactions in the block.
 	// CVE-2012-2459 guard — runs unconditionally so future callers passing nil subtreeStore
 	// don't silently skip dedup. checkDuplicateTransactions iterates SubtreeSlices in memory
-	// and does not need the subtree store directly.
+	// and does not need the subtree store directly. Deliberately ordered BEFORE the coinbase
+	// and fee checks below (freemans13 item 6 / bitcoin-sv/teranode#4692): svnode runs the
+	// mutation check in CheckBlock, ahead of the coinbase checks and ahead of
+	// ContextualCheckBlock's height and fee arithmetic. A body that is both mutated and
+	// fee-wrong is then classified by the stronger of the two rules (corrupt, re-download)
+	// rather than by the weaker one.
 	//
 	// b.txMap is allocated inside checkDuplicateTransactions (possibly mid-execution
 	// when a worker fails). The deferred releaseTxMap below ensures the pooled
@@ -916,6 +876,8 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// errors from checkDuplicateTransactions, the flush below, and
 	// validOrderAndBlessed. releaseTxMap is nil-safe, idempotent, and handles
 	// all three b.txMap variants (disk-backed, pooled in-memory, generic Closer).
+	// Installing the defer earlier than it used to be is inert: a defer runs at function
+	// exit wherever it was installed.
 	defer b.releaseTxMap()
 
 	err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency, settings.Block.DiskMapDirs)
@@ -942,9 +904,86 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// validation nodes. checkDuplicateTransactions' internal errgroup.Wait is the
 	// happens-before edge that guarantees all writes precede this Freeze.
 	// releaseTxMap resets the freeze on its way back to the pool (in-memory Clear)
-	// or discards the map (disk Close).
+	// or discards the map (disk Close). The checks between here and step 12 read only
+	// the coinbase and the subtree fee totals, never b.txMap, so the frozen map is
+	// still written-then-read in that order.
 	if b.txMap != nil {
 		b.txMap.Freeze()
+	}
+
+	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
+	// Parity with bitcoin-sv CheckCoinbase (bad-cb-length): inclusive 2 <= size <= MaxCoinbaseScriptSigSize.
+	// IsCoinbase() above guarantees exactly one input, so Inputs[0] is safe to index; a nil
+	// UnlockingScript is treated as length 0 and fails the lower bound, matching an empty scriptSig.
+	// Deliberately AFTER the merkle binding (freemans13 item 5 / bitcoin-sv/teranode#4692): a bound
+	// body's coinbase IS the miner's committed coinbase, so a bad length on it is genuine consensus
+	// invalidity and condemnable once (svnode marks the block index failed); on an unbound body it
+	// stays corrupt so it is re-downloaded, never poisoned. Ordered before the BIP34 height check so
+	// a truncated scriptSig is reported as bad-cb-length rather than as a coinbase-height extraction
+	// failure.
+	scriptSigLen := 0
+	if us := b.CoinbaseTx.Inputs[0].UnlockingScript; us != nil {
+		scriptSigLen = len(*us)
+	}
+
+	if scriptSigLen < 2 || scriptSigLen > int(settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
+		return false, bindErr("[BLOCK][%s] bad coinbase length", b.String())
+	}
+
+	// BIP34 (https://en.bitcoin.it/wiki/BIP_0034) forces miners to encode the block height in the
+	// coinbase tx; it activates per network at ChainCfgParams.BIP0034Height (skipped below that
+	// height). This check deliberately runs AFTER the merkle binding above (freemans13 item 3 /
+	// bitcoin-sv/teranode#4692): the coinbase is committed by the merkle root, so only once the body is
+	// merkle-bound is a wrong BIP34 height genuine consensus invalidity, condemnable once. An attacker
+	// cannot forge a merkle-matching body with a bad coinbase (the root commits the exact coinbase
+	// bytes); a transit-corrupted coinbase changes the coinbase txid so CheckMerkleRoot fails first
+	// (corrupt -> re-download). On an UNBOUND body (coinbase-only / no subtrees, merkleRootChecked
+	// false) the failure stays corrupt so it is re-downloaded, never poisoned — preserving the
+	// bound-before-poisoning rule. This mirrors svnode, where bad-cb-height lives in
+	// ContextualCheckBlock, after the merkle binding in CheckBlock. BIP34 depends only on the coinbase
+	// (checked above) and b.Height, so it evaluates correctly in this position. "Unbound" here means
+	// a caller that supplied subtrees with no subtree store; a body carrying no subtrees at all IS
+	// bound, by the coinbase-txid rule applied at the binding block.
+	//
+	// Persistence: a merkle-bound bad-BIP34 block is condemned invalid and IS persisted. The
+	// blockchain store's own coinbase-height guard (StoreBlock.validateCoinbaseHeight,
+	// stores/blockchain/sql/StoreBlock.go) re-derives the height and rejects exactly this condition,
+	// but it is deliberately skipped when a block is written as invalid: storing invalid=true is the
+	// act of recording that the block failed a consensus rule, so re-applying that same rule as a
+	// precondition on the write would make the failure unrecordable. The downstream storeInvalidBlock
+	// -> AddBlock therefore succeeds, and a re-announcement of the same hash is answered from the
+	// stored invalid verdict instead of a full re-validation (bitcoin-sv/teranode#4692).
+	//
+	// The explicit b.Height > 0 guard is MANDATORY: on teratestnet/tstn BIP0034Height == 0, so
+	// heightAtOrAfterActivation(0, 0) is true and a height-0 (genesis-like) block would otherwise
+	// attempt ExtractCoinbaseHeight — contradicting the genesis exemption CheckBlockVersion applies.
+	// Version < 2 blocks are already rejected above (bad-version), so no version sub-condition here.
+	if b.Height > 0 && heightAtOrAfterActivation(b.Height, settings.ChainCfgParams.BIP0034Height) {
+		height, err := b.ExtractCoinbaseHeight()
+		if err != nil {
+			return false, bindErr("[BLOCK][%s] error extracting coinbase height", b.String(), err)
+		}
+
+		if height != b.Height {
+			return false, bindErr("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
+		}
+	}
+
+	// 9. Check that the total fees of the block are less than or equal to the block reward.
+	// 10. Check that the coinbase transaction includes the correct block reward.
+	if b.Height > 0 {
+		// The below-checkpoint fee=0 skip is only tolerated on a store that can actually
+		// produce those blocks (the outpoint-only fast path); every other store keeps full
+		// no-inflation enforcement below the checkpoint. Computed here because model cannot
+		// see the store type directly. checkpointConfirmedAncestor is the caller-supplied
+		// ancestry predicate (SetCheckpointConfirmedAncestor); it defaults false, so a caller
+		// that does not set it gets full enforcement.
+		storeSupportsOutpointOnly := txMetaStore != nil && txMetaStore.SupportsOutpointOnlySpend()
+
+		err = b.checkBlockRewardAndFees(settings.ChainCfgParams, storeSupportsOutpointOnly, b.checkpointConfirmedAncestor, merkleRootChecked)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// 12. Check that all transactions are in the valid order and blessed
@@ -953,9 +992,10 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	//     the outpoint-only fast path: the checkpoint-anchored chain already
 	//     certifies order/blessing. The integrity floor still runs earlier in this
 	//     function (steps 1-11): PoW and checkDuplicateTransactions unconditionally.
-	//     The skip additionally REQUIRES merkleRootChecked — CheckMerkleRoot (step 8)
-	//     must have run and bound the body to the checkpoint-certified header — so it
-	//     is never taken on a nil-subtreeStore / no-subtree caller where that binding
+	//     The skip additionally REQUIRES merkleRootChecked — the body must have been
+	//     bound to the checkpoint-certified header, either by CheckMerkleRoot (step 8)
+	//     or by the coinbase-txid rule for a body with no subtrees — so it is never
+	//     taken on a nil-subtreeStore caller with subtrees present, where that binding
 	//     is absent (see skipOrderAndBlessedBelowCheckpoint, which shares the fee
 	//     skip's safety contract but additionally requires the
 	//     OutpointOnlyBelowCheckpoint opt-in, so it engages on a subset of the
@@ -980,6 +1020,25 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	}
 
 	return true, nil
+}
+
+// bindClassifiedError classifies a body-derived consensus failure by whether the body was
+// merkle-bound to the header. A bound body IS the miner's committed body, so the failure is
+// genuine invalidity and the hash can be condemned once. An unbound body is equally consistent
+// with transport corruption or attacker junk, so it stays corrupt: re-download, strike the
+// serving peer, never poison (bitcoin-sv/teranode#4692; svnode's CorruptionOrDoS stance in
+// bitcoin-sv/src/validation.cpp).
+//
+// This is the single definition of the rule. Callers must NOT instead wrap an invalid error
+// inside a corrupt one: (*Error).Is walks the wrapped chain, so a corrupt error wrapping an
+// invalid one would still satisfy errors.Is(err, ErrBlockInvalid) and would re-open every
+// poisoning branch downstream.
+func bindClassifiedError(merkleRootChecked bool, format string, args ...interface{}) error {
+	if merkleRootChecked {
+		return errors.NewBlockInvalidError(format, args...)
+	}
+
+	return errors.NewBlockCorruptError(format, args...)
 }
 
 // releaseTxMap returns b.txMap to the pool (in-memory variant) or closes the
@@ -1041,12 +1100,14 @@ func (b *Block) releaseTxMap() {
 // hash already certifies transaction order, uniqueness and blessing: a block
 // whose transactions differed in any way would produce a different merkle root
 // and could not carry the checkpoint-anchored header chain. PoW and
-// checkDuplicateTransactions (CVE-2012-2459) run unconditionally. CheckMerkleRoot
-// (step 8) runs only when a subtree store and subtrees are present, so it is NOT
-// unconditional — Block.Valid therefore enforces "CheckMerkleRoot ran"
-// (merkleRootChecked) as a precondition of taking this skip, and never skips
-// validOrderAndBlessed unless the local bytes have been bound to the certified
-// chain. This mirrors the native catchup path (quickValidateBlock), which never
+// checkDuplicateTransactions (CVE-2012-2459) run unconditionally. The merkle
+// binding is NOT unconditional: it is CheckMerkleRoot (step 8) when subtrees are
+// present and a subtree store was supplied, and the coinbase-txid rule when the
+// body carries no subtrees, but a caller that supplies subtrees with no subtree
+// store obtains no binding at all. Block.Valid therefore enforces "the body was
+// bound" (merkleRootChecked) as a precondition of taking this skip, and never
+// skips validOrderAndBlessed unless the local bytes have been bound to the
+// certified chain. This mirrors the native catchup path (quickValidateBlock), which never
 // runs Valid() below the checkpoint at all. All below-checkpoint gates now share
 // OutpointOnlyEligible/BelowCheckpoint, which excludes height 0 everywhere.
 func (b *Block) skipOrderAndBlessedBelowCheckpoint(tSettings *settings.Settings, txMetaStore utxo.Store) bool {
@@ -1069,7 +1130,14 @@ func (b *Block) skipOrderAndBlessedBelowCheckpoint(tSettings *settings.Settings,
 // height of the block we are checking for.
 
 // TODO - do this another way, if necessary
-func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOutpointOnly, checkpointConfirmedAncestor bool) error {
+//
+// merkleRootChecked selects the classification of every verdict this function returns, via
+// bindClassifiedError: the fee/reward arithmetic reads the coinbase outputs and the per-subtree
+// fee totals, both of which come from the received body, so on an unbound body a mismatch is
+// evidence of a broken download rather than of an invalid block (freemans13 item 1 /
+// bitcoin-sv/teranode#4692). It is a parameter rather than a wrap at the call site because
+// wrapping would leave errors.Is(err, ErrBlockInvalid) true on a corrupt error.
+func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOutpointOnly, checkpointConfirmedAncestor, merkleRootChecked bool) error {
 	if b.Height == 0 {
 		return nil // Skip this check
 	}
@@ -1122,7 +1190,7 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 	for _, tx := range b.CoinbaseTx.Outputs {
 		sum := coinbaseOutputSatoshis + tx.Satoshis
 		if sum < coinbaseOutputSatoshis {
-			return errors.NewBlockInvalidError("[checkBlockRewardAndFees][%s] coinbase output satoshis overflow uint64", b.String())
+			return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] coinbase output satoshis overflow uint64", b.String())
 		}
 
 		coinbaseOutputSatoshis = sum
@@ -1138,7 +1206,7 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 
 		sum := subtreeFees + subtree.Fees
 		if sum < subtreeFees {
-			return errors.NewBlockInvalidError("[checkBlockRewardAndFees][%s] subtree fees overflow uint64", b.String())
+			return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] subtree fees overflow uint64", b.String())
 		}
 
 		subtreeFees = sum
@@ -1148,11 +1216,11 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 
 	allowedReward := subtreeFees + coinbaseReward
 	if allowedReward < subtreeFees {
-		return errors.NewBlockInvalidError("[checkBlockRewardAndFees][%s] fees + block subsidy overflow uint64", b.String())
+		return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] fees + block subsidy overflow uint64", b.String())
 	}
 
 	if coinbaseOutputSatoshis > allowedReward {
-		return errors.NewBlockInvalidError("[checkBlockRewardAndFees][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, allowedReward)
+		return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, allowedReward)
 	}
 
 	return nil
