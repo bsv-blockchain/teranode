@@ -1507,6 +1507,41 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] candidate is stale: chain has already advanced past its parent", jobID)
 	}
 
+	nTime := job.MiningCandidate.Time
+	if req.Time != nil {
+		nTime = *req.Time
+	}
+
+	// A miner may replace the candidate's timestamp, and the block.Valid call
+	// below passes no currentChain, so it skips the median-time rule entirely.
+	// Without this guard an ntime-rolling miner — or a pool restamping from its
+	// own lagging clock — puts us straight back to a locally accepted,
+	// peer-rejected block, the exact defect the candidate-time floor exists to
+	// prevent. The comparison is against the consensus floor rather than the
+	// candidate's own Time, which is usually just the wall clock: rolling ntime
+	// back a few seconds within a job is normal pool behaviour and must stay
+	// legal. Rejecting here rather than letting it reach block.Valid matters
+	// because that failure path treats an invalid block as a subtree-processor
+	// fault and resets block assembly; a bad miner timestamp is not that. The
+	// floor is the memoized value the candidate was built from, so this costs no
+	// round-trip, and when it is unknown there is nothing to enforce.
+	if minTime, ok := ba.blockAssembler.MinCandidateTime(hashPrevBlock); ok && int64(nTime) < minTime {
+		// Distinguish the two ways to arrive here, because they are different
+		// operator problems. Usually the miner replaced the timestamp and the
+		// candidate itself was fine. But when the offending nTime is the
+		// candidate's own, this node served work below the floor: the lookup was
+		// failing when the job was built, so it memoized nothing and degraded to
+		// the wall clock, and a later poll on the same parent then succeeded and
+		// memoized the floor this now enforces. Rejecting is still right — that
+		// block is peer-invalid — but "we served bad work" needs to be visible
+		// as ours rather than read as a misbehaving miner.
+		if nTime == job.MiningCandidate.Time {
+			ba.logger.Warnf("[BlockAssembly][%s] rejecting a solution against a candidate this node served below the parent chain's median-time-past floor: candidate nTime %d, floor %d; the floor lookup was failing when the candidate was built and has since recovered", jobID, nTime, minTime)
+		}
+
+		return nil, errors.NewProcessingError("[BlockAssembly][%s] submitted nTime %d is below the parent chain's median-time-past floor %d, so every peer would reject the block", jobID, nTime, minTime)
+	}
+
 	var coinbaseTx *bt.Tx
 
 	if req.CoinbaseTx != nil {
@@ -1610,11 +1645,6 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	version := job.MiningCandidate.Version
 	if req.Version != nil {
 		version = *req.Version
-	}
-
-	nTime := job.MiningCandidate.Time
-	if req.Time != nil {
-		nTime = *req.Time
 	}
 
 	block := &model.Block{
