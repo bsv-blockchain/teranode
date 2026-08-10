@@ -13,6 +13,21 @@ import (
 // field against its realistic maximum so a message inside the cap cannot smuggle
 // a padded field into the peer registry, the logs, or the WebSocket broadcast
 // (where one inbound message fans out to every connected /p2p-ws client).
+//
+// Fields come in two classes, handled differently on ingress:
+//
+//   - Protocol-format fields (peer IDs, hashes, headers, chainwork, URLs) have
+//     a well-defined shape every honest node produces. A violation is a
+//     protocol violation: the message is dropped and the sender scored, same
+//     as a spoofed peer ID (validateFields).
+//   - Display-only free text (client name, miner name, version, rejection
+//     reason, ...) is telemetry that may embed third-party or operator input —
+//     miner names come from coinbase tags, reasons from validator error
+//     chains. Rejecting those would let a miner's coinbase or a long error get
+//     honest relaying nodes banned network-wide, and would suppress block
+//     announcements (the catchup trigger) over a cosmetic field. They are
+//     sanitized in place instead: control/non-printable runes stripped and the
+//     value truncated to its bound (sanitizeFields).
 const (
 	maxGossipPeerIDLen     = 128  // libp2p peer IDs are ~52 chars base58
 	maxGossipClientNameLen = 128  // operator-configured client name
@@ -31,12 +46,13 @@ const (
 )
 
 // checkGossipString rejects a peer-supplied string that exceeds maxLen bytes,
-// is not valid UTF-8, or contains control characters (guards log injection and
-// makes the value safe to relay). Non-ASCII printable UTF-8 is allowed: miner
-// names extracted from coinbase tags legitimately contain it, and banning the
-// relaying peer for third-party coinbase content would let a miner get honest
-// nodes banned network-wide. The offending value is never echoed into the
-// returned error so an oversized field cannot inflate logs.
+// is not valid UTF-8, or contains non-printable runes (guards log injection
+// and bidi/line-separator spoofing tricks such as U+202E and U+2028; matches
+// the unicode.IsPrint filter extractMiner applies to coinbase tags). Printable
+// non-ASCII UTF-8 is allowed. The offending value is never echoed into the
+// returned error so an oversized field cannot inflate logs. Note this bounds
+// the value, it does not HTML-escape it — renderers are still responsible for
+// escaping.
 func checkGossipString(field, value string, maxLen int) error {
 	if len(value) > maxLen {
 		return errors.NewInvalidArgumentError("%s length %d exceeds max %d", field, len(value), maxLen)
@@ -47,8 +63,8 @@ func checkGossipString(field, value string, maxLen int) error {
 	}
 
 	for _, r := range value {
-		if unicode.IsControl(r) {
-			return errors.NewInvalidArgumentError("%s contains a control character", field)
+		if !unicode.IsPrint(r) {
+			return errors.NewInvalidArgumentError("%s contains a non-printable character", field)
 		}
 	}
 
@@ -73,8 +89,9 @@ func checkGossipHex(field, value string, maxLen int) error {
 	return nil
 }
 
-// gossipFieldCheck describes one string field to validate: free-text fields use
-// checkGossipString, hex fields (hashes, chainwork, headers) use checkGossipHex.
+// gossipFieldCheck describes one protocol-format field to validate: free-text
+// fields use checkGossipString, hex fields (hashes, chainwork, headers) use
+// checkGossipHex.
 type gossipFieldCheck struct {
 	field  string
 	value  string
@@ -99,36 +116,41 @@ func checkGossipFields(checks []gossipFieldCheck) error {
 	return nil
 }
 
-// validateFields bounds every peer-controlled string field of a node_status
-// message. Handlers call it straight after the peer-ID spoof check, before the
-// message reaches the notification channel, the peer registry, or the logs.
+// validateFields checks the protocol-format fields of a node_status message.
+// Handlers call it (after sanitizeFields) before the message reaches the
+// notification channel, the peer registry, or the logs.
 func (m *NodeStatusMessage) validateFields() error {
 	return checkGossipFields([]gossipFieldCheck{
 		{"peer_id", m.PeerID, maxGossipPeerIDLen, false},
-		{"client_name", m.ClientName, maxGossipClientNameLen, false},
-		{"type", m.Type, maxGossipTypeLen, false},
 		{"base_url", m.BaseURL, maxGossipURLLen, false},
 		{"propagation_url", m.PropagationURL, maxGossipURLLen, false},
-		{"version", m.Version, maxGossipVersionLen, false},
-		{"commit_hash", m.CommitHash, maxGossipCommitHashLen, false},
 		{"best_block_hash", m.BestBlockHash, maxGossipHashLen, true},
-		{"fsm_state", m.FSMState, maxGossipFSMStateLen, false},
-		{"miner_name", m.MinerName, maxGossipMinerNameLen, false},
-		{"listen_mode", m.ListenMode, maxGossipListenModeLen, false},
 		{"chain_work", m.ChainWork, maxGossipChainWorkLen, true},
 		{"sync_peer_id", m.SyncPeerID, maxGossipPeerIDLen, false},
 		{"sync_peer_block_hash", m.SyncPeerBlockHash, maxGossipHashLen, true},
-		{"storage", m.Storage, maxGossipStorageLen, false},
 	})
 }
 
-// validateFields bounds every peer-controlled string field of a block
-// announcement. Coinbase is charset-checked only: Teranode never populates it
-// and nothing consumes it, so its length is bounded by maxBlockMessageSize.
+// sanitizeFields bounds the display-only free-text fields of a node_status
+// message in place.
+func (m *NodeStatusMessage) sanitizeFields() {
+	m.ClientName = sanitizeGossipString(m.ClientName, maxGossipClientNameLen)
+	m.MinerName = sanitizeGossipString(m.MinerName, maxGossipMinerNameLen)
+	m.Version = sanitizeGossipString(m.Version, maxGossipVersionLen)
+	m.CommitHash = sanitizeGossipString(m.CommitHash, maxGossipCommitHashLen)
+	m.Type = sanitizeGossipString(m.Type, maxGossipTypeLen)
+	m.FSMState = sanitizeGossipString(m.FSMState, maxGossipFSMStateLen)
+	m.ListenMode = sanitizeGossipString(m.ListenMode, maxGossipListenModeLen)
+	m.Storage = sanitizeGossipString(m.Storage, maxGossipStorageLen)
+}
+
+// validateFields checks the protocol-format fields of a block announcement.
+// Coinbase is charset-checked only: Teranode does not populate it today and
+// nothing consumes it, so its length is bounded by maxBlockMessageSize (which
+// keeps headroom for it).
 func (m *BlockMessage) validateFields() error {
 	return checkGossipFields([]gossipFieldCheck{
 		{"peer_id", m.PeerID, maxGossipPeerIDLen, false},
-		{"client_name", m.ClientName, maxGossipClientNameLen, false},
 		{"data_hub_url", m.DataHubURL, maxGossipURLLen, false},
 		{"hash", m.Hash, maxGossipHashLen, true},
 		{"header", m.Header, maxGossipHeaderLen, true},
@@ -136,36 +158,53 @@ func (m *BlockMessage) validateFields() error {
 	})
 }
 
-// validateFields bounds every peer-controlled string field of a subtree
-// announcement.
+// sanitizeFields bounds the display-only free-text fields of a block
+// announcement in place.
+func (m *BlockMessage) sanitizeFields() {
+	m.ClientName = sanitizeGossipString(m.ClientName, maxGossipClientNameLen)
+}
+
+// validateFields checks the protocol-format fields of a subtree announcement.
 func (m *SubtreeMessage) validateFields() error {
 	return checkGossipFields([]gossipFieldCheck{
 		{"peer_id", m.PeerID, maxGossipPeerIDLen, false},
-		{"client_name", m.ClientName, maxGossipClientNameLen, false},
 		{"data_hub_url", m.DataHubURL, maxGossipURLLen, false},
 		{"hash", m.Hash, maxGossipHashLen, true},
 	})
 }
 
-// validateFields bounds every peer-controlled string field of a rejected-tx
-// message.
+// sanitizeFields bounds the display-only free-text fields of a subtree
+// announcement in place.
+func (m *SubtreeMessage) sanitizeFields() {
+	m.ClientName = sanitizeGossipString(m.ClientName, maxGossipClientNameLen)
+}
+
+// validateFields checks the protocol-format fields of a rejected-tx message.
 func (m *RejectedTxMessage) validateFields() error {
 	return checkGossipFields([]gossipFieldCheck{
 		{"peer_id", m.PeerID, maxGossipPeerIDLen, false},
-		{"client_name", m.ClientName, maxGossipClientNameLen, false},
 		{"tx_id", m.TxID, maxGossipHashLen, true},
-		{"reason", m.Reason, maxGossipReasonLen, false},
 	})
 }
 
-// sanitizeGossipString strips control characters and truncates the value to
-// maxLen bytes on a rune boundary. Applied on egress (our own published
-// messages) so locally sourced free text — operator-configured client names,
-// coinbase-derived miner names, validator rejection reasons — always passes the
-// ingress validation of remote peers running the same bounds.
+// sanitizeFields bounds the display-only free-text fields of a rejected-tx
+// message in place. The reason is validator error text and may legitimately be
+// long on un-upgraded peers, so it is truncated rather than treated as a
+// violation.
+func (m *RejectedTxMessage) sanitizeFields() {
+	m.ClientName = sanitizeGossipString(m.ClientName, maxGossipClientNameLen)
+	m.Reason = sanitizeGossipString(m.Reason, maxGossipReasonLen)
+}
+
+// sanitizeGossipString strips non-printable runes (and the U+FFFD replacement
+// runes strings.Map substitutes for invalid UTF-8 bytes) and truncates the
+// value to maxLen bytes on a rune boundary. Used on ingress for display-only
+// fields, and on egress for locally sourced free text — operator-configured
+// client names, coinbase-derived miner names, validator rejection reasons — so
+// our own published values always satisfy checkGossipString on remote peers.
 func sanitizeGossipString(value string, maxLen int) string {
 	value = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if !unicode.IsPrint(r) || r == utf8.RuneError {
 			return -1
 		}
 		return r

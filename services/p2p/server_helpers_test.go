@@ -407,6 +407,8 @@ func TestHandleBlockTopic_BoundsInflatedAdvertisedHeight(t *testing.T) {
 	}
 }
 
+// The non-hex hash now trips the per-field charset bound (checkGossipHex)
+// before parseHash; the observable invariants are unchanged.
 func TestHandleBlockTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
@@ -528,7 +530,8 @@ func TestHandleSubtreeTopic_PeerMapKeyedByCanonicalHash(t *testing.T) {
 }
 
 // A malformed subtree hash must be rejected before any use: no WebSocket
-// notification, no peerMapEntry, and no peer-activity credit.
+// notification, no peerMapEntry, and no peer-activity credit. The non-hex hash
+// now trips the per-field charset bound (checkGossipHex) before parseHash.
 func TestHandleSubtreeTopic_RejectsMalformedHash(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 

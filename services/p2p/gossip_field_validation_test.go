@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +26,8 @@ func TestCheckGossipString(t *testing.T) {
 	require.Error(t, checkGossipString("f", "tab\there", 64), "tab must be rejected")
 	require.Error(t, checkGossipString("f", "esc\x1b[31m", 64), "ANSI escape must be rejected")
 	require.Error(t, checkGossipString("f", "bad\xff\xfeutf8", 64), "invalid UTF-8 must be rejected")
+	require.Error(t, checkGossipString("f", "abc\u202edef", 64), "bidi override must be rejected (display spoofing)")
+	require.Error(t, checkGossipString("f", "abc\u2028def", 64), "line separator must be rejected")
 
 	// The error must not echo the value, so a padded field cannot inflate logs.
 	err := checkGossipString("f", strings.Repeat("A", 100), 64)
@@ -47,8 +51,20 @@ func TestSanitizeGossipString(t *testing.T) {
 	require.Equal(t, strings.Repeat("x", 8), sanitizeGossipString(strings.Repeat("x", 20), 8))
 	// Truncation must not split a multi-byte rune ("矿" is 3 bytes).
 	require.Equal(t, "矿", sanitizeGossipString("矿池", 4))
-	// Sanitized output always passes the corresponding check.
-	require.NoError(t, checkGossipString("f", sanitizeGossipString("evil\x00name"+strings.Repeat("p", 500), maxGossipClientNameLen), maxGossipClientNameLen))
+	require.Empty(t, sanitizeGossipString("anything", 0))
+
+	// Sanitized output must always pass the corresponding check, including for
+	// invalid UTF-8 input (the raw-miner-tag case: arbitrary coinbase bytes).
+	hostile := []string{
+		"evil\x00name" + strings.Repeat("p", 500),
+		"raw\xff\xfe\x01miner\x7ftag",
+		"bidi\u202eand\u2028seps",
+		strings.Repeat("\x1b[31mx", 100),
+	}
+	for _, in := range hostile {
+		out := sanitizeGossipString(in, maxGossipClientNameLen)
+		require.NoError(t, checkGossipString("f", out, maxGossipClientNameLen), "sanitize(%q) must pass validation", in)
+	}
 }
 
 // newGossipFieldTestServer extends the size-limit harness with a context so the
@@ -77,10 +93,12 @@ func requireNoNotification(t *testing.T, server *Server, msg string) {
 	}
 }
 
-func TestHandleNodeStatusTopic_OverlongClientNameRejected(t *testing.T) {
-	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
-	info, _ := reg.Get(remotePeerID.String())
-	baseline := info.LastMessageTime
+// A display-only field (client_name) breaching its bound is sanitized in
+// place, not treated as a protocol violation: the notification still flows,
+// but bounded — the broadcast amplification is closed without risking bans of
+// honest peers over telemetry text.
+func TestHandleNodeStatusTopic_OverlongClientNameTruncated(t *testing.T) {
+	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
 
 	// Within the whole-message cap, but the padded field breaches its bound.
 	msgBytes, err := json.Marshal(NodeStatusMessage{
@@ -92,28 +110,46 @@ func TestHandleNodeStatusTopic_OverlongClientNameRejected(t *testing.T) {
 
 	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
 
-	requireNoNotification(t, server, "padded node_status must not reach WebSocket clients")
-	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "padded node_status must not advance LastMessageTime")
-	require.Positive(t, banScore(), "field violation must be scored as a protocol violation")
+	select {
+	case n := <-server.notificationCh:
+		require.Len(t, n.ClientName, maxGossipClientNameLen, "client_name must be truncated to its bound")
+		data, err := json.Marshal(n)
+		require.NoError(t, err)
+		require.Less(t, len(data), 4096, "one 8KB inbound field must not fan out oversized")
+	default:
+		t.Fatal("sanitized node_status must still be forwarded")
+	}
+
+	require.Zero(t, banScore(), "display-text violation must not be scored")
 }
 
-func TestHandleNodeStatusTopic_ControlCharactersRejected(t *testing.T) {
+func TestHandleNodeStatusTopic_ControlCharactersStripped(t *testing.T) {
 	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
 
 	msgBytes, err := json.Marshal(NodeStatusMessage{
 		PeerID:     remotePeerID.String(),
-		ClientName: "evil\nclient",
+		ClientName: "evil\r\n[FORGED] client\x1b[2J",
 	})
 	require.NoError(t, err)
 
 	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
 
-	requireNoNotification(t, server, "node_status with control characters must not reach WebSocket clients")
-	require.Positive(t, banScore(), "control characters must be scored as a protocol violation")
+	select {
+	case n := <-server.notificationCh:
+		require.Equal(t, "evil[FORGED] client[2J", n.ClientName, "control characters must be stripped before fan-out")
+	default:
+		t.Fatal("sanitized node_status must still be forwarded")
+	}
+
+	require.Zero(t, banScore())
 }
 
+// Protocol-format fields have a well-defined shape; a violation drops the
+// message and scores the sender.
 func TestHandleNodeStatusTopic_NonHexChainWorkRejected(t *testing.T) {
-	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+	info, _ := reg.Get(remotePeerID.String())
+	baseline := info.LastMessageTime
 
 	msgBytes, err := json.Marshal(NodeStatusMessage{
 		PeerID:    remotePeerID.String(),
@@ -124,7 +160,27 @@ func TestHandleNodeStatusTopic_NonHexChainWorkRejected(t *testing.T) {
 	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
 
 	requireNoNotification(t, server, "node_status with non-hex chain_work must not reach WebSocket clients")
+	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "invalid node_status must not advance LastMessageTime")
 	require.Positive(t, banScore(), "non-hex chain_work must be scored as a protocol violation")
+}
+
+func TestHandleNodeStatusTopic_OverlongBaseURLRejected(t *testing.T) {
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+	info, _ := reg.Get(remotePeerID.String())
+	baseline := info.LastMessageTime
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:  remotePeerID.String(),
+		BaseURL: "http://example.com/" + strings.Repeat("p", maxGossipURLLen),
+	})
+	require.NoError(t, err)
+	require.Less(t, len(msgBytes), maxNodeStatusMessageSize)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	requireNoNotification(t, server, "node_status with over-long base_url must not reach WebSocket clients")
+	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "invalid node_status must not advance LastMessageTime")
+	require.Positive(t, banScore(), "over-long base_url must be scored as a protocol violation")
 }
 
 func TestHandleNodeStatusTopic_ValidMessageBroadcastStaysBounded(t *testing.T) {
@@ -163,25 +219,25 @@ func TestHandleNodeStatusTopic_ValidMessageBroadcastStaysBounded(t *testing.T) {
 func TestHandleNodeStatusTopic_OwnInvalidMessageDroppedWithoutSelfBan(t *testing.T) {
 	server, _, reg, _ := newGossipFieldTestServer(t)
 	selfID := server.P2PClient.GetID()
+	reg.Register(&blockchain.PeerInfo{ID: selfID})
 
 	msgBytes, err := json.Marshal(NodeStatusMessage{
-		PeerID:     selfID,
-		ClientName: strings.Repeat("x", 8*1024),
+		PeerID:    selfID,
+		ChainWork: "not-hex-at-all",
 	})
 	require.NoError(t, err)
 
 	server.handleNodeStatusTopic(context.Background(), msgBytes, selfID)
 
-	requireNoNotification(t, server, "own message with an invalid field must still be dropped")
-	if info, ok := reg.Get(selfID); ok {
-		require.Zero(t, info.BanScore, "a node must not score itself for its own message")
-	}
+	requireNoNotification(t, server, "own message with an invalid protocol field must still be dropped")
+
+	info, ok := reg.Get(selfID)
+	require.True(t, ok)
+	require.Zero(t, info.BanScore, "a node must not score itself for its own message")
 }
 
-func TestHandleBlockTopic_OverlongClientNameRejected(t *testing.T) {
-	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
-	info, _ := reg.Get(remotePeerID.String())
-	baseline := info.LastMessageTime
+func TestHandleBlockTopic_OverlongClientNameTruncated(t *testing.T) {
+	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
 
 	msgBytes, err := json.Marshal(BlockMessage{
 		PeerID:     remotePeerID.String(),
@@ -194,15 +250,38 @@ func TestHandleBlockTopic_OverlongClientNameRejected(t *testing.T) {
 
 	server.handleBlockTopic(context.Background(), msgBytes, remotePeerID.String())
 
-	requireNoNotification(t, server, "padded block message must not reach WebSocket clients")
-	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "padded block message must not advance LastMessageTime")
-	require.Positive(t, banScore(), "field violation must be scored as a protocol violation")
+	select {
+	case n := <-server.notificationCh:
+		require.Len(t, n.ClientName, maxGossipClientNameLen, "client_name must be truncated to its bound")
+	default:
+		t.Fatal("block announcement with sanitized display text must still be forwarded (it triggers catchup)")
+	}
+
+	require.Zero(t, banScore(), "display-text violation must not suppress block announcements or score the peer")
 }
 
-func TestHandleSubtreeTopic_OverlongClientNameRejected(t *testing.T) {
+func TestHandleBlockTopic_OverlongDataHubURLRejected(t *testing.T) {
 	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
 	info, _ := reg.Get(remotePeerID.String())
 	baseline := info.LastMessageTime
+
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remotePeerID.String(),
+		Hash:       testBlockHashHex,
+		DataHubURL: "http://example.com/" + strings.Repeat("p", maxGossipURLLen),
+	})
+	require.NoError(t, err)
+	require.Less(t, len(msgBytes), maxBlockMessageSize)
+
+	server.handleBlockTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	requireNoNotification(t, server, "block message with over-long DataHubURL must not reach WebSocket clients")
+	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "invalid block message must not advance LastMessageTime")
+	require.Positive(t, banScore(), "over-long DataHubURL must be scored as a protocol violation")
+}
+
+func TestHandleSubtreeTopic_OverlongClientNameTruncated(t *testing.T) {
+	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
 
 	msgBytes, err := json.Marshal(SubtreeMessage{
 		PeerID:     remotePeerID.String(),
@@ -215,26 +294,75 @@ func TestHandleSubtreeTopic_OverlongClientNameRejected(t *testing.T) {
 
 	server.handleSubtreeTopic(context.Background(), msgBytes, remotePeerID.String())
 
-	requireNoNotification(t, server, "padded subtree message must not reach WebSocket clients")
-	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "padded subtree message must not advance LastMessageTime")
-	require.Positive(t, banScore(), "field violation must be scored as a protocol violation")
+	select {
+	case n := <-server.notificationCh:
+		require.Len(t, n.ClientName, maxGossipClientNameLen, "client_name must be truncated to its bound")
+	default:
+		t.Fatal("subtree announcement with sanitized display text must still be forwarded")
+	}
+
+	require.Zero(t, banScore())
 }
 
-func TestHandleRejectedTxTopic_OverlongReasonRejected(t *testing.T) {
+func TestHandleRejectedTxTopic_OverlongReasonTruncatedAndNonHexTxIDRejected(t *testing.T) {
 	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
-	info, _ := reg.Get(remotePeerID.String())
-	baseline := info.LastMessageTime
 
+	// Over-long reason: display text, sanitized, message processed normally.
 	msgBytes, err := json.Marshal(RejectedTxMessage{
 		PeerID: remotePeerID.String(),
 		TxID:   testBlockHashHex,
-		Reason: strings.Repeat("x", maxGossipReasonLen+1),
+		Reason: strings.Repeat("x", maxGossipReasonLen+512),
 	})
 	require.NoError(t, err)
 	require.Less(t, len(msgBytes), maxRejectedTxMessageSize)
 
 	server.handleRejectedTxTopic(context.Background(), msgBytes, remotePeerID.String())
+	require.Zero(t, banScore(), "over-long reason must be truncated, not scored")
 
-	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "padded rejected_tx must not advance LastMessageTime")
-	require.Positive(t, banScore(), "field violation must be scored as a protocol violation")
+	// Non-hex tx_id: protocol field, dropped and scored.
+	info, _ := reg.Get(remotePeerID.String())
+	baseline := info.LastMessageTime
+	msgBytes, err = json.Marshal(RejectedTxMessage{
+		PeerID: remotePeerID.String(),
+		TxID:   "not-a-tx-id",
+	})
+	require.NoError(t, err)
+
+	server.handleRejectedTxTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "invalid rejected_tx must not advance LastMessageTime")
+	require.Positive(t, banScore(), "non-hex tx_id must be scored as a protocol violation")
+}
+
+// Egress round-trip: whatever hostile free text ends up in local settings, the
+// node's own published node_status must pass the ingress validation of remote
+// peers running the same bounds.
+func TestGetNodeStatusMessage_EgressAlwaysPassesIngressValidation(t *testing.T) {
+	server, _, _, _ := newGossipFieldTestServer(t)
+	server.settings = &settings.Settings{
+		ClientName: "evil\x00client" + strings.Repeat("x", 10*1024),
+		Version:    "v1.2.3-" + strings.Repeat("y", 200),
+		P2P:        settings.P2PSettings{ListenMode: settings.ListenModeFull},
+	}
+	server.logger = ulogger.TestLogger{}
+
+	msg := server.getNodeStatusMessage(context.Background())
+	require.NotNil(t, msg)
+	require.NoError(t, checkGossipString("client_name", msg.ClientName, maxGossipClientNameLen))
+
+	// The published NodeStatusMessage is built from this notification and then
+	// sanitized+validated in handleNodeStatusNotification; mirror that here.
+	published := NodeStatusMessage{
+		PeerID:     msg.PeerID,
+		ClientName: msg.ClientName,
+		MinerName:  msg.MinerName,
+		Version:    msg.Version,
+		CommitHash: msg.CommitHash,
+		FSMState:   msg.FSMState,
+		ListenMode: msg.ListenMode,
+		ChainWork:  msg.ChainWork,
+		Storage:    msg.Storage,
+	}
+	published.sanitizeFields()
+	require.NoError(t, published.validateFields())
 }

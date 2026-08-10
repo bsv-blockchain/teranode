@@ -888,8 +888,17 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 
 		rejectedTxMessage := RejectedTxMessage{
 			TxID:   hash.String(),
-			Reason: sanitizeGossipString(m.Reason, maxGossipReasonLen),
+			Reason: m.Reason,
 			PeerID: s.P2PClient.GetID(),
+		}
+
+		// Self-check against the bounds we enforce on ingress: truncates the
+		// validator's reason text so it always passes remote validation.
+		rejectedTxMessage.sanitizeFields()
+
+		if err := rejectedTxMessage.validateFields(); err != nil {
+			s.logger.Errorf("[rejectedTxHandler] rejectedTxMessage failed gossip field validation, not publishing: %v", err)
+			return nil
 		}
 
 		msgBytes, err := json.Marshal(rejectedTxMessage)
@@ -1050,6 +1059,29 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing. This runs before field validation so
+	// a banned peer cannot keep triggering uncached AddBanScore RPCs.
+	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect (logging
+	// — including the spoof log below — registry write, WebSocket fan-out).
+	// Display-only free text is sanitized in place; a malformed
+	// protocol-format field is a protocol violation, same as a spoofed peer ID
+	// — except for our own loopback message, which is dropped without
+	// self-penalising.
+	nodeStatusMessage.sanitizeFields()
+
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
+		if !isSelf {
+			s.applyBanScore(peerID, ReasonProtocolViolation)
+		}
+		return
+	}
+
 	notificationBestHeight := nodeStatusMessage.BestHeight
 	notificationBestBlockHash := nodeStatusMessage.BestBlockHash
 	sanitizedBestHeight := nodeStatusMessage.BestHeight
@@ -1060,24 +1092,6 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
 		s.applyBanScore(peerID, ReasonProtocolViolation)
-		return
-	}
-
-	// Bound every peer-controlled string field before any side effect (registry
-	// write, WebSocket fan-out, logging). A violation is a protocol violation,
-	// same as a spoofed peer ID — except for our own loopback message, which is
-	// dropped without self-penalising.
-	if err := nodeStatusMessage.validateFields(); err != nil {
-		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
-		if !isSelf {
-			s.applyBanScore(peerID, ReasonProtocolViolation)
-		}
-		return
-	}
-
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing.
-	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
 		return
 	}
 
@@ -1224,7 +1238,16 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PClient.GetID(),
 		Header:     hex.EncodeToString(h.Bytes()),
-		ClientName: sanitizeGossipString(s.settings.ClientName, maxGossipClientNameLen),
+		ClientName: s.settings.ClientName,
+	}
+
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here as a loud error instead of getting this
+	// node scored and banned by every peer.
+	blockMessage.sanitizeFields()
+
+	if err := blockMessage.validateFields(); err != nil {
+		return errors.NewError("blockMessage failed gossip field validation, not publishing", err)
 	}
 
 	msgBytes, err = json.Marshal(blockMessage)
@@ -1582,6 +1605,16 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		return nil
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration (e.g. an oversized URL or version string) surfaces here
+	// as a loud error instead of getting this node scored and banned by every
+	// peer.
+	nodeStatusMessage.sanitizeFields()
+
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		return errors.NewError("nodeStatusMessage failed gossip field validation, not publishing", err)
+	}
+
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
 		return errors.NewError("nodeStatusMessage - json marshal error", err)
@@ -1617,7 +1650,16 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		Hash:       hash.String(),
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PClient.GetID(),
-		ClientName: sanitizeGossipString(s.settings.ClientName, maxGossipClientNameLen),
+		ClientName: s.settings.ClientName,
+	}
+
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here as a loud error instead of getting this
+	// node scored and banned by every peer.
+	subtreeMessage.sanitizeFields()
+
+	if err := subtreeMessage.validateFields(); err != nil {
+		return errors.NewError("subtreeMessage failed gossip field validation, not publishing", err)
 	}
 
 	msgBytes, err := json.Marshal(subtreeMessage)

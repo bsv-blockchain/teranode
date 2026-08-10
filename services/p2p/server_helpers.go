@@ -50,29 +50,34 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		return
 	}
 
-	// Check that fromID matches the block peer ID
-	if fromID != blockMessage.PeerID {
-		s.logger.Errorf("[handleBlockTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, blockMessage.PeerID)
-		s.addProtocolViolation(fromID)
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing (and before field validation, so a
+	// banned peer cannot keep triggering uncached AddBanScore RPCs). Own
+	// messages skip the registry round-trip; they return at the isOwnMessage
+	// check below.
+	if !s.isOwnMessage(fromID, blockMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
 		return
 	}
 
-	// Bound every peer-controlled string field before any side effect (logging,
-	// registry write, WebSocket fan-out). A violation is a protocol violation,
-	// except for our own loopback message, which is dropped without
-	// self-penalising.
+	// Bound every peer-controlled string field before any side effect (logging
+	// — including the spoof log below — registry write, WebSocket fan-out).
+	// Display-only free text is sanitized in place; a malformed
+	// protocol-format field is a protocol violation. The self check is on
+	// fromID alone so a peer claiming our ID cannot dodge the score.
+	blockMessage.sanitizeFields()
+
 	if err = blockMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleBlockTopic] invalid block message field from peer %s: %v", fromID, err)
-		if !s.isOwnMessage(fromID, blockMessage.PeerID) {
+		if fromID != s.P2PClient.GetID() {
 			s.addProtocolViolation(fromID)
 		}
 		return
 	}
 
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing. Own messages skip the registry
-	// round-trip; they return at the isOwnMessage check below.
-	if !s.isOwnMessage(fromID, blockMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
+	// Check that fromID matches the block peer ID
+	if fromID != blockMessage.PeerID {
+		s.logger.Errorf("[handleBlockTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, blockMessage.PeerID)
+		s.addProtocolViolation(fromID)
 		return
 	}
 
@@ -194,26 +199,32 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	// Check that fromID matches the subtree peer ID
-	if fromID != subtreeMessage.PeerID {
-		s.logger.Errorf("[handleSubtreeTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, subtreeMessage.PeerID)
-		s.addProtocolViolation(fromID)
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing (and before field validation, so a
+	// banned peer cannot keep triggering uncached AddBanScore RPCs). Own
+	// messages skip the registry round-trip; they return at the isOwnMessage
+	// check below.
+	if !s.isOwnMessage(fromID, subtreeMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
 		return
 	}
 
-	// Bound every peer-controlled string field before any side effect.
+	// Bound every peer-controlled string field before any side effect:
+	// display-only free text is sanitized in place, a malformed
+	// protocol-format field drops the message and scores the sender.
+	subtreeMessage.sanitizeFields()
+
 	if err = subtreeMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleSubtreeTopic] invalid subtree message field from peer %s: %v", fromID, err)
-		if !s.isOwnMessage(fromID, subtreeMessage.PeerID) {
+		if fromID != s.P2PClient.GetID() {
 			s.addProtocolViolation(fromID)
 		}
 		return
 	}
 
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing. Own messages skip the registry
-	// round-trip; they return at the isOwnMessage check below.
-	if !s.isOwnMessage(fromID, subtreeMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
+	// Check that fromID matches the subtree peer ID
+	if fromID != subtreeMessage.PeerID {
+		s.logger.Errorf("[handleSubtreeTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, subtreeMessage.PeerID)
+		s.addProtocolViolation(fromID)
 		return
 	}
 
@@ -478,6 +489,26 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
+	// Drop messages from banned peers before any registration or further
+	// processing (and before field validation, so a banned peer cannot keep
+	// triggering uncached AddBanScore RPCs).
+	if !s.isOwnMessage(fromID, rejectedTxMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect:
+	// display-only free text is sanitized in place, a malformed
+	// protocol-format field drops the message and scores the sender.
+	rejectedTxMessage.sanitizeFields()
+
+	if err = rejectedTxMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleRejectedTxTopic] invalid rejected tx message field from peer %s: %v", fromID, err)
+		if fromID != s.P2PClient.GetID() {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+
 	// Check that fromID matches the rejected tx peer ID
 	if fromID != rejectedTxMessage.PeerID {
 		s.logger.Errorf("[handleRejectedTxTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, rejectedTxMessage.PeerID)
@@ -485,22 +516,8 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
-	// Bound every peer-controlled string field before any side effect.
-	if err = rejectedTxMessage.validateFields(); err != nil {
-		s.logger.Errorf("[handleRejectedTxTopic] invalid rejected tx message field from peer %s: %v", fromID, err)
-		if !s.isOwnMessage(fromID, rejectedTxMessage.PeerID) {
-			s.addProtocolViolation(fromID)
-		}
-		return
-	}
-
 	if s.isOwnMessage(fromID, rejectedTxMessage.PeerID) {
 		s.logger.Debugf("[handleRejectedTxTopic] ignoring own rejected tx message for %s", rejectedTxMessage.TxID)
-		return
-	}
-
-	// Drop messages from banned peers before any registration or further processing.
-	if s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
 		return
 	}
 	s.logger.Debugf("[handleRejectedTxTopic] received rejected tx %s fromID %s (reason: %s)",
