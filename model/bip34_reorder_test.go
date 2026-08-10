@@ -73,9 +73,10 @@ func bip34ReorderSettings(t *testing.T) *chaincfg.Params {
 // TestBlock_Valid_BIP34Reorder is the freemans13 item 3 fix (bitcoin-sv/teranode#4692, C2/C3): the
 // BIP34 coinbase-height check now runs AFTER the merkle binding, and is classified by whether the
 // body was merkle-bound. A merkle-MATCHING body with a wrong BIP34 height is genuine consensus
-// invalidity (condemn once, invalid=true); an UNBOUND body (coinbase-only / no subtrees, where
-// CheckMerkleRoot never ran) can only be corrupt (re-download, never poison), preserving the
-// bound-before-poisoning rule.
+// invalidity (condemn once, invalid=true); an UNBOUND body — subtrees present but no subtree store,
+// so CheckMerkleRoot never ran — can only be corrupt (re-download, never poison), preserving the
+// bound-before-poisoning rule. A body carrying no subtrees at all is NOT unbound: it is bound by the
+// coinbase-txid rule, covered in TestBlock_Valid_UnboundBody.
 func TestBlock_Valid_BIP34Reorder(t *testing.T) {
 	const (
 		coinbaseHeight = uint32(100) // encoded in the coinbase scriptSig
@@ -116,19 +117,20 @@ func TestBlock_Valid_BIP34Reorder(t *testing.T) {
 		require.Contains(t, err.Error(), "does not match block height")
 	})
 
-	t.Run("coinbase-only bad-BIP34 height is CORRUPT (re-download, never poisoned)", func(t *testing.T) {
+	t.Run("unbound bad-BIP34 height is CORRUPT (re-download, never poisoned)", func(t *testing.T) {
 		coinbase := coinbaseEncodingHeight(t, coinbaseHeight)
 
-		// No subtrees: the merkle block is skipped, merkleRootChecked stays false, so BIP34 runs on
-		// an UNBOUND body and must classify corrupt — never invalid=true.
-		hdr := minedHeaderVersion(t, 4, coinbase.TxIDChainHash())
+		// Subtrees present but NO subtree store: the merkle block never runs, merkleRootChecked stays
+		// false, so BIP34 runs on an UNBOUND body and must classify corrupt — never invalid=true.
+		st, merkleRoot := buildSubtreeAndMerkleRoot(t, coinbase, *txHash)
+		hdr := minedHeaderVersion(t, 4, merkleRoot)
 
-		block, err := NewBlock(hdr, coinbase, []*chainhash.Hash{}, 1, uint64(coinbase.Size()), blockHeight, 0) //nolint:gosec
+		block, err := NewBlock(hdr, coinbase, []*chainhash.Hash{st.RootHash()}, 2, 123, blockHeight, 0)
 		require.NoError(t, err)
 
 		oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-		// nil subtreeStore == the internal / no-subtree caller: the merkle block never runs.
+		// nil subtreeStore == the internal caller: the merkle block never runs.
 		valid, err := block.Valid(
 			context.Background(), ulogger.TestLogger{}, nil,
 			&panicTxMetaStore{}, oldBlockIDs, []*BlockHeader{}, []uint32{}, tSettings, nil,
@@ -136,7 +138,7 @@ func TestBlock_Valid_BIP34Reorder(t *testing.T) {
 		require.False(t, valid)
 		require.Error(t, err)
 		require.True(t, errors.IsBlockCorrupt(err),
-			"an unbound (coinbase-only) wrong BIP34 height must be corrupt (re-download), got: %v", err)
+			"an unbound wrong BIP34 height must be corrupt (re-download), got: %v", err)
 		require.False(t, errors.Is(err, errors.ErrBlockInvalid),
 			"an unbound body must NEVER be poisoned (invalid=true) on a BIP34 failure")
 		require.Contains(t, err.Error(), "does not match block height")

@@ -1,11 +1,13 @@
 package blockvalidation
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
@@ -49,9 +51,15 @@ func newCorruptCapServer(t *testing.T, cap int) *Server {
 	return &Server{
 		settings: tSettings,
 		logger:   ulogger.TestLogger{},
-		blockCorruptAttempts: ttlcache.New[corruptAttemptKey, int](
-			ttlcache.WithTTL[corruptAttemptKey, int](10*time.Minute),
-			ttlcache.WithDisableTouchOnHit[corruptAttemptKey, int](),
+		blockCorruptAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](10*time.Minute),
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
+		),
+		blockPolicyDeclineAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](10*time.Minute),
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
 		),
 	}
 }
@@ -61,8 +69,8 @@ func newCorruptCapServer(t *testing.T, cap int) *Server {
 const capTestPeer = "peerA"
 
 // ck builds the (hash, peerID) cache key for direct cache assertions in the tests.
-func ck(h chainhash.Hash, peerID string) corruptAttemptKey {
-	return corruptAttemptKey{hash: h, peerID: peerID}
+func ck(h chainhash.Hash, peerID string) blockAttemptKey {
+	return blockAttemptKey{hash: h, peerID: peerID}
 }
 
 // TestCorruptAttemptCooldownFallback covers the cooldown helper's fallbacks (bitcoin-sv/teranode#4692):
@@ -251,4 +259,119 @@ func TestCorruptAttemptCap_EmptyPeerIDSharedBucket(t *testing.T) {
 
 	// A named peer is a different bucket, unaffected by the exhausted empty bucket.
 	require.False(t, u.corruptAttemptsExhausted(&h, "peerNamed"))
+}
+
+// TestCorruptAttemptCap_CacheIsBounded covers freemans13 item 8 (bitcoin-sv/teranode#4692): the
+// per-(hash, peerID) map keys on a strictly larger space than its hash-only sibling, so it must carry
+// a capacity like the legacy netsync twin does. Eviction can only LOOSEN the cap — an evicted pair
+// starts a fresh window — so it can never make the node drop an honest block; the assertion below
+// pins both halves: the map stays bounded, and the gate still works after an overflow.
+func TestCorruptAttemptCap_CacheIsBounded(t *testing.T) {
+	u := newCorruptCapServer(t, 3)
+
+	for i := 0; i < corruptAttemptsMaxTracked*2; i++ {
+		h := chainhash.HashH([]byte("bounded-cache-" + strconv.Itoa(i)))
+		u.recordCorruptAttempt(&h, capTestPeer)
+	}
+
+	require.LessOrEqual(t, u.blockCorruptAttempts.Len(), corruptAttemptsMaxTracked,
+		"the corrupt-attempt map must never exceed its configured capacity")
+
+	// A pair recorded after the overflow is still gated correctly: eviction resets a window, it does
+	// not break the gate.
+	fresh := chainhash.HashH([]byte("bounded-cache-after-overflow"))
+	for i := 0; i < 3; i++ {
+		u.recordCorruptAttempt(&fresh, capTestPeer)
+	}
+
+	require.True(t, u.corruptAttemptsExhausted(&fresh, capTestPeer), "the gate still caps after an overflow")
+}
+
+// TestPolicyDeclineCap_SeparateBudget pins the two trackers as INDEPENDENT budgets
+// (freemans13 item 2 / bitcoin-sv/teranode#4692). Sharing one bucket was rejected because every
+// "corrupt" identifier, log line and metric on that path would become false for a policy decline;
+// this test is what fails if a later edit merges them back.
+func TestPolicyDeclineCap_SeparateBudget(t *testing.T) {
+	u := newCorruptCapServer(t, 3)
+	h := chainhash.HashH([]byte("separate-budgets"))
+
+	// Policy declines up to the cap must not spend the corrupt budget.
+	for i := 0; i < 3; i++ {
+		u.recordPolicyDeclineAttempt(&h, capTestPeer)
+	}
+
+	require.True(t, u.policyDeclineAttemptsExhausted(&h, capTestPeer), "policy declines reach their own cap")
+	require.False(t, u.corruptAttemptsExhausted(&h, capTestPeer), "policy declines must never spend the corrupt budget")
+
+	// And the converse, on a different hash: corrupt failures must not suppress a policy-declined
+	// fetch.
+	other := chainhash.HashH([]byte("separate-budgets-converse"))
+	for i := 0; i < 3; i++ {
+		u.recordCorruptAttempt(&other, capTestPeer)
+	}
+
+	require.True(t, u.corruptAttemptsExhausted(&other, capTestPeer), "corrupt failures reach the corrupt cap")
+	require.False(t, u.policyDeclineAttemptsExhausted(&other, capTestPeer), "corrupt failures must never spend the policy budget")
+
+	// Clearing one budget leaves the other untouched.
+	u.clearPolicyDeclineAttempts(&h, capTestPeer)
+	require.False(t, u.policyDeclineAttemptsExhausted(&h, capTestPeer), "clearing re-opens the policy gate")
+	require.True(t, u.corruptAttemptsExhausted(&other, capTestPeer), "clearing the policy budget must not touch the corrupt one")
+}
+
+// TestPolicyDeclineCap_HonestPeerNotWedged mirrors the corrupt cap's honest-tip-wedge property for
+// the policy-decline tracker. The size judged is the peer-supplied SizeInBytes varint, so a per-HASH
+// suppression would let one peer inflate that varint and suppress the honest tip for the whole
+// window; keying on (hash, peerID) means an inflated varint only spends that peer's own budget.
+func TestPolicyDeclineCap_HonestPeerNotWedged(t *testing.T) {
+	u := newCorruptCapServer(t, 3)
+	h := chainhash.HashH([]byte("policy-honest-not-wedged"))
+
+	const badPeer, honestPeer = "peerBad", "peerHonest"
+
+	for i := 0; i < 3; i++ {
+		u.recordPolicyDeclineAttempt(&h, badPeer)
+	}
+
+	require.True(t, u.policyDeclineAttemptsExhausted(&h, badPeer), "the inflating peer is capped for this hash")
+	require.False(t, u.policyDeclineAttemptsExhausted(&h, honestPeer),
+		"an honest peer must keep a fresh budget for the same hash (no honest-tip wedge)")
+}
+
+// TestPolicyDeclineCap_NilSafe pins the fail-open direction: a Server literal without the cache, or a
+// non-positive cap, must never report "exhausted" — a missing config can never silently drop a block.
+func TestPolicyDeclineCap_NilSafe(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	h := chainhash.HashH([]byte("policy-nil-safe"))
+
+	u := &Server{settings: tSettings, logger: ulogger.TestLogger{}} // blockPolicyDeclineAttempts == nil
+	require.Equal(t, 0, u.recordPolicyDeclineAttempt(&h, capTestPeer))
+	require.False(t, u.policyDeclineAttemptsExhausted(&h, capTestPeer))
+	require.NotPanics(t, func() { u.clearPolicyDeclineAttempts(&h, capTestPeer) })
+
+	disabled := newCorruptCapServer(t, 0)
+	for i := 0; i < 5; i++ {
+		disabled.recordPolicyDeclineAttempt(&h, capTestPeer)
+	}
+
+	require.False(t, disabled.policyDeclineAttemptsExhausted(&h, capTestPeer), "cap <= 0 disables the bound")
+}
+
+// TestExcessiveBlockSizeDeclined covers the shared predicate that keeps the RUNNING pre-fetch gate
+// and the authoritative decline in ValidateBlockWithOptions from drifting apart.
+func TestExcessiveBlockSizeDeclined(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	block := &model.Block{SizeInBytes: 1000}
+
+	tSettings.Policy.ExcessiveBlockSize = 0
+	require.False(t, excessiveBlockSizeDeclined(tSettings, block), "0 means unlimited")
+
+	tSettings.Policy.ExcessiveBlockSize = 1000
+	require.False(t, excessiveBlockSizeDeclined(tSettings, block), "the limit is inclusive")
+
+	tSettings.Policy.ExcessiveBlockSize = 999
+	require.True(t, excessiveBlockSizeDeclined(tSettings, block))
+
+	require.False(t, excessiveBlockSizeDeclined(nil, block), "nil settings never declines")
+	require.False(t, excessiveBlockSizeDeclined(tSettings, nil), "nil block never declines")
 }

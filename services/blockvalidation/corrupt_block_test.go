@@ -7,8 +7,8 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -78,7 +78,7 @@ func TestPenalizeCorruptBlockPeer_StrikesServingPeer(t *testing.T) {
 	calls := fake.recorded()
 	require.Len(t, calls, 1)
 	require.Equal(t, "peer-A", calls[0].peerID, "penalty must be attributed to the serving peer")
-	require.Equal(t, p2p.ReasonCorruptBlockBody, calls[0].reason, "must use the dedicated corrupt reason, not invalid_block")
+	require.Equal(t, p2pconstants.ReasonCorruptBlockBody.String(), calls[0].reason, "must use the dedicated corrupt reason, not invalid_block")
 }
 
 // TestPenalizeCorruptBlockPeer_NoopWhenNoAttribution verifies the strike is a safe
