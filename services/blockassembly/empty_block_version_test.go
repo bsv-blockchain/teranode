@@ -19,7 +19,7 @@ func TestGenerateEmptyBlockCandidateUsesSafeVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, bestHeader)
 
-	candidate, _, err := server.blockAssembler.generateEmptyBlockCandidate(bestHeader, meta.Height)
+	candidate, _, err := server.blockAssembler.generateEmptyBlockCandidate(t.Context(), bestHeader, meta.Height)
 	require.NoError(t, err)
 	require.NotNil(t, candidate)
 	require.Equal(t, uint32(0x20000000), candidate.Version)
