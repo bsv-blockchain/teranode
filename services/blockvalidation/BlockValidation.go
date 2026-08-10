@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -1611,26 +1610,23 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			ctxLogger.Infof("[ValidateBlock][%s] revalidating invalid block", block.Header.Hash().String())
 		}
 
-		// check the size of the block
-		// 0 is unlimited so don't check the size
-		if u.settings.Policy.ExcessiveBlockSize > 0 {
-			excessiveBlockSizeUint64, err := safeconversion.IntToUint64(u.settings.Policy.ExcessiveBlockSize)
-			if err != nil {
-				return err
-			}
-
-			if block.SizeInBytes > excessiveBlockSizeUint64 {
-				// excessiveblocksize is a local POLICY knob (settings/policy_settings.go), not a
-				// consensus rule: a block other miners have legitimately mined and proven with real
-				// work may still exceed THIS node's limit. So this is a plain policy decline, not
-				// evidence about the block or the peer (bitcoin-sv/teranode#4692): NO peer strike (the
-				// peer served the honest chain), NOT corrupt (no re-download — a fresh copy is the same
-				// size and is not counted toward the corrupt cap), and NOT invalid=true (never poison
-				// the hash). It also does not condemn the block: the size judged here is still the
-				// peer-supplied block.SizeInBytes; the authoritative size is recomputed post-subtree-load
-				// (model.Block, from the loaded body).
-				return errors.NewBlockError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d (local policy)", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
-			}
+		// check the size of the block; 0 is unlimited so the shared predicate skips the check.
+		//
+		// excessiveblocksize is a local POLICY knob (settings/policy_settings.go), not a consensus
+		// rule: a block other miners have legitimately mined and proven with real work may still
+		// exceed THIS node's limit. So this is a plain policy decline, not evidence about the block
+		// or the peer (bitcoin-sv/teranode#4692): NO peer strike (the peer served the honest chain),
+		// NOT corrupt (no re-download — a fresh copy is the same size and is not counted toward the
+		// corrupt cap), and NOT invalid=true (never poison the hash). It also does not condemn the
+		// block: the size judged here is still the peer-supplied block.SizeInBytes; the authoritative
+		// size is recomputed post-subtree-load (model.Block, from the loaded body).
+		//
+		// This is the authoritative decline for every caller (catchup, revalidation, the direct
+		// ValidateBlock RPC). The RUNNING peer path additionally declines earlier in
+		// processBlockFound, where it owns an attempt counter that bounds repeat deliveries; both
+		// sites read the same predicate so they cannot drift.
+		if excessiveBlockSizeDeclined(u.settings, block) {
+			return errors.NewBlockError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d (local policy)", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 		}
 
 		// NOTE on block-version (BIP34/66/65) enforcement and error ordering:
@@ -2820,12 +2816,31 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
+		// A corrupt error normally means "nothing was added, re-download" — invalidating would poison a
+		// hash we hold no bound evidence against. The one exception is the opt-in optimistic peer path,
+		// where the body was AddBlock'd before block.Valid ran and a failed InvalidateBlock re-queued us
+		// here: there the block IS on-chain, so returning without invalidating leaves a silently
+		// accepted corrupt tip, which is what the re-queue exists to prevent. Gate on the block actually
+		// being in the store — not on the error alone — so the callers that never AddBlock'd (the
+		// GetBlockHeaders failure paths in ValidateBlockWithOptions) can never poison a hash through
+		// this branch (freemans13 item 4 / bitcoin-sv/teranode#4692). A lookup failure and a
+		// not-present block both leave the flag false: the direction that never poisons.
+		invalidateCorruptOnChain := false
+
+		if errors.IsBlockCorrupt(err) {
+			if exists, existsErr := u.GetBlockExists(ctx, blockData.block.Header.Hash()); existsErr != nil {
+				u.logger.Warnf("[ReValidateBlock][%s] corrupt body: could not confirm the block is stored, not invalidating: %v", blockData.block.String(), existsErr)
+			} else {
+				invalidateCorruptOnChain = exists
+			}
+		}
+
 		// ErrBlockIncomplete in a caught-up state is a floater (see isCaughtUp /
 		// the ValidateBlock handlers): invalidate so the revalidate worker
 		// converges to rollback in RUNNING instead of silently exhausting its
 		// bounded retries with the block left optimistically accepted. In sync
 		// states isCaughtUp is false, so it stays the #1031 retry/exhaust path.
-		if errors.Is(err, errors.ErrBlockInvalid) || (errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(ctx)) {
+		if errors.Is(err, errors.ErrBlockInvalid) || (errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(ctx)) || invalidateCorruptOnChain {
 			if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
 				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), invalidateBlockErr)
 			}

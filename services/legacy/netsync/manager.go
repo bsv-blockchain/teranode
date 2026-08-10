@@ -1794,6 +1794,19 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// Once the fixed window lapses the counter resets and the honest body is admitted.
 	if sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
 		sm.logger.Warnf("[handleBlockMsg][%s] corrupt re-download cap reached for peer %s; dropping delivery until the cooldown window expires (not rejected, not stored invalid)", bmsg.blockHash, bmsg.peer)
+
+		// Headers-first: refill before returning, for the same reason the corrupt branch below does
+		// (see refillHeaderBlockPipeline) — this gate has already consumed the headerList entry and
+		// the requestedBlocks slot above, so without a refill every capped delivery drains one
+		// in-flight slot and recovery waits on the stall timer (freemans13 item 3 /
+		// bitcoin-sv/teranode#4692). Pipeline maintenance only: no accepted-block bookkeeping runs on
+		// a dropped delivery.
+		if sm.headersFirstMode.Load() {
+			if refillErr := sm.refillHeaderBlockPipeline(peer, state); refillErr != nil {
+				sm.logger.Warnf("[handleBlockMsg][%s] header-block pipeline refill after corrupt-cap drop failed: %v", bmsg.blockHash, refillErr)
+			}
+		}
+
 		return nil
 	}
 

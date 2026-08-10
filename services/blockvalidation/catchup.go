@@ -1652,7 +1652,8 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 	return false, nil
 }
 
-// removeCatchupSubtreeFiles deletes the block's .subtree blobs from the store on a failed quick
+// removeCatchupSubtreeFiles deletes every peer-supplied subtree blob type for the block from the
+// store on a failed quick
 // validation (bitcoin-sv/teranode#4692). Used on BOTH the plain quick-validation failure (before
 // falling back to normal validation, which re-creates the files) and the corrupt-body path (which
 // aborts for a fresh re-download from another peer; freemans13 item 9). Retaining data that FAILED
@@ -1660,9 +1661,24 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 // validated" marker and be re-applied on every retry. A missing file is not an error.
 func (u *Server) removeCatchupSubtreeFiles(ctx context.Context, block *model.Block) error {
 	for _, subtreeHash := range block.Subtrees {
-		if err := u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtree); err != nil {
-			if !errors.Is(err, errors.ErrNotFound) {
-				return errors.NewProcessingError("[catchup] failed to remove subtree file %s", subtreeHash.String(), err)
+		// Every type the retry path can read back, not just the promoted .subtree marker
+		// (freemans13 item 9 / bitcoin-sv/teranode#4692): the catchup fetch writes
+		// FileTypeSubtreeToCheck (get_blocks.go fetchAndStoreSubtree) and FileTypeSubtreeData
+		// (fetchAndStoreSubtreeData), and both are read back — findLocalSubtreeFile prefers
+		// subtreeToCheck, and model.Block.GetAndValidateSubtrees falls back to it. Leaving them behind
+		// lets content that FAILED its integrity check be re-applied on the next attempt. SubtreeMeta
+		// is included for completeness (written during full subtree validation); a missing file is not
+		// an error, so listing a type that was never written costs nothing.
+		for _, fileType := range []fileformat.FileType{
+			fileformat.FileTypeSubtree,
+			fileformat.FileTypeSubtreeToCheck,
+			fileformat.FileTypeSubtreeMeta,
+			fileformat.FileTypeSubtreeData,
+		} {
+			if err := u.subtreeStore.Del(ctx, subtreeHash[:], fileType); err != nil {
+				if !errors.Is(err, errors.ErrNotFound) {
+					return errors.NewProcessingError("[catchup] failed to remove %s file %s", fileType, subtreeHash.String(), err)
+				}
 			}
 		}
 	}

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -186,10 +187,7 @@ type Server struct {
 	// within a fixed cooldown window (bitcoin-sv/teranode#4692). Once a (hash, peerID)
 	// reaches MaxCorruptAttemptsPerBlock that peer's next RUNNING delivery of the hash is
 	// dropped before the expensive download/subtree-prepare/merkle work until the window
-	// expires. Keying on (hash, peerID) — not the hash alone — keeps the bound while never
-	// wedging an honest tip: one peer's corruption cannot consume the budget for a hash an
-	// honest peer can still serve (that peer keeps a fresh budget), so the honest body is
-	// never suppressed. It is ban-score-INDEPENDENT PER IDENTITY (holds even when p2pClient
+	// expires. It is ban-score-INDEPENDENT PER IDENTITY (holds even when p2pClient
 	// is nil or a single peer serves everything — an empty peerID degrades to one shared
 	// (hash, "") bucket, i.e. the hard per-hash bound for that deployment). Residual
 	// aggregate bound: worst-case per-hash corrupt re-downloads <= (concurrent distinct
@@ -199,8 +197,21 @@ type Server struct {
 	// corrupt path persists nothing (no invalid=true, no SetBlockExists, no AddBlock), so the
 	// (hash, peerID) is only rate-limited, never condemned; once the window lapses an honest
 	// body flows through and is accepted. Same fixed-window/no-touch-on-hit shape as
-	// blockCatchupAttempts so gate reads can never extend the window (no wedge).
-	blockCorruptAttempts *ttlcache.Cache[corruptAttemptKey, int]
+	// blockCatchupAttempts so gate reads can never extend the window (no wedge). Bounded by
+	// corruptAttemptsMaxTracked so a pathological stream of distinct pairs cannot grow it
+	// without limit.
+	blockCorruptAttempts *ttlcache.Cache[blockAttemptKey, int]
+
+	// blockPolicyDeclineAttempts bounds repeat deliveries of a block this node declines on LOCAL
+	// POLICY (excessiveblocksize) rather than on evidence about the block
+	// (freemans13 item 2 / bitcoin-sv/teranode#4692). Deliberately separate from
+	// blockCorruptAttempts: a policy decline is not a corrupt body, it earns no ban score, and
+	// conflating the two would make every "corrupt" name, log line and metric on that path false.
+	// It reuses the corrupt cap's CONFIGURED VALUES (MaxCorruptAttemptsPerBlock /
+	// CorruptAttemptCooldown) so operators get no new knobs; the two mechanisms are independent
+	// budgets that happen to be sized the same. Same key type, fixed window and no-touch-on-hit
+	// semantics as the corrupt cap, for the same anti-wedge reason.
+	blockPolicyDeclineAttempts *ttlcache.Cache[blockAttemptKey, int]
 
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
@@ -412,12 +423,18 @@ func New(
 			// block suppressed forever.
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, int](),
 		),
-		blockCorruptAttempts: ttlcache.New[corruptAttemptKey, int](
-			ttlcache.WithTTL[corruptAttemptKey, int](corruptAttemptCooldown(tSettings)),
+		blockCorruptAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](corruptAttemptCooldown(tSettings)),
 			// Fixed window from the first corrupt failure; gate Get checks must never
 			// extend it, so a persistent attacker cannot suppress an honest body forever
 			// (bitcoin-sv/teranode#4692).
-			ttlcache.WithDisableTouchOnHit[corruptAttemptKey, int](),
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
+		),
+		blockPolicyDeclineAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](corruptAttemptCooldown(tSettings)),
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
 		),
 		adaptiveFetch:       af,
 		stats:               gocore.NewStat("blockvalidation"),
@@ -695,6 +712,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	if u.blockCorruptAttempts != nil {
 		go u.blockCorruptAttempts.Start()
+	}
+
+	if u.blockPolicyDeclineAttempts != nil {
+		go u.blockPolicyDeclineAttempts.Start()
 	}
 
 	// Start fork manager cleanup routine
@@ -1161,6 +1182,10 @@ func (u *Server) Stop(ctx context.Context) error {
 		u.blockCorruptAttempts.Stop()
 	}
 
+	if u.blockPolicyDeclineAttempts != nil {
+		u.blockPolicyDeclineAttempts.Stop()
+	}
+
 	// Wait for all background tasks in BlockValidation to complete, bounded by the
 	// caller's stop deadline (ctx) so a worker whose Init ctx was not cancelled first
 	// cannot hang shutdown indefinitely.
@@ -1572,6 +1597,16 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return nil
 	}
 
+	// Per-(hash, peerID) LOCAL POLICY decline cap (freemans13 item 2 / bitcoin-sv/teranode#4692).
+	// An oversized block is declined but never remembered anywhere else, so without this the same
+	// peer's re-announcements cost a fresh block-message fetch every time. Its own counter, not the
+	// corrupt one: a policy decline is not evidence about the block, so it must not spend the
+	// corrupt budget or make any "corrupt" name true. return nil (skip), never an error/poison.
+	if u.policyDeclineAttemptsExhausted(hash, peerID) {
+		u.logger.Warnf("[processBlockFound][%s] local policy decline cap reached for peer %s; skipping re-fetch until the cooldown window expires", hash.String(), peerID)
+		return nil
+	}
+
 	var block *model.Block
 	if len(useBlock) > 0 {
 		block = useBlock[0]
@@ -1580,6 +1615,21 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		if err != nil {
 			return err
 		}
+	}
+
+	// Local policy decline, remembered per serving identity (bitcoin-sv/teranode#4692). The size
+	// judged here is the peer-supplied SizeInBytes varint, so a per-HASH suppression would let one
+	// peer inflate that varint and suppress the honest tip for the whole window — the same
+	// honest-tip wedge the corrupt cap is keyed on (hash, peerID) to avoid. Keyed on the pair, an
+	// inflated varint only spends that peer's own budget. No peer strike (a legitimately oversized
+	// block from an honest miner is not misbehaviour) and no invalid=true (never poison a hash we
+	// merely decline on local policy); this only stops us re-fetching the same block message from
+	// the same peer, and lapses with the fixed cooldown window. The authoritative decline for every
+	// other caller stays in ValidateBlockWithOptions.
+	if excessiveBlockSizeDeclined(u.settings, block) {
+		u.recordPolicyDeclineAttempt(hash, peerID)
+
+		return errors.NewBlockError("[processBlockFound][%s] block size %d exceeds excessiveblocksize %d (local policy)", hash.String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 	}
 
 	u.checkParentProcessingComplete(ctx, block, baseURL)
@@ -2270,14 +2320,24 @@ func corruptAttemptCooldown(s *settings.Settings) time.Duration {
 	return settings.DefaultCorruptAttemptCooldown
 }
 
-// corruptAttemptKey keys the RUNNING corrupt re-download cap on (block hash, serving peerID)
+// corruptAttemptsMaxTracked bounds the per-(hash, peerID) attempt maps. Matches the legacy twin's
+// blockFailureBackoffMaxTracked (freemans13 item 8 / bitcoin-sv/teranode#4692). Entries only appear
+// on real corrupt failures or real policy declines, so this is a pathological-stream backstop rather
+// than a hot limit. Eviction can only LOOSEN a cap — an evicted pair starts a fresh window — which is
+// the same fail-open direction the cap already takes on misconfiguration
+// (MaxCorruptAttemptsPerBlock <= 0 / nil cache), and the direction that can never make a node drop an
+// honest block.
+const corruptAttemptsMaxTracked = 1024
+
+// blockAttemptKey keys the RUNNING per-block attempt caps on (block hash, serving peerID)
 // (bitcoin-sv/teranode#4692). Keying on the pair — not the hash alone — is what stops one peer's
-// corruption consuming the budget for a hash an honest peer can still serve: each serving identity
+// behaviour consuming the budget for a hash an honest peer can still serve: each serving identity
 // is capped independently, so the honest tip is never wedged. An empty peerID (p2pClient nil, or a
 // peer that supplied no identity) degrades to a single shared (hash, "") bucket — the hard
 // per-hash bound for that deployment. Comparable (chainhash.Hash is [32]byte), so usable directly
-// as a ttlcache key.
-type corruptAttemptKey struct {
+// as a ttlcache key. Shared by blockCorruptAttempts and blockPolicyDeclineAttempts, which are
+// independent budgets keyed the same way.
+type blockAttemptKey struct {
 	hash   chainhash.Hash
 	peerID string
 }
@@ -2293,7 +2353,7 @@ func (u *Server) recordCorruptAttempt(blockHash *chainhash.Hash, peerID string) 
 		return 0
 	}
 
-	key := corruptAttemptKey{hash: *blockHash, peerID: peerID}
+	key := blockAttemptKey{hash: *blockHash, peerID: peerID}
 
 	// Preserve the ORIGINAL expiry: re-Set with the time REMAINING to the original expiry,
 	// not a fresh full window (see recordCatchupAttempt for the ttlcache semantics).
@@ -2340,7 +2400,7 @@ func (u *Server) accountCorruptAttempt(blockHash *chainhash.Hash, peerID string,
 // later corruption starts fresh (bitcoin-sv/teranode#4692). Nil-safe.
 func (u *Server) clearCorruptAttempts(blockHash *chainhash.Hash, peerID string) {
 	if u.blockCorruptAttempts != nil {
-		u.blockCorruptAttempts.Delete(corruptAttemptKey{hash: *blockHash, peerID: peerID})
+		u.blockCorruptAttempts.Delete(blockAttemptKey{hash: *blockHash, peerID: peerID})
 	}
 }
 
@@ -2360,7 +2420,88 @@ func (u *Server) corruptAttemptsExhausted(blockHash *chainhash.Hash, peerID stri
 		return false
 	}
 
-	item := u.blockCorruptAttempts.Get(corruptAttemptKey{hash: *blockHash, peerID: peerID})
+	item := u.blockCorruptAttempts.Get(blockAttemptKey{hash: *blockHash, peerID: peerID})
+
+	return item != nil && item.Value() >= maxAttempts
+}
+
+// excessiveBlockSizeDeclined reports whether a block exceeds this node's local excessiveblocksize
+// policy limit (0 means unlimited). Shared by the RUNNING pre-validation gate in processBlockFound
+// and the authoritative decline in ValidateBlockWithOptions so the two cannot drift apart
+// (freemans13 item 2 / bitcoin-sv/teranode#4692). The size read here is the peer-supplied
+// block.SizeInBytes varint, which is not committed by the header — see the decline sites for what
+// that permits and why it is never grounds for poisoning the hash. A configured limit is positive,
+// so the width conversion cannot fail; if it somehow did, reporting "not declined" is the fail-open
+// direction that can never drop an honest block.
+func excessiveBlockSizeDeclined(tSettings *settings.Settings, block *model.Block) bool {
+	if tSettings == nil || block == nil || tSettings.Policy.ExcessiveBlockSize <= 0 {
+		return false
+	}
+
+	limit, err := safeconversion.IntToUint64(tSettings.Policy.ExcessiveBlockSize)
+	if err != nil {
+		return false
+	}
+
+	return block.SizeInBytes > limit
+}
+
+// recordPolicyDeclineAttempt increments and returns the local-policy decline count for a
+// (block hash, serving peerID) within the current fixed cooldown window
+// (bitcoin-sv/teranode#4692). Same fixed-window semantics as recordCorruptAttempt: the window
+// starts at the FIRST decline and is not extended by later declines or by gate reads, so once it
+// lapses the pair is admitted again. This is a SEPARATE budget from the corrupt cap — a policy
+// decline never spends the corrupt budget and vice versa. A nil cache degrades to no tracking.
+func (u *Server) recordPolicyDeclineAttempt(blockHash *chainhash.Hash, peerID string) int {
+	if u.blockPolicyDeclineAttempts == nil {
+		return 0
+	}
+
+	key := blockAttemptKey{hash: *blockHash, peerID: peerID}
+
+	// Preserve the ORIGINAL expiry: re-Set with the time REMAINING to the original expiry,
+	// not a fresh full window (see recordCatchupAttempt for the ttlcache semantics).
+	if item := u.blockPolicyDeclineAttempts.Get(key); item != nil {
+		remaining := time.Until(item.ExpiresAt())
+		if remaining <= 0 {
+			remaining = ttlcache.DefaultTTL
+		}
+
+		n := item.Value() + 1
+		u.blockPolicyDeclineAttempts.Set(key, n, remaining)
+
+		return n
+	}
+
+	u.blockPolicyDeclineAttempts.Set(key, 1, ttlcache.DefaultTTL)
+
+	return 1
+}
+
+// clearPolicyDeclineAttempts resets a (hash, peerID)'s local-policy decline counter and its
+// cooldown window. Nil-safe.
+func (u *Server) clearPolicyDeclineAttempts(blockHash *chainhash.Hash, peerID string) {
+	if u.blockPolicyDeclineAttempts != nil {
+		u.blockPolicyDeclineAttempts.Delete(blockAttemptKey{hash: *blockHash, peerID: peerID})
+	}
+}
+
+// policyDeclineAttemptsExhausted reports whether a (hash, peerID) has reached the local-policy
+// decline cap and is therefore in its cooldown window (bitcoin-sv/teranode#4692). Sized by
+// MaxCorruptAttemptsPerBlock, which is a separate budget from the corrupt cap that happens to share
+// the operator's knob. A cap of <= 0 disables the bound. Nil-safe and fail-open for the same reason
+// as corruptAttemptsExhausted: a missing config must never silently drop an honest block.
+func (u *Server) policyDeclineAttemptsExhausted(blockHash *chainhash.Hash, peerID string) bool {
+	if u.settings == nil || u.blockPolicyDeclineAttempts == nil {
+		return false
+	}
+
+	maxAttempts := u.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	item := u.blockPolicyDeclineAttempts.Get(blockAttemptKey{hash: *blockHash, peerID: peerID})
 
 	return item != nil && item.Value() >= maxAttempts
 }

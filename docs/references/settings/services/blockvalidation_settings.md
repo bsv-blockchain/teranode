@@ -28,8 +28,8 @@
 | ValidationRetrySleep | time.Duration | 5s | blockvalidation_validation_retry_sleep | Validation retry delay |
 | OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior (global; peer/catch-up paths also require OptimisticMiningPeerBlocks) |
 | OptimisticMiningPeerBlocks | bool | false | blockvalidation_optimistic_mining_peer_blocks | Opt in to optimistic mining on peer-served and catch-up paths (accepts the invalidate-route tradeoff) |
-| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-block-hash cap on corrupt re-downloads (0 disables, re-opening the DoS) |
-| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped corrupt hash is admitted again |
+| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap (0 disables, re-opening the DoS) |
+| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for both caps |
 | IsParentMinedRetryMaxRetry | int | 45 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
 | IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Parent mining retry backoff multiplier |
 | IsParentMinedRetryBackoffDuration | time.Duration | 20ms | blockvalidation_isParentMined_retry_backoff_duration | Parent mining retry backoff base duration |
@@ -105,13 +105,22 @@
 
 ### Corrupt-body re-download cap
 
-- Independently of the per-peer ban score, corrupt-body re-downloads for a single block hash are
-  bounded per hash on the RUNNING and legacy paths by `MaxCorruptAttemptsPerBlock` (default 3) within
-  a fixed `CorruptAttemptCooldown` window (default 10m), then dropped before the expensive
-  download/validate work until the window lapses (bitcoin-sv/teranode#4692). The cap never poisons a
-  hash — once the window lapses an honest body is admitted again (self-healing). Setting
-  `MaxCorruptAttemptsPerBlock` to 0 disables the cap and re-opens the corrupt-body bandwidth DoS, so
-  it is strongly discouraged.
+- Independently of the per-peer ban score, corrupt-body re-downloads are bounded per
+  (block hash, serving peerID) on the RUNNING and legacy netsync paths by
+  `MaxCorruptAttemptsPerBlock` (default 3) within a fixed `CorruptAttemptCooldown` window
+  (default 10m), then dropped before the expensive download/validate work until the window lapses
+  (bitcoin-sv/teranode#4692). Keying on the pair rather than the hash alone is deliberate: one peer's
+  corruption can never consume the budget for a hash an honest peer can still serve, so a bad peer
+  cannot wedge the honest tip. The residual aggregate per-hash bound is therefore
+  (concurrent distinct serving peers) × this cap per window.
+- The cap never poisons a hash: once the window lapses an honest body is admitted again, and the
+  counter is cleared by a successful validation. Setting `MaxCorruptAttemptsPerBlock` to 0 disables
+  the cap and re-opens the corrupt-body bandwidth DoS, so it is strongly discouraged.
+- A separate per-(hash, peerID) counter, sized by the same two settings, bounds repeat deliveries of
+  a block this node declines on local `excessiveblocksize` policy, so an oversized block is not
+  re-fetched from the same peer indefinitely. A policy decline is not a corrupt body: it never
+  strikes the peer, never marks the hash invalid, and spends a budget of its own rather than the
+  corrupt one.
 
 ### Quick Validation Pipeline
 
