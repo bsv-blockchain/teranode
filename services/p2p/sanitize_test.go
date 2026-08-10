@@ -7,7 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -278,6 +282,29 @@ func TestHandleNodeStatusTopic_SanitizesTipWithoutHeight(t *testing.T) {
 	default:
 		t.Fatal("expected node_status notification")
 	}
+}
+
+// TestGetNodeStatusMessage_SanitizesMinerName covers the one hostile string we
+// do not receive over gossip: MinerName is extracted from the best block's
+// coinbase scriptSig, so it is chosen by whoever mined the block, and it is both
+// forwarded to our own WebSocket clients and published to peers.
+func TestGetNodeStatusMessage_SanitizesMinerName(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(
+		model.GenesisBlockHeader,
+		&model.BlockHeaderMeta{Height: 100, Miner: `<img src=x onerror=alert(1)>`},
+		nil,
+	).Maybe()
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, nil).Maybe()
+	s.blockchainClient = mockBlockchain
+
+	msg := s.getNodeStatusMessage(context.Background())
+	require.NotNil(t, msg)
+	require.Equal(t, "img src=x onerror=alert(1)", msg.MinerName)
 }
 
 // TestHandleSubtreeTopic_SanitizesClientName covers the third relay path.
