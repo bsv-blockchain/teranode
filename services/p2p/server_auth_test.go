@@ -739,16 +739,17 @@ func TestRecordCatchupMaliciousRequiresAuth(t *testing.T) {
 		ValidatedChainWork: []byte{0x00, 0x20},
 	})
 
-	// The DataHub URL is a placeholder, so keep selection off the network.
-	tSettings := settings.NewSettings()
-	tSettings.P2P.HealthCheckEnabled = false
-
-	selector := NewPeerSelector(ulogger.TestLogger{}, tSettings)
+	// isEligibleBasic holds the per-peer merit checks - ban state, DataHub URL,
+	// blacklist, reputation threshold, validated-work progress, sync cooldown.
+	// That is the level a forged malicious flag acts on: it pins reputation to
+	// 5.0, below the 20.0 threshold. The availability probe now runs as a
+	// separate pre-pass, so this stays off the network without extra setup.
+	selector := NewPeerSelector(ulogger.TestLogger{}, settings.NewSettings())
 	criteria := SelectionCriteria{LocalChainWork: local}
 
 	info, found := reg.Get(pid.String())
 	require.True(t, found)
-	require.True(t, selector.isEligible(info, criteria), "peer must start out eligible for the test to mean anything")
+	require.True(t, selector.isEligibleBasic(info, criteria), "peer must start out eligible for the test to mean anything")
 
 	authed, anon := startAuthedPeerService(t, s)
 	req := &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()}
@@ -759,7 +760,7 @@ func TestRecordCatchupMaliciousRequiresAuth(t *testing.T) {
 	info, found = reg.Get(pid.String())
 	require.True(t, found)
 	require.Zero(t, info.MaliciousCount, "rejected call must not flag the peer")
-	require.True(t, selector.isEligible(info, criteria), "rejected call must not change sync eligibility")
+	require.True(t, selector.isEligibleBasic(info, criteria), "rejected call must not change sync eligibility")
 
 	// Prove the attack would have worked: the same call with the key does
 	// evict the peer from selection.
@@ -769,7 +770,7 @@ func TestRecordCatchupMaliciousRequiresAuth(t *testing.T) {
 	info, found = reg.Get(pid.String())
 	require.True(t, found)
 	require.Equal(t, int64(1), info.MaliciousCount)
-	require.False(t, selector.isEligible(info, criteria), "a malicious flag must remove the peer from selection")
+	require.False(t, selector.isEligibleBasic(info, criteria), "a malicious flag must remove the peer from selection")
 }
 
 // TestPublicRPCsStayAnonymousOverTheWire checks the other half of the contract
