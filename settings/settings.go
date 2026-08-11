@@ -538,6 +538,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EnableNAT:       getBool("p2p_enable_nat", false, alternativeContext...),        // Default false - UPnP scans gateway
 			EnableMDNS:      getBool("p2p_enable_mdns", false, alternativeContext...),       // Default false to prevent LAN scanning
 			AllowPrivateIPs: getBool("p2p_allow_private_ips", false, alternativeContext...), // Default false for production safety
+			// GossipSub Sybil resistance: peer scoring gates peer exchange and re-enables the mesh's flood defences
+			EnablePeerScoring:   getBool("p2p_enable_peer_scoring", true, alternativeContext...),    // Default true - protect the mesh from Sybils
+			DisablePeerExchange: getBool("p2p_disable_peer_exchange", false, alternativeContext...), // Default false - PX stays on, gated by scoring
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback:                   getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
 			SyncCoordinatorPeriodicEvaluationInterval: getDuration("p2p_sync_coordinator_periodic_evaluation_interval", 30*time.Second, alternativeContext...),

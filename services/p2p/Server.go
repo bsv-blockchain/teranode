@@ -412,6 +412,10 @@ func NewServer(
 		EnableNAT:          tSettings.P2P.EnableNAT,
 		EnableMDNS:         tSettings.P2P.EnableMDNS,
 		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
+		// GossipSub Sybil resistance: peer scoring gates peer exchange and re-enables
+		// the mesh's flood defences. See settings p2p_enable_peer_scoring.
+		EnablePeerScoring:   tSettings.P2P.EnablePeerScoring,
+		DisablePeerExchange: tSettings.P2P.DisablePeerExchange,
 	}
 
 	if len(advertiseAddresses) > 0 {
