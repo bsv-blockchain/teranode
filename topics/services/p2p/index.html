@@ -8173,42 +8173,45 @@
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>├── Server.go                           - Main server logic for the P2P service, peer interactions, and network handling
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>├── Server_test.go                      - Unit tests for Server.go functionalities
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>├── server_helpers.go                   - Helper functions for server message handling
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>├── Client.go                           - Client-side API for interacting with the P2P service
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>├── Client_test.go                      - Unit tests for Client.go functionalities
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>├── Interface.go                        - Defines the P2P service interface
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>├── BanList.go                          - Thread-safe ban list management for IP addresses and subnets
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>├── BanList_test.go                     - Unit tests for ban list functionalities
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>├── BanManager.go                       - Ban management system coordinating ban operations and persistence
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>├── BanManager_test.go                  - Unit tests for ban manager
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>├── HandleWebsocket.go                  - WebSocket connection and communication management
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>├── HandleWebsocket_test.go             - Unit tests for WebSocket handling
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>├── sync_coordinator.go                 - Synchronization coordination between peers
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>├── sync_coordinator_test.go            - Unit tests for sync coordinator
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>├── sync_coordinator_fsm_ban_test.go    - Tests for FSM state transitions during ban events
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>├── sync_integration_test.go            - Integration tests for peer synchronization
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>├── peer_registry.go                    - Maintains registry of known and connected peers
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a>├── peer_registry_test.go               - Unit tests for peer registry
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a>├── peer_registry_cache.go              - Persistent cache for peer registry data
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a>├── peer_registry_cache_test.go         - Unit tests for peer registry cache
-</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a>├── peer_registry_reputation_test.go    - Tests for peer reputation scoring
-</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a>├── peer_selector.go                    - Peer selection logic for connection prioritization
-</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a>├── peer_selector_test.go               - Unit tests for peer selector
-</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a>├── handle_catchup_metrics.go           - Handles catchup performance metrics and reputation updates
-</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a>├── catchup_metrics_integration_test.go - Integration tests for catchup metrics tracking
-</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28" href="#__codelineno-6-28"></a>├── message_types.go                    - Message type definitions for P2P communication
-</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29" href="#__codelineno-6-29"></a>├── advertise_config_test.go            - Tests for peer advertisement configuration
-</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30" href="#__codelineno-6-30"></a>├── peer_cache_config_test.go           - Tests for peer cache configuration
-</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31" href="#__codelineno-6-31"></a>├── report_invalid_block_test.go        - Tests for invalid block reporting to peers
-</span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32" href="#__codelineno-6-32"></a>├── asset_websocket_integration_test.go - Integration tests for Asset service WebSocket connectivity
-</span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33" href="#__codelineno-6-33"></a>├── websocket_integration_test.go       - General WebSocket integration tests
-</span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34" href="#__codelineno-6-34"></a>├── websocket_live_integration_test.go  - Live WebSocket integration tests
-</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35" href="#__codelineno-6-35"></a>├── mock.go                             - Mock implementations for testing
-</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36" href="#__codelineno-6-36"></a>├── test_helpers.go                     - Helper functions for test setup and utilities
-</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37" href="#__codelineno-6-37"></a>├── README.md                           - P2P service documentation
-</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38" href="#__codelineno-6-38"></a>└── p2p_api/                            - gRPC API definitions for P2P service
-</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39" href="#__codelineno-6-39"></a>    ├── p2p_api.proto                   - Protocol Buffers definition for P2P API
-</span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40" href="#__codelineno-6-40"></a>    ├── p2p_api.pb.go                   - Auto-generated protobuf Go bindings
-</span><span id="__span-6-41"><a id="__codelineno-6-41" name="__codelineno-6-41" href="#__codelineno-6-41"></a>    └── p2p_api_grpc.pb.go              - gRPC-specific generated code
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>├── publish_gate.go                     - Declarative per-FSM-state allow-list gating all outbound pubsub publishes
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>├── publish_gate_test.go                - Unit tests for the outbound publish gate
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>├── metrics.go                          - Prometheus metrics for the P2P service
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>├── Client.go                           - Client-side API for interacting with the P2P service
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>├── Client_test.go                      - Unit tests for Client.go functionalities
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>├── Interface.go                        - Defines the P2P service interface
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>├── BanList.go                          - Thread-safe ban list management for IP addresses and subnets
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>├── BanList_test.go                     - Unit tests for ban list functionalities
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>├── BanManager.go                       - Ban management system coordinating ban operations and persistence
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>├── BanManager_test.go                  - Unit tests for ban manager
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>├── HandleWebsocket.go                  - WebSocket connection and communication management
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>├── HandleWebsocket_test.go             - Unit tests for WebSocket handling
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>├── sync_coordinator.go                 - Synchronization coordination between peers
+</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>├── sync_coordinator_test.go            - Unit tests for sync coordinator
+</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a>├── sync_coordinator_fsm_ban_test.go    - Tests for FSM state transitions during ban events
+</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a>├── sync_integration_test.go            - Integration tests for peer synchronization
+</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a>├── peer_registry.go                    - Maintains registry of known and connected peers
+</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a>├── peer_registry_test.go               - Unit tests for peer registry
+</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a>├── peer_registry_cache.go              - Persistent cache for peer registry data
+</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a>├── peer_registry_cache_test.go         - Unit tests for peer registry cache
+</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a>├── peer_registry_reputation_test.go    - Tests for peer reputation scoring
+</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a>├── peer_selector.go                    - Peer selection logic for connection prioritization
+</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28" href="#__codelineno-6-28"></a>├── peer_selector_test.go               - Unit tests for peer selector
+</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29" href="#__codelineno-6-29"></a>├── handle_catchup_metrics.go           - Handles catchup performance metrics and reputation updates
+</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30" href="#__codelineno-6-30"></a>├── catchup_metrics_integration_test.go - Integration tests for catchup metrics tracking
+</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31" href="#__codelineno-6-31"></a>├── message_types.go                    - Message type definitions for P2P communication
+</span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32" href="#__codelineno-6-32"></a>├── advertise_config_test.go            - Tests for peer advertisement configuration
+</span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33" href="#__codelineno-6-33"></a>├── peer_cache_config_test.go           - Tests for peer cache configuration
+</span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34" href="#__codelineno-6-34"></a>├── report_invalid_block_test.go        - Tests for invalid block reporting to peers
+</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35" href="#__codelineno-6-35"></a>├── asset_websocket_integration_test.go - Integration tests for Asset service WebSocket connectivity
+</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36" href="#__codelineno-6-36"></a>├── websocket_integration_test.go       - General WebSocket integration tests
+</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37" href="#__codelineno-6-37"></a>├── websocket_live_integration_test.go  - Live WebSocket integration tests
+</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38" href="#__codelineno-6-38"></a>├── mock.go                             - Mock implementations for testing
+</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39" href="#__codelineno-6-39"></a>├── test_helpers.go                     - Helper functions for test setup and utilities
+</span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40" href="#__codelineno-6-40"></a>├── README.md                           - P2P service documentation
+</span><span id="__span-6-41"><a id="__codelineno-6-41" name="__codelineno-6-41" href="#__codelineno-6-41"></a>└── p2p_api/                            - gRPC API definitions for P2P service
+</span><span id="__span-6-42"><a id="__codelineno-6-42" name="__codelineno-6-42" href="#__codelineno-6-42"></a>    ├── p2p_api.proto                   - Protocol Buffers definition for P2P API
+</span><span id="__span-6-43"><a id="__codelineno-6-43" name="__codelineno-6-43" href="#__codelineno-6-43"></a>    ├── p2p_api.pb.go                   - Auto-generated protobuf Go bindings
+</span><span id="__span-6-44"><a id="__codelineno-6-44" name="__codelineno-6-44" href="#__codelineno-6-44"></a>    └── p2p_api_grpc.pb.go              - gRPC-specific generated code
 </span></code></pre></div>
 <h2 id="6-how-to-run">6. How to run<a class="headerlink" href="#6-how-to-run" title="Permanent link">&para;</a></h2>
 <p>To run the P2P Service locally, you can execute the following command:</p>

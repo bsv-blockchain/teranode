@@ -7380,6 +7380,19 @@
 <li>❌ Create subtrees (or propagate them)</li>
 <li>❌ Create blocks (mine candidates)</li>
 </ul>
+<p>Outbound P2P gossip is gated per FSM state by a declarative allow-list
+(<code>outboundTopicsAllowed</code> in <code>services/p2p/publish_gate.go</code>): in <code>Running</code> the
+node may publish block, subtree, rejected-tx, and <code>node_status</code> messages; in
+<code>CatchingBlocks</code> and <code>Idle</code> it publishes only <code>node_status</code> (so peers can track
+its height). <code>Idle</code> is deliberately restrictive because it doubles as the
+blockchain client's safety fallback: when the FSM state cannot be fetched or
+the heartbeat is lost, the client caches <code>Idle</code> and reports it with no error,
+so a degraded blockchain client reads as <code>Idle</code> and gossip stops (only
+<code>node_status</code> keeps flowing) until the state is re-fetched. An idle node must
+not participate in the network in any case. States unknown to the
+allow-list (e.g. from a newer blockchain service) also fall back to
+<code>node_status</code>-only. Suppressed publishes are counted in the
+<code>teranode_p2p_publish_blocked_total</code> metric.</p>
 <h5 id="error-handling-in-catching-blocks-state">Error Handling in Catching Blocks State<a class="headerlink" href="#error-handling-in-catching-blocks-state" title="Permanent link">&para;</a></h5>
 <p>When an error occurs during the catchup process, the FSM behavior has been updated to maintain state consistency:</p>
 <p><img alt="fsm_catchup_error_handling.svg" src="../img/plantuml/fsm_catchup_error_handling.svg" /></p>

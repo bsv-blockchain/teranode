@@ -6606,6 +6606,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#p2p-service-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        P2P Service Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#legacy-peer-server-metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6951,6 +6962,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#p2p-service-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        P2P Service Metrics
+      
+    </span>
+  </a>
   
 </li>
       
@@ -7986,6 +8008,25 @@
 <td><code>teranode_blockvalidation_queue_wait_seconds</code></td>
 <td>Histogram</td>
 <td>Time blocks spend in queue before processing</td>
+</tr>
+</tbody>
+</table>
+<h2 id="p2p-service-metrics">P2P Service Metrics<a class="headerlink" href="#p2p-service-metrics" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Metric Name</th>
+<th>Type</th>
+<th>Labels</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>teranode_p2p_publish_blocked_total</code></td>
+<td>Counter</td>
+<td><code>topic</code>, <code>fsm_state</code>, <code>stage</code></td>
+<td>Outbound P2P messages suppressed by the per-FSM-state allow-list; <code>stage="precheck"</code> is an expected skip, <code>stage="chokepoint"</code> is a publish that leaked past the pre-checks</td>
 </tr>
 </tbody>
 </table>
