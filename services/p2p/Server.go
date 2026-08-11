@@ -649,6 +649,11 @@ func (s *Server) httpServeError() error {
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("[Init] P2P service initialising")
 
+	// Fail fast on an insecure admin API key before the node joins the network.
+	if err = util.ValidateAdminAPIKey(s.logger, "P2P", s.settings.GRPCAdminAPIKey, s.settings.P2P.GRPCListenAddress, s.settings.SecurityLevelGRPC); err != nil {
+		return err
+	}
+
 	AssetHTTPAddressURLString := s.settings.Asset.HTTPPublicAddress
 	if AssetHTTPAddressURLString == "" {
 		AssetHTTPAddressURLString = s.settings.Asset.HTTPAddress
@@ -834,10 +839,6 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start node status publisher
 	go s.publishNodeStatus(ctx)
-
-	if err = util.ValidateAdminAPIKey(s.logger, "P2P", s.settings.GRPCAdminAPIKey, s.settings.P2P.GRPCListenAddress, s.settings.SecurityLevelGRPC); err != nil {
-		return errors.NewServiceNotStartedError("[P2P] invalid grpc_admin_api_key", err)
-	}
 
 	apiKey := s.settings.GRPCAdminAPIKey
 	if apiKey == "" {

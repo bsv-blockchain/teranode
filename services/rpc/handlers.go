@@ -2281,15 +2281,26 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	s.logger.Debugf("in handleClearBanned")
 
+	var (
+		attempted bool
+		success   bool
+	)
+
 	// check if P2P service is available
 	if s.p2pClient != nil {
+		attempted = true
+
 		err := s.p2pClient.ClearBanned(ctx)
 		if err != nil {
 			s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
+		} else {
+			success = true
 		}
 	}
 	// check if legacy peer service is available
 	if s.legacyP2PClient != nil {
+		attempted = true
+
 		// Bound the call so an absent-but-configured legacy service can't stall
 		// the RPC on the parent context (#591).
 		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
@@ -2299,6 +2310,18 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 		if err != nil {
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
+		} else {
+			success = true
+		}
+	}
+
+	// clearbanned is an administrative control; if every attempted leg failed
+	// (e.g. the admin API key is unset or wrong, so calls are Unauthenticated),
+	// report the failure rather than silently returning success.
+	if attempted && !success {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: "Failed to clear banned list",
 		}
 	}
 

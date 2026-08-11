@@ -60,7 +60,9 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	// Include the admin API key in the connection options
 	apiKey := tSettings.GRPCAdminAPIKey
 	if apiKey != "" {
-		logger.Infof("[Legacy Client] Using API key for authentication")
+		logger.Infof("[P2P Client] Using API key for authentication")
+	} else {
+		logger.Warnf("[P2P Client] grpc_admin_api_key is not set; admin RPCs (ban, unban, connect/disconnect peer) will fail with Unauthenticated because no key is sent while the server expects one")
 	}
 
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
