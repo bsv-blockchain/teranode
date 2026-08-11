@@ -382,7 +382,7 @@ The P2P service includes a comprehensive peer management system that tracks peer
 The system consists of three main components:
 
 - **Peer Registry**: A thread-safe data store maintaining all peer information and interaction history
-- **Peer Selector**: A stateless component that selects optimal peers based on reputation and criteria
+- **Peer Selector**: A component that selects optimal peers based on reputation and criteria, optionally probing peer availability over HTTP (with a short-lived result cache)
 - **Reputation Scoring**: An algorithm calculating peer reliability scores (0-100)
 
 #### 2.8.2. Peer Information Tracking
