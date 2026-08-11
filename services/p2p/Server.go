@@ -835,6 +835,10 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Start node status publisher
 	go s.publishNodeStatus(ctx)
 
+	if err = util.ValidateAdminAPIKey(s.logger, "P2P", s.settings.GRPCAdminAPIKey, s.settings.P2P.GRPCListenAddress, s.settings.SecurityLevelGRPC); err != nil {
+		return errors.NewServiceNotStartedError("[P2P] invalid grpc_admin_api_key", err)
+	}
+
 	apiKey := s.settings.GRPCAdminAPIKey
 	if apiKey == "" {
 		// Generate a random API key if not provided
