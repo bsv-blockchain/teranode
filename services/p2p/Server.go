@@ -462,6 +462,8 @@ func NewServer(
 		peerMapTTL:     defaultPeerMapTTL,
 	}
 
+	initPrometheusMetrics()
+
 	// Override defaults with settings if provided
 	if tSettings.P2P.PeerMapMaxSize > 0 {
 		p2pServer.peerMapMaxSize = tSettings.P2P.PeerMapMaxSize
@@ -868,16 +870,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			return nil
 		}
 
-		var (
-			syncing bool
-			err     error
-		)
-
-		if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-			return err
-		}
-
-		if syncing {
+		if !s.canSendToNetwork(ctx, topicKindRejectedTx) {
 			return nil
 		}
 
@@ -929,7 +922,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
-		if err = s.P2PClient.Publish(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
 		}
 
@@ -1274,7 +1267,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
-	if err = s.P2PClient.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
+	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
 		return errors.NewError("blockMessage - publish error", err)
 	}
 
@@ -1723,7 +1716,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
-	if err = s.P2PClient.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
+	if err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
@@ -1760,7 +1753,7 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
-	if err := s.P2PClient.Publish(ctx, s.subtreeTopicName, msgBytes); err != nil {
+	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {
 		return errors.NewError("subtreeMessage - publish error", err)
 	}
 
@@ -1832,19 +1825,10 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 				continue
 			}
 
-			var (
-				syncing bool
-				err     error
-			)
-
-			if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-				ctxLogger.Errorf("[blockchainSubscriptionListener] error getting blockchain FSM state: %v", err)
-
-				continue
-			}
-
-			// Process PeerFailure notifications even during sync (needed to switch peers on catchup failure)
-			if syncing && notification.Type != model.NotificationType_PeerFailure {
+			// Skip notifications whose outbound announcement is not allowed in
+			// the current FSM state; control notifications (e.g. PeerFailure,
+			// needed to switch peers on catchup failure) always pass.
+			if s.shouldSkipNotification(ctx, notification.Type) {
 				continue
 			}
 

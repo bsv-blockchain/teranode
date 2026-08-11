@@ -599,6 +599,9 @@ Within the P2P service, notifications are sent to WebSocket clients using the fo
 ├── Server.go                           - Main server logic for the P2P service, peer interactions, and network handling
 ├── Server_test.go                      - Unit tests for Server.go functionalities
 ├── server_helpers.go                   - Helper functions for server message handling
+├── publish_gate.go                     - Declarative per-FSM-state allow-list gating all outbound pubsub publishes
+├── publish_gate_test.go                - Unit tests for the outbound publish gate
+├── metrics.go                          - Prometheus metrics for the P2P service
 ├── Client.go                           - Client-side API for interacting with the P2P service
 ├── Client_test.go                      - Unit tests for Client.go functionalities
 ├── Interface.go                        - Defines the P2P service interface
