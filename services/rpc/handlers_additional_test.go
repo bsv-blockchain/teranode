@@ -3686,7 +3686,7 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		assert.True(t, success)
 	})
 
-	t.Run("both clients error - still returns true", func(t *testing.T) {
+	t.Run("both clients error - reports failure", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
 			clearBannedFunc: func(ctx context.Context) error {
 				return errors.New(errors.ERR_ERROR, "p2p service error")
@@ -3708,12 +3708,13 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 			},
 		}
 
+		// clearbanned is an administrative control: when every attempted ban leg
+		// fails (e.g. Unauthenticated because the admin key is unset), it must
+		// report failure rather than silently returning success.
 		result, err := handleClearBanned(context.Background(), s, nil, nil)
 
-		require.NoError(t, err)
-		success, ok := result.(bool)
-		require.True(t, ok)
-		assert.True(t, success) // Always returns true
+		require.Error(t, err)
+		require.Nil(t, result)
 	})
 }
 
