@@ -38,6 +38,7 @@
 | ValidationWarmupCount | int | 128 | blockvalidation_validation_warmup_count | Validation warmup behavior |
 | BatchMissingTransactions | bool | false | blockvalidation_batch_missing_transactions | Missing transaction batching |
 | CheckSubtreeFromBlockTimeout | time.Duration | 5m | blockvalidation_check_subtree_from_block_timeout | Subtree validation timeout |
+| SubtreeDataFetchTimeout | time.Duration | 10m | blockvalidation_subtree_data_fetch_timeout | Bound on one detached subtree_data fetch (download + parse + store) |
 | CheckSubtreeFromBlockRetries | int | 5 | blockvalidation_check_subtree_from_block_retries | Subtree validation retries |
 | CheckSubtreeFromBlockRetryBackoffDuration | time.Duration | 30s | blockvalidation_check_subtree_from_block_retry_backoff_duration | Subtree retry backoff |
 | SecretMiningThreshold | uint32 | 99 | blockvalidation_secret_mining_threshold | **CRITICAL** - Secret mining detection |

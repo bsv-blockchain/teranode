@@ -19,6 +19,16 @@ import (
 // peerFetchTimeout bounds a single subtree data fetch from a peer.
 const peerFetchTimeout = 30 * time.Second
 
+// peerFetchClient is shared by every regenerator. A regenerator is built per block, so a
+// client each would give each block its own connection pool: every block would re-handshake
+// to the same peer instead of reusing a keep-alive connection, and would leave a short-lived
+// idle pool behind. The SSRF policy is constant and independent of the peer URLs, so one
+// client is safe to share.
+//
+// peerURLs come from peer block/subtree announcements, so the client must reject addresses
+// that only turn out to be internal after DNS resolution.
+var peerFetchClient = util.NewSSRFSafeHTTPClient(peerFetchTimeout, util.DefaultSSRFDialPolicy)
+
 // SubtreeMetaRegeneratorI defines the interface for regenerating missing subtree meta files
 type SubtreeMetaRegeneratorI interface {
 	// RegenerateMeta attempts to rebuild meta from subtreedata (local or from peers)
@@ -51,13 +61,11 @@ type SubtreeMetaRegenerator struct {
 func NewSubtreeMetaRegenerator(logger ulogger.Logger, subtreeStore SubtreeStoreWriter, peerURLs []string, apiPrefix string,
 	getBlockHeight func() uint32, blockHeightRetention uint32) *SubtreeMetaRegenerator {
 	return &SubtreeMetaRegenerator{
-		logger:       logger.New("meta_regenerator"),
-		subtreeStore: subtreeStore,
-		peerURLs:     peerURLs,
-		apiPrefix:    apiPrefix,
-		// peerURLs come from peer block/subtree announcements, so the client must reject
-		// addresses that only turn out to be internal after DNS resolution.
-		httpClient:           util.NewSSRFSafeHTTPClient(peerFetchTimeout, util.DefaultSSRFDialPolicy),
+		logger:               logger.New("meta_regenerator"),
+		subtreeStore:         subtreeStore,
+		peerURLs:             peerURLs,
+		apiPrefix:            apiPrefix,
+		httpClient:           peerFetchClient,
 		getBlockHeight:       getBlockHeight,
 		blockHeightRetention: blockHeightRetention,
 	}

@@ -907,3 +907,58 @@ func TestGetOrSetReentrantSameKeyDeadlocks(t *testing.T) {
 	<-waitErr
 	reaped = true
 }
+
+// TestNewExpiringConcurrentCacheWithMaxSize pins the bound. Without it the
+// underlying ExpiringMap grows without limit for the whole TTL, and the aerospike
+// store keeps two of these for external transactions — the largest ones on the
+// node.
+func TestNewExpiringConcurrentCacheWithMaxSize(t *testing.T) {
+	t.Run("caps resident entries and keeps serving", func(t *testing.T) {
+		cache := NewExpiringConcurrentCacheWithMaxSize[int, int](120*time.Second, 4)
+		defer cache.Stop()
+
+		for i := 0; i < 100; i++ {
+			v, err := cache.GetOrSet(i, func() (int, bool, error) { return i * 10, true, nil })
+			require.NoError(t, err)
+			require.Equal(t, i*10, v)
+		}
+
+		require.LessOrEqual(t, cache.cache.Len(), 4, "the cache must not grow past its cap")
+	})
+
+	t.Run("zero means unbounded", func(t *testing.T) {
+		cache := NewExpiringConcurrentCacheWithMaxSize[int, int](120*time.Second, 0)
+		defer cache.Stop()
+
+		for i := 0; i < 50; i++ {
+			_, err := cache.GetOrSet(i, func() (int, bool, error) { return i, true, nil })
+			require.NoError(t, err)
+		}
+
+		require.Equal(t, 50, cache.cache.Len(), "0 must preserve the unbounded behaviour")
+	})
+
+	t.Run("an evicted key is refetched, not lost", func(t *testing.T) {
+		cache := NewExpiringConcurrentCacheWithMaxSize[int, int](120*time.Second, 2)
+		defer cache.Stop()
+
+		fetches := 0
+		get := func(k int) int {
+			v, err := cache.GetOrSet(k, func() (int, bool, error) {
+				fetches++
+				return k * 10, true, nil
+			})
+			require.NoError(t, err)
+
+			return v
+		}
+
+		require.Equal(t, 10, get(1))
+		require.Equal(t, 20, get(2))
+		require.Equal(t, 30, get(3)) // evicts key 1
+		require.Equal(t, 3, fetches)
+
+		require.Equal(t, 10, get(1), "an evicted key must still resolve correctly")
+		require.Equal(t, 4, fetches, "and it must come from a fresh fetch")
+	})
+}

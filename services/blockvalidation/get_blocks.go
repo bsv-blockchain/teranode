@@ -9,6 +9,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -16,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -528,9 +530,23 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 	return subtree, nil
 }
 
+// subtreeDataFetchTimeout resolves the bound for one detached subtree_data fetch.
+//
+// It fails closed: a nil settings object, or a non-positive configured value, yields the
+// default rather than "no limit". The fetch this bounds is peer-controlled, so treating
+// an unset or unparsed value as unbounded would silently restore the behaviour the bound
+// exists to remove. Nil-tolerant because several tests construct a bare settings object.
+func subtreeDataFetchTimeout(tSettings *settings.Settings) time.Duration {
+	if tSettings == nil || tSettings.BlockValidation.SubtreeDataFetchTimeout <= 0 {
+		return settings.DefaultSubtreeDataFetchTimeout
+	}
+
+	return tSettings.BlockValidation.SubtreeDataFetchTimeout
+}
+
 // fetchAndStoreSubtreeData fetches and stores only the subtreeData
 func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
-	subtree *subtreepkg.Subtree, peerID, baseURL string, bypassCache bool) error {
+	subtree *subtreepkg.Subtree, peerID, baseURL string, bypassCache bool) (err error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeData",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeData][%s] Fetching subtree data from peer %s (%s) for subtree %s", block.Hash().String(), peerID, baseURL, subtreeHash.String()),
@@ -556,12 +572,51 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	// subtree_data download in the batch — and each cancellation closes the upstream
 	// connection, causing the peer to abort its on-demand creation (storer.Abort) and
 	// throw away Aerospike work that was already paid for. Detaching here lets each
-	// fetch run to completion (or hit its own http_streaming_timeout) so the peer can
-	// finish writing its subtreeData file. The existence check above still respects
-	// the original ctx, so a pre-cancelled call still exits early.
+	// fetch run to completion so the peer can finish writing its subtreeData file. The
+	// existence check above still respects the original ctx, so a pre-cancelled call
+	// still exits early.
 	//
-	// See companion fix in services/subtreevalidation/check_block_subtrees.go.
-	ctx = context.WithoutCancel(ctx)
+	// The deadline is what keeps that detachment bounded, and it must be applied here
+	// rather than left to the HTTP layer. context.WithoutCancel returns a context with
+	// no deadline AND a nil Done channel, which has two consequences downstream in
+	// DoHTTPRequestBodyReaderWithRetry: its `case <-ctx.Done()` abort can never be
+	// selected, so the retry loop always runs to maxAttempts, and each attempt sees no
+	// deadline and installs a *fresh* http_streaming_timeout of its own. A hostile peer
+	// answering 503 and then dripping bytes therefore held one fetch for maxAttempts ×
+	// http_streaming_timeout. Setting a deadline here fixes both at once: Done() fires
+	// again for the retry guard, and because the per-attempt timeout is only installed
+	// when the context has no deadline, every attempt now shares this single bound.
+	timeout := subtreeDataFetchTimeout(u.settings)
+
+	parentCtx := ctx
+
+	ctx, cancelDetached := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancelDetached()
+
+	// Keep an expiry of our own bound attributable to the peer. Every error below this
+	// point would otherwise surface as a context error, and errors.IsLocalError treats
+	// those as ours: fetchAndStoreSubtreeAndSubtreeData would skip alternative-peer
+	// failover and recordCatchupPeerFailure would decline to charge the peer, so a peer
+	// that stalls until the bound fires would stay in rotation unrecorded. Before this
+	// bound existed the same peer exhausted the retry loop and surfaced as
+	// ErrServiceUnavailable, which is attributable, so leaving it as a context error
+	// would be a regression in exactly the case the bound exists to contain.
+	//
+	// Only re-attribute while the caller's context is still alive. A genuinely cancelled
+	// or expired parent is our shutdown, not the peer's fault, and stays local. The
+	// parent is read rather than the detached context so this does not depend on defer
+	// ordering relative to cancelDetached.
+	//
+	// The replacement must not carry the context error, neither wrapped as a cause nor
+	// rendered into the message: IsContextError matches both, so either form silently
+	// restores the local classification this is undoing.
+	defer func() {
+		if err != nil && parentCtx.Err() == nil && errors.IsContextError(err) {
+			err = errors.NewServiceUnavailableError(
+				"[catchup:fetchAndStoreSubtreeData] peer %s (%s) exceeded the %s subtree_data bound for %s",
+				peerID, baseURL, timeout, subtreeHash.String())
+		}
+	}()
 
 	subtreeDataReader, err := u.fetchSubtreeDataFromPeer(ctx, subtreeHash, peerID, baseURL, bypassCache)
 	if err != nil {
@@ -984,6 +1039,17 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 	if block == nil {
 		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] block could not be created from %d bytes received from peer",
 			hash.String(), len(blockBytes))
+	}
+
+	// The peer chooses the response body, so a well-formed block is not necessarily the
+	// block that was asked for. Callers treat the two identities interchangeably (the
+	// in-flight marker is keyed on the requested hash while every later lookup keys on
+	// the served block), so a substitution would leave that marker undeletable and
+	// suppress every subsequent honest announcement of the requested hash. Reject the
+	// substitution here instead, mirroring verifyBlockHeaders on the batch path.
+	if !block.Hash().IsEqual(hash) {
+		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] peer served block %s for a different hash",
+			hash.String(), block.Hash().String())
 	}
 
 	// Reputation is credited post-validation in validateBlocksOnChannel via reportValidBlockForPeers

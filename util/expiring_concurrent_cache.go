@@ -29,9 +29,29 @@ type ExpiringConcurrentCache[K comparable, V any] struct {
 
 // NewExpiringConcurrentCache creates a new thread-safe cache with automatic expiration.
 // Items expire after the specified duration and are automatically cleaned up.
+//
+// The cache is unbounded: nothing limits how many distinct keys accumulate within
+// one expiration window. Use NewExpiringConcurrentCacheWithMaxSize where the
+// values are large or the key space is driven by remote input.
 func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *ExpiringConcurrentCache[K, V] {
 	return &ExpiringConcurrentCache[K, V]{
 		cache: expiringmap.New[K, V](expiration),
+		wg:    make(map[K]*expiringConcurrentCacheWait[V]),
+	}
+}
+
+// NewExpiringConcurrentCacheWithMaxSize is NewExpiringConcurrentCache bounded to at
+// most maxSize entries. Inserting a new key at capacity evicts the oldest by
+// insertion time; a maxSize of 0 disables the cap, matching
+// NewExpiringConcurrentCache exactly.
+//
+// Eviction costs only a refetch — an evicted key is fetched again on its next
+// GetOrSet — so the cap trades blob-store reads for a ceiling on resident memory.
+// It does not affect in-flight coalescing, which is keyed on the separate waiter
+// map and so is unaffected by what the underlying map has evicted.
+func NewExpiringConcurrentCacheWithMaxSize[K comparable, V any](expiration time.Duration, maxSize int) *ExpiringConcurrentCache[K, V] {
+	return &ExpiringConcurrentCache[K, V]{
+		cache: expiringmap.New[K, V](expiration).WithMaxSize(maxSize),
 		wg:    make(map[K]*expiringConcurrentCacheWait[V]),
 	}
 }
