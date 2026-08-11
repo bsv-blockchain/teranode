@@ -114,7 +114,7 @@ func (s *Server) canSendToNetwork(ctx context.Context, kind topicKind) bool {
 	if !allowedTopicsForState(state)[kind] {
 		initPrometheusMetrics()
 		s.logger.Debugf("[canSendToNetwork] %s not allowed in FSM state %s", kind, state.String())
-		prometheusP2PPublishBlocked.WithLabelValues(string(kind), state.String()).Inc()
+		prometheusP2PPublishBlocked.WithLabelValues(string(kind), state.String(), "precheck").Inc()
 
 		return false
 	}
@@ -159,7 +159,7 @@ func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgByte
 	kind, ok := s.topicKindForName(topicName)
 	if !ok {
 		s.logger.Errorf("[publishToNetwork] dropping publish to unknown topic %s: not in the outbound allow-list", topicName)
-		prometheusP2PPublishBlocked.WithLabelValues("unknown", "unknown").Inc()
+		prometheusP2PPublishBlocked.WithLabelValues("unknown", "unknown", "chokepoint").Inc()
 
 		return nil
 	}
@@ -167,14 +167,16 @@ func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgByte
 	// Listen-mode policy, enforced centrally in addition to the handlers:
 	// silent nodes publish nothing, listen-only nodes publish only
 	// node_status (so they stay discoverable without relaying gossip).
-	if s.settings != nil {
-		mode := s.settings.P2P.ListenMode
-		if mode == settings.ListenModeSilent || (mode == settings.ListenModeListenOnly && kind != topicKindNodeStatus) {
-			s.logger.Debugf("[publishToNetwork] dropping %s publish in listen mode %s", kind, mode)
-			return nil
-		}
+	mode := s.settings.P2P.ListenMode
+	if mode == settings.ListenModeSilent || (mode == settings.ListenModeListenOnly && kind != topicKindNodeStatus) {
+		s.logger.Debugf("[publishToNetwork] dropping %s publish in listen mode %s", kind, mode)
+		return nil
 	}
 
+	// This fail-open branch covers only a direct RPC error; the common
+	// degraded-client case never reaches it, because blockchain.Client
+	// stores IDLE as its safety fallback and reports it with a nil error,
+	// landing in the (node_status-only) IDLE bucket below instead.
 	state, err := s.currentFSMState(ctx)
 	if err != nil {
 		s.logger.Warnf("[publishToNetwork] allowing %s publish, error getting blockchain FSM state: %v", kind, err)
@@ -183,7 +185,7 @@ func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgByte
 
 	if !allowedTopicsForState(state)[kind] {
 		s.logger.Errorf("[publishToNetwork] dropping %s publish: not allowed in FSM state %s", kind, state.String())
-		prometheusP2PPublishBlocked.WithLabelValues(string(kind), state.String()).Inc()
+		prometheusP2PPublishBlocked.WithLabelValues(string(kind), state.String(), "chokepoint").Inc()
 
 		return nil
 	}

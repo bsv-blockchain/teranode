@@ -197,9 +197,9 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 
 ## P2P Service Metrics
 
-| Metric Name                          | Type    | Labels              | Description                                                                 |
-|--------------------------------------|---------|---------------------|-----------------------------------------------------------------------------|
-| `teranode_p2p_publish_blocked_total` | Counter | `topic`, `fsm_state` | Number of outbound P2P publishes dropped by the per-FSM-state allow-list    |
+| Metric Name                          | Type    | Labels                        | Description                                                                                                                              |
+|--------------------------------------|---------|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `teranode_p2p_publish_blocked_total` | Counter | `topic`, `fsm_state`, `stage` | Outbound P2P messages suppressed by the per-FSM-state allow-list; `stage="precheck"` is an expected skip, `stage="chokepoint"` is a publish that leaked past the pre-checks |
 
 ## Legacy Peer Server Metrics
 

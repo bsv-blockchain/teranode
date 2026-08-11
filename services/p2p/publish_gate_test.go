@@ -28,6 +28,7 @@ func newGateTestServer(t *testing.T, blockchainClient blockchain.ClientI) (*Serv
 
 	return &Server{
 		logger:              ulogger.TestLogger{},
+		settings:            &settings.Settings{P2P: settings.P2PSettings{ListenMode: settings.ListenModeFull}},
 		blockchainClient:    blockchainClient,
 		P2PClient:           p2pClient,
 		blockTopicName:      "test-block",
@@ -58,7 +59,11 @@ func TestOutboundTopicsAllowedCoversAllFSMStates(t *testing.T) {
 
 // TestPublishGateIsOnlyPublishCallSite enforces the choke-point invariant:
 // every outbound publish must go through publishToNetwork so the FSM
-// allow-list applies.
+// allow-list applies. Limitations: it scans only this package (non-recursive)
+// and matches the literal ".P2PClient.Publish(" - a call through a local
+// alias (c := s.P2PClient; c.Publish(...)) or from another package slips
+// through. A broader ".Publish(" match would false-positive on the Kafka
+// producers in this package.
 func TestPublishGateIsOnlyPublishCallSite(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
@@ -115,15 +120,22 @@ func TestPublishToNetworkPerState(t *testing.T) {
 }
 
 // TestPublishToNetworkIncrementsBlockedCounter guards the fail-loud
-// property: a drop must be visible in the prometheus counter.
+// property: a drop must be visible in the prometheus counter, with the stage
+// label separating expected pre-check skips from choke-point leaks.
 func TestPublishToNetworkIncrementsBlockedCounter(t *testing.T) {
 	server, _ := newGateTestServer(t, mockBlockchainInState(blockchain_api.FSMStateType_CATCHINGBLOCKS))
 
-	counter := prometheusP2PPublishBlocked.WithLabelValues("block", "CATCHINGBLOCKS")
-	before := testutil.ToFloat64(counter)
+	chokepoint := prometheusP2PPublishBlocked.WithLabelValues("block", "CATCHINGBLOCKS", "chokepoint")
+	precheck := prometheusP2PPublishBlocked.WithLabelValues("block", "CATCHINGBLOCKS", "precheck")
+	chokepointBefore := testutil.ToFloat64(chokepoint)
+	precheckBefore := testutil.ToFloat64(precheck)
 
 	require.NoError(t, server.publishToNetwork(context.Background(), "test-block", []byte("msg")))
-	require.Equal(t, before+1, testutil.ToFloat64(counter))
+	require.Equal(t, chokepointBefore+1, testutil.ToFloat64(chokepoint))
+
+	require.False(t, server.canSendToNetwork(context.Background(), topicKindBlock))
+	require.Equal(t, precheckBefore+1, testutil.ToFloat64(precheck))
+	require.Equal(t, chokepointBefore+1, testutil.ToFloat64(chokepoint), "pre-check skip must not count as a choke-point leak")
 }
 
 // TestPublishToNetworkUnknownTopicFailsClosed: a publish to a topic that was
