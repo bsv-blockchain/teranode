@@ -308,3 +308,191 @@ func TestPrunerMixedChildrenParentPreservation(t *testing.T) {
 
 	t.Log("Mixed children parent preservation validated successfully")
 }
+
+// TestPrunerExternalRecordsMixedChildrenPreservation verifies that pruner Phase 1
+// correctly preserves a parent transaction stored across multiple Aerospike records
+// (external records) when it has mixed children: some mined, some unmined, spending
+// UTXOs from different records.
+//
+// With UtxoBatchSize=2, a transaction with 5 outputs creates 3 Aerospike records:
+//   - Master record (index 0): outputs 0, 1
+//   - Child record 1 (index 1): outputs 2, 3
+//   - Child record 2 (index 2): output 4
+//
+// This test creates children that spend from different records:
+//   - Mined child: spends parent output 0 (master record)
+//   - Unmined child 1: spends parent output 2 (child record 1)
+//   - Unmined child 2: spends parent output 4 (child record 2)
+//
+// After exceeding parent's DAH, the pruner should preserve the entire parent
+// (all 3 records) because it has unmined children.
+func TestPrunerExternalRecordsMixedChildrenPreservation(t *testing.T) {
+	const (
+		unminedTxRetention       = 2
+		parentPreservationBlocks = 100
+		utxoBatchSize            = 2
+		numParentOutputs         = 5 // ceil(5/2) = 3 records
+		outputAmount             = uint64(1e8)
+	)
+
+	node := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnablePruner:     true,
+		EnableRPC:        true,
+		EnableValidator:  true,
+		UTXOStoreType:    "aerospike",
+		UseUnifiedLogger: false,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.UtxoStore.UnminedTxRetention = unminedTxRetention
+				s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
+				s.GlobalBlockHeightRetention = 5
+				s.Pruner.BlockTrigger = settings.PrunerBlockTriggerOnBlockMined
+				s.ChainCfgParams.CoinbaseMaturity = 5
+				s.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+				// Small batch size forces external storage for 5-output transactions
+				s.UtxoStore.UtxoBatchSize = utxoBatchSize
+			},
+		),
+	})
+	defer node.Stop(t, true)
+
+	ctx := context.Background()
+
+	coinbaseTx := node.MineToMaturityAndGetSpendableCoinbaseTx(t, ctx)
+
+	// Create parent tx with 5 outputs — triggers external storage (3 Aerospike records)
+	// Record layout: master[0,1], child1[2,3], child2[4]
+	parentTx := node.CreateTransactionWithOptions(t,
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(numParentOutputs, outputAmount),
+	)
+	parentHex := hex.EncodeToString(parentTx.ExtendedBytes())
+	_, err := node.CallRPC(ctx, "sendrawtransaction", []any{parentHex})
+	require.NoError(t, err)
+	err = node.WaitForTransactionInBlockAssembly(parentTx, 10*time.Second)
+	require.NoError(t, err)
+	node.MineAndWait(t, 1)
+
+	_, meta, err := node.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	parentMinedHeight := meta.Height
+	parentHash := parentTx.TxIDChainHash()
+	t.Logf("Parent tx %s mined at height %d with %d outputs (3 records, DAH ~%d)",
+		parentHash, parentMinedHeight, numParentOutputs, parentMinedHeight+5)
+
+	// Verify parent exists and has all 5 outputs accessible (stored across 3 records)
+	parentMeta, err := node.UtxoStore.Get(ctx, parentHash, fields.Utxos)
+	require.NoError(t, err)
+	require.NotNil(t, parentMeta)
+	require.Len(t, parentMeta.SpendingDatas, numParentOutputs,
+		"Parent should have %d outputs (stored across 3 Aerospike records with batch size %d)",
+		numParentOutputs, utxoBatchSize)
+
+	// Unmined child 1: spends parent output 2 (from child record 1)
+	unminedChild1 := node.CreateTransactionWithOptions(t,
+		transactions.WithInput(parentTx, 2),
+		transactions.WithP2PKHOutputs(1, outputAmount/2),
+	)
+	unminedChild1Hex := hex.EncodeToString(unminedChild1.ExtendedBytes())
+	_, err = node.CallRPC(ctx, "sendrawtransaction", []any{unminedChild1Hex})
+	require.NoError(t, err)
+	err = node.WaitForTransactionInBlockAssembly(unminedChild1, 10*time.Second)
+	require.NoError(t, err)
+	unminedChild1Hash := unminedChild1.TxIDChainHash()
+
+	unminedMeta1, err := node.UtxoStore.Get(ctx, unminedChild1Hash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, unminedMeta1.UnminedSince, "Unmined child 1 should be marked as unmined")
+	t.Logf("Unmined child 1 %s (spends parent output 2 from child record 1) UnminedSince=%d",
+		unminedChild1Hash, unminedMeta1.UnminedSince)
+
+	// Unmined child 2: spends parent output 4 (from child record 2)
+	unminedChild2 := node.CreateTransactionWithOptions(t,
+		transactions.WithInput(parentTx, 4),
+		transactions.WithP2PKHOutputs(1, outputAmount/2),
+	)
+	unminedChild2Hex := hex.EncodeToString(unminedChild2.ExtendedBytes())
+	_, err = node.CallRPC(ctx, "sendrawtransaction", []any{unminedChild2Hex})
+	require.NoError(t, err)
+	err = node.WaitForTransactionInBlockAssembly(unminedChild2, 10*time.Second)
+	require.NoError(t, err)
+	unminedChild2Hash := unminedChild2.TxIDChainHash()
+
+	unminedMeta2, err := node.UtxoStore.Get(ctx, unminedChild2Hash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, unminedMeta2.UnminedSince, "Unmined child 2 should be marked as unmined")
+	t.Logf("Unmined child 2 %s (spends parent output 4 from child record 2) UnminedSince=%d",
+		unminedChild2Hash, unminedMeta2.UnminedSince)
+
+	// Mined child: spends parent output 0 (from master record)
+	minedChild := node.CreateTransactionWithOptions(t,
+		transactions.WithInput(parentTx, 0),
+		transactions.WithP2PKHOutputs(1, outputAmount/2),
+	)
+	minedChildHash := minedChild.TxIDChainHash()
+	t.Logf("Mined child %s (spends parent output 0 from master record)", minedChildHash)
+
+	// Verify parent exists before pruning
+	_, err = node.UtxoStore.Get(ctx, parentHash)
+	require.NoError(t, err, "Parent should exist in UTXO store before pruning")
+
+	// Add blocks via ProcessBlock (bypasses BA, keeps unmined children unmined)
+	// First block includes minedChild; remaining blocks are empty
+	prevBlock, err := node.BlockchainClient.GetBlockByHeight(ctx, parentMinedHeight)
+	require.NoError(t, err)
+
+	// Block 1: includes minedChild (spends parent output 0 from master record)
+	_, block := node.CreateTestBlock(t, prevBlock, 9000, minedChild)
+	err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy")
+	require.NoError(t, err)
+	t.Logf("Block %d: mined child %s included (spends parent output 0)", block.Height, minedChildHash)
+	prevBlock = block
+
+	// Blocks 2-8: empty blocks to exceed parent's DAH
+	for i := 1; i < 8; i++ {
+		_, block = node.CreateTestBlock(t, prevBlock, uint32(9000+i))
+		err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy")
+		require.NoError(t, err)
+		prevBlock = block
+	}
+
+	_, meta, err = node.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	t.Logf("Current height: %d (parent DAH ~%d exceeded)", meta.Height, parentMinedHeight+5)
+
+	// Wait for pruner — parent should be preserved despite DAH exceeded
+	// Phase 1 finds unmined children (spending from child records 1 and 2),
+	// sets PreserveUntil on parent master record, which protects all records
+	require.Eventually(t, func() bool {
+		_, getErr := node.UtxoStore.Get(ctx, parentHash)
+		if getErr != nil {
+			t.Logf("Parent tx check: %v (waiting for pruner to stabilize)", getErr)
+			return false
+		}
+		return true
+	}, 30*time.Second, 1*time.Second,
+		"Parent tx (external, 3 records) should still exist after pruner (Phase 1 preservation)")
+	t.Logf("Parent tx %s (3 records) preserved by Phase 1 despite DAH exceeded", parentHash)
+
+	// Verify parent still has all outputs accessible (all external records intact)
+	parentMetaAfter, err := node.UtxoStore.Get(ctx, parentHash, fields.Utxos)
+	require.NoError(t, err)
+	require.Len(t, parentMetaAfter.SpendingDatas, numParentOutputs,
+		"Parent should still have %d outputs after pruner (all external records preserved)",
+		numParentOutputs)
+
+	// Verify unmined child 1 still exists (spent from child record 1)
+	unminedMeta1After, err := node.UtxoStore.Get(ctx, unminedChild1Hash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, unminedMeta1After.UnminedSince, "Unmined child 1 should still be unmined")
+	t.Logf("Unmined child 1 still unmined (UnminedSince=%d)", unminedMeta1After.UnminedSince)
+
+	// Verify unmined child 2 still exists (spent from child record 2)
+	unminedMeta2After, err := node.UtxoStore.Get(ctx, unminedChild2Hash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, unminedMeta2After.UnminedSince, "Unmined child 2 should still be unmined")
+	t.Logf("Unmined child 2 still unmined (UnminedSince=%d)", unminedMeta2After.UnminedSince)
+
+	t.Log("External records mixed children parent preservation validated successfully")
+}
