@@ -2,6 +2,7 @@
 package p2p
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -202,7 +203,7 @@ func TestP2PWebSocketCurrentNodeFirst(t *testing.T) {
 		clientCh := make(chan []byte, 10)
 
 		// Call the function
-		server.sendInitialNodeStatuses(clientCh)
+		server.sendInitialNodeStatuses(context.Background(), clientCh)
 
 		// Read all messages from the channel
 		var messages []notificationMsg
@@ -282,14 +283,16 @@ func TestP2PWebSocketMessageStructure(t *testing.T) {
 		clientCh := make(chan []byte, 5)
 
 		// Call sendInitialNodeStatuses
-		server.sendInitialNodeStatuses(clientCh)
+		server.sendInitialNodeStatuses(context.Background(), clientCh)
 
 		// Debug: check how many messages we have
 		t.Logf("Channel has %d messages queued", len(clientCh))
 
 		// Read the message - should be exactly one (current node only)
 		var currentNodeMsg *notificationMsg
-		timeout := time.After(100 * time.Millisecond)
+		// The empty-cache path computes the status on a separate goroutine, so
+		// allow generous time for delivery on loaded CI machines.
+		timeout := time.After(time.Second)
 
 		select {
 		case data := <-clientCh:
