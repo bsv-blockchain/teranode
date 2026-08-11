@@ -167,6 +167,20 @@ Allowed Operations in Catching Blocks State:
 - ❌ Create subtrees (or propagate them)
 - ❌ Create blocks (mine candidates)
 
+Outbound P2P gossip is gated per FSM state by a declarative allow-list
+(`outboundTopicsAllowed` in `services/p2p/publish_gate.go`): in `Running` the
+node may publish block, subtree, rejected-tx, and `node_status` messages; in
+`CatchingBlocks` and `Idle` it publishes only `node_status` (so peers can track
+its height). `Idle` is deliberately restrictive because it doubles as the
+blockchain client's safety fallback: when the FSM state cannot be fetched or
+the heartbeat is lost, the client caches `Idle` and reports it with no error,
+so a degraded blockchain client reads as `Idle` and gossip stops (only
+`node_status` keeps flowing) until the state is re-fetched. An idle node must
+not participate in the network in any case. States unknown to the
+allow-list (e.g. from a newer blockchain service) also fall back to
+`node_status`-only. Suppressed publishes are counted in the
+`teranode_p2p_publish_blocked_total` metric.
+
 ##### Error Handling in Catching Blocks State
 
 When an error occurs during the catchup process, the FSM behavior has been updated to maintain state consistency:

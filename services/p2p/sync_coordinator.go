@@ -29,9 +29,10 @@ type SyncCoordinator struct {
 	blockchainClient blockchain.ClientI
 
 	// Coordinator-scoped context used for the gRPC calls into the registry and
-	// the blockchain client. Per-RPC contexts are derived from this via
-	// boundedRPCContext; ctxCancel is invoked by Stop so in-flight RPCs abort
-	// immediately instead of running out their timeout.
+	// the blockchain client, and for peer availability probes during selection.
+	// Per-RPC contexts are derived from this via boundedRPCContext; ctxCancel
+	// is invoked by Stop so in-flight RPCs and probes abort immediately instead
+	// of running out their timeout.
 	ctx       context.Context
 	ctxCancel context.CancelFunc
 
@@ -90,6 +91,7 @@ func NewSyncCoordinator(
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) *SyncCoordinator {
 	ctx, cancel := context.WithCancel(ctx)
+
 	return &SyncCoordinator{
 		logger:                       logger,
 		settings:                     settings,
@@ -273,6 +275,18 @@ func (sc *SyncCoordinator) isUnprovenProbeCandidate(p *blockchain.PeerInfo, now 
 	return !sc.peerHasRecentFullBlockDelivery(p, now)
 }
 
+// warnfUnlessStopping logs at Warn level, downgraded to Debug once the
+// coordinator context is cancelled: Stop cancels sc.ctx before waiting for the
+// worker goroutines, so registry/blockchain calls in flight at shutdown fail
+// with an expected context.Canceled that should not surface as a warning.
+func (sc *SyncCoordinator) warnfUnlessStopping(format string, args ...any) {
+	if sc.ctx.Err() != nil {
+		sc.logger.Debugf(format, args...)
+		return
+	}
+	sc.logger.Warnf(format, args...)
+}
+
 // boundedRPCContext derives a bounded per-RPC context from the coordinator
 // lifetime context. Every registry and blockchain-client call must go through
 // this (via the registry* wrappers below and getLocalTipWorkSafe /
@@ -341,7 +355,7 @@ func (sc *SyncCoordinator) registryReconsiderBadPeers(cooldown time.Duration) (i
 func (sc *SyncCoordinator) listAllPeers() []*blockchain.PeerInfo {
 	peers, err := sc.registryListPeers()
 	if err != nil {
-		sc.logger.Warnf("[SyncCoordinator] ListPeers failed: %v", err)
+		sc.warnfUnlessStopping("[SyncCoordinator] ListPeers failed: %v", err)
 		return nil
 	}
 	return peers
@@ -351,7 +365,7 @@ func (sc *SyncCoordinator) listAllPeers() []*blockchain.PeerInfo {
 func (sc *SyncCoordinator) getPeer(id peer.ID) (*blockchain.PeerInfo, bool) {
 	info, found, err := sc.registryGetPeer(id.String())
 	if err != nil {
-		sc.logger.Warnf("[SyncCoordinator] GetPeer failed for %s: %v", id, err)
+		sc.warnfUnlessStopping("[SyncCoordinator] GetPeer failed for %s: %v", id, err)
 		return nil, false
 	}
 	return info, found
@@ -365,7 +379,7 @@ func (sc *SyncCoordinator) getLocalTipWorkSafe() (uint32, []byte, bool) {
 	defer cancel()
 	_, meta, err := sc.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		sc.logger.Warnf("[SyncCoordinator] GetBestBlockHeader failed: %v", err)
+		sc.warnfUnlessStopping("[SyncCoordinator] GetBestBlockHeader failed: %v", err)
 		return sc.getLocalHeightSafe(), nil, false
 	}
 	if meta == nil || len(meta.ChainWork) == 0 {
@@ -490,7 +504,8 @@ func (sc *SyncCoordinator) Start(ctx context.Context) {
 
 // Stop stops the coordinator and waits for its monitor goroutines to drain.
 // It cancels the coordinator context so any in-flight registry/blockchain RPC
-// aborts immediately rather than running out its timeout. The wait itself is
+// or peer availability probe aborts immediately rather than running out its
+// timeout. The wait itself is
 // bounded by ctx: a goroutine can still be parked in a non-context-aware
 // blocking call (e.g. a wedged Kafka producer Publish), and shutdown must not
 // hang on it — on ctx expiry Stop logs and returns, leaking that goroutine
@@ -598,7 +613,7 @@ func (sc *SyncCoordinator) syncPeerNoProgressTimedOut(now time.Time) (string, ti
 func (sc *SyncCoordinator) clearNoProgressSyncPeer(peerID string, progressAge time.Duration) bool {
 	sc.logger.Warnf("[SyncCoordinator] Sync peer %s made no validated progress for %v", peerID, progressAge.Round(time.Second))
 	if err := sc.registryRecordSyncAttempt(peerID); err != nil {
-		sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt(no-progress) failed for %s: %v", peerID, err)
+		sc.warnfUnlessStopping("[SyncCoordinator] RecordSyncAttempt(no-progress) failed for %s: %v", peerID, err)
 	}
 	if !sc.clearSyncPeerIfCurrent(peerID) {
 		return false
@@ -632,7 +647,7 @@ func (sc *SyncCoordinator) triggerSyncLocked() error {
 func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
 	idStr := peerID.String()
 	if err := sc.registryRemovePeer(idStr); err != nil {
-		sc.logger.Warnf("[SyncCoordinator] RemovePeer %s failed: %v", idStr, err)
+		sc.warnfUnlessStopping("[SyncCoordinator] RemovePeer %s failed: %v", idStr, err)
 	}
 
 	// Check-and-clear under decisionMu so the clear cannot interleave with an
@@ -672,7 +687,7 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 	if failedPeer != "" {
 		sc.logger.Infof("[SyncCoordinator] Recording failure for failed peer %s", failedPeer)
 		if err := sc.registryRecordSyncFailure(failedPeer); err != nil {
-			sc.logger.Warnf("[SyncCoordinator] UpdatePeerMetrics(failure) for %s: %v", failedPeer, err)
+			sc.warnfUnlessStopping("[SyncCoordinator] UpdatePeerMetrics(failure) for %s: %v", failedPeer, err)
 		}
 	}
 
@@ -728,7 +743,7 @@ func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork 
 
 func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, localChainWork []byte, previousPeer string) string {
 	criteria := sc.selectionCriteria(localHeight, localChainWork, previousPeer)
-	return sc.selector.SelectSyncPeer(peers, criteria)
+	return sc.selector.SelectSyncPeer(sc.ctx, peers, criteria)
 }
 
 // monitorFSM monitors FSM state changes
@@ -819,7 +834,7 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 			}
 			peerInfo, exists, err := sc.registryGetPeer(currentPeer)
 			if err != nil {
-				sc.logger.Warnf("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
+				sc.warnfUnlessStopping("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
 				return false
 			}
 
@@ -952,7 +967,7 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 		return nil
 	}
 	if err := sc.registryRecordSyncAttempt(newSyncPeer); err != nil {
-		sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", newSyncPeer, err)
+		sc.warnfUnlessStopping("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", newSyncPeer, err)
 	}
 
 	if err := sc.sendSyncMessage(newSyncPeer); err != nil {
@@ -1106,7 +1121,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	// Get peer info
 	peerInfo, exists, err := sc.registryGetPeer(currentPeer)
 	if err != nil {
-		sc.logger.Warnf("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
+		sc.warnfUnlessStopping("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
 		return
 	}
 	if !exists {
@@ -1190,10 +1205,10 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		// so it is not immediately reselected if the candidate later clears; then record
 		// the candidate's attempt exactly as the normal activation path does.
 		if err := sc.registryRecordSyncAttempt(currentPeer); err != nil {
-			sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for benched peer %s: %v", currentPeer, err)
+			sc.warnfUnlessStopping("[SyncCoordinator] RecordSyncAttempt failed for benched peer %s: %v", currentPeer, err)
 		}
 		if err := sc.registryRecordSyncAttempt(candidate); err != nil {
-			sc.logger.Warnf("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", candidate, err)
+			sc.warnfUnlessStopping("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", candidate, err)
 		}
 		if err := sc.sendSyncMessage(candidate); err != nil {
 			sc.logger.Errorf("[SyncCoordinator] Failed to trigger preemptive sync: %v", err)
@@ -1239,7 +1254,7 @@ func (sc *SyncCoordinator) UpdatePeerInfo(peerID peer.ID, height uint32, blockHa
 		DataHubURL:       dataHubURL,
 	}
 	if err := sc.registryRegisterPeer(info); err != nil {
-		sc.logger.Warnf("[SyncCoordinator] RegisterPeer %s failed: %v", info.ID, err)
+		sc.warnfUnlessStopping("[SyncCoordinator] RegisterPeer %s failed: %v", info.ID, err)
 	}
 }
 
@@ -1252,7 +1267,7 @@ func (sc *SyncCoordinator) UpdateBanStatus(peerID peer.ID) {
 
 	banned, err := sc.registryIsPeerBanned(idStr)
 	if err != nil {
-		sc.logger.Warnf("[SyncCoordinator] IsPeerBanned %s failed: %v", idStr, err)
+		sc.warnfUnlessStopping("[SyncCoordinator] IsPeerBanned %s failed: %v", idStr, err)
 		return
 	}
 
@@ -1338,7 +1353,7 @@ func (sc *SyncCoordinator) enterBackoffMode() {
 
 	peersCleared, err := sc.registryClearAllSyncAttempts()
 	if err != nil {
-		sc.logger.Warnf("[SyncCoordinator] ClearAllSyncAttempts failed: %v", err)
+		sc.warnfUnlessStopping("[SyncCoordinator] ClearAllSyncAttempts failed: %v", err)
 	}
 	sc.logger.Warnf("[SyncCoordinator] All eligible peers attempted, entering backoff for %v (multiplier: %dx). Cleared sync attempts for %d peers.",
 		backoffDuration, currentMultiplier, peersCleared)
@@ -1399,7 +1414,7 @@ func (sc *SyncCoordinator) considerReputationRecovery() {
 
 	peersRecovered, err := sc.registryReconsiderBadPeers(baseCooldown)
 	if err != nil {
-		sc.logger.Warnf("[SyncCoordinator] ReconsiderBadPeers failed: %v", err)
+		sc.warnfUnlessStopping("[SyncCoordinator] ReconsiderBadPeers failed: %v", err)
 		return
 	}
 	if peersRecovered > 0 {

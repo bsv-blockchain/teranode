@@ -156,7 +156,20 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 				responseBytes = append(responseBytes, tx.Bytes()...)
 				responseBytesMu.Unlock()
 			} else {
-				g.Go(func() error {
+				g.Go(func() (retErr error) {
+					// Echo's middleware.Recover only protects the request goroutine —
+					// not the ones errgroup spawns. The hashes come straight from the
+					// request body, so without this defer a single caller-chosen txid
+					// that panics on serialization (e.g. a tx reconstructed from an
+					// .outputs-only external blob, which carries nil *bt.Output holes)
+					// would crash the asset process.
+					defer func() {
+						if r := recover(); r != nil {
+							h.logger.Errorf("[Asset_http:GetTransactions] recovered panic on %s: %v", hash.String(), r)
+							retErr = echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("internal error getting transaction %s", hash.String()).Error())
+						}
+					}()
+
 					b, err := h.repository.GetTransaction(gCtx, &hash)
 					if err != nil {
 						if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {

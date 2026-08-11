@@ -1660,3 +1660,59 @@ func TestSyncCoordinator_LocalHeightCallbackIsTimeBounded(t *testing.T) {
 	defer mu.Unlock()
 	require.True(t, hadDeadline, "local-height callback context must carry a deadline")
 }
+
+// levelCapturingLogger counts Warnf/Debugf calls so tests can assert the level
+// a message was logged at; everything else falls through to TestLogger.
+type levelCapturingLogger struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	warns  int
+	debugs int
+}
+
+func (l *levelCapturingLogger) Warnf(string, ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns++
+}
+
+func (l *levelCapturingLogger) Debugf(string, ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.debugs++
+}
+
+func (l *levelCapturingLogger) counts() (warns, debugs int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.warns, l.debugs
+}
+
+func TestSyncCoordinator_WarnfUnlessStopping_DowngradesToDebugAfterStop(t *testing.T) {
+	logger := &levelCapturingLogger{}
+	tSettings := &settings.Settings{}
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	sc := NewSyncCoordinator(
+		context.Background(),
+		logger,
+		tSettings,
+		blockchain.NewLocalPeerRegistryClient(reg),
+		NewPeerSelector(ulogger.TestLogger{}, tSettings),
+		nil,
+		nil,
+	)
+
+	sc.warnfUnlessStopping("running")
+	warns, debugs := logger.counts()
+	require.Equal(t, 1, warns, "before Stop the message must log at warn level")
+	require.Zero(t, debugs)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sc.Stop(stopCtx)
+
+	sc.warnfUnlessStopping("stopping")
+	warns, debugs = logger.counts()
+	require.Equal(t, 1, warns, "after Stop no new warn-level messages may be emitted")
+	require.Equal(t, 1, debugs, "after Stop the message must downgrade to debug level")
+}

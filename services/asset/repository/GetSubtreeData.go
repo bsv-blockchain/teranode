@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/util"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
@@ -258,12 +259,23 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 
 	// Background goroutine: generate data and write to both destinations
 	g, gCtx := errgroup.WithContext(ctx)
-	g.Go(func() error {
+	g.Go(func() (retErr error) {
 		defer releaseSemaphorePermit(repo.semGetSubtreeDataReader)
 		defer releaseSemaphorePermit(repo.semSubtreeDataCreate)
 		if release != nil {
 			defer release() // Release quorum lock when done
 		}
+
+		// This goroutine outlives the request — the caller reads the pipe after
+		// GetSubtreeDataReader has returned — so no HTTP-layer recover can reach a
+		// panic in here. On panic do what the error paths below do: discard the temp
+		// blob rather than finalise a partial subtreeData (see #1377), fail the pipe
+		// so the consumer stops waiting, and count it as a server-side failure.
+		defer util.RecoverToError(repo.logger, &retErr, func(panicErr error) {
+			storer.Abort(panicErr)
+			_ = httpWriter.CloseWithError(panicErr)
+			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed").Inc()
+		}, "GetSubtreeDataReader %s", subtreeHash.String())()
 
 		// Write all transactions to both destinations
 		err := repo.writeTransactionsViaSubtreeStoreStreaming(gCtx, counted, nil, subtreeHash)

@@ -161,6 +161,14 @@ type Server struct {
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
+	// latestNodeStatus caches the most recent node status computed by
+	// getNodeStatusMessage (refreshed every publish tick and on best-block
+	// changes) so new websocket clients can be served without a blockchain
+	// gRPC round-trip on the shared notification-processor goroutine.
+	// The stored message is marshaled concurrently by multiple goroutines:
+	// a notificationMsg must never be mutated after being stored or published.
+	latestNodeStatus atomic.Pointer[notificationMsg]
+
 	// ipBanCache is a short-lived cache of "is this peer's IP banned" lookups
 	// used by shouldSkipBannedPeer, avoiding a GetPeers scan per gossip message.
 	ipBanCache sync.Map // peerID string -> ipBanCacheEntry
@@ -451,6 +459,8 @@ func NewServer(
 		peerMapTTL:     defaultPeerMapTTL,
 	}
 
+	initPrometheusMetrics()
+
 	// Override defaults with settings if provided
 	if tSettings.P2P.PeerMapMaxSize > 0 {
 		p2pServer.peerMapMaxSize = tSettings.P2P.PeerMapMaxSize
@@ -658,6 +668,17 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 
+	// Warm the node-status cache before the HTTP surface (and its /p2p-ws
+	// route) comes up, so websocket clients are always served the cached status
+	// synchronously on the notification-processor goroutine. This keeps the
+	// guarantee that the first node_status a client receives is our own node's:
+	// the asset service (centrifuge) and the dashboard pin the current node's
+	// identity to the first node_status they see.
+	warmCtx, warmCancel := context.WithTimeout(ctx, initialNodeStatusTimeout)
+	warmStatus := s.getNodeStatusMessage(warmCtx)
+	warmCancel()
+	s.logger.Infof("[Start] node status cache warmed (height=%d, fsm_state=%s, storage=%q)", warmStatus.BestHeight, warmStatus.FSMState, warmStatus.Storage)
+
 	s.e = s.setupHTTPServer()
 
 	// StartHTTP binds the listener synchronously (serving happens in its own
@@ -846,16 +867,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			return nil
 		}
 
-		var (
-			syncing bool
-			err     error
-		)
-
-		if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-			return err
-		}
-
-		if syncing {
+		if !s.canSendToNetwork(ctx, topicKindRejectedTx) {
 			return nil
 		}
 
@@ -898,7 +910,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
-		if err = s.P2PClient.Publish(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
 		}
 
@@ -1226,7 +1238,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
-	if err = s.P2PClient.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
+	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
 		return errors.NewError("blockMessage - publish error", err)
 	}
 
@@ -1239,14 +1251,28 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 	return nil
 }
 
+// nodeStatusPublishInterval is how often the node status is recomputed and
+// published. Each publish is bounded to this interval so one wedged blockchain
+// call cannot stall the publisher (and freeze the latestNodeStatus cache) forever.
+// Declared as a var (not const) so tests can shorten it; not exposed to settings
+// because it is an internal telemetry cadence, not a behavioural knob.
+var nodeStatusPublishInterval = 10 * time.Second
+
 func (s *Server) publishNodeStatus(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(nodeStatusPublishInterval)
 	defer ticker.Stop()
 
-	// Publish initial status immediately
-	if err := s.handleNodeStatusNotification(ctx); err != nil {
-		s.logger.Errorf("[publishNodeStatus] error sending initial node status: %v", err)
+	publish := func() {
+		tickCtx, cancel := context.WithTimeout(ctx, nodeStatusPublishInterval)
+		defer cancel()
+
+		if err := s.handleNodeStatusNotification(tickCtx); err != nil {
+			s.logger.Errorf("[publishNodeStatus] error sending node status: %v", err)
+		}
 	}
+
+	// Publish initial status immediately
+	publish()
 
 	for {
 		select {
@@ -1254,16 +1280,24 @@ func (s *Server) publishNodeStatus(ctx context.Context) {
 			s.logger.Infof("[publishNodeStatus] node status publisher shutting down")
 			return
 		case <-ticker.C:
-			if err := s.handleNodeStatusNotification(ctx); err != nil {
-				s.logger.Errorf("[publishNodeStatus] error sending node status: %v", err)
-			}
+			publish()
 		}
 	}
 }
 
 // getNodeStatusMessage creates a notification message with the current node's status.
 // This is used both for periodic broadcasts and for sending to newly connected WebSocket clients.
+//
+// Every fallible lookup carries forward the corresponding fields of the last
+// cached status when it fails: the zero-value defaults (height 0, fsm_state
+// UNKNOWN, storage "pruned", 0 counts) are indistinguishable from real values,
+// and this message is cached, broadcast to websocket clients, and published to
+// the gossip network, where peers use it for sync-peer selection. This also
+// covers a context deadline expiring mid-computation: the remaining lookups
+// fail and their fields fall back to the last known-good values.
 func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
+	cached := s.latestNodeStatus.Load()
+
 	// Get best block info
 	var bestBlockHeader *model.BlockHeader
 	var bestBlockMeta *model.BlockHeaderMeta
@@ -1272,11 +1306,19 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	if s.blockchainClient != nil {
 		bestBlockHeader, bestBlockMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 	}
-	if err != nil {
-		s.logger.Errorf("[handleNodeStatusNotification] error getting best block header: %s", err)
-		// Use genesis block as fallback when we can't get the best block
-		bestBlockHeader = model.GenesisBlockHeader
-		bestBlockMeta = model.GenesisBlockHeaderMeta
+
+	bestHeaderFailed := err != nil
+	if bestHeaderFailed {
+		s.logger.Errorf("[getNodeStatusMessage] error getting best block header: %s", err)
+		// The formatted best-block fields are backfilled from the cached status
+		// below; genesis is the fallback only when there is no cached status.
+		bestBlockHeader = nil
+		bestBlockMeta = nil
+
+		if cached == nil {
+			bestBlockHeader = model.GenesisBlockHeader
+			bestBlockMeta = model.GenesisBlockHeaderMeta
+		}
 	}
 
 	// Calculate uptime
@@ -1285,10 +1327,15 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Get FSM state from blockchain client
 	fsmState := "UNKNOWN"
 	if s.blockchainClient != nil {
-		currentState, err := s.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			s.logger.Warnf("[handleNodeStatusNotification] error getting FSM state: %s", err)
-		} else if currentState != nil {
+		currentState, fsmErr := s.blockchainClient.GetFSMCurrentState(ctx)
+		switch {
+		case fsmErr != nil:
+			s.logger.Warnf("[getNodeStatusMessage] error getting FSM state: %s", fsmErr)
+
+			if cached != nil {
+				fsmState = cached.FSMState
+			}
+		case currentState != nil:
 			// Convert FSMStateType to string
 			fsmState = currentState.String()
 		}
@@ -1330,6 +1377,14 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		chainWorkStr = hex.EncodeToString(bestBlockMeta.ChainWork)
 	}
 
+	// Carry forward the last known-good best-block fields when the lookup failed
+	if bestHeaderFailed && cached != nil {
+		blockHashStr = cached.BestBlockHash
+		height = cached.BestHeight
+		chainWorkStr = cached.ChainWork
+		minerName = cached.MinerName
+	}
+
 	// Get sync peer information
 	syncPeerID := ""
 	syncPeerHeight := uint32(0)
@@ -1348,7 +1403,7 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 			// First time connecting to this sync peer
 			syncConnectedAt = time.Now().Unix()
 			s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
-			s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
+			s.logger.Debugf("[getNodeStatusMessage] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
 		}
 
 		// Drop entries for previous sync peers so the map only tracks the current one
@@ -1451,9 +1506,13 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// gossiped/disconnected peers, so count only directly connected ones.
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
-		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
-		if err != nil {
-			s.logger.Warnf("[getNodeStatusMessage] ListPeers failed: %v", err)
+		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+		if listErr != nil {
+			s.logger.Warnf("[getNodeStatusMessage] ListPeers failed: %v", listErr)
+
+			if cached != nil {
+				connectedPeersCount = cached.ConnectedPeersCount
+			}
 		} else {
 			for _, p := range allPeers {
 				if p.IsConnected {
@@ -1467,19 +1526,31 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	txCount := uint64(0)
 	subtreeCount := uint32(0)
 	if s.blockAssemblyClient != nil {
-		if state, err := s.blockAssemblyClient.GetBlockAssemblyState(ctx); err == nil && state != nil {
+		if state, baErr := s.blockAssemblyClient.GetBlockAssemblyState(ctx); baErr == nil && state != nil {
 			txCount = state.TxCount
 			subtreeCount = state.SubtreeCount
-		} else if err != nil {
-			s.logger.Debugf("[getNodeStatusMessage] Failed to get block assembly state: %v", err)
+		} else if baErr != nil {
+			s.logger.Debugf("[getNodeStatusMessage] Failed to get block assembly state: %v", baErr)
+
+			if cached != nil {
+				txCount = cached.TxCount
+				subtreeCount = cached.SubtreeCount
+			}
 		}
 	}
 
 	// Determine storage mode (full vs pruned) based on block persister status
-	// Query block persister height from blockchain state
+	// Query block persister height from blockchain state. A lookup error keeps
+	// the cached storage mode below: the error is expected on nodes without a
+	// block persister (state key absent), and on transient failures recomputing
+	// from a zero height would misreport a full node as pruned.
 	var blockPersisterHeight uint32
+	persisterHeightFailed := false
 	if s.blockchainClient != nil {
-		if stateData, err := s.blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(stateData) >= 4 {
+		if stateData, stateErr := s.blockchainClient.GetState(ctx, "BlockPersisterHeight"); stateErr != nil {
+			persisterHeightFailed = true
+			s.logger.Debugf("[getNodeStatusMessage] BlockPersisterHeight state unavailable: %v", stateErr)
+		} else if len(stateData) >= 4 {
 			blockPersisterHeight = binary.LittleEndian.Uint32(stateData)
 		}
 	}
@@ -1495,11 +1566,14 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	}
 
 	storage := util.DetermineStorageMode(blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
+	if persisterHeightFailed && cached != nil {
+		storage = cached.Storage
+	}
+
 	s.logger.Debugf("[getNodeStatusMessage] Determined storage=%q for this node (persisterHeight=%d, bestHeight=%d, retention=%d, prunerTrigger=%s)",
 		storage, blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
 
-	// Return the notification message
-	return &notificationMsg{
+	msg := &notificationMsg{
 		Timestamp:           time.Now().UTC().Format(isoFormat),
 		Type:                "node_status",
 		BaseURL:             baseURL,
@@ -1527,13 +1601,43 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		ConnectedPeersCount: connectedPeersCount,
 		Storage:             storage,
 	}
+
+	// Cache the status so sendInitialNodeStatuses can serve new websocket
+	// clients without blocking on blockchain gRPC. Failed lookups above carried
+	// forward the last known-good fields, so the cached copy never regresses to
+	// zero values, and the cache always matches what this call broadcasts.
+	s.latestNodeStatus.Store(msg)
+
+	return msg
 }
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
-	// Get the node status message
-	msg := s.getNodeStatusMessage(ctx)
+	// Bound the status computation to a fraction of the publish interval so a
+	// wedged blockchain call cannot consume the whole tick budget and hand the
+	// P2P publish below an already-expired context.
+	computeCtx, cancelCompute := context.WithTimeout(ctx, nodeStatusPublishInterval/2)
+	msg := s.getNodeStatusMessage(computeCtx)
+
+	cancelCompute()
+
 	if msg == nil {
 		return errors.NewError("failed to get node status message", nil)
+	}
+
+	// Send to local WebSocket clients before attempting the P2P publish: local
+	// monitoring must not depend on gossip succeeding, and the cache inside
+	// getNodeStatusMessage serves newly connecting clients this same message,
+	// so already-connected clients must receive it too.
+	select {
+	case s.notificationCh <- msg:
+	default:
+		s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
+	}
+
+	// In silent mode, skip publishing to the P2P network so the node remains undiscoverable.
+	if s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		s.logger.Debugf("[handleNodeStatusNotification] Silent mode - skipping P2P publish, forwarded to WebSocket only")
+		return nil
 	}
 
 	// Create the NodeStatusMessage for P2P publishing
@@ -1565,18 +1669,6 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Storage:             msg.Storage,
 	}
 
-	// In silent mode, skip publishing to the P2P network so the node remains undiscoverable,
-	// but still forward to local WebSocket clients for monitoring purposes.
-	if s.settings.P2P.ListenMode == settings.ListenModeSilent {
-		s.logger.Debugf("[handleNodeStatusNotification] Silent mode - skipping P2P publish, forwarding to WebSocket only")
-		select {
-		case s.notificationCh <- msg:
-		default:
-			s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
-		}
-		return nil
-	}
-
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
 		return errors.NewError("nodeStatusMessage - json marshal error", err)
@@ -1585,18 +1677,11 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
-	if err = s.P2PClient.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
+	if err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
 	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
-
-	// Send to local WebSocket clients
-	select {
-	case s.notificationCh <- msg:
-	default:
-		s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
-	}
 
 	return nil
 }
@@ -1620,7 +1705,7 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
-	if err := s.P2PClient.Publish(ctx, s.subtreeTopicName, msgBytes); err != nil {
+	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {
 		return errors.NewError("subtreeMessage - publish error", err)
 	}
 
@@ -1692,19 +1777,10 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 				continue
 			}
 
-			var (
-				syncing bool
-				err     error
-			)
-
-			if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-				ctxLogger.Errorf("[blockchainSubscriptionListener] error getting blockchain FSM state: %v", err)
-
-				continue
-			}
-
-			// Process PeerFailure notifications even during sync (needed to switch peers on catchup failure)
-			if syncing && notification.Type != model.NotificationType_PeerFailure {
+			// Skip notifications whose outbound announcement is not allowed in
+			// the current FSM state; control notifications (e.g. PeerFailure,
+			// needed to switch peers on catchup failure) always pass.
+			if s.shouldSkipNotification(ctx, notification.Type) {
 				continue
 			}
 
