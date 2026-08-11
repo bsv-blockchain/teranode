@@ -37,6 +37,7 @@ var (
 
 	// Additional metrics for block assembler operations
 	prometheusBlockAssemblerGetMiningCandidate          prometheus.Counter
+	prometheusBlockAssemblerCandidateTimeClockSkew      prometheus.Counter
 	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
 	prometheusBlockAssemblerTransactions                prometheus.Gauge
 	prometheusBlockAssemblerQueuedTransactions          prometheus.Gauge
@@ -161,6 +162,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "block_assembler_get_mining_candidate",
 			Help:      "Number of calls to GetMiningCandidate in the block assembler",
+		},
+	)
+
+	prometheusBlockAssemblerCandidateTimeClockSkew = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "block_assembler_candidate_time_clock_skew",
+			Help:      "Mining-candidate polls refused because the parent's median-time-past floor is above the two-hour future bound, so no valid block timestamp exists; a non-zero rate means the local clock is far behind the network and block production has stopped",
 		},
 	)
 

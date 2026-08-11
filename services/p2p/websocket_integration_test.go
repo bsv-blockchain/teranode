@@ -289,7 +289,9 @@ func TestP2PWebSocketMessageStructure(t *testing.T) {
 
 		// Read the message - should be exactly one (current node only)
 		var currentNodeMsg *notificationMsg
-		timeout := time.After(100 * time.Millisecond)
+		// The empty-cache path computes the status on a separate goroutine, so
+		// allow generous time for delivery on loaded CI machines.
+		timeout := time.After(time.Second)
 
 		select {
 		case data := <-clientCh:
