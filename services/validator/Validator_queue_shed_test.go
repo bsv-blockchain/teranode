@@ -3,9 +3,12 @@ package validator
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,6 +53,22 @@ type unlockSpy struct {
 	// deleteIsCacheOnly models a decorator whose Delete reports success without
 	// removing the underlying record.
 	deleteIsCacheOnly bool
+
+	// deletedHash records the hash Delete was called with, so the verify knobs below
+	// can be scoped to the unwind's own read-back and cannot perturb the unrelated
+	// GetMeta calls earlier in validation.
+	deletedHash *chainhash.Hash
+
+	// verifyErr and verifyFailures make the first verifyFailures read-backs of
+	// deletedHash fail with verifyErr; later ones delegate. verifyReadCalls counts the
+	// read-backs actually attempted, which is how the bounded retry is observed.
+	verifyErr       error
+	verifyFailures  int
+	verifyReadCalls int
+
+	// unspendPartialErr, when set, makes Unspend delegate only the FIRST spend and
+	// then return this error — a partial failure on a multi-input transaction.
+	unspendPartialErr error
 }
 
 func (s *unlockSpy) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
@@ -61,6 +80,8 @@ func (s *unlockSpy) SetLocked(ctx context.Context, txHashes []chainhash.Hash, va
 }
 
 func (s *unlockSpy) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	s.deletedHash = hash
+
 	if s.deleteErr != nil {
 		return s.deleteErr
 	}
@@ -72,10 +93,92 @@ func (s *unlockSpy) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return s.Store.Delete(ctx, hash)
 }
 
+func (s *unlockSpy) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	if s.verifyErr != nil && s.deletedHash != nil && hash.IsEqual(s.deletedHash) {
+		s.verifyReadCalls++
+
+		if s.verifyReadCalls <= s.verifyFailures {
+			return s.verifyErr
+		}
+	}
+
+	return s.Store.GetMeta(ctx, hash, data)
+}
+
 func (s *unlockSpy) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsLocked ...bool) error {
 	s.unspendCalls++
 
+	if s.unspendPartialErr != nil && len(spends) > 1 {
+		// Restore the first input, then fail: the operator-visible state is a spend set
+		// that is half undone, which is what the recovery log has to describe.
+		if err := s.Store.Unspend(ctx, spends[:1], flagAsLocked...); err != nil {
+			return err
+		}
+
+		return s.unspendPartialErr
+	}
+
 	return s.Store.Unspend(ctx, spends, flagAsLocked...)
+}
+
+// capturingLogger records Errorf and Warnf lines so a test can assert that a failure
+// arm actually told an operator which outpoints to reconcile. A counter proves an arm
+// was taken; only the log proves it is actionable.
+type capturingLogger struct {
+	ulogger.TestLogger
+
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *capturingLogger) Errorf(format string, args ...interface{}) {
+	l.record(format, args...)
+	l.TestLogger.Errorf(format, args...)
+}
+
+func (l *capturingLogger) Warnf(format string, args ...interface{}) {
+	l.record(format, args...)
+	l.TestLogger.Warnf(format, args...)
+}
+
+func (l *capturingLogger) record(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *capturingLogger) joined() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return strings.Join(l.lines, "\n")
+}
+
+// outpointOf renders a tx:vout the way unwindOutpoints does, for log assertions.
+func outpointOf(tx *bt.Tx, vout uint32) string {
+	return fmt.Sprintf("%s:%d", tx.TxIDChainHash().String(), vout)
+}
+
+// shrinkHandoffFloor scales the per-attempt hand-off deadline down for tests, so a
+// short retry window still leaves room to retry. handoffFloor is
+// blockassembly_queueFullWaitTimeout plus handoffRoundTripSlack, and at the shipped
+// defaults that is 600ms — larger than the sub-second windows these tests configure,
+// which would leave zero room for retries.
+//
+// Returns the resulting floor so a test can reason about it explicitly rather than
+// re-deriving it.
+func shrinkHandoffFloor(t *testing.T, v *Validator, queueWait, slack time.Duration) time.Duration {
+	t.Helper()
+
+	original := handoffRoundTripSlack
+	handoffRoundTripSlack = slack
+
+	t.Cleanup(func() { handoffRoundTripSlack = original })
+
+	v.settings.BlockAssembly.QueueFullWaitTimeout = queueWait
+
+	return v.handoffFloor()
 }
 
 // parentOutpointSpent reports whether output 0 of parentTx reads as spent — the
@@ -83,12 +186,20 @@ func (s *unlockSpy) Unspend(ctx context.Context, spends []*utxostore.Spend, flag
 func parentOutpointSpent(t *testing.T, store utxostore.Store, parentTx *bt.Tx) bool {
 	t.Helper()
 
-	utxoHash, err := util.UTXOHashFromOutput(parentTx.TxIDChainHash(), parentTx.Outputs[0], 0)
+	return outpointSpent(t, store, parentTx, 0)
+}
+
+// outpointSpent reports whether a specific output of tx reads as spent — needed on the
+// multi-input shape, where a partial unwind leaves the two outputs in different states.
+func outpointSpent(t *testing.T, store utxostore.Store, tx *bt.Tx, vout uint32) bool {
+	t.Helper()
+
+	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[vout], vout)
 	require.NoError(t, err)
 
 	resp, err := store.GetSpend(context.Background(), &utxostore.Spend{
-		TxID:     parentTx.TxIDChainHash(),
-		Vout:     0,
+		TxID:     tx.TxIDChainHash(),
+		Vout:     vout,
 		UTXOHash: utxoHash,
 	})
 	require.NoError(t, err)
@@ -108,16 +219,63 @@ func requireTxAbsent(t *testing.T, store utxostore.Store, hash *chainhash.Hash) 
 // times Store was called, sheds (ErrThresholdExceeded) the first shedFirst
 // calls to model a queue that is full then drains, and otherwise returns a
 // configurable error.
+// blockUntilCtxDone models a well-behaved gRPC client against a WEDGED server: it
+// blocks until the context it was handed expires, which is what the hand-off deadline
+// exists to bound. blockAfter delays that behaviour until after N prompt sheds, so a
+// full retry window followed by one stalled final send can be exercised. shedAfter
+// stands in for the remote's own bounded queue wait answering late — the split-
+// deployment skew shape — by sleeping before returning the shed.
 type recoveryBAStore struct {
 	err       error
 	calls     int
 	shedFirst int
+
+	blockUntilCtxDone bool
+	blockAfter        int
+	shedAfter         time.Duration
+
+	// cancelCaller, when set, is invoked at the moment of the hand-off — the point a
+	// saturated node makes a client give up — and the context this Store was handed is
+	// then checked. That makes "the hand-off runs on a context the caller cannot
+	// cancel" directly observable: with the detached context it reports the shed, and
+	// without it it reports the cancellation instead, which is what used to skip the
+	// unwind entirely.
+	cancelCaller func()
 }
 
 var _ blockassembly.Store = (*recoveryBAStore)(nil)
 
-func (f *recoveryBAStore) Store(_ context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
+func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
 	f.calls++
+
+	if f.cancelCaller != nil {
+		f.cancelCaller()
+
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+
+		return false, errors.NewThresholdExceededError("block assembly queue full")
+	}
+
+	if f.blockUntilCtxDone && f.calls > f.blockAfter {
+		<-ctx.Done()
+
+		return false, ctx.Err()
+	}
+
+	if f.shedAfter > 0 {
+		timer := time.NewTimer(f.shedAfter)
+		defer timer.Stop()
+
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-timer.C:
+		}
+
+		return false, errors.NewThresholdExceededError("block assembly queue full")
+	}
 
 	if f.calls <= f.shedFirst {
 		return false, errors.NewThresholdExceededError("block assembly queue full")
@@ -141,8 +299,27 @@ func (f *recoveryBAStore) RemoveTx(_ context.Context, _ *chainhash.Hash) error {
 func recoverySetup(t *testing.T, dbName string) (*Validator, *unlockSpy, *recoveryBAStore, *sql.Store, *bt.Tx, *bt.Tx) {
 	t.Helper()
 
+	v, spy, baStore, realStore, childTx, parentTx, _ := recoverySetupWithLogger(t, dbName, 1)
+
+	return v, spy, baStore, realStore, childTx, parentTx
+}
+
+// recoverySetupMultiInput is recoverySetup with a parent carrying TWO spendable
+// outputs and a child spending both, so a partial Unspend failure is expressible.
+func recoverySetupMultiInput(t *testing.T, dbName string) (*Validator, *unlockSpy, *recoveryBAStore, *sql.Store, *bt.Tx, *bt.Tx, *capturingLogger) {
+	t.Helper()
+
+	return recoverySetupWithLogger(t, dbName, 2)
+}
+
+// recoverySetupWithLogger is the full builder: inputs controls how many of the
+// parent's outputs the child spends, and the returned capturingLogger makes the
+// unwind's recovery log lines assertable.
+func recoverySetupWithLogger(t *testing.T, dbName string, inputs int) (*Validator, *unlockSpy, *recoveryBAStore, *sql.Store, *bt.Tx, *bt.Tx, *capturingLogger) {
+	t.Helper()
+
 	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
+	logger := &capturingLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
 	u, err := url.Parse("sqlitememory:///" + dbName)
@@ -170,19 +347,22 @@ func recoverySetup(t *testing.T, dbName string) (*Validator, *unlockSpy, *recove
 
 	parentTx := transactions.Create(t,
 		transactions.WithCoinbaseData(1, "/queue shed recovery test/"),
-		transactions.WithP2PKHOutputs(1, 100_000, pub),
+		transactions.WithP2PKHOutputs(inputs, 100_000, pub),
 	)
 
 	_, err = realStore.Create(ctx, parentTx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 1, SubtreeIdx: 0}))
 	require.NoError(t, err)
 
-	childTx := transactions.Create(t,
-		transactions.WithPrivateKey(priv),
-		transactions.WithInput(parentTx, 0, priv),
-		transactions.WithP2PKHOutputs(1, 90_000, pub),
-	)
+	childOpts := []transactions.TxOption{transactions.WithPrivateKey(priv)}
+	for vout := 0; vout < inputs; vout++ {
+		childOpts = append(childOpts, transactions.WithInput(parentTx, uint32(vout), priv)) // nolint:gosec
+	}
 
-	return v, spy, baStore, realStore, childTx, parentTx
+	childOpts = append(childOpts, transactions.WithP2PKHOutputs(1, 90_000, pub))
+
+	childTx := transactions.Create(t, childOpts...)
+
+	return v, spy, baStore, realStore, childTx, parentTx, logger
 }
 
 func metaLocked(t *testing.T, store utxostore.Store, hash *chainhash.Hash) *meta.Data {
@@ -206,7 +386,10 @@ func TestValidate_ShedUnwindsItsWork(t *testing.T) {
 
 	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
 
+	initPrometheusMetrics()
+
 	unwindsBefore := testutil.ToFloat64(prometheusValidatorShedUnwindTotal)
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
 
 	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
 	require.Error(t, err, "a shed on the send path must surface as an error")
@@ -220,6 +403,51 @@ func TestValidate_ShedUnwindsItsWork(t *testing.T) {
 	require.Equal(t, 1, spy.unspendCalls, "the unwind unspends exactly once")
 
 	require.Equal(t, unwindsBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindTotal))
+	require.Equal(t, droppedBefore, testutil.ToFloat64(prometheusValidatorShedDroppedTotal),
+		"the drop counter is for the SILENT ingest drop; a synchronous caller got its retryable status")
+}
+
+// Test 11h — the shed unwind must survive a caller that has already given up.
+//
+// The unwind ran on the context returned by DecoupleTracingSpan, whose documented fast
+// path for tracing disabled returns the caller's context UNCHANGED — and tracing is
+// disabled by default. So in the default configuration a cancelled caller took the
+// unwind down with it, in two ways: sendToBlockAssembler returned context.Canceled
+// rather than ErrThresholdExceeded, so the shed branch (and therefore the unwind) was
+// never entered at all; or the cancellation landed during the unwind and Delete failed.
+// Both left the transaction spent, created and Locked — the state the unwind exists to
+// eliminate. The two conditions are correlated: a shed happens when block assembly is
+// saturated, which is exactly when clients time out.
+//
+// The synchronous path is the shape under test: no retry loop, no ctx.Done() guard.
+// Default settings, so tracing is disabled — the configuration the fix has to hold in.
+func TestValidate_SyncShedUnwindsWithCancelledCaller(t *testing.T) {
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_sync_cancelled")
+
+	require.False(t, v.settings.TracingEnabled, "precondition: this must exercise the tracing-disabled default")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The client gives up exactly at the hand-off, which is when it really happens: a
+	// shed only occurs while block assembly is saturated, and that is precisely when
+	// clients time out. Cancelling before Validate instead would abort in the
+	// input-height lookup and never reach the code under test.
+	baStore.cancelCaller = cancel
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+
+	// The classification survives, which is what gets the unwind entered at all. On the
+	// unfixed code the hand-off saw the caller's cancelled context and returned
+	// context.Canceled, so control took the else branch and unwindShed was never called.
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "a cancelled caller must still see the shed, not context.Canceled")
+	require.NotErrorIs(t, err, context.Canceled)
+
+	// And the unwind itself ran to completion on a context the caller cannot cancel.
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the unwind unspent the parent's output despite the cancelled caller")
+	require.Equal(t, 1, spy.unspendCalls)
+	require.Equal(t, 0, spy.unlockCalls, "a shed never unlocks; it deletes")
 }
 
 // Test 11a — the resubmit arm. After a shed has unwound, a resubmit is an ORDINARY
@@ -336,6 +564,165 @@ func TestValidate_ShedUnwindAbortsWhenRecordSurvivesDelete(t *testing.T) {
 	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the inputs stay spent, so no competing spend can take them")
 	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the tx is left exactly as the shed found it")
 	require.Equal(t, 0, spy.unlockCalls)
+}
+
+// Test 11d — the OTHER arm of the verify-after-delete guard: Delete succeeded but the
+// read-back kept failing, so deletion could not be CONFIRMED.
+//
+// It fails closed, and the choice is deliberate. A failed read does not establish that
+// the record survived — but it does not establish that it is gone either, and the two
+// candidate outcomes are asymmetric: unspending on an unconfirmed delete risks freeing
+// the inputs of a surviving record, which a competing double-spend can then take while
+// the survivor is still liftable into a mining template (consensus-visible), whereas
+// leaving them spent makes specific outpoints temporarily unspendable (node-local,
+// operator-recoverable from the log line asserted here).
+//
+// The read is retried first, so a transient store error does not reach this arm at all;
+// see the companion test below.
+func TestValidate_ShedUnwindFailsClosedWhenVerifyReadFails(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_unwind_unverified", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	// Fail every read-back, so the bounded retry is exhausted.
+	spy.verifyErr = errors.NewStorageError("utxo store read unavailable")
+	spy.verifyFailures = shedUnwindVerifyAttempts + 5
+
+	initPrometheusMetrics()
+
+	unverifiedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindUnverified)
+	abortedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindAborted)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	require.Equal(t, shedUnwindVerifyAttempts, spy.verifyReadCalls,
+		"the verify read is retried a bounded number of times, no more and no fewer")
+
+	require.Equal(t, unverifiedBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindUnverified),
+		"an unconfirmable deletion is counted distinctly so an operator can reconcile it")
+	require.Equal(t, abortedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindAborted),
+		"a failed read is not the same condition as a store that did not honour Delete")
+
+	require.Equal(t, 0, spy.unspendCalls, "fail closed: no Unspend on an unconfirmed delete")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the inputs stay spent")
+	require.Equal(t, 0, spy.unlockCalls)
+
+	require.Contains(t, logger.joined(), outpointOf(parentTx, 0),
+		"the inconclusive arm must name the outpoints an operator has to reconcile")
+}
+
+// Test 11e — the bounded retry earns its keep: a TRANSIENT verify-read failure does
+// NOT reach the fail-closed arm. Without the retry, any single blip on the read-back
+// left a transaction's inputs spent for no reason.
+func TestValidate_ShedUnwindRetriesTransientVerifyRead(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_unwind_verify_retry")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	// One failure, then the real store answers (ErrTxNotFound, since Delete ran).
+	spy.verifyErr = errors.NewStorageError("transient utxo store read failure")
+	spy.verifyFailures = 1
+
+	initPrometheusMetrics()
+
+	unverifiedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindUnverified)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded)
+
+	require.Equal(t, 2, spy.verifyReadCalls, "one failed read, then the retry that answered")
+	require.Equal(t, unverifiedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindUnverified),
+		"a transient read failure absorbed by the retry must not be reported as unverified")
+
+	require.Equal(t, 1, spy.unspendCalls, "the unwind completed")
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the inputs were freed as intended")
+}
+
+// Test 11f — the Delete-failure arm names the outpoints too. The method's godoc claims
+// failure "is logged with the txid and the outpoints"; before this, only the
+// Unspend-failure arm actually did.
+func TestValidate_ShedUnwindDeleteFailureLogsOutpoints(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_unwind_delete_log", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+	spy.deleteErr = errors.NewStorageError("utxo store unavailable")
+
+	initPrometheusMetrics()
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded)
+
+	require.Equal(t, 0, spy.unspendCalls)
+	require.True(t, parentOutpointSpent(t, realStore, parentTx))
+
+	require.Contains(t, logger.joined(), outpointOf(parentTx, 0),
+		"a failed Delete must log the outpoints it is deliberately leaving spent")
+}
+
+// Test 11g — a PARTIAL Unspend failure on a multi-input transaction. The store restored
+// one input and then failed, so the spend set is half undone. The recovery log must
+// name EVERY outpoint in the set, not just the residue: an operator reconciling this
+// has to check both, and cannot know from the log which half succeeded.
+func TestValidate_ShedUnwindPartialUnspendLogsAllOutpoints(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupMultiInput(t, "queue_shed_unwind_partial")
+
+	require.Len(t, childTx.Inputs, 2, "precondition: the child spends two of the parent's outputs")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+	spy.unspendPartialErr = errors.NewStorageError("utxo store unavailable mid-unspend")
+
+	initPrometheusMetrics()
+
+	failuresBefore := testutil.ToFloat64(prometheusValidatorShedUnwindFailures)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "a partial unwind must not change the error the caller sees")
+
+	require.Equal(t, failuresBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindFailures))
+	require.Equal(t, 1, spy.unspendCalls)
+	require.Equal(t, 0, spy.unlockCalls)
+
+	// The partial state is real and observable: one output restored, one still spent.
+	require.False(t, outpointSpent(t, realStore, parentTx, 0), "the first input was restored before the failure")
+	require.True(t, outpointSpent(t, realStore, parentTx, 1), "the second input is still spent")
+
+	logged := logger.joined()
+	require.Contains(t, logged, outpointOf(parentTx, 0), "the recovery log names the restored outpoint")
+	require.Contains(t, logged, outpointOf(parentTx, 1), "the recovery log names the still-spent outpoint")
+}
+
+// TestUnwindOutpoints covers the renderer four log lines now depend on, including the
+// defensive skips: a nil spend or a nil TxID must not panic on a recovery path.
+func TestUnwindOutpoints(t *testing.T) {
+	hashA := (&chainhash.Hash{1}).String()
+	hashB := (&chainhash.Hash{2}).String()
+
+	spendA := &utxostore.Spend{TxID: &chainhash.Hash{1}, Vout: 0}
+	spendB := &utxostore.Spend{TxID: &chainhash.Hash{2}, Vout: 7}
+
+	tests := []struct {
+		name   string
+		spends []*utxostore.Spend
+		want   string
+	}{
+		{"empty", nil, ""},
+		{"single", []*utxostore.Spend{spendA}, hashA + ":0"},
+		{"order preserved", []*utxostore.Spend{spendA, spendB}, hashA + ":0," + hashB + ":7"},
+		{"nil spend skipped", []*utxostore.Spend{nil, spendB}, hashB + ":7"},
+		{"nil txid skipped", []*utxostore.Spend{{TxID: nil, Vout: 3}, spendB}, hashB + ":7"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, unwindOutpoints(tc.spends))
+		})
+	}
 }
 
 // Test 12 — how a resubmit of an EXISTING transaction is handled. An ordinary
@@ -461,8 +848,15 @@ func TestValidate_KafkaIngestRetryTimesOutThenUnwinds(t *testing.T) {
 	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
 
 	// A short bound keeps the test fast while still exercising the real deadline
-	// arithmetic (several 5ms backoff iterations).
+	// arithmetic (several 5ms backoff iterations). The per-attempt floor is scaled down
+	// with it, because the window is reduced by that floor and the shipped 600ms floor
+	// would leave a 50ms window no room to retry at all.
+	shrinkHandoffFloor(t, v, 5*time.Millisecond, 5*time.Millisecond)
 	v.settings.Validator.BlockAssemblyShedRetryTimeout = 50 * time.Millisecond
+
+	initPrometheusMetrics()
+
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
 
 	start := time.Now()
 
@@ -472,6 +866,9 @@ func TestValidate_KafkaIngestRetryTimesOutThenUnwinds(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "on timeout the shed is returned, not retried forever")
 	require.Greater(t, baStore.calls, 1, "the handoff was retried before giving up")
 	require.Less(t, elapsed, 5*time.Second, "the retry must be bounded by the configured window, not by the stall")
+
+	require.Equal(t, droppedBefore+1, testutil.ToFloat64(prometheusValidatorShedDroppedTotal),
+		"a transaction dropped on the ingest path is counted; its submitter was already told it was accepted")
 
 	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
 	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the timed-out shed unwinds like any other")
@@ -504,6 +901,292 @@ func TestValidate_KafkaIngestCtxCancelLeavesTxLocked(t *testing.T) {
 	md := metaLocked(t, realStore, childTx.TxIDChainHash())
 	require.True(t, md.Locked, "the tx is left locked for the unmined-reload backstop")
 	require.Empty(t, md.BlockIDs, "the tx is left unmined")
+}
+
+// Test 14a — a STALLED handoff is bounded, and a stall costs exactly one attempt.
+//
+// Detaching the post-decision context (test 11h) removed the only thing that unblocked
+// a stalled unary handoff, so the handoff carries a deadline of its own. Without it this
+// test hangs until the Go test timeout, which is the regression it guards.
+//
+// The call-count assertion is the load-bearing one: a deadline error is not
+// ErrThresholdExceeded, so the retry loop exits immediately and a stall can consume at
+// most ONE handoff floor. That is what makes the total ingest stall a sum of two terms
+// (retry window + one floor) rather than a product.
+func TestValidate_StalledBlockAssemblyHandoffIsBounded(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_handoff_stall")
+
+	// A well-behaved gRPC client against a wedged server: blocks until its context
+	// expires. No sleeps, no store I/O — the smallest possible blocking path, so
+	// scheduling noise has minimal surface.
+	baStore.blockUntilCtxDone = true
+
+	floor := shrinkHandoffFloor(t, v, 20*time.Millisecond, 20*time.Millisecond)
+	require.Equal(t, 40*time.Millisecond, floor)
+
+	initPrometheusMetrics()
+
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+	deadlinesBefore := testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal)
+
+	start := time.Now()
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+	elapsed := time.Since(start)
+
+	// Hang detector, deliberately generous: the quantitative bound is carried by the
+	// call count below and by TestHandoffFloorAndRetryWindow, not by wall clock.
+	require.Less(t, elapsed, 5*time.Second, "a stalled handoff must be bounded by its own deadline")
+
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errors.ErrThresholdExceeded, "a stall is not a shed")
+
+	require.Equal(t, 1, baStore.calls,
+		"a deadline error exits the retry loop, so a stall costs exactly one handoff floor and never compounds")
+
+	// An ambiguous failure is NOT unwound: the deadline can fire after block assembly
+	// enqueued the transaction, so deleting the record could remove one already in a
+	// subtree or template. Left Locked for the unmined reload.
+	require.Equal(t, 0, spy.unspendCalls, "no unwind on an ambiguous handoff failure")
+	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the tx is left locked for the unmined reload")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "its inputs stay spent while the record survives")
+	require.Equal(t, 0, spy.unlockCalls)
+
+	require.Equal(t, droppedBefore, testutil.ToFloat64(prometheusValidatorShedDroppedTotal),
+		"a stall must not be counted as a clean shed drop")
+	require.Equal(t, deadlinesBefore+1, testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal),
+		"the handoff deadline is attributable to its own cause")
+}
+
+// Test 14b — the total ingest stall stays within the CONFIGURED retry window.
+//
+// The budget used to be created after the first handoff, so a stalled first attempt
+// pinned the consumer goroutine and its fetched record batch for a whole handoff
+// timeout before the window even started. It is now an absolute instant taken before
+// the first attempt, reduced by the per-attempt floor, so the window plus one final
+// in-flight attempt together stay inside it.
+//
+// Both directions are asserted: the ceiling, and that the retry actually ran. A test
+// asserting only the ceiling would pass on a build with the retry accidentally
+// disabled.
+func TestValidate_KafkaIngestStallBoundedByConfiguredRetryWindow(t *testing.T) {
+	const window = 300 * time.Millisecond
+
+	t.Run("window exhausted by prompt sheds, then a stalled final send", func(t *testing.T) {
+		ctx := context.Background()
+		v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_window_sheds")
+
+		shrinkHandoffFloor(t, v, 20*time.Millisecond, 20*time.Millisecond)
+		v.settings.Validator.BlockAssemblyShedRetryTimeout = window
+
+		// Sheds promptly, forever: the window is what ends the retry.
+		baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+		start := time.Now()
+
+		_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+		elapsed := time.Since(start)
+
+		require.Less(t, elapsed, 5*time.Second, "hang detector; the bound itself is proved by the call count and the arithmetic test")
+		require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the window ran out on a shed, so a shed is what surfaces")
+		require.Greater(t, baStore.calls, 1, "the retry ran; the bound must not be met by disabling it")
+
+		requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+		require.False(t, parentOutpointSpent(t, realStore, parentTx), "a window-exhausted shed unwinds")
+		require.Equal(t, 0, spy.unlockCalls)
+	})
+
+	t.Run("stall inside the window leaves the tx locked", func(t *testing.T) {
+		ctx := context.Background()
+		v, spy, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_window_stall")
+
+		shrinkHandoffFloor(t, v, 20*time.Millisecond, 20*time.Millisecond)
+		v.settings.Validator.BlockAssemblyShedRetryTimeout = window
+
+		// Two prompt sheds, then a stall well inside the window.
+		baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+		baStore.blockUntilCtxDone = true
+		baStore.blockAfter = 2
+
+		start := time.Now()
+
+		_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+		elapsed := time.Since(start)
+
+		require.Less(t, elapsed, 5*time.Second)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrThresholdExceeded, "the last word was the stall, not the shed")
+
+		require.Equal(t, 3, baStore.calls, "two sheds then the stalled attempt that ended the loop")
+		require.Equal(t, 0, spy.unspendCalls, "an ambiguous stall is not unwound")
+		require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked)
+	})
+}
+
+// Test 14c — a legitimately LONG configured queue wait still surfaces as a shed.
+//
+// Block assembly waits up to blockassembly_queueFullWaitTimeout before shedding and
+// treats caller cancellation as explicitly NOT a shed, so a per-attempt deadline
+// shorter than that wait converts every shed into a local context deadline: the
+// resource-exhausted classification is lost, the unwind never runs, and the transaction
+// is stranded locked. That is why the deadline is DERIVED from the setting rather than
+// picked. Here the configured queue wait (200ms) deliberately exceeds the retry window
+// (50ms), which is the incoherent configuration: the shed must still win.
+func TestValidate_LongQueueFullWaitStillClassifiedAsShed(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_long_queue_wait")
+
+	floor := shrinkHandoffFloor(t, v, 200*time.Millisecond, 20*time.Millisecond)
+	require.Equal(t, 220*time.Millisecond, floor)
+
+	v.settings.Validator.BlockAssemblyShedRetryTimeout = 50 * time.Millisecond
+	require.Less(t, v.shedRetryTimeout(), floor, "precondition: the window cannot accommodate one attempt")
+
+	// The remote's own bounded wait runs almost to completion before answering: longer
+	// than the retry window, but inside the floor.
+	baStore.shedAfter = 150 * time.Millisecond
+
+	initPrometheusMetrics()
+
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+	deadlinesBefore := testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "a late shed must arrive AS a shed, not as our own deadline")
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
+
+	require.Equal(t, 1, baStore.calls, "with the window below the floor there is exactly one bounded attempt")
+
+	// The classification reached the code that depends on it.
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the unwind ran, which is what the classification buys")
+	require.Equal(t, 1, spy.unspendCalls)
+
+	require.Equal(t, droppedBefore+1, testutil.ToFloat64(prometheusValidatorShedDroppedTotal))
+	require.Equal(t, deadlinesBefore, testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal),
+		"nothing was misclassified as a handoff deadline")
+}
+
+// Test 14d — the split-deployment skew is OBSERVABLE.
+//
+// handoffFloor is sized from this process's copy of blockassembly_queueFullWaitTimeout.
+// If that copy under-reports what the block-assembly process actually enforces, the
+// deadline fires before the shed arrives and the shed is neither classified nor unwound.
+// The self-reporting RPC field that would remove the guesswork is deferred, so this
+// test pins what ships instead: the condition is reproduced, the degradation is exactly
+// pre-PR behaviour, and it is counted and named so an operator can act on it.
+func TestValidate_UnderReportedRemoteQueueWaitIsObservable(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_skew", 1)
+
+	// Local copy says 20ms (floor 40ms); the remote really waits 200ms.
+	floor := shrinkHandoffFloor(t, v, 20*time.Millisecond, 20*time.Millisecond)
+	require.Equal(t, 40*time.Millisecond, floor)
+
+	baStore.shedAfter = 200 * time.Millisecond
+
+	initPrometheusMetrics()
+
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+	deadlinesBefore := testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+
+	// The misclassification is reproduced, not assumed: this is a test OF the residual.
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errors.ErrThresholdExceeded, "under skew the shed is lost to our own deadline")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	// The degradation is exactly pre-PR behaviour: left locked, recovered by the
+	// unmined reload. No unwind, and nothing worse than before.
+	require.Equal(t, 0, spy.unspendCalls)
+	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked)
+	require.True(t, parentOutpointSpent(t, realStore, parentTx))
+	require.Equal(t, 0, spy.unlockCalls)
+
+	require.Equal(t, deadlinesBefore+1, testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal),
+		"the skew is attributable to its own counter")
+	require.Equal(t, droppedBefore, testutil.ToFloat64(prometheusValidatorShedDroppedTotal),
+		"and is NOT double-counted as a clean shed drop")
+
+	logged := logger.joined()
+	require.Contains(t, logged, "blockassembly_queueFullWaitTimeout", "the log must name the setting to align")
+	require.Contains(t, logged, "validator_blockAssemblyShedRetryTimeout", "and the one that could be raised instead")
+}
+
+// TestHandoffFloorAndRetryWindow pins the deadline arithmetic with no timing at all, so
+// it cannot flake and it fails instantly if the derivation is wrong.
+//
+// It asserts the two COMPUTED values against per-row constants. The
+// window+floor==shedRetryTimeout identity is a tautology of the expression and is not
+// what this proves: this proves the rule is computed as designed, while the bound being
+// honoured at runtime is what the call-count assertions in tests 14a-14c carry.
+func TestHandoffFloorAndRetryWindow(t *testing.T) {
+	const defaultSlack = 500 * time.Millisecond
+
+	tests := []struct {
+		name       string
+		queueWait  time.Duration
+		shedRetry  time.Duration
+		wantFloor  time.Duration
+		wantWindow time.Duration
+	}{
+		{
+			name:       "shipped defaults",
+			queueWait:  100 * time.Millisecond,
+			shedRetry:  2 * time.Second,
+			wantFloor:  600 * time.Millisecond,
+			wantWindow: 1400 * time.Millisecond,
+		},
+		{
+			name:       "no queue wait configured: the floor is the slack alone",
+			queueWait:  0,
+			shedRetry:  2 * time.Second,
+			wantFloor:  defaultSlack,
+			wantWindow: 1500 * time.Millisecond,
+		},
+		{
+			name:       "negative queue wait is clamped to zero",
+			queueWait:  -5 * time.Second,
+			shedRetry:  2 * time.Second,
+			wantFloor:  defaultSlack,
+			wantWindow: 1500 * time.Millisecond,
+		},
+		{
+			name:       "queue wait far above the window: floor wins, no room to retry",
+			queueWait:  10 * time.Second,
+			shedRetry:  2 * time.Second,
+			wantFloor:  10500 * time.Millisecond,
+			wantWindow: -8500 * time.Millisecond,
+		},
+		{
+			name:       "unset shedRetryTimeout falls back to the documented default",
+			queueWait:  100 * time.Millisecond,
+			shedRetry:  0,
+			wantFloor:  600 * time.Millisecond,
+			wantWindow: 1400 * time.Millisecond,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockAssembly.QueueFullWaitTimeout = tc.queueWait
+			tSettings.Validator.BlockAssemblyShedRetryTimeout = tc.shedRetry
+
+			v := &Validator{settings: tSettings}
+
+			require.Equal(t, tc.wantFloor, v.handoffFloor())
+			require.Equal(t, tc.wantWindow, v.shedRetryTimeout()-v.handoffFloor())
+
+			// A window at or below zero is the degenerate case New warns about: one
+			// bounded attempt, no retries.
+			require.Equal(t, tc.wantWindow <= 0, v.handoffFloor() >= v.shedRetryTimeout(),
+				"the startup-warning condition and a non-positive window are the same predicate")
+		})
+	}
 }
 
 // Test 15 — the validator gRPC ValidateTransaction surfaces a shed as

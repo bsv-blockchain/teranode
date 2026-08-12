@@ -11,6 +11,7 @@ import (
 	batcher "github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -115,6 +116,68 @@ func Test_ValidatorServer_Stop_NoBatcher(t *testing.T) {
 	require.Equal(t, 1, policy.stopCount())
 }
 
+// TestValidatorServer_StartEarlyReturnCancelsConsumerContext pins that an early Start
+// failure does not leave the consumer context live.
+//
+// Start derives a cancellable context and only Stop used to cancel it, so any early
+// return between the two leaked it along with whatever it kept alive. It is now
+// cancelled on every failing path via a deferred check on the named return.
+//
+// Forcing that early return needs care, because most of Start cannot fail:
+// startHTTPServer ALWAYS returns nil (it hands the listen off to a goroutine and only
+// logs a failure), and startKafkaBackpressure is a no-op while the controller is
+// disabled. The one reachable synchronous failure after the consumer context is
+// installed is StartGRPCServer, which returns an error when its listener cannot be
+// created. So the gRPC address is the unusable one here; an unusable HTTP address would
+// merely be logged and Start would go on to bind a real gRPC port and block forever.
+//
+// tSettings.Context is made unique because util.GetListener caches listeners in a
+// package-level map keyed on (settings context, service name, schema). A shared key
+// could hand this test a live listener created by another test, in which case the
+// listen would succeed and Start would block instead of failing.
+func TestValidatorServer_StartEarlyReturnCancelsConsumerContext(t *testing.T) {
+	tSettings := settings.NewSettings()
+	tSettings.Context = "validator-start-early-return-test"
+
+	// Port -1 is rejected by net.Listen, so no port is bound on either address and
+	// nothing has to be torn down afterwards.
+	tSettings.Validator.HTTPListenAddress = "127.0.0.1:-1"
+	tSettings.Validator.GRPCListenAddress = "127.0.0.1:-1"
+
+	// Mirrors TestServer_Start_FSMContextCancellation: the FSM wait is the only
+	// blockchain interaction Start makes before the listen that has to fail here.
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(nil)
+
+	server := &Server{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockchainClient: blockchainClient,
+	}
+
+	// No consumerClient and no blockAssemblyClient, so Start neither begins consuming
+	// nor arms the controller; the consumer context is created and then abandoned, which
+	// is exactly the leak under test.
+	readyCh := make(chan struct{}, 1)
+
+	err := server.Start(context.Background(), readyCh)
+	require.Error(t, err, "an unusable gRPC listen address must fail Start")
+	require.Contains(t, err.Error(), "listen",
+		"the failure must be the gRPC listener, not something incidental that happens to abort Start")
+
+	ctx := server.consumerContext()
+	require.NotNil(t, ctx, "Start installed the consumer context before failing")
+
+	select {
+	case <-ctx.Done():
+	default:
+		require.Fail(t, "the consumer context must be cancelled when Start returns early, without Stop being called")
+	}
+
+	// A later Stop must not double-cancel or panic on an already-cancelled context.
+	require.NotPanics(t, func() { server.cancelConsumer() })
+}
+
 // spyPausableConsumer wraps a real KafkaConsumerGroup so pause/resume calls made by
 // the controller are observable, while the calls still land on the real
 // implementation (including its closed-consumer guard).
@@ -204,9 +267,9 @@ func TestBackpressure_StopCancelsControllerGoroutine(t *testing.T) {
 
 	// One warm-up cycle so any lazily-created infrastructure goroutine (broker,
 	// metrics registry, gRPC plumbing in the mock) exists before the baseline.
-	srv.consumerCtx, srv.consumerCancel = context.WithCancel(context.Background())
+	srv.setConsumerContext(context.WithCancel(context.Background()))
 	srv.startKafkaBackpressure(context.Background())
-	srv.consumerCancel()
+	srv.cancelConsumer()
 
 	// Give the warm-up cycle's goroutine time to observe the cancel and exit before
 	// the baseline is taken. The post-loop assertion is the bounded-retry one; this
@@ -217,11 +280,11 @@ func TestBackpressure_StopCancelsControllerGoroutine(t *testing.T) {
 
 	for i := 0; i < cycles; i++ {
 		// Exactly what Start does...
-		srv.consumerCtx, srv.consumerCancel = context.WithCancel(context.Background())
+		srv.setConsumerContext(context.WithCancel(context.Background()))
 		srv.startKafkaBackpressure(context.Background())
 
 		// ...and exactly what Stop does first, before closing the consumer.
-		srv.consumerCancel()
+		srv.cancelConsumer()
 	}
 
 	// Every controller goroutine must be gone. Bounded settle loop rather than a
@@ -243,7 +306,7 @@ func TestBackpressure_ResumeOnExitRunsOnStop(t *testing.T) {
 	server, consumer, cleanup := backpressureLifecycleServer(t, "mvp-controller-resume-on-exit", 5*time.Second)
 	defer cleanup()
 
-	server.consumerCtx, server.consumerCancel = context.WithCancel(context.Background())
+	server.setConsumerContext(context.WithCancel(context.Background()))
 	server.startKafkaBackpressure(context.Background())
 
 	require.Eventually(t, func() bool {
@@ -252,7 +315,7 @@ func TestBackpressure_ResumeOnExitRunsOnStop(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond, "the controller should pause while the signal is hot")
 
 	// Stop's first action.
-	server.consumerCancel()
+	server.cancelConsumer()
 
 	require.Eventually(t, func() bool {
 		_, resumes := consumer.counts()

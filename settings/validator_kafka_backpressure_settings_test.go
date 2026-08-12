@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -135,4 +136,57 @@ func TestValidatorKafkaBackpressureSettings_IncoherentForcesDisable(t *testing.T
 			require.False(t, kbp.Enabled, "non-positive %s must force the controller off", tc.name)
 		})
 	}
+}
+
+// TestValidatorKafkaBackpressureSettings_AllBadKnobsReported pins that EVERY
+// violation in a config is reported, not just the first.
+//
+// Each "disable the controller" check both warns and clears Enabled. Gating the
+// warnings on the current value of Enabled therefore silenced every check after the
+// first, so an operator with two bad knobs fixed one, restarted, and rediscovered the
+// second. The gate is wasEnabled, captured once before any check can clear it.
+//
+// Asserted against validated() directly rather than through stderr: the warnings are
+// returned to the caller, which is what makes this testable at all.
+func TestValidatorKafkaBackpressureSettings_AllBadKnobsReported(t *testing.T) {
+	t.Run("every bad knob is reported in one pass", func(t *testing.T) {
+		cfg, warnings := ValidatorKafkaBackpressureSettings{
+			Enabled: true,
+			// All four disabling knobs are non-positive at once.
+			PauseQueueAge: 0,
+			PollInterval:  0,
+			ReadTimeout:   0,
+			MaxPause:      0,
+			// Left coherent so they cannot add warnings of their own and inflate the
+			// count: ResumeQueueAge < PauseQueueAge fails when both are 0, so the resume
+			// clamp fires too — accounted for below.
+			MaxFailOpenCooldown: time.Second,
+			StaleErrorLimit:     3,
+		}.validated()
+
+		require.False(t, cfg.Enabled, "any non-positive timing knob disables the controller")
+
+		joined := strings.Join(warnings, "\n")
+
+		for _, knob := range []string{"pauseQueueAge", "pollInterval", "readTimeout", "maxPause"} {
+			require.Contains(t, joined, knob, "every bad knob must be named, not just the first")
+		}
+
+		// Four disabling knobs plus the resume clamp, which is reachable here because
+		// ResumeQueueAge (0) is not strictly below PauseQueueAge (0).
+		require.Len(t, warnings, 5)
+	})
+
+	t.Run("a config that was never enabled stays silent", func(t *testing.T) {
+		cfg, warnings := ValidatorKafkaBackpressureSettings{
+			Enabled:       false,
+			PauseQueueAge: 0,
+			PollInterval:  0,
+			ReadTimeout:   0,
+			MaxPause:      0,
+		}.validated()
+
+		require.False(t, cfg.Enabled)
+		require.Empty(t, warnings, "wasEnabled must not start warning operators who never enabled the controller")
+	})
 }

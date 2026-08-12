@@ -154,11 +154,33 @@ var (
 	prometheusValidatorShedUnwindFailures prometheus.Counter
 
 	// prometheusValidatorShedUnwindAborted counts unwinds abandoned by the
-	// verify-after-delete guard: the store reported a successful delete but the
-	// record was still readable, or its absence could not be confirmed. Kept
-	// distinct from the failure counter so "the store did not honour Delete" is
-	// visibly different from "the unspend failed".
+	// verify-after-delete guard because the store reported a successful delete but the
+	// record was still readable. Kept distinct from the failure counter so "the store
+	// did not honour Delete" is visibly different from "the unspend failed", and
+	// distinct from the unverified counter below because this one is a store-contract
+	// violation an operator fixes by wiring, not by reconciling outpoints.
 	prometheusValidatorShedUnwindAborted prometheus.Counter
+
+	// prometheusValidatorShedUnwindUnverified counts unwinds abandoned because the
+	// record's absence could not be CONFIRMED after the bounded retry — a read that
+	// kept failing, rather than a record that was still there. The inputs are left
+	// spent by a record whose deletion is unconfirmed; the error log carries the txid
+	// and the outpoints to reconcile from.
+	prometheusValidatorShedUnwindUnverified prometheus.Counter
+
+	// prometheusValidatorShedDroppedTotal counts transactions dropped after the
+	// bounded block-assembly handoff retry on the Kafka ingest path. Propagation has
+	// already returned success to the submitter by then, so these drops are silent
+	// from the client's point of view — this is the counter to alert on.
+	prometheusValidatorShedDroppedTotal prometheus.Counter
+
+	// prometheusValidatorHandoffDeadlineTotal counts block-assembly handoffs that hit
+	// the validator's own handoff deadline instead of returning a shed or a success. A
+	// recurring non-zero value points at a settings skew between this process's copy of
+	// blockassembly_queueFullWaitTimeout and the value the block-assembly process
+	// enforces: the deadline then fires before the shed arrives, so the shed is neither
+	// classified nor unwound and the transaction is left locked for the unmined reload.
+	prometheusValidatorHandoffDeadlineTotal prometheus.Counter
 
 	// prometheusValidatorExistingTxLockedUnmined counts resubmits that found an
 	// existing record locked, unmined and not conflicting — the residual stranded
@@ -445,7 +467,34 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "validator",
 			Name:      "shed_unwind_aborted_total",
-			Help:      "Number of shed unwinds abandoned because the record could not be confirmed deleted (the store did not honour Delete)",
+			Help:      "Number of shed unwinds abandoned because the record was still readable after a delete the store reported as successful",
+		},
+	)
+
+	prometheusValidatorShedUnwindUnverified = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_unverified_total",
+			Help:      "Number of shed unwinds abandoned because the record's deletion could not be confirmed after the bounded retry, leaving its inputs spent",
+		},
+	)
+
+	prometheusValidatorShedDroppedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_dropped_total",
+			Help:      "Number of transactions dropped after the bounded block assembly handoff retry on the Kafka ingest path, whose submitter was already told the transaction was accepted",
+		},
+	)
+
+	prometheusValidatorHandoffDeadlineTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "handoff_deadline_total",
+			Help:      "Number of block assembly handoffs that hit the validator's own handoff deadline, so the shed was neither classified nor unwound",
 		},
 	)
 

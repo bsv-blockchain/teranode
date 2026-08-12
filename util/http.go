@@ -560,6 +560,12 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	ct := strings.ToLower(resp.Header.Get("content-type"))
 	isHTML := strings.HasPrefix(ct, "text/html")
 	if isHTML {
+		// The body is never returned on this path, so it has to be closed here or the
+		// connection leaks outright — which defeats the point of draining error bodies
+		// a few lines up. A 2xx with an unexpected content type is worth draining for
+		// reuse rather than tearing down, so the same bounded helper applies.
+		drainAndCloseErrorBody(resp.Body)
+
 		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
 	}
 
@@ -597,6 +603,77 @@ const maxHTTPErrorBodyBytes = 2 * 1024
 // drained.
 const maxHTTPErrorBodyDrainBytes = 64 * 1024
 
+// maxHTTPErrorBodyDrainWait bounds how long the CALLER waits for the remainder drain
+// before abandoning it to the background.
+//
+// It exists because the drain's two requirements pull in opposite directions:
+//
+//   - Connection reuse needs the body read to EOF and CLOSED *before the caller
+//     returns*. Every caller of buildHTTPError cancels its request context immediately
+//     afterwards — DoHTTPRequest defers cancelFn, doHTTPRequestForStreamingWithRetryAfter
+//     calls it outright — and response-body reads honour that context. So a drain that
+//     has not finished by then is killed and the connection is discarded: a purely
+//     asynchronous drain delivers no reuse at all, which is the entire point of
+//     draining.
+//   - A peer that dribbles must not hold the caller. Body reads are otherwise bounded
+//     only by the request context, up to the 5-minute streaming timeout, compounded by
+//     up to six 503 retries.
+//
+// So the drain is synchronous up to this budget and abandoned past it. A peer whose
+// remainder is already buffered — the common case for a verbose error page — drains in
+// microseconds and its connection is reused; a dribbler costs the caller this much and
+// no more.
+const maxHTTPErrorBodyDrainWait = 250 * time.Millisecond
+
+// drainAndCloseErrorBody drains the remainder of an error body and closes it so the
+// connection can return to http.Transport's idle pool, while bounding what that costs
+// the caller.
+//
+// Bounded three ways: in BYTES by maxHTTPErrorBodyDrainBytes, against a peer that
+// streams forever; in the CALLER'S TIME by maxHTTPErrorBodyDrainWait; and, once
+// abandoned, by the request context its caller is about to cancel anyway.
+//
+// The goroutine takes sole ownership of the body and closes it exactly once, whether it
+// finished or was abandoned — callers must not touch the body afterwards.
+//
+// Note what this does NOT bound: a caller can still block on the snippet read in
+// buildHTTPError, which is synchronous and capped in bytes (2 KiB) but not in time.
+// That exposure is pre-existing and strictly smaller than the unbounded io.ReadAll it
+// replaced; bounding it in time needs a bounded-time reader and would trade away the
+// body of a legitimately slow error response.
+func drainAndCloseErrorBody(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		drainErrorBody(body)
+	}()
+
+	timer := time.NewTimer(maxHTTPErrorBodyDrainWait)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		// Drained and closed before the caller returns, so the connection is reusable.
+	case <-timer.C:
+		// Abandoned. The goroutine keeps sole ownership and closes the body when it
+		// stops, at the byte cap or when the request context dies.
+	}
+}
+
+// drainErrorBody is the byte-bounded drain-then-close that drainAndCloseErrorBody waits
+// on. Split out so the byte bound and the close can be asserted directly, without a
+// test having to race a goroutine.
+func drainErrorBody(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxHTTPErrorBodyDrainBytes))
+	_ = body.Close()
+}
+
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
 //
 // The error type is chosen to let callers branch with errors.Is:
@@ -610,10 +687,10 @@ const maxHTTPErrorBodyDrainBytes = 64 * 1024
 // registry: raw peer bytes would otherwise let a peer embed newlines to forge log
 // lines, or terminal escapes, and would break the single-line log convention.
 //
-// The remainder of the body is then drained, bounded by maxHTTPErrorBodyDrainBytes,
-// before Close, so the connection can be reused. The drain is in the deferred
-// function so it also covers the early return on a read error and any future early
-// return added here.
+// The remainder of the body is then drained and closed by drainAndCloseErrorBody,
+// bounded in bytes and in how long it may hold this function, so the connection can be
+// reused without a dribbling peer stalling the caller. The call is deferred so it also
+// covers the early return on a read error and any future early return added here.
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
@@ -624,12 +701,9 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 	}
 
 	if resp.Body != nil {
-		defer func() {
-			// Drain before Close: http.Transport only returns a connection to the
-			// idle pool once its body has been read to EOF.
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPErrorBodyDrainBytes))
-			_ = resp.Body.Close()
-		}()
+		// Ownership of the body transfers to the drain once this returns; the snippet
+		// read below completes first, because the deferred call runs last.
+		defer drainAndCloseErrorBody(resp.Body)
 
 		// Read one byte past the cap so truncation is detected by arrival of that
 		// byte, not by a length equality: io.LimitReader(body, max) returns exactly
@@ -790,7 +864,16 @@ func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string,
 
 	ct := strings.ToLower(resp.Header.Get("content-type"))
 	if strings.HasPrefix(ct, "text/html") {
+		// The body is not handed to the caller on this path, so it must be closed here
+		// or the connection leaks outright. Closed rather than drained: cancelFn below
+		// cancels the request context, which makes the connection unusable anyway, so a
+		// drain for reuse would be spending a goroutine on nothing.
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+
 		cancelFn()
+
 		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
 	}
 
