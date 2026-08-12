@@ -629,13 +629,16 @@ func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 
 	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
 
-	// A non-hex best_block_hash breaches the per-field charset bound, so the
-	// whole message is dropped as a protocol violation: no WebSocket
-	// notification, no registry write, and the sender is scored.
+	// node_status is telemetry: the malformed advertised tip is zeroed by
+	// sanitizeAdvertisedTip (and the raw hash blanked by sanitizePeerHexString)
+	// while the rest of the message keeps flowing, without penalising the
+	// sender. Nothing tip-related may reach the registry.
 	select {
 	case notification := <-s.notificationCh:
-		t.Fatalf("node_status with malformed hash must not be forwarded (got %s notification)", notification.Type)
+		require.Equal(t, uint32(0), notification.BestHeight)
+		require.Empty(t, notification.BestBlockHash)
 	default:
+		t.Fatal("expected node_status notification")
 	}
 
 	got, ok := reg.Get(remote.String())
@@ -644,7 +647,7 @@ func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 	require.Nil(t, got.BlockHash)
 	require.Empty(t, got.ClientName)
 	require.Empty(t, got.DataHubURL)
-	require.Positive(t, got.BanScore, "malformed advertised hash must be scored as a protocol violation")
+	require.Zero(t, got.BanScore, "a malformed advertised tip is sanitized, not scored")
 }
 
 func TestServerHelpers_AddProtocolViolation_AccumulatesScore(t *testing.T) {

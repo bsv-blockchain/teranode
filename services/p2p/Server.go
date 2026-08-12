@@ -1080,11 +1080,11 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 
 	// Bound every peer-controlled string field before any side effect (logging
 	// — including the spoof log below — registry write, WebSocket fan-out).
-	// Display-only free text is sanitized in place; a malformed
-	// protocol-format field is a protocol violation, same as a spoofed peer ID
+	// Display strings are sanitized in place; a malformed protocol-format
+	// field (peer ID, URL) is a protocol violation, same as a spoofed peer ID
 	// — except for our own loopback message, which is dropped without
 	// self-penalising.
-	nodeStatusMessage.sanitizeFields()
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
 
 	if err := nodeStatusMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
@@ -1095,7 +1095,11 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	}
 
 	notificationBestHeight := nodeStatusMessage.BestHeight
-	notificationBestBlockHash := nodeStatusMessage.BestBlockHash
+	// sanitizeAdvertisedTip below replaces this with a parsed hash, but only
+	// when BestHeight > 0; otherwise this raw string is what reaches WebSocket
+	// clients. It is bounded here rather than in sanitizeNodeStatusMessage so
+	// that sanitizeAdvertisedTip still sees the value the peer actually sent.
+	notificationBestBlockHash := sanitizePeerHexString(nodeStatusMessage.BestBlockHash, maxPeerHexStringLen)
 	sanitizedBestHeight := nodeStatusMessage.BestHeight
 	var sanitizedBestBlockHash *chainhash.Hash
 	sanitizedTipOK := false
@@ -1374,14 +1378,16 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// value cannot make remote peers score us for a protocol violation.
 	clientName := ""
 	if s.settings != nil {
-		clientName = sanitizeGossipString(s.settings.ClientName, maxGossipClientNameLen)
+		clientName = sanitizePeerDisplayString(s.settings.ClientName, maxPeerDisplayStringLen)
 	}
 
-	// Get miner name from the best block metadata. Sanitized because it embeds
-	// third-party coinbase text.
+	// Get miner name from the best block metadata. This is extracted from the
+	// coinbase scriptSig, so it is chosen by whoever mined the block rather than
+	// by us - bound it like any other untrusted display string before it is
+	// forwarded to WebSocket clients and published to peers.
 	minerName := ""
 	if bestBlockMeta != nil {
-		minerName = sanitizeGossipString(bestBlockMeta.Miner, maxGossipMinerNameLen)
+		minerName = sanitizePeerDisplayString(bestBlockMeta.Miner, maxPeerDisplayStringLen)
 	}
 
 	// Get block hash string
@@ -1702,7 +1708,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	// as a loud error instead of getting this node scored and banned by every
 	// peer. Local WebSocket clients already received the status above, so
 	// monitoring does not depend on this publish.
-	nodeStatusMessage.sanitizeFields()
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
 
 	if err := nodeStatusMessage.validateFields(); err != nil {
 		return errors.NewError("nodeStatusMessage failed gossip field validation, not publishing", err)
