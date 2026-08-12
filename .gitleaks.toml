@@ -15,6 +15,15 @@ title = "Teranode gitleaks config"
 [extend]
 useDefault = true
 
+# The default ruleset does NOT flag `<name>_private_key = <hex>` settings lines
+# (verified against the key this repo actually leaked), so match them
+# explicitly. The value-based allowlist below exempts the known public test
+# fixtures; anything else is reported.
+[[rules]]
+id = "teranode-settings-private-key"
+description = "Hex private key assigned to a *private_key settings entry"
+regex = '''(?i)[a-z0-9_]*private_keys?(?:\.[a-z0-9_.-]+)*\s*=\s*"?[0-9a-f]{64,}'''
+
 [allowlist]
 description = "Localhost/docker dev-default DB credentials and env placeholders"
 regexTarget = "line"
@@ -29,8 +38,9 @@ regexes = [
   # Known public P2P test fixtures (test/test_settings.go,
   # compose/settings_test.conf, compose/cmd/genpeerkeys/main.go). Allowlisted
   # by VALUE, not key name, so a real key committed under any *_private_key
-  # setting is still caught (settings/committed_private_keys_test.go is the
-  # complementary full-file guard).
+  # setting is still caught by the rule above
+  # (settings/committed_private_keys_test.go is the complementary full-file
+  # guard; this scan only sees PR diffs).
   '''e76c77795b43d2aacd564648bffebde74a4c31540357dad4a3694a561b4c4f1f''',
   '''c8a1b91ae120878d91a04c904e0d565aa44b2575c1bb30a729bd3e36e2a1d5e6''',
   '''44a5a189fbad1d7bc0c59b33fbd5e485f2f4d3d8bf293838c56ce72e53b55717''',
