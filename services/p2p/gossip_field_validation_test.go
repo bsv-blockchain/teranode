@@ -366,3 +366,69 @@ func TestGetNodeStatusMessage_EgressAlwaysPassesIngressValidation(t *testing.T) 
 	published.sanitizeFields()
 	require.NoError(t, published.validateFields())
 }
+
+// banRemotePeer pushes the remote peer over the ban threshold via a reason
+// that is not in the configured ReasonPoints map, so the default points apply.
+func banRemotePeer(t *testing.T, reg *blockchain.CentralizedPeerRegistry, id string) {
+	t.Helper()
+	_, banned := reg.AddBanScore(id, "test-ban", 100)
+	require.True(t, banned, "test setup: peer must be banned")
+}
+
+// Regression tests: a banned remote peer must not dodge the banned-peer skip
+// by claiming the local node's peer ID in the message. The message must be
+// dropped by the skip before the spoof check can trigger an AddBanScore
+// registry call, so the ban score stays exactly where it was.
+
+func TestHandleBlockTopic_BannedPeerClaimingOwnIDStillSkipped(t *testing.T) {
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+	banRemotePeer(t, reg, remotePeerID.String())
+	before := banScore()
+
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     server.P2PClient.GetID(),
+		Hash:       testBlockHashHex,
+		DataHubURL: "http://example.com:8090",
+	})
+	require.NoError(t, err)
+
+	server.handleBlockTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	requireNoNotification(t, server, "banned peer's block message must be dropped")
+	require.Equal(t, before, banScore(), "banned peer must be dropped before any scoring runs")
+}
+
+func TestHandleSubtreeTopic_BannedPeerClaimingOwnIDStillSkipped(t *testing.T) {
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+	banRemotePeer(t, reg, remotePeerID.String())
+	before := banScore()
+
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     server.P2PClient.GetID(),
+		Hash:       testBlockHashHex,
+		DataHubURL: "http://example.com:8090",
+	})
+	require.NoError(t, err)
+
+	server.handleSubtreeTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	requireNoNotification(t, server, "banned peer's subtree message must be dropped")
+	require.Equal(t, before, banScore(), "banned peer must be dropped before any scoring runs")
+}
+
+func TestHandleRejectedTxTopic_BannedPeerClaimingOwnIDStillSkipped(t *testing.T) {
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+	banRemotePeer(t, reg, remotePeerID.String())
+	before := banScore()
+
+	msgBytes, err := json.Marshal(RejectedTxMessage{
+		PeerID: server.P2PClient.GetID(),
+		TxID:   testBlockHashHex,
+		Reason: "some reason",
+	})
+	require.NoError(t, err)
+
+	server.handleRejectedTxTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	require.Equal(t, before, banScore(), "banned peer must be dropped before any scoring runs")
+}

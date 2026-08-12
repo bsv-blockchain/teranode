@@ -51,11 +51,12 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	}
 
 	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing (and before field validation, so a
-	// banned peer cannot keep triggering uncached AddBanScore RPCs). Own
-	// messages skip the registry round-trip; they return at the isOwnMessage
-	// check below.
-	if !s.isOwnMessage(fromID, blockMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
+	// forwarding, or further processing (and before field validation and the
+	// spoof check, so a banned peer cannot keep triggering uncached
+	// AddBanScore RPCs). Own messages are identified by the real sender, not
+	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
+	// skip; genuine own messages return at the isOwnMessage check below.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
 		return
 	}
 
@@ -200,11 +201,12 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	}
 
 	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing (and before field validation, so a
-	// banned peer cannot keep triggering uncached AddBanScore RPCs). Own
-	// messages skip the registry round-trip; they return at the isOwnMessage
-	// check below.
-	if !s.isOwnMessage(fromID, subtreeMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
+	// forwarding, or further processing (and before field validation and the
+	// spoof check, so a banned peer cannot keep triggering uncached
+	// AddBanScore RPCs). Own messages are identified by the real sender, not
+	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
+	// skip; genuine own messages return at the isOwnMessage check below.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
 		return
 	}
 
@@ -490,9 +492,11 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 	}
 
 	// Drop messages from banned peers before any registration or further
-	// processing (and before field validation, so a banned peer cannot keep
-	// triggering uncached AddBanScore RPCs).
-	if !s.isOwnMessage(fromID, rejectedTxMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
+	// processing (and before field validation and the spoof check, so a
+	// banned peer cannot keep triggering uncached AddBanScore RPCs). Own
+	// messages are identified by the real sender, not the claimed PeerID, so
+	// a banned peer spoofing our ID cannot dodge the skip.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
 		return
 	}
 
