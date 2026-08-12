@@ -7336,21 +7336,21 @@
 <tr>
 <td>PeerMapMaxSize</td>
 <td>int</td>
-<td>100000</td>
+<td>10000</td>
 <td>p2p_peer_map_max_size</td>
 <td>Maximum entries in peer maps</td>
 </tr>
 <tr>
 <td>PeerMapTTL</td>
 <td>time.Duration</td>
-<td>30m</td>
+<td>10m</td>
 <td>p2p_peer_map_ttl</td>
 <td>Peer map entry time-to-live</td>
 </tr>
 <tr>
 <td>PeerMapCleanupInterval</td>
 <td>time.Duration</td>
-<td>5m</td>
+<td>1m</td>
 <td>p2p_peer_map_cleanup_interval</td>
 <td>Peer map cleanup frequency</td>
 </tr>
@@ -7389,9 +7389,9 @@
 </ul>
 <h3 id="peer-map-management">Peer Map Management<a class="headerlink" href="#peer-map-management" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>PeerMapMaxSize</code> limits memory usage for block/subtree peer tracking</li>
-<li><code>PeerMapTTL</code> controls peer map entry expiration (30 minutes)</li>
-<li><code>PeerMapCleanupInterval</code> sets cleanup frequency (5 minutes)</li>
+<li><code>PeerMapMaxSize</code> limits memory usage for block/subtree peer tracking (10000 entries, enforced at insert)</li>
+<li><code>PeerMapTTL</code> controls peer map entry expiration (10 minutes)</li>
+<li><code>PeerMapCleanupInterval</code> sets cleanup frequency (1 minute)</li>
 <li>These settings have sensible defaults but can be overridden via environment variables</li>
 </ul>
 <h3 id="network-scanning-prevention">Network Scanning Prevention<a class="headerlink" href="#network-scanning-prevention" title="Permanent link">&para;</a></h3>
