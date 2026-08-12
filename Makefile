@@ -186,6 +186,42 @@ install-tools:
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	@$(MAKE) --no-print-directory bsvportingcheck
+
+# validate the bitcoin-sv porting tracker (test/e2e/daemon/bsv/registry.yaml).
+# Pure file/AST checks - no daemon, no Docker - so it belongs in the fast lane.
+# See test/e2e/daemon/bsv/PORTING.md.
+.PHONY: bsvportingcheck
+bsvportingcheck:
+	go test ./test/e2e/daemon/bsv/ -run TestRegistry -count=1
+
+# run the ported bitcoin-sv functional tests and the wire-peer harness self-tests.
+# These start real daemons, so they are not part of `make test`. SETTINGS_CONTEXT
+# must be in the environment before the process starts - gocore resolves it once,
+# during package init, so no amount of Go code can set it later.
+.PHONY: bsvporttest
+bsvporttest:
+	SETTINGS_CONTEXT=test go test -count=1 -timeout=20m ./test/utils/wirepeer/ ./test/e2e/daemon/bsv/
+
+# print the bitcoin-sv porting progress report
+.PHONY: bsvportingstatus
+bsvportingstatus:
+	@go test ./test/e2e/daemon/bsv/ -run TestRegistrySummary -count=1 -v 2>&1 | grep -E 'registry_test|ok|FAIL'
+
+# regenerate test/e2e/daemon/bsv/GAPS.md from registry.yaml. Run this after
+# editing the gaps: block - bsvportingcheck (and so `make test`) fails while the
+# document and the data disagree.
+.PHONY: bsvportinggapsdoc
+bsvportinggapsdoc:
+	@go test ./test/e2e/daemon/bsv/ -run TestRegistryGapsDoc -count=1 -update-gaps-doc -v 2>&1 \
+		| sed -e 's/^ *gaps_doc_test.go:[0-9]*: *//' -e '/^=== RUN/d' -e '/^--- PASS/d' -e '/^PASS/d'
+
+# print the full bitcoin-sv porting gap register: what is in the way and why
+.PHONY: bsvportinggaps
+bsvportinggaps:
+	@go test ./test/e2e/daemon/bsv/ -run TestRegistryGapReport -count=1 -v 2>&1 \
+		| sed -e '/^=== RUN/d' -e '/^--- PASS/d' -e '/^PASS/d' -e '/^ok /d' \
+		      -e 's/^ *registry_test.go:[0-9]*: *//' -e 's/^        //'
 
 # run tests in the test/longtest directory
 .PHONY: longtest
