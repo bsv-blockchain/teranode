@@ -27,6 +27,14 @@ import (
 // site. Naming them costs a type declaration and removes that class of bug.
 type QueueStats struct {
 	// Count is the current ingest-queue depth in items.
+	//
+	// It is reported for operators reading GetBlockAssemblyQueueStats directly —
+	// depth is what distinguishes "one old batch sitting behind the drain floor" from
+	// "a full queue" — and it is deliberately NOT a control input. The backpressure
+	// controller decides on HeadAge because depth alone cannot tell a queue that is
+	// draining from one that is stalled: a large but falling depth needs no
+	// intervention, a small but static one does. Block assembly exports its own depth
+	// gauge for alerting.
 	Count int64
 
 	// HeadAge is how long the oldest queued batch has waited (0 when empty).

@@ -35,7 +35,7 @@ type ValidatorSettings struct {
 
 	// BlockAssemblyShedRetryTimeout bounds the in-place retry of a queue-full
 	// block-assembly handoff on the Kafka ingest path.
-	BlockAssemblyShedRetryTimeout time.Duration `key:"validator_blockAssemblyShedRetryTimeout" desc:"How long the Kafka ingest path retries a queue-full block-assembly handoff in place" default:"2s" category:"Validator" usage:"Bounds how long an ingest goroutine parks waiting for the block-assembly queue to drain" type:"duration" longdesc:"### Purpose\nBounds the in-place retry of a block-assembly handoff that was shed because the ingest queue was full. Applies only on the Kafka ingest path (WaitForBlockAssembly); synchronous callers surface the shed immediately.\n\n### How It Works\nThe handoff is retried every 5ms until it succeeds, the request context is cancelled, or this timeout elapses. On timeout the transaction's store work is unwound and the shed is returned, so the transaction is dropped cleanly with no residue rather than being stranded locked and unhanded-off.\n\n### Trade-off\n| Setting | Benefit | Drawback |\n|---------|---------|----------|\n| Longer | Fewer ingest transactions dropped during a transient stall | More parked consumer goroutines, each retaining its Kafka record batch |\n| Shorter | Less memory retained during a stall, parents held Locked for less time | More transactions dropped when block assembly is briefly slow |\n\n### Why a bound at all\nAn unbounded retry relocates the growth the block-assembly queue cap removed into the validator's Kafka consumer: the puller does not wait for per-partition goroutines, so during a multi-minute stall every parked goroutine keeps holding its fetched records. With a bound, retention is proportional to this window rather than to how long the stall lasts. This is a **time** bound, not a memory bound — the coefficient is the broker delivery rate times the record size, neither of which is capped here.\n\n### Recommendations\n- **2s** (default) - absorbs the common case (block assembly drains a batch per loop iteration, so a full queue usually clears in milliseconds) without parking goroutines for minutes.\n- Only relevant when blockassembly_maxQueueItems is positive, since only then can a shed occur."`
+	BlockAssemblyShedRetryTimeout time.Duration `key:"validator_blockAssemblyShedRetryTimeout" desc:"How long the Kafka ingest path retries a queue-full block-assembly handoff in place" default:"2s" category:"Validator" usage:"Bounds how long an ingest goroutine parks waiting for the block-assembly queue to drain" type:"duration" longdesc:"### Purpose\nBounds the in-place retry of a block-assembly handoff that was shed because the ingest queue was full. Applies only on the Kafka ingest path (WaitForBlockAssembly); synchronous callers surface the shed immediately.\n\n### How It Works\nThe handoff is retried every 5ms until it succeeds, the request context is cancelled, or this timeout elapses. On timeout the transaction's store work is unwound and the shed is returned, so the transaction is dropped cleanly with no residue rather than being stranded locked and unhanded-off.\n\nThe budget is measured from BEFORE the first handoff attempt, not after it, because the fetched Kafka record batch is pinned from that first attempt.\n\n### The submitter is never told\nPropagation has already returned success to the submitter before the validator sees the transaction, so a transaction dropped after this window is never reported to the submitter. It is dropped **cleanly** (no store residue) but it is **not lossless**; alert on **teranode_validator_shed_dropped_total**.\n\n### Per-attempt cap, and what it costs this window\nEach individual attempt is separately capped at blockassembly_queueFullWaitTimeout plus 500ms of round-trip slack. That floor is not optional: block assembly waits up to its own queueFullWaitTimeout before shedding and treats caller cancellation as explicitly NOT a shed, so an attempt deadline shorter than that wait turns every shed into a local context deadline — losing the resource-exhausted classification and skipping the unwind, which strands the transaction locked.\n\nConsequences to plan for:\n- This window is reduced by that per-attempt cap, so at the defaults the retrying occupies 2s - 600ms = 1.4s.\n- If this setting is not greater than the cap, the handoff makes exactly one bounded attempt and does not retry. A startup warning names both keys and the effective bound.\n- Worst-case ingest retention is this window plus the 2s unwind cap, i.e. 4s at the defaults.\n\n### Trade-off\n| Setting | Benefit | Drawback |\n|---------|---------|----------|\n| Longer | Fewer ingest transactions dropped during a transient stall | More parked consumer goroutines, each retaining its Kafka record batch |\n| Shorter | Less memory retained during a stall, parents held Locked for less time | More transactions dropped when block assembly is briefly slow |\n\n### Why a bound at all\nAn unbounded retry relocates the growth the block-assembly queue cap removed into the validator's Kafka consumer: the puller does not wait for per-partition goroutines, so during a multi-minute stall every parked goroutine keeps holding its fetched records. With a bound, retention is proportional to this window rather than to how long the stall lasts. This is a **time** bound, not a memory bound — the coefficient is the broker delivery rate times the record size, neither of which is capped here.\n\n### Recommendations\n- **2s** (default) - absorbs the common case (block assembly drains a batch per loop iteration, so a full queue usually clears in milliseconds) without parking goroutines for minutes.\n- Only relevant when blockassembly_maxQueueItems is positive, since only then can a shed occur."`
 
 	// KafkaBackpressure configures the queue-age-driven Kafka ingest backpressure
 	// controller. Disabled by default; see ValidatorKafkaBackpressureSettings.
@@ -89,44 +89,59 @@ func loadValidatorKafkaBackpressureSettings(alternativeContext ...string) Valida
 		StaleErrorLimit:     getInt("validator_kafkaBackpressureStaleErrorLimit", 3, alternativeContext...),
 	}
 
-	return s.validated()
+	cfg, warnings := s.validated()
+
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "[settings] validator kafka backpressure: "+w)
+	}
+
+	return cfg
 }
 
 // validated applies the relationship rules described on
-// loadValidatorKafkaBackpressureSettings and returns the corrected config.
-func (s ValidatorKafkaBackpressureSettings) validated() ValidatorKafkaBackpressureSettings {
-	warn := func(msg string) {
-		fmt.Fprintln(os.Stderr, "[settings] validator kafka backpressure: "+msg)
+// loadValidatorKafkaBackpressureSettings and returns the corrected config plus the
+// warnings its caller should surface.
+//
+// It returns the warnings rather than printing them so that every violation in a
+// config is reported, not just the first: each "disable the controller" check both
+// emits a warning and clears Enabled, so gating the warnings on the CURRENT value of
+// Enabled silenced every check after the first one and an operator fixing two bad
+// knobs had to restart to discover the second. The gate is therefore wasEnabled,
+// captured once up front. Returning a slice also makes this testable without
+// capturing os.Stderr.
+func (s ValidatorKafkaBackpressureSettings) validated() (ValidatorKafkaBackpressureSettings, []string) {
+	// Captured before any check can clear it, so all violations are reported in one
+	// pass. A config that was never enabled stays silent.
+	wasEnabled := s.Enabled
+
+	var warnings []string
+
+	warn := func(format string, args ...any) {
+		if wasEnabled {
+			warnings = append(warnings, fmt.Sprintf(format, args...))
+		}
 	}
 
 	if s.PauseQueueAge <= 0 {
-		if s.Enabled {
-			warn(fmt.Sprintf("pauseQueueAge=%s must be > 0; disabling controller", s.PauseQueueAge))
-		}
+		warn("pauseQueueAge=%s must be > 0; disabling controller", s.PauseQueueAge)
 
 		s.Enabled = false
 	}
 
 	if s.PollInterval <= 0 {
-		if s.Enabled {
-			warn(fmt.Sprintf("pollInterval=%s must be > 0; disabling controller", s.PollInterval))
-		}
+		warn("pollInterval=%s must be > 0; disabling controller", s.PollInterval)
 
 		s.Enabled = false
 	}
 
 	if s.ReadTimeout <= 0 {
-		if s.Enabled {
-			warn(fmt.Sprintf("readTimeout=%s must be > 0; disabling controller", s.ReadTimeout))
-		}
+		warn("readTimeout=%s must be > 0; disabling controller", s.ReadTimeout)
 
 		s.Enabled = false
 	}
 
 	if s.MaxPause <= 0 {
-		if s.Enabled {
-			warn(fmt.Sprintf("maxPause=%s must be > 0; disabling controller", s.MaxPause))
-		}
+		warn("maxPause=%s must be > 0; disabling controller", s.MaxPause)
 
 		s.Enabled = false
 	}
@@ -135,9 +150,8 @@ func (s ValidatorKafkaBackpressureSettings) validated() ValidatorKafkaBackpressu
 	// clamp it to half the pause watermark and keep running.
 	if s.ResumeQueueAge >= s.PauseQueueAge {
 		clamped := s.PauseQueueAge / 2
-		if s.Enabled {
-			warn(fmt.Sprintf("resumeQueueAge=%s must be < pauseQueueAge=%s; clamping resume to %s", s.ResumeQueueAge, s.PauseQueueAge, clamped))
-		}
+
+		warn("resumeQueueAge=%s must be < pauseQueueAge=%s; clamping resume to %s", s.ResumeQueueAge, s.PauseQueueAge, clamped)
 
 		s.ResumeQueueAge = clamped
 	}
@@ -151,9 +165,7 @@ func (s ValidatorKafkaBackpressureSettings) validated() ValidatorKafkaBackpressu
 	// fail-open resume and busy-toggle ingest. This is a floor on the CAP; the
 	// controller applies the same floor to each armed cooldown.
 	if floor := 2 * s.PollInterval; s.PollInterval > 0 && s.MaxFailOpenCooldown < floor {
-		if s.Enabled {
-			warn(fmt.Sprintf("maxFailOpenCooldown=%s must be >= 2 x pollInterval=%s; clamping to %s", s.MaxFailOpenCooldown, s.PollInterval, floor))
-		}
+		warn("maxFailOpenCooldown=%s must be >= 2 x pollInterval=%s; clamping to %s", s.MaxFailOpenCooldown, s.PollInterval, floor)
 
 		s.MaxFailOpenCooldown = floor
 	}
@@ -161,12 +173,10 @@ func (s ValidatorKafkaBackpressureSettings) validated() ValidatorKafkaBackpressu
 	// A non-positive limit is meaningless (the streak is compared with >=); floor
 	// it at 1 so the smallest configured value is a single tolerated failure.
 	if s.StaleErrorLimit < 1 {
-		if s.Enabled {
-			warn(fmt.Sprintf("staleErrorLimit=%d must be >= 1; clamping to 1", s.StaleErrorLimit))
-		}
+		warn("staleErrorLimit=%d must be >= 1; clamping to 1", s.StaleErrorLimit)
 
 		s.StaleErrorLimit = 1
 	}
 
-	return s
+	return s, warnings
 }

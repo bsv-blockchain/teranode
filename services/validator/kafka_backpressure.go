@@ -342,12 +342,17 @@ func (c *kafkaBackpressureController) resumeOnExit() {
 // ctx.Done() would never fire on Stop and the controller would keep pausing and
 // resuming a closed consumer.
 //
-// Ordering requirement, satisfied by Stop today: consumerCancel() must run BEFORE
-// consumerClient.Close(), so resume-on-exit observes a live client. The
-// pause/resume no-ops on a closed consumer (see KafkaConsumerGroup.PauseAll) are
-// the backstop if that ordering ever changes.
+// Ordering preference, not a guarantee: Stop cancels the consumer context before
+// closing the consumer, so resume-on-exit has a chance to observe a live client — but
+// nothing joins this goroutine, so the two can interleave. That is acceptable because
+// the property is immaterial: pause state is client-local and dies with the client
+// (franz-go's on the kgo.Client that closeClient closes, the in-memory arm's on the
+// consumer group object built per consumer), so a resume landing after Close changes
+// nothing a later Start could observe. The closed guard in
+// KafkaConsumerGroup.setFetchPaused is what makes such a late call safe rather than
+// merely pointless.
 //
-// consumerCtx is nil when Start has not run (a Stop-before-Start, and the
+// The consumer context is nil when Start has not run (a Stop-before-Start, and the
 // controller unit tests); fall back to the passed context so the caller still
 // gets a controller with a cancellable lifetime.
 func (v *Server) startKafkaBackpressure(ctx context.Context) {
@@ -362,7 +367,7 @@ func (v *Server) startKafkaBackpressure(ctx context.Context) {
 		return
 	}
 
-	controllerCtx := v.consumerCtx
+	controllerCtx := v.consumerContext()
 	if controllerCtx == nil {
 		controllerCtx = ctx
 	}

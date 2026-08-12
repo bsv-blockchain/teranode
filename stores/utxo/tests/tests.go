@@ -1654,6 +1654,8 @@ func SpendAndCreateInvalidOptions(t *testing.T, db utxostore.Store) {
 //
 // Asserted, in order:
 //   - SpendAndCreate: parent outpoint reads spent, child record present and Locked;
+//   - while the child is Locked its OWN outputs cannot be spent — the precondition the
+//     whole safety argument rests on (see below);
 //   - Delete(child): child GetMeta returns ErrTxNotFound while the parent outpoint
 //     STILL reads spent — the safe intermediate state;
 //   - Unspend: the parent outpoint is spendable again and a different spender wins;
@@ -1693,6 +1695,54 @@ func DeleteThenUnspendRestoresParent(t *testing.T, db utxostore.Store) {
 	childMeta := &meta.Data{}
 	require.NoError(t, db.GetMeta(ctx, child.TxIDChainHash(), childMeta))
 	require.True(t, childMeta.Locked, "precondition: the child record is created Locked")
+
+	// Step 0b — the precondition the whole unwind safety argument rests on: while the
+	// child record is Locked, its OWN outputs cannot be spent. The unwind is only safe
+	// to delete the child because no descendant can have spent its outputs, and that
+	// claim is a STORE property rather than validator logic. Asserting it here turns
+	// the assumption into a proof, once per backend.
+	grandchild := bt.NewTx()
+	require.NoError(t, grandchild.FromUTXOs(&bt.UTXO{
+		TxIDHash:      child.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: child.Outputs[0].LockingScript,
+		Satoshis:      child.Outputs[0].Satoshis,
+	}))
+	grandchild.Inputs[0].UnlockingScript = dummyUnlockingScript
+	require.NoError(t, grandchild.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+	_ = db.Delete(ctx, grandchild.TxIDChainHash())
+
+	_, lockedSpends, err := db.SpendAndCreate(ctx, grandchild, db.GetBlockHeight()+1)
+	require.Error(t, err,
+		"a Locked transaction's outputs must not be spendable - this is what makes deleting the child in the unwind safe")
+
+	// The rejection may be reported on the returned spend rather than only on the
+	// aggregate error, and that differs between backends, so accept either. What must
+	// not happen is a rejection for some unrelated reason.
+	lockedReported := errors.Is(err, errors.ErrTxLocked)
+
+	for _, s := range lockedSpends {
+		if s != nil && s.Err != nil && errors.Is(s.Err, errors.ErrTxLocked) {
+			lockedReported = true
+		}
+	}
+
+	require.True(t, lockedReported, "spending a Locked transaction's output must be refused as TX_LOCKED, got: %v", err)
+
+	// Leave no residue from the rejected attempt, so the unwind steps below start from
+	// the state step 0 established.
+	_ = db.Delete(ctx, grandchild.TxIDChainHash())
+
+	// The failed spend must leave the child's output untouched, so the unwind's
+	// starting state is unchanged by having asserted this.
+	childOutHash, err := util.UTXOHashFromOutput(child.TxIDChainHash(), child.Outputs[0], 0)
+	require.NoError(t, err)
+
+	childOutResp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: child.TxIDChainHash(), Vout: 0, UTXOHash: childOutHash})
+	require.NoError(t, err)
+	require.NotEqual(t, int(utxostore.Status_SPENT), childOutResp.Status,
+		"a rejected spend of a locked output must not have marked it spent")
 
 	// Step 1 — Delete the record. The parent output must STILL read spent: that is
 	// the safe intermediate state the ordering exists to guarantee.
