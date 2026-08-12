@@ -944,6 +944,10 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
 
+	if err = b.initializeCapacityLimit(); err != nil {
+		return errors.NewProcessingError("[BlockAssembler] failed to initialize capacity limit: %v", err)
+	}
+
 	// Wait for any pending blocks to be processed before loading unmined transactions
 	if !b.skipWaitForPendingBlocks {
 		if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
@@ -1299,6 +1303,22 @@ func (b *BlockAssembler) initState(ctx context.Context) error {
 	if err = b.SetState(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
+
+	return nil
+}
+
+// initializeCapacityLimit sets the maximum unmined transaction limit.
+// If MaxUnminedTransactions is 0, no limit is enforced (unlimited).
+func (b *BlockAssembler) initializeCapacityLimit() error {
+	maxTx := b.settings.BlockAssembly.MaxUnminedTransactions
+
+	if maxTx > 0 {
+		b.logger.Infof("[BlockAssembler] Setting max unmined transactions limit to %d", maxTx)
+	} else {
+		b.logger.Infof("[BlockAssembler] No limit on unmined transactions (MaxUnminedTransactions=0)")
+	}
+
+	b.subtreeProcessor.SetMaxUnminedTransactions(maxTx)
 
 	return nil
 }

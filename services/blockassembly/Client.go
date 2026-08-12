@@ -365,6 +365,35 @@ func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	return unwrappedErr
 }
 
+// CanAcceptTransaction checks if block assembly can accept more transactions.
+// Returns capacity information to allow validator to fail fast before
+// spending UTXOs if capacity limit has been reached.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - count: Number of transactions to check (default: 1)
+//
+// Returns:
+//   - canAccept: true if block assembly can accept the transactions
+//   - currentCount: current number of unmined transactions
+//   - maxLimit: maximum limit (0 = unlimited)
+//   - remainingCapacity: how many more transactions can be accepted
+//   - error: Any error encountered
+func (s *Client) CanAcceptTransaction(ctx context.Context, count uint32) (canAccept bool, currentCount, maxLimit, remainingCapacity int64, err error) {
+	if count == 0 {
+		count = 1
+	}
+
+	resp, err := s.client.CanAcceptTransaction(ctx, &blockassembly_api.CanAcceptTransactionRequest{
+		Count: count,
+	})
+	if err != nil {
+		return false, 0, 0, 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.CanAccept, resp.CurrentCount, resp.MaxLimit, resp.RemainingCapacity, nil
+}
+
 // GetMiningCandidate retrieves a candidate block for mining.
 //
 // Parameters:

@@ -239,3 +239,43 @@ func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 	m.Called(ctx)
 }
+
+// CurrentTransactionCount implements Interface.CurrentTransactionCount
+func (m *MockSubtreeProcessor) CurrentTransactionCount() int64 {
+	args := m.Called()
+
+	return args.Get(0).(int64)
+}
+
+// CanAcceptTransactions implements Interface.CanAcceptTransactions
+func (m *MockSubtreeProcessor) CanAcceptTransactions(count int) bool {
+	args := m.Called(count)
+
+	return args.Bool(0)
+}
+
+// RemainingCapacity implements Interface.RemainingCapacity
+func (m *MockSubtreeProcessor) RemainingCapacity() int64 {
+	args := m.Called()
+
+	return args.Get(0).(int64)
+}
+
+// IsCapacityLimitReached implements Interface.IsCapacityLimitReached
+func (m *MockSubtreeProcessor) IsCapacityLimitReached() bool {
+	args := m.Called()
+
+	return args.Bool(0)
+}
+
+// SetMaxUnminedTransactions implements Interface.SetMaxUnminedTransactions
+func (m *MockSubtreeProcessor) SetMaxUnminedTransactions(max int64) {
+	m.Called(max)
+}
+
+// GetMaxUnminedTransactions implements Interface.GetMaxUnminedTransactions
+func (m *MockSubtreeProcessor) GetMaxUnminedTransactions() int64 {
+	args := m.Called()
+
+	return args.Get(0).(int64)
+}

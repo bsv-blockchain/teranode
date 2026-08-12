@@ -97,6 +97,11 @@ service BlockAssemblyAPI {
   // The response contains everything needed to assemble a standard Bitcoin wire format block.
   // Returns NotFound if the candidate ID has expired or is invalid.
   rpc GetCandidateBlock (GetCandidateBlockRequest) returns (GetCandidateBlockResponse) {}
+
+  // CanAcceptTransaction checks if block assembly can accept more transactions.
+  // Returns information about current capacity and whether new transactions can be accepted.
+  // Used by validator to fail fast before spending UTXOs if capacity is reached.
+  rpc CanAcceptTransaction (CanAcceptTransactionRequest) returns (CanAcceptTransactionResponse) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -289,4 +294,17 @@ message GetCandidateBlockResponse {
   bytes coinbase_tx = 2;               // serialized coinbase transaction
   repeated bytes subtree_hashes = 3;   // subtree hashes for streaming transactions from the subtree store
   uint64 transaction_count = 4;        // total number of transactions including coinbase
+}
+
+// Request for checking if block assembly can accept transactions.
+message CanAcceptTransactionRequest {
+  uint32 count = 1; // the number of transactions to check (default: 1)
+}
+
+// Response indicating whether block assembly can accept transactions.
+message CanAcceptTransactionResponse {
+  bool can_accept = 1; // true if block assembly can accept the requested number of transactions
+  int64 current_count = 2; // current number of unmined transactions
+  int64 max_limit = 3; // maximum limit (0 = unlimited)
+  int64 remaining_capacity = 4; // how many more transactions can be accepted
 }

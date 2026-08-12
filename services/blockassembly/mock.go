@@ -72,6 +72,16 @@ func (m *Mock) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+func (m *Mock) CanAcceptTransaction(ctx context.Context, count uint32) (canAccept bool, currentCount, maxLimit, remainingCapacity int64, err error) {
+	args := m.Called(ctx, count)
+
+	if args.Error(4) != nil {
+		return false, 0, 0, 0, args.Error(4)
+	}
+
+	return args.Bool(0), args.Get(1).(int64), args.Get(2).(int64), args.Get(3).(int64), nil
+}
+
 func (m *Mock) GetMiningCandidate(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error) {
 	args := m.Called(ctx, includeSubtreeHashes)
 
@@ -218,6 +228,14 @@ func (m *mockBlockAssemblyAPIClient) RemoveTx(ctx context.Context, in *blockasse
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*blockassembly_api.EmptyMessage), args.Error(1)
+}
+
+func (m *mockBlockAssemblyAPIClient) CanAcceptTransaction(ctx context.Context, in *blockassembly_api.CanAcceptTransactionRequest, opts ...grpc.CallOption) (*blockassembly_api.CanAcceptTransactionResponse, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.CanAcceptTransactionResponse), args.Error(1)
 }
 
 func (m *mockBlockAssemblyAPIClient) AddTxBatch(ctx context.Context, in *blockassembly_api.AddTxBatchRequest, opts ...grpc.CallOption) (*blockassembly_api.AddTxBatchResponse, error) {

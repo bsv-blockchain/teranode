@@ -35,6 +35,10 @@ var (
 	prometheusSubtreeProcessorDiskMapEntries               prometheus.Gauge
 	prometheusSubtreeProcessorDiskMapFilterRAM             prometheus.Gauge
 	prometheusSubtreeProcessorDiskMapDiskWritten           prometheus.Gauge
+
+	prometheusCapacityLimitRejected  prometheus.Counter
+	prometheusCapacityLimitReached   prometheus.Gauge
+	prometheusMaxUnminedTransactions prometheus.Gauge
 )
 
 var (
@@ -239,6 +243,33 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreeprocessor",
 			Name:      "diskmap_disk_written_bytes",
 			Help:      "Data bytes written to disk for disk-backed transaction map",
+		},
+	)
+
+	prometheusCapacityLimitRejected = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "capacity_limit_rejected_total",
+			Help:      "Total transactions rejected due to capacity limit",
+		},
+	)
+
+	prometheusCapacityLimitReached = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "capacity_limit_reached",
+			Help:      "1 if capacity limit has been reached, 0 otherwise",
+		},
+	)
+
+	prometheusMaxUnminedTransactions = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "max_unmined_transactions",
+			Help:      "Configured maximum unmined transactions (0 = unlimited)",
 		},
 	)
 }

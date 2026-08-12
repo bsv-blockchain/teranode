@@ -59,6 +59,22 @@ type ClientI interface {
 	//   - error: Any error encountered during removal
 	RemoveTx(ctx context.Context, hash *chainhash.Hash) error
 
+	// CanAcceptTransaction checks if block assembly can accept more transactions.
+	// Returns capacity information to allow validator to fail fast before
+	// spending UTXOs if capacity limit has been reached.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//   - count: Number of transactions to check (default: 1)
+	//
+	// Returns:
+	//   - canAccept: true if block assembly can accept the transactions
+	//   - currentCount: current number of unmined transactions
+	//   - maxLimit: maximum limit (0 = unlimited)
+	//   - remainingCapacity: how many more transactions can be accepted
+	//   - error: Any error encountered
+	CanAcceptTransaction(ctx context.Context, count uint32) (canAccept bool, currentCount, maxLimit, remainingCapacity int64, err error)
+
 	// GetMiningCandidate retrieves a candidate block for mining.
 	//
 	// Parameters:
@@ -198,4 +214,20 @@ type Store interface {
 	// Returns:
 	//   - error: Any error encountered during removal
 	RemoveTx(ctx context.Context, hash *chainhash.Hash) error
+
+	// CanAcceptTransaction checks if block assembly can accept more transactions.
+	// Returns capacity information to allow validator to fail fast before
+	// spending UTXOs if capacity limit has been reached.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//   - count: Number of transactions to check (default: 1)
+	//
+	// Returns:
+	//   - canAccept: true if block assembly can accept the transactions
+	//   - currentCount: current number of unmined transactions
+	//   - maxLimit: maximum limit (0 = unlimited)
+	//   - remainingCapacity: how many more transactions can be accepted
+	//   - error: Any error encountered
+	CanAcceptTransaction(ctx context.Context, count uint32) (canAccept bool, currentCount, maxLimit, remainingCapacity int64, err error)
 }

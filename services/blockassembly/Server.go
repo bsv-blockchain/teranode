@@ -46,6 +46,8 @@ import (
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -959,6 +961,13 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
+		if !ba.blockAssembler.subtreeProcessor.CanAcceptTransactions(1) {
+			return nil, status.Errorf(codes.ResourceExhausted,
+				"capacity limit reached: current=%d, max=%d",
+				ba.blockAssembler.subtreeProcessor.CurrentTransactionCount(),
+				ba.blockAssembler.subtreeProcessor.GetMaxUnminedTransactions())
+		}
+
 		ba.blockAssembler.AddTxBatch(
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
@@ -1077,6 +1086,13 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
+		if !ba.blockAssembler.subtreeProcessor.CanAcceptTransactions(len(nodes)) {
+			return nil, status.Errorf(codes.ResourceExhausted,
+				"capacity limit reached: current=%d, max=%d",
+				ba.blockAssembler.subtreeProcessor.CurrentTransactionCount(),
+				ba.blockAssembler.subtreeProcessor.GetMaxUnminedTransactions())
+		}
+
 		ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
 	}
 
@@ -1255,7 +1271,17 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 
 	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 
-	ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+	// Add entire batch in one call
+	if !ba.settings.BlockAssembly.Disabled {
+		if !ba.blockAssembler.subtreeProcessor.CanAcceptTransactions(len(nodes)) {
+			return nil, status.Errorf(codes.ResourceExhausted,
+				"capacity limit reached: current=%d, max=%d",
+				ba.blockAssembler.subtreeProcessor.CurrentTransactionCount(),
+				ba.blockAssembler.subtreeProcessor.GetMaxUnminedTransactions())
+		}
+
+		ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+	}
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
 }
@@ -2411,4 +2437,34 @@ func (ba *BlockAssembly) SetSkipWaitForPendingBlocks(skip bool) {
 	if ba.blockAssembler != nil {
 		ba.blockAssembler.SetSkipWaitForPendingBlocks(skip)
 	}
+}
+
+// CanAcceptTransaction checks if block assembly can accept more transactions.
+// This method is used by the validator to fail fast before spending UTXOs
+// if the capacity limit has been reached.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - req: Request containing the number of transactions to check
+//
+// Returns:
+//   - Response with capacity information
+//   - error: Any error encountered
+func (ba *BlockAssembly) CanAcceptTransaction(ctx context.Context, req *blockassembly_api.CanAcceptTransactionRequest) (*blockassembly_api.CanAcceptTransactionResponse, error) {
+	count := req.Count
+	if count == 0 {
+		count = 1
+	}
+
+	canAccept := ba.blockAssembler.subtreeProcessor.CanAcceptTransactions(int(count))
+	currentCount := ba.blockAssembler.subtreeProcessor.CurrentTransactionCount()
+	maxLimit := ba.blockAssembler.subtreeProcessor.GetMaxUnminedTransactions()
+	remainingCapacity := ba.blockAssembler.subtreeProcessor.RemainingCapacity()
+
+	return &blockassembly_api.CanAcceptTransactionResponse{
+		CanAccept:         canAccept,
+		CurrentCount:      currentCount,
+		MaxLimit:          maxLimit,
+		RemainingCapacity: remainingCapacity,
+	}, nil
 }

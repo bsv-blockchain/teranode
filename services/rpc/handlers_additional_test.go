@@ -5830,6 +5830,9 @@ func (m *mockBlockAssemblyClient) Store(ctx context.Context, hash *chainhash.Has
 func (m *mockBlockAssemblyClient) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
+func (m *mockBlockAssemblyClient) CanAcceptTransaction(ctx context.Context, count uint32) (canAccept bool, currentCount, maxLimit, remainingCapacity int64, err error) {
+	return true, 0, 0, 1000000, nil
+}
 func (m *mockBlockAssemblyClient) GetMiningCandidate(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error) {
 	if m.getMiningCandidateFunc != nil {
 		return m.getMiningCandidateFunc(ctx, includeSubtreeHashes...)

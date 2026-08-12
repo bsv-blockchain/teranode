@@ -385,6 +385,14 @@ type SubtreeProcessor struct {
 	// clock is the source of wall time for codepaths that need a deterministic
 	// substitute in tests (validFromMillis calculations). Replaced in tests.
 	clock clock
+
+	// maxUnminedTransactions is the configured or calculated limit for unmined transactions
+	// A value of 0 means unlimited (no capacity limit enforced)
+	maxUnminedTransactions atomic.Int64
+
+	// capacityLimitReached tracks if the capacity limit has ever been reached during this session
+	// This is used for metrics and alerting purposes
+	capacityLimitReached atomic.Bool
 }
 
 type State uint32
@@ -1880,6 +1888,77 @@ func (stp *SubtreeProcessor) GetChainedSubtreesTotalSize() uint64 {
 	return stp.chainedSubtreesTotalSize.Load()
 }
 
+// CurrentTransactionCount returns the total number of transactions currently in RAM.
+// This includes transactions in the currentTxMap and the processing queue.
+//
+// Returns:
+//   - int64: Total transaction count in RAM
+func (stp *SubtreeProcessor) CurrentTransactionCount() int64 {
+	return int64(stp.currentTxMap.Length()) + stp.queue.length()
+}
+
+// CanAcceptTransactions checks if the specified number of transactions can be accepted
+// without exceeding the capacity limit.
+//
+// Parameters:
+//   - count: Number of transactions to check
+//
+// Returns:
+//   - bool: true if transactions can be accepted, false if capacity would be exceeded
+func (stp *SubtreeProcessor) CanAcceptTransactions(count int) bool {
+	maxLimit := stp.maxUnminedTransactions.Load()
+	if maxLimit <= 0 {
+		return true
+	}
+
+	current := stp.CurrentTransactionCount()
+
+	return current+int64(count) <= maxLimit
+}
+
+// RemainingCapacity returns how many more transactions can be accepted before
+// reaching the capacity limit.
+//
+// Returns:
+//   - int64: Remaining capacity (0 or negative if at/over limit, MaxInt64 if unlimited)
+func (stp *SubtreeProcessor) RemainingCapacity() int64 {
+	maxLimit := stp.maxUnminedTransactions.Load()
+	if maxLimit <= 0 {
+		return math.MaxInt64
+	}
+
+	current := stp.CurrentTransactionCount()
+
+	return maxLimit - current
+}
+
+// IsCapacityLimitReached returns true if the capacity limit has been reached at any point
+// during this session. This is useful for metrics and alerting.
+//
+// Returns:
+//   - bool: true if capacity limit has been reached
+func (stp *SubtreeProcessor) IsCapacityLimitReached() bool {
+	return stp.capacityLimitReached.Load()
+}
+
+// SetMaxUnminedTransactions sets the maximum unmined transaction limit.
+// A value of 0 means unlimited (no capacity limit enforced).
+//
+// Parameters:
+//   - max: Maximum number of unmined transactions allowed
+func (stp *SubtreeProcessor) SetMaxUnminedTransactions(max int64) {
+	stp.maxUnminedTransactions.Store(max)
+	prometheusMaxUnminedTransactions.Set(float64(max))
+}
+
+// GetMaxUnminedTransactions returns the configured maximum unmined transaction limit.
+//
+// Returns:
+//   - int64: Maximum limit (0 means unlimited)
+func (stp *SubtreeProcessor) GetMaxUnminedTransactions() int64 {
+	return stp.maxUnminedTransactions.Load()
+}
+
 // adjustSubtreeSize calculates and sets a new subtree size based on recent block statistics
 // to maintain approximately one subtree per second. The size will always be a power of 2
 // and not smaller than 1024.
@@ -2445,11 +2524,21 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 }
 
 // AddBatch adds a batch of transaction nodes to the processor queue.
+// If the capacity limit is reached, the batch is rejected and logged.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) {
+	if !stp.CanAcceptTransactions(len(nodes)) {
+		stp.capacityLimitReached.Store(true)
+		prometheusCapacityLimitReached.Set(1)
+		prometheusCapacityLimitRejected.Add(float64(len(nodes)))
+		stp.logger.Warnf("[AddBatch] Capacity limit reached, rejecting %d transactions (current: %d, max: %d)", len(nodes), stp.CurrentTransactionCount(), stp.maxUnminedTransactions.Load())
+
+		return
+	}
+
 	stp.queue.enqueueBatch(nodes, txInpoints)
 }
 
@@ -2477,6 +2566,7 @@ func (stp *SubtreeProcessor) AddDirectly(node *subtreepkg.Node, txInpoints *subt
 // AddNodesDirectly adds a batch of unmined transactions directly to the processor without going through the queue.
 // It performs parallel filtering/insertion into currentTxMap and sequential insertion into subtrees.
 // This bypasses the queue and is useful for bulk loading transactions at startup.
+// If the capacity limit would be exceeded, the transaction list is truncated to fit.
 //
 // Parameters:
 //   - txs: Unmined transactions to add
@@ -2487,6 +2577,27 @@ func (stp *SubtreeProcessor) AddDirectly(node *subtreepkg.Node, txInpoints *subt
 func (stp *SubtreeProcessor) AddNodesDirectly(txs []*utxostore.UnminedTransaction, skipNotification bool) error {
 	if len(txs) == 0 {
 		return nil
+	}
+
+	maxLimit := stp.maxUnminedTransactions.Load()
+	if maxLimit > 0 {
+		remaining := stp.RemainingCapacity()
+		if int64(len(txs)) > remaining {
+			if remaining <= 0 {
+				stp.capacityLimitReached.Store(true)
+				prometheusCapacityLimitReached.Set(1)
+				prometheusCapacityLimitRejected.Add(float64(len(txs)))
+				stp.logger.Warnf("[AddNodesDirectly] Capacity limit reached, cannot load any transactions (current: %d, max: %d)", stp.CurrentTransactionCount(), maxLimit)
+
+				return nil
+			}
+
+			stp.capacityLimitReached.Store(true)
+			prometheusCapacityLimitReached.Set(1)
+			prometheusCapacityLimitRejected.Add(float64(int64(len(txs)) - remaining))
+			stp.logger.Warnf("[AddNodesDirectly] Truncating unmined transactions from %d to %d due to capacity limit (max: %d)", len(txs), remaining, maxLimit)
+			txs = txs[:remaining]
+		}
 	}
 
 	// Phase 1: Parallel insertion into currentTxMap using 1024 batches

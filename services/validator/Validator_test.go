@@ -940,6 +940,14 @@ func (s *MockBlockAssemblyStore) RemoveTx(_ context.Context, hash *chainhash.Has
 	return nil
 }
 
+func (s *MockBlockAssemblyStore) CanAcceptTransaction(_ context.Context, count uint32) (canAccept bool, currentCount, maxLimit, remainingCapacity int64, err error) {
+	if s.returnError != nil {
+		return false, 0, 0, 0, s.returnError
+	}
+
+	return true, int64(len(s.storedTxs)), 0, 1000000, nil
+}
+
 func Benchmark_validateInternal(b *testing.B) {
 	txF65eHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9")
 	require.NoError(b, err)

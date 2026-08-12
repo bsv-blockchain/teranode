@@ -337,6 +337,50 @@ type Interface interface {
 	// Parameters:
 	//   - ctx: Context for the stop operation
 	Stop(ctx context.Context)
+
+	// CurrentTransactionCount returns the total number of transactions currently in RAM.
+	// This includes transactions in the currentTxMap and the processing queue.
+	//
+	// Returns:
+	//   - int64: Total transaction count in RAM
+	CurrentTransactionCount() int64
+
+	// CanAcceptTransactions checks if the specified number of transactions can be accepted
+	// without exceeding the capacity limit.
+	//
+	// Parameters:
+	//   - count: Number of transactions to check
+	//
+	// Returns:
+	//   - bool: true if transactions can be accepted, false if capacity would be exceeded
+	CanAcceptTransactions(count int) bool
+
+	// RemainingCapacity returns how many more transactions can be accepted before
+	// reaching the capacity limit.
+	//
+	// Returns:
+	//   - int64: Remaining capacity (0 or negative if at/over limit, MaxInt64 if unlimited)
+	RemainingCapacity() int64
+
+	// IsCapacityLimitReached returns true if the capacity limit has been reached at any point
+	// during this session.
+	//
+	// Returns:
+	//   - bool: true if capacity limit has been reached
+	IsCapacityLimitReached() bool
+
+	// SetMaxUnminedTransactions sets the maximum unmined transaction limit.
+	// A value of 0 means unlimited.
+	//
+	// Parameters:
+	//   - max: Maximum number of unmined transactions allowed
+	SetMaxUnminedTransactions(max int64)
+
+	// GetMaxUnminedTransactions returns the configured maximum unmined transaction limit.
+	//
+	// Returns:
+	//   - int64: Maximum limit (0 means unlimited)
+	GetMaxUnminedTransactions() int64
 }
 
 // TxInpointsMap defines the interface for transaction inpoints storage with hash keys.
