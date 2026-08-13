@@ -7653,7 +7653,7 @@
 <li>
 <p><strong>Asset HTTP Address Configuration</strong>:</p>
 <ul>
-<li>Retrieves the Asset HTTP Address URL from the configuration using <code>gocore.Config().GetURL("asset_httpAddress")</code>.</li>
+<li>Retrieves the Asset HTTP Address URL from the settings, preferring <code>Asset.HTTPPublicAddress</code> and falling back to <code>Asset.HTTPAddress</code>.</li>
 </ul>
 </li>
 <li>
@@ -7682,13 +7682,14 @@
 <p><strong>HTTP Endpoints</strong>:</p>
 <ul>
 <li>Sets up a health check endpoint (<code>/health</code>) that responds with "OK".</li>
-<li>Adds a WebSocket endpoint (<code>/ws</code>) for real-time communication via <code>s.HandleWebSocket</code>.</li>
+<li>Adds a WebSocket endpoint (<code>/p2p-ws</code>) for real-time communication via <code>s.HandleWebSocket</code>.</li>
+<li>Configures HTTP server timeouts (read header, read, write, idle) so slow or stalled clients cannot hold plain HTTP exchanges (or incomplete WebSocket upgrades) open indefinitely. Established WebSocket connections are exempt: connection deadlines are cleared on upgrade, so post-upgrade liveness is handled by separate WebSocket hardening, not these timeouts.</li>
 </ul>
 </li>
 <li>
 <p><strong>Start HTTP Server</strong>:</p>
 <ul>
-<li>Initiates the HTTP server using a goroutine, which is executed via <code>s.StartHttp</code>.</li>
+<li>Starts the HTTP server via <code>s.StartHTTP</code>, which binds the listener synchronously (so configuration errors fail startup) and then serves in a goroutine.</li>
 </ul>
 </li>
 <li>
