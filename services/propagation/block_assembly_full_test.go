@@ -70,7 +70,7 @@ func TestProcessTransactionRejectedWhenBlockAssemblyFull(t *testing.T) {
 	})
 
 	require.Error(t, err, "propagation must refuse transactions while block assembly is full")
-	require.True(t, isTransientBackpressure(err),
+	require.True(t, ps.isTransientBackpressure(err),
 		"a full block assembly is a transient service condition, not a fault in the transaction: %v", err)
 
 	exists, err := txStore.Exists(ctx, tx.TxIDChainHash()[:], "tx")
@@ -91,54 +91,107 @@ func TestProcessTransactionRejectedWhenBlockAssemblyFull(t *testing.T) {
 }
 
 // TestIsTransientBackpressure checks the classification that keeps a full block assembly out of the
-// error log.
+// error log without also hiding genuine faults.
 //
 // While block assembly is full, every inbound transaction is refused. All three call sites log
 // through logTxProcessingError, so if a refusal were classified as an error the log pipeline would
 // take one line per transaction for as long as the condition lasts — amplifying the exact overload
 // the limit exists to contain and burying real errors.
+//
+// The classification must be narrow. ErrServiceUnavailable is not exclusive to the ingress gate: the
+// file blob store raises it when a read or write permit times out, and the Aerospike UTXO store
+// raises it for an open circuit breaker or a batch timeout. Matching the error class alone would
+// demote a disk stall or a tripped circuit breaker to debug, where the default log level discards
+// it, and neither the rejection counter nor block assembly's transition warning would fire for it.
+// So the refusal is recognised by the class AND the live flag together.
 func TestIsTransientBackpressure(t *testing.T) {
 	fullErr := errors.NewServiceUnavailableError("block assembly is full, not accepting new transactions")
 
+	// What a stalled file blob store looks like by the time it reaches a log site: propagation wraps
+	// the store failure in a StorageError, and errors.Is walks the chain down to the inner code.
+	storeOutage := errors.NewStorageError("[ProcessTransaction] failed to save transaction",
+		errors.NewServiceUnavailableError("[File] write operation timed out waiting for semaphore permit"))
+
 	tests := []struct {
-		name     string
-		err      error
-		expected bool
+		name              string
+		err               error
+		blockAssemblyFull bool
+		expected          bool
 	}{
 		{name: "nil is not backpressure", err: nil, expected: false},
-		{name: "the direct refusal", err: fullErr, expected: true},
+		{name: "nil is not backpressure while full", err: nil, blockAssemblyFull: true, expected: false},
 		{
-			name:     "the refusal after the gRPC handler flattens it",
-			err:      errors.WrapGRPCPublic(fullErr),
-			expected: true,
+			name:              "the direct refusal",
+			err:               fullErr,
+			blockAssemblyFull: true,
+			expected:          true,
 		},
 		{
-			name:     "the batch handler admission control rejection",
+			name:              "the refusal after the gRPC handler flattens it",
+			err:               errors.WrapGRPCPublic(fullErr),
+			blockAssemblyFull: true,
+			expected:          true,
+		},
+		{
+			name:     "the batch handler admission control rejection, whatever block assembly reports",
 			err:      status.Error(codes.Unavailable, "server at capacity"),
 			expected: true,
 		},
 		{
-			name:     "a genuine fault in the transaction still logs as an error",
-			err:      errors.NewTxInvalidError("bad script"),
-			expected: false,
+			name:              "a store outage must keep its error level while block assembly has room",
+			err:               storeOutage,
+			blockAssemblyFull: false,
+			expected:          false,
 		},
 		{
-			name:     "a genuine fault survives the gRPC round trip as an error",
-			err:      errors.WrapGRPCPublic(errors.NewTxInvalidError("bad script")),
-			expected: false,
+			name:              "the refusal error class alone is not enough while block assembly has room",
+			err:               fullErr,
+			blockAssemblyFull: false,
+			expected:          false,
 		},
 		{
-			name:     "a storage failure still logs as an error",
-			err:      errors.NewStorageError("failed to save transaction"),
-			expected: false,
+			name:              "a genuine fault in the transaction still logs as an error",
+			err:               errors.NewTxInvalidError("bad script"),
+			blockAssemblyFull: true,
+			expected:          false,
+		},
+		{
+			name:              "a genuine fault survives the gRPC round trip as an error",
+			err:               errors.WrapGRPCPublic(errors.NewTxInvalidError("bad script")),
+			blockAssemblyFull: true,
+			expected:          false,
+		},
+		{
+			name:              "a storage failure still logs as an error",
+			err:               errors.NewStorageError("failed to save transaction"),
+			blockAssemblyFull: true,
+			expected:          false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.expected, isTransientBackpressure(tt.err))
+			blockchainClient := &blockchain.Mock{}
+			blockchainClient.BlockAssemblyFull.Store(tt.blockAssemblyFull)
+
+			ps := &PropagationServer{blockchainClient: blockchainClient}
+
+			require.Equal(t, tt.expected, ps.isTransientBackpressure(tt.err))
 		})
 	}
+}
+
+// TestIsTransientBackpressureWithoutBlockchainClient checks the nil-client path, which a propagation
+// server configured without a blockchain client takes for every error.
+func TestIsTransientBackpressureWithoutBlockchainClient(t *testing.T) {
+	ps := &PropagationServer{}
+
+	require.False(t, ps.isTransientBackpressure(
+		errors.NewServiceUnavailableError("block assembly is full, not accepting new transactions")),
+		"with no blockchain client there is no full condition to recognise, so the error keeps its level")
+
+	require.True(t, ps.isTransientBackpressure(status.Error(codes.Unavailable, "server at capacity")),
+		"admission control does not depend on block assembly, so it is still backpressure")
 }
 
 // TestProcessTransactionAcceptedWhenBlockAssemblyNotFull checks the default. A node that has heard

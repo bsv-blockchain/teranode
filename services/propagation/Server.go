@@ -560,7 +560,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 							if _, err := ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 								Tx: txb,
 							}); err != nil {
-								logTxProcessingError(ps.logger, err, "error processing transaction: %v", err)
+								ps.logTxProcessingError(ps.logger, err, "error processing transaction: %v", err)
 							}
 						}(txBytes.Bytes())
 					default:
@@ -1105,7 +1105,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	ctxLogger.Debugf("[ProcessTransaction] processing transaction request")
 
 	if err := ps.processTransaction(ctx, req); err != nil {
-		logTxProcessingError(ctxLogger, err, "[ProcessTransaction] failed to process transaction: %v", err)
+		ps.logTxProcessingError(ctxLogger, err, "[ProcessTransaction] failed to process transaction: %v", err)
 
 		return nil, errors.WrapGRPCPublic(err)
 	}
@@ -1196,7 +1196,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 				Tx: tx,
 			}); err != nil {
 				// Use context-aware logger for trace correlation
-				logTxProcessingError(ps.logger.WithTraceContext(txCtx), err,
+				ps.logTxProcessingError(ps.logger.WithTraceContext(txCtx), err,
 					"[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
 
 				response.Errors[idx] = errors.WrapPublic(err)
@@ -1298,46 +1298,6 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 //
 // Returns:
 //   - error: Error if any step in the processing pipeline fails
-// isTransientBackpressure reports whether err is the node refusing work because it is at capacity,
-// rather than a fault in the transaction or in the node.
-//
-// Two forms reach here. On the direct paths the error is still the application error, so errors.Is
-// matches. The UDP worker goes through the gRPC handler, which flattens the error into a status, so
-// the application code has to be reconstructed from the attached detail; a bare Unavailable status
-// (the batch-handler admission control) is treated the same way.
-func isTransientBackpressure(err error) bool {
-	if errors.Is(err, errors.ErrServiceUnavailable) {
-		return true
-	}
-
-	if status.Code(err) == codes.Unavailable {
-		return true
-	}
-
-	if _, ok := status.FromError(err); ok {
-		return errors.Is(errors.UnwrapGRPC(err), errors.ErrServiceUnavailable)
-	}
-
-	return false
-}
-
-// logTxProcessingError logs a transaction processing failure at a level appropriate to the cause.
-//
-// A refusal because block assembly is full is transient backpressure rather than a fault, and while
-// the condition lasts it happens once per inbound transaction. Logging that at error level would
-// amplify the very overload the in-memory limit exists to contain, and would bury real errors in
-// the noise. Those refusals go to debug instead; the rejection counter and block assembly's
-// transition-level warning carry the operator signal.
-func logTxProcessingError(logger ulogger.Logger, err error, format string, args ...interface{}) {
-	if isTransientBackpressure(err) {
-		logger.Debugf(format, args...)
-
-		return
-	}
-
-	logger.Errorf(format, args...)
-}
-
 func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btTx *bt.Tx) (err error) {
 	ctx, _, endSpan := tracing.Tracer("propagation").Start(ctx, "processTransactionInternal",
 		tracing.WithParentStat(ps.stats),
@@ -1394,6 +1354,52 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	}
 
 	return nil
+}
+
+// isTransientBackpressure reports whether err is this node refusing work because it is at capacity,
+// rather than a fault in the transaction, in a store, or in a downstream service.
+//
+// Two conditions qualify. The batch handler's admission control rejects with a bare Unavailable
+// status. The ingress gate above refuses with ErrServiceUnavailable while block assembly holds its
+// configured maximum in memory.
+//
+// The second check reads the live flag rather than matching the error class alone, because
+// ErrServiceUnavailable is not exclusive to the gate: the file blob store raises it when a read or
+// write permit times out, and the Aerospike UTXO store raises it for an open circuit breaker or a
+// batch timeout. Those are genuine faults and must keep their error-level log. Pairing the class
+// with the flag is precise, because the gate returns before storeTransaction, so a store failure
+// cannot be the error here while the flag is set.
+func (ps *PropagationServer) isTransientBackpressure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if status.Code(err) == codes.Unavailable {
+		return true
+	}
+
+	// errors.Is unwraps a gRPC-wrapped error itself, so this matches the refusal both as the direct
+	// application error and as the status the gRPC handler flattens it into for the UDP worker.
+	return ps.blockchainClient != nil &&
+		ps.blockchainClient.IsBlockAssemblyFull() &&
+		errors.Is(err, errors.ErrServiceUnavailable)
+}
+
+// logTxProcessingError logs a transaction processing failure at a level appropriate to the cause.
+//
+// A refusal because block assembly is full is transient backpressure rather than a fault, and while
+// the condition lasts it happens once per inbound transaction. Logging that at error level would
+// amplify the very overload the in-memory limit exists to contain, and would bury real errors in
+// the noise. Those refusals go to debug instead; the rejection counter and block assembly's
+// transition-level warning carry the operator signal.
+func (ps *PropagationServer) logTxProcessingError(logger ulogger.Logger, err error, format string, args ...interface{}) {
+	if ps.isTransientBackpressure(err) {
+		logger.Debugf(format, args...)
+
+		return
+	}
+
+	logger.Errorf(format, args...)
 }
 
 func (ps *PropagationServer) txSanityChecks(btTx *bt.Tx) error {

@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
@@ -65,11 +66,98 @@ func TestClientIsBlockAssemblyFull(t *testing.T) {
 	require.False(t, c.IsBlockAssemblyFull(),
 		"a client must default to accepting transactions before it hears anything")
 
-	c.blockAssemblyFull.Store(blockAssemblyFullFromNotification(NewBlockAssemblyFullNotification(true)))
+	c.blockAssemblyFull.set(blockAssemblyFullFromNotification(NewBlockAssemblyFullNotification(true)), time.Now())
 	require.True(t, c.IsBlockAssemblyFull())
 
-	c.blockAssemblyFull.Store(blockAssemblyFullFromNotification(NewBlockAssemblyFullNotification(false)))
+	c.blockAssemblyFull.set(blockAssemblyFullFromNotification(NewBlockAssemblyFullNotification(false)), time.Now())
 	require.False(t, c.IsBlockAssemblyFull())
+}
+
+// TestBlockAssemblyFullStateExpiry checks that a cached refusal lapses when block assembly stops
+// re-announcing it.
+//
+// This is what stops transaction ingress wedging. Block assembly only publishes while it has a limit
+// configured, so nothing announces the change when an operator sets
+// blockassembly_maxTransactionsInMemory back to 0, or when block assembly stops altogether. Without
+// the expiry every ingress point would keep refusing transactions until it was itself restarted.
+func TestBlockAssemblyFullStateExpiry(t *testing.T) {
+	// A fixed base instant, so the test states the ages it means rather than sleeping.
+	base := time.Unix(1_700_000_000, 0)
+
+	t.Run("a fresh refusal is honoured", func(t *testing.T) {
+		var s blockAssemblyFullState
+
+		s.set(true, base)
+
+		require.True(t, s.isFull(base))
+		require.True(t, s.isFull(base.Add(blockAssemblyFullTTL)),
+			"the refusal must still hold at exactly the TTL")
+	})
+
+	t.Run("a refusal nobody repeats expires", func(t *testing.T) {
+		var s blockAssemblyFullState
+
+		s.set(true, base)
+
+		require.False(t, s.isFull(base.Add(blockAssemblyFullTTL+time.Nanosecond)),
+			"once block assembly stops announcing, ingress must reopen rather than refuse forever")
+		require.False(t, s.isFull(base.Add(time.Hour)))
+	})
+
+	t.Run("the heartbeat keeps a genuine refusal alive", func(t *testing.T) {
+		var s blockAssemblyFullState
+
+		now := base
+		s.set(true, now)
+
+		// Block assembly re-announces well inside the TTL, as its heartbeat does every 10s.
+		for range 100 {
+			now = now.Add(10 * time.Second)
+			s.set(true, now)
+
+			require.True(t, s.isFull(now),
+				"a re-announced refusal must never expire, however long block assembly stays full")
+		}
+	})
+
+	t.Run("not-full needs no freshness", func(t *testing.T) {
+		var s blockAssemblyFullState
+
+		s.set(false, base)
+
+		require.False(t, s.isFull(base.Add(time.Hour)))
+	})
+
+	t.Run("clearing then re-refusing restarts the clock", func(t *testing.T) {
+		var s blockAssemblyFullState
+
+		s.set(true, base)
+		s.set(false, base.Add(time.Second))
+		s.set(true, base.Add(2*time.Second))
+
+		require.True(t, s.isFull(base.Add(2*time.Second+blockAssemblyFullTTL)))
+		require.False(t, s.isFull(base.Add(2*time.Second+blockAssemblyFullTTL+time.Nanosecond)))
+	})
+
+	t.Run("the TTL leaves room for the publisher heartbeat", func(t *testing.T) {
+		// blockassembly.txIngressHeartbeatInterval is 10s. The two live in different packages, so
+		// this pins the relationship the expiry depends on.
+		require.Greater(t, blockAssemblyFullTTL, 10*time.Second,
+			"the TTL must exceed block assembly's re-announce period or a full node would flap")
+	})
+}
+
+// TestBlockAssemblyFullStateReportsTransitions checks the changed result the clients use to decide
+// whether to log, so a repeated heartbeat does not produce a log line every time.
+func TestBlockAssemblyFullStateReportsTransitions(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+
+	var s blockAssemblyFullState
+
+	require.True(t, s.set(true, base), "the first refusal is a transition")
+	require.False(t, s.set(true, base.Add(10*time.Second)), "a repeated heartbeat is not a transition")
+	require.True(t, s.set(false, base.Add(20*time.Second)), "clearing is a transition")
+	require.False(t, s.set(false, base.Add(30*time.Second)), "staying clear is not a transition")
 }
 
 // TestLocalClientIsBlockAssemblyFull checks that the LocalClient picks the flag up from the

@@ -47,7 +47,7 @@ type Client struct {
 	running               *atomic.Bool                       // Flag indicating if client is running
 	conn                  *grpc.ClientConn                   // gRPC connection
 	fmsState              atomic.Pointer[FSMStateType]       // Current FSM state
-	blockAssemblyFull     atomic.Bool                        // Whether block assembly reached its in-memory transaction limit
+	blockAssemblyFull     blockAssemblyFullState             // Whether block assembly reached its in-memory transaction limit, and when it last said so
 	subscribers           []clientSubscriber                 // List of subscribers
 	subscribersMu         sync.Mutex                         // Mutex for subscribers list
 	lastBlockNotification *blockchain_api.Notification       // Last block notification received
@@ -218,7 +218,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 				case model.NotificationType_BlockAssemblyFull:
 					// update the local ingress flag, so callers can read it without an RPC per transaction
 					full := blockAssemblyFullFromNotification(notification)
-					if c.blockAssemblyFull.Swap(full) != full {
+					if c.blockAssemblyFull.set(full, time.Now()) {
 						c.logger.Infof("[Blockchain] Block assembly transaction ingress full=%t for %s", full, source)
 					}
 				default:
@@ -1853,8 +1853,13 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 // which is the safe default: a node accepts transactions rather than refusing them while it does
 // not yet know. Block assembly re-broadcasts the current value periodically, so a client that
 // starts or reconnects after a transition converges instead of holding a stale default.
+//
+// A cached refusal also expires. Block assembly only publishes while it has a limit configured, so
+// nothing would otherwise tell this client that an operator has turned the limit off, or that block
+// assembly has stopped, and ingress would stay refused until this process restarted. Once
+// blockAssemblyFullTTL passes with no announcement, the refusal lapses and this reports false again.
 func (c *Client) IsBlockAssemblyFull() bool {
-	return c.blockAssemblyFull.Load()
+	return c.blockAssemblyFull.isFull(time.Now())
 }
 
 // IsFSMCurrentState checks if the current FSM state matches the provided state.

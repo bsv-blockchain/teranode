@@ -453,6 +453,11 @@ func (b *BlockAssembler) publishTxIngressFull(ctx context.Context, full bool) {
 // It publishes on every transition, and re-publishes the current value on a slower heartbeat so a
 // subscriber that starts or reconnects after a transition converges rather than holding its
 // default. The monitor does nothing when the limit is disabled.
+//
+// The heartbeat is also what keeps a refusal alive: the ingress points expire a cached full=true
+// when the heartbeat stops, so a block assembly that is reconfigured without a limit, or that stops
+// altogether, releases them rather than leaving them refusing forever. See
+// blockAssemblyFullTTL in services/blockchain.
 func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
 	if b.txIngressLimit == 0 {
 		b.logger.Infof("[BlockAssembler] no in-memory transaction limit configured, ingress is never refused")

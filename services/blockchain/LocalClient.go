@@ -5,7 +5,6 @@ import (
 	"context"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -33,8 +32,9 @@ type LocalClient struct {
 	subtreeStore blob.Store         // Subtree store
 	utxoStore    utxo.Store         // UTXO store
 
-	// blockAssemblyFull tracks whether block assembly reached its in-memory transaction limit
-	blockAssemblyFull atomic.Bool
+	// blockAssemblyFull tracks whether block assembly reached its in-memory transaction limit, and
+	// when it last said so
+	blockAssemblyFull blockAssemblyFullState
 
 	// Subscription management
 	subscribersMu sync.RWMutex
@@ -42,9 +42,10 @@ type LocalClient struct {
 }
 
 // IsBlockAssemblyFull reports whether block assembly has reached its in-memory transaction limit.
-// The flag is updated from BlockAssemblyFull notifications passed through SendNotification.
+// The flag is updated from BlockAssemblyFull notifications passed through SendNotification, and a
+// cached refusal expires after blockAssemblyFullTTL, mirroring the gRPC Client.
 func (c *LocalClient) IsBlockAssemblyFull() bool {
-	return c.blockAssemblyFull.Load()
+	return c.blockAssemblyFull.isFull(time.Now())
 }
 
 // NewLocalClient creates a new LocalClient instance with the provided dependencies.
@@ -307,7 +308,7 @@ func (c *LocalClient) SendNotification(ctx context.Context, notification *blockc
 	// track the block assembly ingress flag locally, mirroring what the gRPC Client does when it
 	// receives this notification over its subscription
 	if notification.GetType() == model.NotificationType_BlockAssemblyFull {
-		c.blockAssemblyFull.Store(blockAssemblyFullFromNotification(notification))
+		c.blockAssemblyFull.set(blockAssemblyFullFromNotification(notification), time.Now())
 	}
 
 	// Send notification to all subscribers
