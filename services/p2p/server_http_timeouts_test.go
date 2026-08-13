@@ -23,10 +23,15 @@ func TestSetupHTTPServerTimeouts(t *testing.T) {
 
 	e := s.setupHTTPServer()
 
-	require.NotZero(t, e.Server.ReadHeaderTimeout, "ReadHeaderTimeout must be set to bound the header phase")
-	require.NotZero(t, e.Server.ReadTimeout, "ReadTimeout must be set to bound the request read")
-	require.NotZero(t, e.Server.WriteTimeout, "WriteTimeout must be set to bound the response write")
-	require.NotZero(t, e.Server.IdleTimeout, "IdleTimeout must be set to reap idle keep-alive connections")
+	require.Equal(t, httpReadHeaderTimeout, e.Server.ReadHeaderTimeout, "ReadHeaderTimeout must be set to bound the header phase")
+	require.Equal(t, httpReadTimeout, e.Server.ReadTimeout, "ReadTimeout must be set to bound the request read")
+	require.Equal(t, httpWriteTimeout, e.Server.WriteTimeout, "WriteTimeout must be set to bound the response write")
+	require.Equal(t, httpIdleTimeout, e.Server.IdleTimeout, "IdleTimeout must be set to reap idle keep-alive connections")
+
+	// Sanity relationships: values that individually pass NotZero could still
+	// be nonsensical (e.g. header timeout longer than the whole read budget).
+	require.LessOrEqual(t, e.Server.ReadHeaderTimeout, e.Server.ReadTimeout, "header phase must fit inside the request read budget")
+	require.GreaterOrEqual(t, e.Server.IdleTimeout, e.Server.ReadTimeout, "keep-alive reuse should outlive a single request read")
 }
 
 // TestHTTPServerClosesSlowHeaderClient opens a raw connection, sends a partial
