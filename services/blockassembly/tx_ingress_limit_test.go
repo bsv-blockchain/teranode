@@ -283,6 +283,111 @@ func TestTxIngressLimitMonitorFlipsTheFlag(t *testing.T) {
 	require.True(t, ba.IsTxIngressFull(), "block assembly must agree with what it published")
 }
 
+// TestTxIngressLimitMonitorClearsTheFlag exercises the other direction of the same loop.
+//
+// The requirement has three parts: cap RAM, refuse ingress, and recover. Recovery is the part that
+// matters most in production, because a node that never publishes the clearing transition keeps every
+// ingress point refusing after block assembly has drained. TestTxIngressHysteresis pins the rule on
+// an injected count and TestPublishTxIngressFullReachesBlockchainClient pins the broadcast, but only
+// this drives the monitor's own evaluate tick into publishing full=false from a real measurement.
+//
+// The assembler starts already flagged full, as it would be after filling, while holding nothing.
+// The watermarks are set before the monitor starts, so nothing mutates them underneath it.
+func TestTxIngressLimitMonitorClearsTheFlag(t *testing.T) {
+	initPrometheusMetrics()
+
+	testItems := setupBlockAssemblyTest(t)
+	require.NotNil(t, testItems)
+
+	ba := testItems.blockAssembler
+
+	const limit = 100
+
+	ba.txIngressLimit = limit
+	ba.txIngressResume = 90
+	ba.txIngressEvaluateInterval = 10 * time.Millisecond
+
+	// A heartbeat far longer than the test, so it cannot be what clears the flag. The heartbeat
+	// re-announces whatever the flag currently is, so with a short interval it would reopen ingress
+	// even if the evaluate branch never published the transition, and this test would pass against a
+	// monitor that had lost the ability to announce recovery promptly.
+	ba.txIngressHeartbeatInterval = 10 * time.Minute
+
+	ctx := t.Context()
+
+	// Block assembly filled and told the ingress points to stop.
+	full, changed := ba.applyTxIngressCount(limit)
+	require.True(t, full)
+	require.True(t, changed)
+
+	ba.publishTxIngressFull(ctx, true)
+	require.True(t, testItems.blockchainClient.IsBlockAssemblyFull(),
+		"the ingress points must start this test refusing transactions")
+
+	// It now holds far less than the resume watermark, as it would after a block drained it.
+	require.LessOrEqual(t, ba.TransactionsInMemory(), ba.txIngressResume,
+		"the assembler must be below the resume watermark for the monitor to clear the flag")
+
+	ba.startTxIngressLimitMonitor(ctx)
+
+	require.Eventually(t, func() bool {
+		return !testItems.blockchainClient.IsBlockAssemblyFull()
+	}, 5*time.Second, 10*time.Millisecond,
+		"the monitor must publish the clearing transition, or ingress stays refused after draining")
+
+	require.False(t, ba.IsTxIngressFull(), "block assembly must agree with what it published")
+}
+
+// TestTxIngressLimitMonitorHeartbeatReAnnounces pins the re-announcement the ingress points depend on.
+//
+// The cached flag in each client expires if block assembly stops repeating itself, so the heartbeat is
+// what keeps a genuine refusal in force. Deleting that branch would leave a full node quietly
+// reopening ingress once the cached refusal aged out, with no other test noticing.
+func TestTxIngressLimitMonitorHeartbeatReAnnounces(t *testing.T) {
+	initPrometheusMetrics()
+
+	testItems := setupBlockAssemblyTest(t)
+	require.NotNil(t, testItems)
+
+	ba := testItems.blockAssembler
+
+	// A limit that is already exceeded, so the flag stays full with no count change to drive it.
+	ba.txIngressLimit = 1
+	ba.txIngressResume = 0
+	ba.txIngressEvaluateInterval = 10 * time.Millisecond
+	ba.txIngressHeartbeatInterval = 20 * time.Millisecond
+
+	ctx := t.Context()
+
+	subCh, err := testItems.blockchainClient.Subscribe(ctx, "tx-ingress-heartbeat-test")
+	require.NoError(t, err)
+
+	addTestTxs(ba, 5)
+
+	ba.startTxIngressLimitMonitor(ctx)
+
+	// Count only the repeats: the first announcement is the transition, so a second one can only
+	// have come from the heartbeat.
+	announcements := 0
+	deadline := time.After(5 * time.Second)
+
+	for announcements < 2 {
+		select {
+		case notification := <-subCh:
+			if notification == nil || notification.Type != model.NotificationType_BlockAssemblyFull {
+				continue
+			}
+
+			require.Equal(t, "true", notification.GetMetadata().GetMetadata()["full"],
+				"a block assembly over its limit must keep announcing that it is full")
+
+			announcements++
+		case <-deadline:
+			t.Fatalf("the heartbeat must re-announce the current flag; saw %d announcements", announcements)
+		}
+	}
+}
+
 // TestTxIngressLimitMonitorDoesNothingWhenDisabled checks that the default configuration keeps the
 // previous behaviour: no monitoring, no notifications, ingress always open.
 func TestTxIngressLimitMonitorDoesNothingWhenDisabled(t *testing.T) {

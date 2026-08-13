@@ -2,6 +2,7 @@ package propagation
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -177,6 +178,47 @@ func TestIsTransientBackpressure(t *testing.T) {
 			ps := &PropagationServer{blockchainClient: blockchainClient}
 
 			require.Equal(t, tt.expected, ps.isTransientBackpressure(tt.err))
+		})
+	}
+}
+
+// TestHTTPStatusForBlockAssemblyFull checks what an HTTP submitter is told when the node refuses.
+//
+// A refusal is temporary and the client fixes it by resubmitting later, so it has to arrive as 503.
+// 500 says the node is broken, which stops a load balancer or a client library from backing off and
+// retrying, and makes every refusal look like a fault to whatever watches 5xx rates.
+func TestHTTPStatusForBlockAssemblyFull(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{
+			name:       "the block assembly refusal is retryable",
+			err:        errors.NewServiceUnavailableError("block assembly is full, not accepting new transactions"),
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name: "a store shedding load is also retryable",
+			err: errors.NewStorageError("failed to save transaction",
+				errors.NewServiceUnavailableError("[File] write operation timed out waiting for semaphore permit")),
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name:       "a genuine storage fault is still a server error",
+			err:        errors.NewStorageError("failed to save transaction"),
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "a fault in the transaction is still a client error",
+			err:        errors.NewTxInvalidError("bad script"),
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.wantStatus, httpStatusForTxError(tt.err))
 		})
 	}
 }

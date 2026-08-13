@@ -728,6 +728,12 @@ func httpStatusForTxError(err error) int {
 		errors.Is(err, errors.ErrTxCoinbaseImmature),
 		errors.Is(err, errors.ErrUtxoInvalidSize):
 		return http.StatusBadRequest
+	case errors.Is(err, errors.ErrServiceUnavailable):
+		// The node is temporarily unable to take the transaction: block assembly holds its
+		// configured maximum in memory, or a store is shedding load. Nothing is wrong with the
+		// transaction and nothing is broken, so the client should back off and resubmit rather
+		// than treat it as a fault. 500 would say the opposite.
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}
@@ -908,11 +914,13 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// outcome that classifies as success (e.g. a duplicate submission ->
 		// StatusOK) is not a failure: skip it from both the body and the status,
 		// mirroring handleSingleTx which returns OK for those. Among the genuine
-		// failures the precedence is: a server fault (5xx, e.g. a storage error)
-		// dominates and forces 500 — the client cannot fix it by resubmitting;
-		// otherwise the first client-error (4xx) status in submission order wins,
-		// so a batch of pure tx rejections is a client error (e.g. 400) rather
-		// than a misleading 500.
+		// failures the precedence is: a hard server fault (5xx other than 503,
+		// e.g. a storage error) dominates and forces 500 — the client cannot fix
+		// it by resubmitting; then 503, which says the node is temporarily at
+		// capacity and the client should back off and retry, so it outranks a
+		// client error; otherwise the first client-error (4xx) status in
+		// submission order wins, so a batch of pure tx rejections is a client
+		// error (e.g. 400) rather than a misleading 500.
 		aggStatus := http.StatusOK
 
 		for _, err := range errSlots[:nextSlot] {
@@ -930,6 +938,12 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			errMsgs = append(errMsgs, errors.UserMessage(err))
 
 			switch {
+			case txStatus == http.StatusServiceUnavailable:
+				// Retryable backpressure. Do not let it mask a hard fault that
+				// resubmitting cannot fix.
+				if aggStatus != http.StatusInternalServerError {
+					aggStatus = http.StatusServiceUnavailable
+				}
 			case txStatus >= http.StatusInternalServerError:
 				aggStatus = http.StatusInternalServerError
 			case aggStatus < http.StatusBadRequest:

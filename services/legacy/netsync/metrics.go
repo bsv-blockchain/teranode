@@ -27,6 +27,7 @@ var (
 	prometheusLegacyNetsyncOrphans                        prometheus.Gauge
 	prometheusLegacyNetsyncOrphanTime                     prometheus.Histogram
 	prometheusLegacyNetsyncTxDroppedBlockAssemblyFull     prometheus.Counter
+	prometheusLegacyNetsyncTxInvsSkippedBlockAssemblyFull prometheus.Counter
 
 	// prometheusLegacyNetsyncPrewarmErrors counts validator errors observed during the
 	// pre-warm path in validateTransactions, labelled by error class. The pre-warm runs
@@ -211,6 +212,14 @@ func _initPrometheusMetrics() {
 		Help:      "The number of transactions dropped because block assembly reached its in-memory transaction limit",
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncTxDroppedBlockAssemblyFull)
+
+	prometheusLegacyNetsyncTxInvsSkippedBlockAssemblyFull = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "tx_invs_skipped_block_assembly_full",
+		Help:      "The number of announced transactions not requested because block assembly reached its in-memory transaction limit",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncTxInvsSkippedBlockAssemblyFull)
 
 	prometheusLegacyNetsyncPrewarmErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "teranode",

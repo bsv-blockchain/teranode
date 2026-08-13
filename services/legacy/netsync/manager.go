@@ -2418,6 +2418,20 @@ func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, 
 			if _, exists = sm.rejectedTxns.Get(iv.Hash); exists {
 				return
 			}
+
+			// Do not ask for a transaction we would only discard on arrival. handleTxMsg drops
+			// transactions while block assembly holds its configured maximum in memory, and a
+			// dropped transaction never reaches the UTXO store, so haveInventory keeps reporting
+			// not-have and it is not recorded in rejectedTxns either. Without this check every
+			// later inv, from this peer and from every other peer announcing the same
+			// transaction, would re-issue getdata and re-download it in full, for as long as
+			// block assembly stays full — paying inbound bandwidth and deserialization for
+			// traffic we throw away, exactly while the node is short of memory.
+			if sm.blockchainClient != nil && sm.blockchainClient.IsBlockAssemblyFull() {
+				prometheusLegacyNetsyncTxInvsSkippedBlockAssemblyFull.Inc()
+
+				return
+			}
 		}
 
 		// Add it to the request queue.
