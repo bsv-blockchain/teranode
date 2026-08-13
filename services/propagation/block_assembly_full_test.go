@@ -5,9 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/propagation/propagation_api"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -16,8 +14,9 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // setBlockAssemblyFull drives the real notification that block assembly publishes, so the test
@@ -25,17 +24,7 @@ import (
 func setBlockAssemblyFull(t *testing.T, ctx context.Context, client blockchain.ClientI, full bool) {
 	t.Helper()
 
-	value := "false"
-	if full {
-		value = "true"
-	}
-
-	require.NoError(t, client.SendNotification(ctx, &blockchain_api.Notification{
-		Type: model.NotificationType_BlockAssemblyFull,
-		Metadata: &blockchain_api.NotificationMetadata{
-			Metadata: map[string]string{"full": value},
-		},
-	}))
+	require.NoError(t, client.SendNotification(ctx, blockchain.NewBlockAssemblyFullNotification(full)))
 
 	require.Equal(t, full, client.IsBlockAssemblyFull())
 }
@@ -81,12 +70,12 @@ func TestProcessTransactionRejectedWhenBlockAssemblyFull(t *testing.T) {
 	})
 
 	require.Error(t, err, "propagation must refuse transactions while block assembly is full")
-	assert.True(t, errors.Is(err, errors.ErrServiceUnavailable),
+	require.True(t, isTransientBackpressure(err),
 		"a full block assembly is a transient service condition, not a fault in the transaction: %v", err)
 
 	exists, err := txStore.Exists(ctx, tx.TxIDChainHash()[:], "tx")
 	require.NoError(t, err)
-	assert.False(t, exists, "a refused transaction must not be written to the transaction store")
+	require.False(t, exists, "a refused transaction must not be written to the transaction store")
 
 	// Block assembly reports it has room again, and the same transaction is now accepted.
 	setBlockAssemblyFull(t, ctx, blockchainClient, false)
@@ -98,7 +87,58 @@ func TestProcessTransactionRejectedWhenBlockAssemblyFull(t *testing.T) {
 
 	exists, err = txStore.Exists(ctx, tx.TxIDChainHash()[:], "tx")
 	require.NoError(t, err)
-	assert.True(t, exists, "an accepted transaction must be written to the transaction store")
+	require.True(t, exists, "an accepted transaction must be written to the transaction store")
+}
+
+// TestIsTransientBackpressure checks the classification that keeps a full block assembly out of the
+// error log.
+//
+// While block assembly is full, every inbound transaction is refused. All three call sites log
+// through logTxProcessingError, so if a refusal were classified as an error the log pipeline would
+// take one line per transaction for as long as the condition lasts — amplifying the exact overload
+// the limit exists to contain and burying real errors.
+func TestIsTransientBackpressure(t *testing.T) {
+	fullErr := errors.NewServiceUnavailableError("block assembly is full, not accepting new transactions")
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{name: "nil is not backpressure", err: nil, expected: false},
+		{name: "the direct refusal", err: fullErr, expected: true},
+		{
+			name:     "the refusal after the gRPC handler flattens it",
+			err:      errors.WrapGRPCPublic(fullErr),
+			expected: true,
+		},
+		{
+			name:     "the batch handler admission control rejection",
+			err:      status.Error(codes.Unavailable, "server at capacity"),
+			expected: true,
+		},
+		{
+			name:     "a genuine fault in the transaction still logs as an error",
+			err:      errors.NewTxInvalidError("bad script"),
+			expected: false,
+		},
+		{
+			name:     "a genuine fault survives the gRPC round trip as an error",
+			err:      errors.WrapGRPCPublic(errors.NewTxInvalidError("bad script")),
+			expected: false,
+		},
+		{
+			name:     "a storage failure still logs as an error",
+			err:      errors.NewStorageError("failed to save transaction"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, isTransientBackpressure(tt.err))
+		})
+	}
 }
 
 // TestProcessTransactionAcceptedWhenBlockAssemblyNotFull checks the default. A node that has heard

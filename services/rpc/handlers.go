@@ -857,6 +857,27 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
+	// Refuse new transactions while block assembly holds its configured maximum in memory.
+	//
+	// This handler stores the transaction and calls the validator directly, so it is a third
+	// transaction ingress point alongside propagation and legacy netsync and needs the same gate.
+	// Without it a full node keeps growing past the configured limit through the RPC surface, and
+	// pays the storage cost the propagation gate exists to avoid.
+	//
+	// The check sits before the txStore write for the same reason it does in propagation: a refused
+	// transaction should cost no storage. It is logged at debug rather than error, because while the
+	// condition lasts it fires once per submission and is transient backpressure, not a fault.
+	if s.blockchainClient != nil && s.blockchainClient.IsBlockAssemblyFull() {
+		prometheusTransactionsRejectedBlockAssemblyFull.Inc()
+
+		s.logger.Debugf("[handleSendRawTransaction] refusing %s, block assembly is full", tx.TxID())
+
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: txRejectedPrefix + "block assembly is full, not accepting new transactions",
+		}
+	}
+
 	// Store the transaction in blob store first (following the pattern from propagation service)
 	if s.txStore != nil {
 		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())

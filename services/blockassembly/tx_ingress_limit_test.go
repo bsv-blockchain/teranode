@@ -8,7 +8,6 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -131,9 +130,9 @@ func TestTxIngressHysteresis(t *testing.T) {
 		t.Run(step.name, func(t *testing.T) {
 			full, changed := ba.applyTxIngressCount(step.count)
 
-			assert.Equal(t, step.expectedFull, full, "full")
-			assert.Equal(t, step.expectedChanged, changed, "changed")
-			assert.Equal(t, step.expectedFull, ba.IsTxIngressFull(), "IsTxIngressFull")
+			require.Equal(t, step.expectedFull, full, "full")
+			require.Equal(t, step.expectedChanged, changed, "changed")
+			require.Equal(t, step.expectedFull, ba.IsTxIngressFull(), "IsTxIngressFull")
 		})
 	}
 }
@@ -152,9 +151,9 @@ func TestTxIngressLimitDisabled(t *testing.T) {
 	for _, count := range []uint64{0, 1, 1_000, 1_000_000_000_000} {
 		full, changed := ba.applyTxIngressCount(count)
 
-		assert.False(t, full, "a disabled limit must never report full, count %d", count)
-		assert.False(t, changed, "a disabled limit must never report a change, count %d", count)
-		assert.False(t, ba.IsTxIngressFull())
+		require.False(t, full, "a disabled limit must never report full, count %d", count)
+		require.False(t, changed, "a disabled limit must never report a change, count %d", count)
+		require.False(t, ba.IsTxIngressFull())
 	}
 }
 
@@ -263,6 +262,8 @@ func TestTxIngressLimitMonitorFlipsTheFlag(t *testing.T) {
 
 	ba.txIngressLimit = limit
 	ba.txIngressResume = resumeWatermark(limit, 0)
+	ba.txIngressEvaluateInterval = 10 * time.Millisecond
+	ba.txIngressHeartbeatInterval = 100 * time.Millisecond
 
 	ctx := t.Context()
 
@@ -275,7 +276,7 @@ func TestTxIngressLimitMonitorFlipsTheFlag(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return testItems.blockchainClient.IsBlockAssemblyFull()
-	}, 15*time.Second, 50*time.Millisecond,
+	}, 5*time.Second, 10*time.Millisecond,
 		"the ingress points should have been told block assembly is full (in memory %d, limit %d)",
 		ba.TransactionsInMemory(), limit)
 
@@ -293,6 +294,11 @@ func TestTxIngressLimitMonitorDoesNothingWhenDisabled(t *testing.T) {
 	ba := testItems.blockAssembler
 	require.Zero(t, ba.txIngressLimit)
 
+	// Short intervals so "long enough for a running monitor to have spoken" is milliseconds of wall
+	// clock rather than the production heartbeat.
+	ba.txIngressEvaluateInterval = 10 * time.Millisecond
+	ba.txIngressHeartbeatInterval = 20 * time.Millisecond
+
 	ctx := t.Context()
 
 	subCh, err := testItems.blockchainClient.Subscribe(ctx, "tx-ingress-disabled-test")
@@ -303,7 +309,7 @@ func TestTxIngressLimitMonitorDoesNothingWhenDisabled(t *testing.T) {
 	addTestTxs(ba, 20)
 
 	// Wait past both the evaluate and heartbeat intervals, so a running monitor would have spoken.
-	deadline := time.After(txIngressHeartbeatInterval + 2*time.Second)
+	deadline := time.After(ba.txIngressHeartbeatInterval*10 + 200*time.Millisecond)
 
 	for {
 		select {

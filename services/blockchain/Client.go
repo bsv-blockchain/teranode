@@ -217,7 +217,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 					c.logger.Debugf("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
 				case model.NotificationType_BlockAssemblyFull:
 					// update the local ingress flag, so callers can read it without an RPC per transaction
-					full := notification.GetMetadata().GetMetadata()["full"] == "true"
+					full := blockAssemblyFullFromNotification(notification)
 					if c.blockAssemblyFull.Swap(full) != full {
 						c.logger.Infof("[Blockchain] Block assembly transaction ingress full=%t for %s", full, source)
 					}
@@ -1843,7 +1843,6 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 	return &state.State, nil
 }
 
-// IsFSMCurrentState checks if the current FSM state matches the provided state.
 // IsBlockAssemblyFull reports whether block assembly has reached its in-memory transaction limit.
 //
 // The value comes from a locally cached flag that the client updates from BlockAssemblyFull
@@ -1858,6 +1857,7 @@ func (c *Client) IsBlockAssemblyFull() bool {
 	return c.blockAssemblyFull.Load()
 }
 
+// IsFSMCurrentState checks if the current FSM state matches the provided state.
 func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error) {
 	currentState, err := c.GetFSMCurrentState(ctx)
 	if err != nil {

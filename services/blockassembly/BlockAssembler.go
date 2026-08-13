@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,12 +42,12 @@ const (
 	// polls for pending blocks during startup
 	pendingBlocksPollInterval = 1 * time.Second
 
-	// txIngressEvaluateInterval is the interval at which the block assembler compares the
+	// txIngressEvaluateInterval is the default interval at which the block assembler compares the
 	// transactions it holds in memory against the configured limit
 	txIngressEvaluateInterval = 1 * time.Second
 
-	// txIngressHeartbeatInterval is the interval at which the block assembler re-announces the
-	// current ingress flag, so subscribers that missed a transition still converge
+	// txIngressHeartbeatInterval is the default interval at which the block assembler re-announces
+	// the current ingress flag, so subscribers that missed a transition still converge
 	txIngressHeartbeatInterval = 10 * time.Second
 
 	// miningCandidateVersion is the block version advertised in mining candidates: 0x20000000 is
@@ -211,6 +210,12 @@ type BlockAssembler struct {
 	// txIngressResume is the low watermark at which txIngressFull is cleared
 	txIngressResume uint64
 
+	// txIngressEvaluateInterval is how often the monitor compares what it holds against the limit,
+	// and txIngressHeartbeatInterval how often it re-announces the current flag. They are fields
+	// rather than constants so tests can drive the monitor without waiting on wall clock.
+	txIngressEvaluateInterval  time.Duration
+	txIngressHeartbeatInterval time.Duration
+
 	// wg tracks background goroutines for clean shutdown
 	wg sync.WaitGroup
 }
@@ -291,6 +296,8 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	b.txIngressLimit = tSettings.BlockAssembly.MaxTransactionsInMemory
 	b.txIngressResume = resumeWatermark(b.txIngressLimit, tSettings.BlockAssembly.MaxTransactionsInMemoryResume)
+	b.txIngressEvaluateInterval = txIngressEvaluateInterval
+	b.txIngressHeartbeatInterval = txIngressHeartbeatInterval
 
 	if b.txIngressLimit > 0 {
 		logger.Infof("[BlockAssembler] limiting transactions held in memory to %d, resuming ingress at %d",
@@ -435,16 +442,7 @@ func (b *BlockAssembler) publishTxIngressFull(ctx context.Context, full bool) {
 		return
 	}
 
-	if err := b.blockchainClient.SendNotification(ctx, &blockchain.Notification{
-		Type:     model.NotificationType_BlockAssemblyFull,
-		Hash:     (&chainhash.Hash{})[:], // not relevant for this notification
-		Base_URL: "",                     // not relevant for this notification
-		Metadata: &blockchain.NotificationMetadata{
-			Metadata: map[string]string{
-				"full": strconv.FormatBool(full),
-			},
-		},
-	}); err != nil {
+	if err := b.blockchainClient.SendNotification(ctx, blockchain.NewBlockAssemblyFullNotification(full)); err != nil {
 		b.logger.Errorf("[BlockAssembler] error publishing transaction ingress full=%t: %v", full, err)
 	}
 }
@@ -461,15 +459,25 @@ func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
 		return
 	}
 
+	// fall back to the defaults for an assembler that was not built through NewBlockAssembler,
+	// so a zero interval can never reach time.NewTicker
+	if b.txIngressEvaluateInterval <= 0 {
+		b.txIngressEvaluateInterval = txIngressEvaluateInterval
+	}
+
+	if b.txIngressHeartbeatInterval <= 0 {
+		b.txIngressHeartbeatInterval = txIngressHeartbeatInterval
+	}
+
 	b.wg.Add(1)
 
 	go func() {
 		defer b.wg.Done()
 
-		evaluateTicker := time.NewTicker(txIngressEvaluateInterval)
+		evaluateTicker := time.NewTicker(b.txIngressEvaluateInterval)
 		defer evaluateTicker.Stop()
 
-		heartbeatTicker := time.NewTicker(txIngressHeartbeatInterval)
+		heartbeatTicker := time.NewTicker(b.txIngressHeartbeatInterval)
 		defer heartbeatTicker.Stop()
 
 		for {

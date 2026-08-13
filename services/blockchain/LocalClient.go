@@ -307,7 +307,7 @@ func (c *LocalClient) SendNotification(ctx context.Context, notification *blockc
 	// track the block assembly ingress flag locally, mirroring what the gRPC Client does when it
 	// receives this notification over its subscription
 	if notification.GetType() == model.NotificationType_BlockAssemblyFull {
-		c.blockAssemblyFull.Store(notification.GetMetadata().GetMetadata()["full"] == "true")
+		c.blockAssemblyFull.Store(blockAssemblyFullFromNotification(notification))
 	}
 
 	// Send notification to all subscribers

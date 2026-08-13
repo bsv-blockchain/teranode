@@ -825,13 +825,16 @@ type ClientI interface {
 	// back to the resume watermark. Implementations cache that value locally, so this call is an
 	// atomic read with no RPC and is safe on the per-transaction ingress path.
 	//
-	// Transaction ingress points (propagation, legacy netsync) call this to stop accepting new
-	// transactions while block assembly is full. It is deliberately not part of the FSM, because
-	// fullness is orthogonal to the node lifecycle: a full node stays RUNNING and keeps syncing.
+	// Transaction ingress points call this to stop accepting new transactions while block assembly
+	// is full: propagation, legacy netsync, and the sendrawtransaction RPC. Transactions arriving
+	// inside a block are deliberately not gated, because blocks must validate regardless of block
+	// assembly pressure. It is deliberately not part of the FSM, because fullness is orthogonal to
+	// the node lifecycle: a full node stays RUNNING and keeps syncing.
 	//
-	// The flag is eventually consistent and defaults to false, so a small number of transactions
-	// can still arrive after block assembly reports full. That is expected. Transactions already
-	// in flight are always accepted, and the limit may be briefly exceeded.
+	// The flag is eventually consistent and defaults to false, so transactions can still arrive
+	// after block assembly reports full. That is expected. Transactions already in flight are always
+	// accepted, and the overshoot is bounded by validator Kafka consumer lag rather than by the
+	// limit, because the validator keeps draining its topic into block assembly after ingress stops.
 	//
 	// Returns:
 	// - Boolean indicating whether block assembly is currently refusing new transactions
