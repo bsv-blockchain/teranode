@@ -47,6 +47,7 @@ type Client struct {
 	running               *atomic.Bool                       // Flag indicating if client is running
 	conn                  *grpc.ClientConn                   // gRPC connection
 	fmsState              atomic.Pointer[FSMStateType]       // Current FSM state
+	blockAssemblyFull     atomic.Bool                        // Whether block assembly reached its in-memory transaction limit
 	subscribers           []clientSubscriber                 // List of subscribers
 	subscribersMu         sync.Mutex                         // Mutex for subscribers list
 	lastBlockNotification *blockchain_api.Notification       // Last block notification received
@@ -214,6 +215,12 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 					newState := FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
 					c.fmsState.Store(&newState)
 					c.logger.Debugf("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
+				case model.NotificationType_BlockAssemblyFull:
+					// update the local ingress flag, so callers can read it without an RPC per transaction
+					full := notification.GetMetadata().GetMetadata()["full"] == "true"
+					if c.blockAssemblyFull.Swap(full) != full {
+						c.logger.Infof("[Blockchain] Block assembly transaction ingress full=%t for %s", full, source)
+					}
 				default:
 					// send the notification to all subscribers
 					c.subscribersMu.Lock()
@@ -1837,6 +1844,20 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 }
 
 // IsFSMCurrentState checks if the current FSM state matches the provided state.
+// IsBlockAssemblyFull reports whether block assembly has reached its in-memory transaction limit.
+//
+// The value comes from a locally cached flag that the client updates from BlockAssemblyFull
+// notifications, so this is an atomic load and costs no RPC. Transaction ingress points call it
+// per transaction to decide whether to accept new work.
+//
+// The flag is eventually consistent. It defaults to false until the first notification arrives,
+// which is the safe default: a node accepts transactions rather than refusing them while it does
+// not yet know. Block assembly re-broadcasts the current value periodically, so a client that
+// starts or reconnects after a transition converges instead of holding a stale default.
+func (c *Client) IsBlockAssemblyFull() bool {
+	return c.blockAssemblyFull.Load()
+}
+
 func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error) {
 	currentState, err := c.GetFSMCurrentState(ctx)
 	if err != nil {

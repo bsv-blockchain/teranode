@@ -41,6 +41,7 @@ var (
 	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
 	prometheusBlockAssemblerTransactions                prometheus.Gauge
 	prometheusBlockAssemblerQueuedTransactions          prometheus.Gauge
+	prometheusBlockAssemblerTxIngressFull               prometheus.Gauge
 	prometheusBlockAssemblerSubtrees                    prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration           prometheus.Histogram
 	prometheusBlockAssemblerReorg                       prometheus.Counter
@@ -219,6 +220,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "queued_transactions",
 			Help:      "Number of transactions currently queued in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerTxIngressFull = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "tx_ingress_full",
+			Help:      "1 while block assembly holds its configured maximum of transactions in memory and the ingress points refuse new transactions, 0 otherwise",
 		},
 	)
 

@@ -1314,6 +1314,16 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return err
 	}
 
+	// Refuse new transactions while block assembly holds its configured maximum in memory.
+	// This is checked before we store the transaction, so a refused transaction costs no storage.
+	// The flag is eventually consistent, so a few transactions can still get through; block
+	// assembly accepts those rather than losing them, and the count may briefly exceed the limit.
+	if ps.blockchainClient != nil && ps.blockchainClient.IsBlockAssemblyFull() {
+		prometheusTransactionsRejectedBlockAssemblyFull.Inc()
+
+		return errors.NewServiceUnavailableError("[ProcessTransaction][%s] block assembly is full, not accepting new transactions", btTx.TxIDChainHash())
+	}
+
 	// Serialize once and reuse everywhere downstream to avoid redundant allocations
 	txBytes := btTx.SerializeBytes()
 

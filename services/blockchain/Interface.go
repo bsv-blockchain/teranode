@@ -818,6 +818,25 @@ type ClientI interface {
 	// - Error if the state check fails
 	IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error)
 
+	// IsBlockAssemblyFull reports whether block assembly has reached its in-memory transaction limit.
+	//
+	// Block assembly measures how many transactions it holds in RAM and broadcasts a
+	// BlockAssemblyFull notification when it crosses the configured limit, and again when it drops
+	// back to the resume watermark. Implementations cache that value locally, so this call is an
+	// atomic read with no RPC and is safe on the per-transaction ingress path.
+	//
+	// Transaction ingress points (propagation, legacy netsync) call this to stop accepting new
+	// transactions while block assembly is full. It is deliberately not part of the FSM, because
+	// fullness is orthogonal to the node lifecycle: a full node stays RUNNING and keeps syncing.
+	//
+	// The flag is eventually consistent and defaults to false, so a small number of transactions
+	// can still arrive after block assembly reports full. That is expected. Transactions already
+	// in flight are always accepted, and the limit may be briefly exceeded.
+	//
+	// Returns:
+	// - Boolean indicating whether block assembly is currently refusing new transactions
+	IsBlockAssemblyFull() bool
+
 	// WaitForFSMtoTransitionToGivenState blocks until the FSM transitions to the specified state.
 	//
 	// This method waits synchronously until the blockchain FSM reaches the specified state.

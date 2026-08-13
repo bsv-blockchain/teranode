@@ -1223,6 +1223,24 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 		return
 	}
 
+	// Drop new transactions while block assembly holds its configured maximum in memory. Legacy
+	// peers reach the validator directly rather than through propagation, so this is a separate
+	// ingress point that needs the same gate.
+	//
+	// The transaction is NOT added to rejectedTxns, because this is a transient condition rather
+	// than a fault in the transaction. Clearing the requested-transaction bookkeeping lets us fetch
+	// it again from a later inv message, once block assembly has room.
+	if sm.blockchainClient != nil && sm.blockchainClient.IsBlockAssemblyFull() {
+		sm.logger.Debugf("Dropping transaction %v from %s, block assembly is full", txHash, peer)
+
+		state.requestedTxns.Delete(*txHash)
+		sm.requestedTxns.Delete(*txHash)
+
+		prometheusLegacyNetsyncTxDroppedBlockAssemblyFull.Inc()
+
+		return
+	}
+
 	// Validate the transaction using the validation service
 	buf := bytes.NewBuffer(make([]byte, 0, tmsg.tx.MsgTx().SerializeSize()))
 	_ = tmsg.tx.MsgTx().Serialize(buf)
