@@ -35,9 +35,9 @@
 | AllowPrivateIPs | bool | false | p2p_allow_private_ips | **CRITICAL** - Allow RFC1918 private IP connections |
 | SyncCoordinatorPeriodicEvaluationInterval | time.Duration | 30s | p2p_sync_coordinator_periodic_evaluation_interval | Sync coordinator evaluation interval |
 | HealthCheckEnabled | bool | true | p2p_health_check_enabled | Enable HTTP availability checking during peer selection |
-| PeerMapMaxSize | int | 100000 | p2p_peer_map_max_size | Maximum entries in peer maps |
-| PeerMapTTL | time.Duration | 30m | p2p_peer_map_ttl | Peer map entry time-to-live |
-| PeerMapCleanupInterval | time.Duration | 5m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
+| PeerMapMaxSize | int | 10000 | p2p_peer_map_max_size | Maximum entries in peer maps |
+| PeerMapTTL | time.Duration | 10m | p2p_peer_map_ttl | Peer map entry time-to-live |
+| PeerMapCleanupInterval | time.Duration | 1m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
 | PeerRegistryBatchInterval | time.Duration | 1s | p2p_peer_registry_batch_interval | Flush interval for batched peer-registry updates from gossip handlers |
 | GossipHandlerConcurrency | int | 4 | p2p_gossip_handler_concurrency | Concurrent gossip handler workers per pubsub topic |
 
@@ -61,9 +61,9 @@
 
 ### Peer Map Management
 
-- `PeerMapMaxSize` limits memory usage for block/subtree peer tracking
-- `PeerMapTTL` controls peer map entry expiration (30 minutes)
-- `PeerMapCleanupInterval` sets cleanup frequency (5 minutes)
+- `PeerMapMaxSize` limits memory usage for block/subtree peer tracking (10000 entries, enforced at insert)
+- `PeerMapTTL` controls peer map entry expiration (10 minutes)
+- `PeerMapCleanupInterval` sets cleanup frequency (1 minute)
 - These settings have sensible defaults but can be overridden via environment variables
 
 ### Network Scanning Prevention

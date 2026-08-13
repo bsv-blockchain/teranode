@@ -11,12 +11,14 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	utxostoresql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +28,12 @@ import (
 // processCoinbaseUtxos() which needs a non-nil utxoStore.
 // NewBlockAssembler passes the utxoStore through to its internal SubtreeProcessor,
 // so no separate SubtreeProcessor construction is needed.
-func setupBlockAssemblyTestWithUtxoStore(t *testing.T) *baTestItems {
+// withSettings, if supplied, is applied to the test settings before any store
+// or client is constructed. Mutating settings after this helper returns is not
+// safe: the blockchain SQL store starts a background goroutine at construction
+// that reads ChainCfgParams, so a later write races it. Anything a test needs
+// to change about settings must therefore be changed here, up front.
+func setupBlockAssemblyTestWithUtxoStore(t *testing.T, withSettings ...func(*settings.Settings)) *baTestItems {
 	t.Helper()
 
 	items := baTestItems{}
@@ -41,6 +48,10 @@ func setupBlockAssemblyTestWithUtxoStore(t *testing.T) *baTestItems {
 	require.NoError(t, err)
 
 	tSettings := createTestSettings(t)
+
+	for _, apply := range withSettings {
+		apply(tSettings)
+	}
 
 	utxo, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
@@ -213,4 +224,177 @@ func TestHandleReorg_FallbackReset_ReturnsNilInsteadOfResetError(t *testing.T) {
 	require.Error(t, err, "BUG: handleReorg should return an error after fallback reset to prevent caller from overwriting best block")
 	require.True(t, errors.Is(err, errors.ErrBlockAssemblyReset),
 		"handleReorg should return ErrBlockAssemblyReset after fallback reset, got: %v", err)
+}
+
+// TestReset_FallbackHeaderFailure_RestoresPreResetTip covers a bug where reset()
+// optimistically writes the chain pointer (b.bestBlock) to the new tip before
+// running subtreeProcessor.Reset. Normally the realign after Reset corrects this,
+// but when Reset fails AND the fallback GetBlockHeader (looking up the subtree
+// processor's own current header) also fails, reset() used to return immediately,
+// leaving the chain pointer parked on the optimistic new tip while the coinbase
+// state (tracked by the subtree processor) never moved. That divergence between
+// the chain pointer and the coinbase state is exactly what this feature's recovery
+// logic exists to fix — so reset() must not itself introduce it.
+//
+// This test would have failed before the fix: CurrentBlock() would have returned
+// the optimistic new tip instead of the pre-reset tip.
+func TestReset_FallbackHeaderFailure_RestoresPreResetTip(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := t.Context()
+	items := setupBlockAssemblyTestWithUtxoStore(t)
+	require.NotNil(t, items)
+
+	// Blockchain has block1 -> block2. BA is parked behind, at block1 (height 1),
+	// so reset() must move it forward to block2 (height 2) — this is the "optimistic
+	// new tip" that reset() writes before subtreeProcessor.Reset runs. Without this
+	// genuine gap between the pre-reset tip and the optimistic new tip, the bug this
+	// test targets (the optimistic write never getting rolled back) can't be observed.
+	addBlockWithMinedSet(ctx, t, items, blockHeader1)
+	addBlockWithMinedSet(ctx, t, items, blockHeader2)
+	items.blockAssembler.setBestBlockHeader(blockHeader1, 1)
+	items.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(blockHeader1)
+
+	// Inject an STP whose Reset fails and whose GetCurrentBlockHeader returns a
+	// header the blockchain store does not know, so the fallback GetBlockHeader errors.
+	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+	unknown := &model.BlockHeader{Version: 1, HashPrevBlock: blockHeader2.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 99999, Bits: *bits}
+	mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
+	mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(subtreeprocessor.ResetResponse{Err: errors.NewProcessingError("boom")})
+	mockStp.On("GetCurrentBlockHeader").Return(unknown)
+	injectMockStp(t, items, mockStp)
+
+	preHeader, preHeight := items.blockAssembler.CurrentBlock()
+	require.True(t, preHeader.Hash().IsEqual(blockHeader1.Hash()))
+	require.Equal(t, uint32(1), preHeight)
+
+	err := items.blockAssembler.reset(ctx)
+	require.Error(t, err) // fallback header fetch fails, reset still returns error
+
+	gotHeader, gotHeight := items.blockAssembler.CurrentBlock()
+	require.Equal(t, preHeight, gotHeight, "pointer height must not advance past a failed reset")
+	require.True(t, gotHeader.Hash().IsEqual(preHeader.Hash()), "pointer must be restored to pre-reset tip")
+}
+
+// setUpFailedRollbackReset builds the rollback shape the reset fallback has to
+// cope with: the blockchain has block1 -> block2, block assembly sits on the
+// abandoned block2Alt at the same height, so reset() produces one moveBack block
+// (block2Alt) and one moveForward block (block2) over a common ancestor of
+// block1. The subtree processor is replaced by a mock whose Reset always fails
+// and whose current header is stpHeader, which is what the fallback then has to
+// place.
+func setUpFailedRollbackReset(ctx context.Context, t *testing.T, items *baTestItems, stpHeader *model.BlockHeader) {
+	t.Helper()
+
+	addBlockWithMinedSet(ctx, t, items, blockHeader1)
+	addBlockWithMinedSet(ctx, t, items, blockHeader2)
+	addBlockWithMinedSet(ctx, t, items, blockHeader2Alt)
+
+	// Invalidating block2Alt makes block2 the chain tip while block assembly is
+	// still pointed at block2Alt, which is what puts a block in moveBack.
+	_, err := items.blockchainClient.InvalidateBlock(ctx, blockHeader2Alt.Hash())
+	require.NoError(t, err)
+
+	items.blockAssembler.setBestBlockHeader(blockHeader2Alt, 2)
+
+	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+	mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
+	mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(subtreeprocessor.ResetResponse{Err: errors.NewProcessingError("boom")})
+	mockStp.On("GetCurrentBlockHeader").Return(stpHeader)
+	injectMockStp(t, items, mockStp)
+}
+
+// blockHeaderFailingClient wraps the real blockchain client and fails
+// GetBlockHeader for one specific hash, leaving every other call to answer
+// normally. It exists so a test can prove the reset fallback resolves a height
+// without a blockchain round-trip: the round-trip for that hash is guaranteed to
+// fail, so a correct result can only have come from local state.
+type blockHeaderFailingClient struct {
+	blockchain.ClientI
+
+	failFor *chainhash.Hash
+}
+
+func (c *blockHeaderFailingClient) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	if c.failFor != nil && hash.IsEqual(c.failFor) {
+		return nil, nil, errors.NewStorageError("blockchain client cannot answer for %s", hash.String())
+	}
+
+	return c.ClientI.GetBlockHeader(ctx, hash)
+}
+
+// TestReset_FallbackHeaderFailure_RollbackDirectionStaysOffTheChainTip is the
+// rollback-direction companion to TestReset_FallbackHeaderFailure_RestoresPreResetTip,
+// which only exercises a pure fast-forward.
+//
+// SubtreeProcessor.reset deletes the moveBack blocks' coinbase UTXOs before
+// almost every way it can subsequently fail, so once moveBack is non-empty the
+// pre-reset tip is no longer guaranteed to match the coinbase state. Restoring it
+// is still the right move, but for a different reason than the fast-forward case:
+// it is the only one of the two tips guaranteed to differ from the chain tip, so
+// the next reconcile fires instead of short-circuiting on "tips equal". That is
+// the property this test pins.
+func TestReset_FallbackHeaderFailure_RollbackDirectionStaysOffTheChainTip(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items := setupBlockAssemblyTestWithUtxoStore(t)
+	require.NotNil(t, items)
+
+	// A header no side of this reset ever saw and the blockchain store does not
+	// know, so neither the local resolution nor the round-trip can place it.
+	unknown := &model.BlockHeader{Version: 1, HashPrevBlock: blockHeader2.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 77777, Bits: *bits}
+	setUpFailedRollbackReset(ctx, t, items, unknown)
+
+	err := items.blockAssembler.reset(ctx)
+	require.Error(t, err)
+
+	gotHeader, gotHeight := items.blockAssembler.CurrentBlock()
+	require.Equal(t, uint32(2), gotHeight)
+	require.True(t, gotHeader.Hash().IsEqual(blockHeader2Alt.Hash()),
+		"pointer must be restored to the pre-reset tip after a failed rollback reset")
+	require.False(t, gotHeader.Hash().IsEqual(blockHeader2.Hash()),
+		"the pointer must not be left level with the chain tip, or the next reconcile short-circuits and strands the divergence")
+}
+
+// TestReset_FailedRollbackResolvesHeightWithoutTheBlockchain pins the reason the
+// branch above is now hard to reach at all. The reset fallback resolves the
+// subtree processor's height from the block metadata the reset already fetched,
+// so it does not depend on a blockchain lookup that can fail. Here that lookup is
+// guaranteed to fail for the exact hash being resolved, and the fallback still
+// lands on the right block at the right height.
+//
+// The reset itself must still report failure. Realigning onto the processor's
+// own header is the right state to land on, but the processor's state was never
+// rebuilt, so a caller told "no error" would believe a reset happened that did
+// not -- and a failed reset is the drift this recovery exists to undo. The
+// assertion this test is really about is the height and header below; the error
+// is asserted so the contract cannot silently revert to success-on-failure.
+func TestReset_FailedRollbackResolvesHeightWithoutTheBlockchain(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items := setupBlockAssemblyTestWithUtxoStore(t)
+	require.NotNil(t, items)
+
+	// The processor reports the new tip: SubtreeProcessor.reset stores each
+	// moveForward block's header as it applies it, so a failure after that point
+	// (for example in postProcess) leaves the processor genuinely holding block2.
+	setUpFailedRollbackReset(ctx, t, items, blockHeader2)
+
+	items.blockAssembler.blockchainClient = &blockHeaderFailingClient{
+		ClientI: items.blockchainClient,
+		failFor: blockHeader2.Hash(),
+	}
+
+	err := items.blockAssembler.reset(ctx)
+	require.Error(t, err, "a reset whose subtree processor failed must not report success")
+	require.Contains(t, err.Error(), "realigned",
+		"the error must say the pointer was realigned, not imply nothing happened")
+
+	gotHeader, gotHeight := items.blockAssembler.CurrentBlock()
+	require.Equal(t, uint32(2), gotHeight, "the height must come from the metadata the reset already had")
+	require.True(t, gotHeader.Hash().IsEqual(blockHeader2.Hash()),
+		"block assembly must follow the subtree processor's own header even when the blockchain client cannot place it")
 }

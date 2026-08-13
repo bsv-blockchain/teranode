@@ -116,6 +116,13 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return res
 }
 
+func (s *Store) SetBlockState(height, medianTime uint32) error {
+	err := s.store.SetBlockState(height, medianTime)
+	s.logger.Debugf("[UTXOStore][logger][SetBlockState] height: %d, medianTime: %d err %v : %s", height, medianTime, err, caller())
+
+	return err
+}
+
 func (s *Store) GetBlockState() utxo.BlockState {
 	blockState := s.store.GetBlockState()
 	s.logger.Debugf("[UTXOStore][logger][GetBlockState] height: %d, medianTime: %d : %s", blockState.Height, blockState.MedianTime, caller())

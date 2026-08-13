@@ -307,7 +307,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	utxoStatus := utxo.CalculateUtxoStatus2(spendingData)
 
 	// check utxo is spendable
-	if spendableIn != 0 && spendableIn > int(s.blockHeight.Load()) {
+	if spendableIn != 0 && spendableIn > int(s.GetBlockHeight()) {
 		utxoStatus = utxo.Status_IMMATURE
 	}
 

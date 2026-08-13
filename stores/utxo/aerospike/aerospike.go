@@ -207,8 +207,6 @@ type Store struct {
 	client              *uaerospike.Client
 	namespace           string
 	setName             string
-	blockHeight         atomic.Uint32
-	medianBlockTime     atomic.Uint32
 	logger              ulogger.Logger
 	settings            *settings.Settings
 	batchID             atomic.Uint64
@@ -247,6 +245,12 @@ type Store struct {
 	// runtime PARAMETER_ERROR demotes it back to false while batch goroutines
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
+
+	// utxo.BlockStateFields supplies the chain-tip height and median block time
+	// as one atomic snapshot, and with them the Store interface's six
+	// block-state methods. SetBlockHeight and SetBlockState are declared below
+	// so this store can also mirror the height into its external blob store.
+	utxo.BlockStateFields
 
 	// nativeOpBatchWritePolicy is the shared BatchWritePolicy used by every
 	// NewBatchWrite the native-op path constructs in teranodeBatchRecord.
@@ -643,20 +647,18 @@ func (s *Store) GetSet() string {
 	return s.setName
 }
 
+// SetBlockHeight also mirrors the height into the external blob store, whose
+// own retention bookkeeping needs it; the snapshot itself is the embedded
+// utxo.BlockStateFields' business.
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
-	if blockHeight == 0 {
-		return errors.NewInvalidArgumentError("block height cannot be zero")
+	if err := s.BlockStateFields.SetBlockHeight(blockHeight); err != nil {
+		return err
 	}
 
 	s.logger.Debugf("setting block height to %d", blockHeight)
-	s.blockHeight.Store(blockHeight)
 	s.externalStore.SetCurrentBlockHeight(blockHeight)
 
 	return nil
-}
-
-func (s *Store) GetBlockHeight() uint32 {
-	return s.blockHeight.Load()
 }
 
 // effectiveBlockHeight resolves the block height to use for DAH computation,
@@ -666,7 +668,7 @@ func (s *Store) GetBlockHeight() uint32 {
 // the current block height, preserving the historical behaviour.
 func (s *Store) effectiveBlockHeight(blockHeight uint32) uint32 {
 	if blockHeight == 0 {
-		return s.blockHeight.Load()
+		return s.GetBlockHeight()
 	}
 
 	return blockHeight
@@ -694,20 +696,21 @@ func (s *Store) deleteAtHeightFor(blockHeight uint32) (uint32, bool) {
 
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
-	s.medianBlockTime.Store(medianTime)
+
+	return s.BlockStateFields.SetMedianBlockTime(medianTime)
+}
+
+// SetBlockState mirrors the height into the external blob store as
+// SetBlockHeight does; see utxo.Store for why the pair is published together.
+func (s *Store) SetBlockState(blockHeight, medianTime uint32) error {
+	if err := s.BlockStateFields.SetBlockState(blockHeight, medianTime); err != nil {
+		return err
+	}
+
+	s.logger.Debugf("setting block state to height %d, median time %d", blockHeight, medianTime)
+	s.externalStore.SetCurrentBlockHeight(blockHeight)
 
 	return nil
-}
-
-func (s *Store) GetMedianBlockTime() uint32 {
-	return s.medianBlockTime.Load()
-}
-
-func (s *Store) GetBlockState() utxo.BlockState {
-	return utxo.BlockState{
-		Height:     s.blockHeight.Load(),
-		MedianTime: s.medianBlockTime.Load(),
-	}
 }
 
 // Close drains all batched-write workers and releases the Aerospike client.

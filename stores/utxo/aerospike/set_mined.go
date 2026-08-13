@@ -205,7 +205,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "aerospike:SetMinedMulti2")
 	defer deferFn()
 
-	thisBlockHeight := s.blockHeight.Load() + 1
+	thisBlockHeight := s.GetBlockHeight() + 1
 
 	if !minedBlockInfo.UnsetMined && s.settings.Aerospike.EnableSetMinedFilterExpressions {
 		return s.SetMinedMultiWithExpressions(ctx, hashes, minedBlockInfo)

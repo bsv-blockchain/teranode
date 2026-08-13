@@ -309,6 +309,13 @@ func (m *MockUtxostore) GetMedianBlockTime() uint32 {
 	return args.Get(0).(uint32)
 }
 
+// SetBlockState mocks publishing block height and median block time as one snapshot.
+// Returns the configured mock response for block state update operations.
+func (m *MockUtxostore) SetBlockState(height, medianTime uint32) error {
+	args := m.Called(height, medianTime)
+	return args.Error(0)
+}
+
 // GetBlockState mocks the retrieval of an atomic snapshot of both block height and median block time.
 // Returns the configured mock response for block state queries.
 func (m *MockUtxostore) GetBlockState() BlockState {

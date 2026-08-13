@@ -246,7 +246,7 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 			s.calculateOffsetForOutput(oldUtxo.Vout),
 			oldUtxo.UTXOHash[:],
 			newUtxo.UTXOHash[:],
-			int(s.blockHeight.Load()),
+			int(s.GetBlockHeight()),
 			utxo.ReAssignedUtxoSpendableAfterBlocks,
 		),
 	}

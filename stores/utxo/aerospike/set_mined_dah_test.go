@@ -18,10 +18,10 @@ import (
 
 // TestSetMinedStampsDAHAtMinedBlockHeight is a regression test for the early-pruning
 // bug where setMined computed deleteAtHeight from the store's cached chain tip
-// (s.blockHeight) rather than the height of the block the transaction was actually
+// (GetBlockHeight) rather than the height of the block the transaction was actually
 // mined into (minedBlockInfo.BlockHeight).
 //
-// s.blockHeight is maintained by an asynchronous blockchain-notification
+// The cached height is maintained by an asynchronous blockchain-notification
 // subscription, so during catchup / sync / high load it lags behind the block being
 // validated. When a transaction that was spent while still unmined is later marked
 // mined, setMined stamps the DAH. Using the lagging cached height stamped the DAH far
