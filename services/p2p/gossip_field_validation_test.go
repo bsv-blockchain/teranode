@@ -10,6 +10,8 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -336,24 +338,28 @@ func TestHandleRejectedTxTopic_OverlongReasonTruncatedAndNonHexTxIDRejected(t *t
 
 // Egress round-trip: whatever hostile free text ends up in local settings, the
 // node's own published node_status must pass the ingress validation of remote
-// peers running the same bounds.
+// peers running the same bounds — and the sanitization must demonstrably have
+// happened, not just trivially validated empty fields.
 func TestGetNodeStatusMessage_EgressAlwaysPassesIngressValidation(t *testing.T) {
 	server, _, _, _ := newGossipFieldTestServer(t)
 	server.settings = &settings.Settings{
 		ClientName: "evil\x00client" + strings.Repeat("x", 10*1024),
 		Version:    "v1.2.3-" + strings.Repeat("y", 200),
+		Commit:     "abc<script>" + strings.Repeat("z", 300),
 		P2P:        settings.P2PSettings{ListenMode: settings.ListenModeFull},
 	}
 	server.logger = ulogger.TestLogger{}
 
 	msg := server.getNodeStatusMessage(context.Background())
 	require.NotNil(t, msg)
-	require.NoError(t, checkGossipString("client_name", msg.ClientName, maxPeerDisplayStringLen))
+	require.Len(t, msg.ClientName, maxPeerDisplayStringLen, "hostile client name must be truncated, not just validated")
 
 	// The published NodeStatusMessage is built from this notification and then
-	// sanitized+validated in handleNodeStatusNotification; mirror that here.
+	// sanitized+validated in handleNodeStatusNotification; mirror that here,
+	// seeding an over-long URL so validateFields provably inspects something.
 	published := NodeStatusMessage{
 		PeerID:     msg.PeerID,
+		BaseURL:    "http://example.com/" + strings.Repeat("p", maxGossipURLLen),
 		ClientName: msg.ClientName,
 		MinerName:  msg.MinerName,
 		Version:    msg.Version,
@@ -363,6 +369,57 @@ func TestGetNodeStatusMessage_EgressAlwaysPassesIngressValidation(t *testing.T) 
 		ChainWork:  msg.ChainWork,
 		Storage:    msg.Storage,
 	}
+	sanitizeNodeStatusMessage(&published)
+
+	require.Len(t, published.Version, maxPeerDisplayStringLen, "hostile version must be truncated")
+	require.Len(t, published.CommitHash, maxPeerDisplayStringLen, "hostile commit must be truncated")
+	require.NotContains(t, published.CommitHash, "<", "HTML-meaningful characters must be stripped")
+
+	require.Error(t, published.validateFields(), "the over-long URL must be caught — proves the validator is not vacuous")
+
+	published.BaseURL = ""
+	require.NoError(t, published.validateFields(), "with URLs in bounds, sanitized egress must pass ingress validation")
+}
+
+// TestHandleNodeStatusNotification_BlanksInvalidURLAndPublishesUnderCap drives
+// the real egress path: a pathological operator URL must be blanked (loud log,
+// message still published) rather than taking the node off gossip, and the
+// marshalled payload must fit under the topic cap peers enforce on ingress.
+func TestHandleNodeStatusNotification_BlanksInvalidURLAndPublishesUnderCap(t *testing.T) {
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
+
+	var captured []byte
+	mockP2P := &MockServerP2PClient{peerID: mustNewPeerID(t)}
+	mockP2P.On("Publish", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		captured = args.Get(2).([]byte)
+	}).Return(nil)
+
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			ClientName: "bad\x00name" + strings.Repeat("c", 4*1024),
+			P2P:        settings.P2PSettings{ListenMode: settings.ListenModeFull},
+		},
+		blockchainClient:    mockBlockchain,
+		P2PClient:           mockP2P,
+		notificationCh:      make(chan *notificationMsg, 1),
+		nodeStatusTopicName: "test-node-status",
+		AssetHTTPAddressURL: "http://example.com/" + strings.Repeat("p", maxGossipURLLen),
+	}
+
+	require.NoError(t, s.handleNodeStatusNotification(context.Background()), "an invalid optional URL must not abort the publish")
+	require.NotNil(t, captured, "the message must still be published")
+	require.LessOrEqual(t, len(captured), maxNodeStatusMessageSize, "published payload must fit under the cap peers enforce")
+
+	var published NodeStatusMessage
+	require.NoError(t, json.Unmarshal(captured, &published))
+	require.Empty(t, published.BaseURL, "the invalid URL must be blanked, not published")
+	require.LessOrEqual(t, len(published.ClientName), maxPeerDisplayStringLen)
+
+	// What we published must survive our own ingress validation unscathed.
 	sanitizeNodeStatusMessage(&published)
 	require.NoError(t, published.validateFields())
 }
@@ -431,4 +488,179 @@ func TestHandleRejectedTxTopic_BannedPeerClaimingOwnIDStillSkipped(t *testing.T)
 	server.handleRejectedTxTopic(context.Background(), msgBytes, remotePeerID.String())
 
 	require.Equal(t, before, banScore(), "banned peer must be dropped before any scoring runs")
+}
+
+// Exact boundary behaviour of the protocol-format bounds.
+func TestGossipFieldBoundaries(t *testing.T) {
+	require.NoError(t, checkGossipString("peer_id", strings.Repeat("a", maxGossipPeerIDLen), maxGossipPeerIDLen))
+	require.Error(t, checkGossipString("peer_id", strings.Repeat("a", maxGossipPeerIDLen+1), maxGossipPeerIDLen))
+
+	require.NoError(t, checkGossipHex("hash", strings.Repeat("0", maxGossipHashLen), maxGossipHashLen))
+	require.Error(t, checkGossipHex("hash", strings.Repeat("0", maxGossipHashLen+1), maxGossipHashLen))
+
+	require.NoError(t, checkGossipHex("header", strings.Repeat("f", maxGossipHeaderLen), maxGossipHeaderLen))
+	require.Error(t, checkGossipHex("header", strings.Repeat("f", maxGossipHeaderLen+1), maxGossipHeaderLen))
+
+	require.NoError(t, checkGossipString("url", strings.Repeat("u", maxGossipURLLen), maxGossipURLLen))
+	require.Error(t, checkGossipString("url", strings.Repeat("u", maxGossipURLLen+1), maxGossipURLLen))
+}
+
+// Empty optional protocol-format values must never be scored: a node with no
+// best block legitimately sends "", and older peers omit fields entirely. This
+// pins the empty-allowed rule against any future "make the bounds exact"
+// refactor, which would otherwise ban the whole network.
+func TestHandleNodeStatusTopic_EmptyOptionalFieldsNotScored(t *testing.T) {
+	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{PeerID: remotePeerID.String()})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	select {
+	case n := <-server.notificationCh:
+		require.Equal(t, "node_status", n.Type)
+	default:
+		t.Fatal("node_status with empty optional fields must be forwarded")
+	}
+
+	require.Zero(t, banScore(), "empty optional fields must never be scored")
+}
+
+// The unconsumed Coinbase field must be ignored, not scored: no Teranode
+// version populates it, and another implementation encoding it differently
+// (e.g. base64) must not be banned over a field nothing reads.
+func TestHandleBlockTopic_NonHexCoinbaseIgnored(t *testing.T) {
+	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
+
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remotePeerID.String(),
+		Hash:       testBlockHashHex,
+		DataHubURL: "http://example.com:8090",
+		Coinbase:   "bm90LWhleC1idXQtaGFybWxlc3M=",
+	})
+	require.NoError(t, err)
+
+	server.handleBlockTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	select {
+	case n := <-server.notificationCh:
+		require.Equal(t, "block", n.Type)
+	default:
+		t.Fatal("block announcement with an odd coinbase encoding must still be processed")
+	}
+
+	require.Zero(t, banScore(), "the unconsumed coinbase field must not be scored")
+}
+
+// sanitizeFields must actually truncate the reason, independent of scoring.
+func TestRejectedTxSanitizeFields_TruncatesReason(t *testing.T) {
+	msg := RejectedTxMessage{Reason: strings.Repeat("x", maxGossipReasonLen+512)}
+	msg.sanitizeFields()
+	require.Len(t, msg.Reason, maxGossipReasonLen)
+}
+
+// The self-exemption from scoring must hold in every helper handler, not just
+// node_status: our own loopback message with an invalid protocol field is
+// dropped without the node scoring itself.
+func TestHandleBlockTopic_OwnInvalidMessageDroppedWithoutSelfBan(t *testing.T) {
+	server, _, reg, _ := newGossipFieldTestServer(t)
+	selfID := server.P2PClient.GetID()
+	reg.Register(&blockchain.PeerInfo{ID: selfID})
+
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     selfID,
+		Hash:       testBlockHashHex,
+		DataHubURL: "http://example.com/" + strings.Repeat("p", maxGossipURLLen),
+	})
+	require.NoError(t, err)
+
+	server.handleBlockTopic(context.Background(), msgBytes, selfID)
+
+	requireNoNotification(t, server, "own block message with an invalid field must be dropped")
+	info, ok := reg.Get(selfID)
+	require.True(t, ok)
+	require.Zero(t, info.BanScore, "a node must not score itself for its own block message")
+}
+
+func TestHandleSubtreeTopic_OwnInvalidMessageDroppedWithoutSelfBan(t *testing.T) {
+	server, _, reg, _ := newGossipFieldTestServer(t)
+	selfID := server.P2PClient.GetID()
+	reg.Register(&blockchain.PeerInfo{ID: selfID})
+
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     selfID,
+		Hash:       testBlockHashHex,
+		DataHubURL: "http://example.com/" + strings.Repeat("p", maxGossipURLLen),
+	})
+	require.NoError(t, err)
+
+	server.handleSubtreeTopic(context.Background(), msgBytes, selfID)
+
+	requireNoNotification(t, server, "own subtree message with an invalid field must be dropped")
+	info, ok := reg.Get(selfID)
+	require.True(t, ok)
+	require.Zero(t, info.BanScore, "a node must not score itself for its own subtree message")
+}
+
+func TestHandleRejectedTxTopic_OwnInvalidMessageDroppedWithoutSelfBan(t *testing.T) {
+	server, _, reg, _ := newGossipFieldTestServer(t)
+	selfID := server.P2PClient.GetID()
+	reg.Register(&blockchain.PeerInfo{ID: selfID})
+
+	msgBytes, err := json.Marshal(RejectedTxMessage{
+		PeerID: selfID,
+		TxID:   "not-a-tx-id",
+	})
+	require.NoError(t, err)
+
+	server.handleRejectedTxTopic(context.Background(), msgBytes, selfID)
+
+	info, ok := reg.Get(selfID)
+	require.True(t, ok)
+	require.Zero(t, info.BanScore, "a node must not score itself for its own rejected_tx message")
+}
+
+// The property the tightened caps rest on: a legitimate message with every
+// string field populated to exactly its bound still marshals under the topic
+// cap. Coinbase stays empty — no Teranode version populates it, and the block
+// cap's extra headroom exists precisely for it.
+func TestFullyPopulatedMessagesFitUnderCaps(t *testing.T) {
+	display := strings.Repeat("d", maxPeerDisplayStringLen)
+	hexHash := strings.Repeat("0", maxGossipHashLen)
+	url := "http://example.com/" + strings.Repeat("u", maxGossipURLLen-19)
+	pid := strings.Repeat("p", maxGossipPeerIDLen)
+
+	nodeStatus, err := json.Marshal(NodeStatusMessage{
+		PeerID: pid, ClientName: display, Type: "node_status", BaseURL: url,
+		PropagationURL: url, Version: display, CommitHash: display,
+		BestBlockHash: hexHash, BestHeight: ^uint32(0), TxCount: ^uint64(0),
+		SubtreeCount: ^uint32(0), FSMState: display, StartTime: 1<<63 - 1,
+		Uptime: 1e300, MinerName: display, ListenMode: "listen_only",
+		ChainWork: hexHash, SyncPeerID: pid, SyncPeerHeight: ^uint32(0),
+		SyncPeerBlockHash: hexHash, SyncConnectedAt: 1<<63 - 1,
+		ConnectedPeersCount: 1 << 31, Storage: "pruned",
+	})
+	require.NoError(t, err)
+	require.Less(t, len(nodeStatus), maxNodeStatusMessageSize, "fully populated node_status must fit under its cap")
+
+	block, err := json.Marshal(BlockMessage{
+		PeerID: pid, ClientName: display, DataHubURL: url, Hash: hexHash,
+		Height: ^uint32(0), Header: strings.Repeat("0", maxGossipHeaderLen),
+	})
+	require.NoError(t, err)
+	require.Less(t, len(block), maxBlockMessageSize, "fully populated block message must fit under its cap")
+
+	subtree, err := json.Marshal(SubtreeMessage{
+		PeerID: pid, ClientName: display, DataHubURL: url, Hash: hexHash,
+	})
+	require.NoError(t, err)
+	require.Less(t, len(subtree), maxSubtreeMessageSize, "fully populated subtree message must fit under its cap")
+
+	rejected, err := json.Marshal(RejectedTxMessage{
+		PeerID: pid, ClientName: display, TxID: hexHash,
+		Reason: strings.Repeat("r", maxGossipReasonLen),
+	})
+	require.NoError(t, err)
+	require.Less(t, len(rejected), maxRejectedTxMessageSize, "fully populated rejected_tx message must fit under its cap")
 }

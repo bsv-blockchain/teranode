@@ -103,16 +103,16 @@ func (m *NodeStatusMessage) validateFields() error {
 }
 
 // validateFields checks the protocol-format fields of a block announcement.
-// Coinbase is charset-checked only: Teranode does not populate it today and
-// nothing consumes it, so its length is bounded by maxBlockMessageSize (which
-// keeps headroom for it).
+// Coinbase is deliberately NOT validated: no Teranode version has ever
+// populated it, nothing consumes it, and scoring it would ban another
+// implementation that encodes it differently (e.g. base64). Its size is
+// bounded by maxBlockMessageSize, which keeps headroom for it.
 func (m *BlockMessage) validateFields() error {
 	return checkGossipFields([]gossipFieldCheck{
 		{"peer_id", m.PeerID, maxGossipPeerIDLen, false},
 		{"data_hub_url", m.DataHubURL, maxGossipURLLen, false},
 		{"hash", m.Hash, maxGossipHashLen, true},
 		{"header", m.Header, maxGossipHeaderLen, true},
-		{"coinbase", m.Coinbase, maxBlockMessageSize, true},
 	})
 }
 
