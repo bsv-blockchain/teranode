@@ -6,13 +6,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/kafka"
+	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 const testBlockHashHex = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
@@ -408,6 +412,7 @@ func TestHandleNodeStatusNotification_BlanksInvalidURLAndPublishesUnderCap(t *te
 		notificationCh:      make(chan *notificationMsg, 1),
 		nodeStatusTopicName: "test-node-status",
 		AssetHTTPAddressURL: "http://example.com/" + strings.Repeat("p", maxGossipURLLen),
+		PropagationURL:      "http://example.com/" + strings.Repeat("q", maxGossipURLLen),
 	}
 
 	require.NoError(t, s.handleNodeStatusNotification(context.Background()), "an invalid optional URL must not abort the publish")
@@ -416,7 +421,8 @@ func TestHandleNodeStatusNotification_BlanksInvalidURLAndPublishesUnderCap(t *te
 
 	var published NodeStatusMessage
 	require.NoError(t, json.Unmarshal(captured, &published))
-	require.Empty(t, published.BaseURL, "the invalid URL must be blanked, not published")
+	require.Empty(t, published.BaseURL, "the invalid BaseURL must be blanked, not published")
+	require.Empty(t, published.PropagationURL, "the invalid PropagationURL must be blanked, not published")
 	require.LessOrEqual(t, len(published.ClientName), maxPeerDisplayStringLen)
 
 	// What we published must survive our own ingress validation unscathed.
@@ -663,4 +669,136 @@ func TestFullyPopulatedMessagesFitUnderCaps(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Less(t, len(rejected), maxRejectedTxMessageSize, "fully populated rejected_tx message must fit under its cap")
+}
+
+// A claimed PeerID that does not match the authenticated gossip sender is a
+// protocol violation in the helper handlers too, not just node_status.
+func TestHandleBlockTopic_SpoofedPeerIDScored(t *testing.T) {
+	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
+
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     mustNewPeerID(t).String(),
+		Hash:       testBlockHashHex,
+		DataHubURL: "http://example.com:8090",
+	})
+	require.NoError(t, err)
+
+	server.handleBlockTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	requireNoNotification(t, server, "spoofed block message must be dropped")
+	require.Positive(t, banScore(), "peer ID spoofing must be scored")
+}
+
+func TestHandleSubtreeTopic_SpoofedPeerIDScored(t *testing.T) {
+	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
+
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     mustNewPeerID(t).String(),
+		Hash:       testBlockHashHex,
+		DataHubURL: "http://example.com:8090",
+	})
+	require.NoError(t, err)
+
+	server.handleSubtreeTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	requireNoNotification(t, server, "spoofed subtree message must be dropped")
+	require.Positive(t, banScore(), "peer ID spoofing must be scored")
+}
+
+// capturePublishServer builds a Server whose Publish calls are recorded per
+// topic, for exercising the egress publish paths end to end.
+func capturePublishServer(t *testing.T) (*Server, map[string][]byte) {
+	t.Helper()
+
+	published := make(map[string][]byte)
+	mockP2P := &MockServerP2PClient{peerID: mustNewPeerID(t)}
+	mockP2P.On("Publish", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		published[args.Get(1).(string)] = args.Get(2).([]byte)
+	}).Return(nil)
+
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			ClientName: "bad\x00name" + strings.Repeat("c", 4*1024),
+			P2P:        settings.P2PSettings{ListenMode: settings.ListenModeFull},
+		},
+		P2PClient:           mockP2P,
+		notificationCh:      make(chan *notificationMsg, 4),
+		blockTopicName:      "test-block",
+		subtreeTopicName:    "test-subtree",
+		rejectedTxTopicName: "test-rejected",
+		nodeStatusTopicName: "test-node-status",
+		AssetHTTPAddressURL: "http://example.com:8090",
+	}
+
+	return s, published
+}
+
+// The block egress path must publish a message that is sanitized, under the
+// topic cap, and clean under our own ingress validation.
+func TestHandleBlockNotification_PublishesSanitizedValidatedMessage(t *testing.T) {
+	s, published := capturePublishServer(t)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42}, nil)
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
+	s.blockchainClient = mockBlockchain
+
+	hash := model.GenesisBlockHeader.Hash()
+	require.NoError(t, s.handleBlockNotification(context.Background(), hash))
+
+	captured := published["test-block"]
+	require.NotNil(t, captured, "block announcement must be published")
+	require.LessOrEqual(t, len(captured), maxBlockMessageSize)
+
+	var msg BlockMessage
+	require.NoError(t, json.Unmarshal(captured, &msg))
+	require.LessOrEqual(t, len(msg.ClientName), maxPeerDisplayStringLen, "hostile local client name must be sanitized on egress")
+	require.Equal(t, hash.String(), msg.Hash)
+	require.NoError(t, msg.validateFields(), "published block message must pass our own ingress validation")
+}
+
+// The subtree egress path must publish a message that is sanitized, under the
+// topic cap, and clean under our own ingress validation.
+func TestHandleSubtreeNotification_PublishesSanitizedValidatedMessage(t *testing.T) {
+	s, published := capturePublishServer(t)
+
+	hash := model.GenesisBlockHeader.Hash()
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), hash))
+
+	captured := published["test-subtree"]
+	require.NotNil(t, captured, "subtree announcement must be published")
+	require.LessOrEqual(t, len(captured), maxSubtreeMessageSize)
+
+	var msg SubtreeMessage
+	require.NoError(t, json.Unmarshal(captured, &msg))
+	require.LessOrEqual(t, len(msg.ClientName), maxPeerDisplayStringLen, "hostile local client name must be sanitized on egress")
+	require.NoError(t, msg.validateFields(), "published subtree message must pass our own ingress validation")
+}
+
+// An internal rejection (empty peer_id) is re-broadcast with the validator's
+// reason truncated to its bound, under the topic cap.
+func TestRejectedTxHandler_InternalRejectionPublishesTruncatedReason(t *testing.T) {
+	s, published := capturePublishServer(t)
+
+	value, err := proto.Marshal(&kafkamessage.KafkaRejectedTxTopicMessage{
+		TxHash: testBlockHashHex,
+		PeerId: "",
+		Reason: strings.Repeat("r", maxGossipReasonLen+500),
+	})
+	require.NoError(t, err)
+
+	handler := s.rejectedTxHandler(context.Background())
+	require.NoError(t, handler(&kafka.KafkaMessage{Value: value}))
+
+	captured := published["test-rejected"]
+	require.NotNil(t, captured, "internal rejection must be re-broadcast")
+	require.LessOrEqual(t, len(captured), maxRejectedTxMessageSize)
+
+	var msg RejectedTxMessage
+	require.NoError(t, json.Unmarshal(captured, &msg))
+	require.Len(t, msg.Reason, maxGossipReasonLen, "validator reason must be truncated on egress")
+	require.NoError(t, msg.validateFields(), "published rejected_tx message must pass our own ingress validation")
 }
