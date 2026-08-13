@@ -47,10 +47,11 @@ import (
 // before a reassigned UTXO becomes spendable.
 const ReAssignedUtxoSpendableAfterBlocks = 1_000
 
-// BlockState represents an atomic snapshot of blockchain state containing
-// both block height and median block time. This ensures consistency between
-// these values during validation, preventing race conditions that could occur
-// when reading them separately.
+// BlockState is the pair of chain-tip values validation reads together: the
+// block height and the median block time. GetBlockState returns it in a single
+// atomic load, so the two fields can never be torn mid-read the way separate
+// reads of two atomics could be; how consistent the pair is with one chain tip
+// is down to the writer (see SetBlockState).
 type BlockState struct {
 	Height     uint32 // Current block height
 	MedianTime uint32 // Median time of recent blocks
@@ -577,6 +578,11 @@ type Store interface {
 	// internal state functions
 
 	// SetBlockHeight updates the current block height in the store.
+	//
+	// height must be non-zero: implementations return an ErrInvalidArgument
+	// error for zero rather than publishing a height that cannot be told
+	// apart from a store that was never written. SetBlockState states the
+	// same precondition and the shared suite pins it for every store.
 	SetBlockHeight(height uint32) error
 
 	// GetBlockHeight returns the current block height from the store.
@@ -588,8 +594,25 @@ type Store interface {
 	// GetMedianBlockTime returns the current median block time from the store.
 	GetMedianBlockTime() uint32
 
-	// GetBlockState returns an atomic snapshot of both block height and median block time.
-	// This prevents race conditions that could occur when reading these values separately,
-	// ensuring consistency during validation operations.
+	// SetBlockState publishes the block height and median block time of one
+	// chain tip as a single atomic snapshot. This is the write side of
+	// GetBlockState's consistency guarantee: callers that have both values
+	// for the same tip (the blockchain notification listener) must use this
+	// rather than the two individual setters, whose back-to-back calls leave
+	// a window where a reader pairs a new height with a stale median time
+	// (issue 1443).
+	//
+	// height must be non-zero, matching SetBlockHeight: implementations
+	// return an ErrInvalidArgument error for zero rather than publishing a
+	// snapshot that cannot be distinguished from a store that was never
+	// written. medianTime has no such restriction — zero is the legitimate
+	// "not yet known" value.
+	SetBlockState(height, medianTime uint32) error
+
+	// GetBlockState returns the block height and median block time as one
+	// snapshot: both fields come from a single atomic load, so a reader can
+	// never observe a pair torn mid-read. The pair is only as consistent as
+	// its writer — SetBlockState publishes both fields from one tip
+	// atomically, while the individual setters update one field at a time.
 	GetBlockState() BlockState
 }

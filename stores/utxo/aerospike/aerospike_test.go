@@ -508,11 +508,12 @@ func TestStore_BlockHeight(t *testing.T) {
 	t.Run("GetBlockHeightOnly", func(t *testing.T) {
 		store := &Store{}
 
-		// Test direct manipulation of atomic value for GetBlockHeight
-		store.blockHeight.Store(12345)
+		// Write through the embedded snapshot, which needs neither the logger
+		// nor the external store that the Store wrapper touches.
+		require.NoError(t, store.BlockStateFields.SetBlockHeight(12345))
 		assert.Equal(t, uint32(12345), store.GetBlockHeight())
 
-		store.blockHeight.Store(99999)
+		require.NoError(t, store.BlockStateFields.SetBlockHeight(99999))
 		assert.Equal(t, uint32(99999), store.GetBlockHeight())
 	})
 
@@ -563,11 +564,12 @@ func TestStore_MedianBlockTime(t *testing.T) {
 	})
 
 	t.Run("DirectAtomicManipulation", func(t *testing.T) {
-		// Test direct manipulation of atomic value for GetMedianBlockTime
-		store.medianBlockTime.Store(54321)
+		// Write through the embedded snapshot rather than the Store wrapper, so
+		// GetMedianBlockTime is exercised against the backing state directly.
+		require.NoError(t, store.BlockStateFields.SetMedianBlockTime(54321))
 		assert.Equal(t, uint32(54321), store.GetMedianBlockTime())
 
-		store.medianBlockTime.Store(98765)
+		require.NoError(t, store.BlockStateFields.SetMedianBlockTime(98765))
 		assert.Equal(t, uint32(98765), store.GetMedianBlockTime())
 	})
 }
@@ -676,7 +678,7 @@ func TestStore_AtomicOperations(t *testing.T) {
 		const numOperations = 100
 
 		// Set initial value
-		store.blockHeight.Store(1000)
+		require.NoError(t, store.BlockStateFields.SetBlockHeight(1000))
 
 		// Test concurrent reads and atomic writes
 		for i := 0; i < numGoroutines; i++ {
@@ -686,8 +688,9 @@ func TestStore_AtomicOperations(t *testing.T) {
 					height := store.GetBlockHeight()
 					assert.NotNil(t, height) // Just ensure it doesn't panic
 
-					// Atomic store operation
-					store.blockHeight.Store(uint32(id*1000 + j))
+					// Atomic store operation. +1 because zero is not a legal
+					// height, and id and j both start at zero.
+					_ = store.BlockStateFields.SetBlockHeight(uint32(id*1000+j) + 1)
 				}
 			}(i)
 		}
@@ -705,7 +708,7 @@ func TestStore_AtomicOperations(t *testing.T) {
 		const numOperations = 100
 
 		// Set initial value
-		store.medianBlockTime.Store(2000)
+		require.NoError(t, store.BlockStateFields.SetMedianBlockTime(2000))
 
 		// Test concurrent reads and atomic writes
 		for i := 0; i < numGoroutines; i++ {
@@ -716,7 +719,7 @@ func TestStore_AtomicOperations(t *testing.T) {
 					assert.NotNil(t, medianTime) // Just ensure it doesn't panic
 
 					// Atomic store operation
-					store.medianBlockTime.Store(uint32(id*2000 + j))
+					_ = store.BlockStateFields.SetMedianBlockTime(uint32(id*2000 + j))
 				}
 			}(i)
 		}

@@ -2,7 +2,10 @@ package tests
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -947,6 +950,160 @@ func SetBlockHeightZero(t *testing.T, db utxostore.Store) {
 	err := db.SetBlockHeight(0)
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrInvalidArgument)
+}
+
+// SetBlockStateContract pins the write side of the GetBlockState snapshot
+// guarantee on a real store (issue 1443): after one SetBlockState call the
+// snapshot AND the single-field getters must all agree. Height matters most
+// here: stores keep it in a separate atomic that DAH and maturity logic read
+// directly, so a SetBlockState that updated only the snapshot pair would
+// silently freeze those readers at a stale height while every pair-based test
+// stayed green. Height zero is rejected exactly like SetBlockHeight(0).
+//
+// The store's block state is restored on the way out, so this is safe to run
+// against a suite-wide shared store: later cases that derive a height from
+// GetBlockHeight() see what they would have seen without it. A store that
+// started at height zero cannot be restored — zero is not a settable height —
+// so run this case last against such a store.
+func SetBlockStateContract(t *testing.T, db utxostore.Store) {
+	prior := db.GetBlockState()
+	if prior.Height > 0 {
+		defer func() {
+			require.NoError(t, db.SetBlockState(prior.Height, prior.MedianTime))
+		}()
+	}
+
+	require.NoError(t, db.SetBlockState(4242, 1700000042))
+
+	state := db.GetBlockState()
+	require.Equal(t, uint32(4242), state.Height)
+	require.Equal(t, uint32(1700000042), state.MedianTime)
+	require.Equal(t, uint32(4242), db.GetBlockHeight(), "single-field height reader must stay in step with the snapshot")
+	require.Equal(t, uint32(1700000042), db.GetMedianBlockTime(), "single-field median reader must stay in step with the snapshot")
+
+	err := db.SetBlockState(0, 1700000042)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrInvalidArgument)
+}
+
+// SetBlockStateSnapshotUnderConcurrency pins the read side of the same
+// guarantee on a real store: GetBlockState must return a pair some single
+// writer actually published, never one assembled from two separate reads.
+//
+// The holder is already covered in isolation by TestBlockStateHolderSnapshot,
+// but nothing there stops a store's own GetBlockState from going back to two
+// independent atomic loads — which is exactly what issue 1443 was. That
+// regression would keep the sequential contract above green, because torn
+// pairs only appear while a writer is mid-update. So: one writer publishing
+// pairs with the fixed relation MedianTime == Height + 1000, readers checking
+// the relation holds on every snapshot they observe.
+//
+// Restores the prior block state on the way out, with the same height-zero
+// caveat as SetBlockStateContract.
+func SetBlockStateSnapshotUnderConcurrency(t *testing.T, db utxostore.Store) {
+	prior := db.GetBlockState()
+	if prior.Height > 0 {
+		defer func() {
+			require.NoError(t, db.SetBlockState(prior.Height, prior.MedianTime))
+		}()
+	}
+
+	const (
+		baseHeight = uint32(5_000_000)
+		iterations = uint32(20_000)
+		offset     = uint32(1000)
+	)
+
+	require.NoError(t, db.SetBlockState(baseHeight, baseHeight+offset))
+
+	var (
+		wg        sync.WaitGroup
+		tornMu    sync.Mutex
+		torn      []utxostore.BlockState
+		samples   atomic.Uint64
+		tornFound atomic.Bool
+	)
+
+	stop := make(chan struct{})
+
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+
+				got := db.GetBlockState()
+				samples.Add(1)
+
+				// Recorded and asserted after wg.Wait: testify's FailNow is only
+				// valid on the goroutine running the test.
+				if got.MedianTime != got.Height+offset {
+					tornMu.Lock()
+					torn = append(torn, got)
+					tornMu.Unlock()
+
+					tornFound.Store(true)
+
+					return
+				}
+			}
+		}()
+	}
+
+	// Recorded rather than asserted inside the loop: a FailNow here would skip
+	// close(stop) and leave the readers spinning for the rest of the run.
+	var writeErr error
+
+	// The writer keeps going until the readers have actually sampled, rather
+	// than stopping at a fixed count and asserting the sample total afterwards.
+	// On a single-processor run the readers may not be scheduled at all while a
+	// fixed-length writer loop runs, which would leave the torn-pair assertion
+	// vacuously true; asserting the count instead would fail the case on
+	// correct code. Gating the loop keeps it meaningful on one core either way.
+	//
+	// Note the tear itself is only reliably observable with GOMAXPROCS > 1: at
+	// -cpu=1 a reader can only interleave with the writer where the scheduler
+	// preempts it, so this case guards the regression in CI, not on one core.
+	const minSamples = uint64(1_000)
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for i := baseHeight + 1; ; i++ {
+		if writeErr = db.SetBlockState(i, i+offset); writeErr != nil {
+			break
+		}
+
+		// Readers exit on the first torn pair, so stop chasing minSamples once
+		// the case has already failed — otherwise a real tear costs a stall.
+		if tornFound.Load() {
+			break
+		}
+
+		if i-baseHeight >= iterations && samples.Load() >= minSamples {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+
+	close(stop)
+	wg.Wait()
+
+	require.NoError(t, writeErr)
+	require.Empty(t, torn, "GetBlockState returned torn pairs: %v", torn)
+	// Vacuity guard: the assertion above also holds for a reader loop that never
+	// ran. The writer loop gates on this, so reaching zero means the readers
+	// were starved for the full deadline rather than merely descheduled.
+	require.NotZero(t, samples.Load(), "readers observed no snapshots at all")
 }
 
 // SetLockedBehavior tests the SetLocked lifecycle:

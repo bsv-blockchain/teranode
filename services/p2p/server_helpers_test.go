@@ -29,7 +29,7 @@ func newServerWithLocalRegistry(t *testing.T) (*Server, *blockchain.CentralizedP
 	t.Helper()
 
 	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
-	return &Server{
+	s := &Server{
 		peerRegistry: blockchain.NewLocalPeerRegistryClient(reg),
 		logger:       ulogger.TestLogger{},
 		gCtx:         context.Background(),
@@ -39,7 +39,13 @@ func newServerWithLocalRegistry(t *testing.T) (*Server, *blockchain.CentralizedP
 				MaxUnvalidatedAdvertisedHeightLead: 10_000,
 			},
 		},
-	}, reg
+	}
+
+	// Go through the same peer-map wiring NewServer uses, so the handler tests
+	// exercise the configured bound rather than a fixture-only fallback.
+	s.applyPeerMapLimits(s.settings)
+
+	return s, reg
 }
 
 func setServerLocalHeight(t *testing.T, s *Server, height uint32) {
@@ -446,9 +452,7 @@ func TestHandleBlockTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 	default:
 	}
 
-	entries := 0
-	s.blockPeerMap.Range(func(_, _ any) bool { entries++; return true })
-	require.Zero(t, entries, "malformed hash must not create a blockPeerMap entry")
+	require.Zero(t, s.blockPeerMap.Len(), "malformed hash must not create a blockPeerMap entry")
 }
 
 // chainhash.NewHashFromStr accepts non-canonical hex forms (uppercase,
@@ -555,9 +559,7 @@ func TestHandleSubtreeTopic_RejectsMalformedHash(t *testing.T) {
 	default:
 	}
 
-	entries := 0
-	s.subtreePeerMap.Range(func(_, _ any) bool { entries++; return true })
-	require.Zero(t, entries, "malformed hash must not create a subtreePeerMap entry")
+	require.Zero(t, s.subtreePeerMap.Len(), "malformed hash must not create a subtreePeerMap entry")
 
 	_, ok := reg.Get(remote.String())
 	require.False(t, ok, "malformed hash must not count as peer activity")
@@ -873,9 +875,8 @@ func TestValidateDataHubURL(t *testing.T) {
 // bound — cleanupPeerMaps must sweep entries whose expiresAt has passed.
 func TestCleanupPeerMaps_EvictsExpiredReputationEntries(t *testing.T) {
 	s := &Server{
-		logger:         ulogger.TestLogger{},
-		peerMapTTL:     time.Minute,
-		peerMapMaxSize: 100,
+		logger:     ulogger.TestLogger{},
+		peerMapTTL: time.Minute,
 	}
 
 	now := time.Now()

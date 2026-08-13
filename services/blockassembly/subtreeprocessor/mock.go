@@ -239,3 +239,9 @@ func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 	m.Called(ctx)
 }
+
+// ReconcileCoinbases implements Interface.ReconcileCoinbases
+func (m *MockSubtreeProcessor) ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error {
+	args := m.Called(ctx, gapBlocks)
+	return args.Error(0)
+}

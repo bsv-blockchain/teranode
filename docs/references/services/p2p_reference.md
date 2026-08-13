@@ -38,8 +38,8 @@ type Server struct {
     invalidSubtreeTopicName           string             // Kafka topic for invalid subtrees
     nodeStatusTopicName               string             // pubsub topic for node status messages
     topicPrefix                       string             // Chain identifier prefix for topic validation
-    blockPeerMap                      sync.Map           // Map to track which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry)
-    subtreePeerMap                    sync.Map           // Map to track which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry)
+    blockPeerMap                      cappedPeerMap      // Which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
+    subtreePeerMap                    cappedPeerMap      // Which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Stateless peer selection logic
@@ -48,8 +48,7 @@ type Server struct {
 
     // Cleanup configuration
     peerMapCleanupTicker              *time.Ticker       // Ticker for periodic cleanup of peer maps
-    peerMapMaxSize                    int                // Maximum number of entries in peer maps
-    peerMapTTL                        time.Duration      // Time-to-live for peer map entries
+    peerMapTTL                        time.Duration      // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
     registryCacheSaveTicker           *time.Ticker       // Ticker for periodic saving of peer registry cache
 }
 ```

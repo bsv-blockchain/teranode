@@ -1064,10 +1064,11 @@ func (m *MockUTXOStore) PendingConflictIntents(ctx context.Context) ([]utxo.Conf
 func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	return nil
 }
-func (m *MockUTXOStore) SetBlockHeight(height uint32) error     { return nil }
-func (m *MockUTXOStore) GetBlockHeight() uint32                 { return 0 }
-func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error { return nil }
-func (m *MockUTXOStore) GetMedianBlockTime() uint32             { return 0 }
+func (m *MockUTXOStore) SetBlockHeight(height uint32) error            { return nil }
+func (m *MockUTXOStore) GetBlockHeight() uint32                        { return 0 }
+func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error        { return nil }
+func (m *MockUTXOStore) SetBlockState(height, medianTime uint32) error { return nil }
+func (m *MockUTXOStore) GetMedianBlockTime() uint32                    { return 0 }
 
 func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 	return utxo.BlockState{

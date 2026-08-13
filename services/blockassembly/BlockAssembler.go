@@ -642,7 +642,7 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		return nil
 	}
 
-	baBestBlockHeader, _ := b.CurrentBlock()
+	baBestBlockHeader, baHeight := b.CurrentBlock()
 
 	// Update the internal best block reference before SubtreeProcessor.Reset runs the
 	// postProcessFn (which calls loadUnminedTransactions). Without this, CurrentBlock()
@@ -658,19 +658,73 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		Height: currentHeight,
 	})
 
+	// Heights for every block the subtree processor can legitimately be parked on
+	// once the reset below has run, built before the attempt so the failure path
+	// does not depend on a lookup that can itself fail. See resetBlockHeights.
+	resetHeights := resetBlockHeights(bestBlockchainBlockHeader, currentHeight, moveBackBlocksWithMeta, moveForwardBlocksWithMeta)
+
 	if response := b.subtreeProcessor.Reset(baBestBlockHeader, moveBackBlocks, moveForwardBlocks, useFastForwardReset, postProcessFn); response.Err != nil {
 		b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", response.Err)
 		// something went wrong, we need to set the best block header in the block assembly to be the
 		// same as the subtree processor's best block header
-		bestBlockchainBlockHeader = b.subtreeProcessor.GetCurrentBlockHeader()
+		stpHeader := b.subtreeProcessor.GetCurrentBlockHeader()
+		if stpHeader == nil {
+			// Nothing to realign to at all. Restore the pre-reset tip for the
+			// same reason as the unresolvable-height branch below.
+			b.setBestBlockHeader(baBestBlockHeader, baHeight)
+			return errors.NewProcessingError("[Reset] subtree processor has no current block header after a failed reset", response.Err)
+		}
 
-		_, bestBlockchainBlockHeaderMeta, err := b.blockchainClient.GetBlockHeader(ctx, bestBlockchainBlockHeader.Hash())
-		if err != nil {
-			return errors.NewProcessingError("[Reset] error getting best block header meta", err)
+		// Resolve the height locally first. Every entry in resetHeights came from
+		// a BlockHeaderMeta this reset already fetched, so it is exactly as
+		// authoritative as the GetBlockHeader lookup below — and it cannot fail,
+		// which is what keeps a partially-applied reset out of the branch that
+		// has to guess between two tips.
+		stpHeight, resolved := resetHeights[*stpHeader.Hash()]
+		if !resolved {
+			_, stpHeaderMeta, err := b.blockchainClient.GetBlockHeader(ctx, stpHeader.Hash())
+			if err != nil {
+				// The subtree processor is parked on a block this reset never
+				// saw and the blockchain client cannot place it either, so
+				// block assembly cannot be pointed at what the processor
+				// actually holds.
+				//
+				// Restore the pre-reset tip rather than leaving the optimistic
+				// write from the top of reset(). That is not a claim the
+				// pre-reset tip still matches the coinbase state: a reset with
+				// moveBack blocks deletes their coinbases before most of the
+				// ways it can fail, and a reset that aborts before
+				// processCoinbaseUtxos leaves the new tip's coinbases
+				// uncreated, so after a partial reset neither tip is reliably
+				// consistent. It is chosen because it is the only one of the
+				// two that is guaranteed to differ from the chain tip, and that
+				// difference is what makes the next reconcile fire. Leaving the
+				// optimistic write parks the pointer level with the chain tip,
+				// where the "tips equal" short-circuit strands the divergence
+				// with nothing left to trigger a retry. Being behind is
+				// recoverable; being wrongly level is not.
+				b.setBestBlockHeader(baBestBlockHeader, baHeight)
+				return errors.NewProcessingError("[Reset] error getting best block header meta", err)
+			}
+
+			stpHeight = stpHeaderMeta.Height
 		}
 
 		// set the new height based on the best block header from the subtree processor
-		currentHeight = bestBlockchainBlockHeaderMeta.Height
+		bestBlockchainBlockHeader = stpHeader
+		currentHeight = stpHeight
+
+		b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
+
+		// Realigning is the right state to land on, but it is not a reset. Falling
+		// through from here would run SetState, log "resetting block assembler
+		// DONE" and return nil, so a caller whose reset never rebuilt the subtree
+		// processor's state would be told it succeeded -- and a failed reset is
+		// the drift this whole recovery exists to undo. Report it instead, so the
+		// return value and the Errorf above agree with each other. The two
+		// branches above already return without persisting state for the same
+		// reason.
+		return errors.NewProcessingError("[Reset] subtree processor reset failed; block assembly realigned to %s at height %d", stpHeader.Hash().String(), currentHeight, response.Err)
 	}
 
 	b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
@@ -685,6 +739,68 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 	b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
 
 	return nil
+}
+
+// resetBlockHeights maps the hash of every block a reset can leave the subtree
+// processor parked on to that block's authoritative height.
+//
+// The reset's failure path has to point block assembly at whatever the subtree
+// processor actually holds, and the processor stores a bare header with no
+// height — so resolving that height used to need a blockchain round-trip that
+// can itself fail. When it did fail there was no good answer left: after a
+// partially-applied reset neither the pre-reset tip nor the new tip is reliably
+// consistent with the coinbase state.
+//
+// Every height here comes from a BlockHeaderMeta the blockchain client already
+// returned during this same reset, so a hit is exactly as authoritative as the
+// lookup it saves. model.Block.Height is deliberately not used as a source:
+// it is documented as possibly-unset, and SubtreeProcessor already has to repair
+// it with a blockchain lookup of its own.
+//
+// The covered set is every header the reset writes: the target tip, each
+// moveForward block (finalizeBlockProcessing stores each one as it is applied),
+// each moveBack block (the pre-reset tip is moveBack[0]), and the common
+// ancestor, which the reset settles on when it moves back without moving
+// forward. When both sides are empty the pointer cannot move, so there is
+// nothing to resolve.
+func resetBlockHeights(targetHeader *model.BlockHeader, targetHeight uint32, moveBack, moveForward []blockWithMeta) map[chainhash.Hash]uint32 {
+	heights := make(map[chainhash.Hash]uint32, len(moveBack)+len(moveForward)+2)
+
+	if targetHeader != nil {
+		heights[*targetHeader.Hash()] = targetHeight
+	}
+
+	add := func(blocks []blockWithMeta) {
+		for _, blockWithMeta := range blocks {
+			if blockWithMeta.block == nil || blockWithMeta.block.Header == nil || blockWithMeta.meta == nil {
+				continue
+			}
+
+			heights[*blockWithMeta.block.Header.Hash()] = blockWithMeta.meta.Height
+		}
+	}
+
+	add(moveBack)
+	add(moveForward)
+
+	// The common ancestor is the parent of the lowest block on whichever side of
+	// the fork is populated: moveBack descends from block assembly's tip, and
+	// moveForward ascends to the new tip.
+	var lowest *blockWithMeta
+
+	switch {
+	case len(moveBack) > 0:
+		lowest = &moveBack[len(moveBack)-1]
+	case len(moveForward) > 0:
+		lowest = &moveForward[0]
+	}
+
+	if lowest != nil && lowest.block != nil && lowest.block.Header != nil &&
+		lowest.block.Header.HashPrevBlock != nil && lowest.meta != nil && lowest.meta.Height > 0 {
+		heights[*lowest.block.Header.HashPrevBlock] = lowest.meta.Height - 1
+	}
+
+	return heights
 }
 
 // waitForBlockMinedSet polls until the given block has mined_set=true, indicating
@@ -977,6 +1093,16 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
 	b.subtreeProcessor.Start(ctx)
+
+	// Detect and repair a coinbase divergence left by a prior unclean shutdown
+	// (e.g. crash mid fast-forward create loop) before the node begins
+	// advancing. Must run after subtreeProcessor.Start, since a repair uses
+	// subtreeProcessor.ReconcileCoinbases, and before startChannelListeners,
+	// so no new block/subtree notifications are processed against a diverged
+	// tip. It returns nothing by design: an unrecoverable divergence is logged
+	// loudly (and surfaced via the "escalated" metric) rather than failing
+	// Start, since crash-looping the process would not help an operator.
+	b.checkCoinbaseDivergenceOnStart(ctx)
 
 	if err = b.startChannelListeners(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to start channel listeners: %v", err)
