@@ -3594,7 +3594,7 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		assert.True(t, success)
 	})
 
-	t.Run("p2p client error - still returns true", func(t *testing.T) {
+	t.Run("one leg fails - reports partial failure", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
 			clearBannedFunc: func(ctx context.Context) error {
 				return errors.New(errors.ERR_ERROR, "p2p service error")
@@ -3616,12 +3616,12 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 			},
 		}
 
+		// The legacy leg cleared but the p2p leg failed, so bans persist on p2p;
+		// the operator must not be told the clear fully succeeded.
 		result, err := handleClearBanned(context.Background(), s, nil, nil)
 
-		require.NoError(t, err)
-		success, ok := result.(bool)
-		require.True(t, ok)
-		assert.True(t, success) // Still returns true despite error
+		require.Error(t, err)
+		require.Nil(t, result)
 	})
 
 	t.Run("only p2p client available", func(t *testing.T) {
@@ -3670,7 +3670,7 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		assert.True(t, success)
 	})
 
-	t.Run("no clients available - still returns true", func(t *testing.T) {
+	t.Run("no clients available - reports failure", func(t *testing.T) {
 		s := &RPCServer{
 			logger: logger,
 			settings: &settings.Settings{
@@ -3678,12 +3678,12 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 			},
 		}
 
+		// With no ban service available, the clear cannot be honored, so report
+		// failure rather than a misleading success (mirrors handleSetBan).
 		result, err := handleClearBanned(context.Background(), s, nil, nil)
 
-		require.NoError(t, err)
-		success, ok := result.(bool)
-		require.True(t, ok)
-		assert.True(t, success)
+		require.Error(t, err)
+		require.Nil(t, result)
 	})
 
 	t.Run("both clients error - reports failure", func(t *testing.T) {

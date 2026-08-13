@@ -2283,7 +2283,7 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	var (
 		attempted bool
-		success   bool
+		anyFailed bool
 	)
 
 	// check if P2P service is available
@@ -2292,9 +2292,9 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 		err := s.p2pClient.ClearBanned(ctx)
 		if err != nil {
+			anyFailed = true
+
 			s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
-		} else {
-			success = true
 		}
 	}
 	// check if legacy peer service is available
@@ -2309,16 +2309,18 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		cancel()
 
 		if err != nil {
+			anyFailed = true
+
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
-		} else {
-			success = true
 		}
 	}
 
-	// clearbanned is an administrative control; if every attempted leg failed
-	// (e.g. the admin API key is unset or wrong, so calls are Unauthenticated),
-	// report the failure rather than silently returning success.
-	if attempted && !success {
+	// clearbanned is a destructive administrative control: an operator who is told
+	// the clear succeeded must be able to trust that no bans persist. So report
+	// failure if any attempted leg failed (e.g. one service returns Unauthenticated
+	// on a key mismatch, leaving its bans in place), or if no ban service was
+	// available at all.
+	if !attempted || anyFailed {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInvalidParameter,
 			Message: "Failed to clear banned list",
