@@ -1377,7 +1377,7 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 // status. The ingress gate above refuses with ErrServiceUnavailable while block assembly holds its
 // configured maximum in memory.
 //
-// The second check reads the live flag rather than matching the error class alone, because
+// The gate check reads the live flag rather than matching the error class alone, because
 // ErrServiceUnavailable is not exclusive to the gate: the file blob store raises it when a read or
 // write permit times out, and the Aerospike UTXO store raises it for an open circuit breaker or a
 // batch timeout. Those are genuine faults and must keep their error-level log. Pairing the class
@@ -1388,15 +1388,22 @@ func (ps *PropagationServer) isTransientBackpressure(err error) bool {
 		return false
 	}
 
-	if status.Code(err) == codes.Unavailable {
+	// The gate refusal is tested first because the admission-control test below is the expensive
+	// half, and this is the branch a refusal takes. A teranode *Error does not implement
+	// GRPCStatus(), so status.Code falls through to status.FromError, which renders the whole
+	// wrapped message and allocates a Status before returning Unknown. This function runs once per
+	// refused transaction, at full inbound rate, on a node already short of memory. Keep the two
+	// atomic loads ahead of the status conversion.
+	//
+	// errors.Is unwraps a gRPC-wrapped error itself, so this matches the refusal both as the direct
+	// application error and as the status the gRPC handler flattens it into for the UDP worker.
+	if ps.blockchainClient != nil &&
+		ps.blockchainClient.IsBlockAssemblyFull() &&
+		errors.Is(err, errors.ErrServiceUnavailable) {
 		return true
 	}
 
-	// errors.Is unwraps a gRPC-wrapped error itself, so this matches the refusal both as the direct
-	// application error and as the status the gRPC handler flattens it into for the UDP worker.
-	return ps.blockchainClient != nil &&
-		ps.blockchainClient.IsBlockAssemblyFull() &&
-		errors.Is(err, errors.ErrServiceUnavailable)
+	return status.Code(err) == codes.Unavailable
 }
 
 // logTxProcessingError logs a transaction processing failure at a level appropriate to the cause.
