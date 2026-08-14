@@ -3,6 +3,7 @@ package blockassembly
 import (
 	"context"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -308,6 +310,216 @@ func TestClient_Store_BatchMode(t *testing.T) {
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
 	})
+}
+
+// wedgedBatchHarness is a batch-mode client whose AddTxBatch is entered and then
+// wedges, plus the observables a test needs to drive the dispatched-but-wedged case
+// deterministically.
+//
+// entered closes once the RPC has actually been entered. That is the load-bearing
+// signal: a test that asserted only on Store's return would also pass on a build where
+// the item never reached the RPC at all, which is the trivial
+// abandoned-before-dispatch case rather than the one that matters.
+type wedgedBatchHarness struct {
+	client  *Client
+	entered <-chan struct{}
+
+	// release lets the wedged RPC return, so the dispatcher can finish the item it is
+	// holding. Idempotent, and also run from t.Cleanup so no dispatcher goroutine is
+	// left parked when a test fails early.
+	release func()
+
+	// completed counts AddTxBatch calls that have returned, so a test can wait for the
+	// dispatcher to finish an abandoned item rather than sleeping.
+	completed func() int
+}
+
+// newWedgedBatchHarness builds the harness with a batch size of EXACTLY 1.
+//
+// go-batcher dispatches when the size is reached, the timeout expires, or Trigger() is
+// called, so a size of 1 dispatches on the first PutCtx with no dependence on the 100ms
+// batch timeout. A larger batch size combined with a deadline shorter than that timeout
+// would prove only that Store gave up before the batch ever formed.
+func newWedgedBatchHarness(t *testing.T) *wedgedBatchHarness {
+	t.Helper()
+
+	mockClient := &mockBlockAssemblyAPIClient{}
+
+	var (
+		enteredCh   = make(chan struct{})
+		gate        = make(chan struct{})
+		enterOnce   sync.Once
+		releaseOnce sync.Once
+		completed   atomic.Int32
+	)
+
+	release := func() { releaseOnce.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+
+	mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) {
+			enterOnce.Do(func() { close(enteredCh) })
+
+			<-gate
+
+			completed.Add(1)
+		}).
+		Return(&blockassembly_api.AddTxBatchResponse{}, nil)
+
+	return &wedgedBatchHarness{
+		client:    createTestClient(mockClient, 1),
+		entered:   enteredCh,
+		release:   release,
+		completed: func() int { return int(completed.Load()) },
+	}
+}
+
+// requireEntered blocks until the wedged RPC has been entered, establishing that the
+// item was dispatched and the call is stuck. The timeout is a hang detector, not the
+// property under test.
+func (h *wedgedBatchHarness) requireEntered(t *testing.T) {
+	t.Helper()
+
+	select {
+	case <-h.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("AddTxBatch was never entered, so the item was never dispatched; this test would otherwise prove only the trivial abandoned-before-dispatch case")
+	}
+}
+
+type storeOutcome struct {
+	success bool
+	err     error
+}
+
+// storeAsync runs Store on its own goroutine and publishes the outcome, so the test
+// goroutine can establish the wedged-RPC precondition first and only then wait for the
+// return. Calling Store inline and inferring that dispatch "must have" happened first
+// would make the ordering a timing assumption.
+func storeAsync(ctx context.Context, client *Client, hash *chainhash.Hash) <-chan storeOutcome {
+	out := make(chan storeOutcome, 1)
+
+	go func() {
+		success, err := client.Store(ctx, hash, 1000, 250, subtree.TxInpoints{})
+		out <- storeOutcome{success: success, err: err}
+	}()
+
+	return out
+}
+
+func requireStoreOutcome(t *testing.T, out <-chan storeOutcome) storeOutcome {
+	t.Helper()
+
+	select {
+	case o := <-out:
+		return o
+	case <-time.After(10 * time.Second):
+		t.Fatal("Store did not return while the block-assembly RPC was wedged; the caller's deadline was discarded")
+
+		return storeOutcome{}
+	}
+}
+
+func testStoreHash(t *testing.T) *chainhash.Hash {
+	t.Helper()
+
+	hash, err := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	require.NoError(t, err)
+
+	return hash
+}
+
+// TestClient_Store_BatchMode_HonoursContextDeadline pins the whole point of the batch
+// bound: the caller's deadline is honoured even when the item HAS been dispatched and
+// the RPC is wedged.
+//
+// Batch mode used to wait on context.Background(), which discarded the caller's
+// deadline entirely. Since blockassembly_sendBatchSize ships at 1024, that made the
+// validator's hand-off deadline inert in the configuration everybody runs: a wedged
+// block assembly could park an ingest goroutine, and the Kafka record batch it holds,
+// for as long as the stall lasted.
+//
+// Must run under -race. The abandoned item's result slot is written by the dispatcher
+// after Store has returned, and the race detector is what proves that write has no
+// concurrent reader.
+func TestClient_Store_BatchMode_HonoursContextDeadline(t *testing.T) {
+	h := newWedgedBatchHarness(t)
+	hash := testStoreHash(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	out := storeAsync(ctx, h.client, hash)
+
+	// Precondition: the item reached the RPC and the RPC is stuck.
+	h.requireEntered(t)
+
+	o := requireStoreOutcome(t, out)
+
+	require.False(t, o.success, "an abandoned hand-off is not a success")
+	require.Error(t, o.err)
+	require.ErrorIs(t, o.err, context.DeadlineExceeded, "the caller's deadline must be what ends the wait")
+}
+
+// TestClient_Store_BatchMode_AbandonmentIsNotAShed pins the classification, which is
+// what keeps the validator out of its unwind branch.
+//
+// An early return here is abandonment, not cancellation: the item is on the batcher and
+// may still be dispatched, so the transaction may yet reach block assembly. A shed, by
+// contrast, is unwound by the caller — record deleted, inputs unspent. Doing that to a
+// transaction still in flight could delete a record already in a subtree or a mining
+// template, so the two must never be confusable.
+func TestClient_Store_BatchMode_AbandonmentIsNotAShed(t *testing.T) {
+	h := newWedgedBatchHarness(t)
+	hash := testStoreHash(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	out := storeAsync(ctx, h.client, hash)
+
+	h.requireEntered(t)
+
+	o := requireStoreOutcome(t, out)
+
+	require.False(t, o.success)
+	require.Error(t, o.err)
+	require.NotErrorIs(t, o.err, errors.ErrThresholdExceeded,
+		"an abandoned hand-off must not be mistakable for a queue-full shed, or the caller unwinds a transaction that may still be in flight")
+}
+
+// TestClient_Store_BatchMode_LateCompletionAfterAbandonIsSafe pins that abandoning a
+// wait does not corrupt the batcher or the completion group.
+//
+// After Store has returned, the dispatcher still finishes the already-abandoned item —
+// the late result write that now has no reader. Nothing may panic, and the client must
+// remain usable. The wedged-RPC precondition is what makes this a genuinely late
+// completion rather than a no-op on an item that was never dispatched.
+func TestClient_Store_BatchMode_LateCompletionAfterAbandonIsSafe(t *testing.T) {
+	h := newWedgedBatchHarness(t)
+	hash := testStoreHash(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	out := storeAsync(ctx, h.client, hash)
+
+	h.requireEntered(t)
+
+	o := requireStoreOutcome(t, out)
+	require.Error(t, o.err, "precondition: the first hand-off was abandoned")
+
+	// Let the dispatcher complete the already-abandoned item.
+	h.release()
+
+	require.Eventually(t, func() bool { return h.completed() >= 1 }, 10*time.Second, 5*time.Millisecond,
+		"the dispatcher must finish the abandoned item; that completion is the write with no reader")
+
+	// The client is still usable: a fresh hand-off on an uncancelled context waits to
+	// completion and succeeds, exactly as batch mode always did.
+	success, err := h.client.Store(context.Background(), hash, 1000, 250, subtree.TxInpoints{})
+	require.NoError(t, err, "abandoning a wait must not leave the batcher or the completion group broken")
+	require.True(t, success)
 }
 
 func TestClient_RemoveTx(t *testing.T) {
