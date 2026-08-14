@@ -7520,8 +7520,8 @@
 </ul>
 <h2 id="3-architecture">3. Architecture<a class="headerlink" href="#3-architecture" title="Permanent link">&para;</a></h2>
 <h3 id="31-lock-record-structure">3.1. Lock Record Structure<a class="headerlink" href="#31-lock-record-structure" title="Permanent link">&para;</a></h3>
-<p>Lock records are special Aerospike records identified by a unique index (<code>0xFFFFFFFF</code>) that cannot conflict with actual sub-records:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">LockRecordIndex</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">uint32</span><span class="p">(</span><span class="mh">0xFFFFFFFF</span><span class="p">)</span>
+<p>Lock records are special Aerospike records identified by a unique index (<code>0xFFFFFFFE</code>) that cannot conflict with actual sub-records:</p>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">LockRecordIndex</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">uint32</span><span class="p">(</span><span class="mh">0xFFFFFFFE</span><span class="p">)</span>
 </span></code></pre></div>
 <p><strong>Lock Record Bins:</strong></p>
 <table>
@@ -7558,6 +7558,11 @@
 <td><code>int</code></td>
 <td>Number of records to be created</td>
 </tr>
+<tr>
+<td><code>lock_token</code></td>
+<td><code>string</code></td>
+<td>Random token (at least 128 bits) identifying this acquisition</td>
+</tr>
 </tbody>
 </table>
 <h3 id="32-creating-flag">3.2. Creating Flag<a class="headerlink" href="#32-creating-flag" title="Permanent link">&para;</a></h3>
@@ -7577,7 +7582,7 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Transaction with N batches:
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>┌─────────────────────┐
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>│   Lock Record       │  Index: 0xFFFFFFFF (temporary)
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>│   Lock Record       │  Index: 0xFFFFFFFE (temporary)
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>│   TTL: 30-300s      │
 </span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>└─────────────────────┘
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
@@ -7608,6 +7613,7 @@
 <li>
 <p><strong>Acquire Lock</strong></p>
 <ul>
+<li>Generate a fresh random <code>lock_token</code> identifying this acquisition</li>
 <li>Create lock record with CREATE_ONLY policy</li>
 <li>If lock exists, return <code>TxExistsError</code> (another process is creating)</li>
 <li>Calculate dynamic TTL based on number of records</li>
@@ -7632,7 +7638,10 @@
 <li>
 <p><strong>Release Lock</strong></p>
 <ul>
-<li>Delete lock record (always, even on partial failure)</li>
+<li>Attempt the lock-record delete on every path, including partial failure,
+  gated by a filter expression on <code>lock_token</code> so a release that arrives
+  after the lock expired and was re-acquired by another writer is a no-op
+  rather than evicting the new holder's lock</li>
 <li>Partial records remain for next attempt to complete</li>
 </ul>
 </li>
