@@ -833,6 +833,11 @@ type ClientI interface {
 	// path that reaches block assembly, gate it here too, and add it to the table in the
 	// blockassembly_maxTransactionsInMemory setting documentation.
 	//
+	// The first three refuse, so the sender retries and the transaction arrives again once there is
+	// room. The subtree path does not: it silently skips the template insert, and nothing revisits
+	// those transactions when the flag clears. They still carry UnminedSince, so the next restart
+	// reloads them, but within a running process they enter the template only via a block.
+	//
 	// It is deliberately not part of the FSM, because fullness is orthogonal to the node lifecycle:
 	// a full node stays RUNNING and keeps syncing.
 	//

@@ -1377,33 +1377,55 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 // status. The ingress gate above refuses with ErrServiceUnavailable while block assembly holds its
 // configured maximum in memory.
 //
-// The gate check reads the live flag rather than matching the error class alone, because
-// ErrServiceUnavailable is not exclusive to the gate: the file blob store raises it when a read or
-// write permit times out, and the Aerospike UTXO store raises it for an open circuit breaker or a
-// batch timeout. Those are genuine faults and must keep their error-level log. Pairing the class
-// with the flag is precise, because the gate returns before storeTransaction, so a store failure
-// cannot be the error here while the flag is set.
+// The gate is matched on the *top-level* error code, not with errors.Is. ErrServiceUnavailable is
+// not exclusive to the gate — the file blob store raises it for a read/write permit timeout, and
+// the Aerospike UTXO store for an open circuit breaker or a batch timeout — and errors.Is walks the
+// whole wrap chain, so it would match those too and demote a genuine fault to a debug line.
+// The top-level code separates them exactly, because every path in processTransactionInternal that
+// can surface a downstream ErrServiceUnavailable re-wraps it under a different code first:
+// storeTransaction under ErrStorageError, validateTransactionViaHTTP under ErrServiceError, and the
+// direct validator call under ErrProcessingError. The gate is the only site that returns a bare
+// ErrServiceUnavailable, so a top-level ERR_SERVICE_UNAVAILABLE here is the refusal and nothing
+// else.
+//
+// This deliberately no longer consults the live flag. Pairing the error class with the flag left
+// two holes: a downstream fault raised after the gate passed but before the flag cleared was still
+// demoted, and a refusal whose flag cleared before the log call was still logged at error level.
+// The code carries the fact on its own, so neither race exists.
 func (ps *PropagationServer) isTransientBackpressure(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// The gate refusal is tested first because the admission-control test below is the expensive
-	// half, and this is the branch a refusal takes. A teranode *Error does not implement
-	// GRPCStatus(), so status.Code falls through to status.FromError, which renders the whole
-	// wrapped message and allocates a Status before returning Unknown. This function runs once per
-	// refused transaction, at full inbound rate, on a node already short of memory. Keep the two
-	// atomic loads ahead of the status conversion.
-	//
-	// errors.Is unwraps a gRPC-wrapped error itself, so this matches the refusal both as the direct
-	// application error and as the status the gRPC handler flattens it into for the UDP worker.
-	if ps.blockchainClient != nil &&
-		ps.blockchainClient.IsBlockAssemblyFull() &&
-		errors.Is(err, errors.ErrServiceUnavailable) {
+	// Fast path: the refusal as raised in this process. One type assertion and an integer compare —
+	// no chain walk, no status conversion, no allocation. A teranode *Error does not implement
+	// GRPCStatus(), so reaching for status.Code first would fall through to status.FromError, which
+	// renders the whole wrapped message and allocates a Status before returning Unknown. This runs
+	// once per refused transaction, at full inbound rate, on a node already short of memory.
+	if tErr, ok := err.(*errors.Error); ok {
+		return tErr.Code() == errors.ERR_SERVICE_UNAVAILABLE
+	}
+
+	// Everything else is a gRPC status: either the batch handler's bare Unavailable admission
+	// control, or the flattened form of the refusal that the UDP worker sees, because it calls
+	// ProcessTransaction and so receives WrapGRPCPublic's status rather than the application error.
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+
+	if st.Code() == codes.Unavailable {
 		return true
 	}
 
-	return status.Code(err) == codes.Unavailable
+	// ERR_SERVICE_UNAVAILABLE maps to codes.Internal rather than codes.Unavailable, so the status
+	// code alone cannot see the refusal. WrapGRPCPublic attaches the top-level application code as a
+	// TError detail; recover it from there.
+	if unwrapped := errors.UnwrapGRPC(err); unwrapped != nil {
+		return unwrapped.Code() == errors.ERR_SERVICE_UNAVAILABLE
+	}
+
+	return false
 }
 
 // logTxProcessingError logs a transaction processing failure at a level appropriate to the cause.

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/propagation/propagation_api"
@@ -101,17 +102,38 @@ func TestProcessTransactionRejectedWhenBlockAssemblyFull(t *testing.T) {
 //
 // The classification must be narrow. ErrServiceUnavailable is not exclusive to the ingress gate: the
 // file blob store raises it when a read or write permit times out, and the Aerospike UTXO store
-// raises it for an open circuit breaker or a batch timeout. Matching the error class alone would
-// demote a disk stall or a tripped circuit breaker to debug, where the default log level discards
-// it, and neither the rejection counter nor block assembly's transition warning would fire for it.
-// So the refusal is recognised by the class AND the live flag together.
+// raises it for an open circuit breaker or a batch timeout. Matching the error class with errors.Is
+// would walk the wrap chain into those and demote a disk stall or a tripped circuit breaker to
+// debug, where the default log level discards it, and neither the rejection counter nor block
+// assembly's transition warning would fire for it.
+//
+// So the refusal is recognised by its TOP-LEVEL error code. Every path that can surface a downstream
+// ErrServiceUnavailable re-wraps it under a different code first (ErrStorageError,
+// ErrServiceError, ErrProcessingError), and the gate is the only site returning a bare
+// ErrServiceUnavailable, so the top-level code separates them exactly.
+//
+// The live flag is deliberately not consulted. It used to be ANDed with the error class, which left
+// two races: a downstream fault raised after the gate passed but before the flag cleared was demoted
+// anyway, and a genuine refusal whose flag cleared before the log call was logged at error level.
+// The cases below pin both directions against the flag, so a reintroduced dependency fails here.
 func TestIsTransientBackpressure(t *testing.T) {
 	fullErr := errors.NewServiceUnavailableError("block assembly is full, not accepting new transactions")
 
 	// What a stalled file blob store looks like by the time it reaches a log site: propagation wraps
-	// the store failure in a StorageError, and errors.Is walks the chain down to the inner code.
+	// the store failure in a StorageError, so only the inner code is ErrServiceUnavailable.
 	storeOutage := errors.NewStorageError("[ProcessTransaction] failed to save transaction",
 		errors.NewServiceUnavailableError("[File] write operation timed out waiting for semaphore permit"))
+
+	// What a tripped Aerospike circuit breaker looks like coming back from the direct validator call,
+	// which wraps it in a ProcessingError. This is raised AFTER the gate has already let the
+	// transaction through, so it can reach a log site while the flag is set.
+	validatorOutage := errors.NewProcessingError("[ProcessTransaction] failed to validate transaction",
+		errors.NewServiceUnavailableError("[Aerospike] circuit breaker is open"))
+
+	// What the validator HTTP fallback returns for a 503 from the validator: a ServiceError, again
+	// raised after the gate.
+	validatorHTTPOutage := errors.NewServiceError(
+		"[ProcessTransaction] validator /tx endpoint returned non-OK status: 503, body: overloaded")
 
 	tests := []struct {
 		name              string
@@ -145,10 +167,39 @@ func TestIsTransientBackpressure(t *testing.T) {
 			expected:          false,
 		},
 		{
-			name:              "the refusal error class alone is not enough while block assembly has room",
+			// The regression case: the gate returns before storeTransaction, but the flag can be set
+			// by the time a transaction that already passed the gate fails in the store. Demoting
+			// this would silence a disk stall exactly when the node is under pressure.
+			name:              "a store outage must keep its error level while block assembly is full",
+			err:               storeOutage,
+			blockAssemblyFull: true,
+			expected:          false,
+		},
+		{
+			name:              "a tripped validator circuit breaker keeps its error level while full",
+			err:               validatorOutage,
+			blockAssemblyFull: true,
+			expected:          false,
+		},
+		{
+			name:              "a 503 from the validator HTTP fallback keeps its error level while full",
+			err:               validatorHTTPOutage,
+			blockAssemblyFull: true,
+			expected:          false,
+		},
+		{
+			// The other direction: the flag can clear between the gate refusing and the caller
+			// logging. The refusal is still a refusal, so it must stay at debug.
+			name:              "the refusal is still recognised once the flag has cleared",
 			err:               fullErr,
 			blockAssemblyFull: false,
-			expected:          false,
+			expected:          true,
+		},
+		{
+			name:              "the flattened refusal is still recognised once the flag has cleared",
+			err:               errors.WrapGRPCPublic(fullErr),
+			blockAssemblyFull: false,
+			expected:          true,
 		},
 		{
 			name:              "a genuine fault in the transaction still logs as an error",
@@ -225,12 +276,20 @@ func TestHTTPStatusForBlockAssemblyFull(t *testing.T) {
 
 // TestIsTransientBackpressureWithoutBlockchainClient checks the nil-client path, which a propagation
 // server configured without a blockchain client takes for every error.
+//
+// Classification reads the error alone, so it must behave identically with no client at all. That is
+// what makes it safe on the paths where the flag has already moved on by the time we log.
 func TestIsTransientBackpressureWithoutBlockchainClient(t *testing.T) {
 	ps := &PropagationServer{}
 
-	require.False(t, ps.isTransientBackpressure(
+	require.True(t, ps.isTransientBackpressure(
 		errors.NewServiceUnavailableError("block assembly is full, not accepting new transactions")),
-		"with no blockchain client there is no full condition to recognise, so the error keeps its level")
+		"the refusal is carried by the error code, so it is recognised without consulting a client")
+
+	require.False(t, ps.isTransientBackpressure(
+		errors.NewStorageError("failed to save transaction",
+			errors.NewServiceUnavailableError("[File] write operation timed out waiting for semaphore permit"))),
+		"a wrapped store outage is a fault, not backpressure, whatever the client reports")
 
 	require.True(t, ps.isTransientBackpressure(status.Error(codes.Unavailable, "server at capacity")),
 		"admission control does not depend on block assembly, so it is still backpressure")
@@ -269,4 +328,30 @@ func TestProcessTransactionAcceptedWhenBlockAssemblyNotFull(t *testing.T) {
 		Tx: txs[1].ExtendedBytes(),
 	})
 	require.NoError(t, err)
+}
+
+// BenchmarkIsTransientBackpressure pins the cost of classifying the ingress refusal.
+//
+// This runs once per refused transaction, at full inbound rate, for as long as block assembly stays
+// full — on a node that is already short of memory, which is the whole reason the refusal exists. It
+// must not allocate on the path a refusal actually takes.
+//
+// The refusal is a teranode *Error, which does not implement GRPCStatus(). Reaching for status.Code
+// first would therefore fall through to status.FromError, rendering the whole wrapped message and
+// allocating a Status before returning Unknown. Matching the top-level code with a type assertion
+// keeps the hot path free of both.
+func BenchmarkIsTransientBackpressure(b *testing.B) {
+	ps := &PropagationServer{}
+
+	refusal := errors.NewServiceUnavailableError(
+		"[ProcessTransaction][%s] block assembly is full, not accepting new transactions",
+		chainhash.Hash{})
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if !ps.isTransientBackpressure(refusal) {
+			b.Fatal("the refusal must classify as backpressure")
+		}
+	}
 }

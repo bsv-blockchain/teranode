@@ -867,14 +867,24 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// The check sits before the txStore write for the same reason it does in propagation: a refused
 	// transaction should cost no storage. It is logged at debug rather than error, because while the
 	// condition lasts it fires once per submission and is transient backpressure, not a fault.
+	//
+	// The error deliberately does not use txRejectedPrefix or ErrRPCInternal. Both say the wrong
+	// thing: the transaction was not rejected, it was not looked at, and the node is not broken. A
+	// broadcaster that reads "TX rejected" treats the verdict as final and drops the transaction
+	// rather than resubmitting, which is the opposite of what the HTTP surface is told, where the
+	// same refusal maps to 503 precisely so the client backs off and retries.
+	//
+	// ErrRPCOutOfMemory (-7) is Bitcoin Core's code for a node that ran out of room during an
+	// operation. It is a node-resource condition rather than a transaction verdict, which is exactly
+	// what this is, and it is already in the set of codes existing clients understand.
 	if s.blockchainClient != nil && s.blockchainClient.IsBlockAssemblyFull() {
 		prometheusTransactionsRejectedBlockAssemblyFull.Inc()
 
 		s.logger.Debugf("[handleSendRawTransaction] refusing %s, block assembly is full", tx.TxID())
 
 		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: txRejectedPrefix + "block assembly is full, not accepting new transactions",
+			Code:    bsvjson.ErrRPCOutOfMemory,
+			Message: "block assembly is full, not accepting new transactions, please retry",
 		}
 	}
 

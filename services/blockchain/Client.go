@@ -1859,7 +1859,17 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 // assembly has stopped, and ingress would stay refused until this process restarted. Once
 // blockAssemblyFullTTL passes with no announcement, the refusal lapses and this reports false again.
 func (c *Client) IsBlockAssemblyFull() bool {
-	return c.blockAssemblyFull.isFull(time.Now())
+	full, expired := c.blockAssemblyFull.isFull(time.Now())
+	if expired {
+		// Warn, not debug: the limit has just stopped being enforced on this ingress point. Either
+		// block assembly was reconfigured or stopped, in which case this is expected, or the
+		// notification path between us and it has broken while it is still full, in which case this
+		// is the only signal that the node is about to start accepting unbounded work again. Logged
+		// once per expiry, not once per transaction.
+		c.logger.Warnf("[Blockchain] no block assembly full notification for %s, resuming transaction ingress", blockAssemblyFullTTL)
+	}
+
+	return full
 }
 
 // IsFSMCurrentState checks if the current FSM state matches the provided state.

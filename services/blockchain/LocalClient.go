@@ -45,7 +45,12 @@ type LocalClient struct {
 // The flag is updated from BlockAssemblyFull notifications passed through SendNotification, and a
 // cached refusal expires after blockAssemblyFullTTL, mirroring the gRPC Client.
 func (c *LocalClient) IsBlockAssemblyFull() bool {
-	return c.blockAssemblyFull.isFull(time.Now())
+	full, expired := c.blockAssemblyFull.isFull(time.Now())
+	if expired {
+		c.logger.Warnf("[Blockchain] no block assembly full notification for %s, resuming transaction ingress", blockAssemblyFullTTL)
+	}
+
+	return full
 }
 
 // NewLocalClient creates a new LocalClient instance with the provided dependencies.

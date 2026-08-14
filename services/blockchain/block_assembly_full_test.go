@@ -73,6 +73,14 @@ func TestClientIsBlockAssemblyFull(t *testing.T) {
 	require.False(t, c.IsBlockAssemblyFull())
 }
 
+// fullAt reports the cached decision at an instant, discarding the one-shot expiry signal that only
+// the clients act on. The expiry signal has its own subtest below.
+func fullAt(s *blockAssemblyFullState, when time.Time) bool {
+	full, _ := s.isFull(when)
+
+	return full
+}
+
 // TestBlockAssemblyFullStateExpiry checks that a cached refusal lapses when block assembly stops
 // re-announcing it.
 //
@@ -84,13 +92,40 @@ func TestBlockAssemblyFullStateExpiry(t *testing.T) {
 	// A fixed base instant, so the test states the ages it means rather than sleeping.
 	base := time.Unix(1_700_000_000, 0)
 
+	t.Run("an expiry reports itself exactly once", func(t *testing.T) {
+		var s blockAssemblyFullState
+
+		s.set(true, base)
+
+		full, expired := s.isFull(base.Add(blockAssemblyFullTTL + time.Nanosecond))
+		require.False(t, full)
+		require.True(t, expired,
+			"the call that observes the lapse must report it, so fail-open is not silent")
+
+		// Ingress calls this per transaction. Reporting on every one of them would turn a single
+		// lapse into a log flood on a node that is already under pressure.
+		for range 100 {
+			full, expired = s.isFull(base.Add(time.Hour))
+			require.False(t, full)
+			require.False(t, expired, "the expiry must be reported once, not once per transaction")
+		}
+
+		// A later re-announcement must still take effect: the expiry cleared the cached flag, it did
+		// not latch the client into ignoring block assembly.
+		s.set(true, base.Add(2*time.Hour))
+
+		full, expired = s.isFull(base.Add(2 * time.Hour))
+		require.True(t, full, "a fresh refusal after an expiry must be honoured again")
+		require.False(t, expired)
+	})
+
 	t.Run("a fresh refusal is honoured", func(t *testing.T) {
 		var s blockAssemblyFullState
 
 		s.set(true, base)
 
-		require.True(t, s.isFull(base))
-		require.True(t, s.isFull(base.Add(blockAssemblyFullTTL)),
+		require.True(t, fullAt(&s, base))
+		require.True(t, fullAt(&s, base.Add(blockAssemblyFullTTL)),
 			"the refusal must still hold at exactly the TTL")
 	})
 
@@ -99,9 +134,9 @@ func TestBlockAssemblyFullStateExpiry(t *testing.T) {
 
 		s.set(true, base)
 
-		require.False(t, s.isFull(base.Add(blockAssemblyFullTTL+time.Nanosecond)),
+		require.False(t, fullAt(&s, base.Add(blockAssemblyFullTTL+time.Nanosecond)),
 			"once block assembly stops announcing, ingress must reopen rather than refuse forever")
-		require.False(t, s.isFull(base.Add(time.Hour)))
+		require.False(t, fullAt(&s, base.Add(time.Hour)))
 	})
 
 	t.Run("the heartbeat keeps a genuine refusal alive", func(t *testing.T) {
@@ -115,7 +150,7 @@ func TestBlockAssemblyFullStateExpiry(t *testing.T) {
 			now = now.Add(10 * time.Second)
 			s.set(true, now)
 
-			require.True(t, s.isFull(now),
+			require.True(t, fullAt(&s, now),
 				"a re-announced refusal must never expire, however long block assembly stays full")
 		}
 	})
@@ -125,7 +160,7 @@ func TestBlockAssemblyFullStateExpiry(t *testing.T) {
 
 		s.set(false, base)
 
-		require.False(t, s.isFull(base.Add(time.Hour)))
+		require.False(t, fullAt(&s, base.Add(time.Hour)))
 	})
 
 	t.Run("clearing then re-refusing restarts the clock", func(t *testing.T) {
@@ -135,8 +170,8 @@ func TestBlockAssemblyFullStateExpiry(t *testing.T) {
 		s.set(false, base.Add(time.Second))
 		s.set(true, base.Add(2*time.Second))
 
-		require.True(t, s.isFull(base.Add(2*time.Second+blockAssemblyFullTTL)))
-		require.False(t, s.isFull(base.Add(2*time.Second+blockAssemblyFullTTL+time.Nanosecond)))
+		require.True(t, fullAt(&s, base.Add(2*time.Second+blockAssemblyFullTTL)))
+		require.False(t, fullAt(&s, base.Add(2*time.Second+blockAssemblyFullTTL+time.Nanosecond)))
 	})
 
 	t.Run("the TTL leaves room for the publisher heartbeat", func(t *testing.T) {

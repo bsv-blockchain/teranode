@@ -161,6 +161,15 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 	// are still created and their metadata is still cached, so a later block carrying them validates
 	// normally. This mirrors what CheckSubtree already does while catching up blocks, where
 	// bulk-history transactions do not belong in the template either.
+	//
+	// Note that unlike the other three ingress points, this one does not refuse and so gets no retry:
+	// propagation, netsync and the RPC return an error and the sender resubmits, whereas a subtree
+	// transaction skipped here is not revisited when the flag clears. It reaches the mining template
+	// only when a block carrying it arrives, or on the next restart. The restart path works because
+	// the transaction is still created with UnminedSince set — that is driven by the absence of
+	// block IDs, not by this flag — so loadUnminedTransactions picks it up. The consequence to be
+	// aware of is that a transaction announced only during the full window, whose subtree is never
+	// mined by anyone, stays out of this node's template for the life of the process.
 	if u.blockchainClient != nil && u.blockchainClient.IsBlockAssemblyFull() {
 		prometheusSubtreeValidationTxsNotAddedToBlockAssemblyFull.Inc()
 

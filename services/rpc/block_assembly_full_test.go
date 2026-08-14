@@ -68,6 +68,16 @@ func TestHandleSendRawTransactionRejectedWhenBlockAssemblyFull(t *testing.T) {
 	require.True(t, ok, "the handler must return a JSON-RPC error, got %T", err)
 	require.Contains(t, rpcErr.Message, "block assembly is full")
 
+	// The refusal must not read as a verdict on the transaction. A broadcaster that is told
+	// "TX rejected" treats it as final and drops the transaction, and one told ErrRPCInternal treats
+	// the node as broken; neither backs off and resubmits, which is the only correct response to a
+	// condition that clears on its own. This is the JSON-RPC counterpart of the 503 the HTTP surface
+	// returns for the same refusal.
+	require.Equal(t, bsvjson.ErrRPCOutOfMemory, rpcErr.Code,
+		"a refusal is a node-resource condition, not a rejected transaction")
+	require.NotContains(t, rpcErr.Message, txRejectedPrefix,
+		"the transaction was not rejected, it was never looked at")
+
 	// The refusal must cost no storage, which is the whole reason the check sits before txStore.Set.
 	stored, err := txStoreHasCmdTx(ctx, txStore, cmd)
 	require.NoError(t, err)

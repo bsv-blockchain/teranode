@@ -88,16 +88,28 @@ func (s *blockAssemblyFullState) set(full bool, now time.Time) (changed bool) {
 // A cached full=true is only honoured while it is fresh. Once blockAssemblyFullTTL has passed with
 // no further announcement, block assembly is either running without a limit or is not running at
 // all, and either way it is no longer asking for ingress to stop.
-func (s *blockAssemblyFullState) isFull(now time.Time) bool {
+//
+// The second return value is true on the single call that observes the expiry. Lapsing towards
+// not-full is a fail-open: if the notification bus degrades — which is plausible precisely when the
+// node is under memory pressure, and which the blockchain server can cause on its own by evicting a
+// subscriber whose buffer filled — the limit silently stops being enforced. That is the right
+// default, but it must not be invisible, so the caller gets one chance to say so. It is reported
+// exactly once because the expiry also clears the cached flag: whoever wins the CompareAndSwap owns
+// reporting it, and every later call takes the cheap not-full path above.
+func (s *blockAssemblyFullState) isFull(now time.Time) (full bool, expired bool) {
 	if !s.full.Load() {
-		return false
+		return false, false
 	}
 
 	lastHeardAt := s.lastHeardAt.Load()
 	if lastHeardAt == 0 {
 		// full was set without a timestamp, so treat it as fresh rather than silently ignoring it
-		return true
+		return true, false
 	}
 
-	return now.Sub(time.Unix(0, lastHeardAt)) <= blockAssemblyFullTTL
+	if now.Sub(time.Unix(0, lastHeardAt)) <= blockAssemblyFullTTL {
+		return true, false
+	}
+
+	return false, s.full.CompareAndSwap(true, false)
 }

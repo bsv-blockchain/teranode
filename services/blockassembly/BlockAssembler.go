@@ -296,6 +296,15 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	b.txIngressLimit = tSettings.BlockAssembly.MaxTransactionsInMemory
 	b.txIngressResume = resumeWatermark(b.txIngressLimit, tSettings.BlockAssembly.MaxTransactionsInMemoryResume)
+
+	// Say so when a configured resume watermark was discarded. Silently substituting a derived value
+	// for an operator's explicit setting is how a misconfiguration survives to production: the node
+	// behaves sanely, so nothing draws attention to the ignored value.
+	if configuredResume := tSettings.BlockAssembly.MaxTransactionsInMemoryResume; b.txIngressLimit > 0 &&
+		configuredResume > 0 && configuredResume != b.txIngressResume {
+		logger.Warnf("[BlockAssembler] ignoring blockassembly_maxTransactionsInMemoryResume=%d, it must be below blockassembly_maxTransactionsInMemory=%d, using %d instead",
+			configuredResume, b.txIngressLimit, b.txIngressResume)
+	}
 	b.txIngressEvaluateInterval = txIngressEvaluateInterval
 	b.txIngressHeartbeatInterval = txIngressHeartbeatInterval
 
@@ -491,6 +500,11 @@ func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
 
 	go func() {
 		defer b.wg.Done()
+
+		// Leave the gauge reporting "not refusing" when the monitor stops. Nothing else writes it, so
+		// a monitor that exits while full would otherwise leave a permanent 1 on a process that is no
+		// longer refusing anything, and any alert built on it would never clear.
+		defer prometheusBlockAssemblerTxIngressFull.Set(0)
 
 		evaluateTicker := time.NewTicker(b.txIngressEvaluateInterval)
 		defer evaluateTicker.Stop()
