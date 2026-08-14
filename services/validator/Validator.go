@@ -77,27 +77,47 @@ const (
 	// when the node is already shedding.
 	shedUnwindVerifyAttempts = 3
 	shedUnwindVerifyBackoff  = 5 * time.Millisecond
+
+	// defaultHandoffRoundTripSlack is the allowance added to block assembly's own
+	// bounded queue wait when sizing the per-attempt hand-off deadline. It covers the
+	// gRPC round trip, the batcher dispatch and the server's queue-full poll
+	// granularity.
+	//
+	// Deliberately small, because it is subtracted from the ingest retry window (see
+	// Validator.handoffFloor). Operators size it with validator_handoffRoundTripSlack;
+	// this is the fallback for a Settings struct that never went through the loader.
+	defaultHandoffRoundTripSlack = 500 * time.Millisecond
+
+	// defaultShedUnwindTimeout is the fallback for validator_shedUnwindTimeout, which
+	// bounds the whole unwind. The context reaching the unwind is detached from the
+	// caller by design, so this is what stops a wedged store from parking an ingest
+	// goroutine on a best-effort cleanup path. It sits OUTSIDE the hand-off budget —
+	// the unwind only starts once the hand-off has given up — so an ingest goroutine's
+	// total retention is BlockAssemblyShedRetryTimeout + ShedUnwindTimeout.
+	//
+	// It is ONE budget for the whole sequence, not a per-phase one: the Delete, up to
+	// shedUnwindVerifyAttempts verify reads with shedUnwindVerifyBackoff between them,
+	// and the Unspend all share it. Under a slow store the verify read therefore gets
+	// fewer attempts than shedUnwindVerifyAttempts before the context short-circuits
+	// it, and the unwind fails closed having effectively tried once — which is why the
+	// setting's longdesc carries a sizing rule keyed on the store's P99 rather than
+	// just a default.
+	//
+	// 2s covers one Delete, up to shedUnwindVerifyAttempts verify reads and one Unspend
+	// against a store whose healthy latency is sub-millisecond.
+	defaultShedUnwindTimeout = 2 * time.Second
 )
 
-// handoffRoundTripSlack is the allowance added to block assembly's own bounded queue
-// wait when sizing the per-attempt hand-off deadline. It covers the gRPC round trip,
-// the batcher dispatch and the server's queue-full poll granularity.
+// twoPhaseCommitTimeout bounds the 2PC unlock. The context reaching it is detached
+// from the caller by design, so this is what stops a wedged store from parking an
+// ingest goroutine on post-acceptance bookkeeping. It does NOT widen the retention
+// figure the validator_blockAssemblyShedRetryTimeout longdesc quotes: the shed
+// unwind and the 2PC unlock are mutually exclusive (a shed returns at Validate's
+// send-failure arm and never reaches the commit), so the worst case is
+// max(ShedUnwindTimeout, twoPhaseCommitTimeout), not their sum.
 //
-// Deliberately small, because it is subtracted from the ingest retry window (see
-// Validator.handoffFloor). A var, not a const, only so tests can shrink it.
-var handoffRoundTripSlack = 500 * time.Millisecond
-
-// shedUnwindTimeout bounds the whole unwind (delete, verify reads, unspend). The
-// context reaching the unwind is detached from the caller by design, so this is what
-// stops a wedged store from parking an ingest goroutine on a best-effort cleanup
-// path. It sits OUTSIDE the hand-off budget — the unwind only starts once the
-// hand-off has given up — so an ingest goroutine's total retention is
-// BlockAssemblyShedRetryTimeout + shedUnwindTimeout.
-//
-// 2s covers one Delete, up to shedUnwindVerifyAttempts verify reads and one Unspend
-// against a store whose healthy latency is sub-millisecond. A var only so tests can
-// shrink it.
-var shedUnwindTimeout = 2 * time.Second
+// A var only so tests can shrink it.
+var twoPhaseCommitTimeout = 2 * time.Second
 
 const (
 
@@ -274,7 +294,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// effective bound is then the floor rather than the configured window, which an
 	// operator should not have to derive from the source.
 	if floor := v.handoffFloor(); floor >= v.shedRetryTimeout() {
-		logger.Warnf("[Validator] validator_blockAssemblyShedRetryTimeout=%s is not greater than the block-assembly handoff floor %s (blockassembly_queueFullWaitTimeout=%s plus %s round-trip slack), so a queue-full handoff makes one bounded attempt with no retries and the effective ingest stall bound is %s, not the configured window", v.shedRetryTimeout(), floor, tSettings.BlockAssembly.QueueFullWaitTimeout, handoffRoundTripSlack, floor)
+		logger.Warnf("[Validator] validator_blockAssemblyShedRetryTimeout=%s is not greater than the block-assembly handoff floor %s (blockassembly_queueFullWaitTimeout=%s plus validator_handoffRoundTripSlack=%s), so a queue-full handoff makes one bounded attempt with no retries and the effective ingest stall bound is %s, not the configured window; to restore retries either raise validator_blockAssemblyShedRetryTimeout above the floor or lower validator_handoffRoundTripSlack", v.shedRetryTimeout(), floor, tSettings.BlockAssembly.QueueFullWaitTimeout, v.handoffRoundTripSlack(), floor)
 	}
 
 	txmetaKafkaURL := v.settings.Kafka.TxMetaConfig
@@ -889,11 +909,37 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// WithoutCancel also keeps context values, which the tracing-enabled path (built
 	// on context.Background) drops.
 	//
-	// Detached does not mean unbounded. The two operations that can park on a remote
-	// or a wedged store carry their own hard deadlines: the block-assembly hand-off
-	// (see handoffFloor) and the shed unwind (see shedUnwindTimeout). The Kafka retry
-	// loop below still honours caller cancellation, deliberately and explicitly,
-	// through its own select on ctx.
+	// Detached does not mean unbounded — but the bounding is deliberately PARTIAL, so
+	// read this as a list rather than a guarantee.
+	//
+	// Bounded, each with its own hard deadline:
+	//
+	//   - the block-assembly hand-off (see handoffFloor), in both the unary and the
+	//     batched block-assembly client;
+	//   - the shed unwind (see shedUnwindTimeout);
+	//   - the two-phase-commit unlock (see twoPhaseCommitTimeout).
+	//
+	// NOT bounded here, deliberately, and therefore reliant on the store's own
+	// client-level timeouts: the primary SpendAndCreate below, and the store reads and
+	// writes on the error and duplicate paths — the GetMeta after ErrTxExists, the
+	// conflicting-path CreateInUtxoStore and its GetMeta, MarkConflictingRecursively,
+	// and the GetMeta on the not-found path.
+	//
+	// The exposure is real rather than theoretical. Before this context was detached,
+	// process shutdown could eventually interrupt those calls; now nothing outside the
+	// store can. Aerospike mitigates with its own TotalTimeout/SocketTimeout, but the
+	// SQL/Postgres store applies no per-operation deadline of its own, so a wedged
+	// non-Aerospike store can retain an ingest goroutine indefinitely on those seams.
+	//
+	// SpendAndCreate is not bounded here because it is the acceptance operation, not
+	// bookkeeping: a deadline on it changes acceptance semantics under load — a
+	// slow-but-healthy store during a burst would start failing transactions — and it
+	// would fire mid-operation into the store's own spend-rollback-on-create-failure
+	// path. Sizing that deadline needs a load trace, so it is recorded here as a known
+	// gap rather than guessed at.
+	//
+	// The Kafka retry loop below still honours caller cancellation, deliberately and
+	// explicitly, through its own select on ctx.
 	decoupledCtx, _, deferFn := tracing.DecoupleTracingSpan(context.WithoutCancel(ctx), "validator", "decoupledSpan")
 	defer deferFn()
 
@@ -1222,7 +1268,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// seeing an unexplained hand-off failure.
 				if errors.Is(err, context.DeadlineExceeded) {
 					prometheusValidatorHandoffDeadlineTotal.Inc()
-					v.logger.Warnf("[Validate][%s] block-assembly handoff hit its own deadline (%s) so the transaction is left locked for the unmined reload, not unwound; if this recurs, blockassembly_queueFullWaitTimeout as seen by this process may under-report the block-assembly process's value - align it across both settings contexts, or raise validator_blockAssemblyShedRetryTimeout", txID, v.handoffFloor())
+					v.logger.Warnf("[Validate][%s] block-assembly handoff hit its own deadline (%s) so the transaction is left locked for the unmined reload, not unwound; if this recurs, blockassembly_queueFullWaitTimeout as seen by this process may under-report the block-assembly process's value - align it across both settings contexts, or raise validator_handoffRoundTripSlack, which is the term that actually widens this deadline (raising validator_blockAssemblyShedRetryTimeout buys more attempts but each still deadlines at the same floor)", txID, v.handoffFloor())
 				}
 
 				err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
@@ -1283,12 +1329,21 @@ func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Conte
 	return utxoHeights, nil
 }
 
-// twoPhaseCommitTransaction marks the transaction as spendable
+// twoPhaseCommitTransaction marks the transaction as spendable.
+//
+// Bounded by twoPhaseCommitTimeout: the context arriving here is detached from the
+// caller (see Validate), so without a deadline of its own a wedged store would park
+// this goroutine on what is post-acceptance bookkeeping. A timeout costs nothing the
+// code does not already handle — the failure arm below is explicit that the unlock is
+// recovered by the next block the transaction is mined into.
 func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, txID string) error {
 	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "twoPhaseCommitTransaction",
 		tracing.WithHistogram(prometheusTransaction2PhaseCommit),
 	)
 	defer endSpan()
+
+	ctx, cancel := context.WithTimeout(ctx, twoPhaseCommitTimeout)
+	defer cancel()
 
 	// the tx was marked as locked on creation, we have added it successfully to block assembly
 	// so we can now mark it as spendable again
@@ -1817,11 +1872,25 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 // sendToBlockAssembler sends validated transaction data to the block assembler.
 // Returns error if block assembly integration fails.
 //
-// The call is bounded by handoffFloor. The context arriving here is deliberately
-// detached from the caller (see Validate), so without a deadline of its own nothing
-// would stop a wedged block-assembly server from parking this goroutine — and, on the
-// Kafka ingest path, the record batch it holds — indefinitely. Applying it here rather
-// than at each call site covers the first hand-off and every retry from one place.
+// The call is bounded by handoffFloor, in BOTH the unary and the batched mode of the
+// block-assembly client. The context arriving here is deliberately detached from the
+// caller (see Validate), so without a deadline of its own nothing would stop a wedged
+// block-assembly server from parking this goroutine — and, on the Kafka ingest path,
+// the record batch it holds — indefinitely. Applying it here rather than at each call
+// site covers the first hand-off and every retry from one place.
+//
+// The two modes are bounded, but they are not semantically identical:
+//
+//   - Unary mode: the deadline cancels the in-flight gRPC call, so the transaction was
+//     not accepted by block assembly.
+//   - Batch mode (blockassembly_sendBatchSize > 0, the shipped default): the deadline
+//     abandons the WAIT but not the item. The batcher may still dispatch it, so the
+//     transaction MAY STILL REACH block assembly.
+//
+// That difference is why a deadline failure is deliberately never treated as a shed
+// and never unwound — deleting the record of a transaction that is still in flight
+// could remove one already in a subtree or a template. See the context.DeadlineExceeded
+// arm in Validate, which leaves it Locked for the unmined reload and counts it.
 func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "sendToBlockAssembler",
 		tracing.WithHistogram(prometheusValidatorSendToBlockAssembly),
@@ -1869,6 +1938,30 @@ func (v *Validator) shedRetryTimeout() time.Duration {
 	return defaultBlockAssemblyShedRetryTimeout
 }
 
+// shedUnwindTimeout returns the bound on the whole shed unwind, falling back to the
+// documented default when the setting is unset or nonsensical. Same reason as
+// shedRetryTimeout: tests build Settings structs directly, and a zero value here
+// would make the unwind's context already expired rather than unbounded.
+func (v *Validator) shedUnwindTimeout() time.Duration {
+	if t := v.settings.Validator.ShedUnwindTimeout; t > 0 {
+		return t
+	}
+
+	return defaultShedUnwindTimeout
+}
+
+// handoffRoundTripSlack returns the allowance added to block assembly's own queue
+// wait when sizing a single hand-off attempt, falling back to the documented default
+// when the setting is unset or nonsensical. A zero value would drop the margin the
+// shed classification depends on (see handoffFloor), so the fallback is not optional.
+func (v *Validator) handoffRoundTripSlack() time.Duration {
+	if t := v.settings.Validator.HandoffRoundTripSlack; t > 0 {
+		return t
+	}
+
+	return defaultHandoffRoundTripSlack
+}
+
 // handoffFloor is the ceiling on a SINGLE block-assembly hand-off attempt.
 //
 // Two constraints, in priority order:
@@ -1879,7 +1972,7 @@ func (v *Validator) shedRetryTimeout() time.Duration {
 //     shorter than that wait turns every queue-full shed into a context error: the
 //     resource-exhausted classification is lost, the shed unwind never runs, and the
 //     transaction is stranded locked. Hence the floor is the remote's wait plus
-//     handoffRoundTripSlack.
+//     handoffRoundTripSlack (validator_handoffRoundTripSlack).
 //  2. Subject to (1), the ingest hand-off should not outlast the retry window that
 //     BlockAssemblyShedRetryTimeout advertises. Validate subtracts this floor from
 //     that window, so the window and one final in-flight attempt together stay within
@@ -1907,7 +2000,7 @@ func (v *Validator) handoffFloor() time.Duration {
 		wait = 0
 	}
 
-	return wait + handoffRoundTripSlack
+	return wait + v.handoffRoundTripSlack()
 }
 
 // unwindShed reverses this call's UTXO-store work after a queue-full shed, so a
@@ -1987,13 +2080,16 @@ func (v *Validator) handoffFloor() time.Duration {
 // returned error is for callers that want to observe the unwind outcome; the shed path
 // deliberately ignores it.
 //
-// The context is bounded by shedUnwindTimeout, because the one it inherits is detached
-// from the caller and a wedged store would otherwise park an ingest goroutine on a
-// best-effort cleanup path.
+// The context is bounded by shedUnwindTimeout (validator_shedUnwindTimeout), because
+// the one it inherits is detached from the caller and a wedged store would otherwise
+// park an ingest goroutine on a best-effort cleanup path. That bound is ONE budget for
+// the delete, the verify reads and the unspend together, so a slow store spends it on
+// the earlier phases and the verify read can get fewer attempts than
+// shedUnwindVerifyAttempts before failing closed.
 func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spentUtxos []*utxo.Spend, createdRecord bool) error {
 	prometheusValidatorShedUnwindTotal.Inc()
 
-	ctx, cancel := context.WithTimeout(ctx, shedUnwindTimeout)
+	ctx, cancel := context.WithTimeout(ctx, v.shedUnwindTimeout())
 	defer cancel()
 
 	txHash := tx.TxIDChainHash()

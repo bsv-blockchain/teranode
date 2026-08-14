@@ -85,6 +85,38 @@ func TestValidatorSettings_BlockAssemblyShedRetryTimeout(t *testing.T) {
 	})
 }
 
+// TestValidatorSettings_ShedUnwindTimeout pins the default and the loader for the
+// bound on the shed unwind. It was a compiled-in constant, which left the operator
+// remedy for a store too slow to finish the unwind inside the cap — raise the cap —
+// unactionable without a rebuild.
+func TestValidatorSettings_ShedUnwindTimeout(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		require.Equal(t, 2*time.Second, NewSettings().Validator.ShedUnwindTimeout)
+	})
+
+	t.Run("loader reads the key", func(t *testing.T) {
+		t.Setenv("validator_shedUnwindTimeout", "5s")
+
+		require.Equal(t, 5*time.Second, NewSettings().Validator.ShedUnwindTimeout)
+	})
+}
+
+// TestValidatorSettings_HandoffRoundTripSlack pins the default and the loader for the
+// per-attempt handoff margin. It is the only term that widens the handoff deadline, so
+// it is the only effective remedy for the split-deployment settings skew the validator
+// already warns about at runtime.
+func TestValidatorSettings_HandoffRoundTripSlack(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		require.Equal(t, 500*time.Millisecond, NewSettings().Validator.HandoffRoundTripSlack)
+	})
+
+	t.Run("loader reads the key", func(t *testing.T) {
+		t.Setenv("validator_handoffRoundTripSlack", "1500ms")
+
+		require.Equal(t, 1500*time.Millisecond, NewSettings().Validator.HandoffRoundTripSlack)
+	})
+}
+
 // TestValidatorKafkaBackpressureSettings_ResumeClamp verifies a resume watermark
 // that is not strictly below the pause watermark is clamped to half the pause
 // watermark, while the controller stays enabled.
@@ -97,6 +129,29 @@ func TestValidatorKafkaBackpressureSettings_ResumeClamp(t *testing.T) {
 
 	require.True(t, kbp.Enabled, "a clampable resume watermark keeps the controller enabled")
 	require.Equal(t, 100*time.Millisecond, kbp.ResumeQueueAge, "resume clamped to half the pause watermark")
+
+	// A negative resume watermark is a distinct violation from a resume that is not
+	// strictly below the pause watermark: the "< pause" check passes for a negative
+	// value against a positive pause, so the clamp below it is the only place this
+	// shape can be reported. It used to clamp silently, which contradicted the
+	// contract on validated() that every violation is reported.
+	t.Run("negative resume is clamped and reported", func(t *testing.T) {
+		cfg, warnings := ValidatorKafkaBackpressureSettings{
+			Enabled:             true,
+			PauseQueueAge:       500 * time.Millisecond,
+			ResumeQueueAge:      -50 * time.Millisecond,
+			PollInterval:        50 * time.Millisecond,
+			ReadTimeout:         100 * time.Millisecond,
+			MaxPause:            30 * time.Second,
+			MaxFailOpenCooldown: time.Second,
+			StaleErrorLimit:     3,
+		}.validated()
+
+		require.Len(t, warnings, 1, "only the negative clamp fires: every other knob is coherent")
+		require.Contains(t, warnings[0], "resumeQueueAge")
+		require.Equal(t, time.Duration(0), cfg.ResumeQueueAge)
+		require.True(t, cfg.Enabled, "a clampable resume watermark keeps the controller enabled")
+	})
 }
 
 // TestValidatorKafkaBackpressureSettings_StaleErrorLimitFloor verifies a

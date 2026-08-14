@@ -725,12 +725,20 @@ func (k *KafkaConsumerGroup) startInMemory(ctx context.Context, consumerFn func(
 	// because InMemoryConsumerGroup.Consume does NOT return on context cancellation:
 	// its handler blocks in `range claim.Messages()`, that channel is fed from the
 	// broker's per-consumer channel, and that channel is only closed by Consume's own
-	// deferred cleanup — which cannot run until the handler returns. So the consume
-	// goroutine (and the pump feeding it) outlive a cancelled context and only unwind
-	// on Close; that is pre-existing in-memory behaviour, not something this flag
-	// changes. The defer below therefore only covers a Consume that returns for some
-	// other reason, such as a setup error, and this watcher covers the cancellation
-	// case, which is the common one.
+	// deferred cleanup — which cannot run until the handler returns.
+	//
+	// So cancelling the context does not by itself end that goroutine, and neither
+	// does Close(), which cancels and nothing more. The goroutine ends on the NEXT
+	// message: the wrapper returns its shutdown error for that record, ConsumeClaim
+	// returns it, and the loop breaks. Until a message arrives the goroutine stays
+	// parked — so after Close() the consumer already reports closed here while that
+	// goroutine may still process one more message. That is pre-existing in-memory
+	// (test-only) behaviour, not something this flag changes; the watcher exists so
+	// the closed flag is reached promptly regardless of when the next message lands.
+	//
+	// The defer below therefore only covers a Consume that returns for some other
+	// reason, such as a setup error, and this watcher covers the cancellation case,
+	// which is the common one.
 	//
 	// Because it waits on internalCtx, BOTH shutdown routes end it: a cancelled parent
 	// and Close().

@@ -69,11 +69,23 @@ type unlockSpy struct {
 	// unspendPartialErr, when set, makes Unspend delegate only the FIRST spend and
 	// then return this error — a partial failure on a multi-input transaction.
 	unspendPartialErr error
+
+	// setLockedBlocks makes the two-phase-commit unlock park until the context it was
+	// handed expires, modelling a wedged store on the post-acceptance bookkeeping path.
+	// It returns ctx.Err() rather than an error of its own, because that is the error
+	// the caller wraps and the one the assertions key on.
+	setLockedBlocks bool
 }
 
 func (s *unlockSpy) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	if !value {
 		s.unlockCalls++
+
+		if s.setLockedBlocks {
+			<-ctx.Done()
+
+			return ctx.Err()
+		}
 	}
 
 	return s.Store.SetLocked(ctx, txHashes, value)
@@ -168,17 +180,31 @@ func outpointOf(tx *bt.Tx, vout uint32) string {
 //
 // Returns the resulting floor so a test can reason about it explicitly rather than
 // re-deriving it.
+//
+// The slack is set on this validator's own settings rather than on package state, so
+// concurrently running tests cannot observe each other's shrink.
 func shrinkHandoffFloor(t *testing.T, v *Validator, queueWait, slack time.Duration) time.Duration {
 	t.Helper()
 
-	original := handoffRoundTripSlack
-	handoffRoundTripSlack = slack
-
-	t.Cleanup(func() { handoffRoundTripSlack = original })
-
+	v.settings.Validator.HandoffRoundTripSlack = slack
 	v.settings.BlockAssembly.QueueFullWaitTimeout = queueWait
 
 	return v.handoffFloor()
+}
+
+// shrinkTwoPhaseCommitTimeout scales the 2PC unlock bound down for tests, so a wedged
+// SetLocked surfaces in milliseconds rather than after the shipped 2s.
+//
+// Unlike the handoff slack this bound is package state, not a setting — it is
+// post-acceptance bookkeeping and appears in no operator-facing arithmetic — so the
+// helper has to restore it.
+func shrinkTwoPhaseCommitTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+
+	original := twoPhaseCommitTimeout
+	twoPhaseCommitTimeout = d
+
+	t.Cleanup(func() { twoPhaseCommitTimeout = original })
 }
 
 // parentOutpointSpent reports whether output 0 of parentTx reads as spent — the
@@ -234,6 +260,14 @@ type recoveryBAStore struct {
 	blockAfter        int
 	shedAfter         time.Duration
 
+	// abandonErr stands in for the error the REAL batched block-assembly client
+	// returns when the caller's deadline ends the wait: a ServiceError wrapping
+	// context.DeadlineExceeded, returned promptly rather than at the deadline,
+	// because in batch mode the wait is abandoned while the item may still be
+	// dispatched. It exists so the fake can return exactly what the shipped client
+	// returns, instead of the bare ctx.Err() a ctx-honouring fake produces.
+	abandonErr error
+
 	// cancelCaller, when set, is invoked at the moment of the hand-off — the point a
 	// saturated node makes a client give up — and the context this Store was handed is
 	// then checked. That makes "the hand-off runs on a context the caller cannot
@@ -279,6 +313,10 @@ func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uin
 
 	if f.calls <= f.shedFirst {
 		return false, errors.NewThresholdExceededError("block assembly queue full")
+	}
+
+	if f.abandonErr != nil {
+		return false, f.abandonErr
 	}
 
 	if f.err != nil {
@@ -913,50 +951,197 @@ func TestValidate_KafkaIngestCtxCancelLeavesTxLocked(t *testing.T) {
 // ErrThresholdExceeded, so the retry loop exits immediately and a stall can consume at
 // most ONE handoff floor. That is what makes the total ingest stall a sum of two terms
 // (retry window + one floor) rather than a product.
+//
+// Two shapes, because the two block-assembly client modes fail differently and the
+// validator's disposition has to be identical for both. The first subtest models a
+// ctx-honouring client blocking to the deadline (unary mode); the second returns the
+// exact error the batched client now returns when it abandons a wait, which is the
+// shipped default and is NOT a ctx.Err() of its own.
 func TestValidate_StalledBlockAssemblyHandoffIsBounded(t *testing.T) {
+	// requireAmbiguousHandoffDisposition asserts the four properties that define the
+	// validator's answer to an ambiguous hand-off failure, whichever mode produced it.
+	requireAmbiguousHandoffDisposition := func(t *testing.T, spy *unlockSpy, realStore *sql.Store, childTx, parentTx *bt.Tx, deadlinesBefore, droppedBefore float64) {
+		t.Helper()
+
+		// NOT unwound: the deadline can fire after block assembly enqueued the
+		// transaction, so deleting the record could remove one already in a subtree or
+		// template. Left Locked for the unmined reload.
+		require.Equal(t, 0, spy.unspendCalls, "no unwind on an ambiguous handoff failure")
+		require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the tx is left locked for the unmined reload")
+		require.True(t, parentOutpointSpent(t, realStore, parentTx), "its inputs stay spent while the record survives")
+		require.Equal(t, 0, spy.unlockCalls)
+
+		require.Equal(t, droppedBefore, testutil.ToFloat64(prometheusValidatorShedDroppedTotal),
+			"a stall must not be counted as a clean shed drop")
+		require.Equal(t, deadlinesBefore+1, testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal),
+			"the handoff deadline is attributable to its own cause")
+	}
+
+	t.Run("a client that blocks to the deadline", func(t *testing.T) {
+		ctx := context.Background()
+		v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_handoff_stall")
+
+		// A well-behaved gRPC client against a wedged server: blocks until its context
+		// expires. No sleeps, no store I/O — the smallest possible blocking path, so
+		// scheduling noise has minimal surface.
+		baStore.blockUntilCtxDone = true
+
+		floor := shrinkHandoffFloor(t, v, 20*time.Millisecond, 20*time.Millisecond)
+		require.Equal(t, 40*time.Millisecond, floor)
+
+		initPrometheusMetrics()
+
+		droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+		deadlinesBefore := testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal)
+
+		start := time.Now()
+
+		_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+		elapsed := time.Since(start)
+
+		// Hang detector, deliberately generous: the quantitative bound is carried by the
+		// call count below and by TestHandoffFloorAndRetryWindow, not by wall clock.
+		require.Less(t, elapsed, 5*time.Second, "a stalled handoff must be bounded by its own deadline")
+
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrThresholdExceeded, "a stall is not a shed")
+
+		require.Equal(t, 1, baStore.calls,
+			"a deadline error exits the retry loop, so a stall costs exactly one handoff floor and never compounds")
+
+		requireAmbiguousHandoffDisposition(t, spy, realStore, childTx, parentTx, deadlinesBefore, droppedBefore)
+	})
+
+	// The fake above blocks on ctx.Done() and returns ctx.Err(), which is the unary
+	// client's shape and has one property the batched client does not: the error IS a
+	// context error, and it arrives exactly at the deadline. On its own it therefore
+	// pins the bound against a client shape that is not the shipped default.
+	//
+	// In batch mode the client abandons the wait instead: it returns a ServiceError
+	// WRAPPING context.DeadlineExceeded, promptly, and while the item may still be
+	// dispatched. This subtest feeds the validator exactly that error and asserts the
+	// SAME disposition, so the classification arm is pinned against both shapes.
+	t.Run("the error shape the batched client returns", func(t *testing.T) {
+		ctx := context.Background()
+		v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_handoff_abandon")
+
+		baStore.abandonErr = errors.NewServiceError("block assembly batch handoff abandoned before dispatch completed", context.DeadlineExceeded)
+
+		initPrometheusMetrics()
+
+		droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+		deadlinesBefore := testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal)
+
+		_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrThresholdExceeded, "an abandoned batch handoff is not a shed")
+		require.ErrorIs(t, err, context.DeadlineExceeded,
+			"the deadline classification must survive the client's own wrapping, or the arm that leaves the tx locked never fires")
+
+		require.Equal(t, 1, baStore.calls,
+			"the abandonment is not ErrThresholdExceeded, so the retry loop is never entered")
+
+		requireAmbiguousHandoffDisposition(t, spy, realStore, childTx, parentTx, deadlinesBefore, droppedBefore)
+	})
+}
+
+// TestHandoffDeadlineClassificationSurvivesWrapping pins an otherwise invisible
+// dependency: the hand-off-deadline arm in Validate reads a context error out of an
+// error chain that has been wrapped two or three times before it gets there.
+//
+// It survives partly by substring match rather than by unwrapping — the errors package
+// falls back to comparing message text when the target is not one of its own error
+// types — so the classification depends on the chain's rendered text, not just on its
+// structure. Nothing else in the suite would notice if a change to that rendering, or
+// one more layer of wrapping, quietly broke it: the arm would simply stop firing, the
+// counter would stop moving, and a transaction that should be left locked for the
+// unmined reload would take a different path with no test failing.
+func TestHandoffDeadlineClassificationSurvivesWrapping(t *testing.T) {
+	t.Run("batch mode: the client abandons the wait", func(t *testing.T) {
+		// Layer 1, what the batched block-assembly client returns.
+		clientErr := errors.NewServiceError("block assembly batch handoff abandoned before dispatch completed", context.DeadlineExceeded)
+		require.ErrorIs(t, clientErr, context.DeadlineExceeded)
+
+		// Layer 2, sendToBlockAssembler's wrapping of a non-shed failure. This is the
+		// value the classification arm actually reads.
+		sendErr := errors.NewServiceError("error calling blockAssembler Store()", clientErr)
+		require.ErrorIs(t, sendErr, context.DeadlineExceeded, "the arm that leaves the tx locked reads THIS error")
+
+		// Layer 3, what the caller finally sees.
+		require.ErrorIs(t, errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", "txid", sendErr), context.DeadlineExceeded)
+	})
+
+	t.Run("unary mode: gRPC renders the deadline as a status message", func(t *testing.T) {
+		// The unary path never carries context.DeadlineExceeded as a wrapped value at
+		// all: gRPC returns a status error whose text is "context deadline exceeded",
+		// and the substring fallback is the ONLY reason the arm fires. This is the case
+		// that would break silently.
+		unary := errors.UnwrapGRPC(status.Error(codes.DeadlineExceeded, "context deadline exceeded"))
+		require.ErrorIs(t, unary, context.DeadlineExceeded)
+
+		sendErr := errors.NewServiceError("error calling blockAssembler Store()", unary)
+		require.ErrorIs(t, sendErr, context.DeadlineExceeded)
+
+		require.ErrorIs(t, errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", "txid", sendErr), context.DeadlineExceeded)
+	})
+
+	t.Run("a shed stays distinguishable through the same wrapping", func(t *testing.T) {
+		// The other half of the classification: if a shed matched the deadline arm, a
+		// transaction that should be unwound would be left locked instead.
+		shed := errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", "txid",
+			errors.NewServiceError("error calling blockAssembler Store()", errors.NewThresholdExceededError("block assembly queue full")))
+
+		require.ErrorIs(t, shed, errors.ErrThresholdExceeded)
+		require.NotErrorIs(t, shed, context.DeadlineExceeded)
+	})
+}
+
+// TestValidate_TwoPhaseCommitIsBounded pins the deadline on the 2PC unlock.
+//
+// The unlock runs on the post-decision context, which is detached from the caller by
+// design. Nothing outside the store could therefore interrupt it: a wedged store parked
+// the ingest goroutine — and, on the Kafka path, the record batch it holds —
+// indefinitely, on work that is post-acceptance bookkeeping. Without the bound this
+// test hangs to the Go test timeout, which is the regression it guards.
+//
+// The return shape is asserted exactly, because it is not the obvious one: Validate
+// returns a NON-NIL txMetaData together with a NON-NIL error. The transaction really
+// was accepted, spent and created; only the unlock failed, and the caller is
+// deliberately told so. Recovery is the unlock that happens on the next block the
+// transaction is mined into, not a success return here.
+func TestValidate_TwoPhaseCommitIsBounded(t *testing.T) {
+	const bound = 50 * time.Millisecond
+
 	ctx := context.Background()
-	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_handoff_stall")
+	v, spy, _, realStore, childTx, _ := recoverySetup(t, "queue_shed_2pc_bounded")
 
-	// A well-behaved gRPC client against a wedged server: blocks until its context
-	// expires. No sleeps, no store I/O — the smallest possible blocking path, so
-	// scheduling noise has minimal surface.
-	baStore.blockUntilCtxDone = true
+	shrinkTwoPhaseCommitTimeout(t, bound)
 
-	floor := shrinkHandoffFloor(t, v, 20*time.Millisecond, 20*time.Millisecond)
-	require.Equal(t, 40*time.Millisecond, floor)
-
-	initPrometheusMetrics()
-
-	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
-	deadlinesBefore := testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal)
+	// A wedged store on the unlock: it parks until the context it was handed expires,
+	// which with the bound in place is the 2PC deadline and nothing else. The
+	// block-assembly hand-off succeeds, so this is the only thing that can fail.
+	spy.setLockedBlocks = true
 
 	start := time.Now()
 
-	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+	txMetaData, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
 	elapsed := time.Since(start)
 
-	// Hang detector, deliberately generous: the quantitative bound is carried by the
-	// call count below and by TestHandoffFloorAndRetryWindow, not by wall clock.
-	require.Less(t, elapsed, 5*time.Second, "a stalled handoff must be bounded by its own deadline")
+	// Hang detector, deliberately generous: the bound itself is the 50ms above, and what
+	// matters here is that Validate returns at all rather than parking forever.
+	require.Less(t, elapsed, 5*time.Second, "a wedged 2PC unlock must be bounded by its own deadline")
 
-	require.Error(t, err)
-	require.NotErrorIs(t, err, errors.ErrThresholdExceeded, "a stall is not a shed")
+	require.Error(t, err, "the caller is told the commit failed even though the transaction was accepted")
+	require.ErrorIs(t, err, context.DeadlineExceeded, "and told why: the unlock hit the 2PC bound")
+	require.NotNil(t, txMetaData, "the transaction was accepted and created, so its metadata is still returned")
 
-	require.Equal(t, 1, baStore.calls,
-		"a deadline error exits the retry loop, so a stall costs exactly one handoff floor and never compounds")
+	require.Equal(t, 1, spy.unlockCalls, "the unlock was attempted exactly once")
 
-	// An ambiguous failure is NOT unwound: the deadline can fire after block assembly
-	// enqueued the transaction, so deleting the record could remove one already in a
-	// subtree or template. Left Locked for the unmined reload.
-	require.Equal(t, 0, spy.unspendCalls, "no unwind on an ambiguous handoff failure")
-	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the tx is left locked for the unmined reload")
-	require.True(t, parentOutpointSpent(t, realStore, parentTx), "its inputs stay spent while the record survives")
-	require.Equal(t, 0, spy.unlockCalls)
-
-	require.Equal(t, droppedBefore, testutil.ToFloat64(prometheusValidatorShedDroppedTotal),
-		"a stall must not be counted as a clean shed drop")
-	require.Equal(t, deadlinesBefore+1, testutil.ToFloat64(prometheusValidatorHandoffDeadlineTotal),
-		"the handoff deadline is attributable to its own cause")
+	// The record is still Locked: that is precisely what the unlock failed to clear, and
+	// what the next-block unlock has to recover.
+	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked,
+		"a failed 2PC leaves the transaction locked for the next block it is mined into")
 }
 
 // Test 14b — the total ingest stall stays within the CONFIGURED retry window.
@@ -1123,6 +1308,12 @@ func TestValidate_UnderReportedRemoteQueueWaitIsObservable(t *testing.T) {
 // window+floor==shedRetryTimeout identity is a tautology of the expression and is not
 // what this proves: this proves the rule is computed as designed, while the bound being
 // honoured at runtime is what the call-count assertions in tests 14a-14c carry.
+//
+// The slack is set on every row through validator_handoffRoundTripSlack's field rather
+// than being left implicit, so the rows that drive it to a non-default value prove the
+// setting actually reaches the arithmetic, and the rows that leave it non-positive
+// prove the accessor's fallback does — the loader can never produce those, so nothing
+// else covers them.
 func TestHandoffFloorAndRetryWindow(t *testing.T) {
 	const defaultSlack = 500 * time.Millisecond
 
@@ -1130,6 +1321,7 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 		name       string
 		queueWait  time.Duration
 		shedRetry  time.Duration
+		slack      time.Duration
 		wantFloor  time.Duration
 		wantWindow time.Duration
 	}{
@@ -1137,6 +1329,7 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 			name:       "shipped defaults",
 			queueWait:  100 * time.Millisecond,
 			shedRetry:  2 * time.Second,
+			slack:      defaultSlack,
 			wantFloor:  600 * time.Millisecond,
 			wantWindow: 1400 * time.Millisecond,
 		},
@@ -1144,6 +1337,7 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 			name:       "no queue wait configured: the floor is the slack alone",
 			queueWait:  0,
 			shedRetry:  2 * time.Second,
+			slack:      defaultSlack,
 			wantFloor:  defaultSlack,
 			wantWindow: 1500 * time.Millisecond,
 		},
@@ -1151,6 +1345,7 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 			name:       "negative queue wait is clamped to zero",
 			queueWait:  -5 * time.Second,
 			shedRetry:  2 * time.Second,
+			slack:      defaultSlack,
 			wantFloor:  defaultSlack,
 			wantWindow: 1500 * time.Millisecond,
 		},
@@ -1158,6 +1353,7 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 			name:       "queue wait far above the window: floor wins, no room to retry",
 			queueWait:  10 * time.Second,
 			shedRetry:  2 * time.Second,
+			slack:      defaultSlack,
 			wantFloor:  10500 * time.Millisecond,
 			wantWindow: -8500 * time.Millisecond,
 		},
@@ -1165,6 +1361,41 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 			name:       "unset shedRetryTimeout falls back to the documented default",
 			queueWait:  100 * time.Millisecond,
 			shedRetry:  0,
+			slack:      defaultSlack,
+			wantFloor:  600 * time.Millisecond,
+			wantWindow: 1400 * time.Millisecond,
+		},
+		{
+			// The remedy the handoff-deadline warning names: a raised slack widens the
+			// per-attempt deadline, and pays for it out of the retry window.
+			name:       "a raised slack widens the floor and narrows the window",
+			queueWait:  100 * time.Millisecond,
+			shedRetry:  2 * time.Second,
+			slack:      1500 * time.Millisecond,
+			wantFloor:  1600 * time.Millisecond,
+			wantWindow: 400 * time.Millisecond,
+		},
+		{
+			name:       "a lowered slack restores room to retry under a large queue wait",
+			queueWait:  time.Second,
+			shedRetry:  2 * time.Second,
+			slack:      50 * time.Millisecond,
+			wantFloor:  1050 * time.Millisecond,
+			wantWindow: 950 * time.Millisecond,
+		},
+		{
+			name:       "unset slack falls back to the documented default",
+			queueWait:  100 * time.Millisecond,
+			shedRetry:  2 * time.Second,
+			slack:      0,
+			wantFloor:  600 * time.Millisecond,
+			wantWindow: 1400 * time.Millisecond,
+		},
+		{
+			name:       "negative slack falls back to the documented default, it does not subtract",
+			queueWait:  100 * time.Millisecond,
+			shedRetry:  2 * time.Second,
+			slack:      -250 * time.Millisecond,
 			wantFloor:  600 * time.Millisecond,
 			wantWindow: 1400 * time.Millisecond,
 		},
@@ -1175,6 +1406,7 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.BlockAssembly.QueueFullWaitTimeout = tc.queueWait
 			tSettings.Validator.BlockAssemblyShedRetryTimeout = tc.shedRetry
+			tSettings.Validator.HandoffRoundTripSlack = tc.slack
 
 			v := &Validator{settings: tSettings}
 
@@ -1187,6 +1419,76 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 				"the startup-warning condition and a non-positive window are the same predicate")
 		})
 	}
+}
+
+// TestValidatorSettings_UnwindTimeoutFallback pins the defensive arm of the two
+// duration accessors promoted to settings in this change.
+//
+// The loader can never produce a non-positive value for either key — it substitutes the
+// default before the struct is built — so nothing but this test exercises the fallback.
+// It matters because tests, and any other code that builds a Settings struct directly,
+// bypass the loader entirely: without the fallback a zero-valued struct would give the
+// unwind an already-expired context and the handoff a deadline with no margin at all,
+// which is the exact failure mode (a shed misclassified as a local context deadline)
+// these bounds exist to avoid.
+//
+// This is the executable counterpart of the "### Values" section in both longdescs. If
+// the fallback behaviour is ever changed, this test and that documentation both have to
+// move.
+func TestValidatorSettings_UnwindTimeoutFallback(t *testing.T) {
+	nonPositive := []struct {
+		name  string
+		value time.Duration
+	}{
+		{name: "unset", value: 0},
+		{name: "negative", value: -3 * time.Second},
+	}
+
+	t.Run("shedUnwindTimeout", func(t *testing.T) {
+		for _, tc := range nonPositive {
+			t.Run(tc.name, func(t *testing.T) {
+				tSettings := test.CreateBaseTestSettings(t)
+				tSettings.Validator.ShedUnwindTimeout = tc.value
+
+				v := &Validator{settings: tSettings}
+
+				require.Equal(t, defaultShedUnwindTimeout, v.shedUnwindTimeout())
+				require.Equal(t, 2*time.Second, v.shedUnwindTimeout(), "the default must stay the documented 2s")
+			})
+		}
+
+		t.Run("a positive value is used as configured", func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Validator.ShedUnwindTimeout = 7 * time.Second
+
+			v := &Validator{settings: tSettings}
+
+			require.Equal(t, 7*time.Second, v.shedUnwindTimeout())
+		})
+	})
+
+	t.Run("handoffRoundTripSlack", func(t *testing.T) {
+		for _, tc := range nonPositive {
+			t.Run(tc.name, func(t *testing.T) {
+				tSettings := test.CreateBaseTestSettings(t)
+				tSettings.Validator.HandoffRoundTripSlack = tc.value
+
+				v := &Validator{settings: tSettings}
+
+				require.Equal(t, defaultHandoffRoundTripSlack, v.handoffRoundTripSlack())
+				require.Equal(t, 500*time.Millisecond, v.handoffRoundTripSlack(), "the default must stay the documented 500ms")
+			})
+		}
+
+		t.Run("a positive value is used as configured", func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Validator.HandoffRoundTripSlack = 250 * time.Millisecond
+
+			v := &Validator{settings: tSettings}
+
+			require.Equal(t, 250*time.Millisecond, v.handoffRoundTripSlack())
+		})
+	})
 }
 
 // Test 15 — the validator gRPC ValidateTransaction surfaces a shed as
