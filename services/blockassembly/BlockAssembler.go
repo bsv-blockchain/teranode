@@ -388,6 +388,15 @@ func (b *BlockAssembler) IsTxIngressFull() bool {
 //   - bool: the flag value after evaluation
 //   - bool: whether the flag changed
 func (b *BlockAssembler) evaluateTxIngressFull() (full bool, changed bool) {
+	// While the unmined set is reloading, what we hold does not yet describe what we are about to
+	// hold, so a refusal already in force must stand. Clearing it here would tell every ingress
+	// point there is room, moments before the reload takes that room back. Only the clearing
+	// direction is suppressed: applyTxIngressCount can set the flag but never clears it unless it
+	// is already set, so an assembler filling up during a reload still refuses at the limit.
+	if b.txIngressFull.Load() && b.unminedTransactionsLoading.Load() {
+		return true, false
+	}
+
 	return b.applyTxIngressCount(b.TransactionsInMemory())
 }
 
@@ -450,14 +459,18 @@ func (b *BlockAssembler) publishTxIngressFull(ctx context.Context, full bool) {
 // startTxIngressLimitMonitor watches how many transactions block assembly holds in memory and keeps
 // the rest of the node informed.
 //
-// It publishes on every transition, and re-publishes the current value on a slower heartbeat so a
+// It publishes on every transition, and re-announces a standing refusal on a slower heartbeat so a
 // subscriber that starts or reconnects after a transition converges rather than holding its
 // default. The monitor does nothing when the limit is disabled.
 //
-// The heartbeat is also what keeps a refusal alive: the ingress points expire a cached full=true
-// when the heartbeat stops, so a block assembly that is reconfigured without a limit, or that stops
-// altogether, releases them rather than leaving them refusing forever. See
-// blockAssemblyFullTTL in services/blockchain.
+// The heartbeat is what keeps a refusal alive: the ingress points expire a cached full=true when the
+// heartbeat stops, so a block assembly that is reconfigured without a limit, or that stops
+// altogether, releases them rather than leaving them refusing forever. See blockAssemblyFullTTL in
+// services/blockchain. Only a refusal is re-announced, because that expiry is also how a subscriber
+// converges on not-full, so repeating not-full would add nothing.
+//
+// Start runs this before the slow parts of startup, so a process that restarted while full
+// re-establishes the refusal rather than letting it expire mid-reload.
 func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
 	if b.txIngressLimit == 0 {
 		b.logger.Infof("[BlockAssembler] no in-memory transaction limit configured, ingress is never refused")
@@ -499,8 +512,15 @@ func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
 				}
 
 			case <-heartbeatTicker.C:
-				// re-announce the current value for subscribers that missed the transition
-				b.publishTxIngressFull(ctx, b.txIngressFull.Load())
+				// Re-announce a refusal, and only a refusal. That is the value the ingress points
+				// cannot recover on their own, because their cached full=true expires without it.
+				// A repeated full=false carries no information: a client that has heard nothing
+				// already accepts transactions, and one that missed the clearing transition
+				// converges through the same expiry. Repeating it would also clear a refusal this
+				// process has not yet re-established, while it is still reloading its unmined set.
+				if b.txIngressFull.Load() {
+					b.publishTxIngressFull(ctx, true)
+				}
 			}
 		}
 	}()
@@ -1284,6 +1304,17 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
 
+	// Start watching how many transactions we hold in memory before the slow parts of startup, not
+	// after them. AddTx is already enqueueing on the gRPC side by the time Start runs, and the
+	// ingress points expire a cached refusal once block assembly stops re-announcing it. If the
+	// monitor only started at the end of Start, a process that restarted while full would let every
+	// ingress point reopen partway through loadUnminedTransactions — which can run for minutes on a
+	// large backlog — and would take unlimited new work on top of a reload it already cannot fit.
+	//
+	// Starting here is safe: the flag begins false in a fresh process, and applyTxIngressCount only
+	// publishes on a transition, so an assembler that is still empty announces nothing.
+	b.startTxIngressLimitMonitor(ctx)
+
 	// Wait for any pending blocks to be processed before loading unmined transactions
 	if !b.skipWaitForPendingBlocks {
 		if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
@@ -1334,11 +1365,6 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 
 	_, height := b.CurrentBlock()
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(height))
-
-	// Start watching how many transactions we hold in memory, so the ingress points know when to
-	// stop accepting new work. Started after loading unmined transactions, so the first evaluation
-	// sees the real holding rather than an empty assembler.
-	b.startTxIngressLimitMonitor(ctx)
 
 	return nil
 }
