@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestStore(t *testing.T) *Store {
+func newTestStore(t testing.TB) *Store {
 	dsn, cleanup, err := postgres.SetupTestPostgresContainer()
 	require.NoError(t, err)
 

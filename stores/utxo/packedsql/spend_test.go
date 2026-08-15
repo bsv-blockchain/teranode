@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newSpendingTx(t *testing.T, parent *bt.Tx, vouts ...uint32) *bt.Tx {
+func newSpendingTx(t testing.TB, parent *bt.Tx, vouts ...uint32) *bt.Tx {
 	t.Helper()
 
 	tx := bt.NewTx()

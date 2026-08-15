@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newExtendedTx(t *testing.T, outputs int, satoshisSeed uint64) *bt.Tx {
+func newExtendedTx(t testing.TB, outputs int, satoshisSeed uint64) *bt.Tx {
 	t.Helper()
 
 	tx := bt.NewTx()
