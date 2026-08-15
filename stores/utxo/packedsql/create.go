@@ -257,26 +257,8 @@ func packOutputs(tx *bt.Tx) []byte {
 }
 
 func (s *Store) insertTxRows(ctx context.Context, rows *txRows) error {
-	m := &rows.master
-
-	args := []any{
-		m.hash, m.flags, m.coinbaseSpendingHeight, m.totalCount, m.page0Count,
-		m.pagesTotal, m.spends, m.blockRefs, m.deleteAtHeight, m.unminedSince,
-		m.version, m.lockTime, m.fee, m.sizeInBytes, m.createdAt,
-		m.utxoHashes, m.inputs, m.outputs,
-	}
-
 	if len(rows.pages) == 0 {
-		ct, err := s.pool.Exec(ctx, insertMasterSQL, args...)
-		if err != nil {
-			return errors.NewStorageError("packedsql: failed to insert transaction", err)
-		}
-
-		if ct.RowsAffected() == 0 {
-			return errors.NewTxExistsError("packedsql: transaction %s already exists", chainhash.Hash(m.hash[:slotHashSize]))
-		}
-
-		return nil
+		return s.insertTxRowsOn(ctx, s.pool, rows)
 	}
 
 	dbTx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -286,7 +268,28 @@ func (s *Store) insertTxRows(ctx context.Context, rows *txRows) error {
 
 	defer func() { _ = dbTx.Rollback(ctx) }()
 
-	ct, err := dbTx.Exec(ctx, insertMasterSQL, args...)
+	if err = s.insertTxRowsOn(ctx, dbTx, rows); err != nil {
+		return err
+	}
+
+	if err = dbTx.Commit(ctx); err != nil {
+		return errors.NewStorageError("packedsql: failed to commit create transaction", err)
+	}
+
+	return nil
+}
+
+func (s *Store) insertTxRowsOn(ctx context.Context, q pgxQuerier, rows *txRows) error {
+	m := &rows.master
+
+	args := []any{
+		m.hash, m.flags, m.coinbaseSpendingHeight, m.totalCount, m.page0Count,
+		m.pagesTotal, m.spends, m.blockRefs, m.deleteAtHeight, m.unminedSince,
+		m.version, m.lockTime, m.fee, m.sizeInBytes, m.createdAt,
+		m.utxoHashes, m.inputs, m.outputs,
+	}
+
+	ct, err := q.Exec(ctx, insertMasterSQL, args...)
 	if err != nil {
 		return errors.NewStorageError("packedsql: failed to insert transaction", err)
 	}
@@ -296,13 +299,9 @@ func (s *Store) insertTxRows(ctx context.Context, rows *txRows) error {
 	}
 
 	for _, p := range rows.pages {
-		if _, err = dbTx.Exec(ctx, insertPageSQL, m.hash, p.page, p.spendableCount, p.spends, p.utxoHashes); err != nil {
+		if _, err = q.Exec(ctx, insertPageSQL, m.hash, p.page, p.spendableCount, p.spends, p.utxoHashes); err != nil {
 			return errors.NewStorageError("packedsql: failed to insert page %d", p.page, err)
 		}
-	}
-
-	if err = dbTx.Commit(ctx); err != nil {
-		return errors.NewStorageError("packedsql: failed to commit create transaction", err)
 	}
 
 	return nil
