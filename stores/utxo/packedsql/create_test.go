@@ -26,7 +26,12 @@ func newExtendedTx(t *testing.T, outputs int, satoshisSeed uint64) *bt.Tx {
 	tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
 
 	for i := 0; i < outputs; i++ {
-		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", satoshisSeed+uint64(i)))
+		amount := uint64(1000 + i)
+		if i == 0 {
+			amount = satoshisSeed
+		}
+
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", amount))
 	}
 
 	return tx
