@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"sync"
 	"sync/atomic"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -14,12 +16,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var _ utxo.Store = (*Store)(nil)
+
 type Store struct {
-	logger     ulogger.Logger
-	settings   *settings.Settings
-	pool       *pgxpool.Pool
-	pageSize   uint32
-	blockState atomic.Uint64
+	logger        ulogger.Logger
+	settings      *settings.Settings
+	pool          *pgxpool.Pool
+	pageSize      uint32
+	blockState    atomic.Uint64
+	createBatcher *batcher.Batcher[createItem]
+	spendChans    []chan *spendWork
+	spendWG       sync.WaitGroup
+	closeOnce     sync.Once
 }
 
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
@@ -75,6 +83,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		pageSize: uint32(tSettings.UtxoStore.PackedSQLPageSize), //nolint:gosec
 	}
 
+	s.startPipeline()
+
 	return s, nil
 }
 
@@ -90,8 +100,32 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 }
 
 func (s *Store) Close(ctx context.Context) error {
-	s.pool.Close()
-	return nil
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		s.closeOnce.Do(func() {
+			for _, ch := range s.spendChans {
+				close(ch)
+			}
+
+			s.spendWG.Wait()
+
+			if s.createBatcher != nil {
+				s.createBatcher.Close()
+			}
+
+			s.pool.Close()
+		})
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Store) SupportsOutpointOnlySpend() bool {

@@ -127,7 +127,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, errors.NewProcessingError("packedsql: no spends provided")
 	}
 
-	err = s.spendOnQuerier(ctx, s.pool, spends, blockHeight, ig)
+	if len(s.spendChans) > 0 {
+		err = s.spendViaWorkers(ctx, groupSpendsByParentPage(spends, s.pageSize), blockHeight, ig)
+	} else {
+		err = s.spendOnQuerier(ctx, s.pool, spends, blockHeight, ig)
+	}
+
 	if err != nil && needsRollback(spends) {
 		succeeded := make([]*utxo.Spend, 0, len(spends))
 
@@ -158,7 +163,11 @@ func (s *Store) spendOnQuerier(ctx context.Context, q pgxQuerier, spends []*utxo
 		}
 	}
 
-	return firstErr
+	if firstErr != nil {
+		return errors.NewUtxoError("packedsql: spend failed", firstErr)
+	}
+
+	return nil
 }
 
 func (s *Store) spendGroup(ctx context.Context, q pgxQuerier, g *parentSpendGroup, blockHeight uint32, ig utxo.IgnoreFlags) error {

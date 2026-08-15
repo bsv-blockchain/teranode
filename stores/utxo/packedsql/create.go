@@ -42,8 +42,9 @@ type pageRow struct {
 }
 
 type txRows struct {
-	master masterRow
-	pages  []pageRow
+	master             masterRow
+	pages              []pageRow
+	conflictingParents [][]byte
 }
 
 const insertMasterSQL = `INSERT INTO packed_txs (hash, flags, coinbase_spending_height, total_count, page0_count,
@@ -66,6 +67,14 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	rows, md, err := s.buildTxRows(tx, blockHeight, options)
 	if err != nil {
 		return nil, err
+	}
+
+	if s.createBatcher != nil {
+		if err = s.createViaBatcher(ctx, rows); err != nil {
+			return nil, err
+		}
+
+		return md, nil
 	}
 
 	if err = s.insertTxRows(ctx, rows); err != nil {
@@ -211,6 +220,12 @@ func (s *Store) buildTxRows(tx *bt.Tx, blockHeight uint32, options *utxo.CreateO
 		rows.master.deleteAtHeight = dah
 	}
 
+	if options.Conflicting {
+		for _, input := range tx.Inputs {
+			rows.conflictingParents = append(rows.conflictingParents, input.PreviousTxIDChainHash()[:])
+		}
+	}
+
 	return rows, md, nil
 }
 
@@ -301,6 +316,14 @@ func (s *Store) insertTxRowsOn(ctx context.Context, q pgxQuerier, rows *txRows) 
 	for _, p := range rows.pages {
 		if _, err = q.Exec(ctx, insertPageSQL, m.hash, p.page, p.spendableCount, p.spends, p.utxoHashes); err != nil {
 			return errors.NewStorageError("packedsql: failed to insert page %d", p.page, err)
+		}
+	}
+
+	for _, parent := range rows.conflictingParents {
+		if _, err = q.Exec(ctx,
+			`INSERT INTO conflicting_children (hash, child_hash, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+			parent, m.hash, m.createdAt); err != nil {
+			return errors.NewStorageError("packedsql: failed to insert conflicting child", err)
 		}
 	}
 

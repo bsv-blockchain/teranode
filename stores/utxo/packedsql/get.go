@@ -361,29 +361,37 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 		return nil, errors.NewStorageError("packedsql: failed to read spend %s:%d", sp.TxID, sp.Vout, err)
 	}
 
-	if sp.UTXOHash != nil && !bytes.Equal(storedHash, sp.UTXOHash[:]) {
-		return nil, errors.NewUtxoHashMismatchError("packedsql: utxo hash mismatch for %s:%d", sp.TxID, sp.Vout)
-	}
-
-	spendingData := unpackSpendingData(storedSpend)
-	utxoStatus := utxo.CalculateUtxoStatus(spendingData, uint32(coinbaseSpendingHeight), s.GetBlockHeight()) //nolint:gosec
-
 	frozen := flags&flagFrozen != 0
+	effectiveHash := storedHash
 
 	var spendableIn *int64
 
 	if flags&flagHasOverrides != 0 {
-		var oFrozen bool
+		var (
+			oFrozen        bool
+			reassignedHash []byte
+		)
 
 		err = s.pool.QueryRow(ctx,
-			`SELECT frozen, spendable_in FROM utxo_overrides WHERE hash = $1 AND vout = $2`,
-			sp.TxID[:], sp.Vout).Scan(&oFrozen, &spendableIn)
+			`SELECT frozen, spendable_in, reassigned_hash FROM utxo_overrides WHERE hash = $1 AND vout = $2`,
+			sp.TxID[:], sp.Vout).Scan(&oFrozen, &spendableIn, &reassignedHash)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, errors.NewStorageError("packedsql: failed to read override %s:%d", sp.TxID, sp.Vout, err)
 		}
 
 		frozen = frozen || oFrozen
+
+		if reassignedHash != nil {
+			effectiveHash = reassignedHash
+		}
 	}
+
+	if sp.UTXOHash != nil && !bytes.Equal(effectiveHash, sp.UTXOHash[:]) {
+		return nil, errors.NewUtxoHashMismatchError("packedsql: utxo hash mismatch for %s:%d", sp.TxID, sp.Vout)
+	}
+
+	spendingData := unpackSpendingData(storedSpend)
+	utxoStatus := utxo.CalculateUtxoStatus(spendingData, uint32(coinbaseSpendingHeight), s.GetBlockHeight()) //nolint:gosec
 
 	if frozen {
 		utxoStatus = utxo.Status_FROZEN
