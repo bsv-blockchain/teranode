@@ -312,22 +312,49 @@ func (v *scriptVerifierGoBDK) ValidateTransaction(tx *bt.Tx, blockHeight uint32,
 	return nil
 }
 
+// withBDKCause appends the engine's own description of the failure to base.
+//
+// The public error boundary (errors.UserMessage / PublicError) surfaces a
+// single code and message: the innermost cause whose code is on
+// publicCauseCodes, or the outermost code. errVerify is a bdkscript error, not
+// a *errors.Error, so it can never be selected — which meant every script and
+// standardness rejection left this node as the bare constant below, and the
+// submitter was told only that validation failed. The reason existed solely in
+// this node's Warnf line.
+//
+// Folding it into the message is what carries it across. It is safe to surface:
+// a script-evaluation result is a verdict about the submitted transaction and
+// names no node-internal state. errVerify stays wrapped as well, so anything
+// inspecting the chain (errors.Is, the ERR code) is unchanged.
+func withBDKCause(base string, errVerify error) string {
+	if errVerify == nil {
+		return base
+	}
+
+	cause := errVerify.Error()
+	if cause == "" {
+		return base
+	}
+
+	return base + ": " + cause
+}
+
 func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus bool) error {
 	var dosErr bdkscript.DoSError
 	if errors.As(errVerify, &dosErr) {
 		switch dosErr.Code() {
 		case bdkscript.DOS_ERR_NOT_STANDARD, bdkscript.DOS_ERR_SIGOPS_POLICY, bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION:
-			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			policyErr := errors.NewTxPolicyError(withBDKCause(errMsgPolicy, errVerify), errVerify)
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		case bdkscript.DOS_ERR_INSUFFICIENT_FEE:
-			policyErr := errors.NewTxPolicyError("transaction fee is too low", errVerify)
+			policyErr := errors.NewTxPolicyError(withBDKCause("transaction fee is too low", errVerify), errVerify)
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		default:
 			if dosErr.Code() <= bdkscript.DOS_ERR_OK || dosErr.Code() >= bdkscript.DOS_ERR_COUNT {
 				v.logger.Warnf("unknown BDK DoS error code=%d error=%v", dosErr.Code(), errVerify)
 			}
 
-			return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+			return errors.NewTxInvalidError(withBDKCause(errMsgInvalidTx, errVerify), errVerify)
 		}
 	}
 
@@ -335,17 +362,20 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 	if errors.As(errVerify, &scriptErr) {
 		errCode := scriptErr.Code()
 		if errCode == bdkscript.SCRIPT_ERR_CGO_EXCEPTION {
+			// A CGO exception is a fault in this node, not a verdict about the
+			// transaction: PROCESSING keeps it off the public-cause allowlist
+			// so no detail is surfaced, and the caller retries elsewhere.
 			return errors.NewProcessingError(errMsgInvalidTx, errVerify)
 		}
 
 		if (!consensus && bdkPolicyRelatedScriptError(errCode)) ||
 			(consensus && errCode == bdkscript.SCRIPT_ERR_STACK_SIZE) {
-			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			policyErr := errors.NewTxPolicyError(withBDKCause(errMsgPolicy, errVerify), errVerify)
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		}
 	}
 
-	return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+	return errors.NewTxInvalidError(withBDKCause(errMsgInvalidTx, errVerify), errVerify)
 }
 
 func bdkPolicyRelatedScriptError(errCode bdkscript.ScriptErrorCode) bool {

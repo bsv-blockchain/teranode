@@ -693,11 +693,57 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 			if status >= 200 && status < 300 {
 				return c.String(status, "OK")
 			}
-			return c.String(status, "Failed to process transaction: "+errors.UserMessage(err))
+			// Re-parse only to name the transaction in the failure, and only on
+			// the failure path. A body we could not parse yields a nil tx, which
+			// failureLine renders unchanged.
+			failedTx, parseErr := bt.NewTxFromBytes(body)
+			if parseErr != nil {
+				failedTx = nil
+			}
+			return c.String(status, "Failed to process transaction: "+failureLine(failedTx, err))
 		}
 
 		return c.String(http.StatusOK, "OK")
 	}
+}
+
+// failureLine renders one failed transaction for a client-facing response
+// body: the public message, always naming the transaction it is about.
+//
+// The txid is not otherwise guaranteed to be there. errors.UserMessage
+// surfaces the innermost allowlisted cause and discards everything outside it
+// — including the "[ProcessTransaction][<txid>]" wrapper this package adds —
+// so precisely the failures with the most useful messages arrive anonymous:
+// "bad-txns-in-belowout", "transaction fee is too low", "GoBDK fail to
+// ValidateTransaction". A client submitting a batch is then told that
+// something failed, without being told what.
+//
+// The txid is injected AFTER the leading "CODE (n): " so the code stays at the
+// head of the line, where every existing consumer looks for it.
+//
+// tx may be nil (a parse failure, or a slot taken by context cancellation);
+// there is no transaction to name then, and the message is returned as-is. The
+// txid is hashed here rather than at submission time so an accepted
+// transaction never pays for it.
+func failureLine(tx *bt.Tx, err error) string {
+	msg := errors.UserMessage(err)
+	if tx == nil {
+		return msg
+	}
+
+	txid := tx.TxID()
+	if strings.Contains(msg, txid) {
+		// Already named — the outermost wrapper survived, or the cause names it
+		// itself. Don't say it twice.
+		return msg
+	}
+
+	wrapper := "[ProcessTransaction][" + txid + "] "
+	if head := strings.Index(msg, "): "); head >= 0 {
+		return msg[:head+3] + wrapper + msg[head+3:]
+	}
+
+	return wrapper + msg
 }
 
 // httpStatusForTxError maps a transaction processing error to the appropriate
@@ -775,6 +821,12 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// happen only after processingWg.Wait() establishes happens-before.
 		const maxSubmissions = maxTransactionsPerRequest + 1 // +1 for ctx-cancel slot
 		errSlots := make([]error, maxSubmissions)
+		// txSlots holds the transaction that occupies each submission slot, so a
+		// failure can name it. Only a pointer is stored: the txid is hashed
+		// lazily, on the failure path, never for a transaction we accept. Slots
+		// used by parse errors and the ctx-cancel path stay nil — there is no
+		// transaction to name.
+		txSlots := make([]*bt.Tx, maxSubmissions)
 		nextSlot := 0
 		processingWg := sync.WaitGroup{}
 		totalNrTransactions := 0
@@ -891,6 +943,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			// Reserve a submission slot for this tx and dispatch the worker.
 			slot := nextSlot
 			nextSlot++
+			txSlots[slot] = tx
 			processingWg.Add(1)
 
 			go processOne(tx, slot)
@@ -915,7 +968,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// than a misleading 500.
 		aggStatus := http.StatusOK
 
-		for _, err := range errSlots[:nextSlot] {
+		for i, err := range errSlots[:nextSlot] {
 			if err == nil {
 				continue
 			}
@@ -927,7 +980,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 				continue
 			}
 
-			errMsgs = append(errMsgs, errors.UserMessage(err))
+			errMsgs = append(errMsgs, failureLine(txSlots[i], err))
 
 			switch {
 			case txStatus >= http.StatusInternalServerError:
