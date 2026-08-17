@@ -595,13 +595,33 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 }
 
 // recordCatchupPeerFailure attributes a data-serving failure to the peer that caused
-// it, for the current catchup cycle. Best-effort: with no active catchup context
-// (e.g. a direct block fetch outside catchup) the call is a no-op.
+// it, charging it against whichever catchup cycle is active when the call is made.
+// Best-effort: with no cycle active the call is a no-op.
 //
 // errors.IsLocalError is checked here — not at each call site — so every caller
 // gets the guard for free: a context cancellation (catchup abort / peer switch /
 // shutdown landing mid-retry) or a local storage failure (subtreeStore.Set) is ours,
 // not the peer's, and must never land an innocent peer in failedPeers.
+//
+// Attribution reads the server-wide u.activeCatchupCtx rather than taking a cycle
+// from the caller. Two properties define the limits of that read, and both are worth
+// re-checking before changing anything on this path.
+//
+// A catchup cycle outlives every fetch it starts. fetchAndStoreSubtreeData detaches
+// its context (context.WithoutCancel) so an aborted fetch still finishes writing,
+// but the goroutine stays inside the errgroup fetchSubtreeDataForBlock waits on,
+// which blockWorker waits on, which catchup waits on before releaseCatchupLock
+// clears the context. A slow peer can therefore delay the end of its cycle — up to
+// the subtree_data fetch timeout — but can never outlive it, so a failure raised by
+// a catchup's own fetch is never charged to a later cycle nor dropped into a cleared
+// context. Making any fetch on that path fire-and-forget breaks this and requires the
+// cycle to be threaded from the caller instead.
+//
+// Not every caller is a catchup. RevalidateBlock reaches this path through
+// fetchSubtreeDataForBlock on its own gRPC goroutine with no interlock against a
+// running catchup, so its per-subtree failures land in that cycle's failedPeers and
+// are charged when the cycle drains. The peer blamed is the one that actually failed
+// to serve the data, so the charge is right by peer and wrong only by cycle.
 func (u *Server) recordCatchupPeerFailure(peerID string, err error) {
 	if peerID == "" || err == nil || errors.IsLocalError(err) {
 		return
