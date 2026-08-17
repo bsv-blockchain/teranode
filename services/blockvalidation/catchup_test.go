@@ -3707,6 +3707,82 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 	assert.True(t, catchupCtx.useQuickValidation, "Quick validation should be enabled when checkpoints are verified")
 }
 
+// TestQuickValidationBoundToActuallyVerifiedCheckpoint verifies that when multiple
+// checkpoints are configured but only the LOWER one falls within the current catchup
+// range (and is hash-verified), highestCheckpointHeight is bound to that verified
+// checkpoint - NOT to the highest checkpoint in the global configured list.
+//
+// This guards against a bug where any single successful checkpoint verification in the
+// current range would make quick validation eligible for every block up to the highest
+// CONFIGURED checkpoint, including blocks between the last checkpoint actually verified
+// this run and the true chain tip - blocks that were never cryptographically anchored
+// in this catchup session.
+func TestQuickValidationBoundToActuallyVerifiedCheckpoint(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Create a long test chain so we have a "higher" checkpoint far beyond our current
+	// catchup range.
+	blocks := testhelpers.CreateTestBlockChain(t, 60)
+
+	// Two configured checkpoints:
+	//   - height 5:  falls inside the current catchup range and WILL be hash-verified
+	//   - height 50: configured globally, but outside the current catchup range
+	//                (headers only go up to height 10), so it is never checked
+	suite.Server.settings.ChainCfgParams = &chaincfg.Params{
+		Checkpoints: []chaincfg.Checkpoint{
+			{Height: 5, Hash: blocks[5].Header.Hash()},
+			{Height: 50, Hash: blocks[50].Header.Hash()},
+		},
+	}
+	suite.Server.settings.BlockValidation.CatchupAllowQuickValidation = true
+
+	catchupCtx := &CatchupContext{
+		blockUpTo: &model.Block{
+			Header: blocks[10].Header,
+			Height: 10,
+		},
+		commonAncestorMeta: &model.BlockHeaderMeta{
+			Height: 3,
+		},
+		// Headers we're processing: blocks 4-10 (7 blocks). Checkpoint at height 50 is
+		// far outside this range and can never be reached by the verification loop.
+		blockHeaders: []*model.BlockHeader{
+			blocks[4].Header,
+			blocks[5].Header, // height 5 - checkpoint, will be verified
+			blocks[6].Header,
+			blocks[7].Header,
+			blocks[8].Header,
+			blocks[9].Header,
+			blocks[10].Header,
+		},
+		forkDepth:   0,
+		checkpoints: suite.Server.settings.ChainCfgParams.Checkpoints,
+	}
+
+	err := suite.Server.verifyCheckpointsInHeaderChain(catchupCtx)
+	require.NoError(t, err, "checkpoint verification should succeed for the in-range checkpoint")
+	require.True(t, catchupCtx.useQuickValidation, "quick validation should be enabled since a checkpoint was verified")
+
+	// The core assertion: highestCheckpointHeight must reflect only the checkpoint that
+	// was ACTUALLY verified this run (height 5), not the globally highest CONFIGURED
+	// checkpoint (height 50) which was never checked in this catchup range.
+	require.Equal(t, uint32(5), catchupCtx.highestCheckpointHeight,
+		"highestCheckpointHeight must be bound to the checkpoint actually verified in this run, not the globally configured maximum")
+
+	// A block above the verified checkpoint (5) but below the merely-configured higher
+	// checkpoint (50) must NOT be eligible for quick validation - it was never
+	// cryptographically anchored by a checkpoint in this catchup session.
+	blockAboveVerifiedCheckpoint := testhelpers.CreateTestBlocks(t, 1)[0]
+	blockAboveVerifiedCheckpoint.Height = 8
+
+	shouldTryNormal, err := suite.Server.tryQuickValidation(
+		suite.Ctx, blockAboveVerifiedCheckpoint, catchupCtx, "", "http://test", nil)
+	require.NoError(t, err)
+	require.True(t, shouldTryNormal,
+		"block above the verified checkpoint but below the merely-configured checkpoint must fall back to normal validation")
+}
+
 // TestCheckpointValidationSkipsCheckpointsBelowAncestor verifies that checkpoint validation
 // correctly skips checkpoints that are below the common ancestor height
 func TestCheckpointValidationSkipsCheckpointsBelowAncestor(t *testing.T) {

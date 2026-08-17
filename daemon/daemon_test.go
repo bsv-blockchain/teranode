@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,9 +205,154 @@ func TestPrintUsage(t *testing.T) {
 
 	output := buf.String()
 
-	assert.Contains(t, output, "usage: main [options]")
-	assert.Contains(t, output, "-blockchain=<1|0>")
-	assert.Contains(t, output, "-all=0")
+	require.Contains(t, output, "usage: main [options]")
+	require.Contains(t, output, "-blockchain=<1|0>")
+	require.Contains(t, output, "-all=0")
+
+	// The faucet service no longer exists, so it must never be documented again.
+	require.NotContains(t, strings.ToLower(output), "faucet")
+}
+
+// TestPrintUsageMatchesShouldStartFlags guards the usage text against drift in both
+// directions: every flag printUsage documents must be a flag shouldStart actually
+// honours, and every flag shouldStart honours must be documented.
+func TestPrintUsageMatchesShouldStartFlags(t *testing.T) {
+	documented := documentedUsageFlags(t)
+	honoured := shouldStartFlags(t)
+
+	for flag := range documented {
+		require.Contains(t, honoured, flag, "printUsage documents -%s but no shouldStart call honours it", flag)
+	}
+
+	for flag := range honoured {
+		require.Contains(t, documented, flag, "shouldStart honours -%s but printUsage does not document it", flag)
+	}
+}
+
+// documentedUsageFlags returns the set of flag names documented by printUsage.
+func documentedUsageFlags(t *testing.T) map[string]struct{} {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = w
+
+	printUsage()
+
+	require.NoError(t, w.Close())
+
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+
+	flagRe := regexp.MustCompile(`(?m)^\s+-([a-z0-9_]+)=`)
+
+	flags := make(map[string]struct{})
+
+	for _, match := range flagRe.FindAllStringSubmatch(buf.String(), -1) {
+		flags[match[1]] = struct{}{}
+	}
+
+	require.NotEmpty(t, flags, "no flags found in usage output")
+
+	return flags
+}
+
+// shouldStartFlags parses the non-test sources of this package and returns the set of
+// command line flag names that shouldStart is actually called with (lower-cased, as
+// shouldStart itself lower-cases the app name). The "-all=0" flag is handled inline in
+// shouldStart rather than through a call, so it is picked up from the literal.
+func shouldStartFlags(t *testing.T) map[string]struct{} {
+	t.Helper()
+
+	fset := token.NewFileSet()
+
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	require.NoError(t, err)
+
+	flags := make(map[string]struct{})
+	consts := make(map[string]string)
+
+	// First pass: collect string constants so shouldStart(serviceXFormal, ...) resolves.
+	for _, pkg := range pkgs {
+		ast.Inspect(pkg, func(n ast.Node) bool {
+			spec, ok := n.(*ast.ValueSpec)
+			if !ok {
+				return true
+			}
+
+			for i, name := range spec.Names {
+				if i >= len(spec.Values) {
+					continue
+				}
+
+				if value, ok := stringLit(spec.Values[i]); ok {
+					consts[name.Name] = value
+				}
+			}
+
+			return true
+		})
+	}
+
+	for _, pkg := range pkgs {
+		ast.Inspect(pkg, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.BasicLit:
+				// "-all=0" is matched directly inside shouldStart.
+				if value, ok := stringLit(node); ok && value == "-all=0" {
+					flags["all"] = struct{}{}
+				}
+			case *ast.CallExpr:
+				sel, ok := node.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "shouldStart" || len(node.Args) == 0 {
+					return true
+				}
+
+				switch arg := node.Args[0].(type) {
+				case *ast.BasicLit:
+					if value, ok := stringLit(arg); ok {
+						flags[strings.ToLower(value)] = struct{}{}
+					}
+				case *ast.Ident:
+					if value, ok := consts[arg.Name]; ok {
+						flags[strings.ToLower(value)] = struct{}{}
+					} else {
+						t.Fatalf("could not resolve shouldStart argument %q to a string constant", arg.Name)
+					}
+				default:
+					t.Fatalf("unexpected shouldStart argument expression %T", arg)
+				}
+			}
+
+			return true
+		})
+	}
+
+	require.NotEmpty(t, flags, "no shouldStart flags found in package sources")
+
+	return flags
+}
+
+// stringLit returns the value of an untyped string literal expression.
+func stringLit(expr ast.Expr) (string, bool) {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+
+	value, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+
+	return value, true
 }
 
 // TestDaemon_Start_AllServices tests the Start method of the Daemon to ensure it can start all services correctly.

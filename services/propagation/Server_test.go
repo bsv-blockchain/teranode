@@ -1355,7 +1355,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 // and validates transaction processing functionality against the distributed database backend.
 func Test_processTransactionInternalAerospike(t *testing.T) {
 	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		_ = teardown()
@@ -1369,7 +1369,7 @@ func Test_processTransactionInternalAerospike(t *testing.T) {
 // and validates transaction processing functionality against the relational database backend.
 func Test_processTransactionInternalPostgres(t *testing.T) {
 	container, err := postgres.RunPostgresTestContainer(context.Background(), "propagation-test")
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	defer func() {
 		_ = container.Terminate(context.Background())
