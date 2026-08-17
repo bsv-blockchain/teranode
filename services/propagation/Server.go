@@ -686,19 +686,16 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 			return c.String(http.StatusBadRequest, "Invalid request body")
 		}
 
-		// Process the transaction and return appropriate response
-		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
+		// Process the transaction and return appropriate response. The parsed
+		// transaction comes back with the error so the failure can name it
+		// without parsing the body again: the only parse is the one inside
+		// processTransaction, which is guarded against a parser panic on
+		// adversarial input. It is nil exactly when there was nothing to name.
+		failedTx, err := ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
 			status := httpStatusForTxError(err)
 			if status >= 200 && status < 300 {
 				return c.String(status, "OK")
-			}
-			// Re-parse only to name the transaction in the failure, and only on
-			// the failure path. A body we could not parse yields a nil tx, which
-			// failureLine renders unchanged.
-			failedTx, parseErr := bt.NewTxFromBytes(body)
-			if parseErr != nil {
-				failedTx = nil
 			}
 			return c.String(status, "Failed to process transaction: "+failureLine(failedTx, err))
 		}
@@ -722,9 +719,13 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 // head of the line, where every existing consumer looks for it.
 //
 // tx may be nil (a parse failure, or a slot taken by context cancellation);
-// there is no transaction to name then, and the message is returned as-is. The
-// txid is hashed here rather than at submission time so an accepted
-// transaction never pays for it.
+// there is no transaction to name then, and the message is returned as-is.
+//
+// The txid is derived here, while rendering the line, rather than being
+// captured for every submission: a batch of N transactions with F failures
+// pays for F hashes rather than N. It is not free — bt.Tx.TxIDChainHash
+// recomputes unless SetTxHash was called — but it is bounded by the number of
+// failures, and the accepted transactions in the same batch are unaffected.
 func failureLine(tx *bt.Tx, err error) string {
 	msg := errors.UserMessage(err)
 	if tx == nil {
@@ -822,10 +823,10 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		const maxSubmissions = maxTransactionsPerRequest + 1 // +1 for ctx-cancel slot
 		errSlots := make([]error, maxSubmissions)
 		// txSlots holds the transaction that occupies each submission slot, so a
-		// failure can name it. Only a pointer is stored: the txid is hashed
-		// lazily, on the failure path, never for a transaction we accept. Slots
-		// used by parse errors and the ctx-cancel path stay nil — there is no
-		// transaction to name.
+		// failure can name it. Only a pointer is stored; the txid is derived
+		// later, in failureLine, and only for the slots that actually failed.
+		// Slots used by parse errors and the ctx-cancel path stay nil — there is
+		// no transaction to name.
 		txSlots := make([]*bt.Tx, maxSubmissions)
 		nextSlot := 0
 		processingWg := sync.WaitGroup{}
@@ -1157,7 +1158,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 
 	ctxLogger.Debugf("[ProcessTransaction] processing transaction request")
 
-	if err := ps.processTransaction(ctx, req); err != nil {
+	if _, err := ps.processTransaction(ctx, req); err != nil {
 		ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
 
 		return nil, errors.WrapGRPCPublic(err)
@@ -1245,7 +1246,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			}
 
 			// just call the internal process transaction function for every transaction
-			if err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
+			if _, err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
 				// Use context-aware logger for trace correlation
@@ -1278,8 +1279,12 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 //   - req: transaction processing request
 //
 // Returns:
+//   - *bt.Tx: the parsed transaction, once parsing has succeeded, so a caller
+//     can name it in a client-facing failure without parsing the body a second
+//     time. nil when the body could not be parsed (or was rejected before
+//     parsing, on size), which is exactly when there is no transaction to name.
 //   - error: error if any processing step fails
-func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) error {
+func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*bt.Tx, error) {
 	ctx, span, endSpan := tracing.Tracer("propagation").Start(ctx, "processTransaction",
 		tracing.WithParentStat(ps.stats),
 	)
@@ -1295,7 +1300,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 			prometheusInvalidTransactions.Inc()
 			err := errors.NewTxInvalidError("[ProcessTransaction] transaction size %d exceeds maximum allowed size %d", txSize, maxTxSize)
 			span.RecordError(err)
-			return err
+			return nil, err
 		}
 	}
 
@@ -1317,18 +1322,18 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		err = errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
 		span.RecordError(err)
 
-		return err
+		return nil, err
 	}
 
 	if err = ps.processTransactionInternal(ctx, btTx); err != nil {
 		span.RecordError(err)
-		return err
+		return btTx, err
 	}
 
 	prometheusTransactionSize.Observe(float64(txSize))
 	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
-	return nil
+	return btTx, nil
 }
 
 // processTransactionInternal performs the core business logic for processing a transaction.

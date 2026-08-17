@@ -171,6 +171,32 @@ func TestSingleTxFailureNamesItsTransaction(t *testing.T) {
 	}
 }
 
+// TestSingleTxUnparseableBodyIsAnswered pins the one path where there is no
+// transaction to name: a body the parser rejects.
+//
+// The handler must answer it rather than fall over. Naming the transaction in
+// a failure needs the parsed transaction, and the obvious way to get one in
+// the handler — parsing the body again on the failure path — would re-run the
+// parser on exactly the input that just failed it, unguarded. bt's parser is
+// recovered from a panic everywhere else in this file precisely because
+// adversarial input can panic it, and this echo server registers no
+// middleware.Recover, so such a panic would unwind into net/http and drop the
+// connection instead of returning a status. processTransaction hands the
+// parsed transaction back instead, so the body is parsed exactly once, inside
+// the existing guard, and a nil result simply means "nothing to name".
+func TestSingleTxUnparseableBodyIsAnswered(t *testing.T) {
+	ps, _ := setupPropagationServer(t, NewMockValidatorForTxTest(nil), nil)
+
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(
+		httptest.NewRequest(http.MethodPost, "/tx", bytes.NewReader([]byte{0x01, 0x02, 0x03})), rec)
+
+	require.NotPanics(t, func() {
+		require.NoError(t, ps.handleSingleTx(context.Background())(c))
+	})
+	require.Contains(t, rec.Body.String(), "failed to parse transaction from bytes")
+}
+
 // TestFailureLine covers the renderer directly, including the cases the
 // handler tests cannot reach.
 func TestFailureLine(t *testing.T) {

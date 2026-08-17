@@ -1628,9 +1628,12 @@ func TestProcessTransaction_ExceedsMaxSize(t *testing.T) {
 		Tx: tx.ExtendedBytes(),
 	}
 
-	err := ps.processTransaction(context.Background(), req)
+	parsed, err := ps.processTransaction(context.Background(), req)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds maximum allowed size")
+	// Rejected on size before the body is ever parsed, so there is no
+	// transaction to hand back for the caller to name.
+	assert.Nil(t, parsed)
 }
 
 // TestCheckDuplicateInputs tests the duplicate input detection.
