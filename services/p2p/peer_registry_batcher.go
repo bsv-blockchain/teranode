@@ -159,6 +159,13 @@ type peerRegistryBatcher struct {
 	// fresh post-removal data flushes next cycle. Nil when no flush is
 	// running; reset at the end of each cycle.
 	removedDuringFlush map[string]struct{}
+	// assertForgottenDuringFlush records forgetAssertState calls that arrive
+	// while a flush cycle is processing its snapshot, so the cycle's re-record
+	// step does not resurrect the pre-forget assert state it read earlier.
+	// Nil when no flush is running; reset at the end of each cycle. Bounded at
+	// registryBatcherMaxPending; a dropped entry only means the reconciler's
+	// clear can be masked for up to registryReassertTTL before self-healing.
+	assertForgottenDuringFlush map[string]struct{}
 
 	// flushMu serializes flush cycles (ticker, stop, and synchronous mode).
 	flushMu sync.Mutex
@@ -296,10 +303,15 @@ func (b *peerRegistryBatcher) enqueueStorage(peerID, storage string) {
 // IsConnected flag is cleared out-of-band by the connection-state reconciler:
 // without this, the batcher could skip re-asserting connected=true for up to
 // registryReassertTTL after the peer reconnects. Pending updates and tombstones
-// are untouched — the peer is not being removed.
+// are untouched — the peer is not being removed. The flush-scoped set stops an
+// in-flight flushOnce from resurrecting the pre-forget snapshot it read before
+// this call (it re-records assert state after its RPCs complete).
 func (b *peerRegistryBatcher) forgetAssertState(peerID string) {
 	b.mu.Lock()
 	delete(b.lastAsserted, peerID)
+	if b.assertForgottenDuringFlush != nil && len(b.assertForgottenDuringFlush) < registryBatcherMaxPending {
+		b.assertForgottenDuringFlush[peerID] = struct{}{}
+	}
 	b.mu.Unlock()
 }
 
@@ -355,12 +367,14 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 		// persistent tombstone, but must not let this loop push the peer's
 		// stale pre-removal snapshot.
 		b.removedDuringFlush = make(map[string]struct{})
+		b.assertForgottenDuringFlush = make(map[string]struct{})
 	}
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
 		b.removedDuringFlush = nil
+		b.assertForgottenDuringFlush = nil
 		b.mu.Unlock()
 	}()
 
@@ -466,6 +480,17 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 			// above, and recording the assertion would suppress the peer's
 			// re-registration for registryReassertTTL after its next message.
 			if !b.isRemovedLocked(peerID) {
+				// A forgetAssertState() may also have raced the RPCs: keep
+				// only the assertions this cycle actually sent so the
+				// forgotten (stale) part of the snapshot is not resurrected.
+				if _, forgotten := b.assertForgottenDuringFlush[peerID]; forgotten {
+					if !sendRegister {
+						st.registeredAt = time.Time{}
+					}
+					if !sendConnected {
+						st.connectedAt = time.Time{}
+					}
+				}
 				b.recordAssertStateLocked(peerID, st)
 			}
 			b.mu.Unlock()

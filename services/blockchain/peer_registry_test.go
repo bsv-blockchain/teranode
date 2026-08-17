@@ -198,6 +198,26 @@ func TestCentralizedPeerRegistry_Persistence(t *testing.T) {
 	require.Equal(t, blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL, p1.TransportType)
 }
 
+func TestCentralizedPeerRegistry_Persistence_LoadResetsIsConnected(t *testing.T) {
+	store := newTestBlobStore(t)
+	ctx := context.Background()
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.Register(&PeerInfo{ID: "peer-1"})
+	r.UpdateConnectionState("peer-1", true)
+	require.NoError(t, r.Save(ctx, store))
+
+	// A connection cannot survive a restart; a restored flag would report a
+	// phantom connection and exempt the entry from cleanup until the p2p
+	// reconciliation sweep first runs.
+	r2 := NewCentralizedPeerRegistry(DefaultBanConfig())
+	require.NoError(t, r2.Load(ctx, store, 24*time.Hour))
+
+	got, ok := r2.Get("peer-1")
+	require.True(t, ok)
+	require.False(t, got.IsConnected)
+}
+
 func TestCentralizedPeerRegistry_Persistence_MissingKey(t *testing.T) {
 	store := newTestBlobStore(t)
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())

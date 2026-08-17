@@ -24,6 +24,9 @@ type countingRegistryClient struct {
 	blockchain.PeerRegistryClientI
 	mu    sync.Mutex
 	calls map[string]int
+	// onRegister, when set, runs during RegisterPeer — lets tests interleave
+	// out-of-band batcher calls with an in-flight flush cycle.
+	onRegister func()
 }
 
 func newCountingRegistryClient(inner blockchain.PeerRegistryClientI) *countingRegistryClient {
@@ -44,6 +47,9 @@ func (c *countingRegistryClient) callCount(method string) int {
 
 func (c *countingRegistryClient) RegisterPeer(ctx context.Context, info *blockchain.PeerInfo) error {
 	c.count("RegisterPeer")
+	if c.onRegister != nil {
+		c.onRegister()
+	}
 	return c.PeerRegistryClientI.RegisterPeer(ctx, info)
 }
 
@@ -167,6 +173,31 @@ func TestPeerRegistryBatcher_ForgetAssertStateForcesReassert(t *testing.T) {
 	require.True(t, got.IsConnected, "reconnecting peer must be re-marked connected after forgetAssertState")
 }
 
+func TestPeerRegistryBatcher_ForgetAssertStateDuringFlushNotResurrected(t *testing.T) {
+	b, counting, _ := newBatcherWithCountingRegistry()
+	pid := mustNewPeerID(t).String()
+
+	// Assert connected once so lastAsserted holds a fresh connectedAt.
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	require.Equal(t, 1, counting.callCount("UpdateConnectionState"))
+
+	// Next cycle sends a register (new client name) but no connection assert
+	// (still within registryReassertTTL). A reconciler forgetAssertState lands
+	// mid-flush, after the loop snapshotted the peer's assert state.
+	counting.onRegister = func() { b.forgetAssertState(pid) }
+	b.enqueueRegister(pid, "client/2.0", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	counting.onRegister = nil
+	require.Equal(t, 1, counting.callCount("UpdateConnectionState"), "still within reassert TTL")
+
+	// The stale connectedAt must not have been resurrected by the in-flight
+	// flush: the peer's next message re-asserts connected immediately.
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	require.Equal(t, 2, counting.callCount("UpdateConnectionState"), "forgotten assert state must force a re-assert on the next flush")
+}
+
 func TestPeerRegistryBatcher_NewInfoForcesRegister(t *testing.T) {
 	b, counting, reg := newBatcherWithCountingRegistry()
 	pid := mustNewPeerID(t).String()
@@ -286,12 +317,16 @@ func TestServer_GossipFlood_BoundedRegistryRPCs(t *testing.T) {
 	setServerLocalHeight(t, s, 100)
 
 	self := mustNewPeerID(t)
+	remote := mustNewPeerID(t)
 	mockP2P := new(MockServerP2PClient)
 	mockP2P.peerID = self
+	// The flooding peer is directly connected (live Addrs); seed the liveness
+	// snapshot so the hot path may flag it IsConnected.
+	mockP2P.peers = []p2pMessageBus.PeerInfo{{ID: remote.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
 	s.P2PClient = mockP2P
+	s.refreshLiveConnIDs()
 	s.notificationCh = make(chan *notificationMsg, 200)
 
-	remote := mustNewPeerID(t)
 	const flood = 100
 	for i := 0; i < flood; i++ {
 		blockHash := chainhash.HashH([]byte(fmt.Sprintf("block %d", i))).String()

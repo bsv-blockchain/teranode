@@ -1131,6 +1131,10 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 
 	s.peerMapCleanupTicker = time.NewTicker(cleanupInterval)
 
+	// Seed the liveness snapshot so the gossip hot path has one before the
+	// first reconcile tick.
+	s.refreshLiveConnIDs()
+
 	go func() {
 		for {
 			select {
@@ -1139,7 +1143,16 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 				return
 			case <-s.peerMapCleanupTicker.C:
 				s.cleanupPeerMaps()
-				s.reconcileConnectionStates(ctx)
+				// Reconcile on its own goroutine so a slow registry can never
+				// delay the cache sweep above (the only expirer of the
+				// reputation/ban caches); skip the tick if the previous pass
+				// is still running.
+				if s.reconcileInFlight.CompareAndSwap(false, true) {
+					go func() {
+						defer s.reconcileInFlight.Store(false)
+						s.reconcileConnectionStates(ctx)
+					}()
+				}
 			}
 		}
 	}()
@@ -1147,25 +1160,57 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
 }
 
-// reconcileConnectionStates clears IsConnected on registry entries whose peer
-// no longer has a live libp2p connection. Nothing else ever clears the flag:
-// go-p2p-message-bus exposes no disconnect callback (see networkDisconnector)
-// and the only other clearing site is the ban path (removePeer), so without
-// this sweep every peer that ever gossiped would stay flagged connected — and
-// therefore cleanup-exempt in the registry — for the life of the process.
-// Liveness comes from P2PClient.GetPeers(): Addrs is populated from the
-// host's open connections, so a peer with no addresses has no live connection.
+// reconcileTimeout bounds one reconcileConnectionStates pass so a wedged or
+// flooded registry cannot pin the reconcile goroutine (and its RPCs) forever.
+const reconcileTimeout = 30 * time.Second
+
+// refreshLiveConnIDs snapshots the set of peer IDs that currently have an
+// open libp2p connection and publishes it for hasLiveConnection. Liveness
+// comes from P2PClient.GetPeers(): Addrs is populated from the host's open
+// connections, so a peer with no addresses has no live connection.
+func (s *Server) refreshLiveConnIDs() map[string]struct{} {
+	live := make(map[string]struct{})
+	if s.P2PClient != nil {
+		for _, p := range s.P2PClient.GetPeers() {
+			if len(p.Addrs) > 0 {
+				live[p.ID] = struct{}{}
+			}
+		}
+	}
+	s.liveConnIDs.Store(live)
+	return live
+}
+
+// hasLiveConnection reports whether the peer had an open libp2p connection at
+// the last reconcile snapshot. Before the first snapshot it returns false —
+// the safe direction: a real neighbour is flagged connected by the next
+// reconcile pass, while a gossip-relayed publisher must never be flagged.
+func (s *Server) hasLiveConnection(peerID string) bool {
+	m, _ := s.liveConnIDs.Load().(map[string]struct{})
+	if m == nil {
+		return false
+	}
+	_, ok := m[peerID]
+	return ok
+}
+
+// reconcileConnectionStates synchronizes the registry's IsConnected flags with
+// actual libp2p connectedness, in both directions: it clears the flag on
+// entries with no live connection and sets it on live peers the hot path
+// missed (their messages arrived before the liveness snapshot included them).
+// Nothing else ever clears the flag: go-p2p-message-bus exposes no disconnect
+// callback (see networkDisconnector) and the only other clearing site is the
+// ban path (removePeer), so without this sweep every flagged peer would stay
+// cleanup-exempt in the registry for the life of the process.
 func (s *Server) reconcileConnectionStates(ctx context.Context) {
 	if s.P2PClient == nil || s.peerRegistry == nil {
 		return
 	}
 
-	live := make(map[string]struct{})
-	for _, p := range s.P2PClient.GetPeers() {
-		if len(p.Addrs) > 0 {
-			live[p.ID] = struct{}{}
-		}
-	}
+	live := s.refreshLiveConnIDs()
+
+	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
 
 	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
 	if err != nil {
@@ -1173,29 +1218,38 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 		return
 	}
 
-	cleared := 0
+	cleared, flagged := 0, 0
 	for _, info := range peers {
-		if !info.IsConnected {
-			continue
+		if ctx.Err() != nil {
+			s.logger.Warnf("[reconcileConnectionStates] pass cut short (%v) after clearing %d and flagging %d peers", ctx.Err(), cleared, flagged)
+			return
 		}
-		if _, ok := live[info.ID]; ok {
-			continue
+
+		_, isLive := live[info.ID]
+		switch {
+		case info.IsConnected && !isLive:
+			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, false); err != nil {
+				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s false failed: %v", info.ID, err)
+				continue
+			}
+			// Drop the batcher's reassert memory so a peer that reconnects
+			// gets re-marked connected on its next message instead of being
+			// skipped as recently asserted.
+			if s.registryBatcher != nil {
+				s.registryBatcher.forgetAssertState(info.ID)
+			}
+			cleared++
+		case !info.IsConnected && isLive:
+			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, true); err != nil {
+				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s true failed: %v", info.ID, err)
+				continue
+			}
+			flagged++
 		}
-		if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, false); err != nil {
-			s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s failed: %v", info.ID, err)
-			continue
-		}
-		// Drop the batcher's reassert memory so a peer that reconnects gets
-		// re-marked connected on its next message instead of being skipped as
-		// recently asserted.
-		if s.registryBatcher != nil {
-			s.registryBatcher.forgetAssertState(info.ID)
-		}
-		cleared++
 	}
 
-	if cleared > 0 {
-		s.logger.Infof("[reconcileConnectionStates] cleared stale connected flag on %d registry peers", cleared)
+	if cleared > 0 || flagged > 0 {
+		s.logger.Infof("[reconcileConnectionStates] reconciled connection flags: %d cleared, %d flagged live", cleared, flagged)
 	}
 }
 

@@ -83,7 +83,7 @@ The `PeerRegistry` is a thread-safe data store that maintains comprehensive info
 | `DataHubURL` | `string` | URL for fetching blocks/subtrees from peer |
 | `Storage` | `string` | Storage mode: "full", "pruned", or empty |
 | `ReputationScore` | `float64` | Overall reliability score (0-100) |
-| `IsConnected` | `bool` | Whether peer is directly connected |
+| `IsConnected` | `bool` | Whether peer has a live libp2p connection; set for message senders with an open connection, cleared by a periodic reconciliation sweep in the p2p service (no libp2p disconnect callback exists) and never restored from persistence |
 | `IsBanned` | `bool` | Whether peer is currently banned |
 
 **Interaction Metrics:**

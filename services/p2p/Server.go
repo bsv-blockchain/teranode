@@ -158,6 +158,14 @@ type Server struct {
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
+	// liveConnIDs holds the last snapshot of peer IDs with an open libp2p
+	// connection (map[string]struct{}), refreshed by reconcileConnectionStates.
+	// updatePeerLastMessageTime consults it so gossip-relayed publishers are
+	// never marked IsConnected. reconcileInFlight keeps ticker-driven
+	// reconcile passes from piling up when the registry is slow.
+	liveConnIDs       atomic.Value
+	reconcileInFlight atomic.Bool
+
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
 	// latestNodeStatus caches the most recent node status computed by
@@ -1064,8 +1072,6 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 		return
 	}
 
-	// Mark sender as connected and update last message time
-	// The sender is the peer we're directly connected to
 	// Note: We don't have the sender's client name here, only the originator's
 	senderID, err := peer.Decode(from)
 	if err != nil {
@@ -1073,7 +1079,16 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 		return
 	}
 
-	s.addConnectedPeer(senderID, "", 0, nil, "")
+	// Only mark the sender connected when it has a live libp2p connection.
+	// FromID is the pubsub author, not the immediate hop, so gossip-relayed
+	// messages arrive "from" peers we never dialled; flagging those connected
+	// would exempt them from registry cleanup and let a flood of self-signed
+	// messages under fresh peer IDs grow the registry without bound.
+	if s.hasLiveConnection(from) {
+		s.addConnectedPeer(senderID, "", 0, nil, "")
+	} else {
+		s.addPeer(senderID, "", 0, nil, "")
+	}
 	s.touchLastMessageTime(senderID)
 
 	// Also update for the originator if different (gossiped message)
@@ -1996,6 +2011,14 @@ func (s *Server) Stop(ctx context.Context) error {
 		coordCancel()
 	}
 
+	// Stop the peer map cleanup ticker before closing the P2P client: a
+	// reconcile tick against a closed client sees zero live connections and
+	// would clear IsConnected on every registry peer during shutdown.
+	if s.peerMapCleanupTicker != nil {
+		s.peerMapCleanupTicker.Stop()
+		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
+	}
+
 	// Stop the underlying P2P node
 	if s.P2PClient != nil {
 		collect("stop P2P node", s.P2PClient.Close())
@@ -2025,12 +2048,6 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	if s.e != nil {
 		collect("shutdown Echo server", s.e.Shutdown(ctx))
-	}
-
-	// Stop the peer map cleanup ticker
-	if s.peerMapCleanupTicker != nil {
-		s.peerMapCleanupTicker.Stop()
-		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
 	}
 
 	// Stop the registry batcher (performs a final flush of pending updates,

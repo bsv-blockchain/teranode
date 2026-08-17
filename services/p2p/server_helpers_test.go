@@ -70,22 +70,27 @@ func mustNewPeerID(t *testing.T) peer.ID {
 	return pid
 }
 
-func TestServerHelpers_ReconcileConnectionStates_ClearsStaleFlags(t *testing.T) {
+func TestServerHelpers_ReconcileConnectionStates_SyncsBothDirections(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
 	liveID := mustNewPeerID(t)
 	goneID := mustNewPeerID(t)
 	unknownID := mustNewPeerID(t)
+	missedID := mustNewPeerID(t)
 
 	s.addConnectedPeer(liveID, "", 0, nil, "")
 	s.addConnectedPeer(goneID, "", 0, nil, "")
 	s.addConnectedPeer(unknownID, "", 0, nil, "")
+	// missed is live but its messages arrived before the liveness snapshot
+	// included it, so the hot path only registered it as gossiped.
+	s.addPeer(missedID, "", 0, nil, "")
 
-	// live still has an open connection (Addrs populated from the host's
+	// live and missed have open connections (Addrs populated from the host's
 	// connections), gone is a known topic peer whose connection closed
 	// (no Addrs), unknown is not reported by the client at all.
 	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
 		{ID: liveID.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
+		{ID: missedID.String(), Addrs: []string{"/ip4/10.0.0.2/tcp/9905"}},
 		{ID: goneID.String()},
 	}}
 
@@ -102,6 +107,46 @@ func TestServerHelpers_ReconcileConnectionStates_ClearsStaleFlags(t *testing.T) 
 	got, ok = reg.Get(unknownID.String())
 	require.True(t, ok)
 	require.False(t, got.IsConnected, "peer unknown to the client is cleared")
+
+	got, ok = reg.Get(missedID.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "live peer the hot path missed is flagged")
+}
+
+func TestServerHelpers_GossipOnlyPublisherNeverFlaggedConnected(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.registryBatcher = newPeerRegistryBatcher(context.Background(), s.logger, s.peerRegistry, 0)
+
+	neighbourID := mustNewPeerID(t)
+	publisherID := mustNewPeerID(t)
+
+	// Only the neighbour has an open connection; the publisher's messages
+	// arrive relayed through the mesh (FromID is the pubsub author).
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
+		{ID: neighbourID.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
+		{ID: publisherID.String()},
+	}}
+	s.refreshLiveConnIDs()
+
+	s.updatePeerLastMessageTime(neighbourID.String(), "")
+	s.updatePeerLastMessageTime(publisherID.String(), "")
+
+	got, ok := reg.Get(neighbourID.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "directly connected sender is flagged")
+
+	got, ok = reg.Get(publisherID.String())
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "gossip-relayed publisher must not be flagged connected")
+
+	// The publisher keeps gossiping across a reconcile pass: the flag must
+	// converge to false (stay false), not flap back, so the entry remains
+	// subject to TTL/LRU cleanup.
+	s.reconcileConnectionStates(context.Background())
+	s.updatePeerLastMessageTime(publisherID.String(), "")
+
+	got, _ = reg.Get(publisherID.String())
+	require.False(t, got.IsConnected, "flag must not flap back for a peer without a live connection")
 }
 
 func TestServerHelpers_AddPeer_Registers(t *testing.T) {
