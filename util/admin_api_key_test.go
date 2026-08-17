@@ -5,20 +5,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
-// capturingLogger records Warnf messages so tests can assert that the cleartext
-// exposure warning actually fired (rather than the guard silently doing nothing).
+// capturingLogger records Warnf/Errorf messages so tests can assert that the
+// cleartext-exposure warning and the placeholder-ignored error actually fired
+// (rather than the guard silently doing nothing).
 type capturingLogger struct {
 	ulogger.TestLogger
-	warns []string
+	warns  []string
+	errors []string
 }
 
 func (l *capturingLogger) Warnf(format string, args ...interface{}) {
 	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+func (l *capturingLogger) Errorf(format string, args ...interface{}) {
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
 }
 
 func TestValidateAdminAPIKey(t *testing.T) {
@@ -27,11 +32,12 @@ func TestValidateAdminAPIKey(t *testing.T) {
 		apiKey        string
 		listenAddress string
 		securityLevel int
-		wantErr       bool
+		wantIgnore    bool
 		wantWarn      bool
+		wantError     bool
 	}{
 		{
-			name:   "empty key is allowed (fail-closed random key path)",
+			name:   "empty key is not ignored (fail-closed random key path)",
 			apiKey: "",
 		},
 		{
@@ -40,22 +46,25 @@ func TestValidateAdminAPIKey(t *testing.T) {
 			listenAddress: "0.0.0.0:9904",
 		},
 		{
-			name:          "committed placeholder testkey is rejected",
+			name:          "committed placeholder testkey is ignored (not hard-fail)",
 			apiKey:        "testkey",
 			listenAddress: "127.0.0.1:9904",
-			wantErr:       true,
+			wantIgnore:    true,
+			wantError:     true,
 		},
 		{
-			name:          "placeholder rejected regardless of case",
+			name:          "placeholder ignored regardless of case",
 			apiKey:        "TestKey",
 			listenAddress: "127.0.0.1:9904",
-			wantErr:       true,
+			wantIgnore:    true,
+			wantError:     true,
 		},
 		{
-			name:          "placeholder rejected with surrounding whitespace",
+			name:          "placeholder ignored with surrounding whitespace",
 			apiKey:        "  changeme  ",
 			listenAddress: "127.0.0.1:9904",
-			wantErr:       true,
+			wantIgnore:    true,
+			wantError:     true,
 		},
 		{
 			name:          "real key on loopback listener is accepted without warning",
@@ -63,7 +72,7 @@ func TestValidateAdminAPIKey(t *testing.T) {
 			listenAddress: "127.0.0.1:9904",
 		},
 		{
-			name:          "real key on non-loopback listener without TLS warns but does not fail",
+			name:          "real key on non-loopback listener without TLS warns but is kept",
 			apiKey:        "a-strong-random-admin-secret-value",
 			listenAddress: "0.0.0.0:9904",
 			securityLevel: 0,
@@ -93,13 +102,15 @@ func TestValidateAdminAPIKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := &capturingLogger{}
-			err := ValidateAdminAPIKey(logger, "P2P", tt.apiKey, tt.listenAddress, tt.securityLevel)
+			ignore := ValidateAdminAPIKey(logger, "P2P", tt.apiKey, tt.listenAddress, tt.securityLevel)
 
-			if tt.wantErr {
-				require.Error(t, err)
-				require.True(t, errors.Is(err, errors.ErrConfiguration), "expected a configuration error, got %v", err)
+			require.Equal(t, tt.wantIgnore, ignore)
+
+			if tt.wantError {
+				require.NotEmpty(t, logger.errors, "expected a placeholder-ignored error log")
+				require.Contains(t, logger.errors[0], "grpc_admin_api_key")
 			} else {
-				require.NoError(t, err)
+				require.Empty(t, logger.errors, "did not expect an error log, got %v", logger.errors)
 			}
 
 			if tt.wantWarn {
@@ -156,13 +167,14 @@ func TestIsLoopbackListenAddress(t *testing.T) {
 	}
 }
 
-// TestValidateAdminAPIKeyMatchesServerEmptyCheck guards the invariant behind
-// finding 6: the servers treat GRPCAdminAPIKey == "" as "generate a random key",
-// and the setting is trimmed at load, so a whitespace-only value must resolve to
-// empty in both places rather than becoming a live secret.
+// TestValidateAdminAPIKeyMatchesServerEmptyCheck guards the invariant that a
+// whitespace-only value resolves to empty: the setting is trimmed at load, and
+// the servers treat GRPCAdminAPIKey == "" as "generate a random key", so a
+// whitespace-only value must never become a live secret.
 func TestValidateAdminAPIKeyMatchesServerEmptyCheck(t *testing.T) {
 	require.Equal(t, "", strings.TrimSpace("   "))
 	logger := &capturingLogger{}
-	require.NoError(t, ValidateAdminAPIKey(logger, "P2P", "   ", "0.0.0.0:9904", 0))
+	require.False(t, ValidateAdminAPIKey(logger, "P2P", "   ", "0.0.0.0:9904", 0))
 	require.Empty(t, logger.warns)
+	require.Empty(t, logger.errors)
 }

@@ -255,7 +255,7 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 			Severity:    SeverityERROR,
 			Check:       labelGRPCAdminAPIKey,
 			Value:       "well-known placeholder",
-			Recommended: "Replace the placeholder; P2P/Legacy servers reject it at startup",
+			Recommended: "Replace the placeholder; P2P/Legacy servers ignore it and admin RPCs stay disabled until a real secret is set",
 		})
 	} else if len(s.GRPCAdminAPIKey) < 16 {
 		results = append(results, ConfigResult{

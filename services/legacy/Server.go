@@ -252,11 +252,6 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (s *Server) Init(ctx context.Context) error {
 	var err error
 
-	// Fail fast on an insecure admin API key before the node joins the network.
-	if err = util.ValidateAdminAPIKey(s.logger, "Legacy", s.settings.GRPCAdminAPIKey, s.settings.Legacy.GRPCListenAddress, s.settings.SecurityLevelGRPC); err != nil {
-		return err
-	}
-
 	wire.SetLimits(4000000000)
 
 	// Stream-decode incoming "block" messages straight from the socket
@@ -654,6 +649,12 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	s.logger.Infof("[Legacy Server] Started peer statistics logging")
 
 	apiKey := s.settings.GRPCAdminAPIKey
+	if util.ValidateAdminAPIKey(s.logger, "Legacy", apiKey, s.settings.Legacy.GRPCListenAddress, s.settings.SecurityLevelGRPC) {
+		// Configured key is a well-known placeholder; ignore it and fall back to
+		// the random-key path below rather than trusting a world-readable value.
+		apiKey = ""
+	}
+
 	if apiKey == "" {
 		// Generate a random API key if not provided
 		key := make([]byte, 32)

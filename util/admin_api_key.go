@@ -4,7 +4,6 @@ import (
 	"net"
 	"strings"
 
-	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -34,37 +33,42 @@ func IsPlaceholderAdminAPIKey(key string) bool {
 	return ok
 }
 
-// ValidateAdminAPIKey guards the configured gRPC admin API key before a server
-// starts serving protected (state-mutating) admin RPCs.
+// ValidateAdminAPIKey inspects the configured gRPC admin API key before a server
+// installs the auth interceptor, and reports whether the caller should ignore the
+// configured value and fall back to the random-key (fail-closed) path.
 //
-// It hard-fails (returns an error) when the key is a well-known placeholder such
-// as "testkey", so a world-readable committed value can never silently reduce
-// admin authentication to a no-op. An empty key is intentionally allowed here:
-// callers fall back to a randomly generated key that leaves admin RPCs
-// unreachable (fail-closed), which is safe.
+// A well-known placeholder such as "testkey" is ignored (logged at Error) rather
+// than trusted: this repository is public, so a committed placeholder protects
+// nothing. Ignoring it lands on the same fail-closed path as an empty key - a
+// random key is generated and the protected admin RPCs stay unreachable until a
+// real secret is configured - so the node keeps validating and relaying blocks
+// instead of being taken offline by a setting that only guards admin RPCs. An
+// empty key returns false (nothing to ignore), and the caller's own empty check
+// generates the random key.
 //
 // When a real key is configured but served on a non-loopback listener without
 // verified gRPC transport security, the key would travel where it can be
-// harvested; this logs a warning rather than failing, because internal
-// deployments on trusted networks legitimately run without TLS and must not be
-// crashed at startup. securityLevel 0 sends the key in cleartext and level 1
-// encrypts without verifying the server certificate (MITM-exploitable, see
-// loadTLSCredentials), so both warn; level 2+ (verified TLS) is treated as safe.
-func ValidateAdminAPIKey(logger ulogger.Logger, serviceName, apiKey, listenAddress string, securityLevel int) error {
+// harvested; this logs a warning, because internal deployments on trusted
+// networks legitimately run without TLS. securityLevel 0 sends the key in
+// cleartext and level 1 encrypts without verifying the server certificate
+// (MITM-exploitable, see loadTLSCredentials), so both warn; level 2+ (verified
+// TLS) is treated as safe.
+func ValidateAdminAPIKey(logger ulogger.Logger, serviceName, apiKey, listenAddress string, securityLevel int) (ignoreKey bool) {
 	trimmed := strings.TrimSpace(apiKey)
 	if trimmed == "" {
-		return nil
+		return false
 	}
 
 	if IsPlaceholderAdminAPIKey(trimmed) {
-		return errors.NewConfigurationError("[%s] grpc_admin_api_key is set to the well-known placeholder %q; this repository is public so such a value protects nothing - supply a strong random secret (32+ chars) via an environment variable or secret store", serviceName, trimmed)
+		logger.Errorf("[%s] grpc_admin_api_key is the well-known placeholder %q; this repository is public so it protects nothing. Ignoring it: a random key is used instead, so admin RPCs are unreachable until a strong secret is supplied via an environment variable or secret store", serviceName, trimmed)
+		return true
 	}
 
 	if securityLevel <= 1 && !isLoopbackListenAddress(listenAddress) {
 		logger.Warnf("[%s] grpc_admin_api_key is set but the gRPC listener %q is not loopback-bound and securityLevelGRPC=%d does not provide verified transport security, so the admin key can be harvested in transit; bind the listener to loopback or set securityLevelGRPC >= 2 with certificate verification", serviceName, listenAddress, securityLevel)
 	}
 
-	return nil
+	return false
 }
 
 // isLoopbackListenAddress reports whether a gRPC listen address is bound only to
