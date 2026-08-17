@@ -12,6 +12,7 @@ import (
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
@@ -24,9 +25,13 @@ type countingRegistryClient struct {
 	blockchain.PeerRegistryClientI
 	mu    sync.Mutex
 	calls map[string]int
-	// onRegister, when set, runs during RegisterPeer — lets tests interleave
-	// out-of-band batcher calls with an in-flight flush cycle.
-	onRegister func()
+	// onRegister / onUpdateConnectionState, when set, run during the RPC —
+	// lets tests interleave out-of-band batcher calls with an in-flight
+	// flush cycle. The fail* errors, when set, are returned by the RPC.
+	onRegister                func()
+	onUpdateConnectionState   func()
+	failListPeers             error
+	failUpdateConnectionState error
 }
 
 func newCountingRegistryClient(inner blockchain.PeerRegistryClientI) *countingRegistryClient {
@@ -55,7 +60,21 @@ func (c *countingRegistryClient) RegisterPeer(ctx context.Context, info *blockch
 
 func (c *countingRegistryClient) UpdateConnectionState(ctx context.Context, peerID string, connected bool) error {
 	c.count("UpdateConnectionState")
+	if c.onUpdateConnectionState != nil {
+		c.onUpdateConnectionState()
+	}
+	if c.failUpdateConnectionState != nil {
+		return c.failUpdateConnectionState
+	}
 	return c.PeerRegistryClientI.UpdateConnectionState(ctx, peerID, connected)
+}
+
+func (c *countingRegistryClient) ListPeers(ctx context.Context, transportFilter *blockchain_api.TransportType, minReputation float64, minHeight uint32, excludeBanned, sortByStorage bool) ([]*blockchain.PeerInfo, error) {
+	c.count("ListPeers")
+	if c.failListPeers != nil {
+		return nil, c.failListPeers
+	}
+	return c.PeerRegistryClientI.ListPeers(ctx, transportFilter, minReputation, minHeight, excludeBanned, sortByStorage)
 }
 
 func (c *countingRegistryClient) UpdateLastMessageTime(ctx context.Context, peerID string) error {
@@ -196,6 +215,35 @@ func TestPeerRegistryBatcher_ForgetAssertStateDuringFlushNotResurrected(t *testi
 	b.enqueueRegister(pid, "", 0, nil, "", true)
 	b.flushOnce(context.Background())
 	require.Equal(t, 2, counting.callCount("UpdateConnectionState"), "forgotten assert state must force a re-assert on the next flush")
+}
+
+func TestPeerRegistryBatcher_ForgetDuringConnectOnlyFlushZerosRegisteredAt(t *testing.T) {
+	b, counting, _ := newBatcherWithCountingRegistry()
+	pid := mustNewPeerID(t).String()
+
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+
+	// Age only the connection assert so the next flush re-asserts connected
+	// without re-registering.
+	b.mu.Lock()
+	st := b.lastAsserted[pid]
+	st.connectedAt = time.Now().Add(-2 * registryReassertTTL)
+	b.lastAsserted[pid] = st
+	b.mu.Unlock()
+
+	counting.onUpdateConnectionState = func() { b.forgetAssertState(pid) }
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	counting.onUpdateConnectionState = nil
+
+	// The connect assert this cycle actually sent is kept; the not-sent
+	// register half of the forgotten snapshot must not be resurrected.
+	b.mu.Lock()
+	st = b.lastAsserted[pid]
+	b.mu.Unlock()
+	require.False(t, st.connectedAt.IsZero(), "connect assert sent this cycle is kept")
+	require.True(t, st.registeredAt.IsZero(), "stale registeredAt must not be resurrected")
 }
 
 func TestPeerRegistryBatcher_NewInfoForcesRegister(t *testing.T) {

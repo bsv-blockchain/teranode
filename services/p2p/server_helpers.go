@@ -1166,8 +1166,14 @@ const reconcileTimeout = 30 * time.Second
 
 // refreshLiveConnIDs snapshots the set of peer IDs that currently have an
 // open libp2p connection and publishes it for hasLiveConnection. Liveness
-// comes from P2PClient.GetPeers(): Addrs is populated from the host's open
-// connections, so a peer with no addresses has no live connection.
+// comes from P2PClient.GetPeers(): verified against go-p2p-message-bus
+// v0.1.17 (client.go GetPeers), Addrs is built from
+// host.Network().ConnsToPeer — open connections only, not the peerstore —
+// while the peer list itself is every peer that ever authored a message on a
+// subscribed topic (gossip-only publishers included, never pruned). So the
+// Addrs filter is what separates live neighbours from gossip-only authors;
+// it is not redundant with the listing. This differs from the p2p service's
+// own GetPeers RPC, which is filtered to IsConnected registry entries.
 func (s *Server) refreshLiveConnIDs() map[string]struct{} {
 	live := make(map[string]struct{})
 	if s.P2PClient != nil {

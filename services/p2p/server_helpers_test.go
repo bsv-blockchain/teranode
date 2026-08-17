@@ -113,6 +113,74 @@ func TestServerHelpers_ReconcileConnectionStates_SyncsBothDirections(t *testing.
 	require.True(t, got.IsConnected, "live peer the hot path missed is flagged")
 }
 
+func TestServerHelpers_StartPeerMapCleanup_RunsReconcile(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.settings.P2P.PeerMapCleanupInterval = 10 * time.Millisecond
+	s.registryBatcher = newPeerRegistryBatcher(context.Background(), s.logger, s.peerRegistry, 0)
+
+	stale := mustNewPeerID(t)
+	s.addConnectedPeer(stale, "", 0, nil, "")
+
+	// Known topic peer with no open connection: the ticker-driven reconcile
+	// must clear its stale connected flag.
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{{ID: stale.String()}}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.startPeerMapCleanup(ctx)
+
+	require.Eventually(t, func() bool {
+		got, ok := reg.Get(stale.String())
+		return ok && !got.IsConnected
+	}, 5*time.Second, 10*time.Millisecond, "ticker-driven reconcile must clear the stale flag")
+}
+
+func TestServerHelpers_ReconcileConnectionStates_ErrorAndGuardPaths(t *testing.T) {
+	// Nil client / nil registry: no-ops, no panic.
+	s, _ := newServerWithLocalRegistry(t)
+	s.reconcileConnectionStates(context.Background())
+
+	s2 := &Server{logger: ulogger.TestLogger{}, P2PClient: &MockServerP2PClient{}}
+	s2.reconcileConnectionStates(context.Background())
+
+	// ListPeers failure: the pass is skipped and flags stay untouched.
+	s3, reg3 := newServerWithLocalRegistry(t)
+	stale := mustNewPeerID(t)
+	s3.addConnectedPeer(stale, "", 0, nil, "")
+	counting := newCountingRegistryClient(s3.peerRegistry)
+	s3.peerRegistry = counting
+	s3.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{{ID: stale.String()}}}
+
+	counting.failListPeers = assert.AnError
+	s3.reconcileConnectionStates(context.Background())
+	got, _ := reg3.Get(stale.String())
+	require.True(t, got.IsConnected, "flags untouched when ListPeers fails")
+	counting.failListPeers = nil
+
+	// UpdateConnectionState failures: the loop logs and continues, covering
+	// both the clear and the flag direction.
+	live := mustNewPeerID(t)
+	s3.addPeer(live, "", 0, nil, "")
+	s3.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
+		{ID: stale.String()},
+		{ID: live.String(), Addrs: []string{"/ip4/10.0.0.9/tcp/9905"}},
+	}}
+	counting.failUpdateConnectionState = assert.AnError
+	s3.reconcileConnectionStates(context.Background())
+	got, _ = reg3.Get(stale.String())
+	require.True(t, got.IsConnected, "clear direction skipped on RPC error")
+	got, _ = reg3.Get(live.String())
+	require.False(t, got.IsConnected, "flag direction skipped on RPC error")
+	counting.failUpdateConnectionState = nil
+
+	// Canceled context: the pass is cut short before any update.
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	s3.reconcileConnectionStates(canceled)
+	got, _ = reg3.Get(stale.String())
+	require.True(t, got.IsConnected, "cut-short pass must not clear flags")
+}
+
 func TestServerHelpers_GossipOnlyPublisherNeverFlaggedConnected(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 	s.registryBatcher = newPeerRegistryBatcher(context.Background(), s.logger, s.peerRegistry, 0)
