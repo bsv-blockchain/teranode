@@ -1139,11 +1139,64 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 				return
 			case <-s.peerMapCleanupTicker.C:
 				s.cleanupPeerMaps()
+				s.reconcileConnectionStates(ctx)
 			}
 		}
 	}()
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
+}
+
+// reconcileConnectionStates clears IsConnected on registry entries whose peer
+// no longer has a live libp2p connection. Nothing else ever clears the flag:
+// go-p2p-message-bus exposes no disconnect callback (see networkDisconnector)
+// and the only other clearing site is the ban path (removePeer), so without
+// this sweep every peer that ever gossiped would stay flagged connected — and
+// therefore cleanup-exempt in the registry — for the life of the process.
+// Liveness comes from P2PClient.GetPeers(): Addrs is populated from the
+// host's open connections, so a peer with no addresses has no live connection.
+func (s *Server) reconcileConnectionStates(ctx context.Context) {
+	if s.P2PClient == nil || s.peerRegistry == nil {
+		return
+	}
+
+	live := make(map[string]struct{})
+	for _, p := range s.P2PClient.GetPeers() {
+		if len(p.Addrs) > 0 {
+			live[p.ID] = struct{}{}
+		}
+	}
+
+	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	if err != nil {
+		s.logger.Warnf("[reconcileConnectionStates] ListPeers failed: %v", err)
+		return
+	}
+
+	cleared := 0
+	for _, info := range peers {
+		if !info.IsConnected {
+			continue
+		}
+		if _, ok := live[info.ID]; ok {
+			continue
+		}
+		if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, false); err != nil {
+			s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s failed: %v", info.ID, err)
+			continue
+		}
+		// Drop the batcher's reassert memory so a peer that reconnects gets
+		// re-marked connected on its next message instead of being skipped as
+		// recently asserted.
+		if s.registryBatcher != nil {
+			s.registryBatcher.forgetAssertState(info.ID)
+		}
+		cleared++
+	}
+
+	if cleared > 0 {
+		s.logger.Infof("[reconcileConnectionStates] cleared stale connected flag on %d registry peers", cleared)
+	}
 }
 
 // startPeerRegistryCleanup and startPeerRegistryCacheSave have been removed.

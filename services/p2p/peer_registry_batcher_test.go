@@ -145,6 +145,28 @@ func TestPeerRegistryBatcher_SkipsReassertWithinTTL(t *testing.T) {
 	require.Equal(t, 2, counting.callCount("UpdateLastMessageTime"))
 }
 
+func TestPeerRegistryBatcher_ForgetAssertStateForcesReassert(t *testing.T) {
+	b, counting, reg := newBatcherWithCountingRegistry()
+	pid := mustNewPeerID(t).String()
+
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	require.Equal(t, 1, counting.callCount("UpdateConnectionState"))
+
+	// The reconciler clears the registry flag out-of-band and drops the
+	// batcher's reassert memory; the peer's next message must re-mark it
+	// connected instead of being skipped as recently asserted.
+	require.NoError(t, counting.UpdateConnectionState(context.Background(), pid, false))
+	b.forgetAssertState(pid)
+
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+
+	got, ok := reg.Get(pid)
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "reconnecting peer must be re-marked connected after forgetAssertState")
+}
+
 func TestPeerRegistryBatcher_NewInfoForcesRegister(t *testing.T) {
 	b, counting, reg := newBatcherWithCountingRegistry()
 	pid := mustNewPeerID(t).String()

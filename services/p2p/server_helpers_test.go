@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -67,6 +68,40 @@ func mustNewPeerID(t *testing.T) peer.ID {
 	pid, err := peer.IDFromPrivateKey(priv)
 	require.NoError(t, err)
 	return pid
+}
+
+func TestServerHelpers_ReconcileConnectionStates_ClearsStaleFlags(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	liveID := mustNewPeerID(t)
+	goneID := mustNewPeerID(t)
+	unknownID := mustNewPeerID(t)
+
+	s.addConnectedPeer(liveID, "", 0, nil, "")
+	s.addConnectedPeer(goneID, "", 0, nil, "")
+	s.addConnectedPeer(unknownID, "", 0, nil, "")
+
+	// live still has an open connection (Addrs populated from the host's
+	// connections), gone is a known topic peer whose connection closed
+	// (no Addrs), unknown is not reported by the client at all.
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
+		{ID: liveID.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
+		{ID: goneID.String()},
+	}}
+
+	s.reconcileConnectionStates(context.Background())
+
+	got, ok := reg.Get(liveID.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "peer with a live connection keeps its flag")
+
+	got, ok = reg.Get(goneID.String())
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "disconnected topic peer is cleared")
+
+	got, ok = reg.Get(unknownID.String())
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "peer unknown to the client is cleared")
 }
 
 func TestServerHelpers_AddPeer_Registers(t *testing.T) {

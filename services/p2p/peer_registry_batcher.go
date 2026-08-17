@@ -291,6 +291,18 @@ func (b *peerRegistryBatcher) enqueueStorage(peerID, storage string) {
 	b.enqueue(peerID, &pendingPeerUpdate{storage: storage})
 }
 
+// forgetAssertState drops only the peer's reassert memory, so the next flush
+// re-registers it and re-asserts its connection state. Used when the registry's
+// IsConnected flag is cleared out-of-band by the connection-state reconciler:
+// without this, the batcher could skip re-asserting connected=true for up to
+// registryReassertTTL after the peer reconnects. Pending updates and tombstones
+// are untouched — the peer is not being removed.
+func (b *peerRegistryBatcher) forgetAssertState(peerID string) {
+	b.mu.Lock()
+	delete(b.lastAsserted, peerID)
+	b.mu.Unlock()
+}
+
 // forget clears the peer's batcher state and leaves a removal tombstone.
 // Called when the peer is removed from the registry (disconnect, ban): pending
 // updates for a removed peer are stale, an in-flight flush must not resurrect
