@@ -8344,21 +8344,21 @@
 <p><strong>Note</strong>: Some tests don't require build tags and can be run directly:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># For TNC tests in e2e/daemon</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestCoinbaseTXAmount</span>$<span class="s2">&quot;</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestCoinbaseTXAmount</span>$<span class="s2">"</span>
 </span></code></pre></div>
 <p>To execute a single test, use:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># For tests using testify suites</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestSuiteName&gt;</span>$<span class="s2">/^&lt;TestName&gt;</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>&lt;build_tag&gt;
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^&lt;TestSuiteName&gt;</span>$<span class="s2">/^&lt;TestName&gt;</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>&lt;build_tag&gt;
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># For standalone tests</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestName&gt;</span>$<span class="s2">&quot;</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^&lt;TestName&gt;</span>$<span class="s2">"</span>
 </span></code></pre></div>
 <p>For example:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Suite-based test (TNA)</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestBroadcastNewTxAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna<span class="w"> </span>./test/tna/tna1_test.go
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNA1TestSuite</span>$<span class="s2">/TestBroadcastNewTxAllNodes</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tna<span class="w"> </span>./test/tna/tna1_test.go
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Standalone test (TNC in e2e/daemon)</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestCoinbaseTXAmount</span>$<span class="s2">&quot;</span><span class="w"> </span>./test/e2e/daemon/tnc1_3_test.go
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestCoinbaseTXAmount</span>$<span class="s2">"</span><span class="w"> </span>./test/e2e/daemon/tnc1_3_test.go
 </span></code></pre></div>
 <h2 id="tna">TNA<a class="headerlink" href="#tna" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tna</code> folder verify the essential conditions that a node must follow in order to be part of the BSV network.</p>
@@ -8418,32 +8418,32 @@
 </span></code></pre></div>
 <h4 id="running-specific-tna-tests">Running Specific TNA Tests<a class="headerlink" href="#running-specific-tna-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestTNA1</span>$<span class="s2">&quot;</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNA1TestSuite</span>$<span class="s2">/TestTNA1</span>$<span class="s2">"</span>
 </span></code></pre></div>
 <p>Examples for each TNA test:</p>
 <ul>
 <li>For TNA-1 (transaction broadcasting):</li>
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestBroadcastNewTxAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNA1TestSuite</span>$<span class="s2">/TestBroadcastNewTxAllNodes</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
 </span></code></pre></div>
 <ul>
 <li>For TNA-2 (transaction collection):</li>
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA2TestSuite</span>$<span class="s2">/TestTxsReceivedAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNA2TestSuite</span>$<span class="s2">/TestTxsReceivedAllNodes</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
 </span></code></pre></div>
 <ul>
 <li>For TNA-4 (block broadcasting):</li>
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA4TestSuite</span>$<span class="s2">/TestBlockBroadcast</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNA4TestSuite</span>$<span class="s2">/TestBlockBroadcast</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
 </span></code></pre></div>
 <ul>
 <li>For TNA-6 (block acceptance):</li>
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA6TestSuite</span>$<span class="s2">/TestAcceptanceNextBlock</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNA6TestSuite</span>$<span class="s2">/TestAcceptanceNextBlock</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
 </span></code></pre></div>
 <h2 id="tnb">TNB<a class="headerlink" href="#tnb" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tnb</code> folder verify that transactions are correctly validated and processed within Teranode. These tests ensure that transaction validation rules are correctly enforced and that the UTXO set is properly maintained.</p>
@@ -8511,32 +8511,32 @@
 </span></code></pre></div>
 <h4 id="running-specific-tnb-tests">Running Specific TNB Tests<a class="headerlink" href="#running-specific-tnb-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB1TestSuite</span>$<span class="s2">/TestSendTxsInBatch</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNB1TestSuite</span>$<span class="s2">/TestSendTxsInBatch</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
 </span></code></pre></div>
 <p>Examples for each TNB test:</p>
 <ul>
 <li>For TNB-1 (transaction processing):</li>
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB1TestSuite</span>$<span class="s2">/TestSendTxsInBatch</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNB1TestSuite</span>$<span class="s2">/TestSendTxsInBatch</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
 </span></code></pre></div>
 <ul>
 <li>For TNB-2 (transaction validation):</li>
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB2TestSuite</span>$<span class="s2">/TestUTXOValidation</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNB2TestSuite</span>$<span class="s2">/TestUTXOValidation</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
 </span></code></pre></div>
 <ul>
 <li>For TNB-6 (UTXO set management):</li>
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB6TestSuite</span>$<span class="s2">/TestUnspentTransactionOutputs</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNB6TestSuite</span>$<span class="s2">/TestUnspentTransactionOutputs</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
 </span></code></pre></div>
 <ul>
 <li>For TNB-7 (transaction input spending):</li>
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB7TestSuite</span>$<span class="s2">/TestValidatedTxShouldSpendInputs</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNB7TestSuite</span>$<span class="s2">/TestValidatedTxShouldSpendInputs</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
 </span></code></pre></div>
 <h2 id="tnc">TNC<a class="headerlink" href="#tnc" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the TNC tests verify that transactions are correctly assembled into Merkle tree structures and consequently organized into valid blocks to propagate to mining pool software.</p>
@@ -8645,7 +8645,7 @@
 </span></code></pre></div>
 <h4 id="running-specific-tnd-tests">Running Specific TND Tests<a class="headerlink" href="#running-specific-tnd-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnd
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTND1TestSuite</span>$<span class="s2">/TestTND1_1</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnd
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTND1TestSuite</span>$<span class="s2">/TestTND1_1</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnd
 </span></code></pre></div>
 <h2 id="tne">TNE<a class="headerlink" href="#tne" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the TNE tests verify that nodes correctly validate blocks received from the network and optimize verification processes.</p>
@@ -8662,7 +8662,7 @@
 <h4 id="running-tne-tests_1">Running TNE Tests<a class="headerlink" href="#running-tne-tests_1" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
 </span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="c1"># Run specific TNE test</span>
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNE1_1</span>$<span class="s2">&quot;</span><span class="w"> </span>tne1_1_test.go
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNE1_1</span>$<span class="s2">"</span><span class="w"> </span>tne1_1_test.go
 </span></code></pre></div>
 <p><strong>Note</strong>: TNE tests are integration tests in the e2e/daemon directory and typically don't require build tags.</p>
 <h2 id="tnf">TNF<a class="headerlink" href="#tnf" title="Permanent link">&para;</a></h2>
@@ -8696,7 +8696,7 @@
 </span></code></pre></div>
 <h4 id="running-specific-tnf-tests">Running Specific TNF Tests<a class="headerlink" href="#running-specific-tnf-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnf
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNFTestSuite</span>$<span class="s2">/TestInvalidateBlock</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnf
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNFTestSuite</span>$<span class="s2">/TestInvalidateBlock</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnf
 </span></code></pre></div>
 <h2 id="tnj">TNJ<a class="headerlink" href="#tnj" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tnj</code> folder verify that Teranode correctly implements and enforces the standard consensus rules of the Bitcoin protocol.</p>
@@ -8728,10 +8728,10 @@
 </span></code></pre></div>
 <h4 id="running-specific-tnj-tests">Running Specific TNJ Tests<a class="headerlink" href="#running-specific-tnj-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestBlockSubsidy</span>$<span class="s2">&quot;</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestBlockSubsidy</span>$<span class="s2">"</span>
 </span></code></pre></div>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnj
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNJLockTimeTestSuite</span>$<span class="s2">/TestLocktimeScenarios</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnj
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNJLockTimeTestSuite</span>$<span class="s2">/TestLocktimeScenarios</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnj
 </span></code></pre></div>
 <h2 id="tec">TEC<a class="headerlink" href="#tec" title="Permanent link">&para;</a></h2>
 <p>The tests in the <code>/test/tec</code> folder check  Teranode's ability to recover from multiple types of errors, from incorrect settings to communication errors on the message channels between microservices.</p>

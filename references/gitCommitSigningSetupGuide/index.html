@@ -6943,7 +6943,7 @@
 <li>
 <p>Install pinentry-mac for Keychain integration
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>brew<span class="w"> </span>install<span class="w"> </span>pinentry-mac
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;pinentry-program </span><span class="k">$(</span>which<span class="w"> </span>pinentry-mac<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.gnupg/gpg-agent.conf
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"pinentry-program </span><span class="k">$(</span>which<span class="w"> </span>pinentry-mac<span class="k">)</span><span class="s2">"</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.gnupg/gpg-agent.conf
 </span></code></pre></div></p>
 </li>
 <li>
@@ -6978,13 +6978,13 @@
 </li>
 <li>
 <p>Sign a commit
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>git<span class="w"> </span>commit<span class="w"> </span>-S<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;Commit message&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>git<span class="w"> </span>commit<span class="w"> </span>-S<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Commit message"</span>
 </span></code></pre></div>
 Note: If <code>commit.gpgsign = true</code>, commits will always be signed even without <code>-S</code></p>
 </li>
 <li>
 <p>Sign a tag
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>git<span class="w"> </span>tag<span class="w"> </span>-s<span class="w"> </span><span class="s1">&#39;mytag&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>git<span class="w"> </span>tag<span class="w"> </span>-s<span class="w"> </span><span class="s1">'mytag'</span>
 </span></code></pre></div></p>
 </li>
 <li>
@@ -7046,12 +7046,12 @@ Note: If <code>commit.gpgsign = true</code>, commits will always be signed even 
 <ol>
 <li>
 <p>Make a commit (it will be signed automatically)
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;Commit message&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Commit message"</span>
 </span></code></pre></div></p>
 </li>
 <li>
 <p>Create a tag (it will be signed)
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>git<span class="w"> </span>tag<span class="w"> </span>-s<span class="w"> </span><span class="s1">&#39;mytag&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>git<span class="w"> </span>tag<span class="w"> </span>-s<span class="w"> </span><span class="s1">'mytag'</span>
 </span></code></pre></div></p>
 </li>
 <li>
@@ -7099,7 +7099,7 @@ Note: If <code>commit.gpgsign = true</code>, commits will always be signed even 
 </span><span id="__span-16-25"><a id="__codelineno-16-25" name="__codelineno-16-25" href="#__codelineno-16-25"></a>Email<span class="w"> </span>address:<span class="w"> </span><span class="m">71282472</span>+ghacctid@users.noreply.github.com
 </span><span id="__span-16-26"><a id="__codelineno-16-26" name="__codelineno-16-26" href="#__codelineno-16-26"></a>Comment:
 </span><span id="__span-16-27"><a id="__codelineno-16-27" name="__codelineno-16-27" href="#__codelineno-16-27"></a>You<span class="w"> </span>selected<span class="w"> </span>this<span class="w"> </span>USER-ID:
-</span><span id="__span-16-28"><a id="__codelineno-16-28" name="__codelineno-16-28" href="#__codelineno-16-28"></a><span class="w">    </span><span class="s2">&quot;New Name &lt;71282472+ghacctid@users.noreply.github.com&gt;&quot;</span>
+</span><span id="__span-16-28"><a id="__codelineno-16-28" name="__codelineno-16-28" href="#__codelineno-16-28"></a><span class="w">    </span><span class="s2">"New Name &lt;71282472+ghacctid@users.noreply.github.com&gt;"</span>
 </span><span id="__span-16-29"><a id="__codelineno-16-29" name="__codelineno-16-29" href="#__codelineno-16-29"></a>
 </span><span id="__span-16-30"><a id="__codelineno-16-30" name="__codelineno-16-30" href="#__codelineno-16-30"></a>Change<span class="w"> </span><span class="o">(</span>N<span class="o">)</span>ame,<span class="w"> </span><span class="o">(</span>C<span class="o">)</span>omment,<span class="w"> </span><span class="o">(</span>E<span class="o">)</span>mail<span class="w"> </span>or<span class="w"> </span><span class="o">(</span>O<span class="o">)</span>kay/<span class="o">(</span>Q<span class="o">)</span>uit?<span class="w"> </span>O
 </span><span id="__span-16-31"><a id="__codelineno-16-31" name="__codelineno-16-31" href="#__codelineno-16-31"></a>
@@ -7115,8 +7115,8 @@ Note: If <code>commit.gpgsign = true</code>, commits will always be signed even 
 </span><span id="__span-16-41"><a id="__codelineno-16-41" name="__codelineno-16-41" href="#__codelineno-16-41"></a>Save<span class="w"> </span>changes?<span class="w"> </span><span class="o">(</span>y/N<span class="o">)</span><span class="w"> </span>y
 </span></code></pre></div>
 <p>You can then configure Git in a particular repo to use the alternative email address for signing commits. Add the --global flag to do this for all repos:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>git<span class="w"> </span>config<span class="w"> </span>user.email<span class="w"> </span><span class="s2">&quot;71282472+ghacctid@users.noreply.github.com&quot;</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>git<span class="w"> </span>config<span class="w"> </span>user.name<span class="w"> </span><span class="s2">&quot;New Name&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>git<span class="w"> </span>config<span class="w"> </span>user.email<span class="w"> </span><span class="s2">"71282472+ghacctid@users.noreply.github.com"</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>git<span class="w"> </span>config<span class="w"> </span>user.name<span class="w"> </span><span class="s2">"New Name"</span>
 </span></code></pre></div>
 <p>You will need to delete a previously installed GPG key within GitHub, re-export an ASCII public key using the gpg program (see Setup instructions, Step 5), and then import the new public key into your GitHub user settings. It should then display both the original and alternate email address.</p>
 

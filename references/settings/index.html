@@ -7073,13 +7073,13 @@
 <h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h3>
 <p>Suppose we have a base setting named <code>DATABASE_URL</code> to define the database connection URL for our application.</p>
 <p>The base setting might be:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>DATABASE_URL = &quot;database-url-default.com&quot;
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>DATABASE_URL = "database-url-default.com"
 </span></code></pre></div>
 <p>As an example, we might have a <code>newenvironment1</code> database for development purposes. So, for the context <code>dev.newenvironment1</code>, there might be an override:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>DATABASE_URL.dev.newenvironment1 = &quot;database-url-environment1&quot;
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>DATABASE_URL.dev.newenvironment1 = "database-url-environment1"
 </span></code></pre></div>
 <p>There might also be a generic development database URL, defined as:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>DATABASE_URL.dev = &quot;database-url-dev.com&quot;
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>DATABASE_URL.dev = "database-url-dev.com"
 </span></code></pre></div>
 <p>When the application is run against this development context (<code>dev.newenvironment1</code>):</p>
 <ul>
@@ -7147,7 +7147,7 @@
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nx">maxRetries</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">settings</span><span class="p">.</span><span class="nx">BlockChain</span><span class="p">.</span><span class="nx">MaxRetries</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">// Avoid (historical style, now deprecated)</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nx">maxRetries</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Config</span><span class="p">().</span><span class="nx">GetInt</span><span class="p">(</span><span class="s">&quot;blockchain_maxRetries&quot;</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nx">maxRetries</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Config</span><span class="p">().</span><span class="nx">GetInt</span><span class="p">(</span><span class="s">"blockchain_maxRetries"</span><span class="p">)</span>
 </span></code></pre></div>
 </li>
 <li>

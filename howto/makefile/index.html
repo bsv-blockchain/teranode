@@ -7281,8 +7281,6 @@
 <h3 id="building-tools-and-utilities">Building Tools and Utilities<a class="headerlink" href="#building-tools-and-utilities" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>build-chainintegrity</strong>: Builds the chain integrity testing tool at <code>./compose/cmd/chainintegrity/</code>.</li>
-<li><strong>build-tx-blaster</strong>: Builds the transaction blaster performance testing tool at <code>./cmd/txblaster/</code>. <strong>Note:</strong> the <code>./cmd/txblaster/</code> source directory does not currently exist; this target will fail if invoked.</li>
-<li><strong>build-blockchainstatus</strong>: Builds the blockchain status utility at <code>./cmd/blockchainstatus/</code>. <strong>Note:</strong> the <code>./cmd/blockchainstatus/</code> source directory does not currently exist; this target will fail if invoked.</li>
 </ul>
 <h3 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h3>
 <ul>
@@ -7385,7 +7383,6 @@
 <p><strong>clean</strong>: Cleans up built artifacts:</p>
 <ul>
 <li>Removes <code>.tar.gz</code> archives</li>
-<li>Removes binary executables (<code>blaster.run</code>, <code>blockchainstatus.run</code>)</li>
 <li>Removes build directory</li>
 <li>Removes coverage output files</li>
 </ul>
@@ -7584,7 +7581,7 @@
 </span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>make<span class="w"> </span>sequentialtest-aerospike<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">5</span>
 </span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>
 </span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="c1"># Run tests in specific directory</span>
-</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-race<span class="w"> </span>-tags<span class="w"> </span><span class="s2">&quot;testtxmetacache&quot;</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./services/validator/...
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-race<span class="w"> </span>-tags<span class="w"> </span><span class="s2">"testtxmetacache"</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./services/validator/...
 </span></code></pre></div>
 <p><strong>Chain Integrity Testing:</strong></p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Run full chain integrity test (120 blocks)</span>

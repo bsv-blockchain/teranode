@@ -7804,8 +7804,8 @@
 </span></code></pre></div>
 <p><strong>Response:</strong></p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;ok&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;details&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">"ok"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">"details"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><strong>Health Checks Performed:</strong></p>
@@ -7835,8 +7835,8 @@
 </li>
 </ul>
 <p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pruner_duration_seconds{operation=&quot;preserve_parents&quot;} 1.234
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>pruner_duration_seconds{operation=&quot;dah_pruner&quot;} 5.678
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pruner_duration_seconds{operation="preserve_parents"} 1.234
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>pruner_duration_seconds{operation="dah_pruner"} 5.678
 </span></code></pre></div>
 <h4 id="pruner_skipped_total">pruner_skipped_total<a class="headerlink" href="#pruner_skipped_total" title="Permanent link">&para;</a></h4>
 <p><strong>Type</strong>: Counter</p>
@@ -7851,9 +7851,9 @@
 </li>
 </ul>
 <p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pruner_skipped_total{reason=&quot;not_running&quot;} 42
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>pruner_skipped_total{reason=&quot;already_in_progress&quot;} 10
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>pruner_skipped_total{reason=&quot;preserve_failed&quot;} 0
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pruner_skipped_total{reason="not_running"} 42
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>pruner_skipped_total{reason="already_in_progress"} 10
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>pruner_skipped_total{reason="preserve_failed"} 0
 </span></code></pre></div>
 <p><strong>Note</strong>: When defensive mode is enabled, skipped records are logged but not tracked as a separate metric label. Monitor logs for "Defensive skip" messages.</p>
 <h4 id="pruner_updating_parents_total">pruner_updating_parents_total<a class="headerlink" href="#pruner_updating_parents_total" title="Permanent link">&para;</a></h4>
@@ -7893,9 +7893,9 @@
 </li>
 </ul>
 <p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>pruner_errors_total{operation=&quot;preserve_parents&quot;} 0
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>pruner_errors_total{operation=&quot;dah_pruner&quot;} 2
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>pruner_errors_total{operation=&quot;state_check&quot;} 0
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>pruner_errors_total{operation="preserve_parents"} 0
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>pruner_errors_total{operation="dah_pruner"} 2
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>pruner_errors_total{operation="state_check"} 0
 </span></code></pre></div>
 <h3 id="store-level-metrics">Store-Level Metrics<a class="headerlink" href="#store-level-metrics" title="Permanent link">&para;</a></h3>
 <p>Located in <code>/stores/utxo/aerospike/pruner/</code>:</p>
@@ -7928,7 +7928,7 @@
 <h3 id="provider-interface">Provider Interface<a class="headerlink" href="#provider-interface" title="Permanent link">&para;</a></h3>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">PrunerServiceProvider</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">    </span><span class="c1">// GetPrunerService returns a pruner service for the store.</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="c1">// Returns nil if the store doesn&#39;t support pruner functionality.</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="c1">// Returns nil if the store doesn't support pruner functionality.</span>
 </span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="nx">GetPrunerService</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="nx">Service</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="p">}</span>
 </span></code></pre></div>
@@ -8132,7 +8132,7 @@
 </li>
 <li>
 <p>Check logs for initialization errors:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>grep<span class="w"> </span><span class="s2">&quot;\[Pruner\].*error&quot;</span><span class="w"> </span>teranode.log
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>grep<span class="w"> </span><span class="s2">"\[Pruner\].*error"</span><span class="w"> </span>teranode.log
 </span></code></pre></div>
 </li>
 </ol>
@@ -8151,7 +8151,7 @@
 </li>
 <li>
 <p>Verify event subscriptions:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>grep<span class="w"> </span><span class="s2">&quot;Subscribed to.*notifications&quot;</span><span class="w"> </span>teranode.log
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>grep<span class="w"> </span><span class="s2">"Subscribed to.*notifications"</span><span class="w"> </span>teranode.log
 </span></code></pre></div>
 </li>
 <li>
@@ -8164,13 +8164,13 @@
 <ol>
 <li>
 <p>Check <code>pruner_errors_total</code> by operation:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>pruner_errors_total{operation=&quot;preserve_parents&quot;}
-</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>pruner_errors_total{operation=&quot;dah_pruner&quot;}
+<div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>pruner_errors_total{operation="preserve_parents"}
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>pruner_errors_total{operation="dah_pruner"}
 </span></code></pre></div>
 </li>
 <li>
 <p>Review error logs:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>grep<span class="w"> </span><span class="s2">&quot;\[Pruner\].*ERROR&quot;</span><span class="w"> </span>teranode.log
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>grep<span class="w"> </span><span class="s2">"\[Pruner\].*ERROR"</span><span class="w"> </span>teranode.log
 </span></code></pre></div>
 </li>
 <li>
@@ -8201,7 +8201,7 @@
 </li>
 <li>
 <p>Verify secondary index exists (Aerospike):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;show indexes&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"show indexes"</span>
 </span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="c1"># Should show: pruner_dah_index</span>
 </span></code></pre></div>
 </li>

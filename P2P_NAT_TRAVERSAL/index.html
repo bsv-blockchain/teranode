@@ -7119,7 +7119,7 @@
 <h3 id="option-2-explicitly-set-advertise-address">Option 2: Explicitly Set Advertise Address<a class="headerlink" href="#option-2-explicitly-set-advertise-address" title="Permanent link">&para;</a></h3>
 <p>If you know your public IP or domain:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a># In settings_local.conf
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>p2p_advertise_addresses = [&quot;/ip4/203.0.113.1/tcp/9905&quot;]
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>p2p_advertise_addresses = ["/ip4/203.0.113.1/tcp/9905"]
 </span></code></pre></div>
 <p>This is ideal for:</p>
 <ul>
@@ -7160,12 +7160,12 @@
 <ol>
 <li>
 <p>Check the logs for warnings about unreachable nodes:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>grep<span class="w"> </span><span class="s2">&quot;No peers connected\|NAT\|observed\|advertise&quot;</span><span class="w"> </span>teranode.log
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>grep<span class="w"> </span><span class="s2">"No peers connected\|NAT\|observed\|advertise"</span><span class="w"> </span>teranode.log
 </span></code></pre></div>
 </li>
 <li>
 <p>Verify your configuration:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>grep<span class="w"> </span><span class="s2">&quot;p2p_enable_nat\|p2p_advertise&quot;</span><span class="w"> </span>settings_local.conf
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>grep<span class="w"> </span><span class="s2">"p2p_enable_nat\|p2p_advertise"</span><span class="w"> </span>settings_local.conf
 </span></code></pre></div>
 </li>
 <li>

@@ -7118,7 +7118,7 @@
 <p>Teranode's P2P service uses QUIC transport via libp2p, which requires increased UDP buffer sizes for stable operation. The default Linux kernel buffer limits are too small for high-bandwidth QUIC transfers, causing packet drops and connection instability.</p>
 <p><strong>Apply these settings on all hosts running Teranode:</strong></p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Create a dedicated sysctl configuration file</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>cat<span class="w"> </span><span class="s">&lt;&lt; &#39;EOF&#39; | sudo tee /etc/sysctl.d/99-teranode.conf</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>cat<span class="w"> </span><span class="s">&lt;&lt; 'EOF' | sudo tee /etc/sysctl.d/99-teranode.conf</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="s">net.core.rmem_max=7500000</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="s">net.core.wmem_max=7500000</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="s">EOF</span>

@@ -7521,7 +7521,7 @@
 <h2 id="3-architecture">3. Architecture<a class="headerlink" href="#3-architecture" title="Permanent link">&para;</a></h2>
 <h3 id="31-lock-record-structure">3.1. Lock Record Structure<a class="headerlink" href="#31-lock-record-structure" title="Permanent link">&para;</a></h3>
 <p>Lock records are special Aerospike records identified by a unique index (<code>0xFFFFFFFE</code>) that cannot conflict with actual sub-records:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">LockRecordIndex</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">uint32</span><span class="p">(</span><span class="mh">0xFFFFFFFE</span><span class="p">)</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">LockRecordIndex</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kt">uint32</span><span class="p">(</span><span class="mh">0xFFFFFFFE</span><span class="p">)</span>
 </span></code></pre></div>
 <p><strong>Lock Record Bins:</strong></p>
 <table>
@@ -7574,7 +7574,7 @@
 <p>The Lua UDF script checks this flag before allowing UTXO spending:</p>
 <div class="language-lua highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">-- From teranode.lua (spend operation)</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kr">if</span><span class="w"> </span><span class="nv">record</span><span class="p">[</span><span class="nv">creating</span><span class="p">]</span><span class="w"> </span><span class="kr">then</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="kr">return</span><span class="w"> </span><span class="nb">error</span><span class="p">(</span><span class="s2">&quot;UTXO_LOCKED&quot;</span><span class="p">)</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="kr">return</span><span class="w"> </span><span class="nb">error</span><span class="p">(</span><span class="s2">"UTXO_LOCKED"</span><span class="p">)</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="kr">end</span>
 </span></code></pre></div>
 <h3 id="33-record-layout">3.3. Record Layout<a class="headerlink" href="#33-record-layout" title="Permanent link">&para;</a></h3>
@@ -7775,7 +7775,7 @@
 </ol>
 <h3 id="53-storageerror-usage">5.3. StorageError Usage<a class="headerlink" href="#53-storageerror-usage" title="Permanent link">&para;</a></h3>
 <p>The <code>StorageError</code> type is used specifically for external storage failures:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nx">errors</span><span class="p">.</span><span class="nx">NewStorageError</span><span class="p">(</span><span class="s">&quot;[sendStoreBatch] error writing transaction to external store [%s]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">txHash</span><span class="p">.</span><span class="nx">String</span><span class="p">())</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nx">errors</span><span class="p">.</span><span class="nx">NewStorageError</span><span class="p">(</span><span class="s">"[sendStoreBatch] error writing transaction to external store [%s]"</span><span class="p">,</span><span class="w"> </span><span class="nx">txHash</span><span class="p">.</span><span class="nx">String</span><span class="p">())</span>
 </span></code></pre></div>
 <p>This error type:</p>
 <ul>
@@ -7785,7 +7785,7 @@
 </ul>
 <h2 id="6-ttl-and-resource-management">6. TTL and Resource Management<a class="headerlink" href="#6-ttl-and-resource-management" title="Permanent link">&para;</a></h2>
 <p>Lock record TTL is calculated dynamically based on transaction complexity:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nx">TTL</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">BaseTTL</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">(</span><span class="nx">PerRecordTTL</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">NumRecords</span><span class="p">)</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nx">TTL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">BaseTTL</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">(</span><span class="nx">PerRecordTTL</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">NumRecords</span><span class="p">)</span>
 </span></code></pre></div>
 <p><strong>Constants:</strong></p>
 <table>
@@ -7849,7 +7849,7 @@
 <div class="language-go highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// From processTxMetaUsingStore.go</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">txMeta</span><span class="p">.</span><span class="nx">Creating</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="c1">// Re-process to complete the two-phase commit</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">processTxMetaWithRetry</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">processTxMetaWithRetry</span><span class="p">(...)</span>
 </span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
 </span></code></pre></div>
 <h2 id="8-configuration-options">8. Configuration Options<a class="headerlink" href="#8-configuration-options" title="Permanent link">&para;</a></h2>
