@@ -56,6 +56,7 @@ package aerospike
 
 import (
 	"context"
+	"crypto/rand"
 	"os"
 	"runtime/debug"
 	"sync/atomic"
@@ -906,6 +907,9 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	// Split utxos into batches
 	batches := s.splitIntoBatches(utxos, commonBins)
 
+	// Record 0 is the master: the mined-state bins below live only here. classifyCreateBatchResults
+	// depends on that to decide whether a writer created the transaction, so moving them off
+	// batches[0] would silently change what Create reports to its callers.
 	batches[0] = append(batches[0], aerospike.NewBin(fields.TotalExtraRecs.String(), aerospike.NewIntegerValue(len(batches)-1)))
 	batches[0] = append(batches[0], aerospike.NewBin(fields.BlockIDs.String(), blockIDs))
 	batches[0] = append(batches[0], aerospike.NewBin(fields.BlockHeights.String(), blockHeights))
@@ -1023,6 +1027,60 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 	)
 }
 
+// isKeyExists reports whether err is Aerospike's "this key already exists" result, which on
+// a CREATE_ONLY write means another attempt got there first.
+func isKeyExists(err error) bool {
+	var aErr aerospike.Error
+	return errors.As(err, &aErr) && aErr.Matches(types.KEY_EXISTS_ERROR)
+}
+
+// isFilteredOut reports whether err is Aerospike's "the policy's filter expression did not
+// match" result, which on a write means the server declined to apply it.
+func isFilteredOut(err error) bool {
+	var aErr aerospike.Error
+	return errors.As(err, &aErr) && aErr.Matches(types.FILTERED_OUT)
+}
+
+// classifyCreateBatchResults decides, from one CREATE_ONLY batch's per-record results,
+// whether THIS writer created the transaction.
+//
+// masterCreated is true only when record 0 was written by us. Record 0 is the master:
+// GetBinsToStore puts BlockIDs/BlockHeights/SubtreeIdxs — or UnminedSince when there are
+// none — only on batches[0]. So if record 0 already existed, another writer owns that
+// mined-state metadata and ours was never applied, however many child records we filled in.
+//
+// Answering "did I create this transaction" with "did I write any record" is what let a
+// writer report success over someone else's master. That success is one the caller acts on:
+// block validation only collects a transaction for its mined-info repair when the store says
+// it already exists, so a false success suppressed the repair and left the master carrying
+// the earlier writer's UnminedSince with no BlockIDs — a mined transaction recorded as
+// unmined, which then feeds the unmined pruner and the re-add-to-block-assembly path.
+//
+// It needs no concurrency: a partial batch failure deliberately leaves its records in place
+// for the next attempt, so a later sequential create from a different caller finds the master
+// present, fills in the missing child, and used to report success.
+//
+// alreadyPresent and failed list the record indices in each state, so the caller can log
+// them without walking the results again. Split out from storeExternallyWithLock so the
+// rule can be tested without an Aerospike client — the surrounding function acquires the
+// creation lock through the concrete client before it ever reaches this point.
+func classifyCreateBatchResults(batchRecords []aerospike.BatchRecordIfc) (masterCreated bool, alreadyPresent, failed []int) {
+	for idx, record := range batchRecords {
+		switch err := record.BatchRec().Err; {
+		case err == nil:
+			if idx == 0 {
+				masterCreated = true
+			}
+		case isKeyExists(err):
+			alreadyPresent = append(alreadyPresent, idx)
+		default:
+			failed = append(failed, idx)
+		}
+	}
+
+	return masterCreated, alreadyPresent, failed
+}
+
 // storeExternallyWithLock is the shared implementation for external transaction storage
 // Both StoreTransactionExternally and StorePartialTransactionExternally delegate to this
 //
@@ -1047,12 +1105,12 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 //
 // 1. TRANSACTION IS PERSISTED: Phase 1 success means all records exist with complete data
 // 2. SPEND PROTECTION: creating=true flags prevent premature UTXO spending (per-record Lua checks)
-// 3. AUTO-RECOVERY: System self-heals through multiple paths (see line 911 for details)
+// 3. AUTO-RECOVERY: System self-heals through multiple paths (see RECOVERY SCENARIOS below)
 // 4. ATOMICITY: Returning error would break atomicity (Phase 1 done, but system thinks it failed)
 // 5. BLOCK ASSEMBLY: Notification is about existence, not spendability
 //
 // RECOVERY SCENARIOS:
-// - Retry attempts complete Phase 2 via "All exist" path (line 888)
+// - Retry attempts complete Phase 2 via the "master already exists" recovery path below
 // - Auto-recovery triggers when transaction is re-encountered (processTxMetaUsingStore.go:112-122)
 // - Mining operation clears flags via setMined
 func (s *Store) storeExternallyWithLock(
@@ -1070,7 +1128,7 @@ func (s *Store) storeExternallyWithLock(
 	}
 
 	// Acquire lock FIRST to prevent duplicate work
-	lockKey, err := s.acquireLock(bItem.txHash, len(binsToStore))
+	lockKey, lockToken, err := s.acquireLock(bItem.txHash, len(binsToStore))
 	if err != nil {
 		bItem.complete(err)
 		return
@@ -1080,7 +1138,7 @@ func (s *Store) storeExternallyWithLock(
 	// The creating bin in each record prevents UTXO spending until cleared
 	// Failed creations leave partial records for the next attempt to "finish off"
 	defer func() {
-		if releaseErr := s.releaseLock(lockKey); releaseErr != nil {
+		if releaseErr := s.releaseLock(lockKey, lockToken); releaseErr != nil {
 			s.logger.Warnf("[%s] Failed to release lock: %v", funcName, releaseErr)
 		}
 	}()
@@ -1134,24 +1192,17 @@ func (s *Store) storeExternallyWithLock(
 	}
 
 	// Check results - KEY_EXISTS_ERROR means recovery (completing previous attempt)
-	hasFailures := false
-	createdAny := false
-	for idx, record := range batchRecords {
-		if err := record.BatchRec().Err; err != nil {
-			aErr, ok := err.(*aerospike.AerospikeError)
-			if ok && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-				s.logger.Debugf("[%s] Record %d already exists for tx %s (completing previous attempt)", funcName, idx, bItem.txHash)
-				continue
-			}
-			s.logger.Errorf("[%s] Failed to create record %d for tx %s: %v", funcName, idx, bItem.txHash, err)
-			hasFailures = true
-		} else {
-			// No error - this record was created successfully
-			createdAny = true
-		}
+	masterCreated, alreadyPresent, failed := classifyCreateBatchResults(batchRecords)
+
+	for _, idx := range alreadyPresent {
+		s.logger.Debugf("[%s] Record %d already exists for tx %s (completing previous attempt)", funcName, idx, bItem.txHash)
 	}
 
-	if hasFailures {
+	if len(failed) > 0 {
+		for _, idx := range failed {
+			s.logger.Errorf("[%s] Failed to create record %d for tx %s: %v", funcName, idx, bItem.txHash, batchRecords[idx].BatchRec().Err)
+		}
+
 		// Do NOT clean up partial records - leave them for the next attempt to complete
 		// The creating bin in each record prevents UTXO spending until all records exist
 		// The defer will release the lock, allowing another process to finish the creation
@@ -1159,9 +1210,10 @@ func (s *Store) storeExternallyWithLock(
 		return
 	}
 
-	// If we didn't create any new records, all already existed - transaction is complete
-	if !createdAny {
-		// RECOVERY PATH: All records already exist from previous attempt
+	// If we did not create the master record, this transaction was created by someone else -
+	// their mined-state metadata stands, and ours must be reconciled by the caller.
+	if !masterCreated {
+		// RECOVERY PATH: the master record already exists from a previous attempt
 		//
 		// We don't notify block assembly (transaction already processed) but we still attempt
 		// Phase 2 cleanup to handle the case where a previous attempt completed Phase 1 but
@@ -1237,11 +1289,12 @@ func calculateLockTTL(numRecords int) uint32 {
 }
 
 // acquireLock creates and acquires the lock record for transaction creation
-// Returns the lock key on success, or error if lock acquisition fails
-func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.Key, error) {
+// Returns the lock key and the token identifying this acquisition on success, or error
+// if lock acquisition fails
+func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.Key, string, error) {
 	lockKey, err := aerospike.NewKey(s.namespace, s.setName, calculateLockKey(txHash))
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to create lock key", err)
+		return nil, "", errors.NewProcessingError("failed to create lock key", err)
 	}
 
 	lockTTL := calculateLockTTL(numRecords)
@@ -1251,39 +1304,75 @@ func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.
 
 	hostname, _ := os.Hostname()
 
+	// token uniquely identifies this acquisition, so that releaseLock can prove it is
+	// deleting the lock it was handed rather than a different writer's lock created
+	// after this one's TTL expired. rand.Text is at least 128 bits and cannot fail.
+	token := rand.Text()
+
 	lockBins := []*aerospike.Bin{
 		aerospike.NewBin("created_at", time.Now().Unix()),
 		aerospike.NewBin("lock_type", "tx_creation"),
 		aerospike.NewBin("process_id", os.Getpid()),
 		aerospike.NewBin("hostname", hostname),
 		aerospike.NewBin("expected_recs", numRecords),
+		aerospike.NewBin("lock_token", token),
 	}
 
 	err = s.client.PutBins(lockPolicy, lockKey, lockBins...)
 	if err != nil {
-		aErr, ok := err.(*aerospike.AerospikeError)
-		if ok && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-			return nil, errors.NewTxExistsError("transaction creation in progress or already exists: %s", txHash)
+		if isKeyExists(err) {
+			return nil, "", errors.NewTxExistsError("transaction creation in progress or already exists: %s", txHash)
 		}
 
-		return nil, errors.NewProcessingError("failed to acquire lock", err)
+		return nil, "", errors.NewProcessingError("failed to acquire lock", err)
 	}
 
-	return lockKey, nil
+	return lockKey, token, nil
 }
 
-// releaseLock deletes the lock record
-func (s *Store) releaseLock(lockKey *aerospike.Key) error {
+// releaseLock deletes the lock record, but only if it still carries the token this
+// caller was given when it acquired the lock.
+//
+// What this fences against: a writer that stalls past the lock's TTL loses the lock
+// silently - Aerospike expires the record regardless of whether the stalled writer is
+// still "holding" it in its own head. A second writer can then CREATE_ONLY a fresh lock
+// record for the same key. Without the token check, the first writer's deferred release
+// would delete that second writer's live lock by key alone, letting a third writer in
+// while the second still believes it holds the lock. The FilterExpression makes the
+// delete conditional on lock_token still matching what THIS acquisition wrote, so a
+// stale release becomes a no-op (FILTERED_OUT) instead of evicting someone else's lock.
+//
+// Why a token and not the record's generation: the acquire is always a CREATE_ONLY first
+// write, so its generation is always 1 - and a lock re-created after expiry is also 1.
+// Generation cannot tell "my live lock" from "someone else's, created after mine expired",
+// which is exactly the case being fenced.
+//
+// What this does NOT fence against: the token check only protects the lock record
+// itself from cross-writer deletion. It does nothing to stop two writers from both
+// believing they hold the lock and racing to create the same transaction's records at
+// the same time - that race is bounded separately, by the per-record CREATE_ONLY writes
+// (which Aerospike settles server-side, so only one writer's put can win each record)
+// and by the master-record rule in this package.
+func (s *Store) releaseLock(lockKey *aerospike.Key, token string) error {
 	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.FilterExpression = aerospike.ExpEq(aerospike.ExpStringBin("lock_token"), aerospike.ExpStringVal(token))
 
-	_, err := s.client.Delete(policy, lockKey)
+	existed, err := s.client.Delete(policy, lockKey)
 	if err != nil {
-		aErr, ok := err.(*aerospike.AerospikeError)
-		if ok && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
+		if isFilteredOut(err) {
+			s.logger.Debugf("[releaseLock] Lock record for key %v is now held by a different token; not ours to delete", lockKey)
 			return nil
 		}
 
 		return err
+	}
+
+	// A missing lock record is not an error on the delete path - the client maps the
+	// server's KEY_NOT_FOUND to existed=false with a nil error, so there is no separate
+	// not-found branch to take here - but it is worth distinguishing in the logs from a
+	// delete that actually removed our lock.
+	if !existed {
+		s.logger.Debugf("[releaseLock] Lock record for key %v already gone (expired or already released)", lockKey)
 	}
 
 	return nil

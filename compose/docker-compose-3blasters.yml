@@ -9,6 +9,7 @@ x-teranode-base: &teranode-base
     - ../data/test/${TEST_ID:-chainintegrity}:/app/data
 
 x-teranode-coinbase-base: &teranode-coinbase-base
+  # coinbase.run/blaster.run/blaster-tui.run come from this externally-built image; the source is not in this repository.
   image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest
   # image: teranode-coinbase:local
   networks:

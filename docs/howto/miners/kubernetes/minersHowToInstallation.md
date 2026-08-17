@@ -232,6 +232,13 @@ By default, this configuration deploys Teranode to connect to the **teratestnet*
               memory: 256Mi
     ```
 
+    The `imagePullPolicy: Never` and `cpu: 100m` / `memory: 256Mi` values above
+    are Minikube/local-dev defaults — the legacy service scans the full
+    historical chain and needs far more than that in practice. For testnet or
+    mainnet, size resources from the shipped mainnet CR instead, which requests
+    `cpu: 2` / `memory: 64Gi` for legacy: see
+    [teranode-cr-mainnet.yaml](https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
+
 3. Apply the updated configuration:
 
     ```bash
@@ -272,11 +279,16 @@ For production deployments, consider:
 
 - Deploying dependencies (Aerospike, PostgreSQL, Kafka) in separate clusters or using managed services
 - Implementing proper security measures (network policies, RBAC, etc.)
-- Setting up monitoring and alerting
+- Setting up [monitoring and alerting](../minersHowToMonitoring.md)
 - Configuring appropriate resource requests and limits
 - Setting up proper backup and disaster recovery procedures
 
 An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
+
+## Related Documentation
+
+- [Monitoring Teranode](../minersHowToMonitoring.md)
+- [Prometheus Metrics Reference](../../../references/prometheusMetrics.md)
 
 ## Resetting Teranode
 

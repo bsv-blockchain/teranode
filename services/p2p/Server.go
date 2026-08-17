@@ -682,10 +682,29 @@ func (s *Server) Init(ctx context.Context) (err error) {
 //
 // Returns an error if any component fails to start, or nil on successful startup.
 
+// HTTP server timeouts for the p2p HTTP surface. They bound every phase of a
+// plain HTTP exchange (e.g. /health) plus the request/header/idle phases of a
+// /p2p-ws connection that never completes its upgrade. They do NOT bound an
+// established /p2p-ws stream: net/http clears the connection deadlines on
+// Hijack (and gorilla/websocket clears them again on upgrade), so post-upgrade
+// liveness (read deadlines, ping/pong, connection caps) is separate websocket
+// hardening work.
+const (
+	httpReadHeaderTimeout = 10 * time.Second
+	httpReadTimeout       = 30 * time.Second
+	httpWriteTimeout      = 30 * time.Second
+	httpIdleTimeout       = 120 * time.Second
+)
+
 func (s *Server) setupHTTPServer() *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+
+	e.Server.ReadHeaderTimeout = httpReadHeaderTimeout
+	e.Server.ReadTimeout = httpReadTimeout
+	e.Server.WriteTimeout = httpWriteTimeout
+	e.Server.IdleTimeout = httpIdleTimeout
 
 	e.Use(middleware.Recover())
 

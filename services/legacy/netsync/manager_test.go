@@ -475,9 +475,31 @@ func TestQueueInv_NoPanicWhenChannelsClosedDuringShutdown(t *testing.T) {
 
 // Test blockchain syncing protocol. SyncManager should request, processes, and
 // relay blocks to/from peers.
-// TODO: Test is timing out, needs to be fixed.
+//
+// Investigated: the original "timing out" symptom has (at least) two distinct
+// causes stacked on top of each other, both below the assumptions this
+// btcd-derived test was written against:
+//
+//  1. startSync() (manager.go) now short-circuits to FSMStateRUNNING and never
+//     calls PushGetBlocksMsg whenever the sync peer's advertised height equals
+//     ours. This test's remotePeerCfg never sets peer.Config.NewestBlock, so
+//     the peer always reports height 0 == our genesis-only height, and the
+//     very first `remoteMessages.getBlocksChan` receive times out. Making the
+//     remote peer advertise a height ahead of ours (via NewestBlock) fixes
+//     that first timeout and gets the test past the initial handshake.
+//  2. With (1) worked around, the test still times out later, waiting on
+//     errChan after the first QueueBlock call ("Timeout waiting for sync
+//     manager to process block 0"). This harness's testContext.Setup passes a
+//     nil block-assembly client into New(...) and never configures the
+//     subtreeValidation mock's CheckBlockSubtrees/CheckSubtreeFromBlock
+//     expectations for a real block payload, either of which plausibly stalls
+//     real block-processing deep inside HandleBlockDirect. Root-causing that
+//     needs a proper block-processing harness (real/mocked block assembly +
+//     subtree validation expectations for an actual 3-block regtest chain),
+//     which is beyond a bounded triage pass - left skipped rather than force
+//     enabled against an unresolved hang.
 func TestBlockchainSync(t *testing.T) {
-	t.Skip("skipping")
+	t.Skip("times out: startSync skips PushGetBlocksMsg when the peer's advertised height ties ours (no NewestBlock configured here), and even past that, block processing via QueueBlock never signals errChan - likely missing block-assembly/subtreeValidation wiring in this harness; needs a real block-processing harness fix, not a quick nil-pointer patch")
 
 	chainParams := chaincfg.RegressionNetParams
 	chainParams.CoinbaseMaturity = 1
