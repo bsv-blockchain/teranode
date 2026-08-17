@@ -10,31 +10,31 @@
       
       
       
-        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/references/settings/services/validator_settings/">
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToMonitoring/">
       
       
-        <link rel="prev" href="../utxopersister_settings/">
+        <link rel="prev" href="../kubernetes/minersHowToSyncTheNode/">
       
       
-        <link rel="next" href="../../stores/aerospike_settings/">
+        <link rel="next" href="../minersHowToBackup/">
       
       
         
       
       
-      <link rel="icon" href="../../../../assets/favicon.png">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Validator - Teranode</title>
+        <title>Monitoring - Teranode</title>
       
     
     
-      <link rel="stylesheet" href="../../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -48,14 +48,14 @@
         
         
         
-        <link rel="stylesheet" href="../../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
         <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
-      <link rel="stylesheet" href="../../../../overrides/custom.css?v=8cf07571">
+      <link rel="stylesheet" href="../../../overrides/custom.css?v=8cf07571">
     
-    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#validator-service-settings" class="md-skip">
+        <a href="#monitoring-teranode" class="md-skip">
           Skip to content
         </a>
       
@@ -96,9 +96,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
+    <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../../assets/bsv-logo.png" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -115,7 +115,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Validator
+              Monitoring
             
           </span>
         </div>
@@ -227,7 +227,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
   
@@ -244,6 +244,8 @@
   
   
   
+    
+  
   
     
     
@@ -251,11 +253,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../../../howto/developerSetup/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../developerSetup/" class="md-tabs__link">
           
   
   
@@ -280,7 +284,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../../topics/teranodeIntro/" class="md-tabs__link">
+        <a href="../../../topics/teranodeIntro/" class="md-tabs__link">
           
   
   
@@ -298,13 +302,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../../projectStructure/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../../references/projectStructure/" class="md-tabs__link">
           
   
   
@@ -346,9 +348,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
+    <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../../assets/bsv-logo.png" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
@@ -375,7 +377,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -399,8 +401,10 @@
       
   
   
+    
   
   
+  
     
     
       
@@ -430,19 +434,22 @@
     
     
       
+        
+        
+      
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
@@ -460,7 +467,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -494,17 +501,20 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
         
           
-          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="">
             
   
   
@@ -540,7 +550,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/developerSetup/" class="md-nav__link">
+      <a href="../../developerSetup/" class="md-nav__link">
         
   
   
@@ -568,7 +578,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/forkAndPullRequestGuidelines/" class="md-nav__link">
+      <a href="../../forkAndPullRequestGuidelines/" class="md-nav__link">
         
   
   
@@ -596,7 +606,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/locallyRunningServices/" class="md-nav__link">
+      <a href="../../locallyRunningServices/" class="md-nav__link">
         
   
   
@@ -624,7 +634,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/howToRemoteDebugTeranode/" class="md-nav__link">
+      <a href="../../howToRemoteDebugTeranode/" class="md-nav__link">
         
   
   
@@ -660,7 +670,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/generatingProtobuf/" class="md-nav__link">
+      <a href="../../generatingProtobuf/" class="md-nav__link">
         
   
   
@@ -688,7 +698,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/addingNewProtobufServices/" class="md-nav__link">
+      <a href="../../addingNewProtobufServices/" class="md-nav__link">
         
   
   
@@ -716,7 +726,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/configuringGrpcLogging/" class="md-nav__link">
+      <a href="../../configuringGrpcLogging/" class="md-nav__link">
         
   
   
@@ -744,7 +754,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/runningTests/" class="md-nav__link">
+      <a href="../../runningTests/" class="md-nav__link">
         
   
   
@@ -772,7 +782,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/automatedTestingHowTo/" class="md-nav__link">
+      <a href="../../automatedTestingHowTo/" class="md-nav__link">
         
   
   
@@ -800,7 +810,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/chain-integrity-testing/" class="md-nav__link">
+      <a href="../../chain-integrity-testing/" class="md-nav__link">
         
   
   
@@ -828,7 +838,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/makefile/" class="md-nav__link">
+      <a href="../../makefile/" class="md-nav__link">
         
   
   
@@ -856,7 +866,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/bugReporting/" class="md-nav__link">
+      <a href="../../bugReporting/" class="md-nav__link">
         
   
   
@@ -884,7 +894,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/developersHowToTeranodeCLI/" class="md-nav__link">
+      <a href="../../developersHowToTeranodeCLI/" class="md-nav__link">
         
   
   
@@ -909,8 +919,10 @@
                 
   
   
+    
   
   
+  
     
     
       
@@ -939,18 +951,21 @@
     
       
       
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
         
           
-          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="">
             
   
   
@@ -968,7 +983,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_11">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1044,7 +1059,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/docker/minersHowToInstallation/" class="md-nav__link">
+      <a href="../docker/minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -1072,7 +1087,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersHowToInstallation/" class="md-nav__link">
+      <a href="../kubernetes/minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -1176,7 +1191,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/docker/minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../docker/minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1204,7 +1219,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../kubernetes/minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1232,7 +1247,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersHowToExposeP2P/" class="md-nav__link">
+      <a href="../kubernetes/minersHowToExposeP2P/" class="md-nav__link">
         
   
   
@@ -1260,7 +1275,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToAerospikeTuning/" class="md-nav__link">
+      <a href="../minersHowToAerospikeTuning/" class="md-nav__link">
         
   
   
@@ -1288,7 +1303,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToInteractWithAssetServer/" class="md-nav__link">
+      <a href="../minersHowToInteractWithAssetServer/" class="md-nav__link">
         
   
   
@@ -1316,7 +1331,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToInteractWithFSM/" class="md-nav__link">
+      <a href="../minersHowToInteractWithFSM/" class="md-nav__link">
         
   
   
@@ -1344,7 +1359,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToInteractWithRPCServer/" class="md-nav__link">
+      <a href="../minersHowToInteractWithRPCServer/" class="md-nav__link">
         
   
   
@@ -1438,7 +1453,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
+      <a href="../docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
         
   
   
@@ -1466,7 +1481,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
+      <a href="../kubernetes/minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
         
   
   
@@ -1560,7 +1575,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/docker/minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../docker/minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -1588,7 +1603,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../kubernetes/minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -1682,7 +1697,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/docker/minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../docker/minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -1710,7 +1725,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../kubernetes/minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -1804,7 +1819,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/docker/minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../docker/minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -1832,7 +1847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../kubernetes/minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -1926,7 +1941,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/docker/minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../docker/minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -1954,7 +1969,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../kubernetes/minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -2048,7 +2063,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/docker/minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../docker/minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -2076,7 +2091,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -2109,10 +2124,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToMonitoring/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -2128,6 +2170,131 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboards
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-healthy-vs-degraded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics: Healthy vs. Degraded
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics: Healthy vs. Degraded">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fsm-and-sync-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FSM and sync state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-assembly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block assembly
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation-and-propagation-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation and propagation errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork-and-reorg-activity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork and reorg activity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-and-store-pressure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache and store pressure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#starter-alerting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Starter Alerting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2204,7 +2371,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToBackup/" class="md-nav__link">
+      <a href="../minersHowToBackup/" class="md-nav__link">
         
   
   
@@ -2232,7 +2399,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToCPUMiner/" class="md-nav__link">
+      <a href="../minersHowToCPUMiner/" class="md-nav__link">
         
   
   
@@ -2260,7 +2427,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToTeranodeCLI/" class="md-nav__link">
+      <a href="../minersHowToTeranodeCLI/" class="md-nav__link">
         
   
   
@@ -2288,7 +2455,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersManagingDiskSpace/" class="md-nav__link">
+      <a href="../minersManagingDiskSpace/" class="md-nav__link">
         
   
   
@@ -2316,7 +2483,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../howto/miners/minersHowToUseListenMode/" class="md-nav__link">
+      <a href="../minersHowToUseListenMode/" class="md-nav__link">
         
   
   
@@ -2461,7 +2628,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/teranodeIntro/" class="md-nav__link">
+      <a href="../../../topics/teranodeIntro/" class="md-nav__link">
         
   
   
@@ -2489,7 +2656,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/teranode-overall-system-design/" class="md-nav__link">
+      <a href="../../../topics/architecture/teranode-overall-system-design/" class="md-nav__link">
         
   
   
@@ -2517,7 +2684,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/teranode-architecture-brief/" class="md-nav__link">
+      <a href="../../../topics/architecture/teranode-architecture-brief/" class="md-nav__link">
         
   
   
@@ -2545,7 +2712,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/teranode-microservices-overview/" class="md-nav__link">
+      <a href="../../../topics/architecture/teranode-microservices-overview/" class="md-nav__link">
         
   
   
@@ -2573,7 +2740,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/transactionLifecycle/" class="md-nav__link">
+      <a href="../../../topics/transactionLifecycle/" class="md-nav__link">
         
   
   
@@ -2601,7 +2768,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/stateManagement/" class="md-nav__link">
+      <a href="../../../topics/architecture/stateManagement/" class="md-nav__link">
         
   
   
@@ -2629,7 +2796,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../state-machine.diagram/" class="md-nav__link">
+      <a href="../../../state-machine.diagram/" class="md-nav__link">
         
   
   
@@ -2657,7 +2824,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/understandingDoubleSpends/" class="md-nav__link">
+      <a href="../../../topics/architecture/understandingDoubleSpends/" class="md-nav__link">
         
   
   
@@ -2685,7 +2852,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/technologyStack/" class="md-nav__link">
+      <a href="../../../topics/technologyStack/" class="md-nav__link">
         
   
   
@@ -2713,7 +2880,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/understandingTheTestingFramework/" class="md-nav__link">
+      <a href="../../../topics/understandingTheTestingFramework/" class="md-nav__link">
         
   
   
@@ -2741,7 +2908,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/functionalRequirementTests/" class="md-nav__link">
+      <a href="../../../topics/functionalRequirementTests/" class="md-nav__link">
         
   
   
@@ -2829,7 +2996,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/features/two_phase_commit/" class="md-nav__link">
+      <a href="../../../topics/features/two_phase_commit/" class="md-nav__link">
         
   
   
@@ -2857,7 +3024,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/features/peer_registry_reputation/" class="md-nav__link">
+      <a href="../../../topics/features/peer_registry_reputation/" class="md-nav__link">
         
   
   
@@ -2885,7 +3052,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/features/utxo_lock_records/" class="md-nav__link">
+      <a href="../../../topics/features/utxo_lock_records/" class="md-nav__link">
         
   
   
@@ -2921,7 +3088,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/dashboard/" class="md-nav__link">
+      <a href="../../../topics/dashboard/" class="md-nav__link">
         
   
   
@@ -2949,7 +3116,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/tui_tools/" class="md-nav__link">
+      <a href="../../../topics/tui_tools/" class="md-nav__link">
         
   
   
@@ -3047,7 +3214,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/alert/" class="md-nav__link">
+      <a href="../../../topics/services/alert/" class="md-nav__link">
         
   
   
@@ -3075,7 +3242,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/assetServer/" class="md-nav__link">
+      <a href="../../../topics/services/assetServer/" class="md-nav__link">
         
   
   
@@ -3103,7 +3270,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/blockAssembly/" class="md-nav__link">
+      <a href="../../../topics/services/blockAssembly/" class="md-nav__link">
         
   
   
@@ -3131,7 +3298,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/blockValidation/" class="md-nav__link">
+      <a href="../../../topics/services/blockValidation/" class="md-nav__link">
         
   
   
@@ -3159,7 +3326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/blockchain/" class="md-nav__link">
+      <a href="../../../topics/services/blockchain/" class="md-nav__link">
         
   
   
@@ -3187,7 +3354,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/propagation/" class="md-nav__link">
+      <a href="../../../topics/services/propagation/" class="md-nav__link">
         
   
   
@@ -3215,7 +3382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/subtreeValidation/" class="md-nav__link">
+      <a href="../../../topics/services/subtreeValidation/" class="md-nav__link">
         
   
   
@@ -3243,7 +3410,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/validator/" class="md-nav__link">
+      <a href="../../../topics/services/validator/" class="md-nav__link">
         
   
   
@@ -3347,7 +3514,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/blockPersister/" class="md-nav__link">
+      <a href="../../../topics/services/blockPersister/" class="md-nav__link">
         
   
   
@@ -3375,7 +3542,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/p2p/" class="md-nav__link">
+      <a href="../../../topics/services/p2p/" class="md-nav__link">
         
   
   
@@ -3403,7 +3570,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
+      <a href="../../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
         
   
   
@@ -3431,7 +3598,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/pruner/" class="md-nav__link">
+      <a href="../../../topics/services/pruner/" class="md-nav__link">
         
   
   
@@ -3459,7 +3626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/legacy/" class="md-nav__link">
+      <a href="../../../topics/services/legacy/" class="md-nav__link">
         
   
   
@@ -3487,7 +3654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/rpc/" class="md-nav__link">
+      <a href="../../../topics/services/rpc/" class="md-nav__link">
         
   
   
@@ -3515,7 +3682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/utxoPersister/" class="md-nav__link">
+      <a href="../../../topics/services/utxoPersister/" class="md-nav__link">
         
   
   
@@ -3609,7 +3776,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/stores/blob/" class="md-nav__link">
+      <a href="../../../topics/stores/blob/" class="md-nav__link">
         
   
   
@@ -3637,7 +3804,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/stores/utxo/" class="md-nav__link">
+      <a href="../../../topics/stores/utxo/" class="md-nav__link">
         
   
   
@@ -3737,7 +3904,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/block_data_model/" class="md-nav__link">
+      <a href="../../../topics/datamodel/block_data_model/" class="md-nav__link">
         
   
   
@@ -3765,7 +3932,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/block_header_data_model/" class="md-nav__link">
+      <a href="../../../topics/datamodel/block_header_data_model/" class="md-nav__link">
         
   
   
@@ -3793,7 +3960,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/subtree_data_model/" class="md-nav__link">
+      <a href="../../../topics/datamodel/subtree_data_model/" class="md-nav__link">
         
   
   
@@ -3821,7 +3988,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/transaction_data_model/" class="md-nav__link">
+      <a href="../../../topics/datamodel/transaction_data_model/" class="md-nav__link">
         
   
   
@@ -3849,7 +4016,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/utxo_data_model/" class="md-nav__link">
+      <a href="../../../topics/datamodel/utxo_data_model/" class="md-nav__link">
         
   
   
@@ -3941,7 +4108,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/kafka/kafka/" class="md-nav__link">
+      <a href="../../../topics/kafka/kafka/" class="md-nav__link">
         
   
   
@@ -4033,7 +4200,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/commands/seeder/" class="md-nav__link">
+      <a href="../../../topics/commands/seeder/" class="md-nav__link">
         
   
   
@@ -4073,10 +4240,8 @@
       
   
   
-    
   
   
-  
     
     
       
@@ -4098,22 +4263,19 @@
     
     
       
-        
-        
-      
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -4131,7 +4293,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -4149,7 +4311,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../projectStructure/" class="md-nav__link">
+      <a href="../../../references/projectStructure/" class="md-nav__link">
         
   
   
@@ -4197,20 +4359,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
             
   
   
@@ -4246,7 +4405,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../errorHandling/" class="md-nav__link">
+      <a href="../../../references/errorHandling/" class="md-nav__link">
         
   
   
@@ -4274,7 +4433,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../glossary/" class="md-nav__link">
+      <a href="../../../references/glossary/" class="md-nav__link">
         
   
   
@@ -4302,7 +4461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../codingConventions/" class="md-nav__link">
+      <a href="../../../references/codingConventions/" class="md-nav__link">
         
   
   
@@ -4330,7 +4489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../kafkaMessageFormat/" class="md-nav__link">
+      <a href="../../../references/kafkaMessageFormat/" class="md-nav__link">
         
   
   
@@ -4358,7 +4517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../networkConsensusRules/" class="md-nav__link">
+      <a href="../../../references/networkConsensusRules/" class="md-nav__link">
         
   
   
@@ -4462,7 +4621,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/alertProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/alertProto/" class="md-nav__link">
         
   
   
@@ -4490,7 +4649,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/assetProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/assetProto/" class="md-nav__link">
         
   
   
@@ -4518,7 +4677,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
   
@@ -4546,7 +4705,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/blockchainProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/blockchainProto/" class="md-nav__link">
         
   
   
@@ -4574,7 +4733,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/blockvalidationProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/blockvalidationProto/" class="md-nav__link">
         
   
   
@@ -4602,7 +4761,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
         
   
   
@@ -4630,7 +4789,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/p2pProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
         
   
   
@@ -4658,7 +4817,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/propagationProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
   
@@ -4686,7 +4845,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/prunerProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
         
   
   
@@ -4714,7 +4873,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/subtreevalidationProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/subtreevalidationProto/" class="md-nav__link">
         
   
   
@@ -4742,7 +4901,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protobuf_docs/validatorProto/" class="md-nav__link">
+      <a href="../../../references/protobuf_docs/validatorProto/" class="md-nav__link">
         
   
   
@@ -4810,20 +4969,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
             
   
   
@@ -4859,7 +5015,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/alert_reference/" class="md-nav__link">
+      <a href="../../../references/services/alert_reference/" class="md-nav__link">
         
   
   
@@ -4887,7 +5043,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/asset_reference/" class="md-nav__link">
+      <a href="../../../references/services/asset_reference/" class="md-nav__link">
         
   
   
@@ -4915,7 +5071,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/blockassembly_reference/" class="md-nav__link">
+      <a href="../../../references/services/blockassembly_reference/" class="md-nav__link">
         
   
   
@@ -4943,7 +5099,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/blockvalidation_reference/" class="md-nav__link">
+      <a href="../../../references/services/blockvalidation_reference/" class="md-nav__link">
         
   
   
@@ -4971,7 +5127,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/blockchain_reference/" class="md-nav__link">
+      <a href="../../../references/services/blockchain_reference/" class="md-nav__link">
         
   
   
@@ -4999,7 +5155,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/propagation_reference/" class="md-nav__link">
+      <a href="../../../references/services/propagation_reference/" class="md-nav__link">
         
   
   
@@ -5027,7 +5183,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/subtreevalidation_reference/" class="md-nav__link">
+      <a href="../../../references/services/subtreevalidation_reference/" class="md-nav__link">
         
   
   
@@ -5055,7 +5211,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/validator_reference/" class="md-nav__link">
+      <a href="../../../references/services/validator_reference/" class="md-nav__link">
         
   
   
@@ -5111,20 +5267,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" >
         
           
-          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
             
   
   
@@ -5160,7 +5313,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/blockpersister_reference/" class="md-nav__link">
+      <a href="../../../references/services/blockpersister_reference/" class="md-nav__link">
         
   
   
@@ -5188,7 +5341,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/p2p_reference/" class="md-nav__link">
+      <a href="../../../references/services/p2p_reference/" class="md-nav__link">
         
   
   
@@ -5216,7 +5369,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/legacy_reference/" class="md-nav__link">
+      <a href="../../../references/services/legacy_reference/" class="md-nav__link">
         
   
   
@@ -5244,7 +5397,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/pruner_reference/" class="md-nav__link">
+      <a href="../../../references/services/pruner_reference/" class="md-nav__link">
         
   
   
@@ -5272,7 +5425,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/rpc_reference/" class="md-nav__link">
+      <a href="../../../references/services/rpc_reference/" class="md-nav__link">
         
   
   
@@ -5300,7 +5453,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../services/utxopersister_reference/" class="md-nav__link">
+      <a href="../../../references/services/utxopersister_reference/" class="md-nav__link">
         
   
   
@@ -5348,20 +5501,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_5" >
         
           
-          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="0">
             
   
   
@@ -5397,7 +5547,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../stores/blob_reference/" class="md-nav__link">
+      <a href="../../../references/stores/blob_reference/" class="md-nav__link">
         
   
   
@@ -5425,7 +5575,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../stores/utxo_reference/" class="md-nav__link">
+      <a href="../../../references/stores/utxo_reference/" class="md-nav__link">
         
   
   
@@ -5458,10 +5608,8 @@
                 
   
   
-    
   
   
-  
     
     
       
@@ -5484,21 +5632,18 @@
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6" >
         
           
-          
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_4_6" id="__nav_4_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_6" id="__nav_4_6_label" tabindex="0">
             
   
   
@@ -5516,7 +5661,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -5534,7 +5679,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../../../references/settings/" class="md-nav__link">
         
   
   
@@ -5562,7 +5707,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../settings_reference/" class="md-nav__link">
+      <a href="../../../references/settings_reference/" class="md-nav__link">
         
   
   
@@ -5590,7 +5735,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../global_settings/" class="md-nav__link">
+      <a href="../../../references/settings/global_settings/" class="md-nav__link">
         
   
   
@@ -5618,7 +5763,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../policy_settings/" class="md-nav__link">
+      <a href="../../../references/settings/policy_settings/" class="md-nav__link">
         
   
   
@@ -5646,7 +5791,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../kafka_settings/" class="md-nav__link">
+      <a href="../../../references/settings/kafka_settings/" class="md-nav__link">
         
   
   
@@ -5671,10 +5816,8 @@
                 
   
   
-    
   
   
-  
     
     
       
@@ -5715,11 +5858,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6_6" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6_6" >
         
           
           <label class="md-nav__link" for="__nav_4_6_6" id="__nav_4_6_6_label" tabindex="0">
@@ -5740,7 +5883,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_6_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_6_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_6_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -5758,7 +5901,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../alert_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/alert_settings/" class="md-nav__link">
         
   
   
@@ -5786,7 +5929,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../asset_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/asset_settings/" class="md-nav__link">
         
   
   
@@ -5814,7 +5957,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../blockassembly_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/blockassembly_settings/" class="md-nav__link">
         
   
   
@@ -5842,7 +5985,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../blockchain_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/blockchain_settings/" class="md-nav__link">
         
   
   
@@ -5870,7 +6013,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../blockpersister_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/blockpersister_settings/" class="md-nav__link">
         
   
   
@@ -5898,7 +6041,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../blockvalidation_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/blockvalidation_settings/" class="md-nav__link">
         
   
   
@@ -5926,7 +6069,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../legacy_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/legacy_settings/" class="md-nav__link">
         
   
   
@@ -5954,7 +6097,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../p2p_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/p2p_settings/" class="md-nav__link">
         
   
   
@@ -5982,7 +6125,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../propagation_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/propagation_settings/" class="md-nav__link">
         
   
   
@@ -6010,7 +6153,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../pruner_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/pruner_settings/" class="md-nav__link">
         
   
   
@@ -6038,7 +6181,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../rpc_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/rpc_settings/" class="md-nav__link">
         
   
   
@@ -6066,7 +6209,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../subtreevalidation_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/subtreevalidation_settings/" class="md-nav__link">
         
   
   
@@ -6094,7 +6237,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../utxopersister_settings/" class="md-nav__link">
+      <a href="../../../references/settings/services/utxopersister_settings/" class="md-nav__link">
         
   
   
@@ -6119,37 +6262,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Validator
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/validator_settings/" class="md-nav__link">
         
   
   
@@ -6165,181 +6281,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Configuration Settings
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Configuration Dependencies
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#grpc-server-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        gRPC Server Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#http-server-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        HTTP Server Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#debug-logging" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Debug Logging
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#batch-processing" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Batch Processing
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#block-validation-retry-logic" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Block Validation Retry Logic
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#service-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Service Dependencies
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Validation Rules
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-examples" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Configuration Examples
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Examples">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Basic Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#performance-tuning" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Performance Tuning
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#debug-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Debug Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -6420,7 +6361,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../stores/aerospike_settings/" class="md-nav__link">
+      <a href="../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
         
   
   
@@ -6448,7 +6389,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../stores/blob_settings/" class="md-nav__link">
+      <a href="../../../references/settings/stores/blob_settings/" class="md-nav__link">
         
   
   
@@ -6476,7 +6417,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../stores/utxo_settings/" class="md-nav__link">
+      <a href="../../../references/settings/stores/utxo_settings/" class="md-nav__link">
         
   
   
@@ -6542,20 +6483,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_7" >
         
           
-          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="0">
             
   
   
@@ -6591,7 +6529,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../misc/BIP-239/" class="md-nav__link">
+      <a href="../../../misc/BIP-239/" class="md-nav__link">
         
   
   
@@ -6619,7 +6557,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../gitCommitSigningSetupGuide/" class="md-nav__link">
+      <a href="../../../references/gitCommitSigningSetupGuide/" class="md-nav__link">
         
   
   
@@ -6647,7 +6585,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../licenseInformation/" class="md-nav__link">
+      <a href="../../../references/licenseInformation/" class="md-nav__link">
         
   
   
@@ -6675,7 +6613,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../prometheusMetrics/" class="md-nav__link">
+      <a href="../../../references/prometheusMetrics/" class="md-nav__link">
         
   
   
@@ -6703,7 +6641,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../teranodeDaemonReference/" class="md-nav__link">
+      <a href="../../../references/teranodeDaemonReference/" class="md-nav__link">
         
   
   
@@ -6731,7 +6669,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../testingTechnicalReference/" class="md-nav__link">
+      <a href="../../../references/testingTechnicalReference/" class="md-nav__link">
         
   
   
@@ -6759,7 +6697,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../thirdPartySoftwareRequirements/" class="md-nav__link">
+      <a href="../../../references/thirdPartySoftwareRequirements/" class="md-nav__link">
         
   
   
@@ -6822,10 +6760,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-settings" class="md-nav__link">
+  <a href="#dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration Settings
+        Dashboards
       
     </span>
   </a>
@@ -6833,22 +6771,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-dependencies" class="md-nav__link">
+  <a href="#metrics-healthy-vs-degraded" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration Dependencies
+        Metrics: Healthy vs. Degraded
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Dependencies">
+    <nav class="md-nav" aria-label="Metrics: Healthy vs. Degraded">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#grpc-server-management" class="md-nav__link">
+  <a href="#fsm-and-sync-state" class="md-nav__link">
     <span class="md-ellipsis">
       
-        gRPC Server Management
+        FSM and sync state
       
     </span>
   </a>
@@ -6856,10 +6794,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#http-server-management" class="md-nav__link">
+  <a href="#block-assembly" class="md-nav__link">
     <span class="md-ellipsis">
       
-        HTTP Server Management
+        Block assembly
       
     </span>
   </a>
@@ -6867,10 +6805,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#debug-logging" class="md-nav__link">
+  <a href="#validation-and-propagation-errors" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Debug Logging
+        Validation and propagation errors
       
     </span>
   </a>
@@ -6878,10 +6816,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#batch-processing" class="md-nav__link">
+  <a href="#fork-and-reorg-activity" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Batch Processing
+        Fork and reorg activity
       
     </span>
   </a>
@@ -6889,10 +6827,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#block-validation-retry-logic" class="md-nav__link">
+  <a href="#cache-and-store-pressure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Block Validation Retry Logic
+        Cache and store pressure
       
     </span>
   </a>
@@ -6905,10 +6843,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#service-dependencies" class="md-nav__link">
+  <a href="#starter-alerting" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Service Dependencies
+        Starter Alerting
       
     </span>
   </a>
@@ -6916,63 +6854,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#validation-rules" class="md-nav__link">
+  <a href="#related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Validation Rules
+        Related Documentation
       
     </span>
   </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-examples" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Configuration Examples
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Examples">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Basic Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#performance-tuning" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Performance Tuning
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#debug-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Debug Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -7001,7 +6889,7 @@
   
   
     <li class="md-path__item">
-      <a href="../../../.." class="md-path__link">
+      <a href="../../.." class="md-path__link">
         
   <span class="md-ellipsis">
     Home
@@ -7018,15 +6906,23 @@
   
     
     
+      
+  
+  
+    
+    
       <li class="md-path__item">
-        <a href="../../../projectStructure/" class="md-path__link">
+        <a href="../../developerSetup/" class="md-path__link">
           
   <span class="md-ellipsis">
-    Reference
+    How-To Guides
   </span>
 
         </a>
       </li>
+    
+  
+
     
   
 
@@ -7036,33 +6932,23 @@
   
     
     
-      <li class="md-path__item">
-        <a href="../../" class="md-path__link">
-          
-  <span class="md-ellipsis">
-    Configuration
-  </span>
-
-        </a>
-      </li>
-    
-  
-
       
-        
   
   
     
     
       <li class="md-path__item">
-        <a href="../alert_settings/" class="md-path__link">
+        <a href="../docker/minersHowToInstallation/" class="md-path__link">
           
   <span class="md-ellipsis">
-    Service Settings
+    Miners
   </span>
 
         </a>
       </li>
+    
+  
+
     
   
 
@@ -7080,258 +6966,262 @@
   
 
 
-<h1 id="validator-service-settings">Validator Service Settings<a class="headerlink" href="#validator-service-settings" title="Permanent link">&para;</a></h1>
-<p><strong>Related Topic</strong>: <a href="../../../../topics/services/validator/">Validator Service</a></p>
-<h2 id="configuration-settings">Configuration Settings<a class="headerlink" href="#configuration-settings" title="Permanent link">&para;</a></h2>
+<h1 id="monitoring-teranode">Monitoring Teranode<a class="headerlink" href="#monitoring-teranode" title="Permanent link">&para;</a></h1>
+<p>This guide covers the dashboards Teranode ships out of the box, the metrics
+that distinguish a healthy node from a degraded one, and how to get started
+with alerting. It applies to both the Docker quickstart and Kubernetes
+operator deployments — the metrics and the dashboard files are the same; what
+differs is how you reach Grafana/Prometheus and which dashboards are provisioned
+for you.</p>
+<h2 id="dashboards">Dashboards<a class="headerlink" href="#dashboards" title="Permanent link">&para;</a></h2>
+<p>Teranode ships pre-built Grafana dashboards. Not all of them are provisioned by
+every stack — the <code>Provisioned by</code> column says which one mounts each file:</p>
 <table>
 <thead>
 <tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Environment Variable</th>
-<th>Usage</th>
+<th>Dashboard</th>
+<th>File</th>
+<th>Provisioned by</th>
+<th>What it shows</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>GRPCAddress</td>
-<td>string</td>
-<td>"localhost:8081"</td>
-<td>validator_grpcAddress</td>
-<td>gRPC client connections</td>
+<td>Teranode Service Overview</td>
+<td><code>deploy/docker/base/grafana_dashboards/teranode/teranode-overview-dashboard.json</code></td>
+<td>Operator Docker stacks (<code>deploy/docker/mainnet</code>, <code>deploy/docker/testnet</code>, <code>deploy/docker/monitoring</code>)</td>
+<td>Top-level health across all services: throughput, latencies, error rates</td>
 </tr>
 <tr>
-<td>GRPCListenAddress</td>
-<td>string</td>
-<td>":8081"</td>
-<td>validator_grpcListenAddress</td>
-<td><strong>CRITICAL</strong> - gRPC server binding, service only starts if not empty</td>
+<td>Aerospike Batch Index Bottleneck Diagnostic</td>
+<td><code>deploy/docker/base/grafana_dashboards/teranode/teranode-batch-index-dashboard.json</code></td>
+<td>Operator Docker stacks</td>
+<td>Aerospike batch index buffer pressure, a common scaling bottleneck</td>
 </tr>
 <tr>
-<td>KafkaWorkers</td>
-<td>int</td>
+<td>Aerospike Namespace</td>
+<td><code>deploy/docker/base/grafana_dashboards/aerospike/aerospike-namespace.json</code></td>
+<td>Operator Docker stacks</td>
+<td>Namespace-level memory, disk, and object counts</td>
+</tr>
+<tr>
+<td>Aerospike Latency</td>
+<td><code>deploy/docker/base/grafana_dashboards/aerospike/aerospike-latency.json</code></td>
+<td>Operator Docker stacks</td>
+<td>Read/write/batch latency buckets for the UTXO store</td>
+</tr>
+<tr>
+<td>BlockAssembler State Monitoring</td>
+<td><code>compose/grafana/dashboards/blockassembly-state.json</code></td>
+<td>Nothing on the operator paths — <strong>import by hand</strong> (only the developer multi-node stacks <code>compose/docker-compose-ss.yml</code> and <code>test/docker-compose-host.yml</code> mount it)</td>
+<td>Block assembler state timeline (<code>running</code>, <code>reorging</code>, <code>movingUp</code>, ...), state durations, and transition rates — see <a href="https://github.com/bsv-blockchain/teranode/blob/main/compose/grafana/dashboards/README.md">dashboard notes</a></td>
+</tr>
+</tbody>
+</table>
+<p>The Grafana service in the Docker stacks mounts a single dashboards directory,
+<code>deploy/docker/base/grafana_dashboards</code>, so the four dashboards in that directory
+— and only those — are provisioned automatically. On the quickstart, Grafana and
+Prometheus come up with the <code>monitoring</code> compose profile, which is part of the
+default <code>COMPOSE_PROFILES</code> (<code>legacy,p2p,monitoring</code>). Grafana is then reachable
+at <code>http://localhost:3005</code> and Prometheus at <code>http://localhost:9090</code> (both
+loopback-only by default). See <a href="../docker/minersHowToInstallation/">Installing with
+Docker</a> and its <a href="../docker/minersHowToTroubleshooting/">Troubleshooting
+guide</a> if Grafana shows no data.</p>
+<p>The BlockAssembler State Monitoring dashboard is <strong>not</strong> provisioned on either
+operator path. To use it, import
+<code>compose/grafana/dashboards/blockassembly-state.json</code> manually (Grafana →
+Dashboards → Import → Upload JSON file), or drop the file into
+<code>deploy/docker/base/grafana_dashboards/teranode/</code> before starting the stack so
+the existing provisioning picks it up.</p>
+<p>On Kubernetes, Prometheus and Grafana are not deployed by the Teranode
+operator itself — point your cluster's existing Prometheus at the Teranode
+services' metrics endpoints and import all of the dashboards above manually
+(Grafana → Dashboards → Import).</p>
+<h2 id="metrics-healthy-vs-degraded">Metrics: Healthy vs. Degraded<a class="headerlink" href="#metrics-healthy-vs-degraded" title="Permanent link">&para;</a></h2>
+<p>The full metric catalogue is in the <a href="../../../references/prometheusMetrics/">Prometheus Metrics
+Reference</a>. The signals below are the
+ones worth watching first — most are visible directly on the Service Overview
+dashboard.</p>
+<h3 id="fsm-and-sync-state">FSM and sync state<a class="headerlink" href="#fsm-and-sync-state" title="Permanent link">&para;</a></h3>
+<p><code>teranode_blockchain_fsm_current_state</code> is a <strong>numeric</strong> gauge, not a string — it
+carries the enum ordinal of the blockchain FSM state:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+<tr>
 <td>0</td>
-<td>validator_kafkaWorkers</td>
-<td>Kafka worker thread configuration</td>
+<td><code>IDLE</code></td>
 </tr>
 <tr>
-<td>SendBatchSize</td>
-<td>int</td>
-<td>100</td>
-<td>validator_sendBatchSize</td>
-<td>Batch processing size</td>
+<td>1</td>
+<td><code>RUNNING</code></td>
 </tr>
 <tr>
-<td>SendBatchTimeout</td>
-<td>int</td>
 <td>2</td>
-<td>validator_sendBatchTimeout</td>
-<td>Batch processing timeout</td>
+<td><code>CATCHINGBLOCKS</code></td>
 </tr>
+</tbody>
+</table>
+<p>A healthy node sits on <code>1</code> (<code>RUNNING</code>) once initial sync completes. Stuck on <code>2</code>
+(<code>CATCHINGBLOCKS</code>) or oscillating indicates a sync problem; see <a href="../docker/minersHowToSyncTheNode/">Syncing the
+Node</a>. The gauge is written on FSM transitions
+only, so the series is absent until the node makes its first transition — use
+<code>absent(...)</code> if you want to alert on that case as well.</p>
+<p>Also watch:</p>
+<ul>
+<li><code>teranode_blockvalidation_catchup_active</code> and
+  <code>teranode_blockvalidation_processing_blocks_stuck</code> — non-zero for extended
+  periods means the node has fallen behind or a block is wedged.</li>
+</ul>
+<h3 id="block-assembly">Block assembly<a class="headerlink" href="#block-assembly" title="Permanent link">&para;</a></h3>
+<p><code>teranode_blockassembly_current_state</code> is a <strong>numeric</strong> gauge too:</p>
+<table>
+<thead>
 <tr>
-<td>SendBatchWorkers</td>
-<td>int</td>
-<td>10</td>
-<td>validator_sendBatchWorkers</td>
-<td>Batch worker thread count</td>
+<th>Value</th>
+<th>State</th>
 </tr>
+</thead>
+<tbody>
 <tr>
-<td>BlockValidationDelay</td>
-<td>int</td>
 <td>0</td>
-<td>validator_blockvalidation_delay</td>
-<td>Block validation delay</td>
+<td><code>starting</code></td>
 </tr>
 <tr>
-<td>BlockValidationMaxRetries</td>
-<td>int</td>
+<td>1</td>
+<td><code>running</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>resetting</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>blockchainSubscription</code></td>
+</tr>
+<tr>
 <td>5</td>
-<td>validator_blockvalidation_maxRetries</td>
-<td>Block validation retry limit</td>
+<td><code>reorging</code></td>
 </tr>
 <tr>
-<td>BlockValidationRetrySleep</td>
-<td>string</td>
-<td>"2s"</td>
-<td>validator_blockvalidation_retrySleep</td>
-<td>Block validation retry delay</td>
+<td>6</td>
+<td><code>movingUp</code></td>
 </tr>
 <tr>
-<td>VerboseDebug</td>
-<td>bool</td>
-<td>false</td>
-<td>validator_verbose_debug</td>
-<td><strong>CRITICAL</strong> - Debug logging control for validation operations</td>
-</tr>
-<tr>
-<td>HTTPListenAddress</td>
-<td>string</td>
-<td>""</td>
-<td>validator_httpListenAddress</td>
-<td><strong>CRITICAL</strong> - HTTP server binding, health checks only run if not empty</td>
-</tr>
-<tr>
-<td>HTTPAddress</td>
-<td>*url.URL</td>
-<td>""</td>
-<td>validator_httpAddress</td>
-<td>HTTP client connections</td>
-</tr>
-<tr>
-<td>HTTPRateLimit</td>
-<td>int</td>
-<td>1024</td>
-<td>validator_httpRateLimit</td>
-<td><strong>CRITICAL</strong> - HTTP request rate limiting</td>
-</tr>
-<tr>
-<td>KafkaMaxMessageBytes</td>
-<td>int</td>
-<td>1048576</td>
-<td>validator_kafka_maxMessageBytes</td>
-<td>Kafka message size limits</td>
-</tr>
-<tr>
-<td>UseLocalValidator</td>
-<td>bool</td>
-<td>false (true in settings.conf)</td>
-<td>useLocalValidator</td>
-<td><strong>CRITICAL</strong> - Local vs remote validator deployment mode</td>
-</tr>
-<tr>
-<td>HTTPBodyLimit</td>
-<td>string</td>
-<td>100MB</td>
-<td>validator_httpBodyLimit</td>
-<td>Maximum HTTP request body size (prevents OOM on oversized requests)</td>
-</tr>
-<tr>
-<td>TxMetaKafkaBatchSize</td>
-<td>int</td>
-<td>1024</td>
-<td>validator_txmeta_kafka_batchSize</td>
-<td>Transaction metadata Kafka batch size</td>
-</tr>
-<tr>
-<td>TxMetaKafkaBatchTimeoutMs</td>
-<td>int</td>
-<td>5</td>
-<td>validator_txmeta_kafka_batchTimeoutMs</td>
-<td>Transaction metadata Kafka batch timeout (ms)</td>
+<td>7</td>
+<td><code>reconciling</code></td>
 </tr>
 </tbody>
 </table>
-<h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
-<h3 id="grpc-server-management">gRPC Server Management<a class="headerlink" href="#grpc-server-management" title="Permanent link">&para;</a></h3>
+<p>Value <code>3</code> is unused — that state was removed. A healthy node spends almost all of
+its time on <code>1</code> (<code>running</code>).</p>
+<p><code>teranode_blockassembly_state_duration_seconds</code> (histogram) and
+<code>teranode_blockassembly_state_transitions_total</code> (counter) carry the state in a
+<code>state</code> / <code>from</code> / <code>to</code> label. The label values are the lower-camelCase names in
+the table above — <code>running</code>, <code>movingUp</code>, <code>blockchainSubscription</code>, and so on —
+<strong>not</strong> the capitalised names the dashboard panels display, so a selector such as
+<code>{state="Running"}</code> matches nothing. Long dwell time in <code>reorging</code> or <code>movingUp</code>
+is worth investigating.</p>
+<p>Also watch:</p>
 <ul>
-<li>Service only starts if <code>GRPCListenAddress</code> is not empty</li>
-<li>Health checks are conditional on gRPC server configuration</li>
+<li><code>teranode_blockassembly_best_block_height</code> vs. your own chain tip — a gap
+  that doesn't close means block assembly is falling behind validation.</li>
 </ul>
-<h3 id="http-server-management">HTTP Server Management<a class="headerlink" href="#http-server-management" title="Permanent link">&para;</a></h3>
+<h3 id="validation-and-propagation-errors">Validation and propagation errors<a class="headerlink" href="#validation-and-propagation-errors" title="Permanent link">&para;</a></h3>
 <ul>
-<li>HTTP server only starts if <code>HTTPListenAddress</code> is not empty</li>
-<li>Rate limiting applied when HTTP server is enabled</li>
-<li>Uses <code>HTTPRateLimit</code> for middleware configuration</li>
+<li><code>teranode_validator_invalid_transactions</code> and
+  <code>teranode_propagation_invalid_transactions</code> — a sustained non-zero rate
+  (rather than occasional spikes from normal network traffic) suggests policy
+  misconfiguration or an upstream data problem.</li>
+<li><code>teranode_aerospike_utxo_errors</code>, <code>teranode_aerospike_txmeta_errors</code>, and
+  the SQL-store equivalents (<code>teranode_sql_utxo_errors</code>) — any sustained rate
+  here points at store-level trouble (disk, memory pressure, connectivity),
+  not the chain itself.</li>
 </ul>
-<h3 id="debug-logging">Debug Logging<a class="headerlink" href="#debug-logging" title="Permanent link">&para;</a></h3>
+<h3 id="fork-and-reorg-activity">Fork and reorg activity<a class="headerlink" href="#fork-and-reorg-activity" title="Permanent link">&para;</a></h3>
 <ul>
-<li>When <code>VerboseDebug = true</code>, provides detailed logging for validation operations</li>
-<li>Controls logging in block assembly interactions</li>
+<li><code>teranode_blockvalidation_fork_count</code> and
+  <code>teranode_blockvalidation_fork_orphaned_total</code> — occasional forks are
+  normal; a rapidly growing fork count or frequent orphaning suggests network
+  or peering issues.</li>
 </ul>
-<h3 id="batch-processing">Batch Processing<a class="headerlink" href="#batch-processing" title="Permanent link">&para;</a></h3>
+<h3 id="cache-and-store-pressure">Cache and store pressure<a class="headerlink" href="#cache-and-store-pressure" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>SendBatchSize</code>, <code>SendBatchTimeout</code>, and <code>SendBatchWorkers</code> work together</li>
-<li>Controls transaction batch processing performance</li>
+<li><code>teranode_tx_meta_cache_hits</code> vs. <code>teranode_tx_meta_cache_misses</code> — a
+  degrading hit ratio under steady load usually precedes increased UTXO store
+  latency.</li>
+<li><code>teranode_aerospike_utxo_create_batch</code> / <code>_spend_batch</code> (histograms) —
+  rising batch durations are an early indicator of Aerospike contention,
+  before it shows up as user-visible slowdown.</li>
 </ul>
-<h3 id="block-validation-retry-logic">Block Validation Retry Logic<a class="headerlink" href="#block-validation-retry-logic" title="Permanent link">&para;</a></h3>
-<ul>
-<li><code>BlockValidationMaxRetries</code>, <code>BlockValidationRetrySleep</code>, and <code>BlockValidationDelay</code> control resilience</li>
-<li>Manages block validation failure recovery</li>
-</ul>
-<h2 id="service-dependencies">Service Dependencies<a class="headerlink" href="#service-dependencies" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Dependency</th>
-<th>Interface</th>
-<th>Usage</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>UTXOStore</td>
-<td>utxo.Store</td>
-<td><strong>CRITICAL</strong> - Transaction input validation and double-spend prevention</td>
-</tr>
-<tr>
-<td>BlockchainClient</td>
-<td>blockchain.ClientI</td>
-<td><strong>CRITICAL</strong> - Blockchain operations and block data</td>
-</tr>
-<tr>
-<td>BlockAssemblyClient</td>
-<td>blockassembly.ClientI</td>
-<td><strong>CRITICAL</strong> - Sending validated transactions to mining</td>
-</tr>
-<tr>
-<td>ValidatorTxsConfig</td>
-<td>*url.URL</td>
-<td><strong>CRITICAL</strong> - Kafka-based transaction validation messaging</td>
-</tr>
-</tbody>
-</table>
-<h2 id="validation-rules">Validation Rules<a class="headerlink" href="#validation-rules" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Validation</th>
-<th>Impact</th>
-<th>When Checked</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>GRPCListenAddress</td>
-<td>Service startup conditional</td>
-<td>Service availability</td>
-<td>During daemon startup</td>
-</tr>
-<tr>
-<td>HTTPListenAddress</td>
-<td>HTTP server startup conditional</td>
-<td>API availability</td>
-<td>During service initialization</td>
-</tr>
-<tr>
-<td>VerboseDebug</td>
-<td>Controls logging verbosity</td>
-<td>Performance and diagnostics</td>
-<td>During validation operations</td>
-</tr>
-<tr>
-<td>HTTPRateLimit</td>
-<td>Rate limiting enforcement</td>
-<td>Resource protection</td>
-<td>During HTTP middleware setup</td>
-</tr>
-</tbody>
-</table>
-<h2 id="configuration-examples">Configuration Examples<a class="headerlink" href="#configuration-examples" title="Permanent link">&para;</a></h2>
-<h3 id="basic-configuration">Basic Configuration<a class="headerlink" href="#basic-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>validator_grpcListenAddress = ":8081"
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>validator_httpListenAddress = ":8834"
+<h2 id="starter-alerting">Starter Alerting<a class="headerlink" href="#starter-alerting" title="Permanent link">&para;</a></h2>
+<p>Teranode does not ship Prometheus alerting rules — alert thresholds depend on
+your hardware, network, and risk tolerance, so this is left to the operator.</p>
+<p>Both state metrics are numeric gauges, so state alerts must be written as
+numeric comparisons; a string comparison such as
+<code>teranode_blockchain_fsm_current_state != "RUNNING"</code> is not valid PromQL and
+will be rejected. As a starting point, consider:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">groups</span><span class="p">:</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode-starter</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">rules</span><span class="p">:</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="c1"># Blockchain FSM not RUNNING (1) for 5 minutes.</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TeranodeFSMNotRunning</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode_blockchain_fsm_current_state != 1</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">"Blockchain</span><span class="nv"> </span><span class="s">FSM</span><span class="nv"> </span><span class="s">is</span><span class="nv"> </span><span class="s">not</span><span class="nv"> </span><span class="s">RUNNING"</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">      </span><span class="c1"># Block assembly stuck outside running (1) for 5 minutes. Tune the window</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="c1"># to the block time you expect on your network.</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TeranodeBlockAssemblyNotRunning</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode_blockassembly_current_state != 1</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">"Block</span><span class="nv"> </span><span class="s">assembly</span><span class="nv"> </span><span class="s">is</span><span class="nv"> </span><span class="s">not</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">the</span><span class="nv"> </span><span class="s">running</span><span class="nv"> </span><span class="s">state"</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">      </span><span class="c1"># A block is wedged in validation.</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TeranodeBlockProcessingStuck</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode_blockvalidation_processing_blocks_stuck &gt; 0</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2m</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">"Block</span><span class="nv"> </span><span class="s">validation</span><span class="nv"> </span><span class="s">reports</span><span class="nv"> </span><span class="s">stuck</span><span class="nv"> </span><span class="s">blocks"</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">      </span><span class="c1"># Sustained store or validation errors.</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TeranodeErrorRate</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w">          </span><span class="no">rate(teranode_validator_invalid_transactions[5m]) &gt; 0</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="w">          </span><span class="no">or rate(teranode_aerospike_utxo_errors[5m]) &gt; 0</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="w">          </span><span class="no">or rate(teranode_sql_utxo_errors[5m]) &gt; 0</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">"Sustained</span><span class="nv"> </span><span class="s">validation</span><span class="nv"> </span><span class="s">or</span><span class="nv"> </span><span class="s">UTXO</span><span class="nv"> </span><span class="s">store</span><span class="nv"> </span><span class="s">errors"</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a><span class="w">      </span><span class="c1"># Reorgs happening more than once every 10 seconds.</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TeranodeFrequentReorgs</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sum(rate(teranode_blockassembly_state_transitions_total{to="reorging"}[5m])) &gt; 0.1</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">"Frequent</span><span class="nv"> </span><span class="s">block</span><span class="nv"> </span><span class="s">assembly</span><span class="nv"> </span><span class="s">reorgs"</span>
 </span></code></pre></div>
-<h3 id="performance-tuning">Performance Tuning<a class="headerlink" href="#performance-tuning" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>validator_sendBatchSize = 200
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>validator_sendBatchWorkers = 20
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>validator_httpRateLimit = 2048
-</span></code></pre></div>
-<h3 id="debug-configuration">Debug Configuration<a class="headerlink" href="#debug-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>validator_verbose_debug = true
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>validator_blockvalidation_maxRetries = 10
-</span></code></pre></div>
+<p>Note the <code>to="reorging"</code> label value: the <code>state</code>, <code>from</code>, and <code>to</code> labels carry
+the lower-camelCase state names listed above, so capitalised selectors return an
+empty series and the alert silently never fires.</p>
+<p>The <a href="https://github.com/bsv-blockchain/teranode/blob/main/compose/grafana/dashboards/README.md#alerting-rules">BlockAssembler State Monitoring dashboard
+notes</a>
+carry further examples in the same style.</p>
+<h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../../references/prometheusMetrics/">Prometheus Metrics Reference</a></li>
+<li><a href="../docker/minersHowToInstallation/">Installing with Docker</a></li>
+<li><a href="../kubernetes/minersHowToInstallation/">Installing with Kubernetes</a></li>
+<li><a href="../docker/minersHowToTroubleshooting/">Troubleshooting (Docker)</a></li>
+<li><a href="../kubernetes/minersHowToTroubleshooting/">Troubleshooting (Kubernetes)</a></li>
+</ul>
 
 
 
@@ -7369,7 +7259,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../utxopersister_settings/" class="md-footer__link md-footer__link--prev" aria-label="Previous: UTXO Persister">
+          <a href="../kubernetes/minersHowToSyncTheNode/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Kubernetes">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -7379,20 +7269,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                UTXO Persister
+                Kubernetes
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../stores/aerospike_settings/" class="md-footer__link md-footer__link--next" aria-label="Next: Aerospike Store">
+          <a href="../minersHowToBackup/" class="md-footer__link md-footer__link--next" aria-label="Next: Backup Teranode">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Aerospike Store
+                Backup Teranode
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -7424,10 +7314,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

@@ -932,6 +932,8 @@
       
         
       
+        
+      
     
     
     
@@ -2109,6 +2111,34 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToMonitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
     
     
       
@@ -2135,10 +2165,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_10" >
         
           
-          <label class="md-nav__link" for="__nav_2_11_9" id="__nav_2_11_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_10" id="__nav_2_11_10_label" tabindex="0">
             
   
   
@@ -2156,8 +2186,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11_9">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -8488,6 +8518,16 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Approximately 10x faster than full validation for historical blocks</li>
 <li>Currently disabled pending additional testing (<code>useQuickValidation = false</code>)</li>
 </ul>
+<p><strong>Behaviour change — quick-validation window is bound to what this run verified:</strong></p>
+<p>The eligibility bound is the highest checkpoint whose hash was actually <strong>matched against a
+header in the current catchup range</strong>, not the highest checkpoint present in
+<code>ChainCfgParams.Checkpoints</code>. A checkpoint that is configured but sits outside the range being
+processed proves nothing about this session, so it no longer widens the window.</p>
+<p>Operational consequence: in each catchup range, the blocks above the last in-range checkpoint —
+the tail up to the peer's tip — fall back to full validation instead of quick validation. On a
+node syncing far below the highest checkpoint this is one tail per catchup range and only
+affects sync throughput, never which blocks are accepted. Sync of the checkpointed prefix is
+unaffected as long as ranges continue to span checkpoints.</p>
 <p><strong>Safety Guarantees:</strong></p>
 <p>Checkpoint verification ensures:</p>
 <ul>
@@ -8660,7 +8700,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <p>The quick validation path is only applied to blocks below verified checkpoints:</p>
 <ul>
 <li><strong>Checkpoint Verification</strong>: During catchup, checkpoints are verified in header chain (see Section 2.2.2)</li>
-<li><strong>Eligibility Check</strong>: <code>block.Height &lt;= highestCheckpointHeight</code> determines if quick validation can be used</li>
+<li><strong>Eligibility Check</strong>: <code>block.Height &lt;= highestCheckpointHeight</code> determines if quick validation can be used, where <code>highestCheckpointHeight</code> is the highest checkpoint <strong>hash-verified in the current catchup run</strong> — blocks above it fall back to full validation (see Section 2.2.2)</li>
 <li><strong>Trust Assumption</strong>: Blocks below checkpoints are known to be valid, allowing optimized processing</li>
 <li><strong>Current Status</strong>: Quick validation currently disabled (<code>useQuickValidation = false</code>) pending additional testing</li>
 </ul>

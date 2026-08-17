@@ -944,6 +944,8 @@
       
         
       
+        
+      
     
     
     
@@ -1423,6 +1425,17 @@
     <span class="md-ellipsis">
       
         Production Considerations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
       
     </span>
   </a>
@@ -2478,6 +2491,34 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../minersHowToMonitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
     
     
       
@@ -2504,10 +2545,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_10" >
         
           
-          <label class="md-nav__link" for="__nav_2_11_9" id="__nav_2_11_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_10" id="__nav_2_11_10_label" tabindex="0">
             
   
   
@@ -2525,8 +2566,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11_9">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -7215,6 +7256,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#resetting-teranode" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7528,6 +7580,12 @@ rotate the database credentials for production deployments.</p>
 </span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">          </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
 </span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">          </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
 </span></code></pre></div>
+<p>The <code>imagePullPolicy: Never</code> and <code>cpu: 100m</code> / <code>memory: 256Mi</code> values above
+are Minikube/local-dev defaults — the legacy service scans the full
+historical chain and needs far more than that in practice. For testnet or
+mainnet, size resources from the shipped mainnet CR instead, which requests
+<code>cpu: 2</code> / <code>memory: 64Gi</code> for legacy: see
+<a href="https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml">teranode-cr-mainnet.yaml</a>.</p>
 </li>
 <li>
 <p>Apply the updated configuration:</p>
@@ -7558,11 +7616,16 @@ rotate the database credentials for production deployments.</p>
 <ul>
 <li>Deploying dependencies (Aerospike, PostgreSQL, Kafka) in separate clusters or using managed services</li>
 <li>Implementing proper security measures (network policies, RBAC, etc.)</li>
-<li>Setting up monitoring and alerting</li>
+<li>Setting up <a href="../../minersHowToMonitoring/">monitoring and alerting</a></li>
 <li>Configuring appropriate resource requests and limits</li>
 <li>Setting up proper backup and disaster recovery procedures</li>
 </ul>
 <p>An example CR for a mainnet deployment is available in <a href="https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml">kubernetes/teranode/teranode-cr-mainnet.yaml</a>.</p>
+<h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../minersHowToMonitoring/">Monitoring Teranode</a></li>
+<li><a href="../../../../references/prometheusMetrics/">Prometheus Metrics Reference</a></li>
+</ul>
 <h2 id="resetting-teranode">Resetting Teranode<a class="headerlink" href="#resetting-teranode" title="Permanent link">&para;</a></h2>
 <p>If you need to reset your Teranode deployment, see the <a href="../minersHowToResetTeranode/">How to Reset Teranode</a> guide for complete instructions on cleaning up Aerospike, PostgreSQL, and persistent volumes.</p>
 <h2 id="other-resources">Other Resources<a class="headerlink" href="#other-resources" title="Permanent link">&para;</a></h2>

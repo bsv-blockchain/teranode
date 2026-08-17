@@ -932,6 +932,8 @@
       
         
       
+        
+      
     
     
     
@@ -2109,6 +2111,34 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToMonitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
     
     
       
@@ -2135,10 +2165,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_10" >
         
           
-          <label class="md-nav__link" for="__nav_2_11_9" id="__nav_2_11_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_10" id="__nav_2_11_10_label" tabindex="0">
             
   
   
@@ -2156,8 +2186,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11_9">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -8106,11 +8136,11 @@
 <h3 id="validator-service">Validator Service<a class="headerlink" href="#validator-service" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Consumer</strong>: <code>ValidatorTxsConfig</code> - consumes transactions for validation (optional)</li>
-<li><strong>Producer</strong>: <code>ValidatorTxsConfig</code> - publishes validation results (optional)</li>
 <li><strong>Producer</strong>: <code>RejectedTxConfig</code> - publishes rejected transactions</li>
 </ul>
 <h3 id="propagation-service">Propagation Service<a class="headerlink" href="#propagation-service" title="Permanent link">&para;</a></h3>
 <ul>
+<li><strong>Producer</strong>: <code>ValidatorTxsConfig</code> - publishes new transactions to the Validator; when unset, Propagation calls the Validator directly instead</li>
 <li><strong>Consumer</strong>: <code>RejectedTxConfig</code> - consumes rejected transactions</li>
 </ul>
 <h3 id="block-persister-service">Block Persister Service<a class="headerlink" href="#block-persister-service" title="Permanent link">&para;</a></h3>

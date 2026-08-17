@@ -932,6 +932,8 @@
       
         
       
+        
+      
     
     
     
@@ -2109,6 +2111,34 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToMonitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
     
     
       
@@ -2135,10 +2165,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_10" >
         
           
-          <label class="md-nav__link" for="__nav_2_11_9" id="__nav_2_11_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_10" id="__nav_2_11_10_label" tabindex="0">
             
   
   
@@ -2156,8 +2186,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11_9">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -3245,17 +3275,6 @@
     <span class="md-ellipsis">
       
         4.1.3. GetBlockByHash()
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#415-getblockbyhash-getblocks-and-getlastnblocks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()
       
     </span>
   </a>
@@ -7474,17 +7493,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#415-getblockbyhash-getblocks-and-getlastnblocks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#414-getblocks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8274,52 +8282,9 @@
 <ul>
 <li><strong>URL</strong>: <code>/block/:hash</code> (with <code>/hex</code>, <code>/json</code> variants)</li>
 <li><strong>Method</strong>: GET</li>
-<li><strong>Response Format</strong>: JSON</li>
-<li><strong>Content</strong>: Block header data including previous block ID and metadata</li>
-</ul>
-<p><img alt="asset_server_http_get_block_header.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_header.svg" /></p>
-<h3 id="415-getblockbyhash-getblocks-and-getlastnblocks">4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()<a class="headerlink" href="#415-getblockbyhash-getblocks-and-getlastnblocks" title="Permanent link">&para;</a></h3>
-<p><strong>GetBlockByHash</strong> - Get a single block by hash:</p>
-<ul>
-<li><strong>URL</strong>: <code>/api/v1/block/:hash</code> (also available: <code>/api/v1/block/:hash/hex</code>, <code>/api/v1/block/:hash/json</code>)</li>
-<li><strong>Method</strong>: GET</li>
 <li><strong>URL Parameters</strong>: <code>hash</code> - Block hash (64-character hex string)</li>
 <li><strong>Response Format</strong>: Binary (default), Hex, or JSON</li>
 <li><strong>Content</strong>: Complete block data with subtree identifiers</li>
-</ul>
-<p><strong>GetBlocks</strong> - Get paginated list of blocks:</p>
-<ul>
-<li><strong>URL</strong>: <code>/api/v1/blocks</code></li>
-<li><strong>Method</strong>: GET</li>
-<li>
-<p><strong>Query Parameters</strong>:</p>
-<ul>
-<li><code>offset</code> (integer, optional, default: 0) - Number of blocks to skip from tip</li>
-<li><code>limit</code> (integer, optional, default: 20, max: 100) - Maximum blocks to return</li>
-<li><code>includeOrphans</code> (boolean, optional, default: false) - Include orphaned blocks</li>
-</ul>
-</li>
-<li>
-<p><strong>Response Format</strong>: JSON with pagination metadata</p>
-</li>
-<li><strong>Content</strong>: Block list with pagination information</li>
-</ul>
-<p><strong>GetLastNBlocks</strong> - Get most recent N blocks:</p>
-<ul>
-<li><strong>URL</strong>: <code>/api/v1/lastblocks</code></li>
-<li><strong>Method</strong>: GET</li>
-<li>
-<p><strong>Query Parameters</strong>:</p>
-<ul>
-<li><code>n</code> (integer, optional, default: 10) - Number of blocks to retrieve</li>
-<li><code>fromHeight</code> (unsigned integer, optional, default: 0) - Starting block height</li>
-<li><code>includeOrphans</code> (boolean, optional, default: false) - Include orphaned blocks</li>
-</ul>
-</li>
-<li>
-<p><strong>Response Format</strong>: JSON</p>
-</li>
-<li><strong>Content</strong>: Array of recent blocks in descending order (newest first)</li>
 </ul>
 <p><img alt="asset_server_http_get_block.svg" src="../img/plantuml/assetserver/asset_server_http_get_block.svg" /></p>
 <p>Supports multiple response formats through URL path suffixes. Binary response returns raw block data, hex returns hexadecimal string, and JSON returns structured block data with metadata.</p>
@@ -8328,8 +8293,8 @@
 <ul>
 <li><strong>URL</strong>: <code>/blocks</code></li>
 <li><strong>Method</strong>: GET</li>
-<li><strong>Response Format</strong>: JSON</li>
-<li><strong>Content</strong>: Paginated list of blocks with metadata</li>
+<li><strong>Response Format</strong>: JSON with pagination metadata</li>
+<li><strong>Content</strong>: Paginated list of blocks with pagination information and metadata</li>
 <li>
 <p><strong>Query Parameters</strong>:</p>
 <ul>
