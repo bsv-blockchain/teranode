@@ -1740,6 +1740,16 @@ func TestSmokeTests(t *testing.T) {
 
 		tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
 	})
+
+	// Last: these cases move the shared store's block height, and cannot restore
+	// it if the store started at zero.
+	t.Run("aerospike_set_block_state", func(t *testing.T) {
+		tests.SetBlockStateContract(t, store)
+	})
+
+	t.Run("aerospike_set_block_state_concurrent", func(t *testing.T) {
+		tests.SetBlockStateSnapshotUnderConcurrency(t, store)
+	})
 }
 
 func TestCreateZeroSat(t *testing.T) {

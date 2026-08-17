@@ -275,9 +275,8 @@ func TestShouldSkipBannedPeer_IPBanWithoutRegistryBan(t *testing.T) {
 // sweep expired ipBanCache entries or the map grows once per unique peer ID.
 func TestCleanupPeerMaps_EvictsExpiredIPBanEntries(t *testing.T) {
 	s := &Server{
-		logger:         ulogger.TestLogger{},
-		peerMapTTL:     time.Minute,
-		peerMapMaxSize: 100,
+		logger:     ulogger.TestLogger{},
+		peerMapTTL: time.Minute,
 	}
 
 	now := time.Now()

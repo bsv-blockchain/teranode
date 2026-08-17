@@ -28,8 +28,11 @@ import (
 // All methods succeed immediately without performing any actual storage operations.
 // This is useful for testing scenarios or when UTXO tracking needs to be disabled.
 type NullStore struct {
-	blockHeight     uint32
-	medianBlockTime uint32
+	// utxo.BlockStateFields gives the null store the same block-state
+	// behaviour as the real ones — including the rejection of height zero — so
+	// it satisfies the interface contract rather than being a laxer special
+	// case that the shared test suite would let through.
+	utxo.BlockStateFields
 }
 
 // BatchDecorate implements utxo.Store.
@@ -41,31 +44,6 @@ func (m *NullStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice [
 // Returns a null UTXO store that implements all interface methods as no-ops.
 func NewNullStore() (*NullStore, error) {
 	return &NullStore{}, nil
-}
-
-func (m *NullStore) SetBlockHeight(height uint32) error {
-	m.blockHeight = height
-	return nil
-}
-
-func (m *NullStore) GetBlockHeight() uint32 {
-	return m.blockHeight
-}
-
-func (m *NullStore) SetMedianBlockTime(medianTime uint32) error {
-	m.medianBlockTime = medianTime
-	return nil
-}
-
-func (m *NullStore) GetMedianBlockTime() uint32 {
-	return m.medianBlockTime
-}
-
-func (m *NullStore) GetBlockState() utxo.BlockState {
-	return utxo.BlockState{
-		Height:     m.blockHeight,
-		MedianTime: m.medianBlockTime,
-	}
 }
 
 // SupportsOutpointOnlySpend reports false: the null store performs no real UTXO work.

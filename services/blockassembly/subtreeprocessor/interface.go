@@ -337,6 +337,21 @@ type Interface interface {
 	// Parameters:
 	//   - ctx: Context for the stop operation
 	Stop(ctx context.Context)
+
+	// ReconcileCoinbases creates the canonical coinbase UTXOs for the given gap
+	// blocks (ascending height). It is coinbase-only and idempotent, and never
+	// touches any other in-memory processor state (no reset, no unmined-tx
+	// reload), which keeps its cost O(len(gapBlocks)) rather than O(mempool
+	// size). Used by the coinbase-divergence recovery orchestration to repair
+	// a scoped gap of missing coinbases.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation of the underlying UTXO store calls
+	//   - gapBlocks: Canonical gap blocks, ascending height, needing coinbase UTXOs
+	//
+	// Returns:
+	//   - error: The first error encountered creating a gap block's coinbase, if any
+	ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error
 }
 
 // TxInpointsMap defines the interface for transaction inpoints storage with hash keys.

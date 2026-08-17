@@ -92,7 +92,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		batchRecords = append(batchRecords, s.teranodeBatchRecord(
 			batchUDFPolicy, LuaPackage, key, subOpSetConflicting, "setConflicting",
 			setValue,
-			int(s.blockHeight.Load()),
+			int(s.GetBlockHeight()),
 			s.settings.GetUtxoStoreBlockHeightRetention(),
 		))
 

@@ -144,16 +144,14 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 					logger.Warnf(errGettingBestHeightAndTime, source, err)
 				}
 			} else if blockHeight > 0 {
-				logger.Debugf("[UTXOStore] setting block height to %d", blockHeight)
+				logger.Debugf("[UTXOStore] setting block state to height %d, median time %d", blockHeight, medianBlockTime)
 
-				if err = utxoStore.SetBlockHeight(blockHeight); err != nil {
-					logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
-				}
-
-				logger.Debugf("[UTXOStore] setting median block time to %d", medianBlockTime)
-
-				if err = utxoStore.SetMedianBlockTime(medianBlockTime); err != nil {
-					logger.Errorf("[UTXOStore] error setting median block time for %s: %v", source, err)
+				// Both values come from the same chain tip, so publish them as
+				// one atomic snapshot (issue 1443): two separate setter calls
+				// leave a window where GetBlockState readers pair a new height
+				// with a stale median time.
+				if err = utxoStore.SetBlockState(blockHeight, medianBlockTime); err != nil {
+					logger.Errorf("[UTXOStore] error setting block state for %s: %v", source, err)
 				}
 			} else {
 				logger.Infof("[UTXOStore] skipping block height initialization for %s (height is 0)", source)
@@ -179,12 +177,10 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 							} else if blockHeight > 0 {
 								logger.Debugf("[UTXOStore] updated block height to %d and median time to %d for %s", blockHeight, medianBlockTime, source)
 
-								if err = utxoStore.SetBlockHeight(blockHeight); err != nil {
-									logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
-								}
-
-								if err = utxoStore.SetMedianBlockTime(medianBlockTime); err != nil {
-									logger.Errorf("[UTXOStore] error setting median block time for %s: %v", source, err)
+								// One atomic snapshot per tip; see the comment on the
+								// initialisation path above (issue 1443).
+								if err = utxoStore.SetBlockState(blockHeight, medianBlockTime); err != nil {
+									logger.Errorf("[UTXOStore] error setting block state for %s: %v", source, err)
 								}
 							} else {
 								logger.Infof("[UTXOStore] skipping block height update for %s (height is 0)", source)
