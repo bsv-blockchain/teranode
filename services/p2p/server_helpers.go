@@ -617,7 +617,11 @@ func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
 	hash, err := chainhash.NewHashFromStr(advertisedHash)
 	if err != nil {
-		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash %q: %v", peerID, advertisedHash, err)
+		// Log the length, never the value: node_status deliberately feeds the
+		// raw advertised hash through here (sanitizeAdvertisedTip must see what
+		// the peer actually sent), so this is the one place a peer-controlled
+		// string of near-message-cap size could otherwise reach the logs.
+		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash (len %d): %v", peerID, len(advertisedHash), err)
 		return 0, nil, false
 	}
 

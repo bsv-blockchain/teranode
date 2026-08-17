@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -19,6 +20,20 @@ const (
 	topicKindRejectedTx topicKind = "rejected_tx"
 	topicKindNodeStatus topicKind = "node_status"
 )
+
+// topicKindCaps pairs each message class with the per-topic ingress size cap
+// (Server.go). publishToNetwork enforces it on every outbound payload so a
+// publisher cannot omit the check or pair the wrong constant with the wrong
+// topic: peers apply the cap to the marshalled bytes, and JSON escaping can
+// expand a valid-per-field message beyond the raw field-bound sum, so an
+// unchecked oversized publish would be silently dropped at every receiver
+// with no local signal.
+var topicKindCaps = map[topicKind]int{
+	topicKindBlock:      maxBlockMessageSize,
+	topicKindSubtree:    maxSubtreeMessageSize,
+	topicKindRejectedTx: maxRejectedTxMessageSize,
+	topicKindNodeStatus: maxNodeStatusMessageSize,
+}
 
 // outboundTopicsAllowed declares, per blockchain FSM state, which outbound
 // pubsub message classes the node may emit. Every publish goes through
@@ -162,6 +177,13 @@ func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgByte
 		prometheusP2PPublishBlocked.WithLabelValues("unknown", "unknown", "chokepoint").Inc()
 
 		return nil
+	}
+
+	// Enforce the topic's ingress size cap on the way out, and loudly: an
+	// oversized publish is not a policy drop but a local bug/misconfiguration
+	// that every receiver would otherwise reject in silence.
+	if capBytes, ok := topicKindCaps[kind]; ok && len(msgBytes) > capBytes {
+		return errors.NewError("%s publish of %d bytes exceeds topic cap %d, not publishing", kind, len(msgBytes), capBytes)
 	}
 
 	// Listen-mode policy, enforced centrally in addition to the handlers:

@@ -100,10 +100,10 @@ const (
 	// existed — ConnectedPeersCount has always been an int.) The per-field
 	// bounds cap the raw string bytes at ~5KB, but json.Marshal HTML-escapes
 	// some printable characters to six bytes each, so the marshalled form of a
-	// pathological-yet-valid message can exceed the raw sum; the egress
-	// publishers therefore also check len(msgBytes) against this cap after
-	// marshalling, so a local config that would be dropped by peers fails
-	// loudly here instead.
+	// pathological-yet-valid message can exceed the raw sum; publishToNetwork
+	// therefore enforces these caps on every outbound payload (topicKindCaps),
+	// so a local config that would be dropped by peers fails loudly here
+	// instead.
 	maxNodeStatusMessageSize = 16 * 1024 // 16KB
 	// rejected_tx messages carry: tx hash, reason string, peer ID. Our egress
 	// truncates the reason to maxGossipReasonLen, but un-upgraded peers publish
@@ -1007,13 +1007,8 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			return err
 		}
 
-		// Peers apply the topic cap to the marshalled bytes; fail loudly here
-		// rather than being silently dropped at every receiver's size check.
-		if len(msgBytes) > maxRejectedTxMessageSize {
-			s.logger.Errorf("[rejectedTxHandler] rejectedTxMessage marshalled size %d exceeds cap %d, not publishing", len(msgBytes), maxRejectedTxMessageSize)
-			return nil
-		}
-
+		// The topic size cap on the marshalled bytes is enforced centrally in
+		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
 		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
@@ -1360,15 +1355,19 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage failed gossip field validation, not publishing", err)
 	}
 
+	// An empty or unroutable DataHubURL is scored as a protocol violation by
+	// every receiver (checkDataHubURL); warn loudly but keep publishing, since
+	// suppressing would also silence dev setups that legitimately advertise
+	// private addresses to peers configured to accept them.
+	if err := s.validateDataHubURL(blockMessage.DataHubURL); err != nil {
+		s.logger.Warnf("[handleBlockNotification] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", blockMessage.DataHubURL, err)
+	}
+
+	// The topic size cap on the marshalled bytes is enforced centrally in
+	// publishToNetwork.
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
 		return errors.NewError("blockMessage - json marshal error", err)
-	}
-
-	// Peers apply the topic cap to the marshalled bytes; fail loudly here
-	// rather than being silently dropped at every receiver's size check.
-	if len(msgBytes) > maxBlockMessageSize {
-		return errors.NewError("blockMessage marshalled size %d exceeds cap %d, not publishing", len(msgBytes), maxBlockMessageSize)
 	}
 
 	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
@@ -1810,13 +1809,19 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	sanitizeNodeStatusMessage(&nodeStatusMessage)
 
 	// The URLs are optional in a node_status: a violation (oversized or
-	// non-printable operator config) blanks the field and keeps publishing —
-	// mirroring the blacklisted-BaseURL handling on ingress — so a pathological
-	// URL degrades sync-source discovery instead of taking the node off gossip
-	// entirely. Only PeerID (machine-generated) remains a hard failure.
-	if err := checkGossipString("base_url", nodeStatusMessage.BaseURL, maxGossipURLLen); err != nil {
-		s.logger.Errorf("[handleNodeStatusNotification] invalid BaseURL, publishing node_status without it: %v", err)
-		nodeStatusMessage.BaseURL = ""
+	// non-printable operator config, or a BaseURL peers would score under
+	// their SSRF check) blanks the field and keeps publishing — mirroring the
+	// blacklisted-BaseURL handling on ingress — so a pathological URL degrades
+	// sync-source discovery instead of taking the node off gossip entirely.
+	// Only PeerID (machine-generated) remains a hard failure.
+	if nodeStatusMessage.BaseURL != "" {
+		if err := checkGossipString("base_url", nodeStatusMessage.BaseURL, maxGossipURLLen); err != nil {
+			s.logger.Errorf("[handleNodeStatusNotification] invalid BaseURL, publishing node_status without it: %v", err)
+			nodeStatusMessage.BaseURL = ""
+		} else if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
+			s.logger.Errorf("[handleNodeStatusNotification] BaseURL would be scored as a protocol violation by peers (set asset_httpPublicAddress), publishing node_status without it: %v", err)
+			nodeStatusMessage.BaseURL = ""
+		}
 	}
 
 	if err := checkGossipString("propagation_url", nodeStatusMessage.PropagationURL, maxGossipURLLen); err != nil {
@@ -1833,13 +1838,19 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		return errors.NewError("nodeStatusMessage - json marshal error", err)
 	}
 
-	// The per-topic caps apply to the marshalled bytes on ingress, and JSON
-	// escaping can expand a valid message beyond the raw field-bound sum, so
-	// check the final payload too: peers would silently drop an oversized
-	// publish at their size cap, making this node invisible with no local
-	// signal.
-	if len(msgBytes) > maxNodeStatusMessageSize {
-		return errors.NewError("nodeStatusMessage marshalled size %d exceeds cap %d, not publishing", len(msgBytes), maxNodeStatusMessageSize)
+	// JSON escaping can expand the in-bounds URLs enough to breach the topic
+	// cap peers enforce on the marshalled bytes. Degrade the same way as an
+	// invalid URL above — drop the optional URLs and re-marshal once — instead
+	// of hard-failing on config that every tick would resubmit;
+	// publishToNetwork still enforces the cap as the final backstop.
+	if len(msgBytes) > maxNodeStatusMessageSize && (nodeStatusMessage.BaseURL != "" || nodeStatusMessage.PropagationURL != "") {
+		s.logger.Errorf("[handleNodeStatusNotification] marshalled size %d exceeds cap %d, publishing node_status without the optional URLs", len(msgBytes), maxNodeStatusMessageSize)
+		nodeStatusMessage.BaseURL = ""
+		nodeStatusMessage.PropagationURL = ""
+
+		if msgBytes, err = json.Marshal(nodeStatusMessage); err != nil {
+			return errors.NewError("nodeStatusMessage - json marshal error", err)
+		}
 	}
 
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
@@ -1877,15 +1888,19 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage failed gossip field validation, not publishing", err)
 	}
 
+	// An empty or unroutable DataHubURL is scored as a protocol violation by
+	// every receiver (checkDataHubURL); warn loudly but keep publishing, since
+	// suppressing would also silence dev setups that legitimately advertise
+	// private addresses to peers configured to accept them.
+	if err := s.validateDataHubURL(subtreeMessage.DataHubURL); err != nil {
+		s.logger.Warnf("[handleSubtreeNotification] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", subtreeMessage.DataHubURL, err)
+	}
+
+	// The topic size cap on the marshalled bytes is enforced centrally in
+	// publishToNetwork.
 	msgBytes, err := json.Marshal(subtreeMessage)
 	if err != nil {
 		return errors.NewError("subtreeMessage - json marshal error", err)
-	}
-
-	// Peers apply the topic cap to the marshalled bytes; fail loudly here
-	// rather than being silently dropped at every receiver's size check.
-	if len(msgBytes) > maxSubtreeMessageSize {
-		return errors.NewError("subtreeMessage marshalled size %d exceeds cap %d, not publishing", len(msgBytes), maxSubtreeMessageSize)
 	}
 
 	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {

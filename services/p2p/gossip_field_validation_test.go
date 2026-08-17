@@ -802,3 +802,114 @@ func TestRejectedTxHandler_InternalRejectionPublishesTruncatedReason(t *testing.
 	require.Len(t, msg.Reason, maxGossipReasonLen, "validator reason must be truncated on egress")
 	require.NoError(t, msg.validateFields(), "published rejected_tx message must pass our own ingress validation")
 }
+
+// ChiR3 regression: an over-long advertised best_block_hash must be zeroed for
+// the fan-out and not scored — and, per the no-echo policy, never reach a side
+// effect at its full size (sanitizeAdvertisedTip logs only its length).
+func TestHandleNodeStatusTopic_OverlongAdvertisedHashZeroedNotScored(t *testing.T) {
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remotePeerID.String(),
+		BestHeight:    1_000_000,
+		BestBlockHash: strings.Repeat("f", 8*1024),
+	})
+	require.NoError(t, err)
+	require.Less(t, len(msgBytes), maxNodeStatusMessageSize)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	select {
+	case n := <-server.notificationCh:
+		require.Zero(t, n.BestHeight, "unverifiable advertised height must be zeroed")
+		require.Empty(t, n.BestBlockHash, "over-long advertised hash must not reach WebSocket clients")
+	default:
+		t.Fatal("node_status telemetry must still be forwarded with the tip zeroed")
+	}
+
+	got, ok := reg.Get(remotePeerID.String())
+	require.True(t, ok)
+	require.Nil(t, got.BlockHash, "over-long advertised hash must not reach the registry")
+	require.Zero(t, banScore(), "a malformed advertised tip is sanitized, not scored")
+}
+
+// JSON escaping headroom: URLs at their full bound made of half-escapable
+// characters ('&' marshals as &, six bytes) must still fit under the
+// node_status cap alongside realistic values for every other field.
+func TestEscapeHeavyURLsStillFitUnderNodeStatusCap(t *testing.T) {
+	escapeHeavy := "http://example.com/?" + strings.Repeat("a&", (maxGossipURLLen-20)/2)
+	require.LessOrEqual(t, len(escapeHeavy), maxGossipURLLen)
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:         strings.Repeat("p", maxGossipPeerIDLen),
+		Type:           "node_status",
+		BaseURL:        escapeHeavy,
+		PropagationURL: escapeHeavy,
+		ClientName:     "teranode-test",
+		MinerName:      "/TAAL/",
+		Version:        "v1.2.3",
+		CommitHash:     "9de8693c2ffb1b6f0c79b8f3a1d2e4c5a6b7c8d9",
+		BestBlockHash:  testBlockHashHex,
+		BestHeight:     ^uint32(0),
+		FSMState:       "RUNNING",
+		ListenMode:     "full",
+		ChainWork:      strings.Repeat("0", maxPeerHexStringLen),
+		Storage:        "full",
+	})
+	require.NoError(t, err)
+	require.Less(t, len(msgBytes), maxNodeStatusMessageSize, "escape-heavy but realistic node_status must fit under the cap")
+}
+
+// Composition of the URL degradation with the size cap: when the (in-bounds,
+// SSRF-clean) URLs alone push the marshalled payload over the cap, the
+// publisher must drop them and publish the rest rather than going off gossip.
+func TestHandleNodeStatusNotification_OversizedURLsDroppedNotSilenced(t *testing.T) {
+	s, published := capturePublishServer(t)
+
+	// Passes the length bound and validateDataHubURL, but marshals to ~12KB
+	// each: two of them breach the 16KB cap on the first marshal.
+	pathological := "http://example.com/?" + strings.Repeat("&", maxGossipURLLen-20)
+	s.AssetHTTPAddressURL = pathological
+	s.PropagationURL = pathological
+
+	require.NoError(t, s.handleNodeStatusNotification(context.Background()), "oversized URLs must degrade, not silence the node")
+
+	captured := published["test-node-status"]
+	require.NotNil(t, captured, "node_status must still be published")
+	require.LessOrEqual(t, len(captured), maxNodeStatusMessageSize)
+
+	var msg NodeStatusMessage
+	require.NoError(t, json.Unmarshal(captured, &msg))
+	require.Empty(t, msg.BaseURL, "the oversizing URLs must be dropped")
+	require.Empty(t, msg.PropagationURL, "the oversizing URLs must be dropped")
+}
+
+// ChiR4: a DataHubURL that peers would score under their SSRF check (e.g. the
+// committed localhost default) is warned about but still published — the warn
+// is the operator signal, suppression would break dev setups.
+func TestHandleSubtreeNotification_LocalhostURLWarnsButPublishes(t *testing.T) {
+	s, published := capturePublishServer(t)
+	s.AssetHTTPAddressURL = "http://localhost:8090"
+
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), model.GenesisBlockHeader.Hash()))
+
+	captured := published["test-subtree"]
+	require.NotNil(t, captured, "a localhost DataHubURL must not suppress the publish")
+
+	var msg SubtreeMessage
+	require.NoError(t, json.Unmarshal(captured, &msg))
+	require.Equal(t, "http://localhost:8090", msg.DataHubURL)
+}
+
+// The centralized cap enforcement in publishToNetwork is the single backstop
+// for every publisher.
+func TestPublishToNetwork_EnforcesTopicCap(t *testing.T) {
+	s, published := capturePublishServer(t)
+
+	err := s.publishToNetwork(context.Background(), "test-subtree", make([]byte, maxSubtreeMessageSize+1))
+	require.Error(t, err, "an oversized payload must fail loudly")
+	require.Nil(t, published["test-subtree"], "an oversized payload must not be published")
+
+	require.NoError(t, s.publishToNetwork(context.Background(), "test-subtree", []byte("{}")))
+	require.NotNil(t, published["test-subtree"])
+}
