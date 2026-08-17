@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -47,4 +48,21 @@ func TestNullStoreSetLocked(t *testing.T) {
 	err := store.SetLocked(ctx, nil, true)
 
 	assert.NoError(t, err)
+}
+
+// TestNullStoreBlockState runs the shared block-state contract cases against the
+// null store. It is the only store the shared suite did not cover, which is how
+// its block state came to behave differently from every other implementation.
+func TestNullStoreBlockState(t *testing.T) {
+	t.Run("set block height zero", func(t *testing.T) {
+		tests.SetBlockHeightZero(t, &NullStore{})
+	})
+
+	t.Run("set block state contract", func(t *testing.T) {
+		tests.SetBlockStateContract(t, &NullStore{})
+	})
+
+	t.Run("set block state snapshot under concurrency", func(t *testing.T) {
+		tests.SetBlockStateSnapshotUnderConcurrency(t, &NullStore{})
+	})
 }

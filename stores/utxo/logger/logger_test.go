@@ -49,6 +49,11 @@ func (m *MockStore) GetMedianBlockTime() uint32 {
 	return args.Get(0).(uint32)
 }
 
+func (m *MockStore) SetBlockState(height, medianTime uint32) error {
+	args := m.Called(height, medianTime)
+	return args.Error(0)
+}
+
 func (m *MockStore) GetBlockState() utxo.BlockState {
 	return utxo.BlockState{
 		Height:     m.GetBlockHeight(),

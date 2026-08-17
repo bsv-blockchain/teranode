@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -56,6 +54,10 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		s.addProtocolViolation(fromID)
 		return
 	}
+
+	// ClientName is free-form peer-controlled text that is relayed to WebSocket
+	// clients and stored in the peer registry; bound it before either happens.
+	blockMessage.ClientName = sanitizePeerDisplayString(blockMessage.ClientName, maxPeerDisplayStringLen)
 
 	// Drop messages from banned peers before any registration, WebSocket
 	// forwarding, or further processing. Own messages skip the registry
@@ -188,6 +190,10 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		s.addProtocolViolation(fromID)
 		return
 	}
+
+	// ClientName is free-form peer-controlled text that is relayed to WebSocket
+	// clients and stored in the peer registry; bound it before either happens.
+	subtreeMessage.ClientName = sanitizePeerDisplayString(subtreeMessage.ClientName, maxPeerDisplayStringLen)
 
 	// Drop messages from banned peers before any registration, WebSocket
 	// forwarding, or further processing. Own messages skip the registry
@@ -833,44 +839,23 @@ func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, err
 }
 
 // cleanupPeerMaps performs periodic cleanup of blockPeerMap and subtreePeerMap
-// It removes entries older than TTL and enforces size limits using LRU eviction
+// and of the reputation, IP-ban and ban-status caches. It removes entries older
+// than their TTL; size is enforced at insert instead (issue 1409), so there is
+// no size pass here.
 func (s *Server) cleanupPeerMaps() {
 	now := time.Now()
 
-	// Collect entries to delete
-	var blockKeysToDelete []string
-	var subtreeKeysToDelete []string
-	blockCount := 0
-	subtreeCount := 0
-
-	// First pass: count entries and collect expired ones
-	s.blockPeerMap.Range(func(key, value interface{}) bool {
-		blockCount++
-		if entry, ok := value.(peerMapEntry); ok {
-			if now.Sub(entry.timestamp) > s.peerMapTTL {
-				blockKeysToDelete = append(blockKeysToDelete, key.(string))
-			}
-		}
-		return true
-	})
-
-	s.subtreePeerMap.Range(func(key, value interface{}) bool {
-		subtreeCount++
-		if entry, ok := value.(peerMapEntry); ok {
-			if now.Sub(entry.timestamp) > s.peerMapTTL {
-				subtreeKeysToDelete = append(subtreeKeysToDelete, key.(string))
-			}
-		}
-		return true
-	})
-
-	// Delete expired entries
-	for _, key := range blockKeysToDelete {
-		s.blockPeerMap.Delete(key)
-	}
-	for _, key := range subtreeKeysToDelete {
-		s.subtreePeerMap.Delete(key)
-	}
+	// Expire the attribution maps in a single locked pass each. Size is not
+	// enforced here: the maps are bounded at insert (issue 1409), so by the
+	// time this runs they are already within the cap.
+	//
+	// Resolve the TTL rather than trusting the field: a Server that never
+	// reached applyPeerMapLimits leaves it at zero, and a zero TTL puts the
+	// cutoff at now, expiring every entry on every tick and switching off ban
+	// attribution entirely. The cap fails closed, so this does too.
+	ttlCutoff := now.Add(-s.peerMapTTLOrDefault())
+	blockExpired := s.blockPeerMap.DeleteExpired(ttlCutoff)
+	subtreeExpired := s.subtreePeerMap.DeleteExpired(ttlCutoff)
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
 	// inserts; without this sweep the map would grow once per unique peer ID
@@ -919,62 +904,27 @@ func (s *Server) cleanupPeerMaps() {
 	}
 
 	// Log cleanup stats
-	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 || len(ipBanKeysToDelete) > 0 || len(banStatusKeysToDelete) > 0 {
+	if blockExpired > 0 || subtreeExpired > 0 || len(reputationKeysToDelete) > 0 || len(ipBanKeysToDelete) > 0 || len(banStatusKeysToDelete) > 0 {
 		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries, %d expired IP-ban entries, %d expired ban-status entries",
-			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete), len(ipBanKeysToDelete), len(banStatusKeysToDelete))
+			blockExpired, subtreeExpired, len(reputationKeysToDelete), len(ipBanKeysToDelete), len(banStatusKeysToDelete))
 	}
 
-	// Second pass: enforce size limits if needed
-	remainingBlockCount := blockCount - len(blockKeysToDelete)
-	remainingSubtreeCount := subtreeCount - len(subtreeKeysToDelete)
-
-	if remainingBlockCount > s.peerMapMaxSize {
-		s.enforceMapSizeLimit(&s.blockPeerMap, s.peerMapMaxSize, "block")
-	}
-
-	if remainingSubtreeCount > s.peerMapMaxSize {
-		s.enforceMapSizeLimit(&s.subtreePeerMap, s.peerMapMaxSize, "subtree")
+	// Surface how many entries the inline cap evicted since the last sweep
+	// (issue 1409) — flood visibility without a per-insert log line. Sustained
+	// eviction means announcements are arriving faster than the cap can hold,
+	// so attribution for the oldest of them is being aged out early. The
+	// attribution matters as much as the count: pressure spread across peers
+	// is throughput and a larger cap helps, whereas one dominant contributor
+	// is a flood, where a larger cap just hands the attacker more memory and a
+	// longer sweep — ban the peer instead (issue 1503).
+	if blockEvictions, subtreeEvictions := s.blockPeerMap.EvictionsSinceLastRead(), s.subtreePeerMap.EvictionsSinceLastRead(); blockEvictions.total > 0 || subtreeEvictions.total > 0 {
+		s.logger.Warnf("[cleanupPeerMaps] peer maps at capacity since the last sweep: evicted %d oldest block entries (%s) and %d oldest subtree entries (%s)",
+			blockEvictions.total, blockEvictions, subtreeEvictions.total, subtreeEvictions)
 	}
 
 	// Log current sizes
 	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
-		remainingBlockCount, remainingSubtreeCount)
-}
-
-// enforceMapSizeLimit removes oldest entries from a map to enforce size limit
-func (s *Server) enforceMapSizeLimit(m *sync.Map, maxSize int, mapType string) {
-	type entryWithKey struct {
-		key       string
-		timestamp time.Time
-	}
-
-	var entries []entryWithKey
-
-	// Collect all entries with their timestamps
-	m.Range(func(key, value interface{}) bool {
-		if entry, ok := value.(peerMapEntry); ok {
-			entries = append(entries, entryWithKey{
-				key:       key.(string),
-				timestamp: entry.timestamp,
-			})
-		}
-		return true
-	})
-
-	// Sort by timestamp (oldest first)
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].timestamp.Before(entries[j].timestamp)
-	})
-
-	// Remove oldest entries to get under the limit
-	toRemove := len(entries) - maxSize
-	if toRemove > 0 {
-		for i := 0; i < toRemove; i++ {
-			m.Delete(entries[i].key)
-		}
-		s.logger.Warnf("[enforceMapSizeLimit] removed %d oldest %s entries to enforce size limit of %d",
-			toRemove, mapType, maxSize)
-	}
+		s.blockPeerMap.Len(), s.subtreePeerMap.Len())
 }
 
 // startPeerMapCleanup starts the periodic cleanup goroutine
@@ -1136,28 +1086,28 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 	return false
 }
 
-// storePeerMapEntry stores a peer entry in the specified map
-func (s *Server) storePeerMapEntry(peerMap *sync.Map, hash string, from string, timestamp time.Time) {
-	entry := peerMapEntry{
+// storePeerMapEntry stores a peer entry in the specified map. The map is
+// bounded inline (issue 1409): at capacity the OLDEST entry is evicted, so a
+// distinct-hash flood cannot grow memory without bound between sweeps, and
+// cannot pre-emptively suppress attribution for the announcement arriving
+// next. A flood after an honest announcement can still age it out before
+// validation reports on it (issue 1503), and a peer can age out its own
+// attribution the same way to escape the invalid-block ban path (issue 1433).
+func (s *Server) storePeerMapEntry(peerMap *cappedPeerMap, hash string, from string, timestamp time.Time) {
+	peerMap.Store(hash, peerMapEntry{
 		peerID:    from,
 		timestamp: timestamp,
-	}
-	peerMap.Store(hash, entry)
+	})
 }
 
-// getPeerFromMap retrieves and validates a peer entry from a map
-func (s *Server) getPeerFromMap(peerMap *sync.Map, hash string, mapType string) (string, error) {
-	peerIDVal, ok := peerMap.Load(hash)
+// getPeerFromMap retrieves a peer entry from a map
+func (s *Server) getPeerFromMap(peerMap *cappedPeerMap, hash string, mapType string) (string, error) {
+	entry, ok := peerMap.Load(hash)
 	if !ok {
 		s.logger.Warnf("[getPeerFromMap] no peer found for %s %s", mapType, hash)
 		return "", errors.NewNotFoundError("no peer found for %s %s", mapType, hash)
 	}
 
-	entry, ok := peerIDVal.(peerMapEntry)
-	if !ok {
-		s.logger.Errorf("[getPeerFromMap] peer entry for %s %s is not a peerMapEntry: %v", mapType, hash, peerIDVal)
-		return "", errors.NewInvalidArgumentError("peer entry for %s %s is not a peerMapEntry", mapType, hash)
-	}
 	return entry.peerID, nil
 }
 

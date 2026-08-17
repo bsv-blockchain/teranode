@@ -339,6 +339,12 @@ func TestBlockAssembly_Start(t *testing.T) {
 		// Mock GetFSMCurrentState for parent preservation logic in Start()
 		runningState := blockchain.FSMStateRUNNING
 		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+		// Start's new checkCoinbaseDivergenceOnStart hook probes the canonical
+		// coinbase at the resumed tip height (1) via GetBlockByHeight; this bare
+		// mock carries no real chain data, so return not-found and exercise the
+		// documented non-fatal path (check-error is logged and swallowed, Start
+		// still succeeds).
+		blockchainClient.On("GetBlockByHeight", mock.Anything, uint32(1)).Return(nil, errors.ErrNotFound)
 
 		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)

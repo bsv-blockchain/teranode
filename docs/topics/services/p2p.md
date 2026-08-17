@@ -148,7 +148,7 @@ The P2P server's `Init` function is in charge of server setup:
 
 2. **Asset HTTP Address Configuration**:
 
-    - Retrieves the Asset HTTP Address URL from the configuration using `gocore.Config().GetURL("asset_httpAddress")`.
+    - Retrieves the Asset HTTP Address URL from the settings, preferring `Asset.HTTPPublicAddress` and falling back to `Asset.HTTPAddress`.
 
 3. **Block Validation Client Initialization**:
 
@@ -170,10 +170,11 @@ The `Start` function is responsible for commencing the P2P service:
 
     - Sets up a health check endpoint (`/health`) that responds with "OK".
     - Adds a WebSocket endpoint (`/p2p-ws`) for real-time communication via `s.HandleWebSocket`.
+    - Configures HTTP server timeouts (read header, read, write, idle) so slow or stalled clients cannot hold plain HTTP exchanges (or incomplete WebSocket upgrades) open indefinitely. Established WebSocket connections are exempt: connection deadlines are cleared on upgrade, so post-upgrade liveness is handled by separate WebSocket hardening, not these timeouts.
 
 3. **Start HTTP Server**:
 
-    - Initiates the HTTP server using a goroutine, which is executed via `s.StartHttp`.
+    - Starts the HTTP server via `s.StartHTTP`, which binds the listener synchronously (so configuration errors fail startup) and then serves in a goroutine.
 
 4. **PubSub Topics Setup**:
 
@@ -600,6 +601,9 @@ Within the P2P service, notifications are sent to WebSocket clients using the fo
 ├── Server.go                           - Main server logic for the P2P service, peer interactions, and network handling
 ├── Server_test.go                      - Unit tests for Server.go functionalities
 ├── server_helpers.go                   - Helper functions for server message handling
+├── publish_gate.go                     - Declarative per-FSM-state allow-list gating all outbound pubsub publishes
+├── publish_gate_test.go                - Unit tests for the outbound publish gate
+├── metrics.go                          - Prometheus metrics for the P2P service
 ├── Client.go                           - Client-side API for interacting with the P2P service
 ├── Client_test.go                      - Unit tests for Client.go functionalities
 ├── Interface.go                        - Defines the P2P service interface

@@ -146,8 +146,8 @@ type Server struct {
 	invalidSubtreeTopicName           string                         // Kafka topic for invalid subtrees
 	nodeStatusTopicName               string                         // pubsub topic for node status messages
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map                       // Map to track which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry)
-	subtreePeerMap                    sync.Map                       // Map to track which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry)
+	blockPeerMap                      cappedPeerMap                  // Which peer sent each block (canonical hash -> peerMapEntry); insert-capped, issue 1409
+	subtreePeerMap                    cappedPeerMap                  // Which peer sent each subtree (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -156,8 +156,7 @@ type Server struct {
 
 	// Cleanup configuration
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
-	peerMapMaxSize       int           // Maximum number of entries in peer maps
-	peerMapTTL           time.Duration // Time-to-live for peer map entries
+	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
@@ -455,19 +454,11 @@ func NewServer(
 		nodeStatusTopicName:               fmt.Sprintf("%s-%s", topicPrefix, nodeStatusTopic),
 		topicPrefix:                       topicPrefix,
 		startTime:                         time.Now(),
-
-		// Initialize cleanup configuration with defaults
-		peerMapMaxSize: defaultPeerMapMaxSize,
-		peerMapTTL:     defaultPeerMapTTL,
 	}
 
-	// Override defaults with settings if provided
-	if tSettings.P2P.PeerMapMaxSize > 0 {
-		p2pServer.peerMapMaxSize = tSettings.P2P.PeerMapMaxSize
-	}
-	if tSettings.P2P.PeerMapTTL > 0 {
-		p2pServer.peerMapTTL = tSettings.P2P.PeerMapTTL
-	}
+	initPrometheusMetrics()
+
+	p2pServer.applyPeerMapLimits(tSettings)
 
 	// Use the centralized peer registry hosted by the blockchain service.
 	// Loading, persistence, ban scoring, and TTL/LRU eviction all live there now.
@@ -557,6 +548,88 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// applyPeerMapLimits resolves the attribution maps' size cap and TTL, taking
+// the configured values when set and the service defaults otherwise, and
+// applies the cap to both maps. The maps are bounded at insert (issue 1409);
+// the cap they enforce is the authoritative one, which is why it is not also
+// mirrored on Server. This lives apart from NewServer so that the wiring can
+// be tested against a bare Server literal, needing a logger but none of the
+// service's other dependencies — it announces what it resolved, so the logger
+// is load-bearing rather than incidental.
+//
+// Neither value depends on this call having happened: an unconfigured cap
+// falls back to defaultPeerMapMaxSize inside cappedPeerMap, and an
+// unconfigured TTL falls back to defaultPeerMapTTL in peerMapTTLOrDefault.
+// Forgetting the call therefore costs configurability, not the bound and not
+// attribution.
+func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
+	maxSize := defaultPeerMapMaxSize
+	s.peerMapTTL = defaultPeerMapTTL
+
+	if tSettings.P2P.PeerMapMaxSize > 0 {
+		maxSize = tSettings.P2P.PeerMapMaxSize
+	}
+
+	if tSettings.P2P.PeerMapTTL > 0 {
+		s.peerMapTTL = tSettings.P2P.PeerMapTTL
+	}
+
+	s.announcePeerMapLimits(tSettings, maxSize)
+
+	s.blockPeerMap.setMaxSize(maxSize)
+	s.subtreePeerMap.setMaxSize(maxSize)
+}
+
+// announcePeerMapLimits logs the two ways a configured value differs from what
+// the node ran before these keys were wired.
+//
+// Until this change the three p2p_peer_map_* keys carried struct tags but were
+// never read, so every deployment ran the constants no matter what its config
+// said. An operator who followed the reference docs — which advertised
+// 100000/30m/5m — has had dead lines that now take effect on the next restart,
+// at a higher per-entry cost than the sync.Map this replaced. A silent 10x
+// growth in the attribution maps on a change whose purpose is bounding them is
+// the kind of thing that gets diagnosed as a leak three weeks later, so say it
+// at startup instead.
+//
+// The other direction is a value coerced upwards: there is no unbounded mode
+// here, but the adjacent p2p_peer_registry_max_size documents 0 as "disable
+// enforcement", so an operator can reasonably set 0 expecting that and get a
+// bound they did not ask for. A silently-coerced value looks exactly like a
+// value that was never read, which is the bug this change just finished fixing.
+func (s *Server) announcePeerMapLimits(tSettings *settings.Settings, maxSize int) {
+	if tSettings.P2P.PeerMapMaxSize <= 0 {
+		s.logger.Infof("[applyPeerMapLimits] p2p_peer_map_max_size=%d is not a usable cap; using the %d default — there is no unbounded mode",
+			tSettings.P2P.PeerMapMaxSize, defaultPeerMapMaxSize)
+	} else if maxSize > defaultPeerMapMaxSize {
+		s.logger.Warnf("[applyPeerMapLimits] p2p_peer_map_max_size=%d exceeds the %d default; this key was inert before and is now read, so check the value is intended — it also lengthens the cleanup sweep's locked walk",
+			maxSize, defaultPeerMapMaxSize)
+	}
+
+	if s.peerMapTTL > defaultPeerMapTTL {
+		s.logger.Warnf("[applyPeerMapLimits] p2p_peer_map_ttl=%s exceeds the %s default; this key was inert before and is now read, so check the value is intended",
+			s.peerMapTTL, defaultPeerMapTTL)
+	}
+
+	if tSettings.P2P.PeerMapCleanupInterval > defaultPeerMapCleanupInterval {
+		s.logger.Warnf("[applyPeerMapLimits] p2p_peer_map_cleanup_interval=%s exceeds the %s default; this key was inert before and is now read, so check the value is intended",
+			tSettings.P2P.PeerMapCleanupInterval, defaultPeerMapCleanupInterval)
+	}
+}
+
+// peerMapTTLOrDefault returns the attribution TTL, falling back to
+// defaultPeerMapTTL when it was never configured. A zero TTL is not "expire
+// nothing" but "expire everything": the sweep's cutoff would land on now, so
+// every announcement would be gone before the block it names finishes
+// validating, and the invalid-block ban path would find nobody to blame.
+func (s *Server) peerMapTTLOrDefault() time.Duration {
+	if s.peerMapTTL <= 0 {
+		return defaultPeerMapTTL
+	}
+
+	return s.peerMapTTL
+}
+
 // httpServeError returns the error the HTTP serve goroutine exited with, or nil
 // if the HTTP server is (still) serving or was shut down gracefully.
 func (s *Server) httpServeError() error {
@@ -611,24 +684,29 @@ func (s *Server) Init(ctx context.Context) (err error) {
 //
 // Returns an error if any component fails to start, or nil on successful startup.
 
+// HTTP server timeouts for the p2p HTTP surface. They bound every phase of a
+// plain HTTP exchange (e.g. /health) plus the request/header/idle phases of a
+// /p2p-ws connection that never completes its upgrade. They do NOT bound an
+// established /p2p-ws stream: net/http clears the connection deadlines on
+// Hijack (and gorilla/websocket clears them again on upgrade), so post-upgrade
+// liveness (read deadlines, ping/pong, connection caps) is separate websocket
+// hardening work.
+const (
+	httpReadHeaderTimeout = 10 * time.Second
+	httpReadTimeout       = 30 * time.Second
+	httpWriteTimeout      = 30 * time.Second
+	httpIdleTimeout       = 120 * time.Second
+)
+
 func (s *Server) setupHTTPServer() *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
 
-	// Bound every non-hijacked phase of a request (all four timeouts, mirroring
-	// the asset service): without ReadHeaderTimeout a client dribbling header
-	// bytes holds an fd and a net/http goroutine forever (slow-loris), and
-	// without ReadTimeout the same applies to a withheld request body - after
-	// the headers the header deadline is disarmed, and net/http's post-handler
-	// body drain (e.g. GET /health with an unsent Content-Length byte) blocks
-	// with no deadline. Neither is counted against the websocket connection
-	// cap. Hijacked websocket connections are unaffected - net/http clears its
-	// deadlines on hijack and the websocket path manages its own.
-	e.Server.ReadHeaderTimeout = 10 * time.Second
-	e.Server.ReadTimeout = 30 * time.Second
-	e.Server.WriteTimeout = 120 * time.Second
-	e.Server.IdleTimeout = 120 * time.Second
+	e.Server.ReadHeaderTimeout = httpReadHeaderTimeout
+	e.Server.ReadTimeout = httpReadTimeout
+	e.Server.WriteTimeout = httpWriteTimeout
+	e.Server.IdleTimeout = httpIdleTimeout
 
 	e.Use(middleware.Recover())
 
@@ -746,6 +824,17 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		s.registryBatcher.start()
 	}
 
+	// Start the peer-map sweep before the topic subscriptions that feed it, for
+	// the same reason. The gossip handlers below insert into the attribution
+	// maps and the reputation and IP-ban caches, and subscribeToTopic
+	// deliberately drains its channel without watching ctx.Done, so its workers
+	// outlive a failed Start. Starting the sweep afterwards would leave any
+	// early return between here and there — the blockchain Subscribe below —
+	// with those maps being fed and nothing expiring them or reading the
+	// at-capacity diagnostic. The attribution maps are bounded at insert either
+	// way (issue 1409), but the caches that share this sweep are TTL-only.
+	s.startPeerMapCleanup(ctx)
+
 	// Subscribe to all topics
 	s.subscribeToTopic(ctx, s.blockTopicName, s.handleBlockTopic)
 	s.subscribeToTopic(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
@@ -766,9 +855,6 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// disconnect any pre-existing banned peers at startup
 	go s.disconnectPreExistingBannedPeers(ctx)
-
-	// Start periodic cleanup of peer maps
-	s.startPeerMapCleanup(ctx)
 
 	// Peer registry cache save and TTL/LRU eviction now live in the centralized
 	// blockchain peer registry service. The periodic cleanup driver itself is a
@@ -893,16 +979,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			return nil
 		}
 
-		var (
-			syncing bool
-			err     error
-		)
-
-		if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-			return err
-		}
-
-		if syncing {
+		if !s.canSendToNetwork(ctx, topicKindRejectedTx) {
 			return nil
 		}
 
@@ -945,7 +1022,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
-		if err = s.P2PClient.Publish(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
 		}
 
@@ -1091,11 +1168,20 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		return
 	}
 
+	// Bound the peer-controlled display strings before they reach WebSocket
+	// clients or the peer registry. Everything below this point works with the
+	// sanitized values.
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
+
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 
 	notificationBestHeight := nodeStatusMessage.BestHeight
-	notificationBestBlockHash := nodeStatusMessage.BestBlockHash
+	// sanitizeAdvertisedTip below replaces this with a parsed hash, but only
+	// when BestHeight > 0; otherwise this raw string is what reaches WebSocket
+	// clients. It is bounded here rather than in sanitizeNodeStatusMessage so
+	// that sanitizeAdvertisedTip still sees the value the peer actually sent.
+	notificationBestBlockHash := sanitizePeerHexString(nodeStatusMessage.BestBlockHash, maxPeerHexStringLen)
 	sanitizedBestHeight := nodeStatusMessage.BestHeight
 	var sanitizedBestBlockHash *chainhash.Hash
 	sanitizedTipOK := false
@@ -1264,7 +1350,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
-	if err = s.P2PClient.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
+	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
 		return errors.NewError("blockMessage - publish error", err)
 	}
 
@@ -1373,10 +1459,13 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		clientName = s.settings.ClientName
 	}
 
-	// Get miner name from the best block metadata
+	// Get miner name from the best block metadata. This is extracted from the
+	// coinbase scriptSig, so it is chosen by whoever mined the block rather than
+	// by us - bound it like any other untrusted display string before it is
+	// forwarded to WebSocket clients and published to peers.
 	minerName := ""
 	if bestBlockMeta != nil {
-		minerName = bestBlockMeta.Miner
+		minerName = sanitizePeerDisplayString(bestBlockMeta.Miner, maxPeerDisplayStringLen)
 	}
 
 	// Get block hash string
@@ -1700,7 +1789,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
-	if err = s.P2PClient.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
+	if err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
@@ -1728,7 +1817,7 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
-	if err := s.P2PClient.Publish(ctx, s.subtreeTopicName, msgBytes); err != nil {
+	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {
 		return errors.NewError("subtreeMessage - publish error", err)
 	}
 
@@ -1800,19 +1889,10 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 				continue
 			}
 
-			var (
-				syncing bool
-				err     error
-			)
-
-			if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-				ctxLogger.Errorf("[blockchainSubscriptionListener] error getting blockchain FSM state: %v", err)
-
-				continue
-			}
-
-			// Process PeerFailure notifications even during sync (needed to switch peers on catchup failure)
-			if syncing && notification.Type != model.NotificationType_PeerFailure {
+			// Skip notifications whose outbound announcement is not allowed in
+			// the current FSM state; control notifications (e.g. PeerFailure,
+			// needed to switch peers on catchup failure) always pass.
+			if s.shouldSkipNotification(ctx, notification.Type) {
 				continue
 			}
 
@@ -1977,14 +2057,8 @@ func (s *Server) Stop(ctx context.Context) error {
 	// drives its own TTL/LRU eviction (deferred to PR2 in any case).
 
 	// Clear the peer maps to free memory
-	s.blockPeerMap.Range(func(key, value interface{}) bool {
-		s.blockPeerMap.Delete(key)
-		return true
-	})
-	s.subtreePeerMap.Range(func(key, value interface{}) bool {
-		s.subtreePeerMap.Delete(key)
-		return true
-	})
+	s.blockPeerMap.Clear()
+	s.subtreePeerMap.Clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
 	if len(errs) > 0 {

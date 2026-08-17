@@ -307,7 +307,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	utxoStatus := utxo.CalculateUtxoStatus2(spendingData)
 
 	// check utxo is spendable
-	if spendableIn != 0 && spendableIn > int(s.blockHeight.Load()) {
+	if spendableIn != 0 && spendableIn > int(s.GetBlockHeight()) {
 		utxoStatus = utxo.Status_IMMATURE
 	}
 
@@ -897,7 +897,7 @@ NEXT_BATCH_RECORD:
 			case fields.Utxos:
 				res, err := s.processUTXOs(ctx, &items[idx].Hash, bins)
 				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process utxos", err)
+					items[idx].Err = classifyUTXOReadError(err)
 
 					continue NEXT_BATCH_RECORD // because there was an error processing the utxos.
 				}
@@ -1152,6 +1152,28 @@ func processSubtreeIdxs(bins aerospike.BinMap) ([]int, error) {
 	return res, nil
 }
 
+// classifyUTXOReadError decides what class of error a failed UTXO read carries.
+//
+// ErrTxInvalid is a consensus verdict: isUnvalidatablePeerError treats it as a
+// genuine consensus failure, so ValidateBlock persists the block as permanently
+// invalid and flags the peer that served it. Nothing processUTXOs can discover
+// justifies that. It only decodes a record this node wrote itself, so every way
+// it can fail — a torn record, a failed fetch, a cancelled context, a key that
+// would not build — means our own read went wrong, never that the transaction
+// or the peer is at fault.
+//
+// So the rule is to preserve whatever class the error already carries, and hand
+// out a consensus verdict only for an error that already is one. That keeps
+// routine runtime events, above all context cancellation at shutdown, from
+// permanently condemning a valid block.
+func classifyUTXOReadError(err error) error {
+	if errors.Is(err, errors.ErrTxInvalid) {
+		return errors.NewTxInvalidError("could not process utxos", err)
+	}
+
+	return err
+}
+
 // processUTXOs extracts and processes UTXO data from Aerospike bins.
 // This function handles the reconstruction of UTXO spending data from stored
 // binary format, including handling of paginated records for large transactions.
@@ -1178,12 +1200,22 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 
 	utxos, ok := bins[fields.Utxos.String()].([]interface{})
 	if !ok {
-		return nil, errors.NewTxInvalidError("missing utxos")
+		// Every record this store writes carries a utxos bin, so a missing or
+		// wrong-typed one is our own record being malformed — storage damage, not
+		// evidence about the transaction. The extra-record reader classifies the
+		// identical condition the same way.
+		return nil, errors.NewStorageError("[processUTXOs] missing or malformed utxos bin (%T) on %s — torn or partially-applied record", bins[fields.Utxos.String()], txid.String())
 	}
 
 	spendingDatas := make([]*spendpkg.SpendingData, totalUtxos)
 
 	for i, ui := range utxos {
+		if i >= len(spendingDatas) {
+			// The totalUtxos bin disagrees with the stored list, so this record is
+			// torn or mis-keyed. Error rather than index past the end and panic.
+			return nil, errors.NewStorageError("[processUTXOs][%s] record holds more outputs than totalUtxos says (%d of %d) — torn record", txid.String(), i, len(spendingDatas))
+		}
+
 		u, ok := ui.([]uint8)
 		if ok && len(u) == 68 {
 			spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:])
@@ -1242,7 +1274,7 @@ func processConflictingChildren(bins aerospike.BinMap) (conflictingChildren []ch
 	return conflictingChildren, nil
 }
 
-// getAllExtraUTXOs retrieves all UTXOs from child records recursively
+// getAllExtraUTXOs retrieves all UTXOs from the transaction's extra (paginated) child records
 func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, totalExtraRecs int, spendingDatas []*spendpkg.SpendingData) error {
 	if totalExtraRecs <= 0 {
 		return nil
@@ -1274,18 +1306,114 @@ func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, tota
 		// Calculate the base offset for this pagination record
 		baseOffset := recordNum * s.utxoBatchSize
 
-		// Extract UTXOs from the extra record
-		if extraUtxos, ok := extraRecord.Bins[fields.Utxos.String()].([]interface{}); ok {
-			for i, ui := range extraUtxos {
-				if u, ok := ui.([]uint8); ok && len(u) == 68 {
-					spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:])
-					if err != nil {
-						return errors.NewStorageError("failed to parse spending data from extra record", err)
-					}
+		// How many outputs this record must hold. splitIntoBatches gives every
+		// record a full batch except the last, which takes the remainder, so
+		// the transaction's output count fixes the expected length exactly.
+		remaining := len(spendingDatas) - baseOffset
+		if remaining <= 0 {
+			return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record %d starts at offset %d, past the transaction's %d outputs — torn or mis-keyed record", txID.String(), recordNum, baseOffset, len(spendingDatas))
+		}
 
-					spendingDatas[baseOffset+i] = spendingData
-				}
+		expected := min(remaining, s.utxoBatchSize)
+
+		if applyErr := applyExtraRecordBins(txID, recordNum, extraRecord, baseOffset, spendingDatas, expected); applyErr != nil {
+			return applyErr
+		}
+	}
+
+	return nil
+}
+
+// applyExtraRecordBins interprets one fetched extra (paginated) record and
+// writes the spend state it holds into the caller's slice.
+//
+// It is split from the fetch so the interpretation can be tested without an
+// Aerospike container.
+//
+// The nil-record guard is defence in depth rather than the primary handling of
+// a missing extra record. This client version reports an absent key as
+// ErrKeyNotFound, which getAllExtraUTXOs already turns into a storage error
+// before calling here, and it never hands back a nil BinMap (a record whose
+// utxos bin is absent arrives with an empty map, and falls through to the
+// malformed-bin branch below). The guard exists so that a client or wrapper
+// that ever did return a nil record with no error would error here rather than
+// panic on the deref.
+func applyExtraRecordBins(txID *chainhash.Hash, recordNum int, extraRecord *aerospike.Record, baseOffset int, spendingDatas []*spendpkg.SpendingData, expectedCount int) error {
+	if extraRecord == nil || extraRecord.Bins == nil {
+		return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record %d is missing — torn or partially-applied write", txID.String(), recordNum)
+	}
+
+	extraUtxos, ok := extraRecord.Bins[fields.Utxos.String()].([]interface{})
+	if !ok {
+		return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record has a missing or malformed utxos bin (%T) at record %d — torn or partially-applied record", txID.String(), extraRecord.Bins[fields.Utxos.String()], recordNum)
+	}
+
+	return applyExtraRecordUTXOs(txID, recordNum, extraUtxos, baseOffset, spendingDatas, expectedCount)
+}
+
+// applyExtraRecordUTXOs writes the spend state held in one extra (paginated)
+// record into the caller's slice.
+//
+// Whether an output is spent is consensus state, and here "no data" reads as
+// UNSPENT. So anything unexpected in the record fails the read rather than
+// being skipped: silently leaving a slot nil turns a spent output back into a
+// spendable one, and a double-spend of it is then accepted with no error
+// anywhere (issue 1440).
+//
+// Three element shapes are legitimate and must all keep working:
+//
+//   - nil — the output was never entered into the UTXO set because it is
+//     provably unspendable (see utxo.ShouldStoreOutputAsUTXO: OP_FALSE
+//     OP_RETURN in every era, plus bare OP_RETURN and oversized locking
+//     scripts pre-Genesis). GetBinsToStore leaves those slots nil and the
+//     Aerospike client round-trips them as a nil list element, so a large
+//     transaction carrying a data output has nils in its extra records.
+//   - 32 bytes — an unspent output: the utxo hash alone, no spending data.
+//   - 68 bytes — a spent (or frozen) output: 32-byte utxo hash + 36-byte
+//     spending data.
+//
+// All three correctly leave, or set, the caller's slot. Any other length, or a
+// non-nil non-byte element, is a torn or partially-applied record.
+//
+// The element count is checked first, because a short list is the same hazard
+// arriving from the other direction: the loop would simply never visit the
+// missing offsets, leaving those slots nil, and nil reads as UNSPENT. Trailing
+// nils survive the round trip (pinned by TestTrailingNilSlotsSurviveRoundTrip),
+// so a healthy record ending in unspendable outputs still comes back at its
+// full length and exact equality cannot misfire on it.
+func applyExtraRecordUTXOs(txID *chainhash.Hash, recordNum int, extraUtxos []interface{}, baseOffset int, spendingDatas []*spendpkg.SpendingData, expectedCount int) error {
+	if len(extraUtxos) != expectedCount {
+		return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record %d holds %d outputs, expected %d — truncated or over-long record", txID.String(), recordNum, len(extraUtxos), expectedCount)
+	}
+
+	for i, ui := range extraUtxos {
+		offset := baseOffset + i
+		if offset >= len(spendingDatas) {
+			return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record %d holds more outputs than the transaction has (offset %d of %d) — torn or mis-keyed record", txID.String(), recordNum, offset, len(spendingDatas))
+		}
+
+		if ui == nil {
+			// Provably unspendable output, never stored as a UTXO. Slot stays nil.
+			continue
+		}
+
+		u, ok := ui.([]uint8)
+		if !ok {
+			return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record %d output is %T, not bytes, at offset %d — torn or partially-applied record", txID.String(), recordNum, ui, offset)
+		}
+
+		switch len(u) {
+		case 32:
+			// Unspent: hash only, no spending data. Slot stays nil.
+		case 68:
+			spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:])
+			if err != nil {
+				return errors.NewStorageError("failed to parse spending data from extra record", err)
 			}
+
+			spendingDatas[offset] = spendingData
+		default:
+			return errors.NewStorageError("[getAllExtraUTXOs][%s] extra record %d output %d is %d bytes, expected 32 (unspent) or 68 (spent) — torn or short record", txID.String(), recordNum, i, len(u))
 		}
 	}
 

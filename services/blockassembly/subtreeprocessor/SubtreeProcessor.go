@@ -237,6 +237,10 @@ type SubtreeProcessor struct {
 	// resetCh handles requests to reset the processor state
 	resetCh chan *resetBlocks
 
+	// reconcileCoinbasesCh handles requests to create canonical coinbase UTXOs
+	// for a set of gap blocks, without touching any other in-memory state
+	reconcileCoinbasesCh chan reconcileCoinbasesMsg
+
 	// removeTxCh receives transactions to be removed
 	removeTxCh chan chainhash.Hash
 
@@ -423,6 +427,10 @@ var (
 
 	// StateCheckSubtreeProcessor indicates the processor is checking its state
 	StateCheckSubtreeProcessor State = 11
+
+	// StateReconcileCoinbases indicates the processor is creating canonical
+	// coinbase UTXOs to repair a detected coinbase divergence
+	StateReconcileCoinbases State = 12
 )
 
 var StateStrings = map[State]string{
@@ -437,6 +445,7 @@ var StateStrings = map[State]string{
 	StateResetBlocks:           "resetBlocks",
 	StateRemoveTx:              "removeTx",
 	StateCheckSubtreeProcessor: "checkSubtreeProcessor",
+	StateReconcileCoinbases:    "reconcileCoinbases",
 }
 
 var (
@@ -523,6 +532,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		moveForwardBlockChan:         make(chan moveBlockRequest),
 		reorgBlockChan:               make(chan reorgBlocksRequest),
 		resetCh:                      make(chan *resetBlocks),
+		reconcileCoinbasesCh:         make(chan reconcileCoinbasesMsg),
 		removeTxCh:                   make(chan chainhash.Hash, 100),
 		lengthCh:                     make(chan chan int),
 		checkSubtreeProcessorCh:      make(chan chan error),
@@ -875,6 +885,21 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					if resetBlocksMsg.responseCh != nil {
 						resetBlocksMsg.responseCh <- ResetResponse{Err: resetErr}
 					}
+
+					stp.setCurrentRunningState(StateRunning)
+
+				case reconcileMsg := <-stp.reconcileCoinbasesCh:
+					// Panic-safe like the reset/checkSubtreeProcessor handlers above -
+					// without runHandlerWithRecover, a panic here would kill the processor
+					// goroutine (recovered only by the top-level goroutine recover, which
+					// just logs and exits) and leave the caller of ReconcileCoinbases
+					// blocked forever on responseCh.
+					reconcileErr := stp.runHandlerWithRecover("reconcileCoinbases", func() error {
+						stp.setCurrentRunningState(StateReconcileCoinbases)
+						return stp.reconcileCoinbases(reconcileMsg.ctx, reconcileMsg.gapBlocks)
+					})
+
+					reconcileMsg.responseCh <- reconcileErr
 
 					stp.setCurrentRunningState(StateRunning)
 
@@ -1354,7 +1379,13 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 		if err := stp.removeCoinbaseUtxos(ctx, block); err != nil {
 			// no need to error out if the key doesn't exist anyway
 			if !errors.Is(err, errors.ErrTxNotFound) {
-				return errors.NewProcessingError("[SubtreeProcessor][Reset] error deleting utxos for tx %s", block.CoinbaseTx.String(), err)
+				// Identify the block, not its coinbase. removeCoinbaseUtxos
+				// reports a nil coinbase as a processing error, and formatting
+				// that failure with block.CoinbaseTx.String() would panic on
+				// the very nil it just reported -- turning the guard into a
+				// panic one frame further out. moveBackBlock already describes
+				// the block here for the same reason.
+				return errors.NewProcessingError("[SubtreeProcessor][Reset] error deleting coinbase utxos for %s", block.String(), err)
 			}
 		}
 
@@ -1408,7 +1439,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 				// remove all the coinbase transactions we added
 				block := value.(*model.Block)
 				if delErr := stp.removeCoinbaseUtxos(context.Background(), block); delErr != nil {
-					stp.logger.Errorf("[SubtreeProcessor][Reset] error deleting utxos for coinbase tx %s: %v", block.CoinbaseTx.String(), delErr)
+					// Same reason as the moveBack loop above: describe the
+					// block, so a nil-coinbase failure cannot panic the
+					// unwind that is already handling a failure.
+					stp.logger.Errorf("[SubtreeProcessor][Reset] error deleting coinbase utxos for %s: %v", block.String(), delErr)
 				}
 
 				return true
@@ -4053,14 +4087,25 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 
 // removeCoinbaseUtxos removes the coinbase UTXO and its child spends from the UTXO store.
 //
+// The nil block / nil CoinbaseTx guard exists for the rollback paths that call
+// this on the way out of a failure: moveBackBlock during a reorg, and the
+// fast-forward reset unwind, both of which iterate blocks assembled elsewhere.
+// Without the guard a nil coinbase turns a recoverable rollback into a panic
+// inside the processor goroutine. Coinbase-divergence recovery only ever
+// creates coinbases (ReconcileCoinbases -> processCoinbaseUtxos) and never
+// reaches here.
+//
 // Parameters:
 //   - ctx: Context for cancellation
 //   - block: Block containing the coinbase transaction
-//   - subtreeHash: Hash of the subtree containing the coinbase
 //
 // Returns:
 //   - error: Any error encountered during removal
 func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *model.Block) error {
+	if block == nil || block.CoinbaseTx == nil {
+		return errors.NewProcessingError("[SubtreeProcessor][removeCoinbaseUtxos] block or coinbase transaction is nil")
+	}
+
 	// get all child spends of the coinbase, this will lock them in the utxo store
 	// so they cannot be spent while we are processing the reorg
 	childSpendHashes, err := utxostore.GetAndLockChildren(ctx, stp.utxoStore, *block.CoinbaseTx.TxIDChainHash())
