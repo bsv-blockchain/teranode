@@ -81,3 +81,35 @@ func TestP2PPeerMapSettings_DefaultsMatchTheServiceConstants(t *testing.T) {
 	require.Equal(t, 10*time.Minute, s.P2P.PeerMapTTL)
 	require.Equal(t, time.Minute, s.P2P.PeerMapCleanupInterval)
 }
+
+// TestP2PGossipSubMeshProtectionSettings guards the GossipSub Sybil-defence
+// wiring: peer scoring and peer exchange must default to enabled (scoring off
+// with PX on is the spec-violating state that lets Sybil peers capture the
+// mesh), and both keys must actually be read by the loader so operators can
+// override them.
+func TestP2PGossipSubMeshProtectionSettings(t *testing.T) {
+	t.Run("defaults are secure", func(t *testing.T) {
+		for _, key := range []string{"p2p_enable_peer_scoring", "p2p_enable_peer_exchange"} {
+			gocore.Config().Set(key, "")
+		}
+
+		s := NewSettings()
+
+		require.True(t, s.P2P.EnablePeerScoring, "peer scoring must default to enabled (Sybil mesh protection)")
+		require.True(t, s.P2P.EnablePeerExchange, "peer exchange must default to enabled (safe with scoring on)")
+	})
+
+	t.Run("loader reads overrides", func(t *testing.T) {
+		gocore.Config().Set("p2p_enable_peer_scoring", "false")
+		gocore.Config().Set("p2p_enable_peer_exchange", "false")
+		t.Cleanup(func() {
+			gocore.Config().Set("p2p_enable_peer_scoring", "")
+			gocore.Config().Set("p2p_enable_peer_exchange", "")
+		})
+
+		s := NewSettings()
+
+		require.False(t, s.P2P.EnablePeerScoring)
+		require.False(t, s.P2P.EnablePeerExchange)
+	})
+}

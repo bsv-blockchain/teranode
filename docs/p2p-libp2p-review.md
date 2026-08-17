@@ -27,7 +27,7 @@ This review covers the six areas in the brief, plus one additional finding (Stat
 ## 2. Pub/sub topology and relay
 
 ### Implementation
-- The library uses **gossipsub** (`pubsub.NewGossipSub(ctx, h, pubsub.WithPeerExchange(true))` at `go-p2p-message-bus/client.go:127`). Only `WithPeerExchange(true)` is set; every other parameter is libp2p's default. Underlying lib is `go-libp2p-pubsub v0.15.0`.
+- The library uses **gossipsub** (`go-p2p-message-bus` v0.1.23, `go-libp2p-pubsub` v0.17.0). Since v0.1.23 Teranode enables **peer scoring** (`p2p_enable_peer_scoring`, default true): penalty-only defaults with IP-colocation and behaviour penalties, score-gated peer exchange (`AcceptPXThreshold`), and static/bootstrap peers exempt as direct peers. Peer exchange stays on (`p2p_enable_peer_exchange`, default true) — safe now that PX acceptance is score-gated.
 
 ### Mesh parameters (libp2p defaults)
 | Parameter | Default | Note |

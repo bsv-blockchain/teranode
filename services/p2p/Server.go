@@ -411,6 +411,12 @@ func NewServer(
 		EnableNAT:          tSettings.P2P.EnableNAT,
 		EnableMDNS:         tSettings.P2P.EnableMDNS,
 		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
+		// GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
+		// protocol misbehaviour, and gates peer exchange so PRUNE-supplied peer records
+		// from negatively-scored peers are rejected. Static/bootstrap peers are exempt
+		// (registered as direct peers by the bus).
+		EnablePeerScoring:   tSettings.P2P.EnablePeerScoring,
+		DisablePeerExchange: !tSettings.P2P.EnablePeerExchange,
 	}
 
 	if len(advertiseAddresses) > 0 {

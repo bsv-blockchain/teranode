@@ -33,6 +33,8 @@
 | EnableNAT | bool | false | p2p_enable_nat | **CRITICAL** - UPnP/NAT-PMP port mapping (triggers network scanning) |
 | EnableMDNS | bool | false | p2p_enable_mdns | **CRITICAL** - mDNS peer discovery (triggers network scanning) |
 | AllowPrivateIPs | bool | false | p2p_allow_private_ips | **CRITICAL** - Allow RFC1918 private IP connections |
+| EnablePeerScoring | bool | true | p2p_enable_peer_scoring | **CRITICAL** - GossipSub peer scoring (Sybil mesh protection); static/bootstrap peers exempt |
+| EnablePeerExchange | bool | true | p2p_enable_peer_exchange | GossipSub peer exchange (PX); safe with scoring enabled |
 | SyncCoordinatorPeriodicEvaluationInterval | time.Duration | 30s | p2p_sync_coordinator_periodic_evaluation_interval | Sync coordinator evaluation interval |
 | HealthCheckEnabled | bool | true | p2p_health_check_enabled | Enable HTTP availability checking during peer selection |
 | PeerMapMaxSize | int | 10000 | p2p_peer_map_max_size | Maximum entries in peer maps |
