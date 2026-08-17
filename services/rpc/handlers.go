@@ -2281,26 +2281,24 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	s.logger.Debugf("in handleClearBanned")
 
-	var (
-		attempted bool
-		anyFailed bool
-	)
+	// success tracks whether at least one applicable clear leg actually cleared.
+	// A legacy peer service that is configured but absent times out here by
+	// design (#591), so requiring every leg to succeed would fail the whole
+	// command on that expected timeout. Mirror handleSetBan: as long as one leg
+	// clears, report success; only fail when none did.
+	var success bool
 
 	// check if P2P service is available
 	if s.p2pClient != nil {
-		attempted = true
-
 		err := s.p2pClient.ClearBanned(ctx)
 		if err != nil {
-			anyFailed = true
-
 			s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
+		} else {
+			success = true
 		}
 	}
 	// check if legacy peer service is available
 	if s.legacyP2PClient != nil {
-		attempted = true
-
 		// Bound the call so an absent-but-configured legacy service can't stall
 		// the RPC on the parent context (#591).
 		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
@@ -2309,18 +2307,17 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		cancel()
 
 		if err != nil {
-			anyFailed = true
-
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
+		} else {
+			success = true
 		}
 	}
 
-	// clearbanned is a destructive administrative control: an operator who is told
-	// the clear succeeded must be able to trust that no bans persist. So report
-	// failure if any attempted leg failed (e.g. one service returns Unauthenticated
-	// on a key mismatch, leaving its bans in place), or if no ban service was
-	// available at all.
-	if !attempted || anyFailed {
+	// No applicable clear leg succeeded (every attempted leg failed - e.g. the
+	// admin API key is unset or wrong so calls are Unauthenticated - or none was
+	// available). clearbanned is an administrative control, so report the failure
+	// rather than silently returning success.
+	if !success {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInvalidParameter,
 			Message: "Failed to clear banned list",
