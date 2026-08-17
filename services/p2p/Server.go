@@ -148,6 +148,8 @@ type Server struct {
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
 	blockPeerMap                      cappedPeerMap                  // Which peer sent each block (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	subtreePeerMap                    cappedPeerMap                  // Which peer sent each subtree (canonical hash -> peerMapEntry); insert-capped, issue 1409
+	blockSeenHashes                   seenHashCache                  // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic

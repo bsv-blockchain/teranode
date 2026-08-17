@@ -182,6 +182,14 @@ type Server struct {
 	// block can be retried again later if better peers appear.
 	blockCatchupAttempts *ttlcache.Cache[chainhash.Hash, int]
 
+	// peerMaliciousCache is a short-lived cache of IsPeerMalicious verdicts.
+	// Every gossip-driven Kafka message costs two of these checks and each is
+	// a p2p gRPC that fans into a blockchain RPC, so an announcement flood
+	// would otherwise turn into an RPC storm. The TTL is short enough that a
+	// fresh ban still takes effect within seconds. Nil-safe: Server literals
+	// in tests that don't wire it get uncached lookups.
+	peerMaliciousCache *ttlcache.Cache[string, bool]
+
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
 
@@ -391,6 +399,12 @@ func New(
 			// the first failed attempt, so the enqueue-gate's Get checks cannot keep a
 			// block suppressed forever.
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, int](),
+		),
+		peerMaliciousCache: ttlcache.New[string, bool](
+			ttlcache.WithTTL[string, bool](peerMaliciousCacheTTL),
+			// Do not extend the window on reads: a flood of checks for one peer
+			// must not keep serving an ever-staler verdict.
+			ttlcache.WithDisableTouchOnHit[string, bool](),
 		),
 		adaptiveFetch:       af,
 		stats:               gocore.NewStat("blockvalidation"),
@@ -651,6 +665,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	// call Init without initialising it (NewServer always does). Matches Stop().
 	if u.blockCatchupAttempts != nil {
 		go u.blockCatchupAttempts.Start()
+	}
+
+	if u.peerMaliciousCache != nil {
+		go u.peerMaliciousCache.Start()
 	}
 
 	// Start fork manager cleanup routine
@@ -921,8 +939,15 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	shouldConsiderCatchup := u.settings.BlockValidation.UseCatchupWhenBehind && (queueSize > 10 || len(u.blockFoundCh) > 3)
 
 	if shouldConsiderCatchup {
-		// Fetch the block to classify it before deciding on catchup
-		block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+		// Fetch the block to classify it before deciding on catchup. Bound the
+		// fetch: ctx here is the blockFoundCh worker's service-lifetime context,
+		// and this branch is reached exactly when the queue is backed up — a
+		// state an announcement flood creates — so an unbounded fetch would let
+		// a slow peer pin the worker indefinitely. Same budget as the
+		// priority-queue catchup fetch in addBlockToPriorityQueue.
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 30*time.Second)
+		block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+		fetchCancel()
 		if err != nil {
 			if blockFound.errCh != nil {
 				blockFound.errCh <- err
@@ -1111,6 +1136,10 @@ func (u *Server) Stop(ctx context.Context) error {
 	// don't initialise it (NewServer always does). Matches the nil-safe helpers.
 	if u.blockCatchupAttempts != nil {
 		u.blockCatchupAttempts.Stop()
+	}
+
+	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCache.Stop()
 	}
 
 	// Wait for all background tasks in BlockValidation to complete, bounded by the
