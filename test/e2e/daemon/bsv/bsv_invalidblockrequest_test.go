@@ -1,254 +1,292 @@
 package bsv
 
 import (
-	"context"
+	"bytes"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/daemon"
-	"github.com/bsv-blockchain/teranode/settings"
-	helper "github.com/bsv-blockchain/teranode/test/utils"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/test/utils/wirepeer"
 	"github.com/stretchr/testify/require"
 )
 
-// TestBSVInvalidBlockRequest tests invalid block handling across P2P network
+// TestBSVInvalidBlockRequest is the Teranode port of bitcoin-sv's
+// invalidblockrequest.py.
 //
-// Converted from BSV invalidblockrequest.py test
-// Purpose: Test how Teranode nodes handle invalid blocks and validation across P2P network
+// Upstream drives a node through ComparisonTestFramework, feeding it blocks over
+// p2p and asserting the reject each one draws: a block whose transaction list
+// contains a duplicate (RejectResult(16, b'bad-txns-duplicate')), a block whose
+// transaction spends the same outpoint twice
+// (RejectResult(16, b'bad-txns-inputs-duplicate')), and a block whose coinbase
+// pays more than the subsidy (RejectResult(16, b'bad-cb-amount')). Around them it
+// asserts a valid block is requested and becomes the tip.
 //
-// APPROACH: Use proven multi-node P2P pattern + Teranode's CreateTestBlock + ProcessBlock
-// PATTERN: Multiple daemon.NewTestDaemon() + ConnectToPeer() + block validation testing
+// This replaces an earlier port that predates the porting exercise and never
+// passed: it built a three-node P2P ring that could not form under
+// SETTINGS_CONTEXT=test, and none of its subtests actually constructed an invalid
+// block or asserted a rejection reason. See the invalidblockrequest-port-red gap,
+// whose plan this discharges.
 //
-// TEST BEHAVIOR:
-// 1. Create 3 connected Teranode nodes
-// 2. Generate blocks and test valid block acceptance
-// 3. Create invalid blocks with various problems
-// 4. Test P2P validation behavior and error handling
-// 5. Verify consistent rejection across all nodes
+// The three defects are submitted through BlockValidationClient.ProcessBlock
+// rather than over the wire, and that choice is the result of measuring what the
+// wire can carry. Teranode does answer an invalid block with a reject of code
+// RejectInvalid (16, matching upstream), but the reason is the fixed string
+// "block rejected" for every cause (netsync/manager.go PushRejectMsg) - so a wire
+// peer cannot tell bad-txns-duplicate from bad-cb-amount, and asserting over the
+// wire would assert strictly less than asserting the error ProcessBlock returns.
+// See the opaque-block-reject-reason gap. The wire leg below therefore covers the
+// assertion the wire genuinely can carry - that a valid block is requested via
+// getdata and becomes the tip - and the three rejection reasons are asserted
+// where they are distinguishable.
 //
-// This demonstrates block validation using Teranode's native block creation and validation!
+// Reproduced from upstream:
+//   - a valid block is requested via getdata and becomes the chain tip
+//   - a block containing a duplicated transaction is rejected
+//   - a block whose transaction spends the same outpoint twice is rejected
+//   - a block whose coinbase pays more than subsidy + fees is rejected
+//   - each rejected block leaves the chain tip where it was
 func TestBSVInvalidBlockRequest(t *testing.T) {
-	t.Log("Testing BSV invalid block request handling across multiple Teranode nodes...")
+	td := wirepeer.NewLegacyDaemon(t)
+	defer td.Stop(t)
 
-	// Create 3 nodes with P2P enabled (using proven multi-node pattern)
-	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableValidator: true,
-		EnableP2P:       true,
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.Asset.HTTPPort = 18090
-			settings.Validator.UseLocalValidator = true
-		},
-	})
-	defer node1.Stop(t)
+	// Upstream mines block1 for its spendable coinbase and then 100 more blocks to
+	// mature it. The test chain params set CoinbaseMaturity to 1, so two blocks buy
+	// the same thing: block 1's coinbase is spendable once block 2 is on top.
+	require.EqualValues(t, 1, td.Settings.ChainCfgParams.CoinbaseMaturity,
+		"this port mines 2 blocks because maturity is 1; if that changes, mine maturity+1")
 
-	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableValidator: true,
-		EnableP2P:       true,
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.Asset.HTTPPort = 28090
-			settings.Validator.UseLocalValidator = true
-		},
-	})
-	defer node2.Stop(t)
+	td.MineBlocks(t, 2)
 
-	node3 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableValidator: true,
-		EnableP2P:       true,
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.Asset.HTTPPort = 38090
-			settings.Validator.UseLocalValidator = true
-		},
-	})
-	defer node3.Stop(t)
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err, "read block 1")
 
-	// Connect nodes in ring topology (proven pattern)
-	t.Log("Connecting nodes in P2P network...")
-	node1.ConnectToPeer(t, node2)
-	node2.ConnectToPeer(t, node3)
-	node3.ConnectToPeer(t, node1)
+	// Upstream's tx1 (spends block1's coinbase) and tx2 (spends tx1). Both are
+	// valid; the blocks built from them below are what is invalid.
+	tx1 := td.CreateTransaction(t, block1.CoinbaseTx)
+	tx2 := td.CreateTransaction(t, tx1)
 
-	// Test Case 1: Valid Block Acceptance
-	t.Run("valid_block_acceptance", func(t *testing.T) {
-		testValidBlockAcceptance(t, []*daemon.TestDaemon{node1, node2, node3})
+	t.Run("valid_block_requested_via_getdata_and_becomes_tip", func(t *testing.T) {
+		requireValidBlockRequestedAndAccepted(t, td)
 	})
 
-	// Test Case 2: Block Maturation (generate enough blocks for coinbase maturity)
-	t.Run("block_maturation", func(t *testing.T) {
-		testBlockMaturation(t, []*daemon.TestDaemon{node1, node2, node3})
+	t.Run("duplicate_transaction_rejected", func(t *testing.T) {
+		// Upstream mutates a valid 3-transaction block by appending its last
+		// transaction again, which leaves the merkle root - and so the block hash -
+		// unchanged, because the classic merkle tree duplicates the final node to
+		// pad an odd row. That specific malleability is not expressible against a
+		// Teranode block: the merkle root comes from the subtree, so the duplicate
+		// changes the root and the hash. The defect upstream is testing for is the
+		// duplicate itself, and that is what is submitted here.
+		// Caught by subtree validation ("duplicate transaction in subtree at index
+		// N") rather than by model.Block.checkDuplicateTransactions, which enforces
+		// the same rule a layer further in. Asserting the message that actually
+		// comes back keeps the test honest about which check is load-bearing.
+		requireBlockRejected(t, td, "duplicate transaction in subtree", tx1, tx2, tx2)
 	})
 
-	// Test Case 3: Invalid Block with Bad Coinbase Amount
-	t.Run("invalid_coinbase_amount", func(t *testing.T) {
-		testInvalidCoinbaseAmount(t, []*daemon.TestDaemon{node1, node2, node3})
+	t.Run("duplicate_inputs_rejected", func(t *testing.T) {
+		dupInputTx := spendSameOutpointTwice(t, td, tx1)
+
+		// The one place this port reproduces an upstream reason string exactly.
+		// Teranode rejects at the transaction rather than the block, and the reason
+		// comes from GoBDK - the same script engine bitcoin-sv runs - so the string
+		// upstream asserts arrives verbatim.
+		requireBlockRejected(t, td, "bad-txns-inputs-duplicate", dupInputTx)
 	})
 
-	// Test Case 4: Invalid Block Processing
-	t.Run("invalid_block_processing", func(t *testing.T) {
-		testInvalidBlockProcessing(t, []*daemon.TestDaemon{node1, node2, node3})
+	t.Run("bad_coinbase_amount_rejected", func(t *testing.T) {
+		requireBadCoinbaseAmountRejected(t, td)
 	})
-
-	t.Log("BSV invalid block request test completed successfully")
 }
 
-// testValidBlockAcceptance tests that valid blocks are accepted and become chain tip
-func testValidBlockAcceptance(t *testing.T, nodes []*daemon.TestDaemon) {
-	t.Log("Testing valid block acceptance across nodes...")
+// requireValidBlockRequestedAndAccepted is upstream's first TestInstance: a block
+// offered to the node is asked for and becomes the tip.
+//
+// It goes through the wire rather than ProcessBlock because the request half of
+// the assertion only exists there. Teranode does not accept an unrequested block
+// from a peer - peer_server.go disconnects for it - so the exchange is the whole
+// point: announce by inv, wait to be asked, then answer.
+func requireValidBlockRequestedAndAccepted(t *testing.T, td *daemon.TestDaemon) {
+	t.Helper()
 
-	// Generate a valid block on node 0
-	node0 := nodes[0]
-	_, err := node0.CallRPC(node0.Ctx, "generate", []any{1})
-	require.NoError(t, err, "Failed to generate valid block")
+	before := tipHeader(t, td)
 
-	// Wait for P2P propagation using proven helper
-	ctx := context.Background()
-	blockWaitTime := 30 * time.Second
-	expectedHeight := uint32(1)
+	_, block := td.CreateTestBlock(t, blockOf(t, td, before), nextNonce(t))
 
-	// Verify all nodes accept the block
-	for i, node := range nodes {
-		err = helper.WaitForNodeBlockHeight(ctx, node.BlockchainClient, expectedHeight, blockWaitTime)
-		require.NoError(t, err, "Node %d failed to accept valid block", i+1)
-		t.Logf("✅ Node %d accepted valid block", i+1)
-	}
+	p := wirepeer.Connect(t, td)
+	defer p.Close()
 
-	// Verify all nodes have same best block hash
-	bestHashes := make([]string, 0, 3)
-	for i, node := range nodes {
-		header, _, err := node.BlockchainClient.GetBestBlockHeader(ctx)
-		require.NoError(t, err, "Failed to get best block header from node %d", i+1)
-		bestHashes = append(bestHashes, header.Hash().String())
-	}
+	inv := wire.NewMsgInv()
+	require.NoError(t, inv.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, block.Hash())), "build inv")
+	p.Send(t, inv)
 
-	// All nodes should have same best block
-	baseHash := bestHashes[0]
-	for i := 1; i < len(bestHashes); i++ {
-		require.Equal(t, baseHash, bestHashes[i],
-			"Best block hash mismatch: node 1 vs node %d", i+1)
-	}
+	p.WaitForGetDataOf(t, 30*time.Second, block.Hash())
 
-	t.Log("✅ All nodes accepted valid block and have consistent state")
+	p.Send(t, asMsgBlock(t, block))
+
+	require.Eventually(t, func() bool {
+		return tryBestBlockHash(td) == block.Hash().String()
+	}, 30*time.Second, 200*time.Millisecond, "the block the node asked for should have become the tip")
 }
 
-// testBlockMaturation generates enough blocks for coinbase maturity
-func testBlockMaturation(t *testing.T, nodes []*daemon.TestDaemon) {
-	t.Log("Testing block maturation (generating blocks for coinbase maturity)...")
+// asMsgBlock renders a coinbase-only Teranode block as a wire block.
+//
+// It goes through the serialized form rather than copying fields across, so the
+// header encoding stays the node's own. Only coinbase-only blocks are supported:
+// anything else lives in subtrees that would have to be walked to recover the
+// transaction list, which no caller here needs.
+func asMsgBlock(t *testing.T, block *model.Block) *wire.MsgBlock {
+	t.Helper()
 
-	// Generate 100 blocks for coinbase maturity (like BSV test)
-	node0 := nodes[0]
-	_, err := node0.CallRPC(node0.Ctx, "generate", []any{100})
-	require.NoError(t, err, "Failed to generate maturation blocks")
+	require.Empty(t, block.Subtrees, "asMsgBlock only serializes coinbase-only blocks")
 
-	// Wait for all nodes to sync
-	ctx := context.Background()
-	blockWaitTime := 60 * time.Second
-	expectedHeight := uint32(101) // 1 + 100
+	raw := block.Header.Bytes()
+	raw = append(raw, 0x01) // transaction count, as a single-byte varint
+	raw = append(raw, block.CoinbaseTx.Bytes()...)
 
-	for i, node := range nodes {
-		err = helper.WaitForNodeBlockHeight(ctx, node.BlockchainClient, expectedHeight, blockWaitTime)
-		require.NoError(t, err, "Node %d failed to reach maturation height", i+1)
-		t.Logf("✅ Node %d reached height %d", i+1, expectedHeight)
-	}
+	msg := &wire.MsgBlock{}
+	require.NoError(t, msg.Bsvdecode(bytes.NewReader(raw), wire.ProtocolVersion, wire.BaseEncoding),
+		"decode the block back as a wire message")
 
-	t.Log("✅ All nodes reached coinbase maturation height")
+	return msg
 }
 
-// testInvalidCoinbaseAmount tests handling of blocks with invalid coinbase reward
-func testInvalidCoinbaseAmount(t *testing.T, nodes []*daemon.TestDaemon) {
-	t.Log("Testing invalid block with bad coinbase amount...")
+// requireBlockRejected builds a block containing txs on top of the current tip,
+// submits it, and asserts it is refused for wantReason and leaves the tip alone.
+//
+// The tip check is upstream's implicit assertion throughout: every rejected
+// TestInstance is followed by the next one building on the same parent, which
+// only holds if the rejected block never became the tip.
+func requireBlockRejected(t *testing.T, td *daemon.TestDaemon, wantReason string, txs ...*bt.Tx) {
+	t.Helper()
 
-	node0 := nodes[0]
-	ctx := context.Background()
+	before := tipHeader(t, td)
 
-	// Get the current best block to build on
-	currentHeight, _, err := node0.BlockchainClient.GetBestHeightAndTime(ctx)
-	require.NoError(t, err, "Failed to get current height")
+	_, block := td.CreateTestBlock(t, blockOf(t, td, before), nextNonce(t), txs...)
 
-	// Get the previous block to use as parent
-	previousBlock, err := node0.BlockchainClient.GetBlockByHeight(ctx, currentHeight)
-	require.NoError(t, err, "Failed to get previous block")
+	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block, block.Height, "", "legacy", 0)
+	require.Error(t, err, "block should have been rejected")
+	require.Contains(t, err.Error(), wantReason,
+		"block was rejected, but not for the reason this port is asserting")
 
-	t.Logf("Creating invalid block on top of height %d", currentHeight)
-
-	// Create a block with invalid coinbase amount using Teranode's CreateTestBlock
-	// Note: We'll create a normal block first, then try to process an invalid one
-	_, validBlock := node0.CreateTestBlock(t, previousBlock, 12345) // Empty block with just coinbase
-
-	// Try to process the valid block first to ensure our setup works
-	err = node0.BlockValidationClient.ProcessBlock(ctx, validBlock, validBlock.Height, "", "legacy", 0)
-	require.NoError(t, err, "Valid block should be accepted")
-
-	t.Log("✅ Valid block was accepted, now testing invalid scenarios...")
-
-	// For now, we'll test that the validation system works
-	// The actual invalid coinbase creation would require more complex block manipulation
-	// which we can implement in a follow-up iteration
-
-	t.Log("✅ Block validation system is working correctly")
+	requireTipUnchanged(t, td, before)
 }
 
-// testInvalidBlockProcessing tests various invalid block scenarios
-func testInvalidBlockProcessing(t *testing.T, nodes []*daemon.TestDaemon) {
-	t.Log("Testing invalid block processing scenarios...")
+// requireBadCoinbaseAmountRejected is upstream's block3: a coinbase-only block
+// whose coinbase claims 100 coins where the subsidy allows 50.
+//
+// It is built by hand rather than through requireBlockRejected because the
+// coinbase is what has to be wrong, and CreateTestBlock always builds a correct
+// one. With no other transactions the merkle root is just the coinbase hash, so
+// rewriting the output means recomputing the root and re-mining the header.
+func requireBadCoinbaseAmountRejected(t *testing.T, td *daemon.TestDaemon) {
+	t.Helper()
 
-	node0 := nodes[0]
-	ctx := context.Background()
+	before := tipHeader(t, td)
 
-	// Get current state
-	currentHeight, _, err := node0.BlockchainClient.GetBestHeightAndTime(ctx)
-	require.NoError(t, err, "Failed to get current height")
+	_, block := td.CreateTestBlock(t, blockOf(t, td, before), nextNonce(t))
 
-	// Get a block to work with
-	block1, err := node0.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err, "Failed to get block 1")
+	require.Len(t, block.CoinbaseTx.Outputs, 1, "expected a single-output coinbase to inflate")
+	block.CoinbaseTx.Outputs[0].Satoshis = 100e8 // Too high, as upstream puts it.
 
-	// Create a transaction spending the coinbase
-	parentTx := bt.NewTx()
-	err = parentTx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      block1.CoinbaseTx.TxIDChainHash(),
+	block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
+	remine(block)
+
+	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block, block.Height, "", "legacy", 0)
+	require.Error(t, err, "an over-paying coinbase should have been rejected")
+	require.Contains(t, err.Error(), "is greater than the fees + block subsidy",
+		"block was rejected, but not for the coinbase amount")
+
+	requireTipUnchanged(t, td, before)
+}
+
+// spendSameOutpointTwice builds upstream's duplicate-input transaction: the same
+// outpoint appears in two inputs.
+//
+// Both inputs are signed properly, so the only rule the transaction breaks is the
+// one under test. Appending a copy of an already-signed input would work too, but
+// would leave the second signature invalid and risk the block being refused for
+// that instead.
+func spendSameOutpointTwice(t *testing.T, td *daemon.TestDaemon, parent *bt.Tx) *bt.Tx {
+	t.Helper()
+
+	outpoint := &bt.UTXO{
+		TxIDHash:      parent.TxIDChainHash(),
 		Vout:          0,
-		LockingScript: block1.CoinbaseTx.Outputs[0].LockingScript,
-		Satoshis:      block1.CoinbaseTx.Outputs[0].Satoshis,
-	})
-	require.NoError(t, err, "Failed to create parent transaction")
-
-	// Add output
-	err = parentTx.AddP2PKHOutputFromPubKeyBytes(node0.GetPrivateKey(t).PubKey().Compressed(), 10000)
-	require.NoError(t, err, "Failed to add output")
-
-	// Sign transaction
-	err = parentTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: node0.GetPrivateKey(t)})
-	require.NoError(t, err, "Failed to sign transaction")
-
-	// Create a child transaction
-	childTx := node0.CreateTransaction(t, parentTx)
-
-	// Get the current best block to build on
-	bestBlock, err := node0.BlockchainClient.GetBlockByHeight(ctx, currentHeight)
-	require.NoError(t, err, "Failed to get best block")
-
-	// Create a test block with the transactions
-	_, testBlock := node0.CreateTestBlock(t, bestBlock, 54321, parentTx, childTx)
-
-	// Try to process the block - this should work if transactions are valid
-	err = node0.BlockValidationClient.ProcessBlock(ctx, testBlock, testBlock.Height, "", "legacy", 0)
-	if err != nil {
-		t.Logf("Block validation failed as expected: %v", err)
-		t.Log("✅ Block validation correctly rejected invalid block")
-	} else {
-		t.Log("✅ Block validation accepted valid block")
+		LockingScript: parent.Outputs[0].LockingScript,
+		Satoshis:      parent.Outputs[0].Satoshis,
 	}
 
-	// Verify network state remains consistent
-	for i, node := range nodes {
-		height, _, err := node.BlockchainClient.GetBestHeightAndTime(ctx)
-		require.NoError(t, err, "Failed to get height from node %d", i+1)
-		t.Logf("Node %d height: %d", i+1, height)
-	}
+	tx := bt.NewTx()
+	require.NoError(t, tx.FromUTXOs(outpoint), "add first input")
+	require.NoError(t, tx.FromUTXOs(outpoint), "add the same outpoint a second time")
 
-	t.Log("✅ Invalid block processing test completed")
+	require.NoError(t, tx.AddP2PKHOutputFromPubKeyBytes(
+		td.GetPrivateKey(t).PubKey().Compressed(), parent.Outputs[0].Satoshis/2), "add output")
+
+	require.NoError(t, tx.FillAllInputs(td.Ctx,
+		&unlocker.Getter{PrivateKey: td.GetPrivateKey(t)}), "sign both inputs")
+
+	return tx
+}
+
+// tipHeader returns the current best block header.
+func tipHeader(t *testing.T, td *daemon.TestDaemon) *model.BlockHeader {
+	t.Helper()
+
+	header, _, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
+	require.NoError(t, err, "read best block header")
+
+	return header
+}
+
+// blockOf resolves a header to the full block, which CreateTestBlock needs as the
+// parent.
+func blockOf(t *testing.T, td *daemon.TestDaemon, header *model.BlockHeader) *model.Block {
+	t.Helper()
+
+	block, err := td.BlockchainClient.GetBlock(td.Ctx, header.Hash())
+	require.NoError(t, err, "read block %s", header.Hash())
+
+	return block
+}
+
+// requireTipUnchanged asserts the tip is still want, and stays there. A block that
+// is rejected synchronously could still be adopted a moment later by an
+// asynchronous path, which a single read would miss.
+func requireTipUnchanged(t *testing.T, td *daemon.TestDaemon, want *model.BlockHeader) {
+	t.Helper()
+
+	require.Never(t, func() bool {
+		return tryBestBlockHash(td) != want.Hash().String()
+	}, 2*time.Second, 200*time.Millisecond, "a rejected block must not become the tip")
+}
+
+// nextNonce hands out a distinct starting nonce per block so two blocks built on
+// the same parent in one run cannot collide.
+func nextNonce(t *testing.T) uint32 {
+	t.Helper()
+
+	nonceSeq++
+
+	return nonceSeq
+}
+
+var nonceSeq uint32 = 10000
+
+// remine advances the nonce until the header meets the target, which is what
+// CreateTestBlock does after assembling a block and what any edit to the header
+// invalidates.
+func remine(block *model.Block) {
+	for {
+		if ok, _, _ := block.Header.HasMetTargetDifficulty(); ok {
+			return
+		}
+
+		block.Header.Nonce++
+	}
 }
