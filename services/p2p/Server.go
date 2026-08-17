@@ -150,6 +150,7 @@ type Server struct {
 	subtreePeerMap                    cappedPeerMap                  // Which peer sent each subtree (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	blockSeenHashes                   seenHashCache                  // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
 	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -1311,6 +1312,18 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 	}
 
 	ctxLogger := s.logger.WithTraceContext(ctx)
+
+	// A blockchain-subscription reconnect replays the current tip notification
+	// (sendInitialNotification / the client's lastBlockNotification replay), so
+	// a flapping blockchain stream would re-gossip the same hash with a fresh
+	// seqno — a replay to peers that suppress and spam-score repeats. Suppress
+	// consecutive duplicates only: a reorg away and back changes the announced
+	// hash in between and still gets through.
+	if last := s.lastAnnouncedBlockHash.Load(); last != nil && last.IsEqual(hash) {
+		ctxLogger.Debugf("[handleBlockNotification] suppressing repeat announcement of current tip %s", hash.String())
+		return nil
+	}
+
 	var msgBytes []byte
 
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
@@ -1341,6 +1354,8 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
 		return errors.NewError("blockMessage - publish error", err)
 	}
+
+	s.lastAnnouncedBlockHash.Store(hash)
 
 	// Also send a node_status update when best block changes
 	if err = s.handleNodeStatusNotification(ctx); err != nil {
@@ -2044,9 +2059,11 @@ func (s *Server) Stop(ctx context.Context) error {
 	// Peer registry cleanup ticker is gone — the centralized blockchain registry
 	// drives its own TTL/LRU eviction (deferred to PR2 in any case).
 
-	// Clear the peer maps to free memory
+	// Clear the peer maps and seen-hash caches to free memory
 	s.blockPeerMap.Clear()
 	s.subtreePeerMap.Clear()
+	s.blockSeenHashes.Clear()
+	s.subtreeSeenHashes.Clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
 	if len(errs) > 0 {

@@ -40,6 +40,8 @@ type Server struct {
     topicPrefix                       string             // Chain identifier prefix for topic validation
     blockPeerMap                      cappedPeerMap      // Which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
     subtreePeerMap                    cappedPeerMap      // Which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
+    blockSeenHashes                   seenHashCache      // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+    subtreeSeenHashes                 seenHashCache      // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Stateless peer selection logic
@@ -476,6 +478,8 @@ Records bytes downloaded from a peer via HTTP (typically from their DataHub).
 
 - `handleBlockTopic`: Handles incoming block messages and validates block announcements.
 - `handleSubtreeTopic`: Handles incoming subtree messages and processes subtree data.
+
+Both announcement handlers deduplicate by hash before publishing to Kafka: within a short TTL only the first few distinct announcers of a hash are forwarded (keeping block validation's alternative-source failover fed), and a peer that keeps re-announcing the same hash past a small tolerance accrues `spam` ban score. The Kafka publish is non-blocking; announcements dropped under producer backpressure stay retryable by later announcements of the same hash.
 - `handleRejectedTxTopic`: Handles rejected transaction notifications from peers.
 - `handleNodeStatusTopic`: Handles incoming node status update messages.
 - `processInvalidBlockMessage`: Processes notifications about invalid blocks from Kafka and bans the sending peer.

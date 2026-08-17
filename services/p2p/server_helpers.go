@@ -143,18 +143,20 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// ingest amplification). GossipSub only dedups on message ID (sender +
 	// seqno), so byte-identical announcements with fresh seqnos arrive as new
 	// messages, and each publish below is amplified downstream into gRPC
-	// round-trips, a store lookup and a peer-controlled HTTP fetch. The peer
-	// bookkeeping above still ran, so registry state and ban attribution stay
-	// fresh for duplicates. A peer that keeps re-announcing the same hash past
-	// the reorg tolerance is scored with ReasonSpam.
-	if duplicate, peerRepeats := s.blockSeenHashes.Check(hash.String(), fromID, now); duplicate {
-		if peerRepeats > seenHashSpamRepeatTolerance {
-			s.logger.Warnf("[handleBlockTopic] peer %s re-announced block %s %d times within the seen-hash TTL, applying spam ban score", fromID, hash.String(), peerRepeats)
-			s.applyBanScore(fromID, ReasonSpam)
-		}
+	// round-trips, a store lookup and a peer-controlled HTTP fetch. Only the
+	// first few DISTINCT announcers per hash are published, keeping block
+	// validation's alternative-source failover fed; the peer bookkeeping above
+	// still ran, so registry state and ban attribution stay fresh for
+	// suppressed announcements. A peer that keeps re-announcing the same hash
+	// past the tolerance is scored with ReasonSpam.
+	publish, peerRepeats := s.blockSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > seenHashSpamRepeatTolerance {
+		s.logger.Warnf("[handleBlockTopic] peer %s re-announced block %s %d times within the seen-hash TTL, applying spam ban score", fromID, hash.String(), peerRepeats)
+		s.applyBanScore(fromID, ReasonSpam)
+	}
 
+	if !publish {
 		s.logger.Debugf("[handleBlockTopic] suppressing duplicate announcement of block %s from peer %s", hash.String(), fromID)
-
 		return
 	}
 
@@ -171,18 +173,19 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.blockSeenHashes.PublishFailed(hash.String())
 			s.logger.Errorf("[handleBlockTopic] error marshaling KafkaBlockTopicMessage: %v", err)
 			return
 		}
 
 		// Non-blocking publish: a blocking send here would let broker
-		// backpressure stall the whole gossip worker pool. On a drop, forget
-		// the hash so a later announcement of it can retry the publish.
+		// backpressure stall the whole gossip worker pool. On a drop, return
+		// the publish grant so a later announcement of the hash can retry.
 		if !s.blocksKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
 		}) {
-			s.blockSeenHashes.Forget(hash.String())
+			s.blockSeenHashes.PublishFailed(hash.String())
 			s.logger.Warnf("[handleBlockTopic] kafka blocks producer backlogged, dropped announcement of block %s from peer %s", hash.String(), fromID)
 		}
 	}
@@ -284,14 +287,14 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	// handleBlockTopic. The check sits AFTER the unhealthy-peer gate above so
 	// an announcement that gate drops does not mark the hash seen and thereby
 	// suppress a later, healthy announcement of the same subtree.
-	if duplicate, peerRepeats := s.subtreeSeenHashes.Check(hash.String(), fromID, now); duplicate {
-		if peerRepeats > seenHashSpamRepeatTolerance {
-			s.logger.Warnf("[handleSubtreeTopic] peer %s re-announced subtree %s %d times within the seen-hash TTL, applying spam ban score", fromID, hash.String(), peerRepeats)
-			s.applyBanScore(fromID, ReasonSpam)
-		}
+	publish, peerRepeats := s.subtreeSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > seenHashSpamRepeatTolerance {
+		s.logger.Warnf("[handleSubtreeTopic] peer %s re-announced subtree %s %d times within the seen-hash TTL, applying spam ban score", fromID, hash.String(), peerRepeats)
+		s.applyBanScore(fromID, ReasonSpam)
+	}
 
+	if !publish {
 		s.logger.Debugf("[handleSubtreeTopic] suppressing duplicate announcement of subtree %s from peer %s", hash.String(), fromID)
-
 		return
 	}
 
@@ -304,17 +307,18 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.subtreeSeenHashes.PublishFailed(hash.String())
 			s.logger.Errorf("[handleSubtreeTopic] error marshaling KafkaSubtreeTopicMessage: %v", err)
 			return
 		}
 
 		// Non-blocking publish, as in handleBlockTopic: drop under producer
-		// backpressure and forget the hash so a later announcement can retry.
+		// backpressure and return the grant so a later announcement can retry.
 		if !s.subtreeKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
 		}) {
-			s.subtreeSeenHashes.Forget(hash.String())
+			s.subtreeSeenHashes.PublishFailed(hash.String())
 			s.logger.Warnf("[handleSubtreeTopic] kafka subtrees producer backlogged, dropped announcement of subtree %s from peer %s", hash.String(), fromID)
 		}
 	}
@@ -905,8 +909,11 @@ func (s *Server) cleanupPeerMaps() {
 	// Sweep the seen-hash caches too. They self-bound at insert and expire
 	// lazily on Check, so this only reclaims memory for hashes that stopped
 	// being announced.
-	s.blockSeenHashes.DeleteExpired(now)
-	s.subtreeSeenHashes.DeleteExpired(now)
+	seenBlockExpired := s.blockSeenHashes.DeleteExpired(now)
+	seenSubtreeExpired := s.subtreeSeenHashes.DeleteExpired(now)
+	if seenBlockExpired > 0 || seenSubtreeExpired > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired seen-block-hash entries, %d expired seen-subtree-hash entries", seenBlockExpired, seenSubtreeExpired)
+	}
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
 	// inserts; without this sweep the map would grow once per unique peer ID
@@ -974,8 +981,8 @@ func (s *Server) cleanupPeerMaps() {
 	}
 
 	// Log current sizes
-	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
-		s.blockPeerMap.Len(), s.subtreePeerMap.Len())
+	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d, seen block hashes: %d, seen subtree hashes: %d",
+		s.blockPeerMap.Len(), s.subtreePeerMap.Len(), s.blockSeenHashes.Len(), s.subtreeSeenHashes.Len())
 }
 
 // startPeerMapCleanup starts the periodic cleanup goroutine
