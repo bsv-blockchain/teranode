@@ -60,6 +60,14 @@
 
 - `StaticPeers` ensures persistent connections
 - `PeerCacheDir` for peer persistence
+- When peer scoring is enabled, static and bootstrap peers become GossipSub *direct peers*: exempt from scoring, protected from connection-manager trimming, never grafted into the mesh (messages flow to them outside it). Static peer lists should be reciprocal (both sides list each other) or messages from the unlisted side arrive only via gossip pull.
+
+### GossipSub Mesh Protection
+
+- `EnablePeerScoring` (default true) applies penalty-only scoring: an IP-colocation penalty (more than 10 peers behind one exact IP score negative and become mesh-ineligible), a behaviour penalty (GRAFT/PRUNE flooding, broken IWANT promises), and score-gated peer exchange. It raises the cost of Sybil mesh capture; it does not award positive score.
+- Deployments with more than 10 nodes behind one shared public IP (NAT, single cloud egress) will penalize each other's nodes. Either give nodes distinct IPs, list them as mutual `StaticPeers` (direct peers are exempt), or disable scoring on that isolated network.
+- With `AllowPrivateIPs` true, loopback and RFC1918 ranges are whitelisted from the colocation penalty, so local/test multi-node clusters are unaffected.
+- `EnablePeerExchange` (default true) controls PX in PRUNE messages; keep scoring on whenever PX is on (gossipsub v1.1 spec requirement).
 
 ### Peer Map Management
 

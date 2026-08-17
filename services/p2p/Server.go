@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/grpc"
@@ -188,6 +190,94 @@ type Server struct {
 	// localHeightCache is a short-lived cache of the local best height used by
 	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
 	localHeightCache atomic.Pointer[localHeightCacheEntry]
+}
+
+// privateIPColocationWhitelist returns loopback and RFC1918 networks for exemption
+// from the GossipSub IP-colocation penalty. Deployments that deliberately allow
+// private IPs (local/test clusters) run many nodes behind one IP; without the
+// exemption the 11th and later peers on that IP would be permanently mesh-ineligible.
+func privateIPColocationWhitelist() []*net.IPNet {
+	var nets []*net.IPNet
+	for _, cidr := range []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+		if _, n, err := net.ParseCIDR(cidr); err == nil {
+			nets = append(nets, n)
+		}
+	}
+	return nets
+}
+
+// buildP2PMessageBusConfig maps Teranode P2P settings onto the message bus config.
+//
+// GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
+// protocol misbehaviour (GRAFT flooding, broken IWANT promises), and gates peer
+// exchange so PRUNE-supplied peer records from negatively-scored peers are rejected.
+// Static and bootstrap peers are exempt: the bus registers them as GossipSub direct
+// peers. Peer exchange is inverted here because the settings key is expressed as
+// an enable flag while the bus config expresses it as a disable flag.
+func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Settings, privKey crypto.PrivKey, protocolVersion, dhtMode string, advertiseAddresses []string) p2pMessageBus.Config {
+	conf := p2pMessageBus.Config{
+		PrivateKey:          privKey,
+		Name:                tSettings.ClientName,
+		Logger:              logger,
+		PeerCacheFile:       p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
+		BootstrapPeers:      tSettings.P2P.BootstrapPeers,
+		StaticPeers:         tSettings.P2P.StaticPeers,
+		ProtocolVersion:     protocolVersion,
+		DHTMode:             dhtMode,
+		DHTCleanupInterval:  tSettings.P2P.DHTCleanupInterval,
+		EnableNAT:           tSettings.P2P.EnableNAT,
+		EnableMDNS:          tSettings.P2P.EnableMDNS,
+		AllowPrivateIPs:     tSettings.P2P.AllowPrivateIPs,
+		EnablePeerScoring:   tSettings.P2P.EnablePeerScoring,
+		DisablePeerExchange: !tSettings.P2P.EnablePeerExchange,
+	}
+
+	if tSettings.P2P.EnablePeerScoring {
+		// When private IPs are deliberately allowed, exempt loopback and RFC1918
+		// ranges from the IP-colocation penalty so multi-node local/test clusters
+		// behind one IP stay mesh-eligible.
+		if tSettings.P2P.AllowPrivateIPs {
+			params := p2pMessageBus.DefaultPeerScoreParams()
+			params.IPColocationFactorWhitelist = privateIPColocationWhitelist()
+			conf.PeerScoreParams = params
+			conf.PeerScoreThresholds = p2pMessageBus.DefaultPeerScoreThresholds()
+		}
+
+		// Observability: scoring failure modes are silent (a peer below 0 is never
+		// grafted; below the graylist threshold its gossip is ignored), so log any
+		// negatively-scored peers with the worst offender for attribution.
+		graylistThreshold := p2pMessageBus.DefaultPeerScoreThresholds().GraylistThreshold
+		conf.PeerScoreInspect = func(snapshots map[peer.ID]*pubsub.PeerScoreSnapshot) {
+			var negative, graylisted int
+			var worst float64
+			var worstPeer peer.ID
+			for pid, snap := range snapshots {
+				if snap == nil || snap.Score >= 0 {
+					continue
+				}
+				negative++
+				if snap.Score <= worst {
+					worst = snap.Score
+					worstPeer = pid
+				}
+				if snap.Score < graylistThreshold {
+					graylisted++
+				}
+			}
+			if graylisted > 0 {
+				logger.Warnf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
+			} else if negative > 0 {
+				logger.Debugf("[p2p] gossipsub peer scores: %d negative, worst %s score %.0f", negative, worstPeer, worst)
+			}
+		}
+	}
+
+	if len(advertiseAddresses) > 0 {
+		conf.AnnounceAddrs = advertiseAddresses
+		conf.Port = tSettings.P2P.Port
+	}
+
+	return conf
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -398,31 +488,7 @@ func NewServer(
 		logger.Infof("[silent mode] DHT disabled - node will not participate in peer discovery")
 	}
 
-	conf := p2pMessageBus.Config{
-		PrivateKey:         privKey,
-		Name:               tSettings.ClientName,
-		Logger:             logger,
-		PeerCacheFile:      p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
-		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
-		StaticPeers:        tSettings.P2P.StaticPeers,
-		ProtocolVersion:    bitcoinProtocolVersion,
-		DHTMode:            dhtMode,
-		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
-		EnableNAT:          tSettings.P2P.EnableNAT,
-		EnableMDNS:         tSettings.P2P.EnableMDNS,
-		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
-		// GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
-		// protocol misbehaviour, and gates peer exchange so PRUNE-supplied peer records
-		// from negatively-scored peers are rejected. Static/bootstrap peers are exempt
-		// (registered as direct peers by the bus).
-		EnablePeerScoring:   tSettings.P2P.EnablePeerScoring,
-		DisablePeerExchange: !tSettings.P2P.EnablePeerExchange,
-	}
-
-	if len(advertiseAddresses) > 0 {
-		conf.AnnounceAddrs = advertiseAddresses
-		conf.Port = tSettings.P2P.Port
-	}
+	conf := buildP2PMessageBusConfig(logger, tSettings, privKey, bitcoinProtocolVersion, dhtMode, advertiseAddresses)
 
 	p2pClient, err := p2pMessageBus.NewClient(conf)
 	if err != nil {

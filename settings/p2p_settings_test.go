@@ -87,10 +87,23 @@ func TestP2PPeerMapSettings_DefaultsMatchTheServiceConstants(t *testing.T) {
 // with PX on is the spec-violating state that lets Sybil peers capture the
 // mesh), and both keys must actually be read by the loader so operators can
 // override them.
+//
+// gocore resolves key.<context> first, so overrides are set at the precedence
+// that wins under the ambient context (same pattern as the batcher tests) and
+// the default assertion only runs under contexts with no .conf override.
 func TestP2PGossipSubMeshProtectionSettings(t *testing.T) {
+	keys := []string{"p2p_enable_peer_scoring", "p2p_enable_peer_exchange"}
+	ctx := gocore.Config().GetContext()
+	winKey := func(key string) string {
+		if ctx != "" {
+			return key + "." + ctx
+		}
+		return key
+	}
+
 	t.Run("defaults are secure", func(t *testing.T) {
-		for _, key := range []string{"p2p_enable_peer_scoring", "p2p_enable_peer_exchange"} {
-			gocore.Config().Set(key, "")
+		for _, key := range keys {
+			gocore.Config().Set(winKey(key), "")
 		}
 
 		s := NewSettings()
@@ -100,16 +113,18 @@ func TestP2PGossipSubMeshProtectionSettings(t *testing.T) {
 	})
 
 	t.Run("loader reads overrides", func(t *testing.T) {
-		gocore.Config().Set("p2p_enable_peer_scoring", "false")
-		gocore.Config().Set("p2p_enable_peer_exchange", "false")
+		for _, key := range keys {
+			gocore.Config().Set(winKey(key), "false")
+		}
 		t.Cleanup(func() {
-			gocore.Config().Set("p2p_enable_peer_scoring", "")
-			gocore.Config().Set("p2p_enable_peer_exchange", "")
+			for _, key := range keys {
+				gocore.Config().Set(winKey(key), "")
+			}
 		})
 
 		s := NewSettings()
 
-		require.False(t, s.P2P.EnablePeerScoring)
-		require.False(t, s.P2P.EnablePeerExchange)
+		require.False(t, s.P2P.EnablePeerScoring, "loader must read p2p_enable_peer_scoring under context %q", ctx)
+		require.False(t, s.P2P.EnablePeerExchange, "loader must read p2p_enable_peer_exchange under context %q", ctx)
 	})
 }
