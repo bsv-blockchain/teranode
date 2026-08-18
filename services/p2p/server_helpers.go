@@ -1209,7 +1209,13 @@ func extractIPFromMultiaddr(addrStr string) string {
 		return ""
 	}
 
-	if _, err := maddr.ValueForProtocol(ma.P_CIRCUIT); err == nil {
+	return extractIPFromParsedMultiaddr(maddr)
+}
+
+// extractIPFromParsedMultiaddr is extractIPFromMultiaddr for an
+// already-parsed multiaddr; it applies the same relay-circuit rejection.
+func extractIPFromParsedMultiaddr(maddr ma.Multiaddr) string {
+	if isRelayCircuit(maddr) {
 		return ""
 	}
 
@@ -1222,6 +1228,15 @@ func extractIPFromMultiaddr(addrStr string) string {
 	}
 
 	return ""
+}
+
+// isRelayCircuit reports whether the multiaddr contains a libp2p relay
+// circuit component (/p2p-circuit). Every IP/DNS component of such an address
+// names the RELAY, not the peer behind it, so ban logic must never attribute
+// those components to the peer.
+func isRelayCircuit(maddr ma.Multiaddr) bool {
+	_, err := maddr.ValueForProtocol(ma.P_CIRCUIT)
+	return err == nil
 }
 
 // checkMultiaddrBanned reports whether the dial target of a multiaddr is on
@@ -1241,11 +1256,11 @@ func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool
 		return false, errors.NewInvalidArgumentError("invalid multiaddr %s: %v", addrStr, err)
 	}
 
-	if _, cerr := maddr.ValueForProtocol(ma.P_CIRCUIT); cerr == nil {
+	if isRelayCircuit(maddr) {
 		return false, nil
 	}
 
-	if ip := extractIPFromMultiaddr(addrStr); ip != "" {
+	if ip := extractIPFromParsedMultiaddr(maddr); ip != "" {
 		return s.banList.IsBanned(ip), nil
 	}
 

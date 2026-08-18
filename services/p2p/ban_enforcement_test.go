@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,11 +81,16 @@ func TestExtractIPFromMultiaddr(t *testing.T) {
 	}
 	for _, tt := range tests {
 		require.Equal(t, tt.want, extractIPFromMultiaddr(tt.addr), "addr %q", tt.addr)
-		// Circuit addrs must return "" because of the circuit rejection, not
-		// because they failed to parse.
-		if tt.want == "" && tt.addr != "" && tt.addr != "not-a-multiaddr" {
-			_, err := ma.NewMultiaddr(tt.addr)
+		// Circuit rows must return "" because of the circuit rejection: assert
+		// they parse AND carry a literal IP component that was deliberately
+		// not extracted.
+		if strings.Contains(tt.addr, "/p2p-circuit") {
+			maddr, err := ma.NewMultiaddr(tt.addr)
 			require.NoError(t, err, "addr %q must be a valid multiaddr", tt.addr)
+			_, err4 := maddr.ValueForProtocol(ma.P_IP4)
+			_, err6 := maddr.ValueForProtocol(ma.P_IP6)
+			require.True(t, err4 == nil || err6 == nil,
+				"circuit addr %q must carry a literal IP so \"\" proves the circuit rejection", tt.addr)
 		}
 	}
 }
@@ -142,9 +148,10 @@ func TestOnPeerBanned_RelayedAddrDoesNotBanRelayIP(t *testing.T) {
 }
 
 func TestOnPeerBanned_CircuitOnlyAddrsBanNoIP(t *testing.T) {
-	s, _ := newServerWithLocalRegistry(t)
+	s, reg := newServerWithLocalRegistry(t)
 	pid := mustNewPeerID(t)
 	relayID := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
 
 	banList := &recordingBanList{}
 	s.banList = banList
@@ -157,6 +164,14 @@ func TestOnPeerBanned_CircuitOnlyAddrsBanNoIP(t *testing.T) {
 
 	require.Empty(t, banList.addedEntries(),
 		"a circuit-only peer must produce no IP ban; the peer-ID ban covers it")
+
+	// The peer-ID ban must still take full effect: gossip filter cache marked
+	// banned and the peer removed from the registry.
+	v, ok := s.banStatusCache.Load(pid.String())
+	require.True(t, ok, "banStatusCache must be primed on ban")
+	require.True(t, v.(banStatusCacheEntry).banned, "banStatusCache must mark the peer banned")
+	_, found := reg.Get(pid.String())
+	require.False(t, found, "the banned circuit-only peer must be removed from the registry")
 }
 
 // TestDisconnectPeersOnBanList_IgnoresRelayedPeersOfBannedRelayIP: once a
@@ -345,6 +360,22 @@ func TestServer_ConnectPeer_FailsClosedOnUnresolvableDNS(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.False(t, resp.Success, "an unresolvable DNS multiaddr must be refused (fail closed)")
+	require.NotEmpty(t, resp.Error)
+	client.AssertNotCalled(t, "Connect", mock.Anything, mock.Anything)
+}
+
+// TestServer_ConnectPeer_FailsClosedOnInvalidMultiaddr pins the fail-closed
+// ordering now that the parse is the first gate in checkMultiaddrBanned.
+func TestServer_ConnectPeer_FailsClosedOnInvalidMultiaddr(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = &recordingBanList{}
+
+	client := &MockServerP2PClient{}
+	s.P2PClient = client
+
+	resp, err := s.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{PeerAddress: "not-a-multiaddr"})
+	require.NoError(t, err)
+	require.False(t, resp.Success, "an unparseable multiaddr must be refused (fail closed)")
 	require.NotEmpty(t, resp.Error)
 	client.AssertNotCalled(t, "Connect", mock.Anything, mock.Anything)
 }
