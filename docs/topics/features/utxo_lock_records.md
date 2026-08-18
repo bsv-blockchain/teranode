@@ -65,10 +65,10 @@ The Lock Record Pattern addresses several critical challenges in handling large 
 
 ### 3.1. Lock Record Structure
 
-Lock records are special Aerospike records identified by a unique index (`0xFFFFFFFF`) that cannot conflict with actual sub-records:
+Lock records are special Aerospike records identified by a unique index (`0xFFFFFFFE`) that cannot conflict with actual sub-records:
 
 ```go
-const LockRecordIndex = uint32(0xFFFFFFFF)
+const LockRecordIndex = uint32(0xFFFFFFFE)
 ```
 
 **Lock Record Bins:**
@@ -80,6 +80,7 @@ const LockRecordIndex = uint32(0xFFFFFFFF)
 | `process_id` | `int` | OS process ID that holds the lock |
 | `hostname` | `string` | Host where lock was acquired |
 | `expected_recs` | `int` | Number of records to be created |
+| `lock_token` | `string` | Random token (at least 128 bits) identifying this acquisition |
 
 ### 3.2. Creating Flag
 
@@ -105,7 +106,7 @@ For a transaction with >20,000 outputs, records are organized as:
 Transaction with N batches:
 
 ┌─────────────────────┐
-│   Lock Record       │  Index: 0xFFFFFFFF (temporary)
+│   Lock Record       │  Index: 0xFFFFFFFE (temporary)
 │   TTL: 30-300s      │
 └─────────────────────┘
 
@@ -138,6 +139,7 @@ The first phase creates all transaction records with the `creating` flag set to 
 
 1. **Acquire Lock**
 
+    - Generate a fresh random `lock_token` identifying this acquisition
     - Create lock record with CREATE_ONLY policy
     - If lock exists, return `TxExistsError` (another process is creating)
     - Calculate dynamic TTL based on number of records
@@ -156,7 +158,10 @@ The first phase creates all transaction records with the `creating` flag set to 
 
 4. **Release Lock**
 
-    - Delete lock record (always, even on partial failure)
+    - Attempt the lock-record delete on every path, including partial failure,
+      gated by a filter expression on `lock_token` so a release that arrives
+      after the lock expired and was re-acquired by another writer is a no-op
+      rather than evicting the new holder's lock
     - Partial records remain for next attempt to complete
 
 ### 4.2. Phase 2: Flag Clearing
