@@ -178,7 +178,7 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 		int(offset),                // vout adjusted for utxoBatchSize
 		spend.UTXOHash[:],          // utxo hash
 		spend.SpendingData.Bytes(), // expected stored spending data (mandatory ownership check; #766)
-		int(s.blockHeight.Load()),
+		int(s.GetBlockHeight()),
 		s.settings.GetUtxoStoreBlockHeightRetention(),
 	)
 	if aErr != nil {

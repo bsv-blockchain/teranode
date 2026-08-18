@@ -1035,6 +1035,18 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SetBlockHeightZero(t, db)
 	})
 
+	t.Run("set block state contract", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetBlockStateContract(t, db)
+	})
+
+	t.Run("set block state snapshot under concurrency", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetBlockStateSnapshotUnderConcurrency(t, db)
+	})
+
 	t.Run("set locked behavior", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
@@ -1202,13 +1214,13 @@ func TestSetTTL(t *testing.T) {
 
 	// Verify the exact DAH value: blockHeight + 1 + retention (mirrors aerospike set_mined.go:162)
 	retention := store.settings.GetUtxoStoreBlockHeightRetention()
-	expectedDAH := int64(store.blockHeight.Load() + 1 + retention)
+	expectedDAH := int64(store.GetBlockHeight() + 1 + retention)
 	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be blockHeight + 1 + retention")
 
 	// Verify DAH bump: advance block height, re-run setDAH — DAH should increase
 	oldDAH := *tombstoneMillis
-	store.blockHeight.Store(store.blockHeight.Load() + 100) // advance 100 blocks
-	expectedBumpedDAH := int64(store.blockHeight.Load() + 1 + retention)
+	require.NoError(t, store.SetBlockHeight(store.GetBlockHeight()+100)) // advance 100 blocks
+	expectedBumpedDAH := int64(store.GetBlockHeight() + 1 + retention)
 
 	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
@@ -1272,7 +1284,7 @@ func TestSetTTL(t *testing.T) {
 
 	// Verify conflicting COALESCE: DAH is already set, calling setDAH again should NOT overwrite it
 	existingConflictingDAH := *tombstoneMillis
-	store.blockHeight.Store(store.blockHeight.Load() + 50) // advance more
+	require.NoError(t, store.SetBlockHeight(store.GetBlockHeight()+50)) // advance more
 
 	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)

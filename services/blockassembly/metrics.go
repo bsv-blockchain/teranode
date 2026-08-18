@@ -52,6 +52,7 @@ var (
 	prometheusBlockAssemblyCurrentBlockHeight           prometheus.Gauge
 	prometheusBlockAssemblyTipLagBlocks                 prometheus.Gauge
 	prometheusBlockAssemblyProcessingStuck              *prometheus.CounterVec
+	prometheusBlockAssemblyCoinbaseDivergence           *prometheus.CounterVec
 	prometheusBlockAssemblerCurrentState                prometheus.Gauge
 	prometheusBlockAssemblerStateTransitions            *prometheus.CounterVec
 	prometheusBlockAssemblerStateDuration               *prometheus.HistogramVec
@@ -323,6 +324,16 @@ func _initPrometheusMetrics() {
 			Help:      "Count of block assembly catch-up/reorg/move-forward failures that left the assembler behind the tip, labelled by reason (issue #980).",
 		},
 		[]string{"reason"},
+	)
+
+	prometheusBlockAssemblyCoinbaseDivergence = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "coinbase_divergence_total",
+			Help:      "Coinbase-divergence events by outcome. Every detection records exactly one follow-up outcome, so detected == repaired + no_gap + escalated + aborted.",
+		},
+		[]string{"outcome"},
 	)
 
 	prometheusBlockAssemblerCurrentState = promauto.NewGauge(

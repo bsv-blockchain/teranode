@@ -101,18 +101,22 @@ type batchSpend struct {
 
 // Store implements the UTXO store interface using a SQL database backend.
 type Store struct {
-	logger          ulogger.Logger
-	settings        *settings.Settings
-	db              *usql.DB
-	storeURL        *url.URL
-	engine          string
-	blockHeight     atomic.Uint32
-	medianBlockTime atomic.Uint32
-	ctx             context.Context
-	spendBatcher    *batcher.Batcher[batchSpend]
-	getBatcher      *batcher.Batcher[batchGetItem]
-	createBatcher   *batcher.Batcher[batchCreateItem]
-	unlockBatcher   *batcher.Batcher[batchUnlockItem]
+	logger        ulogger.Logger
+	settings      *settings.Settings
+	db            *usql.DB
+	storeURL      *url.URL
+	engine        string
+	ctx           context.Context
+	spendBatcher  *batcher.Batcher[batchSpend]
+	getBatcher    *batcher.Batcher[batchGetItem]
+	createBatcher *batcher.Batcher[batchCreateItem]
+	unlockBatcher *batcher.Batcher[batchUnlockItem]
+
+	// utxo.BlockStateFields supplies the chain-tip height and median block time
+	// as one atomic snapshot, and with them the Store interface's six
+	// block-state methods. SetBlockHeight, SetMedianBlockTime and SetBlockState
+	// are wrapped below to add a debug line.
+	utxo.BlockStateFields
 }
 
 // batchUnlockItem represents a single SetLocked(false) request.
@@ -189,14 +193,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	s := &Store{
-		logger:          logger,
-		settings:        tSettings,
-		db:              db,
-		storeURL:        storeURL,
-		engine:          storeURL.Scheme,
-		blockHeight:     atomic.Uint32{},
-		medianBlockTime: atomic.Uint32{},
-		ctx:             ctx,
+		logger:   logger,
+		settings: tSettings,
+		db:       db,
+		storeURL: storeURL,
+		engine:   storeURL.Scheme,
+		ctx:      ctx,
 	}
 
 	otelTracer := tracing.Tracer("utxo").OTelTracer()
@@ -275,36 +277,29 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
-	if blockHeight == 0 {
-		return errors.NewInvalidArgumentError("block height cannot be zero")
+	if err := s.BlockStateFields.SetBlockHeight(blockHeight); err != nil {
+		return err
 	}
 
 	s.logger.Debugf("setting block height to %d", blockHeight)
-	s.blockHeight.Store(blockHeight)
 
 	return nil
-}
-
-func (s *Store) GetBlockHeight() uint32 {
-	return s.blockHeight.Load()
 }
 
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
-	s.medianBlockTime.Store(medianTime)
+
+	return s.BlockStateFields.SetMedianBlockTime(medianTime)
+}
+
+func (s *Store) SetBlockState(blockHeight, medianTime uint32) error {
+	if err := s.BlockStateFields.SetBlockState(blockHeight, medianTime); err != nil {
+		return err
+	}
+
+	s.logger.Debugf("setting block state to height %d, median time %d", blockHeight, medianTime)
 
 	return nil
-}
-
-func (s *Store) GetMedianBlockTime() uint32 {
-	return s.medianBlockTime.Load()
-}
-
-func (s *Store) GetBlockState() utxo.BlockState {
-	return utxo.BlockState{
-		Height:     s.blockHeight.Load(),
-		MedianTime: s.medianBlockTime.Load(),
-	}
 }
 
 // Close drains the batched-write workers and closes the underlying SQL
@@ -2355,7 +2350,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			pidx += 4
 		}
 		if wrapDAH {
-			newDAH := int64(s.blockHeight.Load() + 1 + retention)
+			newDAH := int64(s.GetBlockHeight() + 1 + retention)
 			dahIdx := pidx
 			updateArgs = append(updateArgs, newDAH)
 			// Postgres CTEs share a snapshot, so the count(*) over outputs inside
@@ -2933,7 +2928,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	retention := s.settings.GetUtxoStoreBlockHeightRetention()
 	// +1 because blockHeight is updated asynchronously via blockchain notifications
 	// and lags behind during block processing (mirrors aerospike set_mined.go:162)
-	newDAH := int64(s.blockHeight.Load() + 1 + retention)
+	newDAH := int64(s.GetBlockHeight() + 1 + retention)
 
 	if conflicting {
 		// Conflicting: set DAH only if not already set (mirrors aerospike line 944-951)
@@ -3336,8 +3331,8 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		retention = s.settings.GetUtxoStoreBlockHeightRetention()
 	}
 	// Stamp the DAH relative to the height of the block the tx is mined into
-	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip. s.blockHeight
-	// is updated asynchronously via blockchain notifications and lags behind the
+	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip. The cached
+	// height is updated asynchronously via blockchain notifications and lags behind the
 	// block being validated during catchup/sync; using it stamped the DAH too low
 	// and let the pruner delete the record before the retention window elapsed.
 	newDAH := int64(minedBlockInfo.BlockHeight) + int64(retention)
@@ -3393,7 +3388,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			// when #blocks == 0 after removing the block_id.
 			// Use the store's current block height (not the invalidated block's height)
 			// to match Aerospike's setMined UDF behavior.
-			currentBlockHeight := s.blockHeight.Load() + 1
+			currentBlockHeight := s.GetBlockHeight() + 1
 
 			// Step 1: Unlock and clear delete_at_height for all affected transactions
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
@@ -3539,7 +3534,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		}
 	}
 
-	utxoStatus := utxo.CalculateUtxoStatus(spendingData, coinbaseSpendingHeight, s.blockHeight.Load())
+	utxoStatus := utxo.CalculateUtxoStatus(spendingData, coinbaseSpendingHeight, s.GetBlockHeight())
 
 	if frozen {
 		utxoStatus = utxo.Status_FROZEN
@@ -4275,7 +4270,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 
 	if s.settings.GetUtxoStoreBlockHeightRetention() > 0 && setValue {
 		// +1 because blockHeight lags during block processing (mirrors aerospike set_mined.go:162)
-		if err := deleteAtHeight.Scan(int64(s.blockHeight.Load() + 1 + s.settings.GetUtxoStoreBlockHeightRetention())); err != nil {
+		if err := deleteAtHeight.Scan(int64(s.GetBlockHeight() + 1 + s.settings.GetUtxoStoreBlockHeightRetention())); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -4537,7 +4532,7 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 			// Bulk unlock + DAH recalculation in a single UPDATE.
 			// The CTE computes per-row state (unspent count, conflicting, etc.)
 			// and the UPDATE applies the DAH logic from setDAH in one pass.
-			newDAH := int64(s.blockHeight.Load() + 1 + retention)
+			newDAH := int64(s.GetBlockHeight() + 1 + retention)
 
 			// $1 = newDAH, hashes start at $2
 			inClause, hashArgs := buildINClause(hashBytes, 2)

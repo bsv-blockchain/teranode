@@ -293,6 +293,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaximumMerkleItemsPerSubtree:         getInt("maximum_merkle_items_per_subtree", 1024*1024, alternativeContext...),
 			DoubleSpendWindow:                    doubleSpendWindow,
 			MaxGetReorgHashes:                    getInt("blockassembly_maxGetReorgHashes", 10_000, alternativeContext...),
+			CoinbaseRecoveryMaxGapBlocks:         getInt("blockassembly_coinbaseRecoveryMaxGapBlocks", 200, alternativeContext...),
+			CoinbaseRecoveryConsecutiveGood:      getInt("blockassembly_coinbaseRecoveryConsecutiveGood", 6, alternativeContext...),
+			CoinbaseRecoveryMaxAttempts:          getInt("blockassembly_coinbaseRecoveryMaxAttempts", 3, alternativeContext...),
 			MinerWalletPrivateKeys:               getMultiString("miner_wallet_private_keys", "|", []string{}, alternativeContext...),
 			DifficultyCache:                      getBool("blockassembly_difficultyCache", true, alternativeContext...),
 			UseDynamicSubtreeSize:                getBool("blockassembly_useDynamicSubtreeSize", false, alternativeContext...),
@@ -521,6 +524,12 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerCacheDir: getString("p2p_peer_cache_dir", "", alternativeContext...), // Empty = binary directory
 			BanThreshold: getInt("p2p_ban_threshold", 100, alternativeContext...),
 			BanDuration:  getDuration("p2p_ban_duration", 24*time.Hour),
+			// Peer map cleanup configuration. Defaults match the p2p service's
+			// own fallback constants, so wiring these keys does not change
+			// behaviour for a deployment that never set them.
+			PeerMapMaxSize:         getInt("p2p_peer_map_max_size", 10000, alternativeContext...),
+			PeerMapTTL:             getDuration("p2p_peer_map_ttl", 10*time.Minute, alternativeContext...),
+			PeerMapCleanupInterval: getDuration("p2p_peer_map_cleanup_interval", time.Minute, alternativeContext...),
 			// Sync manager configuration
 			ForceSyncPeer:                         getString("p2p_force_sync_peer", "", alternativeContext...),
 			NodeStatusTopic:                       getString("p2p_node_status_topic", "", alternativeContext...),
