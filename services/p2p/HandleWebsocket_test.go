@@ -866,6 +866,20 @@ func TestWebsocketTimeouts_PingPeriodClamped(t *testing.T) {
 	defaults := (&Server{}).websocketTimeouts()
 	require.Equal(t, defaultWSTimeouts(), defaults, "nil override must yield defaults")
 	require.Less(t, defaults.pingPeriod, defaults.pongWait)
+
+	// Non-positive overrides must be floored: a zero pingPeriod would make
+	// time.NewTicker panic in the writer goroutine and take the process down.
+	for _, override := range []wsTimeouts{
+		{},
+		{writeTimeout: -time.Second, pongWait: -time.Second, pingPeriod: -time.Second},
+		{writeTimeout: time.Second}, // pongWait/pingPeriod zero
+		{pongWait: time.Nanosecond}, // derived pingPeriod would floor to zero
+	} {
+		to := (&Server{wsTimeouts: &override}).websocketTimeouts()
+		require.Positive(t, to.writeTimeout, "writeTimeout must be positive for %+v", override)
+		require.Positive(t, to.pongWait, "pongWait must be positive for %+v", override)
+		require.Positive(t, to.pingPeriod, "pingPeriod must be positive for %+v (ticker would panic)", override)
+	}
 }
 
 // newWebSocketTestServer registers the handler on a real echo instance so
@@ -1092,7 +1106,7 @@ func TestWSConnLimiter(t *testing.T) {
 	logger := &ulogger.TestLogger{}
 
 	t.Run("Per-source cap", func(t *testing.T) {
-		l := newWSConnLimiter(100, nil, logger) // per-source cap = max(4, 100/20) = 5
+		l := newWSConnLimiter(100, 0, nil, logger) // per-source cap = max(4, 100/20) = 5
 
 		releases := make([]func(), 0, 5)
 
@@ -1117,7 +1131,7 @@ func TestWSConnLimiter(t *testing.T) {
 	})
 
 	t.Run("Total cap", func(t *testing.T) {
-		l := newWSConnLimiter(4, nil, logger)
+		l := newWSConnLimiter(4, 0, nil, logger)
 
 		for i := 0; i < 4; i++ {
 			_, ok := l.acquire(fmt.Sprintf("10.0.0.%d:1000", i))
@@ -1129,7 +1143,7 @@ func TestWSConnLimiter(t *testing.T) {
 	})
 
 	t.Run("Trusted bypass", func(t *testing.T) {
-		l := newWSConnLimiter(1, []string{"127.0.0.0/8", "::1/128", "not-a-cidr", ""}, logger)
+		l := newWSConnLimiter(1, 0, []string{"127.0.0.0/8", "::1/128", "not-a-cidr", ""}, logger)
 
 		_, ok := l.acquire("10.0.0.1:1000")
 		require.True(t, ok)
@@ -1149,12 +1163,57 @@ func TestWSConnLimiter(t *testing.T) {
 	})
 
 	t.Run("Cap disabled", func(t *testing.T) {
-		l := newWSConnLimiter(0, nil, logger)
+		l := newWSConnLimiter(0, 0, nil, logger)
 
 		for i := 0; i < 50; i++ {
 			_, ok := l.acquire("10.0.0.1:1000")
 			require.True(t, ok, "non-positive cap must disable both limits")
 		}
+	})
+
+	t.Run("Per-source cap fixed override", func(t *testing.T) {
+		l := newWSConnLimiter(100, 2, nil, logger)
+
+		_, ok := l.acquire("10.0.0.1:1000")
+		require.True(t, ok)
+		_, ok = l.acquire("10.0.0.1:1001")
+		require.True(t, ok)
+		_, ok = l.acquire("10.0.0.1:1002")
+		require.False(t, ok, "a positive override must replace the derived per-source cap")
+	})
+
+	t.Run("Per-source cap disabled by negative override", func(t *testing.T) {
+		l := newWSConnLimiter(100, -1, nil, logger)
+
+		// Far beyond the derived cap of 5: one source may take slots up to the
+		// global cap when a proxy/NAT legitimately concentrates clients.
+		for i := 0; i < 50; i++ {
+			_, ok := l.acquire("10.0.0.1:1000")
+			require.True(t, ok, "negative override must disable the per-source cap")
+		}
+
+		require.Zero(t, l.maxPerSource)
+	})
+
+	t.Run("Trusted bypass overload warns once", func(t *testing.T) {
+		l := newWSConnLimiter(2, 0, []string{"127.0.0.0/8"}, logger)
+
+		releases := make([]func(), 0, 4)
+
+		for i := 0; i < 4; i++ {
+			release, ok := l.acquire("127.0.0.1:9000")
+			require.True(t, ok)
+			releases = append(releases, release)
+		}
+
+		require.True(t, l.bypassWarned,
+			"live trusted-bypass connections above the global cap must flag the caps as non-binding")
+
+		for _, release := range releases {
+			release()
+		}
+
+		require.Zero(t, l.trustedLive, "trusted releases must decrement the live bypass count")
 	})
 }
 

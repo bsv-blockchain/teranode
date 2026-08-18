@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -211,6 +212,10 @@ const (
 	// pongWait window; the endpoint is publish-only, so an admitted client
 	// must not be able to spend server read-path budget without bound.
 	wsMaxInboundFrames = 100
+	// wsCapWarnInterval throttles the connection-cap rejection warning: at most
+	// one WARN per interval so an ongoing saturation stays visible at default
+	// log level, without letting an attacker amplify rejections into log spam.
+	wsCapWarnInterval = time.Minute
 	// wsHandshakeTimeout bounds writing the 101 upgrade response (gorilla
 	// applies HandshakeTimeout server-side only to the response write).
 	// Reading the request headers is bounded by the HTTP server's
@@ -243,17 +248,36 @@ func defaultWSTimeouts() wsTimeouts {
 	}
 }
 
-// websocketTimeouts returns the effective keepalive parameters, enforcing the
-// pingPeriod < pongWait invariant so a misconfigured override cannot evict
-// every healthy connection each ping cycle.
+// websocketTimeouts returns the effective keepalive parameters, guarding
+// against misconfigured overrides: non-positive durations fall back to the
+// defaults (a zero pingPeriod would make time.NewTicker panic in the writer
+// goroutine, taking the process down), and pingPeriod is clamped below
+// pongWait so an override cannot evict every healthy connection each ping
+// cycle.
 func (s *Server) websocketTimeouts() wsTimeouts {
-	to := defaultWSTimeouts()
+	def := defaultWSTimeouts()
+
+	to := def
 	if s.wsTimeouts != nil {
 		to = *s.wsTimeouts
 	}
 
-	if to.pingPeriod >= to.pongWait {
+	if to.writeTimeout <= 0 {
+		to.writeTimeout = def.writeTimeout
+	}
+
+	if to.pongWait <= 0 {
+		to.pongWait = def.pongWait
+	}
+
+	if to.pingPeriod <= 0 || to.pingPeriod >= to.pongWait {
 		to.pingPeriod = to.pongWait * 9 / 10
+	}
+
+	// Integer division can still floor to zero for absurdly small pongWait
+	// values; keep the ticker period strictly positive no matter what.
+	if to.pingPeriod <= 0 {
+		to.pingPeriod = to.pongWait
 	}
 
 	return to
@@ -287,19 +311,33 @@ type wsConnLimiter struct {
 	mu           sync.Mutex
 	total        int64            // live connections from untrusted sources
 	perSource    map[string]int64 // live connections per untrusted source host
+	trustedLive  int64            // live connections admitted via the trusted bypass
+	bypassWarned bool             // trusted-bypass overload warning emitted
 	maxTotal     int64            // <= 0 disables both caps
 	maxPerSource int64
 	trusted      []*net.IPNet
+	logger       ulogger.Logger
 }
 
-func newWSConnLimiter(maxTotal int64, trustedCIDRs []string, logger ulogger.Logger) *wsConnLimiter {
+// newWSConnLimiter builds the admission controller. perSourceOverride selects
+// the per-source cap: 0 derives max(4, maxTotal/20), a positive value is used
+// as-is, and a negative value disables the per-source cap - needed when a
+// proxy or NAT in front of /p2p-ws funnels many legitimate clients through
+// one RemoteAddr host.
+func newWSConnLimiter(maxTotal, perSourceOverride int64, trustedCIDRs []string, logger ulogger.Logger) *wsConnLimiter {
 	l := &wsConnLimiter{
 		maxTotal:  maxTotal,
 		perSource: make(map[string]int64),
+		logger:    logger,
 	}
 
-	if maxTotal > 0 {
+	switch {
+	case perSourceOverride > 0:
+		l.maxPerSource = perSourceOverride
+	case perSourceOverride == 0 && maxTotal > 0:
 		l.maxPerSource = max(4, maxTotal/20)
+	default:
+		// Negative override, or auto with the global cap disabled: no per-source cap.
 	}
 
 	for _, cidr := range trustedCIDRs {
@@ -322,7 +360,10 @@ func newWSConnLimiter(maxTotal int64, trustedCIDRs []string, logger ulogger.Logg
 
 // acquire admits or rejects a connection from remoteAddr. On success the
 // returned release func must be called exactly once at connection teardown.
-// Trusted sources bypass and are not counted against either cap.
+// Trusted sources bypass and are not counted against either cap; if the live
+// trusted-bypass population ever exceeds the global cap, a one-time warning
+// flags that the caps are not binding (typically a reverse proxy fronting
+// /p2p-ws from a trusted address, hiding the real client IPs).
 func (l *wsConnLimiter) acquire(remoteAddr string) (release func(), ok bool) {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -332,7 +373,20 @@ func (l *wsConnLimiter) acquire(remoteAddr string) (release func(), ok bool) {
 	if ip := net.ParseIP(host); ip != nil {
 		for _, ipNet := range l.trusted {
 			if ipNet.Contains(ip) {
-				return func() {}, true
+				l.mu.Lock()
+				l.trustedLive++
+
+				if l.maxTotal > 0 && l.trustedLive > l.maxTotal && !l.bypassWarned {
+					l.bypassWarned = true
+					l.logger.Warnf("More live /p2p-ws connections admitted via the trusted-source bypass (%d) than the global cap (%d); if a reverse proxy fronts this endpoint from a trusted address, the connection caps are not protecting it - preserve client source addresses or narrow p2p_websocket_trusted_source_cidrs", l.trustedLive, l.maxTotal)
+				}
+				l.mu.Unlock()
+
+				return func() {
+					l.mu.Lock()
+					defer l.mu.Unlock()
+					l.trustedLive--
+				}, true
 			}
 		}
 	}
@@ -498,12 +552,14 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 	var (
 		allowedOrigins []string
 		maxConns       int64
+		perSourceCap   int64
 		trustedCIDRs   []string
 	)
 
 	if s.settings != nil {
 		allowedOrigins = s.settings.P2P.WebSocketAllowedOrigins
 		maxConns = int64(s.settings.P2P.WebSocketMaxConnections)
+		perSourceCap = int64(s.settings.P2P.WebSocketMaxConnectionsPerSource)
 		trustedCIDRs = s.settings.P2P.WebSocketTrustedSourceCIDRs
 	}
 
@@ -520,9 +576,12 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 		},
 	}
 
-	limiter := newWSConnLimiter(maxConns, trustedCIDRs, s.logger)
+	limiter := newWSConnLimiter(maxConns, perSourceCap, trustedCIDRs, s.logger)
 
-	var capWarnedOnce sync.Once
+	// Rejections warn at most once per interval so an ongoing saturation event
+	// stays visible at default log level for the life of the process, while an
+	// attacker hammering the endpoint can't amplify rejections into log spam.
+	var lastCapWarnNanos atomic.Int64
 
 	to := s.websocketTimeouts()
 
@@ -532,12 +591,12 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 		// (not RealIP) on purpose: forwarded-for headers are caller-supplied.
 		release, ok := limiter.acquire(c.Request().RemoteAddr)
 		if !ok {
-			// Warnf once so operators notice; Debugf after that so an
-			// attacker hammering the endpoint can't amplify into log spam.
-			capWarnedOnce.Do(func() {
-				s.logger.Warnf("Rejecting websocket connection from %s: connection limit reached (max %d total, %d per source; further rejections logged at debug)", c.Request().RemoteAddr, limiter.maxTotal, limiter.maxPerSource)
-			})
-			s.logger.Debugf("Rejecting websocket connection from %s: connection limit reached", c.Request().RemoteAddr)
+			now := time.Now().UnixNano()
+			if last := lastCapWarnNanos.Load(); now-last >= wsCapWarnInterval.Nanoseconds() && lastCapWarnNanos.CompareAndSwap(last, now) {
+				s.logger.Warnf("Rejecting websocket connection from %s: connection limit reached (max %d total, %d per source; further rejections logged at debug for up to %s)", c.Request().RemoteAddr, limiter.maxTotal, limiter.maxPerSource, wsCapWarnInterval)
+			} else {
+				s.logger.Debugf("Rejecting websocket connection from %s: connection limit reached", c.Request().RemoteAddr)
+			}
 
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "websocket connection limit reached")
 		}
