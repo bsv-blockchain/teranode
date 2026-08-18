@@ -20,17 +20,16 @@ spec:
   asset:
     enabled: true
     spec:
+      # No grpcIngress here: the asset service serves HTTP and WebSocket only
+      # and starts no gRPC server. Omitting the field is not a statement about
+      # the other services — several of them do run gRPC listeners and simply
+      # keep them cluster-internal.
       deploymentOverrides:
         replicas: 1
         resources:
           requests:
             cpu: 1
             memory: 1Gi
-      grpcIngress:
-        annotations:
-          traefik.ingress.kubernetes.io/router.entrypoints: ast-grpc
-        className: traefik-internal
-        host: mainnet-eu-1.example.com
       httpIngress:
         annotations:
           traefik.ingress.kubernetes.io/router.entrypoints: web
