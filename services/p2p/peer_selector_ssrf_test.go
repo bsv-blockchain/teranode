@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -62,20 +63,16 @@ func TestPeerHealthCheck_RejectsHostnameResolvingToLoopback(t *testing.T) {
 	require.Zero(t, hits.Load(), "the probe must not reach the internal target")
 }
 
-// TestPeerHealthCheck_RejectsInternalAddresses covers every class the policy blocks,
-// including RFC1918 (named in the issue) and IPv6 forms, going through the real client so
-// the guard does not depend on the static pre-check having run first.
+// TestPeerHealthCheck_RejectsInternalAddresses covers every class the probe refuses, in
+// both IPv4 and IPv6 form, driven through the real client so the guard does not depend on
+// the static pre-check having run first.
 func TestPeerHealthCheck_RejectsInternalAddresses(t *testing.T) {
 	tests := map[string]string{
-		"http://127.0.0.1:1/api/v1":       "loopback address",
-		"http://[::1]:1/api/v1":           "loopback address",
-		"http://169.254.169.254/api/v1":   "link-local address",
-		"http://[fe80::1]:8090/api/v1":    "link-local address",
-		"http://0.0.0.0:8090/api/v1":      "unspecified address",
-		"http://10.0.0.5:8090/api/v1":     "private address",
-		"http://192.168.1.10:8090/api/v1": "private address",
-		"http://172.16.4.4:8090/api/v1":   "private address",
-		"http://[fc00::1]:8090/api/v1":    "private address",
+		"http://127.0.0.1:1/api/v1":     "loopback address",
+		"http://[::1]:1/api/v1":         "loopback address",
+		"http://169.254.169.254/api/v1": "link-local address",
+		"http://[fe80::1]:8090/api/v1":  "link-local address",
+		"http://0.0.0.0:8090/api/v1":    "unspecified address",
 	}
 
 	ps := newSelectorWithPrivateIPs(t, false)
@@ -90,52 +87,58 @@ func TestPeerHealthCheck_RejectsInternalAddresses(t *testing.T) {
 	}
 }
 
-// TestDataHubDialPolicy pins the policy itself: it must enforce the same address classes as
-// validateDataHubURL's isUnsafeIP, so a hostname cannot reach what a literal cannot.
-func TestDataHubDialPolicy(t *testing.T) {
-	strict := newSelectorWithPrivateIPs(t, false)
+// TestPeerProbeAllowsPrivateAddresses is the availability guard-rail. The probe only decides
+// whether to fetch from a peer, so it must never refuse an address the block/subtree fetch
+// path would accept. RFC1918 is the case that matters: the fetch path allows it by documented
+// design, so a probe that refused it would drop peers catchup could have used - a node whose
+// peers resolve into private space would find no sync peer at all. The probe therefore shares
+// util.DefaultSSRFDialPolicy instead of owning a policy that can drift from it.
+//
+// The dial is expected to fail (nothing is listening); what matters is that it fails as a
+// network error rather than an SSRF rejection, under both settings of AllowPrivateIPs.
+func TestPeerProbeAllowsPrivateAddresses(t *testing.T) {
+	for _, allowPrivateIPs := range []bool{false, true} {
+		ps := newSelectorWithPrivateIPs(t, allowPrivateIPs)
 
-	for ipStr, reason := range map[string]string{
-		"127.0.0.1":       "loopback address",
-		"::1":             "loopback address",
-		"169.254.169.254": "link-local address",
-		"fe80::1":         "link-local address",
-		"0.0.0.0":         "unspecified address",
-		"10.0.0.5":        "private address",
-		"192.168.1.10":    "private address",
-		"172.16.4.4":      "private address",
-		"fc00::1":         "private address",
-	} {
-		ip := net.ParseIP(ipStr)
-		require.NotNil(t, ip, ipStr)
-		require.Equal(t, reason, strict.dataHubDialPolicy(ip), "expected %s to be rejected", ipStr)
-		require.Equal(t, isUnsafeIP(ip), strict.dataHubDialPolicy(ip),
-			"the dial policy must agree with validateDataHubURL for %s", ipStr)
+		for _, hostPort := range []string{"10.255.255.1:1", "192.168.255.254:1", "[fc00::1]:1"} {
+			t.Run(hostPort, func(t *testing.T) {
+				// Bounded so an unroutable private address cannot stall the test.
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				defer cancel()
+
+				_, err := ps.checkPeerAvailability(ctx, "http://"+hostPort+"/api/v1")
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), "SSRF dial check",
+					"private address must not be refused by the guard (AllowPrivateIPs=%v)", allowPrivateIPs)
+				require.NotContains(t, err.Error(), "private address")
+			})
+		}
 	}
 
-	for _, ipStr := range []string{"8.8.8.8", "1.2.3.4", "2606:4700::1111"} {
-		ip := net.ParseIP(ipStr)
-		require.NotNil(t, ip, ipStr)
-		require.Empty(t, strict.dataHubDialPolicy(ip), "expected %s to be allowed", ipStr)
-	}
-}
-
-// TestDataHubDialPolicy_AllowPrivateIPs: the setting relaxes the private ranges (which the
-// fetch path also allows), but never loopback, link-local or unspecified - so no
-// configuration lets a peer steer the probe at a metadata endpoint or at localhost.
-func TestDataHubDialPolicy_AllowPrivateIPs(t *testing.T) {
-	permissive := newSelectorWithPrivateIPs(t, true)
-
+	// The shared policy is the single source of truth for both paths.
 	for _, ipStr := range []string{"10.0.0.5", "192.168.1.10", "172.16.4.4", "fc00::1"} {
 		ip := net.ParseIP(ipStr)
 		require.NotNil(t, ip, ipStr)
-		require.Empty(t, permissive.dataHubDialPolicy(ip), "AllowPrivateIPs must allow %s", ipStr)
+		require.Empty(t, util.DefaultSSRFDialPolicy(ip), "the fetch path must allow %s", ipStr)
 	}
+}
 
-	require.Equal(t, "loopback address", permissive.dataHubDialPolicy(net.ParseIP("127.0.0.1")))
-	require.Equal(t, "link-local address", permissive.dataHubDialPolicy(net.ParseIP("169.254.169.254")))
-	require.Equal(t, "link-local address", permissive.dataHubDialPolicy(net.ParseIP("fe80::1")))
-	require.Equal(t, "unspecified address", permissive.dataHubDialPolicy(net.ParseIP("0.0.0.0")))
+// TestPeerProbeIgnoresAllowPrivateIPs pins the deliberate asymmetry with validateDataHubURL,
+// which short-circuits every IP check when the flag is set (server_helpers.go). The
+// connection-time guard does not: loopback, link-local and unspecified stay refused with the
+// flag on, so no configuration lets a peer steer a probe at localhost or at the cloud
+// metadata endpoint. Announcement acceptance and probe reachability are separate questions.
+func TestPeerProbeIgnoresAllowPrivateIPs(t *testing.T) {
+	s := &Server{settings: &settings.Settings{P2P: settings.P2PSettings{AllowPrivateIPs: true}}}
+	require.NoError(t, s.validateDataHubURL("http://localhost:8090/api/v1"),
+		"the flag makes the static check accept a loopback URL")
+
+	ps := newSelectorWithPrivateIPs(t, true)
+
+	healthy, err := ps.checkPeerAvailability(context.Background(), "http://localhost:8090/api/v1")
+	require.False(t, healthy, "the probe still refuses loopback with the flag set")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "loopback address")
 }
 
 // TestPeerHealthCheck_ProbesReachablePeer checks the guarded client is otherwise a working

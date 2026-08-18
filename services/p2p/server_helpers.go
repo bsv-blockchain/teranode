@@ -382,7 +382,7 @@ func isLocalhostHostname(hostname string) bool {
 // This is a cheap static pre-filter only: it deliberately performs no DNS resolution, since
 // that would let a peer trigger a blocking lookup per announcement. A hostname that resolves
 // to an internal address therefore passes here and is stopped at connection time instead -
-// by the peer health check's dialer (PeerSelector.dataHubDialPolicy) and by the shared
+// by the peer health check probe client and by the shared
 // block/subtree fetch client (util.NewSSRFSafeDialContext).
 func (s *Server) validateDataHubURL(urlStr string) error {
 	if urlStr == "" {

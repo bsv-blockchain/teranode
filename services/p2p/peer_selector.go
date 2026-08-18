@@ -3,7 +3,6 @@ package p2p
 import (
 	"context"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"sort"
 	"sync"
@@ -60,7 +59,7 @@ type SelectionCriteria struct {
 // URLs over HTTP (bounded concurrency, overall deadline) and keeps a short-TTL
 // cache of those probe results, so it is neither pure nor stateless. Those URLs
 // are peer-supplied, so the probes go through an SSRF-safe client that
-// re-validates every resolved IP.
+// re-validates every resolved IP, under the same policy as the fetch path.
 type PeerSelector struct {
 	logger   ulogger.Logger
 	settings *settings.Settings
@@ -95,9 +94,12 @@ func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSe
 	}
 
 	// The probe target is peer-supplied, so it goes through a client whose dialer
-	// re-validates every resolved IP against dataHubDialPolicy. checkPeerAvailability is
-	// bound as a method value here so tests can still replace ps.checkHealth.
-	ps.httpClient = util.NewSSRFSafeHTTPClient(peerHealthCheckTimeout, ps.dataHubDialPolicy)
+	// re-validates every resolved IP. It shares util.DefaultSSRFDialPolicy with the block and
+	// subtree fetch path deliberately: the probe only decides whether to fetch from a peer, so
+	// a stricter policy here would drop peers the fetch path is willing to talk to - a node
+	// whose peers resolve into RFC1918 would find no sync peer at all. checkPeerAvailability
+	// is bound as a method value so tests can still replace ps.checkHealth.
+	ps.httpClient = util.NewSSRFSafeHTTPClient(peerHealthCheckTimeout, util.DefaultSSRFDialPolicy)
 	ps.checkHealth = ps.checkPeerAvailability
 
 	return ps
@@ -610,7 +612,7 @@ func compareChainWork(a, b []byte) int {
 // Any 2xx response counts as available; the probe is bounded by peerHealthCheckTimeout.
 //
 // The probe target is peer-supplied, so it goes through ps.httpClient, whose dialer
-// re-validates every resolved IP against dataHubDialPolicy.
+// re-validates every resolved IP against util.DefaultSSRFDialPolicy.
 func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL string) (bool, error) {
 	if dataHubURL == "" {
 		return false, nil
@@ -632,31 +634,4 @@ func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL st
 	}
 
 	return false, err
-}
-
-// dataHubDialPolicy is the SSRF policy applied to every address resolved while probing a
-// peer-supplied DataHub URL. Running after DNS resolution is the point: the static
-// validateDataHubURL check only inspects IP literals, so without this a hostname resolving
-// to an internal address would be probed.
-//
-// It enforces the same address classes as validateDataHubURL (isUnsafeIP), including
-// RFC1918: a probe reaching an internal host tells a peer whether that host is listening,
-// so accepting private targets for hostnames while rejecting them for literals would leave
-// exactly the literal-versus-hostname gap this guard exists to close. P2P.AllowPrivateIPs
-// relaxes the private ranges, matching its effect on validateDataHubURL.
-//
-// Loopback, link-local and unspecified addresses are refused in every configuration. The
-// setting deliberately does not relax them: link-local is the cloud metadata range an
-// attacker is actually after, and loopback cannot work anyway, since block and subtree
-// fetches go through util's shared client, which refuses loopback regardless of settings.
-func (ps *PeerSelector) dataHubDialPolicy(ip net.IP) string {
-	if ip.IsPrivate() {
-		if ps.settings != nil && ps.settings.P2P.AllowPrivateIPs {
-			return ""
-		}
-
-		return "private address"
-	}
-
-	return util.DefaultSSRFDialPolicy(ip)
 }
