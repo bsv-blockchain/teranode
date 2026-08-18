@@ -1,7 +1,6 @@
 package settings
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,11 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Committed settings files may only carry well-known public test fixtures under
-// context-scoped *private_key entries. Real per-node identity keys belong in
+// Committed settings files may only carry well-known public test fixtures as
+// key-shaped values. Real per-node identity keys belong in an uncommitted
 // settings_local.conf, env, or the generated p2p.key file. This test is the CI
 // guard for bitcoin-sv/teranode issue 4739: a real Ed25519 identity key was
 // committed to settings.conf and had to be treated as compromised.
+//
+// The check is value-shaped rather than key-name-based: gocore resolves
+// ${VAR} indirection from same-file entries (including context-suffixed
+// definitions), so a key hidden behind any variable name is caught where the
+// literal is defined, whatever it is called.
 
 // allowedFixtures are the public throwaway values already published in the
 // repo's test configs and tooling. Never add a real value here.
@@ -36,22 +40,36 @@ var allowedFixtures = map[string]bool{
 	// Long-committed dev wallet WIF fixtures (settings.conf PK1-PK6, also in
 	// util/general_test.go and compose/docker-compose-3blasters.yml). Note:
 	// miner_wallet_private_keys.operator.mainnet resolves to these unless the
-	// deployment overrides PK1-PK3 - tracked as a separate issue.
+	// deployment overrides PK1-PK3; flagged as a related finding on
+	// bitcoin-sv/teranode issue 4739, tracked separately.
 	"L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q": true,
 	"KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k": true,
 	"L3NVjmwg3nC7ZPrwMVF6FXiG1a1RZ89nhizmJVctGztRKLYrhtFL": true,
+	// Pre-existing committed dev libp2p PSK (settings.conf p2p_shared_key).
+	// No Go consumer references the setting; candidate for separate removal.
+	"285b49e6d910726a70f205086c39cbac6d8dcc47839053a21b1f614773bbc137": true,
+}
+
+// committedSettingsFiles are every settings-format file committed to the repo
+// (the deploy/util settings_local.conf files are force-added past .gitignore).
+var committedSettingsFiles = []string{
+	"../settings.conf",
+	"../compose/settings_test.conf",
+	"../deploy/docker/base/settings_local.conf",
+	"../deploy/docker/base/settings_local.conf.template",
+	"../util/servicemanager/example/settings_local.conf",
 }
 
 var (
-	// Case-insensitive and prefix-optional so PRIVATE_KEY / P2P_PRIVATE_KEY
-	// style names cannot slip past the guard.
-	privateKeyLine = regexp.MustCompile(`(?i)^([A-Za-z0-9_]*private_keys?)((?:\.[A-Za-z0-9_-]+)*)\s*=\s*(.*)$`)
-	assignmentLine = regexp.MustCompile(`^([A-Za-z0-9_]+)\s*=\s*(.*)$`)
-	placeholder    = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)\}`)
+	assignmentLine = regexp.MustCompile(`^([A-Za-z0-9_]+)((?:\.[A-Za-z0-9_-]+)*)\s*=\s*(.*)$`)
 
-	// placeholderOnly matches values built purely from ${VAR} placeholders and
-	// separators (e.g. "${PK1} | ${PK2}"), which are resolved at runtime.
-	placeholderOnly = regexp.MustCompile(`^(\$\{[A-Za-z0-9_]+\}[\s|]*)+$`)
+	// Private key material shapes: 32- or 64-byte hex (Ed25519 seed or
+	// priv+pub), and base58 WIF. Compressed/uncompressed public keys are 33/65
+	// bytes (66/130 hex) and deliberately do not match.
+	hexKeyValue = regexp.MustCompile(`^[0-9a-fA-F]{64}$|^[0-9a-fA-F]{128}$`)
+	wifKeyValue = regexp.MustCompile(`^[5KL9c][1-9A-HJ-NP-Za-km-z]{50,51}$`)
+
+	privateKeyName = regexp.MustCompile(`(?i)private_keys?$`)
 )
 
 func normalizeValue(raw string) string {
@@ -63,48 +81,15 @@ func normalizeValue(raw string) string {
 	return strings.Trim(value, `"`)
 }
 
-func readSettingsLines(t *testing.T, path string) []string {
-	f, err := os.Open(path)
-	require.NoError(t, err, "committed settings file must exist: %s", path)
-
-	defer func() { require.NoError(t, f.Close()) }()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-
-	var lines []string
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	require.NoError(t, scanner.Err())
-
-	return lines
-}
-
 func TestNoRealPrivateKeysCommitted(t *testing.T) {
-	for _, rel := range []string{"../settings.conf", "../compose/settings_test.conf"} {
+	for _, rel := range committedSettingsFiles {
 		path, err := filepath.Abs(rel)
 		require.NoError(t, err)
 
-		lines := readSettingsLines(t, path)
+		content, err := os.ReadFile(path)
+		require.NoError(t, err, "committed settings file must exist: %s", rel)
 
-		// gocore resolves ${VAR} from same-file entries, so a key hidden
-		// behind an in-file variable must be checked at its definition.
-		defs := map[string]string{}
-
-		for _, raw := range lines {
-			line := strings.TrimSpace(raw)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-
-			if m := assignmentLine.FindStringSubmatch(line); m != nil {
-				defs[m[1]] = normalizeValue(m[2])
-			}
-		}
-
-		for i, raw := range lines {
+		for i, raw := range strings.Split(string(content), "\n") {
 			lineNo := i + 1
 
 			line := strings.TrimSpace(raw)
@@ -112,39 +97,27 @@ func TestNoRealPrivateKeysCommitted(t *testing.T) {
 				continue
 			}
 
-			m := privateKeyLine.FindStringSubmatch(line)
+			m := assignmentLine.FindStringSubmatch(line)
 			if m == nil {
 				continue
 			}
 
 			name, context := m[1], m[2]
+
 			value := normalizeValue(m[3])
-
-			if value == "" {
+			if !hexKeyValue.MatchString(value) && !wifKeyValue.MatchString(value) {
 				continue
 			}
-
-			if placeholderOnly.MatchString(value) {
-				// Env-only placeholders are fine; in-file definitions are the
-				// value in disguise and get the same checks.
-				for _, pm := range placeholder.FindAllStringSubmatch(value, -1) {
-					if resolved := defs[pm[1]]; resolved != "" && !placeholderOnly.MatchString(resolved) {
-						require.True(t, allowedFixtures[resolved],
-							"%s:%d: %s%s resolves in-file variable ${%s} to a value that is not a known public test fixture; real keys belong in settings_local.conf, env, or the generated p2p.key - if this leaked, rotate it",
-							rel, lineNo, name, context, pm[1])
-					}
-				}
-
-				continue
-			}
-
-			require.NotEmpty(t, context,
-				"%s:%d: %s has a context-less committed value; a bare default would silently become every deployment's identity - leave it empty so the auto-generate path runs",
-				rel, lineNo, name)
 
 			require.True(t, allowedFixtures[value],
-				"%s:%d: %s%s has a committed value that is not a known public test fixture; real keys belong in settings_local.conf, env, or the generated p2p.key - if this leaked, rotate it",
+				"%s:%d: %s%s has a committed private-key-shaped value that is not a known public test fixture; real keys belong in an uncommitted settings_local.conf, env, or the generated p2p.key - if this leaked, rotate it",
 				rel, lineNo, name, context)
+
+			if privateKeyName.MatchString(name) {
+				require.NotEmpty(t, context,
+					"%s:%d: %s has a context-less committed key value; a bare default silently becomes every deployment's identity - leave it empty so the auto-generate path runs",
+					rel, lineNo, name)
+			}
 		}
 	}
 }
