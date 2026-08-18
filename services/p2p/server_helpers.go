@@ -1197,11 +1197,19 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 
 // extractIPFromMultiaddr returns the literal IP component of a libp2p
 // multiaddr string such as "/ip4/1.2.3.4/tcp/9905/p2p/12D3KooW...". It returns
-// "" for addresses without a literal IP (DNS names, relay circuits) and for
-// strings that don't parse as a multiaddr.
+// "" for addresses without a literal IP (DNS names), for relay circuits, and
+// for strings that don't parse as a multiaddr. Relay circuits must be
+// rejected: for a relayed connection the transport address is the RELAY's
+// (e.g. "/ip4/<relay-ip>/tcp/9905/p2p/<relayID>/p2p-circuit"), so treating it
+// as the peer's IP would ban or match the relay and every peer behind it.
+// Peer-ID bans cover peers reached over a circuit.
 func extractIPFromMultiaddr(addrStr string) string {
 	maddr, err := ma.NewMultiaddr(addrStr)
 	if err != nil {
+		return ""
+	}
+
+	if _, err := maddr.ValueForProtocol(ma.P_CIRCUIT); err == nil {
 		return ""
 	}
 
@@ -1220,20 +1228,25 @@ func extractIPFromMultiaddr(addrStr string) string {
 // the IP/subnet ban list. Literal IPs are checked directly; DNS components
 // (/dns, /dns4, /dns6, /dnsaddr) are resolved and every returned address is
 // checked. A parse or resolution failure returns an error so callers can fail
-// closed. Multiaddrs with neither an IP nor a DNS name (e.g. relay circuits)
-// have nothing to check and pass; peer-ID bans cover those.
+// closed. Relay circuits pass without any check: their IP/DNS components name
+// the relay, not the dial target, so checking them would refuse to dial every
+// peer behind a banned relay; peer-ID bans cover circuit peers.
 func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool, error) {
 	if s.banList == nil {
 		return false, nil
 	}
 
-	if ip := extractIPFromMultiaddr(addrStr); ip != "" {
-		return s.banList.IsBanned(ip), nil
-	}
-
 	maddr, err := ma.NewMultiaddr(addrStr)
 	if err != nil {
 		return false, errors.NewInvalidArgumentError("invalid multiaddr %s: %v", addrStr, err)
+	}
+
+	if _, cerr := maddr.ValueForProtocol(ma.P_CIRCUIT); cerr == nil {
+		return false, nil
+	}
+
+	if ip := extractIPFromMultiaddr(addrStr); ip != "" {
+		return s.banList.IsBanned(ip), nil
 	}
 
 	host := ""
@@ -1298,7 +1311,7 @@ func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 
 // networkDisconnector is implemented by P2P clients that can sever the
 // underlying libp2p connection. go-p2p-message-bus does not implement it as of
-// v0.1.17 (nothing up to v0.1.21 exposes the host, a gater, or a disconnect);
+// v0.1.17 (nothing up to v0.1.23 exposes the host, a gater, or a disconnect);
 // once the library gains this capability, network-layer ban enforcement starts
 // working here without further changes.
 type networkDisconnector interface {
