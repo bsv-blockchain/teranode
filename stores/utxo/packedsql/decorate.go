@@ -138,7 +138,13 @@ func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) 
 }
 
 func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpointRef) error {
-	offsetSQL, offsetArgs := buildOutpointQuery(refs, "substring(t.outputs FROM v.vout * 4 + 5 FOR 8)")
+	// The two 4-byte offsets that delimit output v live at bytes 4+4v and 8+4v of the
+	// offset blob header (1-based for substring: v*4+5). Reading them for a vout at or past
+	// the output count would read *payload* and reinterpret it as offsets, so the count is
+	// checked in SQL and the resulting span is validated against the real column length
+	// below. vout is attacker-controlled (it comes off the wire in a transaction input).
+	offsetSQL, offsetArgs := buildOutpointQuery(refs, `CASE WHEN v.vout < `+outputCountExpr+`
+	     THEN substring(t.outputs FROM v.vout * 4 + 5 FOR 8) END, octet_length(t.outputs)`)
 
 	rows, err := s.pool.Query(ctx, offsetSQL, offsetArgs...)
 	if err != nil {
@@ -157,9 +163,10 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 		var (
 			idx         int
 			offsetBytes []byte
+			totalLen    int64
 		)
 
-		if err = rows.Scan(&idx, &offsetBytes); err != nil {
+		if err = rows.Scan(&idx, &offsetBytes, &totalLen); err != nil {
 			rows.Close()
 			return errors.NewStorageError("packedsql: outpoint offset scan failed", err)
 		}
@@ -168,14 +175,14 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 			continue
 		}
 
-		start := binary.LittleEndian.Uint32(offsetBytes[:4])
-		end := binary.LittleEndian.Uint32(offsetBytes[4:])
+		start := int64(binary.LittleEndian.Uint32(offsetBytes[:4]))
+		end := int64(binary.LittleEndian.Uint32(offsetBytes[4:]))
 
-		if end < start {
+		if end < start || start > totalLen || end > totalLen {
 			continue
 		}
 
-		spans[idx] = span{start: int64(start) + 1, length: int64(end - start)}
+		spans[idx] = span{start: start + 1, length: end - start}
 		seen[idx] = true
 	}
 
@@ -209,6 +216,7 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 			fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4)
 		}
 
+		// Bounded by octet_length(outputs) above, so the int32 narrowing cannot overflow.
 		args = append(args, r.hash, i, int32(spans[i].start), int32(spans[i].length)) //nolint:gosec
 	}
 
@@ -244,6 +252,13 @@ func (s *Store) decorateChunk(ctx context.Context, txs []*bt.Tx, refs []outpoint
 
 	return dataRows.Err()
 }
+
+// outputCountExpr decodes the little-endian item count from the first four bytes of an
+// offset blob header. get_byte is 0-based.
+const outputCountExpr = `(get_byte(t.outputs, 0)
+	     + get_byte(t.outputs, 1) * 256
+	     + get_byte(t.outputs, 2) * 65536
+	     + get_byte(t.outputs, 3) * 16777216)`
 
 func buildOutpointQuery(refs []outpointRef, expr string) (string, []any) {
 	var sb strings.Builder

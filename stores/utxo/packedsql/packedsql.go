@@ -28,6 +28,17 @@ type Store struct {
 	spendChans    []chan *spendWork
 	spendWG       sync.WaitGroup
 	closeOnce     sync.Once
+
+	// bgCtx bounds all work the pipeline performs on behalf of callers whose own context
+	// has already been satisfied (group-committed batches). It is cancelled once the
+	// workers have drained, so a wedged connection cannot outlive the store.
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+
+	// closeMu guards sends into the pipeline against Close closing the channels underneath
+	// them. Senders hold it for read; Close takes it for write before closing anything.
+	closeMu sync.RWMutex
+	closed  bool
 }
 
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
@@ -76,11 +87,15 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, err
 	}
 
+	bgCtx, bgCancel := context.WithCancel(context.WithoutCancel(ctx))
+
 	s := &Store{
 		logger:   logger,
 		settings: tSettings,
 		pool:     pool,
 		pageSize: uint32(tSettings.UtxoStore.PackedSQLPageSize), //nolint:gosec
+		bgCtx:    bgCtx,
+		bgCancel: bgCancel,
 	}
 
 	s.startPipeline()
@@ -106,6 +121,12 @@ func (s *Store) Close(ctx context.Context) error {
 		defer close(done)
 
 		s.closeOnce.Do(func() {
+			// Block until every in-flight send has landed, then fence off new ones so
+			// closing the channels below cannot race a send.
+			s.closeMu.Lock()
+			s.closed = true
+			s.closeMu.Unlock()
+
 			for _, ch := range s.spendChans {
 				close(ch)
 			}
@@ -116,6 +137,7 @@ func (s *Store) Close(ctx context.Context) error {
 				s.createBatcher.Close()
 			}
 
+			s.bgCancel()
 			s.pool.Close()
 		})
 	}()

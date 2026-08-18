@@ -202,6 +202,13 @@ func (s *Store) spendGroup(ctx context.Context, q pgxQuerier, g *parentSpendGrou
 	return firstErr
 }
 
+// buildSpendSQL builds the conditional spend UPDATE for a group of slots on a single row.
+//
+// The utxo_hashes slot is always consulted, even when skipHashCheck is set. A slot that
+// belongs to an output which was never stored as a UTXO (OP_RETURN, dust, post-genesis
+// unspendable) has a zeroed hash slot AND a zeroed spend slot, so the "unspent" predicate
+// alone would let an outpoint-only spend succeed against a UTXO that does not exist. The
+// non-zero hash guard keeps those slots unspendable on both paths.
 func buildSpendSQL(page uint32, slots []spendSlot, skipHashCheck, skipOverridesBit bool) (string, int) {
 	var sb strings.Builder
 
@@ -227,6 +234,11 @@ func buildSpendSQL(page uint32, slots []spendSlot, skipHashCheck, skipOverridesB
 
 	zerosParam := next()
 
+	var zeros32Param int
+	if skipHashCheck {
+		zeros32Param = next()
+	}
+
 	type slotParams struct {
 		sd, off, hoff, uh int
 	}
@@ -236,9 +248,9 @@ func buildSpendSQL(page uint32, slots []spendSlot, skipHashCheck, skipOverridesB
 	for i := range slots {
 		sp[i].sd = next()
 		sp[i].off = next()
+		sp[i].hoff = next()
 
 		if !skipHashCheck {
-			sp[i].hoff = next()
 			sp[i].uh = next()
 		}
 	}
@@ -277,7 +289,9 @@ WHERE p.hash = $%d AND p.page = $%d AND m.hash = p.hash
 	}
 
 	for i := range slots {
-		if !skipHashCheck {
+		if skipHashCheck {
+			fmt.Fprintf(&sb, "\n  AND substring(%sutxo_hashes FROM $%d FOR 32) <> $%d::bytea", prefix, sp[i].hoff, zeros32Param)
+		} else {
 			fmt.Fprintf(&sb, "\n  AND substring(%sutxo_hashes FROM $%d FOR 32) = $%d::bytea", prefix, sp[i].hoff, sp[i].uh)
 		}
 
@@ -312,8 +326,12 @@ func (s *Store) trySpendSlots(ctx context.Context, q pgxQuerier, g *parentSpendG
 
 	args = append(args, make([]byte, slotSpendSize))
 
+	if ig.SkipUTXOHashCheck {
+		args = append(args, make([]byte, slotHashSize))
+	}
+
 	for _, sl := range slots {
-		args = append(args, packSpendingData(sl.spend.SpendingData), int(sl.slot)*slotSpendSize+1)
+		args = append(args, packSpendingData(sl.spend.SpendingData), int(sl.slot)*slotSpendSize+1, int(sl.slot)*slotHashSize+1)
 
 		if !ig.SkipUTXOHashCheck {
 			var uh []byte
@@ -321,7 +339,7 @@ func (s *Store) trySpendSlots(ctx context.Context, q pgxQuerier, g *parentSpendG
 				uh = sl.spend.UTXOHash[:]
 			}
 
-			args = append(args, int(sl.slot)*slotHashSize+1, uh)
+			args = append(args, uh)
 		}
 	}
 
@@ -432,6 +450,13 @@ func (s *Store) classifySlot(ctx context.Context, q pgxQuerier, g *parentSpendGr
 		return errors.NewUtxoSpentError(*sl.spend.TxID, sl.spend.Vout, uh, existing)
 	}
 
+	// A zeroed hash slot means the output was never stored as a UTXO, so there is nothing
+	// to spend. On the hash-checking path this surfaces as a mismatch below; on the
+	// outpoint-only path there is no hash to compare against, so report it explicitly.
+	if ig.SkipUTXOHashCheck && isZeroBytes(storedHash) {
+		return errors.NewTxNotFoundError("packedsql: utxo %s:%d does not exist, output is not spendable", g.hash, sl.spend.Vout)
+	}
+
 	if !ig.SkipUTXOHashCheck && sl.spend.UTXOHash != nil && !bytes.Equal(storedHash, sl.spend.UTXOHash[:]) {
 		return errors.NewUtxoHashMismatchError("packedsql: utxo hash mismatch for %s:%d", g.hash, sl.spend.Vout)
 	}
@@ -517,6 +542,16 @@ func (s *Store) spendWithOverrides(ctx context.Context, q pgxQuerier, g *parentS
 	}
 
 	return errors.NewUtxoHashMismatchError("packedsql: utxo hash mismatch for %s:%d", g.hash, vout)
+}
+
+func isZeroBytes(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+
+	return true
 }
 
 func needsRollback(spends []*utxo.Spend) bool {

@@ -25,6 +25,24 @@ type spendWork struct {
 	done        chan error
 }
 
+// defaultBatchTimeout bounds the database work of a group-committed batch. Callers have
+// already been detached from their own context by the time a batch flushes, so without
+// this a wedged connection would stall the pipeline indefinitely.
+const defaultBatchTimeout = 30 * time.Second
+
+func (s *Store) batchTimeout() time.Duration {
+	if t := s.settings.UtxoStore.SpendWaitTimeout; t > 0 {
+		return t
+	}
+
+	return defaultBatchTimeout
+}
+
+// batchContext derives a bounded context from the store lifetime for pipeline work.
+func (s *Store) batchContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(s.bgCtx, s.batchTimeout())
+}
+
 func (s *Store) startPipeline() {
 	if s.settings.UtxoStore.StoreBatcherSize > 1 {
 		size := s.settings.UtxoStore.StoreBatcherSize
@@ -47,7 +65,8 @@ func (s *Store) startPipeline() {
 }
 
 func (s *Store) sendCreateBatch(items []*createItem) {
-	ctx := context.Background()
+	ctx, cancel := s.batchContext()
+	defer cancel()
 
 	dbTx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -95,11 +114,49 @@ func (s *Store) sendCreateBatch(items []*createItem) {
 
 func (s *Store) createViaBatcher(ctx context.Context, rows *txRows) error {
 	done := make(chan error, 1)
-	s.createBatcher.PutCtx(ctx, &createItem{rows: rows, done: done})
+
+	if err := s.putCreateItem(ctx, &createItem{rows: rows, done: done}); err != nil {
+		return err
+	}
 
 	select {
 	case err := <-done:
 		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// putCreateItem hands an item to the create batcher under the close fence so the batcher
+// cannot be closed underneath an in-flight submission.
+func (s *Store) putCreateItem(ctx context.Context, item *createItem) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+
+	if s.closed {
+		return errors.NewServiceUnavailableError("packedsql: store is closed")
+	}
+
+	s.createBatcher.PutCtx(ctx, item)
+
+	return nil
+}
+
+// sendSpendWork routes a group to its worker under the close fence. Holding the read lock
+// across the send is what makes Close safe: Close cannot take the write lock (and therefore
+// cannot close the channels) until every send has landed, and the workers keep draining in
+// the meantime, so the send cannot deadlock.
+func (s *Store) sendSpendWork(ctx context.Context, w *spendWork) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+
+	if s.closed {
+		return errors.NewServiceUnavailableError("packedsql: store is closed")
+	}
+
+	select {
+	case s.spendChans[spendWorkerIndex(w.g.hash[:], len(s.spendChans))] <- w:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -117,20 +174,18 @@ func (s *Store) spendViaWorkers(ctx context.Context, groups []*parentSpendGroup,
 
 	for i, g := range groups {
 		dones[i] = make(chan error, 1)
-		s.spendChans[spendWorkerIndex(g.hash[:], len(s.spendChans))] <- &spendWork{
+
+		if err := s.sendSpendWork(ctx, &spendWork{
 			g:           g,
 			blockHeight: blockHeight,
 			ig:          ig,
 			done:        dones[i],
+		}); err != nil {
+			return err
 		}
 	}
 
-	timeout := s.settings.UtxoStore.SpendWaitTimeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(s.batchTimeout())
 	defer timer.Stop()
 
 	var firstErr error
@@ -219,7 +274,8 @@ func (s *Store) flushSpendBatch(batch []*spendWork) {
 		return batch[i].g.page < batch[j].g.page
 	})
 
-	ctx := context.Background()
+	ctx, cancel := s.batchContext()
+	defer cancel()
 
 	dbTx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

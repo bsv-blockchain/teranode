@@ -20,6 +20,7 @@ type masterRow struct {
 	totalCount             int32
 	page0Count             int32
 	pagesTotal             int32
+	pagesSpent             int32
 	spends                 []byte
 	blockRefs              []byte
 	deleteAtHeight         *int64
@@ -51,7 +52,7 @@ const insertMasterSQL = `INSERT INTO packed_txs (hash, flags, coinbase_spending_
     spent_count, pages_total, pages_spent, spends, block_refs, delete_at_height,
     unmined_since, preserve_until, version, lock_time, fee, size_in_bytes, created_at,
     utxo_hashes, inputs, outputs)
-VALUES ($1,$2,$3,$4,$5,0,$6,0,$7,$8,$9,$10,NULL,$11,$12,$13,$14,$15,$16,$17,$18)
+VALUES ($1,$2,$3,$4,$5,0,$6,$7,$8,$9,$10,$11,NULL,$12,$13,$14,$15,$16,$17,$18,$19)
 ON CONFLICT (hash) DO NOTHING`
 
 const insertPageSQL = `INSERT INTO packed_tx_pages (hash, page, spendable_count, spent_count, spends, utxo_hashes)
@@ -167,6 +168,11 @@ func (s *Store) buildTxRows(tx *bt.Tx, blockHeight uint32, options *utxo.CreateO
 	genesisHeight := s.settings.ChainCfgParams.GenesisActivationHeight
 	totalSpendable := int32(0)
 
+	// Overflow pages that hold no spendable output can never be completed by a spend, so
+	// pages_spent would never reach pages_total and the row would never become eligible
+	// for a delete-at-height. Count them as already complete at creation time.
+	emptyPages := int32(0)
+
 	for page := uint32(0); page <= pagesTotal; page++ {
 		start := page * pageSize
 		end := min(start+pageSize, outputCount)
@@ -198,6 +204,10 @@ func (s *Store) buildTxRows(tx *bt.Tx, blockHeight uint32, options *utxo.CreateO
 			rows.master.spends = spends
 			rows.master.utxoHashes = hashes
 		} else {
+			if spendable == 0 {
+				emptyPages++
+			}
+
 			rows.pages = append(rows.pages, pageRow{
 				page:           page,
 				spendableCount: spendable,
@@ -208,6 +218,7 @@ func (s *Store) buildTxRows(tx *bt.Tx, blockHeight uint32, options *utxo.CreateO
 	}
 
 	rows.master.totalCount = totalSpendable
+	rows.master.pagesSpent = emptyPages
 
 	if len(options.MinedBlockInfos) > 0 {
 		rows.master.blockRefs = packBlockRefs(options.MinedBlockInfos)
@@ -299,7 +310,7 @@ func (s *Store) insertTxRowsOn(ctx context.Context, q pgxQuerier, rows *txRows) 
 
 	args := []any{
 		m.hash, m.flags, m.coinbaseSpendingHeight, m.totalCount, m.page0Count,
-		m.pagesTotal, m.spends, m.blockRefs, m.deleteAtHeight, m.unminedSince,
+		m.pagesTotal, m.pagesSpent, m.spends, m.blockRefs, m.deleteAtHeight, m.unminedSince,
 		m.version, m.lockTime, m.fee, m.sizeInBytes, m.createdAt,
 		m.utxoHashes, m.inputs, m.outputs,
 	}

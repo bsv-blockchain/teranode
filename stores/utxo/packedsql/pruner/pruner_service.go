@@ -88,12 +88,23 @@ const victimsSQL = `SELECT hash FROM packed_txs
 WHERE delete_at_height IS NOT NULL AND delete_at_height <= $1
 LIMIT $2`
 
+// defensiveVictimsSQL only tombstones a row once every spender recorded in its slots is
+// itself stably mined. Slots are addressed by vout, so the slot count must come from the
+// physical length of the spends blob (page0_count counts only *spendable* outputs and is
+// smaller whenever the transaction has an unspendable output). Overflow pages carry their
+// own spend slots and are checked alongside page 0.
 const defensiveVictimsSQL = `SELECT t.hash FROM packed_txs t
 WHERE t.delete_at_height IS NOT NULL AND t.delete_at_height <= $1
 AND NOT EXISTS (
-  SELECT 1
-  FROM generate_series(0, t.page0_count - 1) AS g(slot)
-  CROSS JOIN LATERAL (SELECT substring(t.spends FROM g.slot * 36 + 1 FOR 32) AS spender) sp
+  SELECT 1 FROM (
+    SELECT substring(t.spends FROM g.slot * 36 + 1 FOR 32) AS spender
+    FROM generate_series(0, octet_length(t.spends) / 36 - 1) AS g(slot)
+    UNION ALL
+    SELECT substring(pg.spends FROM gp.slot * 36 + 1 FOR 32) AS spender
+    FROM packed_tx_pages pg
+    CROSS JOIN LATERAL generate_series(0, octet_length(pg.spends) / 36 - 1) AS gp(slot)
+    WHERE pg.hash = t.hash
+  ) sp
   WHERE octet_length(sp.spender) = 32 AND sp.spender <> '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea
     AND NOT EXISTS (
       SELECT 1 FROM packed_txs child

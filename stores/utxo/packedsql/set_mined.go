@@ -56,15 +56,18 @@ func (s *Store) setMinedChunk(ctx context.Context, hashes []*chainhash.Hash, inf
 
 	defer func() { _ = dbTx.Rollback(ctx) }()
 
+	// ORDER BY hash gives every concurrent SetMinedMulti the same row lock order, matching
+	// the hash ordering the spend paths use. Without it two overlapping calls can deadlock.
 	rows, err := dbTx.Query(ctx,
 		`SELECT hash, flags, block_refs, spent_count, page0_count, pages_spent, pages_total,
 		        preserve_until, delete_at_height, unmined_since
-		 FROM packed_txs WHERE hash = ANY($1::bytea[]) FOR UPDATE`, hashBytes)
+		 FROM packed_txs WHERE hash = ANY($1::bytea[]) ORDER BY hash FOR UPDATE`, hashBytes)
 	if err != nil {
 		return errors.NewStorageError("packedsql: SetMinedMulti select failed", err)
 	}
 
 	states := make(map[chainhash.Hash]*minedRowState, len(hashes))
+	ordered := make([]*minedRowState, 0, len(hashes))
 
 	for rows.Next() {
 		st := &minedRowState{}
@@ -78,6 +81,7 @@ func (s *Store) setMinedChunk(ctx context.Context, hashes []*chainhash.Hash, inf
 
 		st.hash = chainhash.Hash(hb)
 		states[st.hash] = st
+		ordered = append(ordered, st)
 	}
 
 	rows.Close()
@@ -97,7 +101,9 @@ func (s *Store) setMinedChunk(ctx context.Context, hashes []*chainhash.Hash, inf
 	retention := s.settings.GetUtxoStoreBlockHeightRetention()
 	newDAH := int64(info.BlockHeight) + int64(retention)
 
-	for _, st := range states {
+	// Iterate in hash order (as returned by the locking SELECT), not map order, so the
+	// UPDATE sequence is deterministic too.
+	for _, st := range ordered {
 		newFlags := st.flags &^ flagLocked
 		newRefs := st.blockRefs
 		newUnmined := st.unminedSince
