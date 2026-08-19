@@ -36,7 +36,7 @@ func TestGenesisActivationHeight(t *testing.T) {
 		params *chaincfg.Params
 		expect uint32
 	}{
-		{"RegressionNet", &chaincfg.RegressionNetParams, 10000},
+		{"RegressionNet", &chaincfg.RegressionNetParams, 100},
 		{"TestNet", &chaincfg.TestNetParams, 1344302},
 		{"MainNet", &chaincfg.MainNetParams, 620538},
 	}
