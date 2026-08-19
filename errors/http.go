@@ -76,7 +76,7 @@ func encodeHTTPError(code ERR, message string) (string, bool) {
 	}
 
 	// base64 costs 4 bytes per 3, and the proto adds a small fixed overhead;
-	// two thirds of the budget leaves ample room for both.
+	// half of the budget leaves ample room for both.
 	budget := maxHTTPErrorHeaderBytes/2 - len(truncationSuffix)
 	if budget < 0 || len(message) <= budget {
 		// Nothing left to trim — emit the code with no message rather than

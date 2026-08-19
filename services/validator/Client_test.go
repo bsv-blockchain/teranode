@@ -324,6 +324,44 @@ func TestHandleValidationError_HTTPServerFail(t *testing.T) {
 	assert.Error(t, resultErr)
 }
 
+func TestHandleValidationError_HTTPFallbackSurfacesVerdict(t *testing.T) {
+	// A verdict as the validator produces it: the client-safe reason buried
+	// under a wrapper that names node-internal state.
+	verdict := errors.NewProcessingError("[Validate][deadbeef] /home/build/services/validator/Validator.go:812 failed",
+		errors.NewTxPolicyError("insufficient-fee"))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		errors.AttachHTTPError(w.Header(), verdict)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("[handleSingleTx] Failed to process transaction: " + verdict.Error()))
+	}))
+	t.Cleanup(server.Close)
+
+	validatorHTTPAddr, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	running := atomic.Bool{}
+	running.Store(true)
+
+	client := &Client{
+		client:            &MockValidatorAPIClient{},
+		logger:            &testLogger{t: t},
+		running:           &running,
+		validatorHTTPAddr: validatorHTTPAddr,
+	}
+
+	resultErr := client.handleValidationError(context.Background(), createTestTransaction(t), 100, NewDefaultOptions(),
+		status.Error(codes.ResourceExhausted, "message too large"))
+
+	require.Error(t, resultErr)
+	require.True(t, errors.Is(resultErr, errors.ErrTxPolicy), "got %v", resultErr)
+	require.Contains(t, resultErr.Error(), "insufficient-fee")
+	require.NotContains(t, resultErr.Error(), "message too large",
+		"the original gRPC size error must not replace the reconstructed verdict")
+	require.NotContains(t, errors.UserMessage(resultErr), "Validator.go:812",
+		"the validator's internal chain must not reach the caller")
+}
+
 func TestBatchValidation(t *testing.T) {
 	// Create mock client that returns batch responses
 	mockClient := &MockValidatorAPIClient{

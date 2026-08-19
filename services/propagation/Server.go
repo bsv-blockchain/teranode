@@ -727,9 +727,9 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 //
 // The txid is derived here, while rendering the line, rather than being
 // captured for every submission: a batch of N transactions with F failures
-// pays for F lookups rather than N. processTransaction caches the hash on the
-// transaction after parsing it, so each of those is a lookup and a hex
-// encoding rather than a re-serialization and a double-SHA.
+// pays for F lookups rather than N. processTransactionInternal caches the
+// hash on the transaction, so each of those is a lookup and a hex encoding
+// rather than a re-serialization and a double-SHA.
 func failureLine(tx *bt.Tx, err error) string {
 	publicErr := errors.PublicError(err)
 	if publicErr == nil {
@@ -1330,13 +1330,6 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		return nil, err
 	}
 
-	// Cache the hash on the transaction. bt.Tx.TxIDChainHash re-serializes and
-	// double-hashes on every call unless SetTxHash has been used, and the paths
-	// below ask for the txid repeatedly: the blob key, the Kafka message key, a
-	// Debugf argument that is evaluated whether or not debug logging is on, and
-	// every error message. One hash here replaces all of them.
-	btTx.SetTxHash(btTx.TxIDChainHash())
-
 	if err = ps.processTransactionInternal(ctx, btTx); err != nil {
 		span.RecordError(err)
 		return btTx, err
@@ -1372,6 +1365,15 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		tracing.WithParentStat(ps.stats),
 	)
 	defer endSpan(err)
+
+	// Cache the hash on the transaction. bt.Tx.TxIDChainHash re-serializes and
+	// double-hashes on every call unless SetTxHash has been used, and every
+	// ingest path asks for the txid repeatedly: the coinbase check below, the
+	// blob key, the Kafka message key, a Debugf argument that is evaluated
+	// whether or not debug logging is on, and every error message. Caching here
+	// covers HTTP /tx, gRPC, and HTTP /txs (which parses with ReadFrom and
+	// calls this directly), so one hash replaces all of them.
+	btTx.SetTxHash(btTx.TxIDChainHash())
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
@@ -1556,11 +1558,11 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 //
 // The validator attaches its public code and message as a header
 // (errors.AttachHTTPError). When it is there, that verdict is what the client is
-// told, under this node's [ProcessTransaction][<txid>] context. When it is not —
+// told, under this node's [ProcessTransaction][<txid>] context, and the response
+// body goes to the log rather than into the returned error. When it is not —
 // an older validator, or a proxy answering on its behalf — the previous wrapping
-// stands, so this degrades to the old behaviour rather than losing the failure.
-// The response body stays out of the returned message either way, and goes to
-// the log instead.
+// stands (status and body included), so this degrades to the old behaviour
+// rather than losing the failure.
 func (ps *PropagationServer) validatorRejection(ctx context.Context, btTx *bt.Tx, resp *http.Response, body []byte) error {
 	verdict := errors.HTTPErrorFrom(resp.Header)
 	if verdict == nil {

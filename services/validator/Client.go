@@ -447,7 +447,10 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	return result, nil
 }
 
-// handleValidationError processes validation errors and attempts HTTP fallback if appropriate
+// handleValidationError processes validation errors and attempts HTTP fallback
+// when the gRPC call failed because the message was too large. A successful
+// fallback returns nil; a failed fallback returns the HTTP verdict, not the
+// original ResourceExhausted error.
 func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options, err error) error {
 	// Check if the error is related to message size (ResourceExhausted)
 	st, ok := status.FromError(err)
@@ -468,7 +471,11 @@ func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeig
 
 	c.logger.Errorf("[ValidateWithOptions][%s] HTTP fallback also failed: %v", tx.TxID(), httpErr)
 
-	return errors.UnwrapGRPC(err)
+	// The HTTP response is the actual verdict (or the old wrapping, when the
+	// header is absent). Returning the original ResourceExhausted would tell
+	// the caller the transaction was too large for gRPC, which is no longer
+	// the failure — it was submitted, and rejected.
+	return httpErr
 }
 
 // sendBatchToValidator sends a batch of transactions to the validator via gRPC.
