@@ -360,6 +360,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BatchMissingTransactions:                  getBool("blockvalidation_batch_missing_transactions", false, alternativeContext...),
 			CheckSubtreeFromBlockTimeout:              getDuration("blockvalidation_check_subtree_from_block_timeout", 5*time.Minute),
 			SubtreeDataFetchTimeout:                   getDuration("blockvalidation_subtree_data_fetch_timeout", DefaultSubtreeDataFetchTimeout, alternativeContext...),
+			SubtreeMetaPeerFetchTimeout:               getDuration("blockvalidation_subtree_meta_peer_fetch_timeout", DefaultSubtreeMetaPeerFetchTimeout, alternativeContext...),
 			CheckSubtreeFromBlockRetries:              getInt("blockvalidation_check_subtree_from_block_retries", 5, alternativeContext...),
 			CheckSubtreeFromBlockRetryBackoffDuration: getDuration("blockvalidation_check_subtree_from_block_retry_backoff_duration", 30*time.Second),
 			SecretMiningThreshold:                     getUint32("blockvalidation_secret_mining_threshold", uint32(params.CoinbaseMaturity-1), alternativeContext...), // golint:nolint
@@ -674,7 +675,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SavePeers:                        getBool("legacy_savePeers", false, alternativeContext...), // by default we do not save the peers
 			AllowSyncCandidateFromLocalPeers: getBool("legacy_allowSyncCandidateFromLocalPeers", false, alternativeContext...),
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
-			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...),     // ping/pong interval is 2 mins, so we set this to 125s to be sure
+			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...), // ping/pong interval is 2 mins, so we set this to 125s to be sure
+			MaxAddnodePeers:                  getInt("legacy_maxAddnodePeers", 8, alternativeContext...),
+			ReplenishInterval:                getDuration("legacy_replenishInterval", 2*time.Second, alternativeContext...),
 			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
 			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
 			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),

@@ -231,7 +231,10 @@ func TestAttempt(t *testing.T) {
 	}
 
 	na := ka.NetAddress()
-	n.Attempt(na)
+
+	// The last-attempt time is recorded whether or not the failure is counted
+	// against the address: it paces retries rather than judging the peer.
+	n.Attempt(na, false)
 
 	if ka.LastAttempt().IsZero() {
 		t.Errorf("Address should have an attempt, but does not")
@@ -489,5 +492,117 @@ func TestNetAddressKey(t *testing.T) {
 			t.Errorf("NetAddressKey #%d\n got: %s want: %s", i, key, test.want)
 			continue
 		}
+	}
+}
+
+// TestAttemptCountsOnlyBlameworthyFailures covers the two guards that decide
+// whether a failed dial is held against an address.
+//
+// Attempts are what demote an address: chance divides its selection weight by
+// 1.5 per attempt, and isBad condemns one that has failed three times without
+// ever succeeding. So counting a failure is an accusation, and accusing every
+// address in the book during an outage would leave the node with nowhere to
+// dial when its link came back.
+//
+// svnode guards this twice (CAddrMan::Attempt_, addrman.cpp:316): the caller
+// only passes countFailure when the node is demonstrably connected elsewhere,
+// and an address is counted at most once between successes anywhere. This pins
+// both, since either alone leaves the outage case open.
+func TestAttemptCountsOnlyBlameworthyFailures(t *testing.T) {
+	t.Run("an uncounted failure does not demote the address", func(t *testing.T) {
+		n := addrmgr.New(ulogger.TestLogger{}, "testattemptuncounted", lookupFunc)
+		if err := n.AddAddressByIP(someIP + ":8333"); err != nil {
+			t.Fatalf("Adding address failed: %v", err)
+		}
+
+		ka := n.GetAddress()
+		na := ka.NetAddress()
+
+		for i := 0; i < 5; i++ {
+			n.Attempt(na, false)
+		}
+
+		if got := ka.Attempts(); got != 0 {
+			t.Errorf("failures the node cannot blame on the peer must not count: got %d attempts, want 0", got)
+		}
+
+		if ka.LastAttempt().IsZero() {
+			t.Error("the attempt time should still be recorded, so retries stay paced")
+		}
+	})
+
+	t.Run("a blameworthy failure counts once until the next success", func(t *testing.T) {
+		n := addrmgr.New(ulogger.TestLogger{}, "testattemptcounted", lookupFunc)
+		if err := n.AddAddressByIP(someIP + ":8333"); err != nil {
+			t.Fatalf("Adding address failed: %v", err)
+		}
+
+		ka := n.GetAddress()
+		na := ka.NetAddress()
+
+		// Good is what marks connectivity as working. Without it there is no
+		// evidence the network is up, so nothing counts.
+		n.Good(na)
+
+		n.Attempt(na, true)
+
+		if got := ka.Attempts(); got != 1 {
+			t.Fatalf("a blameworthy failure should count: got %d attempts, want 1", got)
+		}
+
+		// A retry storm against one address is one piece of evidence, not
+		// twenty. Without this an unreachable host is condemned by a single
+		// burst rather than by a pattern over time.
+		for i := 0; i < 20; i++ {
+			n.Attempt(na, true)
+		}
+
+		if got := ka.Attempts(); got != 1 {
+			t.Errorf("repeated failures between successes should count once: got %d attempts, want 1", got)
+		}
+
+		// Once connectivity is confirmed again, the address is eligible to
+		// earn another strike.
+		n.Good(na)
+		n.Attempt(na, true)
+
+		if got := ka.Attempts(); got != 1 {
+			t.Errorf("Good resets the count, so the next failure is the first again: got %d attempts, want 1", got)
+		}
+	})
+}
+
+// TestAttemptCountsFromColdStart pins that a blameworthy failure counts before
+// the node's first successful version exchange.
+//
+// Attempt only counts when ka.lastCountAttempt is BEFORE a.lastGood. Both start
+// at the zero time, and zero is not before zero — so a lastGood left at zero
+// swallows every failure until the first Good(), which is precisely the window
+// in which the address book most needs to learn that its seed addresses are
+// dead. svnode initialises nLastGood to 1 in CAddrMan::Clear (addrman.h:505)
+// with the comment "Initially at 1 so that 'never' is strictly worse".
+func TestAttemptCountsFromColdStart(t *testing.T) {
+	n := addrmgr.New(ulogger.TestLogger{}, "testattemptcoldstart", lookupFunc)
+	if err := n.AddAddressByIP(someIP + ":8333"); err != nil {
+		t.Fatalf("Adding address failed: %v", err)
+	}
+
+	ka := n.GetAddress()
+
+	// No Good() has ever been called: this is a node that has just started and
+	// has not yet completed a handshake with anybody.
+	n.Attempt(ka.NetAddress(), true)
+
+	if got := ka.Attempts(); got != 1 {
+		t.Errorf("a blameworthy failure before the first success must still count: got %d attempts, want 1", got)
+	}
+
+	// And still only once, until connectivity is confirmed.
+	for i := 0; i < 5; i++ {
+		n.Attempt(ka.NetAddress(), true)
+	}
+
+	if got := ka.Attempts(); got != 1 {
+		t.Errorf("repeated failures between successes should count once: got %d attempts, want 1", got)
 	}
 }
