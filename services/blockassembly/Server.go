@@ -2480,6 +2480,11 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 // Returns:
 //   - error: Any error encountered during block generation
 func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) error {
+	// Block assembly learns about a new tip from an asynchronous notification, so
+	// wait for its view to catch up before building a candidate on a tip the chain
+	// may already have left (issue 764).
+	ba.waitForAssemblerTip(ctx)
+
 	// get a mining candidate
 	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
 	if err != nil {
@@ -2531,6 +2536,49 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	// Wait for the best block header to be updated after successful submission
 	// This prevents the "already mining on top of the same block" error when generating multiple blocks
 	return ba.waitForBestBlockHeaderUpdate(ctx, previousBestHash)
+}
+
+// waitForAssemblerTip waits, bounded, for block assembly's view of the chain tip
+// to match the blockchain's.
+//
+// processNewBlockAnnouncement runs on the block assembler's own goroutine, so a
+// generate call arriving straight after a reorg (invalidateblock is the visible
+// case) can otherwise build its candidate on the pre-reorg tip, which
+// submitMiningSolution then rejects as stale. The blockchain tip is re-read each
+// pass so a chain that advances while waiting is not waited out in full.
+//
+// A timeout is not an error: the caller proceeds and fails with the same stale
+// candidate error it would have hit without this wait.
+func (ba *BlockAssembly) waitForAssemblerTip(ctx context.Context) {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		bestHeader, _, err := ba.blockAssembler.blockchainClient.GetBestBlockHeader(waitCtx)
+		if err != nil {
+			// Nothing to sync against. Leave the candidate path to report the
+			// failure it would have reported anyway.
+			ba.logger.Warnf("[generateBlock] could not read the chain tip to sync against: %v", err)
+			return
+		}
+
+		// A nil current header means the assembler has not loaded its best block
+		// yet, which is exactly what this loop waits for.
+		if currentHeader, _ := ba.blockAssembler.CurrentBlock(); currentHeader != nil &&
+			currentHeader.Hash().IsEqual(bestHeader.Hash()) {
+			return
+		}
+
+		select {
+		case <-waitCtx.Done():
+			ba.logger.Warnf("[generateBlock] timeout waiting for block assembly to reach chain tip %s", bestHeader.Hash())
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // waitForBestBlockHeaderUpdate waits for the best block header to be updated after block submission
