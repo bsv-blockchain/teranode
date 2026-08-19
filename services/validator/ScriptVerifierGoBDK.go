@@ -312,31 +312,40 @@ func (v *scriptVerifierGoBDK) ValidateTransaction(tx *bt.Tx, blockHeight uint32,
 	return nil
 }
 
-// withBDKCause appends the engine's own description of the failure to base.
+// bdkCause turns the engine's own description of the failure into a typed link
+// on the error chain, carrying the verdict code the caller classified it under.
 //
 // The public error boundary (errors.UserMessage / PublicError) surfaces a
 // single code and message: the innermost cause whose code is on
 // publicCauseCodes, or the outermost code. errVerify is a bdkscript error, not
-// a *errors.Error, so it can never be selected — which meant every script and
-// standardness rejection left this node as the bare constant below, and the
-// submitter was told only that validation failed. The reason existed solely in
-// this node's Warnf line.
+// a *errors.Error, so wrapping it directly cannot work — errors.New converts a
+// foreign error to a code-0 link, which is never allowlisted. Every script and
+// standardness rejection therefore left this node as one of the bare constants
+// below, and the submitter was told only that validation failed; the reason
+// existed solely in this node's Warnf line.
 //
-// Folding it into the message is what carries it across. It is safe to surface:
-// a script-evaluation result is a verdict about the submitted transaction and
-// names no node-internal state. errVerify stays wrapped as well, so anything
-// inspecting the chain (errors.Is, the ERR code) is unchanged.
-func withBDKCause(base string, errVerify error) string {
+// Giving the cause a code of its own is what carries it across, and it is safe
+// to surface: these strings come from svnode's static tables (bsv::DoSErrorString,
+// ScriptErrorString) — reject reasons like "insufficient-fee" and
+// "bad-txns-in-belowout", and script prose like "Script evaluated without error
+// but finished with a false/empty top stack element". They are verdicts about
+// the submitted transaction and name no node-internal state.
+//
+// A nil return is safe to pass on as the wrapped cause: errors.New only attaches
+// a non-nil one.
+func bdkCause(code errors.ERR, errVerify error) *errors.Error {
 	if errVerify == nil {
-		return base
+		return nil
 	}
 
 	cause := errVerify.Error()
 	if cause == "" {
-		return base
+		return nil
 	}
 
-	return base + ": " + cause
+	// %s, never cause-as-format: the string crosses a CGO boundary and must
+	// never be interpreted as a format string.
+	return errors.New(code, "%s", cause)
 }
 
 func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus bool) error {
@@ -344,17 +353,17 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 	if errors.As(errVerify, &dosErr) {
 		switch dosErr.Code() {
 		case bdkscript.DOS_ERR_NOT_STANDARD, bdkscript.DOS_ERR_SIGOPS_POLICY, bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION:
-			policyErr := errors.NewTxPolicyError(withBDKCause(errMsgPolicy, errVerify), errVerify)
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		case bdkscript.DOS_ERR_INSUFFICIENT_FEE:
-			policyErr := errors.NewTxPolicyError(withBDKCause("transaction fee is too low", errVerify), errVerify)
+			policyErr := errors.NewTxPolicyError("transaction fee is too low", bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		default:
 			if dosErr.Code() <= bdkscript.DOS_ERR_OK || dosErr.Code() >= bdkscript.DOS_ERR_COUNT {
 				v.logger.Warnf("unknown BDK DoS error code=%d error=%v", dosErr.Code(), errVerify)
 			}
 
-			return errors.NewTxInvalidError(withBDKCause(errMsgInvalidTx, errVerify), errVerify)
+			return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
 		}
 	}
 
@@ -370,12 +379,12 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 
 		if (!consensus && bdkPolicyRelatedScriptError(errCode)) ||
 			(consensus && errCode == bdkscript.SCRIPT_ERR_STACK_SIZE) {
-			policyErr := errors.NewTxPolicyError(withBDKCause(errMsgPolicy, errVerify), errVerify)
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		}
 	}
 
-	return errors.NewTxInvalidError(withBDKCause(errMsgInvalidTx, errVerify), errVerify)
+	return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
 }
 
 func bdkPolicyRelatedScriptError(errCode bdkscript.ScriptErrorCode) bool {

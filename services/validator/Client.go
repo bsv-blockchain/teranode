@@ -662,11 +662,27 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	}
 	defer resp.Body.Close()
 
-	// Check response status
+	// Check response status.
+	//
+	// Same contract as propagation's fallback: prefer the verdict the server
+	// attached as a header over wrapping the whole response as a SERVICE_ERROR.
+	// Without it a rejection reaches an RPC client through
+	// services/rpc/handlers.go as an opaque service failure carrying the
+	// validator's internal error chain verbatim, and callers that classify on the
+	// error code read a permanent rejection as something worth retrying.
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+
+		verdict := errors.HTTPErrorFrom(resp.Header)
+		if verdict == nil {
+			return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+				tx.TxID(), resp.StatusCode, string(body))
+		}
+
+		c.logger.Warnf("[ValidateWithOptions][%s] validator /tx endpoint rejected transaction: status=%d body=%s",
 			tx.TxID(), resp.StatusCode, string(body))
+
+		return errors.New(verdict.Code(), "[ValidateWithOptions][%s] %s", tx.TxID(), verdict.Message())
 	}
 
 	c.logger.Debugf("[ValidateWithOptions][%s] successfully validated using validator /tx endpoint", tx.TxID())

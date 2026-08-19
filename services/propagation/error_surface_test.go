@@ -5,10 +5,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +36,14 @@ import (
 //
 // These tests pin both, per failure class, through the real handlers.
 
+// foreignError is an error from outside the errors package — a stdlib or
+// third-party one, which is what reaches the boundary when a dependency fails
+// before Teranode has wrapped it. errors.PublicError has no code to report for
+// one of these.
+type foreignError string
+
+func (e foreignError) Error() string { return string(e) }
+
 // failureClass is one validation outcome as the validator would return it.
 type failureClass struct {
 	name string
@@ -43,10 +54,10 @@ type failureClass struct {
 	wantStatus int
 	// wantReason is a cause-specific token the response body must carry, or
 	// empty for the classes that are deliberately opaque (node faults).
+	//
+	// No class here names a transaction in its own message, so the txid can
+	// only be present because the handler put it there.
 	wantReason string
-	// anonymous marks a cause whose own message names no transaction, so the
-	// txid can only be present if the handler put it there.
-	anonymous bool
 }
 
 func failureClasses() []failureClass {
@@ -56,51 +67,47 @@ func failureClasses() []failureClass {
 			err:        errors.NewTxInvalidError("bad-txns-in-belowout"),
 			wantStatus: http.StatusBadRequest,
 			wantReason: "bad-txns-in-belowout",
-			anonymous:  true,
 		},
 		{
 			name:       "policy check",
 			err:        errors.NewTxPolicyError("bad-txns-inputs-too-large"),
 			wantStatus: http.StatusBadRequest,
 			wantReason: "bad-txns-inputs-too-large",
-			anonymous:  true,
 		},
 		{
+			// The chain ScriptVerifierGoBDK builds: this node's constant on the
+			// outside, the engine's own verdict as the innermost typed link.
 			name: "script evaluation failure",
-			err: errors.NewTxInvalidError("GoBDK fail to ValidateTransaction: SCRIPT_ERR_EVAL_FALSE",
-				errors.NewTxInvalidError("SCRIPT_ERR_EVAL_FALSE")),
+			err: errors.NewTxInvalidError("GoBDK fail to ValidateTransaction",
+				errors.NewTxInvalidError("Script evaluated without error but finished with a false/empty top stack element")),
 			wantStatus: http.StatusBadRequest,
-			wantReason: "SCRIPT_ERR_EVAL_FALSE",
-			anonymous:  true,
+			wantReason: "false/empty top stack element",
 		},
 		{
 			name: "fee below the floor",
 			err: errors.NewTxInvalidError("GoBDK fail to ValidateTransaction",
-				errors.NewTxPolicyError("transaction fee is too low")),
+				errors.NewTxPolicyError("transaction fee is too low",
+					errors.NewTxPolicyError("insufficient-fee"))),
 			wantStatus: http.StatusBadRequest,
-			wantReason: "transaction fee is too low",
-			anonymous:  true,
+			wantReason: "insufficient-fee",
 		},
 		{
 			name:       "non-final",
 			err:        errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError("lock time (1783806110) is not less than median block time (1783805456)")),
 			wantStatus: http.StatusBadRequest,
 			wantReason: "median block time",
-			anonymous:  true,
 		},
 		{
 			name:       "missing parent",
 			err:        errors.NewTxMissingParentError("error getting parent transaction %s", strings.Repeat("a", 64), errors.ErrTxNotFound),
 			wantStatus: http.StatusUnprocessableEntity,
 			wantReason: "error getting parent transaction",
-			anonymous:  true,
 		},
 		{
 			name:       "conflicting",
 			err:        errors.NewTxConflictingError("tx is conflicting"),
 			wantStatus: http.StatusConflict,
 			wantReason: "tx is conflicting",
-			anonymous:  true,
 		},
 		{
 			name: "node fault",
@@ -108,7 +115,6 @@ func failureClasses() []failureClass {
 			// A fault in this node, not a verdict: no detail is surfaced, and
 			// the 5xx is what tells the client to retry rather than give up.
 			wantStatus: http.StatusInternalServerError,
-			anonymous:  true,
 		},
 	}
 }
@@ -218,6 +224,22 @@ func TestFailureLine(t *testing.T) {
 		err := errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes")
 		require.Equal(t, errors.UserMessage(err), failureLine(nil, err))
 	})
+
+	t.Run("a foreign error still leads with a code", func(t *testing.T) {
+		// errors.PublicError has no code to report for an error that is not a
+		// *errors.Error, and falls back to the bare literal "internal error".
+		// Scanning the message for the "CODE (n): " prefix and inserting the
+		// txid after it produced a line with no code on it at all, breaking the
+		// invariant every other failure line holds. Rendering through the
+		// errors package instead makes the prefix structural.
+		got := failureLine(tx, foreignError("connection reset by peer"))
+		require.Regexp(t, `^[A-Z_]+ \(\d+\): `, got)
+		require.Contains(t, got, txid, "the transaction must still be named: %s", got)
+	})
+
+	t.Run("nil error renders nothing", func(t *testing.T) {
+		require.Empty(t, failureLine(tx, nil))
+	})
 }
 
 // TestPublicCauseAllowlist_MissingParent pins the allowlist decision that makes
@@ -246,4 +268,79 @@ func failureBodyLines(t *testing.T, body string) []string {
 	require.NotEmpty(t, lines)
 	require.Equal(t, "Failed to process transactions:", lines[0], "unexpected body shape: %s", body)
 	return lines[1:]
+}
+
+// TestLargeTxFallbackSurfacesTheVerdict covers the one path on which a
+// Kafka-wired node — every .operator deployment — answers a submitter with a
+// real verdict.
+//
+// Everything else in this file exercises the Kafka-less path. With Kafka
+// configured, processTransactionInternal publishes and returns nil, so a normal
+// transaction is answered 200 OK before the validator has looked at it; only a
+// transaction above KafkaMaxMessageBytes is validated synchronously, over HTTP.
+// That fallback used to wrap whatever came back as SERVICE_ERROR, which is off
+// publicCauseCodes: a permanently invalid transaction was reported as a
+// retryable 500, and the validator's rendered error chain went out in the body.
+func TestLargeTxFallbackSurfacesTheVerdict(t *testing.T) {
+	// A verdict as the validator produces it: the client-safe reason buried
+	// under a wrapper that names node-internal state.
+	verdict := errors.NewProcessingError("[Validate][deadbeef] /home/build/services/validator/Validator.go:812 failed",
+		errors.NewTxPolicyError("insufficient-fee"))
+
+	t.Run("verdict header is preferred over the body", func(t *testing.T) {
+		tx, rec := runLargeTxFallback(t, func(w http.ResponseWriter) {
+			errors.AttachHTTPError(w.Header(), verdict)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("[handleSingleTx] Failed to process transaction: " + verdict.Error()))
+		})
+
+		got := rec.Body.String()
+		require.Equal(t, http.StatusBadRequest, rec.Code,
+			"a permanently invalid transaction must not be reported as retryable\nbody: %s", got)
+		require.Contains(t, got, "insufficient-fee", "the verdict must reach the client\nbody: %s", got)
+		require.Contains(t, got, tx.TxID(), "the failure must name its transaction\nbody: %s", got)
+		require.Contains(t, got, "TX_POLICY", "the code must survive the hop\nbody: %s", got)
+		require.NotContains(t, got, "Validator.go:812",
+			"the validator's internal chain must not reach a client\nbody: %s", got)
+	})
+
+	t.Run("without the header the previous wrapping stands", func(t *testing.T) {
+		_, rec := runLargeTxFallback(t, func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("[handleSingleTx] Failed to process transaction: " + verdict.Error()))
+		})
+
+		require.Equal(t, http.StatusInternalServerError, rec.Code,
+			"an older validator must degrade to the previous behaviour, not lose the failure")
+		require.Contains(t, rec.Body.String(), "non-OK status")
+	})
+}
+
+// runLargeTxFallback drives POST /tx through the > KafkaMaxMessageBytes HTTP
+// fallback against a stub validator, and returns the transaction submitted and
+// the recorded response. The limit is set to one byte rather than building a
+// megabyte transaction: the branch under test is a size comparison.
+func runLargeTxFallback(t *testing.T, respond func(w http.ResponseWriter)) (*bt.Tx, *httptest.ResponseRecorder) {
+	t.Helper()
+
+	validatorStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		respond(w)
+	}))
+	t.Cleanup(validatorStub.Close)
+
+	validatorURL, err := url.Parse(validatorStub.URL)
+	require.NoError(t, err)
+
+	tx := createRobustTestTx(t)
+	ps, _ := setupPropagationServer(t, NewMockValidatorForTxTest(nil), nil)
+	ps.validatorKafkaProducerClient = kafka.NewKafkaAsyncProducerMock()
+	ps.validatorHTTPAddr = validatorURL
+	ps.settings.Validator.KafkaMaxMessageBytes = 1
+
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(
+		httptest.NewRequest(http.MethodPost, "/tx", bytes.NewReader(tx.ExtendedBytes())), rec)
+	require.NoError(t, ps.handleSingleTx(context.Background())(c))
+
+	return tx, rec
 }
