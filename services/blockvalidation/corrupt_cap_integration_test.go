@@ -128,15 +128,19 @@ func TestValidateSubtrees_InfraMerkleErrorIsWrapped(t *testing.T) {
 //     nil (the corrupt error is suppressed), proving the expensive validation was skipped rather
 //     than repeated,
 //   - clearing the counter re-admits the hash and the corrupt error surfaces again (self-heal),
-//   - the cap holds with a nil p2pClient / empty peerID, so it is ban-score-independent.
+//   - the cap holds with a nil p2pClient, so it is ban-score-independent,
+//   - an EMPTY peerID is never capped (fail-open): an unidentified delivery is never gated out.
 func TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s, _, block := newProcessBlockFoundHarness(ctx, t)
+	s, blockchainStore, block := newProcessBlockFoundHarness(ctx, t)
 
 	// Low cap so the test is fast; the gate reads this live.
 	s.settings.BlockValidation.MaxCorruptAttemptsPerBlock = 2
+
+	// A real serving-peer identity — the cap is keyed per (hash, peerID).
+	const peerID = "peerA"
 
 	// Corrupt the BODY, not the header: a 1-byte coinbase scriptSig fails the outer coinbase-length
 	// check (< 2 bytes) and returns ERR_BLOCK_CORRUPT. The coinbase is not committed by the block
@@ -145,26 +149,45 @@ func TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals(t *testing.T) {
 
 	// Deliveries below the cap are validated and surface a corrupt error, each accounted toward the cap.
 	for i := 1; i <= 2; i++ {
-		err := s.processBlockFound(ctx, block.Hash(), "", "legacy", block)
+		err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
 		require.Error(t, err, "delivery %d must reach validation and fail", i)
 		require.True(t, errors.IsBlockCorrupt(err), "delivery %d must surface a corrupt error, got: %v", i, err)
 	}
 
-	require.True(t, s.corruptAttemptsExhausted(block.Hash(), ""), "cap reached after 2 corrupt deliveries")
+	require.True(t, s.corruptAttemptsExhausted(block.Hash(), peerID), "cap reached after 2 corrupt deliveries")
 
-	// Past the cap the corrupt delivery is DROPPED before validation: it returns nil (the corrupt
-	// error is suppressed), proving the gate skipped the expensive work rather than re-running it.
-	err := s.processBlockFound(ctx, block.Hash(), "", "legacy", block)
-	require.NoError(t, err, "past the cap the corrupt delivery must be dropped before validation, returning nil")
+	// Past the cap the corrupt delivery is SUPPRESSED before validation: it returns a
+	// corrupt-classified, NON-POISONING error (never nil-as-accepted, bitcoin-sv/teranode#4692). The
+	// error is corrupt but NOT ErrBlockInvalid, and the block was never stored — so nothing is
+	// poisoned and no caller can read the drop as acceptance.
+	err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+	require.Error(t, err, "past the cap the delivery must be suppressed with an error, never reported as accepted")
+	require.True(t, errors.IsBlockCorrupt(err), "the cap-suppressed drop must be corrupt-classified, got: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "the cap-suppressed drop must NEVER be ErrBlockInvalid (no poison)")
+	require.Contains(t, err.Error(), "cap reached", "the message must identify a cap-suppressed re-download, not a fresh corrupt body")
+
+	stored, existsErr := blockchainStore.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, existsErr)
+	require.False(t, stored, "a cap-suppressed drop must NOT store the block")
 
 	// Self-heal: clearing the counter (as a genuine success would) re-admits the hash, so the same
 	// corrupt body is validated again and surfaces its error — the hash was rate-limited, never condemned.
-	s.clearCorruptAttempts(block.Hash(), "")
-	require.False(t, s.corruptAttemptsExhausted(block.Hash(), ""), "cleared counter reopens the gate")
+	s.clearCorruptAttempts(block.Hash(), peerID)
+	require.False(t, s.corruptAttemptsExhausted(block.Hash(), peerID), "cleared counter reopens the gate")
 
-	err = s.processBlockFound(ctx, block.Hash(), "", "legacy", block)
+	err = s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
 	require.Error(t, err)
 	require.True(t, errors.IsBlockCorrupt(err), "after the cap clears the hash is validated again (self-heal), got: %v", err)
+
+	// An EMPTY peerID is uncapped (fail-open): however many corrupt deliveries arrive under no
+	// identity, the gate never reports exhausted and never drops one as nil-accept. This guards the
+	// blocker directly — an unidentified delivery can never wedge the honest tip.
+	for i := 1; i <= 4; i++ {
+		err = s.processBlockFound(ctx, block.Hash(), "", "legacy", block)
+		require.Error(t, err, "empty-peer delivery %d must reach validation (uncapped)", i)
+		require.True(t, errors.IsBlockCorrupt(err), "empty-peer delivery %d must surface a corrupt error, got: %v", i, err)
+	}
+	require.False(t, s.corruptAttemptsExhausted(block.Hash(), ""), "an empty peerID is never exhausted (fail-open)")
 }
 
 // TestProcessBlockFound_CapDisabled_NeverDrops proves the <= 0 escape hatch: with the cap disabled
@@ -178,15 +201,19 @@ func TestProcessBlockFound_CapDisabled_NeverDrops(t *testing.T) {
 	s.settings.BlockValidation.MaxCorruptAttemptsPerBlock = 0 // disabled
 	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00})
 
+	// A non-empty peerID so this genuinely exercises the maxAttempts <= 0 branch rather than the
+	// empty-peerID fail-open path (which is uncapped for a different reason).
+	const peerID = "peerA"
+
 	// Many corrupt deliveries; with the cap disabled every one still reaches validation and surfaces
 	// the corrupt error (never silently dropped by the gate).
 	for i := 1; i <= 5; i++ {
-		err := s.processBlockFound(ctx, block.Hash(), "", "legacy", block)
+		err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
 		require.Error(t, err, "delivery %d must still reach validation when the cap is disabled", i)
 		require.True(t, errors.IsBlockCorrupt(err), "delivery %d must surface a corrupt error, got: %v", i, err)
 	}
 
-	require.False(t, s.corruptAttemptsExhausted(block.Hash(), ""), "cap <= 0 never reports exhausted")
+	require.False(t, s.corruptAttemptsExhausted(block.Hash(), peerID), "cap <= 0 never reports exhausted")
 }
 
 // TestProcessBlockFound_CorruptCap_HonestPeerNotWedged drives the (hash, peerID) re-key end-to-end
@@ -224,9 +251,10 @@ func TestProcessBlockFound_CorruptCap_HonestPeerNotWedged(t *testing.T) {
 }
 
 // TestProcessBlockFound_CorruptCap_HitNeitherClearsNorPoisons is §4 test 4 (bitcoin-sv/teranode#4692):
-// a cap-hit skip returns nil, does NOT clear its own counter (so the cooldown still bounds the peer),
-// sets no invalid=true, and leaves GetBlockExists false — the hash is rate-limited, never condemned.
-// When the window lapses (simulated by clearing) the honest body is admitted again (self-heal).
+// a cap-hit suppression returns a corrupt-classified, non-poisoning error (never nil-as-accepted),
+// does NOT clear its own counter (so the cooldown still bounds the peer), sets no invalid=true, and
+// leaves GetBlockExists false — the hash is rate-limited, never condemned. When the window lapses
+// (simulated by clearing) the honest body is admitted again (self-heal).
 func TestProcessBlockFound_CorruptCap_HitNeitherClearsNorPoisons(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -245,9 +273,12 @@ func TestProcessBlockFound_CorruptCap_HitNeitherClearsNorPoisons(t *testing.T) {
 	}
 	require.True(t, s.corruptAttemptsExhausted(block.Hash(), peerID), "cap reached")
 
-	// The cap-hit delivery returns nil (dropped) but must NOT clear the counter...
+	// The cap-hit delivery is suppressed with a corrupt-classified, non-poisoning error (never
+	// nil-as-accepted) but must NOT clear the counter...
 	err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
-	require.NoError(t, err, "a cap-hit delivery is dropped, returning nil")
+	require.Error(t, err, "a cap-hit delivery is suppressed with an error, never reported as accepted")
+	require.True(t, errors.IsBlockCorrupt(err), "the cap-hit suppression is corrupt-classified, got: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "the cap-hit suppression must NEVER be ErrBlockInvalid")
 	require.True(t, s.corruptAttemptsExhausted(block.Hash(), peerID),
 		"the cap-hit skip must NOT clear its own counter (else the cooldown would not bound the peer)")
 

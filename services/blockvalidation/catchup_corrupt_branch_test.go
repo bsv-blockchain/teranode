@@ -3,7 +3,6 @@ package blockvalidation
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,96 +11,136 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/stretchr/testify/mock"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
-// maliciousReportRecorder is a P2PClientI that records RecordCatchupMalicious calls, so a test can
-// assert whether releaseCatchup / the catchup validation loop flagged a peer malicious.
-type maliciousReportRecorder struct {
+// catchupReportRecorder is a P2PClientI that records the peer-reputation calls releaseCatchupLock
+// makes after it classifies a terminal catchup error, so a test can assert the classification took
+// the corrupt-body branch (no malicious report, no generic peer-error window) rather than the
+// generic peer-error default.
+type catchupReportRecorder struct {
 	P2PClientI
 
-	mu    sync.Mutex
-	peers []string
+	mu           sync.Mutex
+	malicious    []string
+	genericError []string
 }
 
-func (m *maliciousReportRecorder) RecordCatchupMalicious(_ context.Context, peerID string) error {
+func (m *catchupReportRecorder) RecordCatchupMalicious(_ context.Context, peerID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.peers = append(m.peers, peerID)
+	m.malicious = append(m.malicious, peerID)
 
 	return nil
 }
 
-func (m *maliciousReportRecorder) recorded() []string {
+func (m *catchupReportRecorder) UpdateCatchupError(_ context.Context, peerID, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]string, len(m.peers))
-	copy(out, m.peers)
+	m.genericError = append(m.genericError, peerID)
+
+	return nil
+}
+
+func (m *catchupReportRecorder) maliciousReported() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.malicious))
+	copy(out, m.malicious)
 
 	return out
 }
 
-// TestValidateBlocksOnChannel_CorruptBody_NotReportedMalicious proves the catchup corrupt branch
-// (bitcoin-sv/teranode#4692): when a block delivered during catchup fails with a corrupt-body error,
-// validateBlocksOnChannel must NOT flag the serving peer malicious — the peer was already struck via
-// AddBanScore at the corrupt site, the block was not stored invalid, and an honest relay can forward
-// a corrupted body, so re-download from another peer is the correct handling. Contrast: a genuine
-// consensus-invalid block IS reported malicious, proving the corrupt branch is a distinct decision.
-func TestValidateBlocksOnChannel_CorruptBody_NotReportedMalicious(t *testing.T) {
-	// A block whose received body fails the outer coinbase-length check (1-byte scriptSig < 2) is
-	// classified ERR_BLOCK_CORRUPT by ValidateBlockWithOptions — an unbound-body defect, produced
-	// without any store round-trip.
-	newCorruptBlock := func(t *testing.T) *model.Block {
-		t.Helper()
+func (m *catchupReportRecorder) genericErrorReported() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.genericError))
+	copy(out, m.genericError)
 
-		coinbaseTx := bt.NewTx()
-		require.NoError(t, coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
-		coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00}) // 1 byte < 2 -> corrupt
+	return out
+}
 
-		nBits, _ := model.NewNBitFromString("2000ffff")
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-			Bits:           *nBits,
+// newReleaseCatchupBlock builds a minimal, well-formed block to stand in as the catchup target
+// (releaseCatchupLock only reads its Hash()/Height for the dashboard record).
+func newReleaseCatchupBlock(t *testing.T) *model.Block {
+	t.Helper()
+
+	coinbaseTx := bt.NewTx()
+	require.NoError(t, coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x01, 0x00, 0x00})
+
+	nBits, _ := model.NewNBitFromString("2000ffff")
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: coinbaseTx.TxIDChainHash(),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+	}
+
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{}, 1, uint64(coinbaseTx.Size()), 100, 0) //nolint:gosec
+	require.NoError(t, err)
+
+	return block
+}
+
+// TestReleaseCatchupLock_CorruptBodyClassifiedNonPeer proves that releaseCatchupLock's error
+// classification distinguishes a corrupt block body from a consensus-invalid one
+// (bitcoin-sv/teranode#4692). A corrupt terminal error must classify as "corrupt_block_body",
+// which is NOT a generic peer error: the serving peer was already struck at the corrupt site and
+// an honest relay can forward a corrupted body, so releaseCatchupLock must neither report it
+// malicious nor open a generic peer-error window. The positive control confirms a genuine
+// ErrBlockInvalid does the opposite (classified "validation_failure", peer reported malicious),
+// so the corrupt case is a real, distinct decision — not a branch that can never fire.
+//
+// Mutation proof: deleting `case errors.IsBlockCorrupt(*err)` from the classification switch drops a
+// corrupt error to the switch defaults (errorType "unknown_error", isPeerError true), which reddens
+// both the ErrorType assertion and the "no generic peer-error report" assertion below.
+func TestReleaseCatchupLock_CorruptBodyClassifiedNonPeer(t *testing.T) {
+	t.Run("corrupt body is non-peer, not malicious", func(t *testing.T) {
+		rec := &catchupReportRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		block := newReleaseCatchupBlock(t)
+		catchupCtx := &CatchupContext{
+			blockUpTo: block,
+			baseURL:   "http://peer",
+			peerID:    "peer-corrupt",
+			startTime: time.Now(),
 		}
 
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{}, 1, uint64(coinbaseTx.Size()), 100, 0) //nolint:gosec
-		require.NoError(t, err)
+		corruptErr := error(errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
+		u.releaseCatchupLock(catchupCtx, &corruptErr)
 
-		return block
-	}
+		require.NotNil(t, u.previousCatchupAttempt)
+		require.Equal(t, "corrupt_block_body", u.previousCatchupAttempt.ErrorType,
+			"a corrupt body must classify as corrupt_block_body, not the generic peer-error default")
+		require.Empty(t, rec.maliciousReported(),
+			"a corrupt body must NOT flag the serving peer malicious (bitcoin-sv/teranode#4692)")
+		require.Empty(t, rec.genericErrorReported(),
+			"a corrupt body must NOT open a generic peer-error window (isPeerError=false)")
+	})
 
-	suite := NewCatchupTestSuite(t)
-	defer suite.Cleanup()
+	t.Run("consensus-invalid body is malicious (positive control)", func(t *testing.T) {
+		rec := &catchupReportRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
 
-	suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
+		block := newReleaseCatchupBlock(t)
+		catchupCtx := &CatchupContext{
+			blockUpTo: block,
+			baseURL:   "http://peer",
+			peerID:    "peer-invalid",
+			startTime: time.Now(),
+		}
 
-	fake := &maliciousReportRecorder{}
-	suite.Server.p2pClient = fake
+		invalidErr := error(errors.NewBlockInvalidError("[BLOCK] block violates consensus"))
+		u.releaseCatchupLock(catchupCtx, &invalidErr)
 
-	block := newCorruptBlock(t)
-
-	catchupCtx := &CatchupContext{
-		blockUpTo:          block,
-		baseURL:            "http://peer",
-		peerID:             "peer-corrupt",
-		startTime:          time.Now(),
-		useQuickValidation: false, // force the normal (non-quick) validation path
-	}
-
-	validateBlocksChan := make(chan blockForValidation, 1)
-	validateBlocksChan <- blockForValidation{block: block}
-	close(validateBlocksChan)
-
-	var size atomic.Int64
-	size.Store(1)
-
-	err := suite.Server.validateBlocksOnChannel(validateBlocksChan, context.Background(), catchupCtx, &size, nil)
-
-	require.Error(t, err)
-	require.True(t, errors.IsBlockCorrupt(err), "the corrupt-body error must propagate out of the catchup loop, got: %v", err)
-	require.Empty(t, fake.recorded(), "a corrupt block body must NOT flag the serving peer malicious (bitcoin-sv/teranode#4692)")
+		require.NotNil(t, u.previousCatchupAttempt)
+		require.Equal(t, "validation_failure", u.previousCatchupAttempt.ErrorType,
+			"a consensus-invalid body must classify as validation_failure")
+		require.Equal(t, []string{"peer-invalid"}, rec.maliciousReported(),
+			"a consensus-invalid body must flag the serving peer malicious")
+	})
 }

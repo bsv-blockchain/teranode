@@ -23,7 +23,7 @@ var retryReadableSubtreeTypes = []fileformat.FileType{
 	fileformat.FileTypeSubtreeData,
 }
 
-// TestRemoveCatchupSubtreeFiles covers freemans13 item 9 (bitcoin-sv/teranode#4692): the cleanup ran
+// TestRemoveCatchupSubtreeFiles covers bitcoin-sv/teranode#4692: the cleanup ran
 // on a failed quick validation but deleted only the .subtree marker, leaving the subtreeToCheck and
 // subtreeData blobs the catchup fetch wrote — both readable back by the retry path. Content that had
 // just FAILED its integrity check could therefore be re-applied on the next attempt, which is exactly

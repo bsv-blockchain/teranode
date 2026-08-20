@@ -68,7 +68,7 @@ func unboundBodySettings(t *testing.T) (*settings.Settings, uint64) {
 	return tSettings, util.GetBlockSubsidyForHeight(unboundBodyHeight, tSettings.ChainCfgParams)
 }
 
-// TestBlock_Valid_UnboundBody covers freemans13 item 1 (bitcoin-sv/teranode#4692). The block message
+// TestBlock_Valid_UnboundBody covers bitcoin-sv/teranode#4692. The block message
 // carries the transaction count, the size and the subtree count as three independent untrusted
 // varints, so a body whose subtree list has been emptied is accepted by the decoder. Before the fix
 // such a body reached the fee/reward arithmetic completely unbound to the header, where it either

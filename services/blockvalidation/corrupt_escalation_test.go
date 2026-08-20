@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted is the C2 guarantee
+// TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted pins the escalation guarantee
 // (bitcoin-sv/teranode#4692): on the opt-in optimistic-background path a corrupt body was already
 // AddBlock'd before block.Valid ran, so if the invalidate route's InvalidateBlock FAILS the block
 // must NOT be left quietly on-chain — the guard escalates by re-queuing the block for revalidation
@@ -162,7 +162,7 @@ func TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted(t *tes
 	case data := <-revalidateChan:
 		require.Equal(t, block.Hash(), data.block.Hash(), "the corrupt block must be re-queued for revalidation after InvalidateBlock fails")
 	case <-time.After(2 * time.Second):
-		t.Fatal("InvalidateBlock failed but the block was NOT re-queued (C2): a corrupt tip would be left silently accepted")
+		t.Fatal("InvalidateBlock failed but the block was NOT re-queued: a corrupt tip would be left silently accepted")
 	}
 }
 
@@ -230,8 +230,7 @@ func coinbaseAtHeight(t *testing.T, height uint32) *bt.Tx {
 	return coinbaseTx
 }
 
-// TestOptimisticCorrupt_ReValidationConvergesOnInvalidation is the end-to-end half of freemans13
-// item 4 (bitcoin-sv/teranode#4692). TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted
+// TestOptimisticCorrupt_ReValidationConvergesOnInvalidation is the end-to-end half of bitcoin-sv/teranode#4692. TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted
 // proves the optimistic path RE-QUEUES when InvalidateBlock fails; this proves the re-queue actually
 // CONVERGES, which is what the promise in that path's comment claims and what the old reValidateBlock
 // gate could never deliver (a corrupt error matched neither ErrBlockInvalid nor ErrBlockIncomplete,
@@ -465,26 +464,28 @@ func newCorruptRevalidationHarness(ctx context.Context, t *testing.T, blockIsSto
 	return bv, block, invalidateCalled
 }
 
-// TestReValidateBlock_CorruptConvergesOnlyWhenOnChain covers freemans13 item 4
-// (bitcoin-sv/teranode#4692). The optimistic path re-queues revalidation when InvalidateBlock fails,
-// promising to "converge on invalidation" — but reValidateBlock's gate matched only ErrBlockInvalid
-// and ErrBlockIncomplete, and a corrupt body matches neither, so the retry re-ran block.Valid, failed
-// corrupt again and returned WITHOUT invalidating: it could never converge.
+// TestReValidateBlock_CorruptConvergesOnlyWhenOptimisticallyAdded covers bitcoin-sv/teranode#4692.
+// The optimistic path re-queues revalidation when InvalidateBlock fails, promising to "converge on
+// invalidation" — but reValidateBlock's gate matched only ErrBlockInvalid and ErrBlockIncomplete,
+// and a corrupt body matches neither, so the retry re-ran block.Valid, failed corrupt again and
+// returned WITHOUT invalidating: it could never converge.
 //
-// The fix gates the new corrupt branch on the block actually being in the store, so it converges for
-// the optimistically-added tip while the callers that never AddBlock'd — the GetBlockHeaders failure
-// paths in ValidateBlockWithOptions — can never poison a hash through it.
-func TestReValidateBlock_CorruptConvergesOnlyWhenOnChain(t *testing.T) {
+// The fix gates the corrupt→invalidate decision on the explicit optimisticallyAdded flag carried by
+// the requeue, NOT on GetBlockExists. Gating on existence was too loose: ANY already-accepted block
+// re-validated to a corrupt verdict (e.g. a bad local subtree read) satisfies GetBlockExists and
+// would be wrongly poisoned. With the flag, only the one post-AddBlock optimistic requeue can
+// invalidate; every other revalidation of an on-chain block leaves it untouched.
+func TestReValidateBlock_CorruptConvergesOnlyWhenOptimisticallyAdded(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	t.Run("corrupt body already on chain converges on invalidation", func(t *testing.T) {
+	t.Run("optimistically-added corrupt body converges on invalidation", func(t *testing.T) {
 		bv, block, invalidateCalled := newCorruptRevalidationHarness(ctx, t, true)
 		defer bv.StopCaches()
 
-		err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test"})
+		err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
 		require.Error(t, err)
 		require.True(t, errors.IsBlockCorrupt(err), "the retry must still see a corrupt body, got: %v", err)
 
@@ -496,19 +497,21 @@ func TestReValidateBlock_CorruptConvergesOnlyWhenOnChain(t *testing.T) {
 		}
 	})
 
-	t.Run("corrupt body not in the store is never invalidated", func(t *testing.T) {
-		bv, block, invalidateCalled := newCorruptRevalidationHarness(ctx, t, false)
+	t.Run("corrupt body on chain but NOT optimistically added is never invalidated", func(t *testing.T) {
+		// The block IS in the store (GetBlockExists true) — exactly the case the old GetBlockExists
+		// gate wrongly poisoned. With optimisticallyAdded false it must NOT be invalidated.
+		bv, block, invalidateCalled := newCorruptRevalidationHarness(ctx, t, true)
 		defer bv.StopCaches()
 
-		err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test"})
+		err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: false})
 		require.Error(t, err)
 		require.True(t, errors.IsBlockCorrupt(err), "got: %v", err)
 
 		select {
 		case <-invalidateCalled:
-			t.Fatal("a corrupt body that was never added must NOT be invalidated — that would poison a hash we hold no bound evidence against")
+			t.Fatal("a corrupt body that was not optimistically added must NOT be invalidated — that would poison a hash we hold no bound evidence against")
 		default:
-			// good: the guard held
+			// good: the flag gate held even though the block is on chain
 		}
 	})
 }

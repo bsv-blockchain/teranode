@@ -13,7 +13,7 @@ import (
 )
 
 // TestHandleBlockDirect_MerkleGatePremise guards the shared CheckMerkleRoot classification CONTRACT
-// that the freemans13 item 5 fix relies on (bitcoin-sv/teranode#4692): a body-derived merkle mismatch
+// that the bitcoin-sv/teranode#4692 fix relies on (bitcoin-sv/teranode#4692): a body-derived merkle mismatch
 // is BlockCorrupt, while an infrastructure failure (here a subtree-count mismatch) is a NON-corrupt
 // storage error. Both the HandleBlockDirect gate and its already-tested sibling in
 // quick_validate.go's validateSubtrees branch on exactly this classification; if it ever regressed

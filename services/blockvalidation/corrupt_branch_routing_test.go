@@ -75,7 +75,7 @@ func newCorruptDeliveryServer(t *testing.T) (*Server, *chainhash.Hash, []byte) {
 	return server, h, corruptBytes
 }
 
-// TestProcessBlockWithPriority_CorruptBody_DoesNotWalkAlternatives is the freemans13 item 1 fix at
+// TestProcessBlockWithPriority_CorruptBody_DoesNotWalkAlternatives is the bitcoin-sv/teranode#4692 fix at
 // the processBlockWithPriority site (bitcoin-sv/teranode#4692). IsBlockCorrupt is now tested BEFORE the
 // network/malicious pair, so a corrupt body returns immediately and does NOT walk alternative
 // sources (which exist for network/malicious FETCH failures). If the ordering were reverted, a
@@ -107,7 +107,7 @@ func TestProcessBlockWithPriority_CorruptBody_DoesNotWalkAlternatives(t *testing
 	require.True(t, hasAlt, "a corrupt body must NOT walk alternative sources (that path is for network/malicious fetch failures)")
 }
 
-// TestBlockProcessingWorker_CorruptBody_ClearsProcessBlockNotify is the freemans13 item 1 fix at the
+// TestBlockProcessingWorker_CorruptBody_ClearsProcessBlockNotify is the bitcoin-sv/teranode#4692 fix at the
 // blockProcessingWorker site (bitcoin-sv/teranode#4692). For a corrupt body the worker CLEARS the
 // in-flight processBlockNotify marker (so an honest peer's re-announcement re-enters validation),
 // instead of taking the network/malicious retry branch (which re-queues after 5s and never clears
