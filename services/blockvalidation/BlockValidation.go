@@ -296,7 +296,10 @@ func (w *subtreeStoreWrapper) Set(ctx context.Context, key []byte, fileType file
 
 // createMetaRegenerator creates a SubtreeMetaRegenerator with the given peer URLs.
 // This is used to regenerate missing subtree meta files during block validation.
-// If peerURLs is empty and subtreeStore is nil, returns nil (regeneration not available).
+// peerURLs are DataHub base URLs, which already carry the peer's API prefix.
+// Returns nil (regeneration not available) when there is no source to regenerate
+// from — peerURLs empty and subtreeStore nil — or when utxoStore is nil, since
+// storeRegeneratedMeta needs its block height to compute the meta file's DAH.
 func (u *BlockValidation) createMetaRegenerator(peerURLs []string) model.SubtreeMetaRegeneratorI {
 	if u.subtreeStore == nil && len(peerURLs) == 0 {
 		return nil
@@ -307,8 +310,9 @@ func (u *BlockValidation) createMetaRegenerator(peerURLs []string) model.Subtree
 	}
 
 	wrapper := &subtreeStoreWrapper{store: u.subtreeStore}
-	return model.NewSubtreeMetaRegenerator(u.logger, wrapper, peerURLs, u.settings.Asset.APIPrefix,
-		u.utxoStore.GetBlockHeight, u.subtreeBlockHeightRetention)
+	return model.NewSubtreeMetaRegenerator(u.logger, wrapper, peerURLs,
+		u.utxoStore.GetBlockHeight, u.subtreeBlockHeightRetention,
+		u.settings.BlockValidation.SubtreeMetaPeerFetchTimeout)
 }
 
 // NewBlockValidation creates a new block validation instance with the provided dependencies.
@@ -363,19 +367,10 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeValidationClient:     subtreeValidationClient,
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute).
 			WithEvictionFunction(func(_ chainhash.Hash, block *model.Block) bool {
-				// Return pooled []Node backing slices to the per-class pool
-				// BEFORE closing the subtree. PutNodeSlice is cap-classified, so
-				// mmap-backed subtrees (whose nodes are not pool-sourced) are
-				// silently discarded — safe but ineffective, which is what we
-				// want.
+				// Pools heap-backed []Node slices, Closes mmap-backed subtrees
+				// (unmap + backing-file removal), and nils the entries — all
+				// under the block's subtree mutex.
 				releaseBlockNodes(block)
-
-				// Close mmap-backed subtrees when block expires from cache
-				for _, st := range block.SubtreeSlices {
-					if st != nil {
-						st.Close()
-					}
-				}
 				return true // allow eviction
 			}),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
@@ -1241,6 +1236,14 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	if len(unsetMined) > 0 && unsetMined[0] {
 		u.logger.Warnf("[setTxMined][%s] block is marked as invalid, will attempt to unset tx mined", block.Hash().String())
 
+		// A block taken from lastValidatedBlocks arrives here with its subtrees
+		// still loaded. Overwriting SubtreeSlices below drops the only reference
+		// to them, and an mmap-backed subtree has no finalizer — its mapping and
+		// its temp backing file would survive until process exit. Release first.
+		if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+			u.logger.Warnf("[setTxMined][%s] failed closing subtrees before unset-mined reload: %v", block.Hash().String(), releaseErr)
+		}
+
 		block.SubtreeSlices = make([]*subtreepkg.Subtree, len(block.Subtrees))
 
 		// when the block is invalid, we might not have all the subtrees
@@ -1310,13 +1313,17 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
-	// Close mmap-backed subtrees and clear to free memory
-	for _, st := range block.SubtreeSlices {
-		if st != nil {
-			st.Close()
-		}
+	// Close mmap-backed subtrees and clear to free memory. Routed through
+	// ReleaseSubtreeNodes so the entries are nil-ed under the block's subtree
+	// mutex: this block may still be reachable via lastValidatedBlocks, whose
+	// TTL cleaner runs the same release concurrently. Nodes are not pooled here
+	// (put is nil): a block fetched fresh from the blockchain has no node
+	// allocator, so its slices never came from the pool. A block taken from
+	// lastValidatedBlocks does carry pool-allocated slices — recycling those is
+	// a possible improvement, not a requirement, and is left out of this change.
+	if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+		u.logger.Warnf("[setTxMined][%s] failed closing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
 	}
-	block.SubtreeSlices = nil
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
@@ -1656,20 +1663,48 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// difficulty checks must run first. It also means a peer cannot make us do
 		// full tx validation for a garbage header at zero cost.
 		//
-		// Skip difficulty validation for blocks at or below the highest checkpoint:
-		// these blocks are already verified by checkpoints. block.Height is settled
-		// against the parent before this function runs (Server.deriveBlockHeight on the
-		// peer route; catchup and the operator revalidation endpoint carry authoritative
-		// heights), and BelowCheckpoint applies the mandatory height > 0 guard, so a peer
-		// cannot obtain the skip by declaring height 0 or a fabricated sub-checkpoint
-		// height. The checkpoint hash-match itself was asserted above.
+		// The header hash must meet the target its OWN nBits declares. This is enforced for
+		// every block, including below-checkpoint ones: it is what makes the chainwork the
+		// block contributes (computed from those same declared bits in
+		// getCumulativeChainWork) honestly earned, and it is the cheap gate that stops a
+		// peer buying (fail-open) subtree validation with a garbage header. Unlike the
+		// expected-nBits rule below there is no historical exception to it — no block on any
+		// chain has ever been valid without meeting its own target — so enforcing it here
+		// cannot reject a real block. model.Block.Valid step 1 runs the identical check on
+		// every route that permanently accepts a block, so the accepted-block set is
+		// unchanged; running it here only moves the rejection earlier, ahead of the
+		// optimistic-mining AddBlock that would otherwise put the block on the chain first.
+		// This matters because BelowCheckpoint is true for EVERY height in
+		// 1..highestCheckpoint, not just the checkpoint heights themselves.
+		headerValid, _, err := block.Header.HasMetTargetDifficulty()
+		if !headerValid {
+			reason := "block does not meet target difficulty"
+			if err != nil {
+				reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
+			}
+			if !opts.IsRevalidation {
+				u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+		}
+
+		// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
+		// the difficulty schedule over that prefix is already certified by the pinned
+		// checkpoint hashes, and re-deriving it would require reproducing every historical
+		// retarget rule exactly. block.Height is settled against the parent before this
+		// function runs (Server.deriveBlockHeight on the peer route; catchup and the operator
+		// revalidation endpoint carry authoritative heights), and BelowCheckpoint applies the
+		// mandatory height > 0 guard, so a peer cannot obtain the skip by declaring height 0
+		// or a fabricated sub-checkpoint height. The checkpoint hash-match itself was
+		// asserted above.
 		skipDifficultyCheck := model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height)
 
 		if skipDifficultyCheck {
-			ctxLogger.Debugf("[ValidateBlock][%s] skipping difficulty validation for block at height %d (at or below highest checkpoint height %d)",
+			ctxLogger.Debugf("[ValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
 				block.Header.Hash().String(), block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
 		} else {
-			// First check that the nBits (difficulty target) is correct for this block
+			// Check that the nBits (difficulty target) is correct for this block
 			expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
 			if err != nil {
 				return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
@@ -1684,20 +1719,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
 					block.Header.Hash().String(), block.Header.Bits, expectedNBits)
-			}
-
-			// Then check that the block hash meets the difficulty target
-			headerValid, _, err := block.Header.HasMetTargetDifficulty()
-			if !headerValid {
-				reason := "block does not meet target difficulty"
-				if err != nil {
-					reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
-				}
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
-				}
-
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
 			}
 		}
 
@@ -2030,20 +2051,24 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		// Cache the block BEFORE updating subtrees DAH to avoid race condition
 		// The setMined worker needs the block cached when it receives the BlockSubtreesSet notification
-		if u.hasValidSubtrees(block) {
-			u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), block.GetSubtreeSlicesCount())
-			u.lastValidatedBlocks.Set(*block.Hash(), block)
-		} else {
-			if !block.SubtreesLoaded() {
-				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), block.GetSubtreeSlicesCount(), len(block.Subtrees))
-			} else {
-				u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
-			}
-		}
-
-		// Only update subtrees DAH for non-optimistic mining
-		// (optimistic mining handles this in its background validation goroutine)
+		//
+		// Both are skipped under optimistic mining, which does them in its
+		// background validation goroutine instead. That goroutine may still be
+		// inside block.Valid on this same *Block, and nothing waits on
+		// optimisticMiningWg, so caching the block here would expose it to the
+		// 2-minute TTL eviction — whose callback releases the block's subtree
+		// nodes, nil-ing SubtreeSlices entries and returning pooled []Node
+		// slices while that validation is still reading them. The goroutine
+		// caches the block once Valid returns, which is the only Set on this
+		// path with a lifetime that outlives its reader.
 		if !useOptimisticMining {
+			if u.hasValidSubtrees(block) {
+				u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), block.GetSubtreeSlicesCount())
+				u.lastValidatedBlocks.Set(*block.Hash(), block)
+			} else {
+				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), block.GetSubtreeSlicesCount(), len(block.Subtrees))
+			}
+
 			// it's critical that we call updateSubtreesDAH() only when we know the block is valid
 			// This sends the BlockSubtreesSet notification which triggers setMined
 			if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
@@ -2304,15 +2329,22 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] block conflicts with hardcoded checkpoint", blockData.block.Hash().String(), err)
 	}
 
-	// Skip difficulty validation for blocks at or below the highest checkpoint
-	// These blocks are already verified by checkpoints, so we don't need to validate difficulty
+	// The header hash must meet the target its own nBits declares, below checkpoint or not
+	// — see the matching block in ValidateBlockWithOptions for why this half of the old
+	// skip is never safe to take. Enforced before the subtree work below.
+	if headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty(); !headerValid {
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
+	}
+
+	// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
+	// the difficulty schedule over that prefix is certified by the pinned checkpoint hashes.
 	skipDifficultyCheck := model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, blockData.block.Height)
 
 	if skipDifficultyCheck {
-		u.logger.Debugf("[reValidateBlock][%s] skipping difficulty validation for block at height %d (at or below highest checkpoint height %d)",
+		u.logger.Debugf("[reValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
 			blockData.block.Header.Hash().String(), blockData.block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
 	} else {
-		// First check that the nBits (difficulty target) is correct for this block
+		// Check that the nBits (difficulty target) is correct for this block
 		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock, int64(blockData.block.Header.Timestamp))
 		if err != nil {
 			return errors.NewServiceError("[reValidateBlock][%s] failed to get expected work required", blockData.block.Header.Hash().String(), err)
@@ -2322,12 +2354,6 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		if expectedNBits != nil && blockData.block.Header.Bits != *expectedNBits {
 			return errors.NewBlockInvalidError("[reValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
 				blockData.block.Header.Hash().String(), blockData.block.Header.Bits, expectedNBits)
-		}
-
-		// Then check that the block hash meets the difficulty target
-		headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty()
-		if !headerValid {
-			return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
 		}
 	}
 

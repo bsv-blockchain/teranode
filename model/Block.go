@@ -670,13 +670,25 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 
 		// Verify that we have at least one subtree and that it has at least one node
-		if len(b.SubtreeSlices) == 0 || len(b.SubtreeSlices[0].Nodes) == 0 {
+		if len(b.SubtreeSlices) == 0 {
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
+		}
+
+		// Capture the entry once. Nothing here holds subtreeSlicesMu, so a
+		// concurrent release (cache eviction, TTL cleaner) can nil it between
+		// any two reads — see the header comment on ReleaseSubtreeNodes.
+		firstSubtree := b.SubtreeSlices[0]
+		if firstSubtree == nil {
+			return false, errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", b.String())
+		}
+
+		if len(firstSubtree.Nodes) == 0 {
 			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
+		if !firstSubtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), firstSubtree.Nodes[0].Hash.String())
 		}
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
@@ -932,6 +944,9 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 
 	for i := 0; i < len(b.SubtreeSlices); i++ {
 		subtree := b.SubtreeSlices[i]
+		if subtree == nil {
+			return errors.NewProcessingError("[checkBlockRewardAndFees][%s] subtree %d of %d was released during validation", b.String(), i, len(b.SubtreeSlices))
+		}
 
 		sum := subtreeFees + subtree.Fees
 		if sum < subtreeFees {
@@ -980,8 +995,14 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 
 	// set the expected subtree size based on the first subtree in the block
 	subtreeSize := 0
+
 	if len(b.SubtreeSlices) > 0 {
-		subtreeSize = b.SubtreeSlices[0].Size()
+		firstSubtree := b.SubtreeSlices[0]
+		if firstSubtree == nil {
+			return errors.NewProcessingError("[checkDuplicateTransactions][%s] first subtree was released during validation", b.String())
+		}
+
+		subtreeSize = firstSubtree.Size()
 	}
 
 	// Size both map variants from the loaded block body rather than the
@@ -1016,6 +1037,9 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		subIdx := subIdx
 		subtree := b.SubtreeSlices[subIdx]
 
+		// Hand the captured pointer to the goroutine. A nil entry is reported
+		// through the group rather than by returning here, so the goroutines
+		// already in flight are still waited on before we unwind.
 		g.Go(func() (err error) {
 			return b.checkDuplicateTransactionsInSubtree(subtree, subIdx, subtreeSize)
 		})
@@ -1068,6 +1092,13 @@ func (b *Block) txMapEntryCount() uint64 {
 // Returns:
 // - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
 func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx, subtreeSize int) (err error) {
+	// The caller reads SubtreeSlices without holding subtreeSlicesMu, so the
+	// entry it captured may have been nil-ed by a concurrent release. Transient
+	// — the block is requeued and reloaded, never invalidated.
+	if subtree == nil {
+		return errors.NewProcessingError("[checkDuplicateTransactionsInSubtree][%s] subtree %d was released during validation", b.String(), subIdx)
+	}
+
 	var idx64 uint64
 
 	// All subtrees before subIdx are full-size (the per-block invariant enforced by
@@ -1221,6 +1252,16 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
 	validationCtx *validationContext, subtree *subtreepkg.Subtree, sIdx int) error {
+	// Guard before the tracing call below, which dereferences the subtree's
+	// root hash: Subtree.RootHash() returns a nil *chainhash.Hash on a nil
+	// receiver and chainhash.Hash.String() has a value receiver, so a nil entry
+	// here panics — in an errgroup goroutine with no recover, killing the node.
+	// The caller reads SubtreeSlices without holding subtreeSlicesMu, so a
+	// concurrent release can nil the entry it captured.
+	if subtree == nil {
+		return errors.NewProcessingError("[validateSubtree][%s] subtree %d was released during validation", b.String(), sIdx)
+	}
+
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validateSubtree",
 		tracing.WithLogMessage(logger, "[validateSubtree][%s][%s:%d] called", b.String(), subtree.RootHash().String(), sIdx),
 	)
@@ -1571,7 +1612,12 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		missing := false
 
 		for i := range b.Subtrees {
-			if b.SubtreeSlices[i] == nil {
+			// A non-nil *Subtree with zero Nodes is not loaded: ReleaseNodes
+			// (via blockvalidation's node pooling) strips the Nodes backing
+			// slice while the pointer stays in SubtreeSlices. Trusting it here
+			// made requeued revalidations fail "first subtree has no nodes" on
+			// valid blocks instead of reloading from the store.
+			if b.SubtreeSlices[i] == nil || len(b.SubtreeSlices[i].Nodes) == 0 {
 				missing = true
 				break
 			}
@@ -1581,6 +1627,15 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			// already loaded
 			return nil
 		}
+	}
+
+	// Close whatever survived the loaded-check before dropping the slice.
+	// Reallocating over an mmap-backed survivor would leak its mapping and its
+	// backing file, since nothing else holds a reference once the slice header
+	// is replaced. Nodes are not pooled here: the pool's put function lives in
+	// blockvalidation and this path has no access to it.
+	if closeErr := b.releaseSubtreeNodesLocked(nil); closeErr != nil {
+		logger.Warnf("[BLOCK][%s][ID %d] failed closing subtrees before reload: %v", b.Hash().String(), b.ID, closeErr)
 	}
 
 	b.SubtreeSlices = make([]*subtreepkg.Subtree, len(b.Subtrees))
@@ -1693,13 +1748,15 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		if subtree == nil {
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.String(), b.ID, sIdx, nrOfSubtrees)
+			// b.Hash().String(), not b.String(): we hold b.subtreeSlicesMu and
+			// String() takes it again — sync.RWMutex is not reentrant.
+			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
 		}
 		if sIdx == 0 {
 			subtreeSize = subtree.Length()
 		} else if subtree.Length() != subtreeSize && sIdx != nrOfSubtrees-1 {
 			// all subtrees need to be the same size as the first tree, except the last one
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.String(), b.ID, sIdx, subtree.Length(), subtreeSize)
+			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.Hash().String(), b.ID, sIdx, subtree.Length(), subtreeSize)
 		}
 	}
 
@@ -1710,6 +1767,51 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	// TODO something with conflicts
 
 	return nil
+}
+
+// ReleaseSubtreeNodes releases every loaded subtree under the block's subtree
+// mutex: each heap-backed subtree's Nodes backing slice is handed to put
+// (mmap-backed subtrees are skipped — their backing is the mapped region, and
+// pooling it after munmap would be a use-after-free), each subtree is Closed
+// (unmapping and removing the backing file for mmap-backed subtrees; a no-op
+// for heap-backed ones), and each SubtreeSlices entry is nil-ed so every
+// loaded-check sees the subtree as missing and a later revalidation reloads
+// from the store. Safe to call multiple times; nil entries are skipped.
+//
+// Returns the joined Close errors, if any. A failed Close means a mapping was
+// not torn down (or its backing file not removed), which grows the address
+// space with no other signal — model.Block has no logger, so the caller is
+// expected to log it.
+func (b *Block) ReleaseSubtreeNodes(put func([]subtreepkg.Node)) error {
+	b.subtreeSlicesMu.Lock()
+	defer b.subtreeSlicesMu.Unlock()
+
+	return b.releaseSubtreeNodesLocked(put)
+}
+
+// releaseSubtreeNodesLocked is ReleaseSubtreeNodes' body. The caller must hold
+// b.subtreeSlicesMu for writing.
+func (b *Block) releaseSubtreeNodesLocked(put func([]subtreepkg.Node)) error {
+	var closeErrs []error
+
+	for i, st := range b.SubtreeSlices {
+		if st == nil {
+			continue
+		}
+
+		nodes := st.ReleaseNodes()
+		if nodes != nil && put != nil && !st.IsMmapBacked() {
+			put(nodes)
+		}
+
+		if err := st.Close(); err != nil {
+			closeErrs = append(closeErrs, errors.NewProcessingError("subtree %d", i, err))
+		}
+
+		b.SubtreeSlices[i] = nil
+	}
+
+	return errors.Join(closeErrs...)
 }
 
 // SubtreesLoaded checks if subtrees are loaded and valid.
@@ -1808,8 +1910,15 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		// because for a complete subtree Height = Ceil(Log2(Length)) and that
 		// relationship is preserved by deserialization (which re-derives Height
 		// from numLeaves).
-		targetLength := b.SubtreeSlices[0].Length()
-		targetHeight := b.SubtreeSlices[0].Height
+		// Re-read rather than reuse the loop above: without subtreeSlicesMu a
+		// concurrent release can nil an entry between the two passes.
+		firstSubtree := b.SubtreeSlices[0]
+		if firstSubtree == nil {
+			return errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", b.String())
+		}
+
+		targetLength := firstSubtree.Length()
+		targetHeight := firstSubtree.Height
 
 		// Lift correctness depends on the first subtree's leaf count being a power
 		// of two — that's what makes the partitioned top-tree composition match
@@ -1825,6 +1934,10 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 		for i, sub := range b.SubtreeSlices {
 			isLast := i == len(b.SubtreeSlices)-1
+
+			if sub == nil {
+				return errors.NewProcessingError("[BLOCK][%s] subtree %d of %d was released during validation", b.String(), i, len(b.SubtreeSlices))
+			}
 
 			if !isLast && sub.Length() != targetLength {
 				return errors.NewBlockInvalidError(
@@ -1851,7 +1964,12 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		// non-power-of-two final subtrees is what lets the legacy-block
 		// partitioner stay at maxItems instead of degenerating to tiny subtrees
 		// for adversarial transaction counts — see issue #901.
-		if last := b.SubtreeSlices[len(b.SubtreeSlices)-1]; last.Length() < targetLength {
+		last := b.SubtreeSlices[len(b.SubtreeSlices)-1]
+		if last == nil {
+			return errors.NewProcessingError("[BLOCK][%s] final subtree was released during validation", b.String())
+		}
+
+		if last.Length() < targetLength {
 			liftedRoot, err := last.RootHashPadded(targetHeight)
 			if err != nil {
 				return errors.NewProcessingError("[BLOCK][%s] failed lifting final subtree", b.String(), err)

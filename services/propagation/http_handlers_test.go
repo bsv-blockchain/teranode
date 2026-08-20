@@ -464,11 +464,15 @@ func TestHandleMultipleTx(t *testing.T) {
 			assert.Contains(t, rec.Body.String(), tc.expectedResponse)
 
 			// The batch must surface the per-tx public reason, not collapse to a
-			// generic PROCESSING message: assert the derived UserMessage for the
-			// tx-rejection case is present in the aggregated body.
+			// generic PROCESSING message — and must name the transaction the
+			// reason belongs to, since the allowlisted cause shadows the
+			// "[ProcessTransaction][<txid>]" wrapper that would carry it. In a
+			// batch that id is the difference between an actionable verdict and
+			// "one of these failed".
 			if tc.name == "Transaction validation error" {
 				require.Contains(t, rec.Body.String(),
-					fmt.Sprintf("%s (%d): %s", errors.ERR_TX_INVALID.String(), errors.ERR_TX_INVALID, "test validation error"))
+					fmt.Sprintf("%s (%d): [ProcessTransaction][%s] %s",
+						errors.ERR_TX_INVALID.String(), errors.ERR_TX_INVALID, tx1.TxID(), "test validation error"))
 			}
 
 			// Verify validation and storage behaviors for non-error cases
