@@ -1,9 +1,8 @@
 # Security Best Practices
 
-Last modified: 6-March-2025
+Last modified: 11-August-2026
 
 ## Firewall Configuration
-
 
 Here are some firewall configuration recommendations:
 
@@ -51,17 +50,40 @@ Review the ports exposed in the Kubernetes operator configuration file(s) and en
 
 - Ensure ports 9905 and 9906 are open for incoming connections to allow peer discovery and communication.
 
-
-
 !!! info "Important Security Principle"
     Remember, the exact firewall configuration will depend on your specific network setup, security requirements, and how you intend to operate your Teranode. Always follow the principle of least privilege, exposing only what is necessary for operation.
 
+## PostgreSQL Role Privileges
 
+Teranode's PostgreSQL role (`teranode`) owns the `teranode` database and needs no
+superuser rights. New deployments provision it as `NOSUPERUSER`.
 
+Existing deployments are not fixed by an update. The role is created by the
+`init.sql` in the `postgres-cm0` ConfigMap, which the `postgres` image runs only
+when its data directory is empty, and that directory lives on a persistent volume
+claim. Upgrading the operator or the Teranode image leaves the role exactly as it
+was first created, so a cluster provisioned before this change still runs with a
+superuser `teranode` role.
+
+Remediate once, as the `postgres` superuser (adjust namespace and pod name to your
+deployment):
+
+```bash
+kubectl exec -n teranode-operator postgres-0 -- \
+    psql -U postgres -c 'ALTER ROLE teranode NOSUPERUSER;'
+```
+
+Verify:
+
+```bash
+kubectl exec -n teranode-operator postgres-0 -- \
+    psql -U postgres -tAc "SELECT rolname, rolsuper FROM pg_roles WHERE rolname = 'teranode';"
+```
+
+Expect `teranode|f`. Object ownership is unaffected — `teranode` still owns its
+database and tables, so no regrant is needed and Teranode can be left running.
 
 ## Regular System Updates
-
-
 
 !!! tip "System Update Recommendations"
     In order to receive the latest bug fixes and vulnerability patches, please ensure you perform periodic system updates, as regularly as feasible. Please refer to the Teranode update process outlined in the Section 6 of this document.

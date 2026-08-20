@@ -19,7 +19,7 @@ services:
       cat > /docker-entrypoint-initdb.d/init.sql <<'EOF'
       CREATE ROLE teranode LOGIN
         PASSWORD 'teranode'
-        SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+        NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
       GRANT teranode TO postgres;
       CREATE DATABASE teranode
         WITH OWNER = teranode

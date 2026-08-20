@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -13,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // SubtreeMetaRegeneratorI defines the interface for regenerating missing subtree meta files
@@ -37,23 +37,31 @@ type SubtreeMetaRegenerator struct {
 	logger               ulogger.Logger
 	subtreeStore         SubtreeStoreWriter
 	peerURLs             []string
-	httpClient           *http.Client
-	apiPrefix            string
 	getBlockHeight       func() uint32
 	blockHeightRetention uint32
+	peerFetchTimeout     time.Duration
 }
 
-// NewSubtreeMetaRegenerator creates a new SubtreeMetaRegenerator instance
-func NewSubtreeMetaRegenerator(logger ulogger.Logger, subtreeStore SubtreeStoreWriter, peerURLs []string, apiPrefix string,
-	getBlockHeight func() uint32, blockHeightRetention uint32) *SubtreeMetaRegenerator {
+// NewSubtreeMetaRegenerator creates a new SubtreeMetaRegenerator instance.
+// peerURLs are the announcing peers' DataHub base URLs, which already include
+// the peer's API prefix (e.g. http://peer:9090/api/v1) — the same base every
+// other subtree_data fetcher appends only the resource path to.
+//
+// peerFetchTimeout bounds one peer's fetch; a non-positive value falls back to
+// DefaultPeerFetchTimeout so the fetch is never left unbounded.
+func NewSubtreeMetaRegenerator(logger ulogger.Logger, subtreeStore SubtreeStoreWriter, peerURLs []string,
+	getBlockHeight func() uint32, blockHeightRetention uint32, peerFetchTimeout time.Duration) *SubtreeMetaRegenerator {
+	if peerFetchTimeout <= 0 {
+		peerFetchTimeout = DefaultPeerFetchTimeout
+	}
+
 	return &SubtreeMetaRegenerator{
 		logger:               logger.New("meta_regenerator"),
 		subtreeStore:         subtreeStore,
 		peerURLs:             peerURLs,
-		apiPrefix:            apiPrefix,
-		httpClient:           &http.Client{Timeout: 30 * time.Second},
 		getBlockHeight:       getBlockHeight,
 		blockHeightRetention: blockHeightRetention,
+		peerFetchTimeout:     peerFetchTimeout,
 	}
 }
 
@@ -67,18 +75,25 @@ func (r *SubtreeMetaRegenerator) RegenerateMeta(ctx context.Context, subtreeHash
 	if err == nil {
 		return r.buildAndStoreMeta(ctx, subtreeHash, subtree, data)
 	}
-	r.logger.Debugf("[RegenerateMeta][%s] local subtreedata not found: %v", subtreeHash.String(), err)
 
-	// Fall back to peers
+	r.logger.Warnf("[RegenerateMeta][%s] local subtreedata not found: %v", subtreeHash.String(), err)
+
+	// Fall back to peers. lastErr starts as the local failure so the returned
+	// error always carries a cause: with no peers configured it explains why
+	// the local lookup missed, rather than reporting a bare "not available".
+	lastErr := err
+
 	for _, peerURL := range r.peerURLs {
 		data, err = r.getSubtreeDataFromPeer(ctx, subtreeHash, subtree, peerURL)
 		if err == nil {
 			return r.buildAndStoreMeta(ctx, subtreeHash, subtree, data)
 		}
-		r.logger.Debugf("[RegenerateMeta][%s] peer %s failed: %v", subtreeHash.String(), peerURL, err)
+
+		lastErr = err
+		r.logger.Warnf("[RegenerateMeta][%s] peer %s failed: %v", subtreeHash.String(), peerURL, err)
 	}
 
-	return nil, errors.NewProcessingError("[RegenerateMeta][%s] subtreedata not available locally or from peers", subtreeHash.String())
+	return nil, errors.NewProcessingError("[RegenerateMeta][%s] subtreedata not available locally or from peers", subtreeHash.String(), lastErr)
 }
 
 // getLocalSubtreeData reads subtree data from local store
@@ -98,31 +113,39 @@ func (r *SubtreeMetaRegenerator) getLocalSubtreeData(ctx context.Context, subtre
 	return subtreepkg.NewSubtreeDataFromReader(subtree, reader)
 }
 
-// getSubtreeDataFromPeer fetches subtree data from a peer via HTTP
+// DefaultPeerFetchTimeout is the fallback bound on one peer's fetch (all 503
+// retries plus the body stream) when the caller supplies no timeout. This fetch
+// runs inline in Block.Valid on a context with no deadline, where the shared
+// client would otherwise allow a hung peer the full http_streaming_timeout
+// (10 minutes as shipped in settings.conf) per attempt. Note this is a
+// whole-peer budget, not a per-attempt one: the previous bare http.Client gave
+// 30s to a single attempt with no retries, so under sustained 503 backoff the
+// last attempt here gets considerably less than 30s.
+//
+// Operators configure this via blockvalidation_subtree_meta_peer_fetch_timeout;
+// settings.DefaultSubtreeMetaPeerFetchTimeout carries the same value. The two
+// are separate constants only because model must not import settings.
+const DefaultPeerFetchTimeout = 30 * time.Second
+
+// getSubtreeDataFromPeer fetches subtree data from a peer via HTTP. The peer's
+// base URL already carries its API prefix, so only the resource path is
+// appended. Retries on 503 — the peer's asset service may reject under
+// admission control while it generates the file on-demand.
 func (r *SubtreeMetaRegenerator) getSubtreeDataFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, peerURL string) (*subtreepkg.Data, error) {
-	url := fmt.Sprintf("%s%s/subtree_data/%s", peerURL, r.apiPrefix, subtreeHash.String())
+	ctx, cancel := context.WithTimeout(ctx, r.peerFetchTimeout)
+	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
+	url := fmt.Sprintf("%s/subtree_data/%s", peerURL, subtreeHash.String())
 
-	resp, err := r.httpClient.Do(req)
+	body, err := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		_ = body.Close()
 	}()
 
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, errors.NewNotFoundError("peer returned 404 not found")
-		}
-		return nil, errors.NewServiceError("peer returned HTTP %d", resp.StatusCode)
-	}
-
-	return subtreepkg.NewSubtreeDataFromReader(subtree, resp.Body)
+	return subtreepkg.NewSubtreeDataFromReader(subtree, body)
 }
 
 // buildAndStoreMeta creates meta from subtree data and stores it for future use
@@ -142,18 +165,42 @@ func (r *SubtreeMetaRegenerator) buildAndStoreMeta(ctx context.Context, subtreeH
 func (r *SubtreeMetaRegenerator) buildMetaFromSubtreeData(subtree *subtreepkg.Subtree, data *subtreepkg.Data) (*subtreepkg.Meta, error) {
 	meta := subtreepkg.NewSubtreeMeta(subtree)
 
+	hasCoinbasePlaceholder := subtree.Length() > 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue)
+
 	for i, tx := range data.Txs {
 		if tx == nil {
 			continue // Skip nil entries (e.g., coinbase placeholder)
 		}
 
 		// Skip coinbase placeholder at index 0
-		if i == 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+		if i == 0 && hasCoinbasePlaceholder {
 			continue
 		}
 
 		if err := meta.SetTxInpointsFromTx(tx); err != nil {
 			return nil, errors.NewProcessingError("[buildMetaFromSubtreeData] failed to set inpoints for tx %s: %v", tx.TxID(), err)
+		}
+	}
+
+	// The subtree data deserializer stops at EOF without checking it filled every node, so a
+	// short or empty body yields trailing nil transactions and a meta with no recorded parents
+	// for the tail. That meta is worse than no meta: GetParentTxHashes returns nil with no
+	// error, validOrderAndBlessed reads that as "transaction could not be found in tx meta
+	// data" and raises ErrBlockInvalid, and ValidateBlock then calls storeInvalidBlock — a
+	// valid block permanently invalidated, which is the outcome this PR exists to prevent.
+	// Fail regeneration instead so the error stays transient.
+	//
+	// Meta.Serialize exempts index 0 unconditionally, but only the first subtree of a block
+	// carries the coinbase placeholder there — for every other subtree node 0 is a real
+	// transaction, so it is checked too.
+	firstChecked := 0
+	if hasCoinbasePlaceholder {
+		firstChecked = 1
+	}
+
+	for i := firstChecked; i < subtree.Length(); i++ {
+		if meta.TxInpoints[i].ParentTxHashes == nil {
+			return nil, errors.NewProcessingError("[buildMetaFromSubtreeData] incomplete subtree data: no inpoints for node %d of %d", i, subtree.Length())
 		}
 	}
 
