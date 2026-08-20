@@ -33,6 +33,7 @@ const (
 	BlockAssemblyAPI_ResetBlockAssemblyValidateInputs_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssemblyValidateInputs"
 	BlockAssemblyAPI_CheckBlockAssemblyValidateInputs_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssemblyValidateInputs"
 	BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName            = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyState"
+	BlockAssemblyAPI_GetQueueLength_FullMethodName                   = "/blockassembly_api.BlockAssemblyAPI/GetQueueLength"
 	BlockAssemblyAPI_GenerateBlocks_FullMethodName                   = "/blockassembly_api.BlockAssemblyAPI/GenerateBlocks"
 	BlockAssemblyAPI_CheckBlockAssembly_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssembly"
 	BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName   = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyBlockCandidate"
@@ -96,6 +97,12 @@ type BlockAssemblyAPIClient interface {
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	// Provides detailed information about the assembly process status.
 	GetBlockAssemblyState(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*StateMessage, error)
+	// GetQueueLength returns only the current subtree-processor queue depth.
+	// Unlike GetBlockAssemblyState it reads a single atomic counter and never
+	// round-trips the subtree processor's main loop, so it stays cheap and
+	// responsive even while that loop is busy with a block movement — which is
+	// exactly when back-pressure monitors need an answer.
+	GetQueueLength(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetQueueLengthResponse, error)
 	// GenerateBlocks creates new blocks (typically for testing purposes).
 	// Allows specification of block count and recipient address.
 	GenerateBlocks(ctx context.Context, in *GenerateBlocksRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
@@ -255,6 +262,16 @@ func (c *blockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) GetQueueLength(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetQueueLengthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetQueueLengthResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetQueueLength_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockAssemblyAPIClient) GenerateBlocks(ctx context.Context, in *GenerateBlocksRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EmptyMessage)
@@ -361,6 +378,12 @@ type BlockAssemblyAPIServer interface {
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	// Provides detailed information about the assembly process status.
 	GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error)
+	// GetQueueLength returns only the current subtree-processor queue depth.
+	// Unlike GetBlockAssemblyState it reads a single atomic counter and never
+	// round-trips the subtree processor's main loop, so it stays cheap and
+	// responsive even while that loop is busy with a block movement — which is
+	// exactly when back-pressure monitors need an answer.
+	GetQueueLength(context.Context, *EmptyMessage) (*GetQueueLengthResponse, error)
 	// GenerateBlocks creates new blocks (typically for testing purposes).
 	// Allows specification of block count and recipient address.
 	GenerateBlocks(context.Context, *GenerateBlocksRequest) (*EmptyMessage, error)
@@ -428,6 +451,9 @@ func (UnimplementedBlockAssemblyAPIServer) CheckBlockAssemblyValidateInputs(cont
 }
 func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockAssemblyState not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GetQueueLength(context.Context, *EmptyMessage) (*GetQueueLengthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetQueueLength not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) GenerateBlocks(context.Context, *GenerateBlocksRequest) (*EmptyMessage, error) {
 	return nil, status.Error(codes.Unimplemented, "method GenerateBlocks not implemented")
@@ -699,6 +725,24 @@ func _BlockAssemblyAPI_GetBlockAssemblyState_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GetQueueLength_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetQueueLength(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetQueueLength_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetQueueLength(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockAssemblyAPI_GenerateBlocks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GenerateBlocksRequest)
 	if err := dec(in); err != nil {
@@ -847,6 +891,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockAssemblyState",
 			Handler:    _BlockAssemblyAPI_GetBlockAssemblyState_Handler,
+		},
+		{
+			MethodName: "GetQueueLength",
+			Handler:    _BlockAssemblyAPI_GetQueueLength_Handler,
 		},
 		{
 			MethodName: "GenerateBlocks",

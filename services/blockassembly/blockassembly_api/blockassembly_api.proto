@@ -74,6 +74,13 @@ service BlockAssemblyAPI {
   // Provides detailed information about the assembly process status.
   rpc GetBlockAssemblyState (EmptyMessage) returns (StateMessage) {}
 
+  // GetQueueLength returns only the current subtree-processor queue depth.
+  // Unlike GetBlockAssemblyState it reads a single atomic counter and never
+  // round-trips the subtree processor's main loop, so it stays cheap and
+  // responsive even while that loop is busy with a block movement — which is
+  // exactly when back-pressure monitors need an answer.
+  rpc GetQueueLength (EmptyMessage) returns (GetQueueLengthResponse) {}
+
   // GenerateBlocks creates new blocks (typically for testing purposes).
   // Allows specification of block count and recipient address.
   rpc GenerateBlocks (GenerateBlocksRequest) returns (EmptyMessage) {}
@@ -265,6 +272,11 @@ message GenerateBlocksRequest {
   int32 count = 1; // the number of blocks to generate
   optional string address = 2; // the address to send the generated blocks to
   optional int32 maxTries = 3; // the maximum number of attempts to generate a block
+}
+
+// Response for the GetQueueLength method.
+message GetQueueLengthResponse {
+  int64 queueLength = 1; // the number of transactions currently queued in the subtree processor
 }
 
 // Response for the GetBlockAssemblyBlockCandidate method.

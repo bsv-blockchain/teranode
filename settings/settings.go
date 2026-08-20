@@ -269,6 +269,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		},
 		BlockAssembly: BlockAssemblySettings{
 			Disabled:                             getBool("blockassembly_disabled", false, alternativeContext...),
+			MaxQueuedTransactions:                getInt64("blockassembly_max_queued_transactions", 0, alternativeContext...),
 			GRPCAddress:                          getString("blockassembly_grpcAddress", "localhost:8085", alternativeContext...),
 			GRPCListenAddress:                    getString("blockassembly_grpcListenAddress", ":8085", alternativeContext...),
 			GRPCMaxRetries:                       getInt("blockassembly_grpcMaxRetries", 3, alternativeContext...),
@@ -374,6 +375,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CatchupConcurrency:                    getInt("blockvalidation_catchupConcurrency", max(4, runtime.NumCPU()/2), alternativeContext...),
 			CatchupMaxRetries:                     getInt("blockvalidation_catchup_max_retries", 3, alternativeContext...),
 			CatchupMaxAttemptsPerBlock:            getInt("blockvalidation_catchup_max_attempts_per_block", 5, alternativeContext...),
+			IncompleteBlockMaxRetriesPerBlock:     getInt("blockvalidation_incomplete_block_max_retries_per_block", 5, alternativeContext...),
 			CatchupIterationTimeout:               getInt("blockvalidation_catchup_iteration_timeout", 30, alternativeContext...),
 			CatchupOperationTimeout:               getInt("blockvalidation_catchup_operation_timeout", 300, alternativeContext...),
 			CatchupMaxAccumulatedHeaders:          getInt("blockvalidation_max_accumulated_headers", 100000, alternativeContext...),

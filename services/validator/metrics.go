@@ -48,6 +48,19 @@ var (
 	// final validation completion, including all validation steps and database operations. Units: seconds.
 	prometheusTransactionValidateTotal prometheus.Histogram
 
+	// prometheusValidatorBackpressureRejects counts mempool transactions rejected
+	// pre-validation by the block-assembly back-pressure gate.
+	prometheusValidatorBackpressureRejects prometheus.Counter
+
+	// prometheusValidatorBackpressureWait measures how long an already-accepted
+	// (Kafka-ingested) transaction was held waiting for ingest capacity. One
+	// observation per held transaction, not per retry. Units: seconds.
+	prometheusValidatorBackpressureWait prometheus.Histogram
+
+	// prometheusValidatorBackpressureForced counts already-accepted transactions
+	// processed anyway because the bounded shed-wait expired.
+	prometheusValidatorBackpressureForced prometheus.Counter
+
 	// prometheusTransactionValidate measures the time spent in individual transaction validation steps.
 	// This histogram captures the duration of core validation operations excluding script execution,
 	// such as structure validation, input/output checks, and consensus rule verification. Units: seconds.
@@ -153,6 +166,34 @@ func _initPrometheusMetrics() {
 			Name:      "transactions_validate_total",
 			Help:      "Histogram of total transaction validation",
 			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusValidatorBackpressureRejects = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "backpressure_rejects_total",
+			Help:      "Total number of mempool transactions rejected before validation because block assembly's ingest queue exceeded blockassembly_max_queued_transactions. A sustained non-zero rate means the subtree processor is not keeping up or is wedged — investigate before the node exhausts memory.",
+		},
+	)
+
+	prometheusValidatorBackpressureWait = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "backpressure_wait_seconds",
+			Help:      "Time an already-accepted (Kafka-ingested) transaction spent waiting for block assembly ingest capacity. One observation per held transaction. These transactions cannot be rejected — the submitter already got a success — so on the async ingest path back-pressure shows up here rather than in backpressure_rejects_total.",
+			Buckets:   prometheus.ExponentialBuckets(0.1, 2, 10),
+		},
+	)
+
+	prometheusValidatorBackpressureForced = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "backpressure_forced_total",
+			Help:      "Total number of already-accepted transactions processed despite the back-pressure gate because the bounded shed-wait expired. Non-zero means the block assembly queue is being pushed past blockassembly_max_queued_transactions by traffic that cannot be shed — the shed is no longer holding the bound.",
 		},
 	)
 

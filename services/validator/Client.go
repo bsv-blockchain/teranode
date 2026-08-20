@@ -455,6 +455,16 @@ func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeig
 		return errors.UnwrapGRPC(err)
 	}
 
+	// ResourceExhausted is overloaded in-band: it is also the gRPC code for the
+	// back-pressure shed (THRESHOLD_EXCEEDED). A shed must surface to the caller
+	// as a retryable rejection — falling back to HTTP here would misdiagnose it
+	// as an oversize transaction and ADD load to the node precisely while it is
+	// shedding. The reconstructed teranode code disambiguates the two meanings.
+	unwrapped := errors.UnwrapGRPC(err)
+	if errors.Is(unwrapped, errors.ErrThresholdExceeded) {
+		return unwrapped
+	}
+
 	// Try HTTP fallback
 	c.logger.Warnf("[ValidateWithOptions][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
 		tx.TxID(), st.Message())
@@ -665,6 +675,18 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	// Check response status
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+
+		// 429 is the validator's back-pressure shed. Keep it as
+		// THRESHOLD_EXCEEDED so the caller (propagation, which re-wraps
+		// anything else as Internal) can pass a retryable "busy" back to the
+		// submitter instead of a terminal reject. Reached for exactly the
+		// transactions that take this fallback — the oversize ones — because a
+		// transport-level ResourceExhausted carries no error detail to
+		// reconstruct the code from.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return errors.NewThresholdExceededError("[ValidateWithOptions][%s] validator busy (back-pressure), retry later: %s", tx.TxID(), string(body))
+		}
+
 		return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
 			tx.TxID(), resp.StatusCode, string(body))
 	}

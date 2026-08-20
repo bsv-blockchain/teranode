@@ -26,6 +26,14 @@ type Options struct {
 	// this is done when validating transaction from a block that has been mined
 	SkipPolicyChecks bool
 
+	// SkipBackpressure exempts this validation from the block-assembly
+	// back-pressure gate. Set ONLY for transactions the node has already
+	// accepted (e.g. a Kafka-ingested tx whose submitter got a 200 and whose
+	// bounded shed-wait expired): dropping such a transaction would break the
+	// acceptance contract, so it is force-processed as bounded overshoot
+	// instead of shed. Never set for fresh submissions.
+	SkipBackpressure bool
+
 	// CreateConflicting determines whether to allow conflicting transactions
 	// this is done when validating transaction from a block that has been mined
 	CreateConflicting bool

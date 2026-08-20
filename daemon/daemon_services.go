@@ -1068,6 +1068,26 @@ func (d *Daemon) startPropagationService(
 	// Create ban list for the Propagation service
 	propBanList := createBanList(ctx, createLogger("propagation_banlist"), appSettings)
 
+	// Back-pressure: only take a dependency on block assembly when the operator
+	// configured a queue limit, so the default (limit 0) startup path is
+	// unchanged. The monitor polls the cheap GetQueueLength RPC and lets
+	// propagation shed at ingress — the only place a submitter still gets a
+	// synchronous, retryable answer on the Kafka route.
+	var ingestGate propagation.IngestGate
+
+	if appSettings.BlockAssembly.MaxQueuedTransactions > 0 && !appSettings.BlockAssembly.Disabled {
+		var blockAssemblyClient blockassembly.ClientI
+
+		blockAssemblyClient, err = d.daemonStores.GetBlockAssemblyClient(ctx, createLogger(loggerBlockAssembly), appSettings)
+		if err != nil {
+			return err
+		}
+
+		if monitor := blockassembly.NewQueueMonitor(ctx, createLogger(loggerPropagation), blockAssemblyClient, appSettings.BlockAssembly.MaxQueuedTransactions); monitor != nil {
+			ingestGate = monitor
+		}
+	}
+
 	// Add the Propagation service to the ServiceManager
 	return d.ServiceManager.AddService(servicePropagationFormal, propagation.New(
 		createLogger(loggerPropagation),
@@ -1077,6 +1097,7 @@ func (d *Daemon) startPropagationService(
 		blockchainClient,
 		validatorKafkaProducerClient,
 		propBanList,
+		ingestGate,
 	))
 }
 

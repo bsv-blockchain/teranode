@@ -81,6 +81,12 @@ var (
 	prometheusBlockValidationSetMinedDrops           prometheus.Counter
 	prometheusBlockValidationSetMinedEnqueueOverflow prometheus.Counter
 
+	// BLOCK_INCOMPLETE retry-cap tracking. Aggregate counters (no per-blockhash
+	// label) for the same cardinality reason as the setMined counters above;
+	// block hashes are in the accompanying log lines.
+	prometheusBlockValidationIncompleteBlockRetries     prometheus.Counter
+	prometheusBlockValidationIncompleteBlockEscalations prometheus.Counter
+
 	// outpoint-only fast-path counter: incremented once per block when the
 	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
 	// checkpoint). A rising rate indicates the fast path is in use during IBD.
@@ -239,6 +245,24 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "setmined_drops_total",
 			Help:      "Total number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention; the specific block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusBlockValidationIncompleteBlockRetries = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "incomplete_block_retry_total",
+			Help:      "Total number of BLOCK_INCOMPLETE processing failures across all blocks. A sustained rise means block validation cannot complete a block (missing transactions or parents); the specific block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusBlockValidationIncompleteBlockEscalations = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "incomplete_block_escalations_total",
+			Help:      "Total number of blocks that exhausted the per-block BLOCK_INCOMPLETE retry cap and entered cooldown. Non-zero values are page-worthy: the node's chain tip is likely stuck and the missing data may be unrecoverable; the specific block hash is recorded in the logs (manual_intervention_required).",
 		},
 	)
 

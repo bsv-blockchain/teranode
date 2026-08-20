@@ -5867,6 +5867,10 @@ func (m *mockBlockAssemblyClient) CheckBlockAssemblyValidateInputs(ctx context.C
 func (m *mockBlockAssemblyClient) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	return nil, nil
 }
+
+func (m *mockBlockAssemblyClient) GetQueueLength(ctx context.Context) (int64, error) {
+	return 0, nil
+}
 func (m *mockBlockAssemblyClient) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error) {
 	return nil, nil
 }
@@ -6781,4 +6785,57 @@ func TestBanHandlers_LegacyCallBounded(t *testing.T) {
 		cmd := &bsvjson.SetBanCmd{IPOrSubnet: "10.0.0.1", Command: "add", BanTime: &banTime}
 		mustReturn(t, func() { _, _ = handleSetBan(context.Background(), s, cmd, nil) })
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Back-pressure shed mapping on the RPC entry point.
+//
+// A shed says "the node is busy", not "this transaction is bad". Returning it
+// as ErrRPCVerify (-25) with the rejected prefix — the mapping every other
+// validator error takes — tells bitcoin clients the transaction is permanently
+// invalid, and they abandon it. The submitter must instead get a retryable
+// error, because the transaction was neither stored in the UTXO set nor
+// queued: it is entirely up to the submitter to retry it.
+// ---------------------------------------------------------------------------
+
+// shedingValidator returns the back-pressure error every other validator
+// error path would have flattened into a -25 verify rejection.
+type shedingValidator struct{ validator.Interface }
+
+func (shedingValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	return nil, errors.NewThresholdExceededError("block assembly ingest queue is over blockassembly_max_queued_transactions")
+}
+
+// failingValidator returns an ordinary validation failure.
+type failingValidator struct{ validator.Interface }
+
+func (failingValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	return nil, errors.NewTxInvalidError("bad script")
+}
+
+func TestHandleSendRawTransaction_BackpressureIsRetryable(t *testing.T) {
+	s := newRPCServerForAbsurdFeeTest(t, 0, 100_000_000, shedingValidator{})
+	cmd := buildSendRawTxCmd(t, 99_999_000, nil)
+
+	_, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+	require.Error(t, err)
+
+	rpcErr, ok := err.(*bsvjson.RPCError)
+	require.True(t, ok, "expected an RPC error type")
+	require.Equal(t, bsvjson.ErrRPCMisc, rpcErr.Code, "a shed must not use the -25 verify code clients treat as permanent invalidity")
+	require.NotContains(t, rpcErr.Message, txRejectedPrefix, "a shed is not a rejection of the transaction")
+	require.Contains(t, rpcErr.Message, "retry later")
+}
+
+func TestHandleSendRawTransaction_InvalidTxStaysTerminal(t *testing.T) {
+	s := newRPCServerForAbsurdFeeTest(t, 0, 100_000_000, failingValidator{})
+	cmd := buildSendRawTxCmd(t, 99_999_000, nil)
+
+	_, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+	require.Error(t, err)
+
+	rpcErr, ok := err.(*bsvjson.RPCError)
+	require.True(t, ok, "expected an RPC error type")
+	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code, "a genuine validation failure must stay terminal")
+	require.Contains(t, rpcErr.Message, txRejectedPrefix)
 }

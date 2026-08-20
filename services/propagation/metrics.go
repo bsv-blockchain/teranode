@@ -44,6 +44,10 @@ var (
 	prometheusTransactionSize           prometheus.Histogram
 	prometheusInvalidTransactions       prometheus.Counter
 	prometheusBatchHandlerRejections    prometheus.Counter
+
+	// prometheusPropagationBackpressureRejects counts transactions turned away at
+	// ingress by the block-assembly back-pressure gate.
+	prometheusPropagationBackpressureRejects prometheus.Counter
 )
 
 // Synchronization primitive for ensuring metrics are initialized exactly once.
@@ -137,6 +141,14 @@ func _initPrometheusMetrics() {
 			Subsystem: "propagation",
 			Name:      "batch_handler_rejections_total",
 			Help:      "Number of batch/tx requests rejected due to server at capacity (BatchHandlerLimit reached)",
+		},
+	)
+	prometheusPropagationBackpressureRejects = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "propagation",
+			Name:      "backpressure_rejects_total",
+			Help:      "Number of transactions rejected at ingress because block assembly's queue exceeded blockassembly_max_queued_transactions. This is the synchronous shed the submitter sees (ResourceExhausted); a sustained non-zero rate means the subtree processor is not keeping up or is wedged.",
 		},
 	)
 }

@@ -135,6 +135,20 @@ type ClientI interface {
 	//   - error: Any error encountered during retrieval
 	GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error)
 
+	// GetQueueLength returns the current subtree-processor queue depth. Unlike
+	// GetBlockAssemblyState this reads a single atomic counter server-side and
+	// never round-trips the subtree processor's main loop, so it stays cheap and
+	// responsive even during block movements — which is exactly when
+	// back-pressure monitors need an answer.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//
+	// Returns:
+	//   - int64: Number of transactions currently queued
+	//   - error: Any error encountered during retrieval
+	GetQueueLength(ctx context.Context) (int64, error)
+
 	// GetBlockAssemblyBlockCandidate retrieves the block candidate for block assembly.
 	//
 	// Parameters:

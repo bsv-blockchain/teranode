@@ -308,6 +308,80 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
+// kafkaShedMaxWait bounds how long a Kafka-ingested transaction waits out a
+// block-assembly back-pressure shed before it is force-processed anyway.
+//
+// Waiting turns overload into consumer lag, which is the right async
+// back-pressure signal, but it cannot be unbounded. The validator-txs topic is
+// retention-bounded (60s in the .operator context), so a handler stalled past
+// the retention window lets the broker delete records the consumer never
+// reached — losing a transaction propagation already answered 200 for. A
+// blocked handler also pins its fetched records (and a goroutine) in memory
+// while the puller keeps fetching, which is the same unbounded-memory shape
+// this limit exists to prevent.
+//
+// Past the deadline the transaction is force-processed: a bounded queue
+// overshoot is strictly better than dropping an acknowledged transaction.
+// Fresh submissions are still shed synchronously at propagation ingress, so
+// what reaches this wait is only what was already in flight.
+const kafkaShedMaxWait = 10 * time.Second
+
+// kafkaShedPollInterval is how often a waiting Kafka handler re-checks the
+// back-pressure verdict. Matches the monitor's own sampling interval — a
+// tighter poll cannot see a fresher verdict.
+const kafkaShedPollInterval = blockassembly.QueueMonitorInterval
+
+// awaitIngestCapacity waits out a block-assembly back-pressure shed for a
+// transaction that has ALREADY been accepted from a submitter (the Kafka
+// path). It returns when capacity is available, or — once deadline passes —
+// with options.SkipBackpressure set so validateInternal processes the
+// transaction instead of shedding it.
+//
+// Returns an error only on context cancellation. The shed is counted once per
+// transaction here (as a wait, not as a reject) so the reject counter keeps
+// meaning "transactions turned away" on the paths that can actually turn one
+// away.
+func (v *Server) awaitIngestCapacity(ctx context.Context, txID string, options *Options, deadline time.Time) error {
+	// The validator service always runs the in-process implementation, so this
+	// assertion holds in production; a validator that cannot report the verdict
+	// (test doubles) simply never waits.
+	gate, ok := v.validator.(interface{ IngestOverloaded() bool })
+	if !ok || !gate.IngestOverloaded() {
+		return nil
+	}
+
+	start := time.Now()
+
+	v.logger.Debugf("[Validator] block assembly overloaded, holding kafka tx %s (up to %s)", txID, kafkaShedMaxWait)
+
+	for gate.IngestOverloaded() {
+		if !time.Now().Before(deadline) {
+			// Never drop an acknowledged transaction: accept the overshoot.
+			options.SkipBackpressure = true
+
+			if prometheusValidatorBackpressureForced != nil {
+				prometheusValidatorBackpressureForced.Inc()
+			}
+
+			v.logger.Warnf("[Validator] block assembly still overloaded after %s; force-processing kafka tx %s rather than dropping it (queue overshoots the limit)", time.Since(start).Round(time.Millisecond), txID)
+
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(kafkaShedPollInterval):
+		}
+	}
+
+	if prometheusValidatorBackpressureWait != nil {
+		prometheusValidatorBackpressureWait.Observe(time.Since(start).Seconds())
+	}
+
+	return nil
+}
+
 // Start begins the validator server operation and registers handlers for validation requests.
 // This method initiates all background processing, including Kafka consumer setup, HTTP API servers,
 // and synchronization with the blockchain FSM. It waits for the blockchain FSM to transition
@@ -364,15 +438,35 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			CreateConflicting:    kafkaMsg.Options.CreateConflicting,
 		}
 
+		// Back-pressure on the async path is a WAIT, never a reject: this
+		// consumer runs WithLogErrorAndMoveOn, so an error returned here is
+		// logged, the offset committed, and a transaction propagation already
+		// answered 200 for is silently destroyed. The wait is bounded and ends
+		// in force-processing rather than dropping — see awaitIngestCapacity.
+		shedDeadline := time.Now().Add(kafkaShedMaxWait)
+
 		// should not pass in a height when validating from Kafka, should just be current utxo store height
-		if _, err = v.validator.ValidateWithOptions(ctx, tx, height, options); err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] Invalid tx: %s", err)
+		for {
+			if err = v.awaitIngestCapacity(ctx, tx.TxIDChainHash().String(), options, shedDeadline); err != nil {
+				return err
+			}
 
-			return err
+			if _, err = v.validator.ValidateWithOptions(ctx, tx, height, options); err != nil {
+				// The verdict can flip between the capacity check and the gate
+				// inside validateInternal. Go back to the (already bounded) wait
+				// rather than returning a shed error that would be committed away.
+				if errors.Is(err, errors.ErrThresholdExceeded) && !options.SkipBackpressure {
+					continue
+				}
+
+				prometheusInvalidTransactions.Inc()
+				v.logger.Errorf("[Validator] Invalid tx: %s", err)
+
+				return err
+			}
+
+			return nil
 		}
-
-		return nil
 	}
 
 	if v.consumerClient != nil {
@@ -910,6 +1004,13 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 		// Process the transaction and return appropriate response
 		response, err := v.validateTransaction(ctx, req)
 		if err != nil {
+			// Back-pressure shed: report "busy, retry later" (429) rather than a
+			// generic failure, so the HTTP fallback path carries the same
+			// retryable signal as the gRPC path's ResourceExhausted.
+			if errors.Is(err, errors.ErrThresholdExceeded) {
+				return c.String(http.StatusTooManyRequests, "[handleSingleTx] node busy: "+err.Error())
+			}
+
 			return c.String(http.StatusInternalServerError, "[handleSingleTx] Failed to process transaction: "+err.Error())
 		}
 

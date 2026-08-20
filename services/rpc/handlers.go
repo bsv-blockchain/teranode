@@ -910,6 +910,17 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
 	_, err = s.validatorClient.Validate(ctx, tx, 0)
 	if err != nil {
+		// Back-pressure shed is not a verdict on the transaction: return a
+		// generic "busy, retry" error WITHOUT the rejected prefix or the -25
+		// verify code, which bitcoin clients treat as permanent invalidity and
+		// use as a signal to abandon the transaction.
+		if errors.Is(err, errors.ErrThresholdExceeded) {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCMisc,
+				Message: "node busy: block assembly queue full, transaction not processed - retry later",
+			}
+		}
+
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCVerify,
 			Message: txRejectedPrefix + err.Error(),

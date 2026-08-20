@@ -157,6 +157,16 @@ func (m *Mock) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.St
 	return args.Get(0).(*blockassembly_api.StateMessage), nil
 }
 
+func (m *Mock) GetQueueLength(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+
+	if args.Error(1) != nil {
+		return 0, args.Error(1)
+	}
+
+	return args.Get(0).(int64), nil
+}
+
 func (m *Mock) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error) {
 	args := m.Called(ctx)
 
@@ -298,6 +308,14 @@ func (m *mockBlockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, 
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*blockassembly_api.StateMessage), args.Error(1)
+}
+
+func (m *mockBlockAssemblyAPIClient) GetQueueLength(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.GetQueueLengthResponse, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.GetQueueLengthResponse), args.Error(1)
 }
 
 func (m *mockBlockAssemblyAPIClient) GenerateBlocks(ctx context.Context, in *blockassembly_api.GenerateBlocksRequest, opts ...grpc.CallOption) (*blockassembly_api.EmptyMessage, error) {

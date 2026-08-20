@@ -128,16 +128,30 @@ type PropagationServer struct {
 	httpServer                   *echo.Echo
 	validatorHTTPAddr            *url.URL
 	banList                      banlist.Interface
-	udpWorkerPool                chan struct{} // Semaphore for limiting UDP processing goroutines
-	batchWorkerPool              chan struct{} // Server-wide semaphore limiting concurrent tx-processing goroutines across all ProcessTransactionBatch calls
-	batchHandlerPool             chan struct{} // Non-blocking admission control for in-flight batch/tx handlers; nil when disabled
-	udpConns                     []*net.UDPConn
-	udpConnsMu                   sync.Mutex
+	// ingestGate reports whether block assembly's ingest queue is over
+	// blockassembly_max_queued_transactions. Nil when the limit is disabled.
+	// Consulted at ingress — before a transaction is stored or published — so
+	// the shed is synchronous on EVERY submitter path, including the Kafka one
+	// where the caller is otherwise told 200 before validation happens.
+	ingestGate       IngestGate
+	udpWorkerPool    chan struct{} // Semaphore for limiting UDP processing goroutines
+	batchWorkerPool  chan struct{} // Server-wide semaphore limiting concurrent tx-processing goroutines across all ProcessTransactionBatch calls
+	batchHandlerPool chan struct{} // Non-blocking admission control for in-flight batch/tx handlers; nil when disabled
+	udpConns         []*net.UDPConn
+	udpConnsMu       sync.Mutex
 	// udpWg tracks the UDP reader goroutines and the per-transaction worker
 	// goroutines they spawn (which call ProcessTransaction). Stop() waits on it
 	// after closing the conns so no in-flight ProcessTransaction can still publish
 	// to the validator Kafka producer after that producer's channel is closed.
 	udpWg sync.WaitGroup
+}
+
+// IngestGate reports whether block assembly's ingest queue is currently over
+// blockassembly_max_queued_transactions. Satisfied by
+// *blockassembly.QueueMonitor; propagation only needs the verdict, so it takes
+// the narrow interface and stays testable without a block assembly client.
+type IngestGate interface {
+	Overloaded() bool
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -150,10 +164,13 @@ type PropagationServer struct {
 //   - validatorClient: service for transaction validation
 //   - blockchainClient: interface to blockchain operations
 //   - validatorKafkaProducerClient: Kafka producer for async validation
+//   - banList: peer ban list used to reject transactions from banned sources
+//   - ingestGate: block-assembly back-pressure verdict, nil when
+//     blockassembly_max_queued_transactions is disabled
 //
 // Returns:
 //   - *PropagationServer: configured server instance
-func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, banList banlist.Interface) *PropagationServer {
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, banList banlist.Interface, ingestGate IngestGate) *PropagationServer {
 	initPrometheusMetrics()
 
 	var batchPool chan struct{}
@@ -176,6 +193,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
 		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
 		banList:                      banList,
+		ingestGate:                   ingestGate,
 		udpWorkerPool:                make(chan struct{}, udpWorkerPoolSize),
 		batchWorkerPool:              batchPool,
 		batchHandlerPool:             batchHandlerPool,
@@ -1314,6 +1332,21 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return err
 	}
 
+	// Back-pressure gate. Ingress is the ONLY point where every submitter path
+	// still gets a synchronous, retryable answer: on the Kafka route the caller
+	// is told 200 as soon as the message is published, so a shed decided later
+	// (in the validator) can no longer be reported to anyone — it can only be
+	// waited out or, at worst, lost with the message. Rejecting here — after
+	// the terminal structural checks above, so malformed traffic still gets a
+	// terminal verdict, and before storeTransaction/publish, so nothing is
+	// written for a transaction we are turning away — keeps a shed cheap and
+	// the transaction wholly retryable.
+	if ps.ingestGate != nil && ps.ingestGate.Overloaded() {
+		prometheusPropagationBackpressureRejects.Inc()
+
+		return errors.NewThresholdExceededError("[ProcessTransaction][%s] block assembly ingest queue is over blockassembly_max_queued_transactions; rejecting transaction, retry later", btTx.TxID())
+	}
+
 	// Serialize once and reuse everywhere downstream to avoid redundant allocations
 	txBytes := btTx.SerializeBytes()
 
@@ -1338,6 +1371,14 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
 		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
+			// Preserve the THRESHOLD_EXCEEDED code as the OUTERMOST error: WrapGRPC
+			// builds the gRPC status from the outermost code only, and back-pressure
+			// must surface to submitters as ResourceExhausted ("node busy, retry"),
+			// not Internal (a hard reject to ARC-style broadcasters).
+			if errors.Is(err, errors.ErrThresholdExceeded) {
+				return errors.NewThresholdExceededError("[ProcessTransaction][%s] rejected by back-pressure, retry later", btTx.TxID(), err)
+			}
+
 			return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}
@@ -1452,6 +1493,14 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 	// Check response status
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+
+		// 429 is the validator's back-pressure shed: preserve THRESHOLD_EXCEEDED
+		// so the submitter gets ResourceExhausted ("busy, retry") instead of a
+		// terminal ServiceError, matching the gRPC and sync paths.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return errors.NewThresholdExceededError("[ProcessTransaction][%s] validator busy (back-pressure), retry later: %s", btTx.TxID(), string(body))
+		}
+
 		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
 			btTx.TxID(), resp.StatusCode, string(body))
 	}

@@ -56,6 +56,7 @@ func TestPropagationServiceErrors(t *testing.T) {
 		mockClient, // Mock blockchain client
 		nil,        // No kafka producer
 		nil,        // No ban list
+		nil,        // No ingest gate
 	)
 
 	// Start the server

@@ -1961,7 +1961,7 @@ func TestPropagationServer_Start_FSMContextCancellation(t *testing.T) {
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
 
-	ps := New(logger, tSettings, nil, nil, mockBlockchainClient, nil, nil)
+	ps := New(logger, tSettings, nil, nil, mockBlockchainClient, nil, nil, nil)
 
 	readyCh := make(chan struct{})
 	err := ps.Start(ctx, readyCh)

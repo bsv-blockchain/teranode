@@ -745,6 +745,25 @@ func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.
 	return state, nil
 }
 
+// GetQueueLength returns the current subtree-processor queue depth via the
+// dedicated lightweight RPC (a single atomic read server-side; no
+// subtree-processor main-loop round-trip).
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - int64: Number of transactions currently queued
+//   - error: Any error encountered during retrieval
+func (s *Client) GetQueueLength(ctx context.Context) (int64, error) {
+	resp, err := s.client.GetQueueLength(ctx, &blockassembly_api.EmptyMessage{})
+	if err != nil {
+		return 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.QueueLength, nil
+}
+
 // BlockAssemblyAPIClient returns the underlying gRPC client for block assembly API.
 //
 // Returns:

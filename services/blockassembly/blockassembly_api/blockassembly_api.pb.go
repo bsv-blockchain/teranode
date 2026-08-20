@@ -981,6 +981,51 @@ func (x *GenerateBlocksRequest) GetMaxTries() int32 {
 	return 0
 }
 
+// Response for the GetQueueLength method.
+type GetQueueLengthResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	QueueLength   int64                  `protobuf:"varint,1,opt,name=queueLength,proto3" json:"queueLength,omitempty"` // the number of transactions currently queued in the subtree processor
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetQueueLengthResponse) Reset() {
+	*x = GetQueueLengthResponse{}
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetQueueLengthResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetQueueLengthResponse) ProtoMessage() {}
+
+func (x *GetQueueLengthResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetQueueLengthResponse.ProtoReflect.Descriptor instead.
+func (*GetQueueLengthResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetQueueLengthResponse) GetQueueLength() int64 {
+	if x != nil {
+		return x.QueueLength
+	}
+	return 0
+}
+
 // Response for the GetBlockAssemblyBlockCandidate method.
 type GetBlockAssemblyBlockCandidateResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -991,7 +1036,7 @@ type GetBlockAssemblyBlockCandidateResponse struct {
 
 func (x *GetBlockAssemblyBlockCandidateResponse) Reset() {
 	*x = GetBlockAssemblyBlockCandidateResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[15]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1003,7 +1048,7 @@ func (x *GetBlockAssemblyBlockCandidateResponse) String() string {
 func (*GetBlockAssemblyBlockCandidateResponse) ProtoMessage() {}
 
 func (x *GetBlockAssemblyBlockCandidateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[15]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1016,7 +1061,7 @@ func (x *GetBlockAssemblyBlockCandidateResponse) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use GetBlockAssemblyBlockCandidateResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockAssemblyBlockCandidateResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{15}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetBlockAssemblyBlockCandidateResponse) GetBlock() []byte {
@@ -1037,7 +1082,7 @@ type GetBlockAssemblyTxsResponse struct {
 
 func (x *GetBlockAssemblyTxsResponse) Reset() {
 	*x = GetBlockAssemblyTxsResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[16]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1049,7 +1094,7 @@ func (x *GetBlockAssemblyTxsResponse) String() string {
 func (*GetBlockAssemblyTxsResponse) ProtoMessage() {}
 
 func (x *GetBlockAssemblyTxsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[16]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1062,7 +1107,7 @@ func (x *GetBlockAssemblyTxsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockAssemblyTxsResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockAssemblyTxsResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{16}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetBlockAssemblyTxsResponse) GetTxCount() uint64 {
@@ -1089,7 +1134,7 @@ type GetCandidateBlockRequest struct {
 
 func (x *GetCandidateBlockRequest) Reset() {
 	*x = GetCandidateBlockRequest{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[17]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1101,7 +1146,7 @@ func (x *GetCandidateBlockRequest) String() string {
 func (*GetCandidateBlockRequest) ProtoMessage() {}
 
 func (x *GetCandidateBlockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[17]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1114,7 +1159,7 @@ func (x *GetCandidateBlockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCandidateBlockRequest.ProtoReflect.Descriptor instead.
 func (*GetCandidateBlockRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{17}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetCandidateBlockRequest) GetId() []byte {
@@ -1137,7 +1182,7 @@ type GetCandidateBlockResponse struct {
 
 func (x *GetCandidateBlockResponse) Reset() {
 	*x = GetCandidateBlockResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[18]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1149,7 +1194,7 @@ func (x *GetCandidateBlockResponse) String() string {
 func (*GetCandidateBlockResponse) ProtoMessage() {}
 
 func (x *GetCandidateBlockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[18]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1162,7 +1207,7 @@ func (x *GetCandidateBlockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCandidateBlockResponse.ProtoReflect.Descriptor instead.
 func (*GetCandidateBlockResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{18}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetCandidateBlockResponse) GetHeader() []byte {
@@ -1275,7 +1320,9 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\bmaxTries\x18\x03 \x01(\x05H\x01R\bmaxTries\x88\x01\x01B\n" +
 	"\n" +
 	"\b_addressB\v\n" +
-	"\t_maxTries\">\n" +
+	"\t_maxTries\":\n" +
+	"\x16GetQueueLengthResponse\x12 \n" +
+	"\vqueueLength\x18\x01 \x01(\x03R\vqueueLength\">\n" +
 	"&GetBlockAssemblyBlockCandidateResponse\x12\x14\n" +
 	"\x05block\x18\x01 \x01(\fR\x05block\"I\n" +
 	"\x1bGetBlockAssemblyTxsResponse\x12\x18\n" +
@@ -1288,7 +1335,7 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\vcoinbase_tx\x18\x02 \x01(\fR\n" +
 	"coinbaseTx\x12%\n" +
 	"\x0esubtree_hashes\x18\x03 \x03(\fR\rsubtreeHashes\x12+\n" +
-	"\x11transaction_count\x18\x04 \x01(\x04R\x10transactionCount2\xfd\r\n" +
+	"\x11transaction_count\x18\x04 \x01(\x04R\x10transactionCount2\xdd\x0e\n" +
 	"\x10BlockAssemblyAPI\x12R\n" +
 	"\n" +
 	"HealthGRPC\x12\x1f.blockassembly_api.EmptyMessage\x1a!.blockassembly_api.HealthResponse\"\x00\x12L\n" +
@@ -1304,7 +1351,8 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x17ResetBlockAssemblyFully\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1f.blockassembly_api.EmptyMessage\"\x00\x12f\n" +
 	" ResetBlockAssemblyValidateInputs\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1f.blockassembly_api.EmptyMessage\"\x00\x12f\n" +
 	" CheckBlockAssemblyValidateInputs\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1f.blockassembly_api.EmptyMessage\"\x00\x12[\n" +
-	"\x15GetBlockAssemblyState\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1f.blockassembly_api.StateMessage\"\x00\x12]\n" +
+	"\x15GetBlockAssemblyState\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1f.blockassembly_api.StateMessage\"\x00\x12^\n" +
+	"\x0eGetQueueLength\x12\x1f.blockassembly_api.EmptyMessage\x1a).blockassembly_api.GetQueueLengthResponse\"\x00\x12]\n" +
 	"\x0eGenerateBlocks\x12(.blockassembly_api.GenerateBlocksRequest\x1a\x1f.blockassembly_api.EmptyMessage\"\x00\x12V\n" +
 	"\x12CheckBlockAssembly\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1d.blockassembly_api.OKResponse\"\x00\x12~\n" +
 	"\x1eGetBlockAssemblyBlockCandidate\x12\x1f.blockassembly_api.EmptyMessage\x1a9.blockassembly_api.GetBlockAssemblyBlockCandidateResponse\"\x00\x12h\n" +
@@ -1323,7 +1371,7 @@ func file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDe
 	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescData
 }
 
-var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_goTypes = []any{
 	(*EmptyMessage)(nil),                           // 0: blockassembly_api.EmptyMessage
 	(*HealthResponse)(nil),                         // 1: blockassembly_api.HealthResponse
@@ -1340,15 +1388,16 @@ var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_goType
 	(*StateMessage)(nil),                           // 12: blockassembly_api.StateMessage
 	(*GetCurrentDifficultyResponse)(nil),           // 13: blockassembly_api.GetCurrentDifficultyResponse
 	(*GenerateBlocksRequest)(nil),                  // 14: blockassembly_api.GenerateBlocksRequest
-	(*GetBlockAssemblyBlockCandidateResponse)(nil), // 15: blockassembly_api.GetBlockAssemblyBlockCandidateResponse
-	(*GetBlockAssemblyTxsResponse)(nil),            // 16: blockassembly_api.GetBlockAssemblyTxsResponse
-	(*GetCandidateBlockRequest)(nil),               // 17: blockassembly_api.GetCandidateBlockRequest
-	(*GetCandidateBlockResponse)(nil),              // 18: blockassembly_api.GetCandidateBlockResponse
-	(*timestamppb.Timestamp)(nil),                  // 19: google.protobuf.Timestamp
-	(*model.MiningCandidate)(nil),                  // 20: model.MiningCandidate
+	(*GetQueueLengthResponse)(nil),                 // 15: blockassembly_api.GetQueueLengthResponse
+	(*GetBlockAssemblyBlockCandidateResponse)(nil), // 16: blockassembly_api.GetBlockAssemblyBlockCandidateResponse
+	(*GetBlockAssemblyTxsResponse)(nil),            // 17: blockassembly_api.GetBlockAssemblyTxsResponse
+	(*GetCandidateBlockRequest)(nil),               // 18: blockassembly_api.GetCandidateBlockRequest
+	(*GetCandidateBlockResponse)(nil),              // 19: blockassembly_api.GetCandidateBlockResponse
+	(*timestamppb.Timestamp)(nil),                  // 20: google.protobuf.Timestamp
+	(*model.MiningCandidate)(nil),                  // 21: model.MiningCandidate
 }
 var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdxs = []int32{
-	19, // 0: blockassembly_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	20, // 0: blockassembly_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
 	3,  // 1: blockassembly_api.AddTxBatchRequest.txRequests:type_name -> blockassembly_api.AddTxRequest
 	0,  // 2: blockassembly_api.BlockAssemblyAPI.HealthGRPC:input_type -> blockassembly_api.EmptyMessage
 	3,  // 3: blockassembly_api.BlockAssemblyAPI.AddTx:input_type -> blockassembly_api.AddTxRequest
@@ -1363,31 +1412,33 @@ var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdx
 	0,  // 12: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyValidateInputs:input_type -> blockassembly_api.EmptyMessage
 	0,  // 13: blockassembly_api.BlockAssemblyAPI.CheckBlockAssemblyValidateInputs:input_type -> blockassembly_api.EmptyMessage
 	0,  // 14: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:input_type -> blockassembly_api.EmptyMessage
-	14, // 15: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:input_type -> blockassembly_api.GenerateBlocksRequest
-	0,  // 16: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:input_type -> blockassembly_api.EmptyMessage
-	0,  // 17: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:input_type -> blockassembly_api.EmptyMessage
-	0,  // 18: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyTxs:input_type -> blockassembly_api.EmptyMessage
-	17, // 19: blockassembly_api.BlockAssemblyAPI.GetCandidateBlock:input_type -> blockassembly_api.GetCandidateBlockRequest
-	1,  // 20: blockassembly_api.BlockAssemblyAPI.HealthGRPC:output_type -> blockassembly_api.HealthResponse
-	8,  // 21: blockassembly_api.BlockAssemblyAPI.AddTx:output_type -> blockassembly_api.AddTxResponse
-	0,  // 22: blockassembly_api.BlockAssemblyAPI.RemoveTx:output_type -> blockassembly_api.EmptyMessage
-	9,  // 23: blockassembly_api.BlockAssemblyAPI.AddTxBatch:output_type -> blockassembly_api.AddTxBatchResponse
-	9,  // 24: blockassembly_api.BlockAssemblyAPI.AddTxBatchColumnar:output_type -> blockassembly_api.AddTxBatchResponse
-	20, // 25: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:output_type -> model.MiningCandidate
-	13, // 26: blockassembly_api.BlockAssemblyAPI.GetCurrentDifficulty:output_type -> blockassembly_api.GetCurrentDifficultyResponse
-	11, // 27: blockassembly_api.BlockAssemblyAPI.SubmitMiningSolution:output_type -> blockassembly_api.OKResponse
-	0,  // 28: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:output_type -> blockassembly_api.EmptyMessage
-	0,  // 29: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyFully:output_type -> blockassembly_api.EmptyMessage
-	0,  // 30: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyValidateInputs:output_type -> blockassembly_api.EmptyMessage
-	0,  // 31: blockassembly_api.BlockAssemblyAPI.CheckBlockAssemblyValidateInputs:output_type -> blockassembly_api.EmptyMessage
-	12, // 32: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:output_type -> blockassembly_api.StateMessage
-	0,  // 33: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:output_type -> blockassembly_api.EmptyMessage
-	11, // 34: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:output_type -> blockassembly_api.OKResponse
-	15, // 35: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:output_type -> blockassembly_api.GetBlockAssemblyBlockCandidateResponse
-	16, // 36: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyTxs:output_type -> blockassembly_api.GetBlockAssemblyTxsResponse
-	18, // 37: blockassembly_api.BlockAssemblyAPI.GetCandidateBlock:output_type -> blockassembly_api.GetCandidateBlockResponse
-	20, // [20:38] is the sub-list for method output_type
-	2,  // [2:20] is the sub-list for method input_type
+	0,  // 15: blockassembly_api.BlockAssemblyAPI.GetQueueLength:input_type -> blockassembly_api.EmptyMessage
+	14, // 16: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:input_type -> blockassembly_api.GenerateBlocksRequest
+	0,  // 17: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:input_type -> blockassembly_api.EmptyMessage
+	0,  // 18: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:input_type -> blockassembly_api.EmptyMessage
+	0,  // 19: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyTxs:input_type -> blockassembly_api.EmptyMessage
+	18, // 20: blockassembly_api.BlockAssemblyAPI.GetCandidateBlock:input_type -> blockassembly_api.GetCandidateBlockRequest
+	1,  // 21: blockassembly_api.BlockAssemblyAPI.HealthGRPC:output_type -> blockassembly_api.HealthResponse
+	8,  // 22: blockassembly_api.BlockAssemblyAPI.AddTx:output_type -> blockassembly_api.AddTxResponse
+	0,  // 23: blockassembly_api.BlockAssemblyAPI.RemoveTx:output_type -> blockassembly_api.EmptyMessage
+	9,  // 24: blockassembly_api.BlockAssemblyAPI.AddTxBatch:output_type -> blockassembly_api.AddTxBatchResponse
+	9,  // 25: blockassembly_api.BlockAssemblyAPI.AddTxBatchColumnar:output_type -> blockassembly_api.AddTxBatchResponse
+	21, // 26: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:output_type -> model.MiningCandidate
+	13, // 27: blockassembly_api.BlockAssemblyAPI.GetCurrentDifficulty:output_type -> blockassembly_api.GetCurrentDifficultyResponse
+	11, // 28: blockassembly_api.BlockAssemblyAPI.SubmitMiningSolution:output_type -> blockassembly_api.OKResponse
+	0,  // 29: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:output_type -> blockassembly_api.EmptyMessage
+	0,  // 30: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyFully:output_type -> blockassembly_api.EmptyMessage
+	0,  // 31: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyValidateInputs:output_type -> blockassembly_api.EmptyMessage
+	0,  // 32: blockassembly_api.BlockAssemblyAPI.CheckBlockAssemblyValidateInputs:output_type -> blockassembly_api.EmptyMessage
+	12, // 33: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:output_type -> blockassembly_api.StateMessage
+	15, // 34: blockassembly_api.BlockAssemblyAPI.GetQueueLength:output_type -> blockassembly_api.GetQueueLengthResponse
+	0,  // 35: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:output_type -> blockassembly_api.EmptyMessage
+	11, // 36: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:output_type -> blockassembly_api.OKResponse
+	16, // 37: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:output_type -> blockassembly_api.GetBlockAssemblyBlockCandidateResponse
+	17, // 38: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyTxs:output_type -> blockassembly_api.GetBlockAssemblyTxsResponse
+	19, // 39: blockassembly_api.BlockAssemblyAPI.GetCandidateBlock:output_type -> blockassembly_api.GetCandidateBlockResponse
+	21, // [21:40] is the sub-list for method output_type
+	2,  // [2:21] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -1406,7 +1457,7 @@ func file_services_blockassembly_blockassembly_api_blockassembly_api_proto_init(
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDesc), len(file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
