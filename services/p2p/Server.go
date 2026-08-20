@@ -1617,6 +1617,12 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 	// Get connected peers count from the registry. The registry also holds
 	// gossiped/disconnected peers, so count only directly connected ones.
+	// Precisely: peers with an open libp2p connection that have authored at
+	// least one gossip message since process start — liveness derives from
+	// the message bus's topic-peer set, so a connected-but-silent peer is
+	// invisible and a fresh connection may register as gossip-only for up to
+	// one cleanup interval. Real teranode peers self-heal via the node_status
+	// heartbeat.
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
 		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
@@ -2013,7 +2019,11 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	// Stop the peer map cleanup ticker before closing the P2P client: a
 	// reconcile tick against a closed client sees zero live connections and
-	// would clear IsConnected on every registry peer during shutdown.
+	// would clear IsConnected on every registry peer during shutdown. This is
+	// best-effort — Stop() only prevents future ticks, it does not cancel a
+	// pass the last tick already launched, and nothing waits on
+	// reconcileInFlight. A shutdown mass-clear is harmless regardless: Load
+	// resets IsConnected on restore, so it has no persistent consequence.
 	if s.peerMapCleanupTicker != nil {
 		s.peerMapCleanupTicker.Stop()
 		s.logger.Infof("[Stop] stopped peer map cleanup ticker")

@@ -173,10 +173,17 @@ func TestServerHelpers_ReconcileConnectionStates_ErrorAndGuardPaths(t *testing.T
 	require.False(t, got.IsConnected, "flag direction skipped on RPC error")
 	counting.failUpdateConnectionState = nil
 
-	// Canceled context: the pass is cut short before any update.
+	// Canceled context: the pass is cut short inside the loop, before any
+	// update. Pin the branch: ListPeers must have succeeded (one more call)
+	// and no UpdateConnectionState may have been attempted — otherwise this
+	// case would be indistinguishable from the ListPeers-error path.
+	listCallsBefore := counting.callCount("ListPeers")
+	updateCallsBefore := counting.callCount("UpdateConnectionState")
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	s3.reconcileConnectionStates(canceled)
+	require.Equal(t, listCallsBefore+1, counting.callCount("ListPeers"), "cut-short must happen after a successful ListPeers")
+	require.Equal(t, updateCallsBefore, counting.callCount("UpdateConnectionState"), "cut-short must happen before any update")
 	got, _ = reg3.Get(stale.String())
 	require.True(t, got.IsConnected, "cut-short pass must not clear flags")
 }

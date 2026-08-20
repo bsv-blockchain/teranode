@@ -306,6 +306,13 @@ func (b *peerRegistryBatcher) enqueueStorage(peerID, storage string) {
 // are untouched — the peer is not being removed. The flush-scoped set stops an
 // in-flight flushOnce from resurrecting the pre-forget snapshot it read before
 // this call (it re-records assert state after its RPCs complete).
+//
+// A pending markConnected enqueued before the reconciler's clear may still
+// flush afterwards and re-assert true for a peer that just disconnected. That
+// is deliberate convergence, not a bug: zeroing connectedAt here guarantees
+// the re-assert is actually sent (not skipped as recently asserted), the
+// wrong-way flag lasts at most one batch interval, and the next reconcile
+// pass clears it again — this time with nothing pending.
 func (b *peerRegistryBatcher) forgetAssertState(peerID string) {
 	b.mu.Lock()
 	delete(b.lastAsserted, peerID)
