@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 // defaultCheckTimeout bounds a single health check request when the caller supplies no client.
@@ -13,8 +15,9 @@ const defaultCheckTimeout = 2 * time.Second
 // CheckHTTPServer creates a health check that verifies an HTTP server is listening and accepting requests.
 // It attempts to make an HTTP GET request to the specified health endpoint.
 //
-// The address is expected to be one this node configured itself. To probe an address that
-// came from a peer, use CheckHTTPServerWithClient with an SSRF-safe client instead.
+// The address must be one this node configured itself: the client used here has no SSRF
+// guard, so it connects to whatever the address resolves to. To probe an address that came
+// from a peer, use CheckPeerHTTPServer, which requires a guarded client.
 //
 // Parameters:
 //   - address: The HTTP server address (e.g., "http://localhost:8080")
@@ -22,20 +25,29 @@ const defaultCheckTimeout = 2 * time.Second
 //
 // Returns a Check function that can be used with CheckAll
 func CheckHTTPServer(address string, healthPath string) func(context.Context, bool) (int, string, error) {
-	return CheckHTTPServerWithClient(nil, address, healthPath)
+	return checkHTTPServer(&http.Client{Timeout: defaultCheckTimeout}, address, healthPath)
 }
 
-// CheckHTTPServerWithClient behaves like CheckHTTPServer but uses the supplied client.
-// Callers probing peer-supplied addresses must use this variant with a client whose
-// Transport.DialContext enforces an SSRF policy (see util.NewSSRFSafeHTTPClient), since a
-// default client happily connects to whatever a hostname resolves to.
+// CheckPeerHTTPServer is CheckHTTPServer for an address that came from a peer. It requires a
+// client whose Transport.DialContext enforces an SSRF policy (see util.NewSSRFSafeHTTPClient):
+// a peer-supplied hostname can resolve to a loopback or cloud-metadata address, which an
+// ordinary client would connect to happily.
 //
-// A nil client falls back to a plain client with the default 2s timeout.
-func CheckHTTPServerWithClient(client *http.Client, address string, healthPath string) func(context.Context, bool) (int, string, error) {
+// A nil client is rejected rather than defaulted, so a peer probe cannot silently lose the
+// guard by omitting it - the returned check fails closed instead of dialling unguarded.
+func CheckPeerHTTPServer(client *http.Client, address string, healthPath string) func(context.Context, bool) (int, string, error) {
 	if client == nil {
-		client = &http.Client{Timeout: defaultCheckTimeout}
+		return func(context.Context, bool) (int, string, error) {
+			return http.StatusServiceUnavailable, fmt.Sprintf("peer health check for %s misconfigured", address),
+				errors.NewInvalidArgumentError("CheckPeerHTTPServer requires an SSRF-safe client, got nil")
+		}
 	}
 
+	return checkHTTPServer(client, address, healthPath)
+}
+
+// checkHTTPServer is the shared implementation; client must be non-nil.
+func checkHTTPServer(client *http.Client, address string, healthPath string) func(context.Context, bool) (int, string, error) {
 	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
 		// Construct the full URL
 		url := fmt.Sprintf("%s%s", address, healthPath)

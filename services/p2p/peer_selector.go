@@ -620,7 +620,7 @@ func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL st
 
 	// DataHubURL format: "https://host/api/v1"
 	// Append /bestblockheader to get full endpoint path
-	checker := health.CheckHTTPServerWithClient(ps.httpClient, dataHubURL, "/bestblockheader")
+	checker := health.CheckPeerHTTPServer(ps.httpClient, dataHubURL, "/bestblockheader")
 
 	statusCode, msg, err := checker(ctx, false)
 	if statusCode == http.StatusOK {

@@ -32,10 +32,11 @@ var ssrfSafeDialer = &net.Dialer{
 var ssrfLookupHost = net.DefaultResolver.LookupHost
 
 // SSRFDialPolicy reports why an IP resolved from a peer-supplied hostname is unsafe to
-// connect to, or "" when it is safe. The policy is a parameter rather than fixed so that
-// callers with stricter requirements can reuse the resolve-then-dial machinery below
-// without inheriting this package's policy: the p2p peer health check, for example, must
-// also reject RFC1918 addresses to match its DataHubURL validation.
+// connect to, or "" when it is safe. It is a parameter rather than a fixed rule so a caller
+// can reuse the resolve-then-dial machinery below with its own address rules; callers
+// fetching peer-supplied URLs should pass DefaultSSRFDialPolicy so every such path enforces
+// one policy. Note that a policy stricter than the fetch path's is usually a mistake: it
+// makes a peer unusable that block and subtree fetches would have talked to happily.
 type SSRFDialPolicy func(net.IP) string
 
 // NewSSRFSafeDialContext returns a DialContext that resolves the target hostname, rejects
@@ -117,16 +118,35 @@ func NewSSRFSafeDialContext(policy SSRFDialPolicy) func(ctx context.Context, net
 	}
 }
 
-// dialAttemptContext splits the remaining deadline evenly across the addresses still to
-// be tried. With no deadline set it returns the context unchanged.
+// minDialAttemptBudget floors the per-address share of the deadline. An even split alone
+// punishes well-behaved multi-address peers: under the 2s peer probe timeout, a hostname with
+// four A records would give the first (usually working) address only 500ms, where a plain
+// sequential dial would have let it use the whole remaining budget. The floor keeps the
+// failover intent - a blackholed address cannot eat the entire deadline - without failing a
+// reachable address that merely has an unremarkable RTT.
+const minDialAttemptBudget = 500 * time.Millisecond
+
+// dialAttemptContext bounds one dial attempt: each address gets its even share of the
+// remaining deadline, floored at minDialAttemptBudget and never more than what remains. With
+// no deadline set it returns the context unchanged.
 func dialAttemptContext(ctx context.Context, remainingCandidates int) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Deadline()
 	if !ok || remainingCandidates <= 1 {
 		return context.WithCancel(ctx)
 	}
 
-	budget := time.Until(deadline) / time.Duration(remainingCandidates)
-	if budget <= 0 {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithCancel(ctx)
+	}
+
+	budget := remaining / time.Duration(remainingCandidates)
+	if budget < minDialAttemptBudget {
+		budget = minDialAttemptBudget
+	}
+
+	if budget >= remaining {
+		// The share (or the floor) covers everything left; no sub-deadline to impose.
 		return context.WithCancel(ctx)
 	}
 
@@ -169,6 +189,44 @@ var ssrfDialContext = NewSSRFSafeDialContext(DefaultSSRFDialPolicy)
 // maxSSRFRedirects bounds redirect chains followed while fetching peer-supplied URLs.
 const maxSSRFRedirects = 10
 
+// ssrfCheckRedirect builds the CheckRedirect used for peer-supplied URLs: it bounds the hop
+// count, then rejects a redirect target that leaves http/https, carries credentials, or names
+// a blocked IP literal. Targets naming a hostname are caught by the dialer instead, so this
+// is a cheap pre-check that avoids attempting the connection at all.
+//
+// Both the shared httpClient and every client from NewSSRFSafeHTTPClient use this, so there is
+// one redirect rule for the threat rather than two that can drift apart.
+func ssrfCheckRedirect(policy SSRFDialPolicy) func(req *http.Request, via []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxSSRFRedirects {
+			return errors.NewInvalidArgumentError("stopped after %d redirects", maxSSRFRedirects)
+		}
+
+		if !ssrfProtectionEnabled.Load() {
+			return nil
+		}
+
+		scheme := strings.ToLower(req.URL.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return errors.NewInvalidArgumentError("SSRF redirect check: invalid scheme %q", scheme)
+		}
+
+		// Userinfo has no legitimate use here and can be used to confuse logging or
+		// smuggle credentials; ValidateURL rejects it on the initial request too.
+		if req.URL.User != nil {
+			return errors.NewInvalidArgumentError("SSRF redirect check: target must not contain userinfo (credentials)")
+		}
+
+		if ip := net.ParseIP(req.URL.Hostname()); ip != nil {
+			if reason := policy(ip); reason != "" {
+				return errors.NewInvalidArgumentError("SSRF redirect check: target %s is a %s", ip.String(), reason)
+			}
+		}
+
+		return nil
+	}
+}
+
 // NewSSRFSafeHTTPClient returns an HTTP client for fetching peer-supplied URLs. Every
 // connection it makes - including connections for redirect hops - is checked against
 // policy after DNS resolution, and redirect targets are additionally rejected if they
@@ -185,41 +243,10 @@ func NewSSRFSafeHTTPClient(timeout time.Duration, policy SSRFDialPolicy) *http.C
 	transport.DialContext = NewSSRFSafeDialContext(policy)
 
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxSSRFRedirects {
-				return errors.NewInvalidArgumentError("stopped after %d redirects", maxSSRFRedirects)
-			}
-
-			if !ssrfProtectionEnabled.Load() {
-				return nil
-			}
-
-			scheme := strings.ToLower(req.URL.Scheme)
-			if scheme != "http" && scheme != "https" {
-				return errors.NewInvalidArgumentError("SSRF redirect check: invalid scheme %q", scheme)
-			}
-
-			// Redirects to hostnames are caught by the dialer; IP literals are rejected
-			// here so the connection is never attempted.
-			if ip := net.ParseIP(req.URL.Hostname()); ip != nil {
-				if reason := policy(ip); reason != "" {
-					return errors.NewInvalidArgumentError("SSRF redirect check: target %s is a %s", ip.String(), reason)
-				}
-			}
-
-			return nil
-		},
+		Timeout:       timeout,
+		Transport:     transport,
+		CheckRedirect: ssrfCheckRedirect(policy),
 	}
-}
-
-// isBlockedDialIP returns true for IPs that are unsafe to connect to when the hostname
-// came from a peer-controlled URL, evaluated after DNS resolution to close the
-// DNS-rebinding gap that the static ValidateURL pre-check cannot cover. See
-// DefaultSSRFDialPolicy for which ranges are blocked and why.
-func isBlockedDialIP(ip net.IP) bool {
-	return DefaultSSRFDialPolicy(ip) != ""
 }
 
 var (
@@ -238,8 +265,8 @@ var (
 	//
 	// The transport uses ssrfDialContext so that DNS-resolved private/loopback IPs are
 	// rejected at dial time, closing the SSRF-via-hostname gap. CheckRedirect applies the
-	// same validation to redirect targets so a peer-controlled server cannot bounce us to
-	// an internal address.
+	// same policy to redirect targets - the identical check NewSSRFSafeHTTPClient installs -
+	// so a peer-controlled server cannot bounce us to an internal address.
 	httpClient = &http.Client{
 		Transport: func() *http.Transport {
 			t := http.DefaultTransport.(*http.Transport).Clone()
@@ -249,15 +276,7 @@ var (
 			t.DialContext = ssrfDialContext
 			return t
 		}(),
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.NewInvalidArgumentError("stopped after 10 redirects")
-			}
-			if err := ValidateURL(req.URL.String()); err != nil {
-				return errors.NewInvalidArgumentError("SSRF redirect check: %v", err)
-			}
-			return nil
-		},
+		CheckRedirect: ssrfCheckRedirect(DefaultSSRFDialPolicy),
 	}
 )
 

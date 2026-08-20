@@ -999,8 +999,8 @@ func TestValidateURL_RejectsUserinfo(t *testing.T) {
 	}
 }
 
-func TestIsBlockedDialIP(t *testing.T) {
-	// isBlockedDialIP is a pure function; no SSRF toggle needed.
+func TestDefaultSSRFDialPolicy(t *testing.T) {
+	// The policy is a pure function; no SSRF toggle needed.
 	// Only link-local (incl. the metadata endpoint), loopback and unspecified are blocked.
 	blocked := []string{
 		"127.0.0.1",
@@ -1015,7 +1015,7 @@ func TestIsBlockedDialIP(t *testing.T) {
 		t.Run("blocked_"+ipStr, func(t *testing.T) {
 			ip := net.ParseIP(ipStr)
 			require.NotNil(t, ip)
-			assert.True(t, isBlockedDialIP(ip), "expected %s to be blocked", ipStr)
+			assert.NotEmpty(t, DefaultSSRFDialPolicy(ip), "expected %s to be blocked", ipStr)
 		})
 	}
 
@@ -1038,7 +1038,7 @@ func TestIsBlockedDialIP(t *testing.T) {
 		t.Run("allowed_"+ipStr, func(t *testing.T) {
 			ip := net.ParseIP(ipStr)
 			require.NotNil(t, ip)
-			assert.False(t, isBlockedDialIP(ip), "expected %s to be allowed", ipStr)
+			assert.Empty(t, DefaultSSRFDialPolicy(ip), "expected %s to be allowed", ipStr)
 		})
 	}
 }
@@ -1480,6 +1480,103 @@ func TestParseRetryAfter(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
 			assert.Equal(t, c.want, parseRetryAfter(c.in))
+		})
+	}
+}
+
+// TestDialAttemptContext_BudgetFloor pins the per-attempt budget arithmetic. An even split
+// alone starves a well-behaved multi-address peer: with four addresses under the 2s probe
+// timeout the first (usually working) one would get 500ms. The floor keeps failover bounded
+// without penalising an address whose RTT is merely unremarkable.
+func TestDialAttemptContext_BudgetFloor(t *testing.T) {
+	t.Run("no deadline leaves the context unbounded", func(t *testing.T) {
+		ctx, cancel := dialAttemptContext(context.Background(), 4)
+		defer cancel()
+
+		_, ok := ctx.Deadline()
+		require.False(t, ok)
+	})
+
+	t.Run("single candidate gets the whole remaining budget", func(t *testing.T) {
+		parent, cancelParent := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelParent()
+
+		ctx, cancel := dialAttemptContext(parent, 1)
+		defer cancel()
+
+		parentDeadline, _ := parent.Deadline()
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.WithinDuration(t, parentDeadline, deadline, 10*time.Millisecond)
+	})
+
+	t.Run("even share is floored, not honoured blindly", func(t *testing.T) {
+		// 2s over 4 candidates would be 500ms; the floor is 500ms, so the share stands here.
+		parent, cancelParent := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelParent()
+
+		ctx, cancel := dialAttemptContext(parent, 4)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.InDelta(t, float64(500*time.Millisecond), float64(time.Until(deadline)), float64(50*time.Millisecond))
+	})
+
+	t.Run("a share below the floor is raised to it", func(t *testing.T) {
+		// 1s over 8 candidates would be 125ms - too little for a working address.
+		parent, cancelParent := context.WithTimeout(context.Background(), time.Second)
+		defer cancelParent()
+
+		ctx, cancel := dialAttemptContext(parent, 8)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.Greater(t, time.Until(deadline), 400*time.Millisecond, "the floor must apply")
+	})
+
+	t.Run("the floor never exceeds what remains", func(t *testing.T) {
+		// 200ms left, floor is 500ms: the attempt must not outlive the caller's deadline.
+		parent, cancelParent := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancelParent()
+
+		ctx, cancel := dialAttemptContext(parent, 4)
+		defer cancel()
+
+		parentDeadline, _ := parent.Deadline()
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.False(t, deadline.After(parentDeadline), "attempt deadline must not exceed the parent's")
+	})
+}
+
+// TestSharedAndSafeClientsShareRedirectRule pins that the shared httpClient and the clients
+// from NewSSRFSafeHTTPClient enforce the same redirect rule, so one threat has one check
+// rather than two that can drift.
+func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	safe := NewSSRFSafeHTTPClient(2*time.Second, DefaultSSRFDialPolicy)
+
+	for _, target := range []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://127.0.0.1:8090/admin",
+		"file:///etc/passwd",
+		"http://user:pass@peer.example/api/v1",
+	} {
+		t.Run(target, func(t *testing.T) {
+			u, err := url.Parse(target)
+			require.NoError(t, err)
+
+			req := &http.Request{URL: u}
+			sharedErr := httpClient.CheckRedirect(req, []*http.Request{{}})
+			safeErr := safe.CheckRedirect(req, []*http.Request{{}})
+
+			require.Error(t, sharedErr, "shared client must refuse %s", target)
+			require.Error(t, safeErr, "SSRF-safe client must refuse %s", target)
+			require.Equal(t, sharedErr.Error(), safeErr.Error(), "both clients must give the same reason")
 		})
 	}
 }
