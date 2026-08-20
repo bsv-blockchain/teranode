@@ -20,7 +20,7 @@ func (r *recordingBanScoreP2PClient) AddBanScore(_ context.Context, _ string, _ 
 	return nil
 }
 
-// TestValidateBlock_ExcessiveBlockSize_PlainPolicyDecline is the freemans13 item 2 fix
+// TestValidateBlock_ExcessiveBlockSize_PlainPolicyDecline is the bitcoin-sv/teranode#4692 fix
 // (bitcoin-sv/teranode#4692): excessiveblocksize is a local POLICY knob, not evidence of corruption or
 // consensus invalidity. A block that exceeds THIS node's limit (a block other miners may have
 // legitimately mined and proven with real work) must be declined WITHOUT striking the serving peer,
@@ -61,8 +61,7 @@ func TestValidateBlock_ExcessiveBlockSize_PlainPolicyDecline(t *testing.T) {
 		"the decline must not reach the store at all, so no invalid=true verdict exists against this hash")
 }
 
-// TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded covers the second half of freemans13
-// item 2 (bitcoin-sv/teranode#4692): the decline itself is correct, but nothing remembered it, so the
+// TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded covers the second half of bitcoin-sv/teranode#4692: the decline itself is correct, but nothing remembered it, so the
 // same peer's re-announcements cost a fresh block-message fetch on every delivery. A dedicated
 // per-(hash, peerID) tracker now bounds that, sized by the corrupt cap's settings but spending its
 // own budget.
@@ -70,7 +69,7 @@ func TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s, _, block := newProcessBlockFoundHarness(ctx, t)
+	s, blockchainStore, block := newProcessBlockFoundHarness(ctx, t)
 
 	// Tiny limit so the harness block exceeds it; the gate reads this live.
 	s.settings.Policy.ExcessiveBlockSize = 1
@@ -81,28 +80,49 @@ func TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded(t *testing.T) {
 
 	const peerA, peerB = "peer-A", "peer-B"
 
-	// Every delivery up to the cap is judged and declined on policy.
+	// Every delivery up to the cap is judged and declined on policy. Capture the uncapped decline so
+	// the capped suppression below can be asserted to carry the IDENTICAL classification.
+	var uncappedDecline error
 	for i := 0; i < 3; i++ {
 		err := s.processBlockFound(ctx, block.Hash(), peerA, "legacy", block)
 		require.Error(t, err, "delivery %d must be declined on policy", i+1)
 		require.Contains(t, err.Error(), "excessiveblocksize")
+		require.True(t, errors.Is(err, errors.ErrBlockError), "a policy decline is classified ERR_BLOCK_ERROR")
 		require.False(t, errors.IsBlockCorrupt(err), "a policy decline must never be corrupt")
 		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a policy decline must never poison the hash")
+		uncappedDecline = err
 	}
 
 	require.True(t, s.policyDeclineAttemptsExhausted(block.Hash(), peerA), "the cap is reached for this (hash, peer)")
 
-	// The next delivery from the same peer is dropped at the gate, before any fetch or validation
-	// work — the corrupt cap's own skip semantics: return nil, never an error or a poison.
-	require.NoError(t, s.processBlockFound(ctx, block.Hash(), peerA, "legacy", block),
-		"a capped delivery is skipped, not errored")
+	// The next delivery from the same peer is suppressed at the gate, before any fetch. The cap is a
+	// RATE LIMIT on re-fetching a block we already declined, NOT a different verdict — so the drop is
+	// INDISTINGUISHABLE in classification from the uncapped decline it rate-limits (bitcoin-sv/teranode#4692):
+	// same ERR_BLOCK_ERROR sentinel, NOT corrupt (so no corrupt-body strike lands for our local policy
+	// choice), never ErrBlockInvalid, and never nil (no false accept).
+	capErr := s.processBlockFound(ctx, block.Hash(), peerA, "legacy", block)
+	require.Error(t, capErr, "a capped delivery must be suppressed with an error, never reported as accepted")
+	require.Equal(t, errors.IsBlockCorrupt(uncappedDecline), errors.IsBlockCorrupt(capErr),
+		"capped and uncapped declines must share the corrupt-classification (both false)")
+	require.True(t, errors.Is(capErr, errors.ErrBlockError), "the cap suppression carries the SAME class as the decline it rate-limits")
+	require.False(t, errors.IsBlockCorrupt(capErr), "the cap suppression must NOT be corrupt (no corrupt-body strike for a policy decline)")
+	require.False(t, errors.Is(capErr, errors.ErrBlockInvalid), "the cap suppression must never poison the hash")
+	require.Contains(t, capErr.Error(), "suppressed", "the message must identify a cap suppression")
 
-	// Same drop on the REAL route, with no pre-loaded block. This is what pins the gate above the
-	// FETCH rather than merely above validation: without useBlock, processBlockFound would otherwise
-	// call fetchSingleBlock, whose HTTP request against the "legacy" base URL fails and surfaces a
-	// ProcessingError. Returning nil is only possible if the gate ran first.
-	require.NoError(t, s.processBlockFound(ctx, block.Hash(), peerA, "legacy"),
-		"a capped delivery must be skipped before fetchSingleBlock is ever reached")
+	// Same suppression on the REAL route, with no pre-loaded block. This pins the gate ABOVE the
+	// fetch: without useBlock, processBlockFound would otherwise call fetchSingleBlock, whose HTTP
+	// request against the "legacy" base URL fails and surfaces a ProcessingError. An ERR_BLOCK_ERROR
+	// cap-suppression (not a ProcessingError fetch failure) is only possible if the gate ran first.
+	capErr = s.processBlockFound(ctx, block.Hash(), peerA, "legacy")
+	require.Error(t, capErr, "a capped delivery must be suppressed before fetchSingleBlock is ever reached")
+	require.True(t, errors.Is(capErr, errors.ErrBlockError), "the pre-fetch suppression is the policy-decline class, got: %v", capErr)
+	require.False(t, errors.Is(capErr, errors.ErrProcessing), "must be the cap suppression, not a fetch ProcessingError")
+	require.Contains(t, capErr.Error(), "suppressed", "must be the cap suppression, not a fetch error")
+
+	// The suppressed drop stored nothing and poisoned nothing — same as the decline it rate-limits.
+	stored, existsErr := blockchainStore.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, existsErr)
+	require.False(t, stored, "a policy-cap suppression must NOT store the block")
 
 	// The honest-tip-wedge property: a different serving identity keeps a full, independent budget,
 	// so the same hash is judged again rather than suppressed.

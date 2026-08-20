@@ -1851,8 +1851,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		// Headers-first: refill before returning, for the same reason the corrupt branch below does
 		// (see refillHeaderBlockPipeline) — this gate has already consumed the headerList entry and
 		// the requestedBlocks slot above, so without a refill every capped delivery drains one
-		// in-flight slot and recovery waits on the stall timer (freemans13 item 3 /
-		// bitcoin-sv/teranode#4692). Pipeline maintenance only: no accepted-block bookkeeping runs on
+		// in-flight slot and recovery waits on the stall timer (bitcoin-sv/teranode#4692). Pipeline maintenance only: no accepted-block bookkeeping runs on
 		// a dropped delivery.
 		if sm.headersFirstMode.Load() {
 			if refillErr := sm.refillHeaderBlockPipeline(peer, state); refillErr != nil {
@@ -2211,7 +2210,7 @@ func (sm *SyncManager) blockOrigin(state *peerSyncState, blockHash chainhash.Has
 // update, no FSM RUN, no fee-filter reset) — so it is safe to call on a FAILED delivery too. On the
 // corrupt-body drop it is called before returning: without it a headers-first corrupt drop never
 // refills, the in-flight blocks drain each failing on their missing parent, and recovery waits ~180s
-// for the stall timer (freemans13 item 7). Returns an error only if the getblocks fallback fails.
+// for the stall timer (bitcoin-sv/teranode#4692). Returns an error only if the getblocks fallback fails.
 //
 // This is the locking entry point, for the corrupt-body drop, which returns long before
 // handleBlockMsg's acceptance footer takes headerMu. The footer itself already holds the mutex and

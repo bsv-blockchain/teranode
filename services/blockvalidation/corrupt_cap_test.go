@@ -121,7 +121,8 @@ func TestCorruptAttemptCap(t *testing.T) {
 	require.False(t, u.corruptAttemptsExhausted(&h, capTestPeer), "cap <= 0 disables the bound")
 }
 
-// TestAccountCorruptAttempt is the C1 fix: accountCorruptAttempt is the SINGLE accounting point in
+// TestAccountCorruptAttempt pins the single accounting point (bitcoin-sv/teranode#4692):
+// accountCorruptAttempt is the ONE point in
 // processBlockFound that both the worker route and the direct ProcessBlock gRPC route funnel
 // through (bitcoin-sv/teranode#4692). A corrupt validation outcome records toward the cap; a genuine
 // success clears it; a non-corrupt error leaves the counter untouched.
@@ -162,7 +163,7 @@ func TestCorruptAttemptCap_NilCacheSafe(t *testing.T) {
 }
 
 // TestCorruptAttemptCap_WindowAnchoredToFirstFailure proves the fixed-window / no-wedge property
-// (bitcoin-sv/teranode#4692, C3): the cooldown window runs from the FIRST corrupt failure and a
+// (bitcoin-sv/teranode#4692): the cooldown window runs from the FIRST corrupt failure and a
 // repeat failure must not extend it, so a persistent attacker cannot suppress an honest body
 // forever.
 func TestCorruptAttemptCap_WindowAnchoredToFirstFailure(t *testing.T) {
@@ -244,24 +245,35 @@ func TestCorruptAttemptCap_MultipleBadPeersIndependent(t *testing.T) {
 	}
 }
 
-// TestCorruptAttemptCap_EmptyPeerIDSharedBucket covers the degraded deployment (bitcoin-sv/teranode#4692,
-// C4): when the serving identity is empty (p2pClient nil / peer supplied no ID), all empty-identity
-// deliveries share one (hash, "") bucket — the hard per-hash bound for that deployment — so the cap
-// still holds. A distinct real identity is unaffected by the empty bucket.
-func TestCorruptAttemptCap_EmptyPeerIDSharedBucket(t *testing.T) {
+// TestCorruptAttemptCap_EmptyPeerIDUncapped pins the fail-open direction for an empty serving
+// identity (bitcoin-sv/teranode#4692): an empty peerID is NOT capped. The record helpers refuse to
+// store under the empty key (both the accountCorruptAttempt outcome path AND recordCorruptAttempt
+// called directly), and the gate never reports an empty identity exhausted — so the cap-hit
+// suppression that returns a corrupt error can never fire on an unidentified delivery and wedge an
+// honest tip. The legacy route now supplies a real peer.Addr(), so a genuine per-peer cap applies
+// there; the empty-identity path is deliberately uncapped.
+func TestCorruptAttemptCap_EmptyPeerIDUncapped(t *testing.T) {
 	u := newCorruptCapServer(t, 3)
-	h := chainhash.HashH([]byte("empty-peer-bucket"))
+	h := chainhash.HashH([]byte("empty-peer-uncapped"))
 
-	require.Equal(t, 1, u.recordCorruptAttempt(&h, ""))
-	require.Equal(t, 2, u.recordCorruptAttempt(&h, ""))
-	require.Equal(t, 3, u.recordCorruptAttempt(&h, ""))
-	require.True(t, u.corruptAttemptsExhausted(&h, ""), "empty-identity deliveries share one bucket that still caps")
+	// accountCorruptAttempt must not record under an empty key...
+	for i := 0; i < 5; i++ {
+		u.accountCorruptAttempt(&h, "", errors.NewBlockCorruptError("corrupt body"))
+	}
+	require.Nil(t, u.blockCorruptAttempts.Get(ck(h, "")), "accountCorruptAttempt must never record the empty key")
 
-	// A named peer is a different bucket, unaffected by the exhausted empty bucket.
+	// ...and recordCorruptAttempt called directly is also a no-op for the empty key (returns 0,
+	// records nothing), so an empty identity can never be driven to exhaustion.
+	require.Equal(t, 0, u.recordCorruptAttempt(&h, ""), "recordCorruptAttempt must not record under an empty key")
+	require.Equal(t, 0, u.recordCorruptAttempt(&h, ""))
+	require.Nil(t, u.blockCorruptAttempts.Get(ck(h, "")), "the empty key must still be absent")
+	require.False(t, u.corruptAttemptsExhausted(&h, ""), "an empty peerID is uncapped (fail-open), never exhausted")
+
+	// A named peer is capped normally, independent of the empty identity.
 	require.False(t, u.corruptAttemptsExhausted(&h, "peerNamed"))
 }
 
-// TestCorruptAttemptCap_CacheIsBounded covers freemans13 item 8 (bitcoin-sv/teranode#4692): the
+// TestCorruptAttemptCap_CacheIsBounded covers bitcoin-sv/teranode#4692: the
 // per-(hash, peerID) map keys on a strictly larger space than its hash-only sibling, so it must carry
 // a capacity like the legacy netsync twin does. Eviction can only LOOSEN the cap — an evicted pair
 // starts a fresh window — so it can never make the node drop an honest block; the assertion below
@@ -288,7 +300,7 @@ func TestCorruptAttemptCap_CacheIsBounded(t *testing.T) {
 }
 
 // TestPolicyDeclineCap_SeparateBudget pins the two trackers as INDEPENDENT budgets
-// (freemans13 item 2 / bitcoin-sv/teranode#4692). Sharing one bucket was rejected because every
+// (bitcoin-sv/teranode#4692). Sharing one bucket was rejected because every
 // "corrupt" identifier, log line and metric on that path would become false for a policy decline;
 // this test is what fails if a later edit merges them back.
 func TestPolicyDeclineCap_SeparateBudget(t *testing.T) {
@@ -312,11 +324,6 @@ func TestPolicyDeclineCap_SeparateBudget(t *testing.T) {
 
 	require.True(t, u.corruptAttemptsExhausted(&other, capTestPeer), "corrupt failures reach the corrupt cap")
 	require.False(t, u.policyDeclineAttemptsExhausted(&other, capTestPeer), "corrupt failures must never spend the policy budget")
-
-	// Clearing one budget leaves the other untouched.
-	u.clearPolicyDeclineAttempts(&h, capTestPeer)
-	require.False(t, u.policyDeclineAttemptsExhausted(&h, capTestPeer), "clearing re-opens the policy gate")
-	require.True(t, u.corruptAttemptsExhausted(&other, capTestPeer), "clearing the policy budget must not touch the corrupt one")
 }
 
 // TestPolicyDeclineCap_HonestPeerNotWedged mirrors the corrupt cap's honest-tip-wedge property for
@@ -347,7 +354,6 @@ func TestPolicyDeclineCap_NilSafe(t *testing.T) {
 	u := &Server{settings: tSettings, logger: ulogger.TestLogger{}} // blockPolicyDeclineAttempts == nil
 	require.Equal(t, 0, u.recordPolicyDeclineAttempt(&h, capTestPeer))
 	require.False(t, u.policyDeclineAttemptsExhausted(&h, capTestPeer))
-	require.NotPanics(t, func() { u.clearPolicyDeclineAttempts(&h, capTestPeer) })
 
 	disabled := newCorruptCapServer(t, 0)
 	for i := 0; i < 5; i++ {

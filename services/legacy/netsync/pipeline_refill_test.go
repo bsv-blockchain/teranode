@@ -15,13 +15,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRefillHeaderBlockPipeline_NoAcceptanceBookkeeping is the freemans13 item 7 / C5 guard
-// (bitcoin-sv/teranode#4692): the headers-first pipeline refill was extracted from the accepted-block
-// footer precisely so the corrupt-body drop can refill the download pipeline WITHOUT running any
-// accepted-block bookkeeping (rejected-tx clear, peer-height update, FSM RUN, fee-filter reset).
-// This test proves the extracted helper is pure pipeline maintenance: it tops up the pipeline (takes
-// the fetchHeaderBlocks branch, a no-op here with no sync peer) and leaves rejectedTxns — which the
-// acceptance footer clears — untouched.
+// TestRefillHeaderBlockPipeline_NoAcceptanceBookkeeping guards that the headers-first pipeline
+// refill (bitcoin-sv/teranode#4692), extracted from the accepted-block footer so the corrupt-body
+// drop can refill the download pipeline WITHOUT running any accepted-block bookkeeping (rejected-tx
+// clear, peer-height update, FSM RUN, fee-filter reset), carries none of that bookkeeping. What this
+// test actually asserts is narrow: the helper runs without error and leaves rejectedTxns — which the
+// acceptance footer would clear — untouched. With no sync peer the fetchHeaderBlocks branch is a
+// safe no-op, so the pipeline is not actually topped up here; the point proven is the ABSENCE of
+// acceptance side effects, not that the pipeline grew.
 func TestRefillHeaderBlockPipeline_NoAcceptanceBookkeeping(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 

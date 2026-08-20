@@ -19,7 +19,7 @@ import (
 )
 
 // TestValidateBlock_TruncatedSubtreeList_IsCorruptNotPoisoned is the wire-shape regression for
-// freemans13 item 1 (bitcoin-sv/teranode#4692). The finding exists BECAUSE the block message carries
+// bitcoin-sv/teranode#4692. The finding exists BECAUSE the block message carries
 // the transaction count, the size and the subtree count as three independent untrusted varints, so
 // the test drives the real encoder and the real decoder rather than hand-building a model.Block: an
 // in-memory-only fixture would prove the check but not that it covers the actual ingress shape.

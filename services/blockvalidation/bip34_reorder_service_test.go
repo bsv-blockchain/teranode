@@ -78,8 +78,8 @@ func bip34Coinbase(t *testing.T) *bt.Tx {
 	return coinbaseTx
 }
 
-// TestValidateBlock_BIP34Reorder_Service is the freemans13 item 3 SERVICE-LEVEL coverage
-// (bitcoin-sv/teranode#4692, C2/C3), driving ValidateBlock (OptimisticMining off → synchronous
+// TestValidateBlock_BIP34Reorder_Service is the bitcoin-sv/teranode#4692 SERVICE-LEVEL coverage,
+// driving ValidateBlock (OptimisticMining off → synchronous
 // block.Valid). It proves the reorder's CLASSIFICATION consequence at the service boundary, so it
 // FAILS if the reorder is reverted (block.Valid would then return corrupt for the merkle-bound
 // block, and the service would strike + re-download instead of condemning it invalid):

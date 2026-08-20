@@ -817,8 +817,11 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		}
 		testhelpers.MineHeader(genesisHeader)
 
-		// Create two different synthetic chains from the same genesis with equal work
-		// Each chain will have 10 blocks with the same difficulty
+		// Two synthetic chains from the same genesis with equal work. CreateSyntheticChainFrom walks
+		// deterministically from the parent, so with the same genesis and length these are in fact
+		// bit-identical (same hashes) — two peers offering the same 10-block tip, served over
+		// distinct peer URLs below. That is what this test exercises: concurrent equal-work catchup
+		// for the same tip, and which peer's delivery is accepted first.
 		chain1 := testhelpers.CreateSyntheticChainFrom(genesisHeader, 10)
 		chain2 := testhelpers.CreateSyntheticChainFrom(genesisHeader, 10)
 

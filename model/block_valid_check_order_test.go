@@ -16,7 +16,7 @@ import (
 )
 
 // TestBlock_Valid_DuplicateCheckPrecedesFeeCheck pins the check ordering inside Block.Valid against
-// bitcoin-sv (freemans13 item 6 / bitcoin-sv/teranode#4692): svnode runs the CVE-2012-2459 mutation
+// bitcoin-sv (bitcoin-sv/teranode#4692): svnode runs the CVE-2012-2459 mutation
 // check in CheckBlock, ahead of ContextualCheckBlock's coinbase and fee arithmetic. Teranode ran the
 // fee arithmetic first, so a body that is BOTH mutated and fee-wrong was classified by the weaker of
 // the two rules.
