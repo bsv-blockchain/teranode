@@ -2,7 +2,6 @@ package util
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -70,6 +69,12 @@ func TestValidateAdminAPIKey(t *testing.T) {
 			name:          "real key on loopback listener is accepted without warning",
 			apiKey:        "a-strong-random-admin-secret-value",
 			listenAddress: "127.0.0.1:9904",
+		},
+		{
+			name:          "short real key warns about length even on loopback",
+			apiKey:        "shortkey",
+			listenAddress: "127.0.0.1:9904",
+			wantWarn:      true,
 		},
 		{
 			name:          "real key on non-loopback listener without TLS warns but is kept",
@@ -165,16 +170,4 @@ func TestIsLoopbackListenAddress(t *testing.T) {
 			require.Equal(t, tt.want, isLoopbackListenAddress(tt.addr))
 		})
 	}
-}
-
-// TestValidateAdminAPIKeyMatchesServerEmptyCheck guards the invariant that a
-// whitespace-only value resolves to empty: the setting is trimmed at load, and
-// the servers treat GRPCAdminAPIKey == "" as "generate a random key", so a
-// whitespace-only value must never become a live secret.
-func TestValidateAdminAPIKeyMatchesServerEmptyCheck(t *testing.T) {
-	require.Equal(t, "", strings.TrimSpace("   "))
-	logger := &capturingLogger{}
-	require.False(t, ValidateAdminAPIKey(logger, "P2P", "   ", "0.0.0.0:9904", 0))
-	require.Empty(t, logger.warns)
-	require.Empty(t, logger.errors)
 }

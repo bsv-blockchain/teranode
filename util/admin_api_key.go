@@ -25,6 +25,10 @@ var knownPlaceholderAPIKeys = map[string]struct{}{
 	"default":   {},
 }
 
+// minAdminAPIKeyLength is the shortest admin key that does not draw a startup
+// warning; it matches the cmd/diagnose weak-key threshold. 32+ is recommended.
+const minAdminAPIKeyLength = 16
+
 // IsPlaceholderAdminAPIKey reports whether key is a well-known, non-secret
 // placeholder that must never guard admin RPCs. Leading/trailing whitespace is
 // ignored and the comparison is case-insensitive.
@@ -64,6 +68,10 @@ func ValidateAdminAPIKey(logger ulogger.Logger, serviceName, apiKey, listenAddre
 		return true
 	}
 
+	if len(trimmed) < minAdminAPIKeyLength {
+		logger.Warnf("[%s] grpc_admin_api_key is only %d characters; use at least %d (32+ recommended) so the admin secret is not trivially guessable", serviceName, len(trimmed), minAdminAPIKeyLength)
+	}
+
 	if securityLevel <= 1 && !isLoopbackListenAddress(listenAddress) {
 		logger.Warnf("[%s] grpc_admin_api_key is set but the gRPC listener %q is not loopback-bound and securityLevelGRPC=%d does not provide verified transport security, so the admin key can be harvested in transit; bind the listener to loopback or set securityLevelGRPC >= 2 with certificate verification", serviceName, listenAddress, securityLevel)
 	}
@@ -87,6 +95,13 @@ func isLoopbackListenAddress(listenAddress string) bool {
 	}
 
 	host = strings.TrimSpace(host)
+
+	// A bare bracketed IPv6 literal ("[::1]") has no port for SplitHostPort to
+	// strip, so remove the brackets before parsing.
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+
 	if host == "" {
 		// e.g. ":9904" - binds all interfaces.
 		return false

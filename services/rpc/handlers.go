@@ -2285,13 +2285,20 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	// A legacy peer service that is configured but absent times out here by
 	// design (#591), so requiring every leg to succeed would fail the whole
 	// command on that expected timeout. Mirror handleSetBan: as long as one leg
-	// clears, report success; only fail when none did.
-	var success bool
+	// clears, report success; only fail when none did. lastErr keeps the most
+	// recent leg failure so the RPC error can name the cause instead of a bare
+	// "failed" (e.g. Unauthenticated when the admin key is unset/wrong).
+	var (
+		success bool
+		lastErr string
+	)
 
 	// check if P2P service is available
 	if s.p2pClient != nil {
 		err := s.p2pClient.ClearBanned(ctx)
 		if err != nil {
+			lastErr = err.Error()
+
 			s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
 		} else {
 			success = true
@@ -2302,13 +2309,23 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		// Bound the call so an absent-but-configured legacy service can't stall
 		// the RPC on the parent context (#591).
 		legacyCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
-		_, err := s.legacyP2PClient.ClearBanned(legacyCtx, &emptypb.Empty{})
+		resp, err := s.legacyP2PClient.ClearBanned(legacyCtx, &emptypb.Empty{})
 
 		cancel()
 
-		if err != nil {
+		switch {
+		case err != nil:
+			lastErr = err.Error()
+
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
-		} else {
+		case resp == nil || !resp.Ok:
+			// The p2p client turns !Ok into an error one layer down; the legacy
+			// client returns the response raw, so check Ok here too - otherwise a
+			// "did not clear" response would be counted as a successful clear.
+			lastErr = "legacy peer service reported the ban list was not cleared"
+
+			s.logger.Warnf("Legacy peer service did not clear the ban list")
+		default:
 			success = true
 		}
 	}
@@ -2316,11 +2333,16 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	// No applicable clear leg succeeded (every attempted leg failed - e.g. the
 	// admin API key is unset or wrong so calls are Unauthenticated - or none was
 	// available). clearbanned is an administrative control, so report the failure
-	// rather than silently returning success.
+	// (as a server-side/internal error) rather than silently returning success.
 	if !success {
+		msg := "Failed to clear banned list"
+		if lastErr != "" {
+			msg = fmt.Sprintf("%s: %s", msg, lastErr)
+		}
+
 		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInvalidParameter,
-			Message: "Failed to clear banned list",
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: msg,
 		}
 	}
 
