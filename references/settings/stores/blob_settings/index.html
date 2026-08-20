@@ -6434,10 +6434,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#batched-store-with-dah" class="md-nav__link">
+  <a href="#batched-store-write-only-read-the-warning-first" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Batched Store with DAH
+        Batched Store (write-only — read the warning first)
       
     </span>
   </a>
@@ -6950,10 +6950,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#batched-store-with-dah" class="md-nav__link">
+  <a href="#batched-store-write-only-read-the-warning-first" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Batched Store with DAH
+        Batched Store (write-only — read the warning first)
       
     </span>
   </a>
@@ -7099,21 +7099,21 @@
 <td>bool</td>
 <td>false</td>
 <td><code>storeURL.Query().Get("batch") == "true"</code></td>
-<td><strong>CRITICAL</strong> - Enables batch wrapper for performance</td>
+<td><strong>WRITE-ONLY, EXPERIMENTAL</strong> - see the warning below before enabling</td>
 </tr>
 <tr>
 <td>sizeInBytes</td>
-<td>int64</td>
+<td>int</td>
 <td>4194304</td>
 <td><code>storeURL.Query().Get("sizeInBytes")</code></td>
-<td><strong>CRITICAL</strong> - Controls batch memory usage</td>
+<td><strong>CRITICAL</strong> - Controls batch memory usage. Must be greater than 0</td>
 </tr>
 <tr>
 <td>writeKeys</td>
 <td>bool</td>
 <td>false</td>
 <td><code>storeURL.Query().Get("writeKeys") == "true"</code></td>
-<td>Enables key-based retrieval from batches</td>
+<td>Writes a per-batch index of keys and offsets. Nothing in Teranode reads it back</td>
 </tr>
 <tr>
 <td>localDAHStore</td>
@@ -7253,8 +7253,8 @@
 </tr>
 <tr>
 <td>sizeInBytes</td>
-<td>ParseInt validation</td>
-<td>Batch memory allocation</td>
+<td>Atoi validation, must be greater than 0</td>
+<td>Batch memory allocation; a non-positive value is rejected at startup</td>
 <td>During batcher creation</td>
 </tr>
 <tr>
@@ -7287,9 +7287,20 @@
 <h3 id="basic-file-store">Basic File Store<a class="headerlink" href="#basic-file-store" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>file:///data/store
 </span></code></pre></div>
-<h3 id="batched-store-with-dah">Batched Store with DAH<a class="headerlink" href="#batched-store-with-dah" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>file:///data/store?batch=true&amp;sizeInBytes=8388608&amp;localDAHStore=memory://
+<h3 id="batched-store-write-only-read-the-warning-first">Batched Store (write-only — read the warning first)<a class="headerlink" href="#batched-store-write-only-read-the-warning-first" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>file:///data/store?batch=true&amp;sizeInBytes=8388608
 </span></code></pre></div>
+<blockquote>
+<p><strong>Warning.</strong> The batch wrapper is write-only. Reads (<code>Get</code>, <code>GetIoReader</code>, <code>Exists</code>),
+deletion (<code>Del</code>) and <code>SetDAH</code> all return an unsupported-operation error, and nothing in
+Teranode parses the batch files it writes — so batched data cannot be read back. Do not
+use <code>batch=true</code> where Delete-At-Height matters: <code>SetCurrentBlockHeight</code> is a no-op on a
+batched store, so the wrapped store's height never advances and its DAH bookkeeping
+stalls. Writes are also asynchronous, and a batch is held in memory until adding the next
+item would take it past <code>sizeInBytes</code>, or until the store is closed. Keys must be exactly
+32 bytes: a batched store rejects anything else, so it cannot back a store that uses
+non-hash keys.</p>
+</blockquote>
 <h3 id="hash-organized-store">Hash-organized Store<a class="headerlink" href="#hash-organized-store" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>file:///data/store?hashPrefix=2&amp;checksum=true&amp;logger=true
 </span></code></pre></div>
