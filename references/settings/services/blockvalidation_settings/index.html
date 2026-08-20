@@ -7446,7 +7446,7 @@
 <td>uint64</td>
 <td>100</td>
 <td>blockvalidation_previous_block_header_count</td>
-<td><strong>CRITICAL</strong> - Header chain cache size</td>
+<td><strong>CRITICAL</strong> - Header chain cache size. Floored at 11 (<code>settings.MedianTimeSpan</code>): the run is what median-time-past is measured over, so a lower value would compute the median over fewer blocks than consensus requires and accept blocks the rest of the network rejects. Anything below 11 is raised to it, with a warning on stderr</td>
 </tr>
 <tr>
 <td>CatchupMaxRetries</td>
