@@ -12,13 +12,20 @@ import (
 // free text (filter, never reject — telemetry keeps flowing); this file bounds
 // the protocol-format fields, where every honest node produces a well-defined
 // shape, so a violation drops the message and scores the sender
-// (applyBanScore / addProtocolViolation), same as a spoofed peer ID.
+// (applyBanScore / addProtocolViolation), same as a spoofed peer ID. The one
+// exception below is maxGossipReasonLen, which is display-only.
 const (
 	maxGossipPeerIDLen = 128  // libp2p peer IDs are ~52 chars base58
 	maxGossipHashLen   = 64   // hex-encoded 32-byte hash
 	maxGossipHeaderLen = 160  // hex-encoded 80-byte block header; exact size on purpose — headers are fixed-width, so headroom would only admit junk
 	maxGossipURLLen    = 2048 // DataHub / propagation URLs
-	maxGossipReasonLen = 1024 // rejected-tx reason (validator error text)
+
+	// maxGossipReasonLen bounds the rejected-tx reason (validator error text).
+	// Display-only: used by RejectedTxMessage.sanitizeFields (truncates), never
+	// by validateFields — a breach is not scored. It lives here rather than
+	// next to maxPeerDisplayStringLen because the reason legitimately runs
+	// longer than any other display string (wrapped error chains).
+	maxGossipReasonLen = 1024
 )
 
 // checkGossipString rejects a peer-supplied string that exceeds maxLen bytes,

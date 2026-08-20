@@ -53,7 +53,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// spoof check, so a banned peer cannot keep triggering uncached
 	// AddBanScore RPCs). Own messages are identified by the real sender, not
 	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
-	// skip; genuine own messages return at the isOwnMessage check below.
+	// skip; genuine own messages return at the self check below.
 	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
 		return
 	}
@@ -87,7 +87,9 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 	s.logger.Infof("[handleBlockTopic] received block %s fromID %s", blockMessage.Hash, blockMessage.PeerID)
 
-	isSelf := s.isOwnMessage(fromID, blockMessage.PeerID)
+	// The spoof check above proved fromID == blockMessage.PeerID, so the
+	// sender comparison alone decides self.
+	isSelf := fromID == s.P2PClient.GetID()
 	advertisedHeight := blockMessage.Height
 	if isSelf {
 		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
@@ -203,7 +205,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	// spoof check, so a banned peer cannot keep triggering uncached
 	// AddBanScore RPCs). Own messages are identified by the real sender, not
 	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
-	// skip; genuine own messages return at the isOwnMessage check below.
+	// skip; genuine own messages return at the self check below.
 	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
 		return
 	}
@@ -257,8 +259,9 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		s.logger.Warnf("[handleSubtreeTopic] notification channel full, dropped subtree notification for %s", subtreeMessage.Hash)
 	}
 
-	// Ignore our own messages
-	if s.isOwnMessage(fromID, subtreeMessage.PeerID) {
+	// Ignore our own messages. The spoof check above proved fromID equals the
+	// claimed PeerID, so the sender comparison alone decides self.
+	if fromID == s.P2PClient.GetID() {
 		s.logger.Debugf("[handleSubtreeTopic] ignoring own subtree message for %s", subtreeMessage.Hash)
 		return
 	}
@@ -518,7 +521,9 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
-	if s.isOwnMessage(fromID, rejectedTxMessage.PeerID) {
+	// The spoof check above proved fromID equals the claimed PeerID, so the
+	// sender comparison alone decides self.
+	if fromID == s.P2PClient.GetID() {
 		s.logger.Debugf("[handleRejectedTxTopic] ignoring own rejected tx message for %s", rejectedTxMessage.TxID)
 		return
 	}
@@ -976,11 +981,6 @@ func (s *Server) cleanupPeerMaps() {
 
 // startPeerMapCleanup starts the periodic cleanup goroutine
 // Helper methods to reduce redundancy
-
-// isOwnMessage checks if a message is from this node
-func (s *Server) isOwnMessage(from string, peerID string) bool {
-	return from == s.P2PClient.GetID() || peerID == s.P2PClient.GetID()
-}
 
 // shouldSkipBannedPeer checks if we should skip a message from a banned peer:
 // score-based bans live in the centralized peer registry, operator IP/subnet

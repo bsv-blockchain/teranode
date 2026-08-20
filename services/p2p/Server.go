@@ -676,10 +676,14 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		AssetHTTPAddressURLString = s.settings.Asset.HTTPAddress
 	}
 
-	s.AssetHTTPAddressURL = AssetHTTPAddressURLString
+	// Trim surrounding whitespace: a trailing newline picked up from a .env
+	// file, ConfigMap value, or shell substitution would otherwise make every
+	// patched peer score our announcements as a protocol violation
+	// (checkGossipString rejects non-printable runes).
+	s.AssetHTTPAddressURL = strings.TrimSpace(AssetHTTPAddressURLString)
 
 	// Set propagation URL - defaults to AssetHTTPAddressURL if not configured
-	propagationURL := s.settings.Asset.PropagationPublicURL
+	propagationURL := strings.TrimSpace(s.settings.Asset.PropagationPublicURL)
 	if propagationURL == "" {
 		propagationURL = s.AssetHTTPAddressURL
 	}
@@ -1783,6 +1787,18 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 // receivers score on (validateDataHubURL), so the committed default —
 // localhost asset_httpAddress with asset_httpPublicAddress unset — produces
 // exactly one loud warning instead of an error per publish tick.
+//
+// The SSRF half is a heuristic, not a security property: validateDataHubURL
+// reads OUR AllowPrivateIPs, which governs what this node accepts from peers,
+// not what peers accept from us. A publisher at the default false whose peers
+// all run true withholds a private BaseURL those peers would have used —
+// judged the safer default, since the reverse mismatch gets the node scored.
+//
+// Only node_status degrades on a bad verdict (BaseURL blanked, message still
+// published): an empty BaseURL is legal there on ingress. Block and subtree
+// announcements are useless without a fetchable URL and receivers score an
+// empty DataHubURL just like a malformed one, so those publish unchanged and
+// the warning below is the operator's signal that peers will score them.
 func (s *Server) checkStaticGossipURLs() {
 	s.staticURLCheckOnce.Do(func() {
 		if err := checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen); err != nil {

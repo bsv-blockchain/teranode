@@ -978,3 +978,24 @@ func TestHandleNodeStatusNotification_LocalhostBaseURLBlanked(t *testing.T) {
 	require.NoError(t, json.Unmarshal(captured, &msg))
 	require.Empty(t, msg.BaseURL, "a BaseURL peers would score under SSRF checks must be blanked from node_status")
 }
+
+// Init must trim surrounding whitespace from the static URL config: a trailing
+// newline from a .env file or ConfigMap value would otherwise get every
+// announcement scored by patched peers (checkGossipString rejects
+// non-printable runes).
+func TestInit_TrimsStaticURLConfig(t *testing.T) {
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			Asset: settings.AssetSettings{
+				HTTPPublicAddress:    "http://example.com:8090\n",
+				PropagationPublicURL: " http://example.com:8091\t",
+			},
+		},
+	}
+
+	require.NoError(t, s.Init(context.Background()))
+	require.Equal(t, "http://example.com:8090", s.AssetHTTPAddressURL)
+	require.Equal(t, "http://example.com:8091", s.PropagationURL)
+	require.NoError(t, checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen))
+}
