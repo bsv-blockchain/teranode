@@ -5,12 +5,10 @@ import (
 	"net/url"
 
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/labstack/gommon/random"
-	"github.com/ordishs/gocore"
 )
 
 // getKafkaAsyncProducer creates a new Kafka async producer from the provided URL.
@@ -87,21 +85,19 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 	return kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaTxmetaConfig, &settings.Kafka, opts...)
 }
 
-// getKafkaTxAsyncProducer creates a new Kafka async producer for validator transactions using the configuration from gocore.
+// getKafkaTxAsyncProducer creates a new Kafka async producer for validator transactions using the configuration from settings.
+//
+// This must read the same parsed setting as getKafkaTxConsumerGroup: the raw gocore
+// key resolves against the ambient settings context, while the parsed setting honours
+// the alternative context NewSettings was built with, so the two can disagree and
+// leave the Propagation -> Validator transport wired up on one side only.
 func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger, settings *settings.Settings) (kafka.KafkaAsyncProducerI, error) {
-	value, found := gocore.Config().Get("kafka_validatortxsConfig")
-	if !found || value == "" {
+	kafkaURL := settings.Kafka.ValidatorTxsConfig
+	if kafkaURL == nil {
 		return nil, nil
 	}
 
-	kafkaURL, err := urlutil.ParseMultiHostURL(value)
-	if err != nil {
-		return nil, errors.NewConfigurationError("failed to get Kafka URL for validatortxs producer - kafka_validatortxsConfig", err)
-	}
-
-	var producer kafka.KafkaAsyncProducerI
-
-	producer, err = kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, &settings.Kafka)
+	producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, &settings.Kafka)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create validatortxs kafka producer for local validator", err)
 	}
@@ -160,7 +156,7 @@ func getKafkaSubtreesConsumerGroup(logger ulogger.Logger, settings *settings.Set
 	return getKafkaConsumerGroup(logger, kafkaSubtreesConfig, consumerGroupID, true, &settings.Kafka)
 }
 
-// getKafkaTxConsumerGroup creates a new Kafka consumer group for validator transactions using the configuration from gocore.
+// getKafkaTxConsumerGroup creates a new Kafka consumer group for validator transactions using the configuration from settings.
 func getKafkaTxConsumerGroup(logger ulogger.Logger, settings *settings.Settings,
 	consumerGroupID string) (kafka.KafkaConsumerGroupI, error) {
 	kafkaTxConfig := settings.Kafka.ValidatorTxsConfig

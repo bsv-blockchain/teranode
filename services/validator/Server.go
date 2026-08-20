@@ -907,9 +907,18 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 			req = buildValidateTxRequest(body, blockHeight, options)
 		}
 
-		// Process the transaction and return appropriate response
+		// Process the transaction and return appropriate response.
+		//
+		// The verdict also goes out as a machine-readable header. The body below
+		// is a rendered error string: a caller can print it but cannot classify
+		// it, so propagation's large-transaction fallback used to wrap whatever
+		// came back as SERVICE_ERROR and report a permanently invalid transaction
+		// to its own client as a retryable 500. errors.AttachHTTPError carries the
+		// public code and message across instead, and leaves the status and body
+		// untouched for callers that predate it.
 		response, err := v.validateTransaction(ctx, req)
 		if err != nil {
+			errors.AttachHTTPError(c.Response().Header(), err)
 			return c.String(http.StatusInternalServerError, "[handleSingleTx] Failed to process transaction: "+err.Error())
 		}
 

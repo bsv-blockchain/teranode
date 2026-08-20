@@ -299,8 +299,15 @@ func testLongestChainWithDoubleSpendTransaction(t *testing.T, utxoStore string) 
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block6b, "legacy", false, false), "Failed to process block")
 	t.Logf("WaitForBlockBeingMined(t, block6b): %s", block6b.Hash().String())
 	td.WaitForBlockBeingMined(t, block6b)
-	// t.Logf("WaitForBlock(t, block6b, blockWait): %s", block6b.Hash().String())
-	// td.WaitForBlock(t, block6b, blockWait)
+	// WaitForBlockBeingMined only confirms setTxMined has completed on the
+	// blockchain/UTXO side; block assembly's own reorg (moving tx1 back into
+	// its candidate subtrees) happens asynchronously and can still be in
+	// flight at that point. Wait for block assembly itself to report
+	// block6b as its current best block before asserting on its state below,
+	// matching the pattern used for block5b/block6a in the sibling subtests
+	// in this file. Without this, VerifyInBlockAssembly(t, tx1) below is racy.
+	t.Logf("WaitForBlock(t, block6b, blockWait): %s", block6b.Hash().String())
+	td.WaitForBlock(t, block6b, blockWait)
 
 	//                        / 5a [tx1, tx2, parentTx2]
 	// 0 -> 1 ... 2 -> 3 -> 4
