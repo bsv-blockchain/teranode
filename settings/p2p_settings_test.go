@@ -128,3 +128,22 @@ func TestP2PGossipSubMeshProtectionSettings(t *testing.T) {
 		require.False(t, s.P2P.EnablePeerExchange, "loader must read p2p_enable_peer_exchange under context %q", ctx)
 	})
 }
+
+// TestP2PPeerScoreIPColocationThreshold_LoaderReadsKey guards the colocation
+// threshold override: set at the winning precedence for the ambient context,
+// it must be read back (field-exists-but-loader-never-reads-it bug).
+func TestP2PPeerScoreIPColocationThreshold_LoaderReadsKey(t *testing.T) {
+	const key = "p2p_peer_score_ip_colocation_threshold"
+	ctx := gocore.Config().GetContext()
+	winKey := key
+	if ctx != "" {
+		winKey = key + "." + ctx
+	}
+
+	require.Equal(t, 10, NewSettings().P2P.PeerScoreIPColocationThreshold, "default must match the library default of 10")
+
+	gocore.Config().Set(winKey, "3")
+	t.Cleanup(func() { gocore.Config().Set(winKey, "") })
+
+	require.Equal(t, 3, NewSettings().P2P.PeerScoreIPColocationThreshold, "loader must read %s under context %q", key, ctx)
+}

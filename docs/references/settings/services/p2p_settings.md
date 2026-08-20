@@ -34,7 +34,8 @@
 | EnableMDNS | bool | false | p2p_enable_mdns | **CRITICAL** - mDNS peer discovery (triggers network scanning) |
 | AllowPrivateIPs | bool | false | p2p_allow_private_ips | **CRITICAL** - Allow RFC1918 private IP connections |
 | EnablePeerScoring | bool | true | p2p_enable_peer_scoring | **CRITICAL** - GossipSub peer scoring (Sybil mesh protection); static/bootstrap peers exempt |
-| EnablePeerExchange | bool | true | p2p_enable_peer_exchange | GossipSub peer exchange (PX); safe with scoring enabled |
+| EnablePeerExchange | bool | true | p2p_enable_peer_exchange | GossipSub peer exchange (PX); requires EnablePeerScoring (startup error otherwise); inbound PX records currently refused |
+| PeerScoreIPColocationThreshold | int | 10 | p2p_peer_score_ip_colocation_threshold | Peers allowed per exact IP before the colocation penalty applies |
 | SyncCoordinatorPeriodicEvaluationInterval | time.Duration | 30s | p2p_sync_coordinator_periodic_evaluation_interval | Sync coordinator evaluation interval |
 | HealthCheckEnabled | bool | true | p2p_health_check_enabled | Enable HTTP availability checking during peer selection |
 | PeerMapMaxSize | int | 10000 | p2p_peer_map_max_size | Maximum entries in peer maps |
@@ -64,10 +65,11 @@
 
 ### GossipSub Mesh Protection
 
-- `EnablePeerScoring` (default true) applies penalty-only scoring: an IP-colocation penalty (more than 10 peers behind one exact IP score negative and become mesh-ineligible), a behaviour penalty (GRAFT/PRUNE flooding, broken IWANT promises), and score-gated peer exchange. It raises the cost of Sybil mesh capture; it does not award positive score.
-- Deployments with more than 10 nodes behind one shared public IP (NAT, single cloud egress) will penalize each other's nodes. Either give nodes distinct IPs, list them as mutual `StaticPeers` (direct peers are exempt), or disable scoring on that isolated network.
-- With `AllowPrivateIPs` true, loopback and RFC1918 ranges are whitelisted from the colocation penalty, so local/test multi-node clusters are unaffected.
-- `EnablePeerExchange` (default true) controls PX in PRUNE messages; keep scoring on whenever PX is on (gossipsub v1.1 spec requirement).
+- `EnablePeerScoring` (default true) applies penalty-only scoring: an IP-colocation penalty, a behaviour penalty (GRAFT/PRUNE flooding, broken IWANT promises), and a PX acceptance gate. It raises the cost of Sybil mesh capture; it does not award positive score.
+- The IP-colocation penalty is applied **by each remote peer** that holds more than `PeerScoreIPColocationThreshold` (default 10) connections from the same source IP. An operator running more nodes than that behind one public IP (NAT, single cloud egress) is penalized by those remote peers, and **no local setting on the operator's nodes changes that** - disabling scoring locally only stops this node scoring others. Real mitigations: distinct public IPs, or reciprocal `StaticPeers` entries with the specific peers involved (direct peers are scoring-exempt). Note the exposure is per-observer: a remote peer holding only a few connections into the colocated set applies no penalty.
+- `PeerScoreIPColocationThreshold` tunes the local penalty without disabling scoring (lower it on networks with no legitimately colocated operators).
+- With `AllowPrivateIPs` true, loopback, RFC1918, RFC6598, link-local, and IPv6 ULA ranges are whitelisted from the colocation penalty, so local/test multi-node clusters are unaffected.
+- `EnablePeerExchange` (default true) controls emitting PX records in PRUNE messages, and **requires** `EnablePeerScoring` (gossipsub v1.1 pairs PX with scoring) - the service refuses to start with PX on and scoring off. Inbound PX records are currently refused regardless (`AcceptPXThreshold` is set above the maximum attainable score): penalty-only scoring caps every score at 0, so accepting 0-scored records would let an attacker get itself dialed, and dialed peers register as outbound - bypassing gossipsub's Dhi graft refusal and Dout quota. This will be relaxed when positive (per-topic delivery) scoring exists.
 
 ### Peer Map Management
 

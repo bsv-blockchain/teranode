@@ -192,29 +192,47 @@ type Server struct {
 	localHeightCache atomic.Pointer[localHeightCacheEntry]
 }
 
-// privateIPColocationWhitelist returns loopback and RFC1918 networks for exemption
-// from the GossipSub IP-colocation penalty. Deployments that deliberately allow
-// private IPs (local/test clusters) run many nodes behind one IP; without the
-// exemption the 11th and later peers on that IP would be permanently mesh-ineligible.
+// privateIPColocationWhitelist returns local-network ranges for exemption from the
+// GossipSub IP-colocation penalty. Deployments that deliberately allow private IPs
+// (local/test clusters) run many nodes behind one IP; without the exemption the
+// peers above the colocation threshold on that IP would be permanently
+// mesh-ineligible.
 func privateIPColocationWhitelist() []*net.IPNet {
-	var nets []*net.IPNet
-	for _, cidr := range []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
-		if _, n, err := net.ParseCIDR(cidr); err == nil {
-			nets = append(nets, n)
-		}
+	// Loopback, RFC1918, RFC6598 shared space, IPv4 link-local, IPv6 ULA and
+	// IPv6 link-local: the ranges a local/test cluster can legitimately share.
+	cidrs := []string{
+		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"100.64.0.0/10", "169.254.0.0/16",
+		"::1/128", "fc00::/7", "fe80::/10",
 	}
+
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			// The list is constant: a parse failure is a programming error, and
+			// silently skipping it would reintroduce the penalty this exists to prevent.
+			panic(fmt.Sprintf("privateIPColocationWhitelist: bad constant CIDR %q: %v", cidr, err))
+		}
+		nets = append(nets, n)
+	}
+
 	return nets
 }
 
 // buildP2PMessageBusConfig maps Teranode P2P settings onto the message bus config.
 //
 // GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
-// protocol misbehaviour (GRAFT flooding, broken IWANT promises), and gates peer
-// exchange so PRUNE-supplied peer records from negatively-scored peers are rejected.
-// Static and bootstrap peers are exempt: the bus registers them as GossipSub direct
-// peers. Peer exchange is inverted here because the settings key is expressed as
-// an enable flag while the bus config expresses it as a disable flag.
-func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Settings, privKey crypto.PrivKey, protocolVersion, dhtMode string, advertiseAddresses []string) p2pMessageBus.Config {
+// protocol misbehaviour (GRAFT flooding, broken IWANT promises). Static and bootstrap
+// peers are exempt: the bus registers them as GossipSub direct peers. Peer exchange is
+// inverted here because the settings key is expressed as an enable flag while the bus
+// config expresses it as a disable flag. PX enabled without scoring is the
+// spec-violating state this wiring exists to eliminate, so it is a configuration error.
+func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Settings, privKey crypto.PrivKey, protocolVersion, dhtMode string, advertiseAddresses []string) (p2pMessageBus.Config, error) {
+	if tSettings.P2P.EnablePeerExchange && !tSettings.P2P.EnablePeerScoring {
+		return p2pMessageBus.Config{}, errors.NewConfigurationError("p2p_enable_peer_exchange requires p2p_enable_peer_scoring (gossipsub v1.1 pairs PX with scoring); disable peer exchange or enable scoring")
+	}
+
 	conf := p2pMessageBus.Config{
 		PrivateKey:          privKey,
 		Name:                tSettings.ClientName,
@@ -233,20 +251,37 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	if tSettings.P2P.EnablePeerScoring {
-		// When private IPs are deliberately allowed, exempt loopback and RFC1918
-		// ranges from the IP-colocation penalty so multi-node local/test clusters
-		// behind one IP stay mesh-eligible.
-		if tSettings.P2P.AllowPrivateIPs {
-			params := p2pMessageBus.DefaultPeerScoreParams()
-			params.IPColocationFactorWhitelist = privateIPColocationWhitelist()
-			conf.PeerScoreParams = params
-			conf.PeerScoreThresholds = p2pMessageBus.DefaultPeerScoreThresholds()
+		params := p2pMessageBus.DefaultPeerScoreParams()
+		if t := tSettings.P2P.PeerScoreIPColocationThreshold; t > 0 {
+			params.IPColocationFactorThreshold = t
 		}
+		// When private IPs are deliberately allowed, exempt local-network ranges from
+		// the IP-colocation penalty so multi-node local/test clusters behind one IP
+		// stay mesh-eligible.
+		if tSettings.P2P.AllowPrivateIPs {
+			params.IPColocationFactorWhitelist = privateIPColocationWhitelist()
+		}
+
+		thresholds := p2pMessageBus.DefaultPeerScoreThresholds()
+		// Penalty-only params cap every score at 0, so a positive threshold means
+		// "never accept PX". Until per-topic delivery scoring can lift honest peers
+		// above 0, refuse attacker-supplied peer records outright: pxConnect dials
+		// mark those peers outbound, which bypasses gossipsub's Dhi graft refusal
+		// and satisfies the Dout quota - the strongest half of the Sybil attack.
+		thresholds.AcceptPXThreshold = 1
+
+		conf.PeerScoreParams = params
+		conf.PeerScoreThresholds = thresholds
 
 		// Observability: scoring failure modes are silent (a peer below 0 is never
 		// grafted; below the graylist threshold its gossip is ignored), so log any
-		// negatively-scored peers with the worst offender for attribution.
-		graylistThreshold := p2pMessageBus.DefaultPeerScoreThresholds().GraylistThreshold
+		// negatively-scored peers with the worst offender for attribution. Warn only
+		// on transition or material change - a persistent graylisted swarm must not
+		// produce a warn line on every inspection tick.
+		graylistThreshold := thresholds.GraylistThreshold
+		var inspectMu sync.Mutex
+		var lastGraylisted int
+		var lastWorstPeer peer.ID
 		conf.PeerScoreInspect = func(snapshots map[peer.ID]*pubsub.PeerScoreSnapshot) {
 			var negative, graylisted int
 			var worst float64
@@ -264,12 +299,25 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 					graylisted++
 				}
 			}
-			if graylisted > 0 {
+
+			inspectMu.Lock()
+			changed := graylisted != lastGraylisted || worstPeer != lastWorstPeer
+			lastGraylisted, lastWorstPeer = graylisted, worstPeer
+			inspectMu.Unlock()
+
+			if graylisted > 0 && changed {
 				logger.Warnf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
 			} else if negative > 0 {
-				logger.Debugf("[p2p] gossipsub peer scores: %d negative, worst %s score %.0f", negative, worstPeer, worst)
+				logger.Debugf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
 			}
 		}
+
+		logger.Infof("[p2p] gossipsub peer scoring enabled: ip-colocation weight %.0f threshold %d (whitelisted ranges %d), graylist %.0f, acceptPX %.0f, peer exchange %v",
+			params.IPColocationFactorWeight, params.IPColocationFactorThreshold,
+			len(params.IPColocationFactorWhitelist), thresholds.GraylistThreshold,
+			thresholds.AcceptPXThreshold, tSettings.P2P.EnablePeerExchange)
+	} else {
+		logger.Warnf("[p2p] gossipsub peer scoring DISABLED (p2p_enable_peer_scoring=false), peer exchange %v", tSettings.P2P.EnablePeerExchange)
 	}
 
 	if len(advertiseAddresses) > 0 {
@@ -277,7 +325,7 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 		conf.Port = tSettings.P2P.Port
 	}
 
-	return conf
+	return conf, nil
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -488,7 +536,10 @@ func NewServer(
 		logger.Infof("[silent mode] DHT disabled - node will not participate in peer discovery")
 	}
 
-	conf := buildP2PMessageBusConfig(logger, tSettings, privKey, bitcoinProtocolVersion, dhtMode, advertiseAddresses)
+	conf, err := buildP2PMessageBusConfig(logger, tSettings, privKey, bitcoinProtocolVersion, dhtMode, advertiseAddresses)
+	if err != nil {
+		return nil, err
+	}
 
 	p2pClient, err := p2pMessageBus.NewClient(conf)
 	if err != nil {
