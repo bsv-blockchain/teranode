@@ -13,42 +13,62 @@ const (
 	// flood can rotate the cache but never grow it.
 	defaultSeenHashCacheSize = 10_000
 
-	// defaultSeenHashCacheTTL is how long announcements of a hash are collapsed
-	// into at most seenHashMaxPublishersPerHash Kafka publishes. Short on
-	// purpose: past the publisher budget the suppression trades away
-	// announcement redundancy, so the window only needs to outlive the burst in
-	// which every peer announces the same new block or subtree.
+	// defaultSeenHashCacheTTL is how long an entry keeps its per-peer repeat
+	// accounting. Suppression itself is governed by the much shorter publish
+	// window below; this longer window only has to outlast a replay campaign
+	// so spam scoring can accumulate across it.
 	defaultSeenHashCacheTTL = 2 * time.Minute
 
 	// seenHashMaxPublishersPerHash is how many DISTINCT announcers of one hash
-	// get their announcement published to Kafka within the TTL. More than one,
-	// because the first announcer's DataHub URL is peer-controlled and may be
-	// dead or hostile: block validation collects the later announcements as
+	// get their announcement published to Kafka per publish window. More than
+	// one, because the first announcer's DataHub URL is peer-controlled and may
+	// be dead or hostile: block validation collects the later announcements as
 	// alternative fetch sources (catchupAlternatives), a failover that a budget
-	// of one would starve. Three bounds the amplification at three downstream
-	// pipelines per hash per TTL while keeping that failover alive.
+	// of one would starve.
 	seenHashMaxPublishersPerHash = 3
+
+	// seenHashPublishWindow is how long a spent publisher budget stays spent.
+	// Deliberately much shorter than the accounting TTL: the burst in which
+	// every peer announces one new hash is over in about a second, so a short
+	// window loses no dedup value — while a budget that stayed spent for the
+	// whole TTL would let seenHashMaxPublishersPerHash colluding identities
+	// that win the announcement race own every fetch source block validation
+	// is given for that hash for two minutes. With the window, a captured
+	// budget re-opens in seconds, and the steady-state amplification is
+	// bounded at the budget per window per hash. Note the rollover also lets
+	// one repeat announcement through per window (the published == 0 retry
+	// path) — a few messages per minute, which matters in sparse topologies
+	// where the only announcer's earlier publish may have been dropped.
+	seenHashPublishWindow = 15 * time.Second
 
 	// seenHashSpamRepeatTolerance is how many repeat announcements of the same
 	// hash by the same peer are tolerated within the TTL before each further
-	// repeat is scored as spam. GossipSub's message-ID dedup already removes
-	// exact duplicates, but honest same-hash repeats still happen: a reorg away
-	// and back re-announces a recent hash, and a blockchain-subscription
-	// reconnect replays the current tip (suppressed at the sender by
-	// handleBlockNotification, but only on upgraded peers). The tolerance
-	// absorbs a burst of those; a replay flood blows through it in under a
+	// repeat is scored as spam. Generous on purpose: the suppression above
+	// already removes the amplification, so scoring is a backstop against
+	// sustained abuse, not the primary control — and a degraded honest peer can
+	// repeat a hash surprisingly often. A crash-looping blockchain service
+	// replays its tip announcement on every subscription reconnect (the
+	// sender-side suppression in handleBlockNotification exists only on
+	// upgraded peers, and any interleaved side-chain block re-arms it), so the
+	// tolerance sits an order of magnitude above what a reconnect storm
+	// produces in one window. A replay flood still blows through it in about a
 	// second and, at 50 spam points per repeat against the default 100-point
 	// ban threshold, bans itself two repeats later.
-	seenHashSpamRepeatTolerance = 5
+	seenHashSpamRepeatTolerance = 50
 
 	// seenHashMaxAnnouncersPerHash bounds the per-hash announcer counts so a
 	// Sybil fleet announcing one hash cannot grow a single entry without limit.
-	// Announcers beyond the bound are still suppressed (the publisher budget is
-	// long spent by then); the consequence accepted here is that they are not
-	// individually counted, so an identity introduced after the bound can
-	// replay the hash without accruing spam score — costing this node only the
-	// pre-suppression handler work, never a Kafka publish.
-	seenHashMaxAnnouncersPerHash = 32
+	// It exists only for repeat counting (the publish budget is far smaller),
+	// so it is kept low: the worst-case footprint is the PRODUCT of this and
+	// the size cap — up to defaultSeenHashCacheSize x this many stored peer-ID
+	// strings per topic — not the size cap alone. Two accepted scoring gaps:
+	// an identity introduced after the bound can replay the hash without
+	// accruing spam score, and a peer can reset its own counters by flooding
+	// enough distinct hashes to evict the entry (distinct hashes are not
+	// themselves scored). Both cost this node only pre-suppression handler
+	// work, never a Kafka publish — the scoring is a backstop, not a rate
+	// limit (see the tolerance above).
+	seenHashMaxAnnouncersPerHash = 8
 )
 
 // seenHashCache is a size-bounded, TTL-windowed record of which announcement
@@ -58,9 +78,10 @@ const (
 // into a Kafka publish and the downstream RPC/fetch work it triggers.
 //
 // Per hash it grants a publish budget (seenHashMaxPublishersPerHash distinct
-// announcers) and keeps per-peer announcement counts, so the handlers can
-// score a peer that keeps re-announcing the same hash (ReasonSpam) without
-// penalising the normal case of many distinct peers announcing one new block.
+// announcers per seenHashPublishWindow) and keeps per-peer announcement counts
+// across the longer accounting TTL, so the handlers can score a peer that
+// keeps re-announcing the same hash (ReasonSpam) without penalising the normal
+// case of many distinct peers announcing one new block.
 // A grant is optimistic: callers whose publish did not actually happen return
 // it via PublishFailed, so broker backpressure cannot permanently suppress a
 // hash and never resets the spam counters.
@@ -76,13 +97,15 @@ type seenHashCache struct {
 }
 
 // seenHashNode is the list payload: the key, when the hash was first announced
-// in the current window, how many publish grants are outstanding or spent, and
-// how many times each peer has announced it.
+// in the current accounting window, when the current publish window opened,
+// how many publish grants are outstanding or spent in it, and how many times
+// each peer has announced the hash.
 type seenHashNode struct {
-	hash       string
-	firstSeen  time.Time
-	published  int
-	announcers map[string]int
+	hash               string
+	firstSeen          time.Time
+	publishWindowStart time.Time
+	published          int
+	announcers         map[string]int
 }
 
 // capLocked returns the size cap in force. Callers must hold the mutex.
@@ -131,6 +154,14 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 		node := element.Value.(*seenHashNode)
 
 		if now.Sub(node.firstSeen) < c.ttlLocked() {
+			// Re-open a spent publish budget on the short window, keeping the
+			// announcer counts: suppression is meant to collapse the seconds-long
+			// announcement burst, while the repeat accounting spans the full TTL.
+			if now.Sub(node.publishWindowStart) >= seenHashPublishWindow {
+				node.publishWindowStart = now
+				node.published = 0
+			}
+
 			prev := node.announcers[peerID]
 			if prev > 0 || len(node.announcers) < seenHashMaxAnnouncersPerHash {
 				node.announcers[peerID] = prev + 1
@@ -144,8 +175,9 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 			return publish, prev
 		}
 
-		// Window expired: treat as a fresh announcement, reusing the entry.
+		// Accounting window expired: treat as a fresh announcement, reusing the entry.
 		node.firstSeen = now
+		node.publishWindowStart = now
 		node.published = 1
 		node.announcers = map[string]int{peerID: 1}
 		c.order.MoveToBack(element)
@@ -167,10 +199,11 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 	}
 
 	c.entries[hash] = c.order.PushBack(&seenHashNode{
-		hash:       hash,
-		firstSeen:  now,
-		published:  1,
-		announcers: map[string]int{peerID: 1},
+		hash:               hash,
+		firstSeen:          now,
+		publishWindowStart: now,
+		published:          1,
+		announcers:         map[string]int{peerID: 1},
 	})
 
 	return true, 0

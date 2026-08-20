@@ -17,7 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newSeenHashTestServer(t *testing.T) (*Server, *blockchain.CentralizedPeerRegistry, *kafka.KafkaAsyncProducerMock) {
+// newSeenHashTestServer wires independent block and subtree producers at the
+// production buffer depth (gossipKafkaPublishBuffer), so the backpressure
+// tests exercise the drop threshold production actually configures and a drop
+// on one topic cannot mask the other.
+func newSeenHashTestServer(t *testing.T) (*Server, *blockchain.CentralizedPeerRegistry, *kafka.KafkaAsyncProducerMock, *kafka.KafkaAsyncProducerMock) {
 	t.Helper()
 
 	s, reg := newServerWithLocalRegistry(t)
@@ -26,13 +30,14 @@ func newSeenHashTestServer(t *testing.T) (*Server, *blockchain.CentralizedPeerRe
 	mockP2P := new(MockServerP2PClient)
 	mockP2P.peerID = mustNewPeerID(t)
 	s.P2PClient = mockP2P
-	s.notificationCh = make(chan *notificationMsg, 64)
+	s.notificationCh = make(chan *notificationMsg, 256)
 
-	producer := kafka.NewKafkaAsyncProducerMock()
-	s.blocksKafkaProducerClient = producer
-	s.subtreeKafkaProducerClient = producer
+	blockProducer := kafka.NewKafkaAsyncProducerMockWithBuffer(gossipKafkaPublishBuffer)
+	subtreeProducer := kafka.NewKafkaAsyncProducerMockWithBuffer(gossipKafkaPublishBuffer)
+	s.blocksKafkaProducerClient = blockProducer
+	s.subtreeKafkaProducerClient = subtreeProducer
 
-	return s, reg, producer
+	return s, reg, blockProducer, subtreeProducer
 }
 
 func announceBlock(t *testing.T, s *Server, from peer.ID, blockHash string) {
@@ -81,7 +86,7 @@ func drainPublished(producer *kafka.KafkaAsyncProducerMock) []*kafka.Message {
 // sources); everything past the budget, and every same-peer replay, is
 // suppressed. Per-peer bookkeeping still runs for suppressed announcements.
 func TestHandleBlockTopic_DuplicateAnnouncementSuppressed(t *testing.T) {
-	s, reg, producer := newSeenHashTestServer(t)
+	s, reg, producer, _ := newSeenHashTestServer(t)
 
 	blockHash := chainhash.HashH([]byte("seen-hash dedup block")).String()
 
@@ -126,7 +131,7 @@ func TestHandleBlockTopic_DuplicateAnnouncementSuppressed(t *testing.T) {
 // notification path: every valid announcement, duplicate or not, still
 // notifies.
 func TestHandleBlockTopic_DuplicatesStillNotify(t *testing.T) {
-	s, _, _ := newSeenHashTestServer(t)
+	s, _, _, _ := newSeenHashTestServer(t)
 
 	blockHash := chainhash.HashH([]byte("notify block")).String()
 	p := mustNewPeerID(t)
@@ -141,7 +146,7 @@ func TestHandleBlockTopic_DuplicatesStillNotify(t *testing.T) {
 // ban score and eventually be banned; peers within the tolerance, and peers
 // merely duplicating a seen hash, must not be scored.
 func TestHandleBlockTopic_RepeatAnnouncerScoredAsSpam(t *testing.T) {
-	s, reg, _ := newSeenHashTestServer(t)
+	s, reg, _, _ := newSeenHashTestServer(t)
 
 	blockHash := chainhash.HashH([]byte("spam replay block")).String()
 	tolerated := mustNewPeerID(t)
@@ -170,7 +175,7 @@ func TestHandleBlockTopic_RepeatAnnouncerScoredAsSpam(t *testing.T) {
 // blocking the gossip worker, and the publish grant is returned so a later
 // announcement - even a repeat by the same peer - can retry.
 func TestHandleBlockTopic_ProducerBackpressureDropsAndAllowsRetry(t *testing.T) {
-	s, _, producer := newSeenHashTestServer(t)
+	s, _, producer, _ := newSeenHashTestServer(t)
 
 	// Fill the mock producer's buffer so TryPublish fails.
 	for i := 0; i < cap(producer.PublishChannel()); i++ {
@@ -193,7 +198,7 @@ func TestHandleBlockTopic_ProducerBackpressureDropsAndAllowsRetry(t *testing.T) 
 }
 
 func TestHandleSubtreeTopic_DuplicateAnnouncementSuppressed(t *testing.T) {
-	s, _, producer := newSeenHashTestServer(t)
+	s, _, _, producer := newSeenHashTestServer(t)
 
 	subtreeHash := chainhash.HashH([]byte("seen-hash dedup subtree")).String()
 
@@ -212,7 +217,7 @@ func TestHandleSubtreeTopic_DuplicateAnnouncementSuppressed(t *testing.T) {
 // their full publish budget, or low-reputation peers could shadow subtrees off
 // the network.
 func TestHandleSubtreeTopic_UnhealthyPeerDropDoesNotMarkSeen(t *testing.T) {
-	s, reg, producer := newSeenHashTestServer(t)
+	s, reg, _, producer := newSeenHashTestServer(t)
 
 	lowRep := mustNewPeerID(t)
 	reg.Register(&blockchain.PeerInfo{ID: lowRep.String()})

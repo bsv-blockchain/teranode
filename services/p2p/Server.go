@@ -73,6 +73,15 @@ const (
 	// when p2p_gossip_handler_concurrency is unset.
 	defaultGossipHandlerConcurrency = 4
 
+	// gossipKafkaPublishBuffer sizes the block/subtree producers' publish
+	// channels. The gossip handlers use TryPublish, so a full channel is a
+	// DROPPED announcement rather than backpressure — the buffer must absorb
+	// ordinary producer latency (broker leader election, linger flush), not
+	// just smooth a burst. Sized alongside the TryPublish switch on purpose:
+	// the old 10-slot buffer was tuned for a blocking send that could only
+	// delay, never lose.
+	gossipKafkaPublishBuffer = 1000
+
 	// syncCoordinatorStopTimeout is the sync coordinator's drain sub-budget
 	// inside Server.Stop. Coordinator RPCs are bounded at defaultRPCTimeout
 	// (5s), so a healthy drain completes well within it; the cap only bites
@@ -758,8 +767,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		s.invalidSubtreeKafkaConsumerClient.Start(ctx, s.invalidSubtreeHandler(ctx), kafka.WithLogErrorAndMoveOn())
 	}
 
-	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
-	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
+	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, gossipKafkaPublishBuffer))
+	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, gossipKafkaPublishBuffer))
 
 	// Warm the node-status cache before the HTTP surface (and its /p2p-ws
 	// route) comes up, so websocket clients are always served the cached status

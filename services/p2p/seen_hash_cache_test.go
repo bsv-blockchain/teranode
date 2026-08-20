@@ -48,6 +48,26 @@ func TestSeenHashCache_Check(t *testing.T) {
 		}
 	})
 
+	t.Run("publish budget re-opens each publish window, accounting survives", func(t *testing.T) {
+		var c seenHashCache
+
+		for i := 0; i < seenHashMaxPublishersPerHash; i++ {
+			c.Check("hash-a", fmt.Sprintf("peer-%d", i), now)
+		}
+
+		publish, _ := c.Check("hash-a", "peer-captured", now)
+		require.False(t, publish, "budget spent within the window")
+
+		later := now.Add(seenHashPublishWindow)
+
+		publish, _ = c.Check("hash-a", "peer-honest", later)
+		require.True(t, publish, "a fresh distinct announcer must publish once the window rolls over")
+
+		publish, repeats := c.Check("hash-a", "peer-0", later)
+		require.False(t, publish, "a repeat must not publish while a rollover grant is stuck")
+		require.Equal(t, 1, repeats, "repeat accounting must survive the publish-window rollover")
+	})
+
 	t.Run("expired window is treated as fresh", func(t *testing.T) {
 		var c seenHashCache
 
