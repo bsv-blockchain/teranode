@@ -44,14 +44,86 @@ func getFreePort(t *testing.T) int {
 
 // setupTest initializes the test environment and returns a cleanup function.
 // The cleanup function should be deferred by the calling test.
+//
+// Startup allocates "free" ports via listen-then-close (getFreePort) and binds
+// them again moments later in a separate gRPC server goroutine. Under
+// machine-wide parallel test load, another process can grab that exact port in
+// the gap between the two, which fails the blockchain/block-assembly gRPC
+// listener non-deterministically ("can't start GRPC server" / "connection
+// refused") — the classic flaky-under-parallel-load symptom, not a bug in the
+// code under test. Retrying the whole setup with freshly chosen ports resolves
+// it deterministically, the same way test/longtest/util/postgres/container.go
+// already retries the equivalent bind race for its Postgres container.
 func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, context.Context, context.CancelFunc, func()) {
-	err := os.RemoveAll("./data")
-	require.NoError(t, err)
+	const maxSetupAttempts = 3
+
+	var lastErr error
+
+	for attempt := 1; attempt <= maxSetupAttempts; attempt++ {
+		daemon, ba, ctx, cancel, cleanup, err := attemptSetupTest(t)
+		if err == nil {
+			return daemon, ba, ctx, cancel, cleanup
+		}
+
+		lastErr = err
+		t.Logf("setupTest: attempt %d/%d failed (likely a port-bind race under parallel load), retrying: %v", attempt, maxSetupAttempts, err)
+	}
+
+	t.Fatalf("setupTest: failed after %d attempts: %v", maxSetupAttempts, lastErr)
+
+	return nil, nil, nil, nil, nil
+}
+
+// startAttemptTimeout bounds how long attemptSetupTest waits, after readyCh
+// closes, for an error that Start's launcher goroutine may still be in the
+// process of delivering. Mirrors cleanupFn's own bounded wait below.
+const startAttemptTimeout = 200 * time.Millisecond
+
+// waitForEarlyStartErr waits for readyCh to close, then waits up to timeout
+// for a value on startErrCh.
+//
+// Start's own defer closes readyCh as Start itself is returning (see
+// Server.go's `defer closeOnce.Do(func() { close(readyCh) })`) - strictly
+// before its launcher goroutine resumes and sends the result on startErrCh.
+// Closing a channel only guarantees the receiver unblocks after the close; it
+// gives no guarantee about when the closing goroutine's later statements
+// (the send on startErrCh) execute relative to what the receiver does next.
+// A non-blocking check right after <-readyCh can therefore race ahead of
+// that send and miss a genuine startup failure. Bounding the wait gives the
+// launcher goroutine a window to deliver the error while still returning
+// promptly on the common (successful-start) path, where Start never returns
+// during the wait (it blocks in g.Wait() until shutdown).
+//
+// found is false when nothing arrived within timeout, which callers must
+// treat as "Start is still running", not "Start failed silently".
+func waitForEarlyStartErr(readyCh <-chan struct{}, startErrCh chan error, timeout time.Duration) (err error, found bool) {
+	<-readyCh
+
+	select {
+	case err = <-startErrCh:
+		return err, true
+	case <-time.After(timeout):
+		return nil, false
+	}
+}
+
+// attemptSetupTest performs a single setup attempt, returning an error instead
+// of failing the test outright so setupTest can retry on a port-bind race. Any
+// resource it created before failing is cleaned up before returning the error.
+func attemptSetupTest(t *testing.T) (daemon *nodehelpers.BlockchainDaemon, ba *BlockAssembly, ctx context.Context, cancel context.CancelFunc, cleanup func(), err error) {
+	if err = os.RemoveAll("./data"); err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
 
 	blockchainDaemon, err := nodehelpers.NewBlockchainDaemon(t)
-	require.NoError(t, err)
-	err = blockchainDaemon.StartBlockchainService()
-	require.NoError(t, err, "Failed to start blockchain service")
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+
+	if err = blockchainDaemon.StartBlockchainService(); err != nil {
+		blockchainDaemon.Stop()
+		return nil, nil, nil, nil, nil, errors.NewProcessingError("failed to start blockchain service", err)
+	}
 
 	// Setup block assembly service
 	tSettings := blockchainDaemon.Settings
@@ -63,7 +135,7 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	// Set DoubleSpendWindow to 0 so transactions are dequeued immediately in tests
 	tSettings.BlockAssembly.DoubleSpendWindow = 0
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel = context.WithCancel(context.Background())
 	memStore := memory.New()
 	blobStore := memory.New()
 
@@ -71,24 +143,43 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	require.NoError(t, err)
+	if err != nil {
+		cancel()
+		blockchainDaemon.Stop()
+
+		return nil, nil, nil, nil, nil, err
+	}
 
 	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
-	require.NoError(t, err)
+	if err != nil {
+		cancel()
+		blockchainDaemon.Stop()
+
+		return nil, nil, nil, nil, nil, err
+	}
 
 	// Use the blockchain client from the daemon which is already connected and running
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainDaemon.BlockchainClient)
-	require.NotNil(t, ba)
+	newBA := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainDaemon.BlockchainClient)
+	if newBA == nil {
+		cancel()
+		blockchainDaemon.Stop()
+
+		return nil, nil, nil, nil, nil, errors.NewProcessingError("New returned a nil BlockAssembly")
+	}
 
 	// Skip waiting for pending blocks in tests to prevent hanging
-	ba.SetSkipWaitForPendingBlocks(true)
+	newBA.SetSkipWaitForPendingBlocks(true)
 
 	// Log the gRPC addresses
 	t.Logf("BlockAssembly GRPCListenAddress: %s", tSettings.BlockAssembly.GRPCListenAddress)
 	t.Logf("BlockAssembly GRPCAddress: %s", tSettings.BlockAssembly.GRPCAddress)
 
-	err = ba.Init(ctx)
-	require.NoError(t, err)
+	if err = newBA.Init(ctx); err != nil {
+		cancel()
+		blockchainDaemon.Stop()
+
+		return nil, nil, nil, nil, nil, err
+	}
 
 	readyCh := make(chan struct{}, 1)
 	startErrCh := make(chan error, 1)
@@ -101,38 +192,115 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 			}
 		}()
 
-		err := ba.Start(ctx, readyCh)
+		startErr := newBA.Start(ctx, readyCh)
 		// Send error to channel instead of calling t.Errorf directly
 		// This avoids calling test methods after the test completes
-		startErrCh <- err
+		startErrCh <- startErr
 	}()
 
-	<-readyCh // Wait for service to be ready
+	// A failed bind closes readyCh without the gRPC server ever listening. Start
+	// has not necessarily returned by the time readyCh closes on the failure
+	// path - its own defer closes readyCh as Start is in the process of
+	// returning, strictly before the launcher goroutine above resumes and sends
+	// on startErrCh - so waitForEarlyStartErr bounds the wait for that send
+	// instead of checking non-blockingly, which would race ahead of it and
+	// miss real startup failures. Catching it here (rather than only in
+	// cleanup) lets setupTest retry.
+	if startErr, found := waitForEarlyStartErr(readyCh, startErrCh, startAttemptTimeout); found {
+		if startErr != nil {
+			cancel()
+			blockchainDaemon.Stop()
+
+			return nil, nil, nil, nil, nil, errors.NewProcessingError("failed to start block assembly service", startErr)
+		}
+		// nil error: Start returned successfully. Re-buffer it so cleanup's own
+		// receive below still finds it.
+		startErrCh <- startErr
+	}
 
 	// Check for startup errors in cleanup, not in the goroutine
-	cleanup := func() {
+	cleanupFn := func() {
 		// First cancel the context to stop ba.Start
 		cancel()
 
 		// Then check if there was a startup error
 		select {
-		case err := <-startErrCh:
+		case startErr := <-startErrCh:
 			// Only report errors if context wasn't cancelled
-			if err != nil && ctx.Err() == nil {
-				t.Errorf("Error starting block assembly service: %v", err)
+			if startErr != nil && ctx.Err() == nil {
+				t.Errorf("Error starting block assembly service: %v", startErr)
 			}
 		case <-time.After(100 * time.Millisecond):
 			// ba.Start is still running, that's okay
 		}
 
-		if err := ba.Stop(ctx); err != nil {
-			t.Logf("Error stopping block assembly service: %v", err)
+		if stopErr := newBA.Stop(ctx); stopErr != nil {
+			t.Logf("Error stopping block assembly service: %v", stopErr)
 		}
 
 		blockchainDaemon.Stop()
 	}
 
-	return blockchainDaemon, ba, ctx, cancel, cleanup
+	return blockchainDaemon, newBA, ctx, cancel, cleanupFn, nil
+}
+
+// TestWaitForEarlyStartErr_CatchesErrorSentShortlyAfterReadyClose reproduces
+// the exact ordering attemptSetupTest relies on: Start's own defer closes
+// readyCh as Start is returning, strictly before its launcher goroutine
+// resumes and sends the failure on startErrCh (see Server.go's
+// `defer closeOnce.Do(func() { close(readyCh) })`). A caller that checks
+// startErrCh non-blockingly immediately after <-readyCh can therefore race
+// ahead of that send and wrongly conclude "still starting" for a startup
+// that has, in fact, already failed. This test forces exactly that ordering
+// deterministically via a barrier channel (no reliance on real scheduler
+// timing) and asserts the failure is still caught within a bounded wait.
+func TestWaitForEarlyStartErr_CatchesErrorSentShortlyAfterReadyClose(t *testing.T) {
+	readyCh := make(chan struct{}, 1)
+	startErrCh := make(chan error, 1)
+	releaseSend := make(chan struct{})
+	wantErr := errors.NewProcessingError("simulated bind failure")
+
+	go func() {
+		close(readyCh) // simulates Start's deferred close(readyCh) on the failure path
+		<-releaseSend  // simulates the scheduling gap before the launcher goroutine resumes
+		startErrCh <- wantErr
+	}()
+
+	resultCh := make(chan struct {
+		err   error
+		found bool
+	}, 1)
+
+	go func() {
+		err, found := waitForEarlyStartErr(readyCh, startErrCh, 200*time.Millisecond)
+		resultCh <- struct {
+			err   error
+			found bool
+		}{err, found}
+	}()
+
+	// Give waitForEarlyStartErr a moment to reach its check before the send is
+	// released, so we know it genuinely waited rather than winning by luck.
+	time.Sleep(20 * time.Millisecond)
+	close(releaseSend)
+
+	result := <-resultCh
+	require.True(t, result.found, "expected the delayed startup error to be caught within the bounded wait")
+	require.ErrorIs(t, result.err, wantErr)
+}
+
+// TestWaitForEarlyStartErr_TreatsNoErrorWithinBoundAsStillStarting mirrors the
+// successful-start path, where Start never returns during setup (it blocks in
+// g.Wait()), so nothing is ever sent on startErrCh. waitForEarlyStartErr must
+// treat that as "still starting", not as a missed error.
+func TestWaitForEarlyStartErr_TreatsNoErrorWithinBoundAsStillStarting(t *testing.T) {
+	readyCh := make(chan struct{}, 1)
+	startErrCh := make(chan error, 1)
+	close(readyCh)
+
+	err, found := waitForEarlyStartErr(readyCh, startErrCh, 30*time.Millisecond)
+	require.False(t, found, "expected no early error to be reported when Start is still running")
+	require.NoError(t, err)
 }
 
 // TestHealth verifies the health check functionality of the block assembly service.

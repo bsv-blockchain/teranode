@@ -538,9 +538,9 @@ func (sp *serverPeer) pushAddrMsg(addresses []*wire.NetAddress) {
 // disconnected.
 func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 	// No warning is logged and no score is calculated if banning is disabled.
-	// if cfg.DisableBanning {
-	//	return
-	// }
+	if cfg.DisableBanning {
+		return
+	}
 	if sp.isWhitelisted {
 		sp.server.logger.Debugf("Misbehaving whitelisted peer %s: %s", sp, reason)
 		return
@@ -615,10 +615,14 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// This prevents connections from BCH/BTC/BTG and other incompatible forks
 	userAgent := msg.UserAgent
 	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
-		sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
-
-		// Ban the peer to prevent repeated connection attempts from incompatible clients
-		sp.server.BanPeer(sp)
+		// Ban the peer to prevent repeated connection attempts from incompatible
+		// clients, unless banning is disabled. The peer is rejected either way.
+		if cfg.DisableBanning {
+			sp.server.logger.Warnf("Rejecting peer %s with non-BSV user agent (banning disabled): %s", sp.Peer, userAgent)
+		} else {
+			sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
+			sp.server.BanPeer(sp)
+		}
 
 		reason := "Only BSV Blockchain clients are supported"
 
@@ -2523,6 +2527,13 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			return
 		}
 
+		// Peers that have not negotiated sendheaders still need the block
+		// announced via a plain inventory message.
+		if msg.invVect.Type == wire.InvTypeBlock {
+			s.handleRelayBlockInvMsg(sp, msg)
+			return
+		}
+
 		if msg.invVect.Type == wire.InvTypeTx {
 			// Don't relay the transaction to the peer when it has
 			// transaction relaying disabled.
@@ -2603,6 +2614,13 @@ func (s *server) handleRelayBlockMsg(sp *serverPeer, msg relayMsg) {
 	}
 
 	sp.QueueMessage(msgHeaders, nil)
+}
+
+// handleRelayBlockInvMsg queues a plain inventory vector for a block to a peer
+// that has not negotiated sendheaders. Peers that did negotiate sendheaders are
+// announced via a headers message instead, in handleRelayBlockMsg.
+func (s *server) handleRelayBlockInvMsg(sp serverPeerQueueInventory, msg relayMsg) {
+	sp.QueueInventory(msg.invVect)
 }
 
 // handleBroadcastMsg deals with broadcasting messages to peers.  It is invoked

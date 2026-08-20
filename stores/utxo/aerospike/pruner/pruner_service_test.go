@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/assert"
@@ -38,7 +39,7 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 	ctx := context.Background()
 
 	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		err = container.Terminate(ctx)
@@ -229,7 +230,7 @@ func TestServiceStartStop(t *testing.T) {
 	ctx := context.Background()
 
 	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
@@ -276,7 +277,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx := context.Background()
 
 	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		err = container.Terminate(ctx)
