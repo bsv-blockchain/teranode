@@ -7870,8 +7870,8 @@
 <p><img alt="utxo_unspend_process.svg" src="../../services/img/plantuml/utxo/utxo_unspend_process.svg" /></p>
 <p>To know more about the Transaction Validator, please check its specific service documentation.</p>
 <h3 id="47-utxo-batch-processing-and-external-storage-mode">4.7. UTXO Batch Processing and External Storage mode<a class="headerlink" href="#47-utxo-batch-processing-and-external-storage-mode" title="Permanent link">&para;</a></h3>
-<p>Aerospike is the primary datastore for the UTXO store. However, to overcome Aerospike's record size limitation of 1MB, the system implements an external storage mechanism for large transactions.</p>
-<p>If a transaction is too large to fit in a single Aerospike record (indicated by a <code>RECORD_TOO_BIG</code> error), or if the system is configured to externalize all transactions, the UTXO store will store the full transaction data in an external storage (typically AWS S3, but any external storage can be used).</p>
+<p>Aerospike is the primary datastore for the UTXO store. However, to overcome Aerospike's record size limitation, the system implements an external storage mechanism for large transactions.</p>
+<p>A transaction is stored externally when its extended size exceeds <code>MaxTxSizeInStoreInBytes</code> (32KB), when it needs more than one record (more outputs than <code>utxostore_utxoBatchSize</code>), or if the system is configured to externalize all transactions (<code>utxostore_externalizeAllTransactions</code>). A <code>RECORD_TOO_BIG</code> error from Aerospike is handled as a fallback retry via the same external-storage path. In all these cases, the UTXO store will store the full transaction data in an external storage (typically AWS S3, but any external storage can be used).</p>
 <p>In such cases, the full transaction data is stored externally, while metadata and UTXOs are still stored in Aerospike, potentially across multiple records. The Aerospike record will have an <code>external</code> flag set to true, indicating that the full transaction data is stored externally.</p>
 <p>When the UTXO data is needed, the system will first check the Aerospike record. If the <code>external</code> flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.</p>
 <h4 id="external-transaction-cache">External Transaction Cache<a class="headerlink" href="#external-transaction-cache" title="Permanent link">&para;</a></h4>
@@ -7883,7 +7883,7 @@
 </ul>
 <p>The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.</p>
 <h4 id="lock-record-pattern-for-multi-record-transactions">Lock Record Pattern for Multi-Record Transactions<a class="headerlink" href="#lock-record-pattern-for-multi-record-transactions" title="Permanent link">&para;</a></h4>
-<p>When a transaction has more than 20,000 outputs (configurable via <code>utxo_store_batch_size</code>), it must be split across multiple Aerospike records. The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.</p>
+<p>When a transaction has more outputs than <code>utxostore_utxoBatchSize</code> (default 128), it must be split across multiple Aerospike records. The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.</p>
 <p><strong>Key Components:</strong></p>
 <ol>
 <li>
@@ -8144,7 +8144,7 @@ The primary language used for implementing the service's logic.</p>
 <li><strong>Block Persister</strong>: For retrieving UTXO metadata when persisting blocks</li>
 </ul>
 <p>The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:</p>
-<div class="language-shell highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span>
 </span></code></pre></div>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running services locally.</p>
 <h2 id="9-configuration-and-settings">9. Configuration and Settings<a class="headerlink" href="#9-configuration-and-settings" title="Permanent link">&para;</a></h2>

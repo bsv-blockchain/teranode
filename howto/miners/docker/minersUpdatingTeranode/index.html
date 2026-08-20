@@ -6909,7 +6909,7 @@
 
 
 <h1 id="update-docker-teranode">Update Docker Teranode<a class="headerlink" href="#update-docker-teranode" title="Permanent link">&para;</a></h1>
-<p>Last modified: 28-April-2026</p>
+<p>Last modified: 11-August-2026</p>
 <p>Docker updates are managed from the
 <a href="https://github.com/bsv-blockchain/teranode-quickstart">teranode-quickstart</a>
 repository. Quickstart keeps the local Teranode image tag in <code>.env</code> as
@@ -6954,6 +6954,10 @@ To update quickstart scripts and Compose files:</p>
   notes should call that out.</li>
 <li>Keep a copy of <code>.env</code> and any external reverse-proxy configuration before
   major changes.</li>
+<li>Changes to the PostgreSQL <code>init.sql</code> do not apply to an existing data
+  directory. If you provisioned the node before Teranode dropped superuser from
+  the <code>teranode</code> PostgreSQL role, apply the one-off <code>ALTER ROLE</code> in
+  <a href="../minersSecurityBestPractices/#postgresql-role-privileges">PostgreSQL Role Privileges</a>.</li>
 </ul>
 <h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
 <ul>

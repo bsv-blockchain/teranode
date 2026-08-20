@@ -1803,6 +1803,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#postgresql-role-privileges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Role Privileges
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#secrets" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6789,6 +6800,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#postgresql-role-privileges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Role Privileges
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#secrets" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6953,7 +6975,7 @@
 
 
 <h1 id="docker-security-best-practices">Docker Security Best Practices<a class="headerlink" href="#docker-security-best-practices" title="Permanent link">&para;</a></h1>
-<p>Last modified: 28-April-2026</p>
+<p>Last modified: 11-August-2026</p>
 <p>The quickstart deployment is designed to keep most services local by default.
 Do not expose internal ports unless you have a specific operational reason and
 an authentication or network-control layer in front of them.</p>
@@ -7020,10 +7042,36 @@ access.</p>
 <code>127.0.0.1:9292</code>. Keep it that way for normal deployments.</p>
 <p>If remote RPC is required, use a dedicated authenticated tunnel or reverse proxy
 with TLS, access logging, rate limits, and source restrictions.</p>
+<h2 id="postgresql-role-privileges">PostgreSQL Role Privileges<a class="headerlink" href="#postgresql-role-privileges" title="Permanent link">&para;</a></h2>
+<p>Teranode's PostgreSQL role (<code>teranode</code>) owns the <code>teranode</code> database and needs no
+superuser rights. Deployments provisioned from this repository's Compose and
+Kubernetes manifests create it as <code>NOSUPERUSER</code>. The <code>teranode-quickstart</code> stack
+still creates it as <code>SUPERUSER</code>; until that is updated, apply the remediation
+below regardless of when your node was provisioned.</p>
+<p>Existing deployments are not fixed by an update. The role is created by the
+<code>init.sql</code> that the <code>postgres</code> image runs only when its data directory is empty,
+and the Compose stack bind-mounts that directory from the host
+(<code>${DATA_PATH}/postgres</code>). Pulling a newer Teranode and restarting leaves the
+role exactly as it was first created, so a node provisioned before this change
+still runs with a superuser <code>teranode</code> role.</p>
+<p>Remediate once, as the <code>postgres</code> superuser:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-i<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>postgres<span class="w"> </span>-c<span class="w"> </span><span class="s1">'ALTER ROLE teranode NOSUPERUSER;'</span>
+</span></code></pre></div>
+<p>Verify:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-i<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>postgres<span class="w"> </span>-tAc<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="s2">"SELECT rolname, rolsuper FROM pg_roles WHERE rolname = 'teranode';"</span>
+</span></code></pre></div>
+<p>Expect <code>teranode|f</code>. Object ownership is unaffected — <code>teranode</code> still owns its
+database and tables, so no regrant is needed and Teranode can be left running.</p>
+<p>The development and test Compose stacks under <code>compose/</code> and <code>test/</code> create
+<code>miner1</code>, <code>miner2</code>, <code>miner3</code>, and the <code>coinbase*</code> roles the same way. If those
+stacks were brought up before this change and the <code>postgres-data</code> volume was kept
+(<code>docker compose down</code> without <code>-v</code>), run <code>ALTER ROLE &lt;role&gt; NOSUPERUSER;</code> for
+each of those roles, or recreate the volume.</p>
 <h2 id="secrets">Secrets<a class="headerlink" href="#secrets" title="Permanent link">&para;</a></h2>
 <p><code>.env</code> contains RPC and PostgreSQL secrets. On multi-user hosts, restrict file
 permissions:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>.env
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>.env
 </span></code></pre></div>
 <p>Back up <code>.env</code> securely before destructive reset operations.</p>
 <h2 id="monitoring-interfaces">Monitoring Interfaces<a class="headerlink" href="#monitoring-interfaces" title="Permanent link">&para;</a></h2>

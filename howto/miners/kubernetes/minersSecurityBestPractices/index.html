@@ -1892,6 +1892,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#postgresql-role-privileges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Role Privileges
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#regular-system-updates" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6878,6 +6889,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#postgresql-role-privileges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Role Privileges
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#regular-system-updates" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7009,7 +7031,7 @@
 
 
 <h1 id="security-best-practices">Security Best Practices<a class="headerlink" href="#security-best-practices" title="Permanent link">&para;</a></h1>
-<p>Last modified: 6-March-2025</p>
+<p>Last modified: 11-August-2026</p>
 <h2 id="firewall-configuration">Firewall Configuration<a class="headerlink" href="#firewall-configuration" title="Permanent link">&para;</a></h2>
 <p>Here are some firewall configuration recommendations:</p>
 <h3 id="1-publicly-exposed-ports">1. Publicly Exposed Ports<a class="headerlink" href="#1-publicly-exposed-ports" title="Permanent link">&para;</a></h3>
@@ -7058,6 +7080,26 @@
 <p class="admonition-title">Important Security Principle</p>
 <p>Remember, the exact firewall configuration will depend on your specific network setup, security requirements, and how you intend to operate your Teranode. Always follow the principle of least privilege, exposing only what is necessary for operation.</p>
 </div>
+<h2 id="postgresql-role-privileges">PostgreSQL Role Privileges<a class="headerlink" href="#postgresql-role-privileges" title="Permanent link">&para;</a></h2>
+<p>Teranode's PostgreSQL role (<code>teranode</code>) owns the <code>teranode</code> database and needs no
+superuser rights. New deployments provision it as <code>NOSUPERUSER</code>.</p>
+<p>Existing deployments are not fixed by an update. The role is created by the
+<code>init.sql</code> in the <code>postgres-cm0</code> ConfigMap, which the <code>postgres</code> image runs only
+when its data directory is empty, and that directory lives on a persistent volume
+claim. Upgrading the operator or the Teranode image leaves the role exactly as it
+was first created, so a cluster provisioned before this change still runs with a
+superuser <code>teranode</code> role.</p>
+<p>Remediate once, as the <code>postgres</code> superuser (adjust namespace and pod name to your
+deployment):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>postgres-0<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>psql<span class="w"> </span>-U<span class="w"> </span>postgres<span class="w"> </span>-c<span class="w"> </span><span class="s1">'ALTER ROLE teranode NOSUPERUSER;'</span>
+</span></code></pre></div>
+<p>Verify:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>postgres-0<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>psql<span class="w"> </span>-U<span class="w"> </span>postgres<span class="w"> </span>-tAc<span class="w"> </span><span class="s2">"SELECT rolname, rolsuper FROM pg_roles WHERE rolname = 'teranode';"</span>
+</span></code></pre></div>
+<p>Expect <code>teranode|f</code>. Object ownership is unaffected — <code>teranode</code> still owns its
+database and tables, so no regrant is needed and Teranode can be left running.</p>
 <h2 id="regular-system-updates">Regular System Updates<a class="headerlink" href="#regular-system-updates" title="Permanent link">&para;</a></h2>
 <div class="admonition tip">
 <p class="admonition-title">System Update Recommendations</p>

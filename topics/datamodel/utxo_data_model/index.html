@@ -4264,15 +4264,15 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#record-pagination-20000-outputs" class="md-nav__link">
+  <a href="#record-pagination-more-outputs-than-utxobatchsize" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Record Pagination (&gt;20,000 Outputs)
+        Record Pagination (More Outputs Than utxoBatchSize)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Record Pagination (&gt;20,000 Outputs)">
+    <nav class="md-nav" aria-label="Record Pagination (More Outputs Than utxoBatchSize)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -7583,15 +7583,15 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#record-pagination-20000-outputs" class="md-nav__link">
+  <a href="#record-pagination-more-outputs-than-utxobatchsize" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Record Pagination (&gt;20,000 Outputs)
+        Record Pagination (More Outputs Than utxoBatchSize)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Record Pagination (&gt;20,000 Outputs)">
+    <nav class="md-nav" aria-label="Record Pagination (More Outputs Than utxoBatchSize)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -8647,37 +8647,37 @@
 <h3 id="storage-architecture-overview">Storage Architecture Overview<a class="headerlink" href="#storage-architecture-overview" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Transaction Size Check
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>         │
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>         ├──&gt; Small (&lt;1MB, ≤20K outputs)
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>         ├──&gt; Small (≤32KB, ≤ utxoBatchSize outputs)
 </span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>         │    └──&gt; Single Aerospike Record
 </span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>         │         ├─ Transaction data (inputs/outputs)
 </span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>         │         ├─ UTXO array (32 or 68 bytes each)
 </span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>         │         └─ Metadata (fee, blockIDs, etc.)
 </span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>         │
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>         ├──&gt; Medium (≤1MB, &gt;20K outputs)
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>         ├──&gt; Medium (≤32KB, &gt; utxoBatchSize outputs)
 </span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>         │    └──&gt; Multiple Aerospike Records (Pagination)
 </span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>         │         ├─ Master Record (index 0)
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>         │         │  ├─ Full transaction data
-</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>         │         │  ├─ First 20K UTXOs
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>         │         │  ├─ external=true flag (no inline tx data)
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>         │         │  ├─ First utxoBatchSize UTXOs
 </span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>         │         │  └─ Metadata + totalExtraRecs
 </span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>         │         └─ Child Records (index 1, 2, 3...)
-</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>         │            ├─ Next 20K UTXOs per record
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>         │            ├─ Next utxoBatchSize UTXOs per record
 </span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>         │            └─ Subset of metadata
 </span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>         │
-</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>         └──&gt; Large (&gt;1MB or force external)
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>         └──&gt; Large (&gt;32KB or force external)
 </span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>              └──&gt; External Blob Storage + Aerospike
 </span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>                   ├─ Blob Storage
 </span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>                   │  ├─ FileTypeTx (.tx) - Full transaction
 </span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>                   │  └─ FileTypeOutputs (.outputs) - Outputs only
 </span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>                   └─ Aerospike Records
 </span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>                      ├─ external=true flag
-</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>                      ├─ UTXO arrays (paginated if &gt;20K)
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>                      ├─ UTXO arrays (paginated if &gt; utxoBatchSize)
 </span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>                      └─ Metadata only (no tx data)
 </span></code></pre></div>
-<h3 id="record-pagination-20000-outputs">Record Pagination (&gt;20,000 Outputs)<a class="headerlink" href="#record-pagination-20000-outputs" title="Permanent link">&para;</a></h3>
-<p>Transactions with more than 20,000 outputs are automatically split across multiple Aerospike records to stay within database size constraints.</p>
+<h3 id="record-pagination-more-outputs-than-utxobatchsize">Record Pagination (More Outputs Than <code>utxoBatchSize</code>)<a class="headerlink" href="#record-pagination-more-outputs-than-utxobatchsize" title="Permanent link">&para;</a></h3>
+<p>Transactions with more outputs than <code>utxostore_utxoBatchSize</code> (default 128) are automatically split into records of <code>utxoBatchSize</code> UTXOs each, so a record never grows unbounded with the output count. Actual record-size overflow is handled separately by the 32KB externalisation threshold (see <a href="#external-blob-storage">External Blob Storage</a>) and by the <code>RECORD_TOO_BIG</code> retry.</p>
 <h4 id="pagination-strategy">Pagination Strategy<a class="headerlink" href="#pagination-strategy" title="Permanent link">&para;</a></h4>
 <ul>
-<li><strong>Batch Size</strong>: 20,000 UTXOs per record (configurable via <code>utxoBatchSize</code> setting)</li>
+<li><strong>Batch Size</strong>: <code>utxostore_utxoBatchSize</code> UTXOs per record (default 128; never change it after a node has been initialised, the key calculation depends on it)</li>
 <li><strong>Master Record</strong> (index 0): Contains first batch of UTXOs plus complete metadata</li>
 <li><strong>Child Records</strong> (index 1+): Contain subsequent UTXO batches with limited metadata</li>
 </ul>
@@ -8706,7 +8706,7 @@
 </tr>
 <tr>
 <td><code>utxos</code></td>
-<td>First 20,000 UTXO entries</td>
+<td>First <code>utxoBatchSize</code> UTXO entries</td>
 <td>Always</td>
 </tr>
 <tr>
@@ -8717,7 +8717,7 @@
 <tr>
 <td><code>totalExtraRecs</code></td>
 <td>Number of child records (pagination records)</td>
-<td>If &gt;20K outputs</td>
+<td>If outputs &gt; <code>utxoBatchSize</code></td>
 </tr>
 <tr>
 <td><code>recordUtxos</code></td>
@@ -8732,7 +8732,7 @@
 <tr>
 <td><code>spentExtraRecs</code></td>
 <td>Number of child records fully spent</td>
-<td>If &gt;20K outputs</td>
+<td>If outputs &gt; <code>utxoBatchSize</code></td>
 </tr>
 <tr>
 <td><code>blockIDs</code>, <code>blockHeights</code>, <code>subtreeIdxs</code></td>
@@ -8759,7 +8759,7 @@
 <tbody>
 <tr>
 <td><code>utxos</code></td>
-<td>Next 20,000 UTXO entries</td>
+<td>Next <code>utxoBatchSize</code> UTXO entries</td>
 <td>Always</td>
 </tr>
 <tr>
@@ -8791,29 +8791,29 @@
 <li>Enables coordinated cleanup of entire transaction across all pagination records</li>
 </ul>
 <h4 id="pagination-example">Pagination Example<a class="headerlink" href="#pagination-example" title="Permanent link">&para;</a></h4>
-<p>Transaction with 45,000 outputs splits into 3 records:</p>
+<p>With the default <code>utxoBatchSize</code> of 128, a transaction with 300 outputs splits into 3 records:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Master Record (key = hash(txID), index 0):
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>  - utxos[0:20000]        // First 20K UTXOs
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>  - totalUtxos = 45000
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>  - utxos[0:128]          // First batch of UTXOs
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>  - totalUtxos = 300
 </span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>  - totalExtraRecs = 2
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>  - recordUtxos = 20000   // Non-nil in this record
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>  - recordUtxos = 128     // Non-nil in this record
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>  - spentUtxos = 0
 </span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>  - spentExtraRecs = 0
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>  - Full tx data or external=true
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>  - external=true (tx data in blob storage)
 </span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>  - All metadata fields
 </span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
 </span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>Child Record 1 (key = hash(txID+1), index 1):
 </span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>  - utxos[20000:40000]    // Second 20K UTXOs
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>  - recordUtxos = 20000
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>  - utxos[128:256]        // Second batch of UTXOs
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>  - recordUtxos = 128
 </span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>  - spentUtxos = 0
 </span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>  - Common metadata only
 </span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>
 </span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>Child Record 2 (key = hash(txID+2), index 2):
 </span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>  - utxos[40000:45000]    // Final 5K UTXOs
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>  - recordUtxos = 5000
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>  - utxos[256:300]        // Final 44 UTXOs
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>  - recordUtxos = 44
 </span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>  - spentUtxos = 0
 </span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>  - Common metadata only
 </span></code></pre></div>
@@ -8830,8 +8830,8 @@
 <h4 id="trigger-conditions">Trigger Conditions<a class="headerlink" href="#trigger-conditions" title="Permanent link">&para;</a></h4>
 <p>External storage used when:</p>
 <ul>
-<li>Transaction size &gt; <code>MaxTxSizeInStoreInBytes</code> (typically 1MB)</li>
-<li>Transaction has &gt;20,000 outputs (automatic with pagination)</li>
+<li>Transaction extended size &gt; <code>MaxTxSizeInStoreInBytes</code> (32KB)</li>
+<li>Transaction has more outputs than <code>utxostore_utxoBatchSize</code> (default 128), so it paginates across multiple records</li>
 <li>Configuration forces externalization: <code>ExternalizeAllTransactions=true</code></li>
 </ul>
 <h4 id="file-types">File Types<a class="headerlink" href="#file-types" title="Permanent link">&para;</a></h4>
@@ -8879,18 +8879,27 @@
 <ol>
 <li>Calculate transaction extended size</li>
 <li>
-<p>If size ≤ 1MB and ≤20K outputs:</p>
+<p>If size ≤ 32KB and outputs ≤ <code>utxoBatchSize</code>:</p>
 <ul>
 <li>Store transaction data in Aerospike <code>inputs</code> and <code>outputs</code> bins</li>
 <li>Store UTXOs in <code>utxos</code> bin</li>
 <li>Set <code>external=false</code></li>
 <li>
-<p>If size &gt; 1MB:</p>
+<p>If size &gt; 32KB:</p>
 </li>
 <li>
 <p>Write transaction to blob storage as <code>.tx</code> file</p>
 </li>
 <li>Store only metadata and UTXOs in Aerospike</li>
+<li>Set <code>external=true</code> flag</li>
+<li>
+<p>If outputs &gt; <code>utxoBatchSize</code> (regardless of size):</p>
+</li>
+<li>
+<p>Write transaction to blob storage (the multi-record write goes through the
+  same two-phase-commit path as external storage)</p>
+</li>
+<li>Split UTXOs across a master record plus child records</li>
 <li>Set <code>external=true</code> flag</li>
 </ul>
 </li>
@@ -9017,14 +9026,14 @@
 </thead>
 <tbody>
 <tr>
-<td>Max transaction size in Aerospike</td>
-<td>1MB</td>
+<td>Max transaction size stored inline in Aerospike</td>
+<td>32KB</td>
 <td><code>MaxTxSizeInStoreInBytes</code></td>
 </tr>
 <tr>
 <td>UTXOs per Aerospike record</td>
-<td>20,000</td>
-<td><code>utxoBatchSize</code> setting</td>
+<td>128 (default)</td>
+<td><code>utxostore_utxoBatchSize</code> setting</td>
 </tr>
 <tr>
 <td>Aerospike record size limit</td>
@@ -9041,12 +9050,12 @@
 <p><strong>Automatic Handling</strong>:</p>
 <ul>
 <li>Transactions exceeding limits automatically use external storage</li>
-<li>Pagination automatically triggered at 20K output threshold</li>
+<li>Pagination automatically triggered above the <code>utxostore_utxoBatchSize</code> output threshold (default 128)</li>
 <li><code>RECORD_TOO_BIG</code> error triggers retry with external storage</li>
 <li>No application-level size restrictions on individual transactions</li>
 </ul>
 <p><strong>Multi-Record Transaction Consistency</strong>:</p>
-<p>When transactions require multiple Aerospike records (&gt;20K outputs), the system uses a lock record pattern to ensure atomic creation:</p>
+<p>When transactions require multiple Aerospike records (more outputs than <code>utxostore_utxoBatchSize</code>, default 128), the system uses a lock record pattern to ensure atomic creation:</p>
 <ol>
 <li><strong>Lock Record</strong>: A temporary record prevents concurrent creation attempts for the same transaction</li>
 <li><strong>Creating Flag</strong>: Each record has a <code>creating</code> flag that prevents UTXO spending until all records exist</li>
@@ -9054,18 +9063,18 @@
 <li><strong>Auto-Recovery</strong>: If creation fails partially, the system automatically recovers on next encounter</li>
 </ol>
 <p><strong>Record Layout for Large Transactions</strong>:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Transaction with N batches (&gt;20K outputs):
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Transaction with N batches (more outputs than utxoBatchSize):
 </span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
 </span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>Master Record (index 0):
 </span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>
 </span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  - Transaction metadata (TxID, version, fees, etc.)
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>  - First 20,000 UTXOs
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>  - First utxoBatchSize UTXOs (default 128)
 </span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>  - TotalExtraRecs field indicating additional records
 </span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>  - Creating flag (cleared when complete)
 </span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>
 </span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>Child Records (indices 1 to N-1):
 </span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>
-</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a>  - Additional UTXOs in batches of 20,000
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a>  - Additional UTXOs in batches of utxoBatchSize
 </span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a>  - Common metadata fields
 </span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a>  - Creating flag (cleared when complete)
 </span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a>

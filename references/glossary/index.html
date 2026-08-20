@@ -6732,14 +6732,14 @@
 <p><strong>Kademlia</strong>: A distributed hash table used for efficient routing and peer discovery in P2P networks.</p>
 <p><strong>Kafka</strong>: A distributed streaming platform used in Teranode for asynchronous event-driven communication between microservices. Kafka topics handle block notifications, subtree events, and transaction propagation across the system.</p>
 <p><strong>Legacy Service</strong>: Bridges the gap between traditional BSV nodes and advanced Teranode-BSV nodes, ensuring seamless communication and data translation.</p>
-<p><strong>libp2p</strong>: A modular peer-to-peer networking framework used by Teranode's P2P Bootstrap Service for peer discovery and network communication, providing features like NAT traversal and multiple transport protocols.</p>
+<p><strong>libp2p</strong>: A modular peer-to-peer networking framework used by Teranode's P2P Service for peer discovery and network communication, providing features like NAT traversal and multiple transport protocols.</p>
 <p><strong>Lustre Fs</strong>: A parallel distributed file system used for high-performance, large-scale data storage and workloads in Teranode.</p>
 <p><strong>Microservices</strong>: An architectural style that structures an application as a collection of loosely coupled services.</p>
 <p><strong>Miner</strong>: A node on the network that processes transactions and creates new blocks.</p>
 <p><strong>Mining Candidate</strong>: A potential block that includes all known subtrees up to a certain time, built on top of the longest honest chain.</p>
 <p><strong>Merkle Tree</strong>: A binary tree of cryptographic hashes used in Bitcoin to efficiently verify transaction inclusion in a block. Each leaf node contains a transaction hash, and parent nodes contain hashes of their children, culminating in a single Merkle root stored in the block header.</p>
 <p><strong>Orphan Block</strong>: A valid block that is not part of the main blockchain because its parent block is unknown or not yet received. Orphan blocks are temporarily stored until their parent arrives or they are discarded if they don't connect to the main chain.</p>
-<p><strong>P2P Bootstrap Service</strong>: Helps new nodes discover peers and join the network, using libp2p and Kademlia.</p>
+<p><strong>Bootstrap peers</strong>: Initial DHT/relay entry points, configured via <code>p2p_bootstrap_peers</code> and dialled by the P2P Service at startup (libp2p/Kademlia).</p>
 <p><strong>P2P Service</strong>: Allows peers to subscribe and receive blockchain notifications about new blocks and subtrees in the network.</p>
 <p><strong>PostgreSQL</strong>: An open-source relational database used in Teranode for storing blockchain data.</p>
 <p><strong>Pre-allocated Block ID</strong>: A unique block identifier reserved in advance through GetNextBlockID, enabling parallel block processing and optimized validation scenarios.</p>

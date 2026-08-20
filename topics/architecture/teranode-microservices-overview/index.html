@@ -2803,6 +2803,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#36-pruner-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Pruner Service
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7158,6 +7169,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#36-pruner-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Pruner Service
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7354,6 +7376,7 @@
 <li><a href="#33-p2p-service">3.3 P2P Service</a></li>
 <li><a href="#34-legacy-service">3.4 Legacy Service</a></li>
 <li><a href="#35-rpc-service">3.5 RPC Service</a></li>
+<li><a href="#36-pruner-service">3.6 Pruner Service</a></li>
 </ul>
 </li>
 <li><a href="#4-stores">4. Stores</a><ul>
@@ -7695,6 +7718,26 @@
 <li>JSON for request/response formatting</li>
 </ul>
 <p>You can read more about this service in the <a href="../../services/rpc/">RPC Service documentation</a>.</p>
+<h3 id="36-pruner-service">3.6 Pruner Service<a class="headerlink" href="#36-pruner-service" title="Permanent link">&para;</a></h3>
+<p>The Pruner Service is an event-driven overlay service that removes stale UTXO data to prevent unbounded database growth.</p>
+<p><img alt="Pruner_Service_Container_Diagram.png" src="../../services/img/Pruner_Service_Container_Diagram.png" /></p>
+<p><strong>Key Responsibilities:</strong></p>
+<ul>
+<li>Respond to <code>BlockPersisted</code> or <code>Block</code> notifications — selected by <code>pruner_block_trigger</code> — instead of polling</li>
+<li>Preserve parent transactions of old unmined transactions so they remain available for resubmission</li>
+<li>Remove UTXO records marked for deletion once they reach their delete-at-height</li>
+<li>Coordinate with the Block Persister so transaction data stays accessible until <code>.subtree_data</code> files are created</li>
+<li>Clean up external transaction blobs from blob storage (S3/filesystem)</li>
+</ul>
+<p><img alt="Pruner_Service_Component_Diagram.png" src="../../services/img/Pruner_Service_Component_Diagram.png" /></p>
+<p><strong>Key Processes:</strong></p>
+<ul>
+<li>Subscribing to blockchain notifications to trigger pruning runs</li>
+<li>Running a two-phase pruning process to prevent data loss</li>
+<li>Coordinating with Block Persister during catchup</li>
+<li>Managing a job queue and worker pool for pruning and blob-deletion work</li>
+</ul>
+<p>You can read more about this service in the <a href="../../services/pruner/">Pruner Service documentation</a>.</p>
 <h2 id="4-stores">4. Stores<a class="headerlink" href="#4-stores" title="Permanent link">&para;</a></h2>
 <h3 id="41-tx-and-subtree-store-blob-server">4.1 TX and Subtree Store (Blob Server)<a class="headerlink" href="#41-tx-and-subtree-store-blob-server" title="Permanent link">&para;</a></h3>
 <p>The Blob Server is a generic datastore used for storing transactions (extended tx) and subtrees.</p>
@@ -7834,6 +7877,7 @@
 <li><a href="../../services/p2p/">P2P Service</a></li>
 <li><a href="../../services/legacy/">Legacy Service</a></li>
 <li><a href="../../services/rpc/">RPC Server</a></li>
+<li><a href="../../services/pruner/">Pruner Service</a></li>
 <li>
 <p>Stores:</p>
 </li>

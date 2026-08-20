@@ -7515,7 +7515,7 @@
 <li><a href="#10-related-documentation">Related Documentation</a></li>
 </ol>
 <h2 id="1-overview">1. Overview<a class="headerlink" href="#1-overview" title="Permanent link">&para;</a></h2>
-<p>The Lock Record Pattern is a distributed consistency mechanism used by Teranode's UTXO store to safely handle transactions with more than 20,000 outputs. When a transaction exceeds the Aerospike record size limit, it must be split across multiple records. The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.</p>
+<p>The Lock Record Pattern is a distributed consistency mechanism used by Teranode's UTXO store to safely handle transactions with more outputs than <code>utxostore_utxoBatchSize</code> (default 128). Such a transaction is split into records of <code>utxoBatchSize</code> UTXOs each, so a record never grows unbounded with the output count; this is a batching choice, not a record-size limit (record-size overflow is handled separately, see <a href="../../datamodel/utxo_data_model/#storage-implementation">Storage Implementation</a>). The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.</p>
 <p>The pattern uses two key mechanisms:</p>
 <ol>
 <li><strong>Lock Records</strong>: Temporary Aerospike records that prevent concurrent creation attempts for the same transaction</li>
@@ -7608,7 +7608,7 @@
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="kr">end</span>
 </span></code></pre></div>
 <h3 id="33-record-layout">3.3. Record Layout<a class="headerlink" href="#33-record-layout" title="Permanent link">&para;</a></h3>
-<p>For a transaction with &gt;20,000 outputs, records are organized as:</p>
+<p>For a transaction with more outputs than <code>utxostore_utxoBatchSize</code> (default 128), records are organized as:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Transaction with N batches:
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>┌─────────────────────┐
@@ -7619,14 +7619,14 @@
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>┌─────────────────────┐
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>│   Master Record     │  Index: 0
 </span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>│   - Metadata        │  - TxID, version, fees, etc.
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>│   - UTXOs 0-19999   │  - First batch of outputs
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>│   - UTXOs 0-127     │  - First batch of outputs (utxoBatchSize)
 </span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>│   - TotalExtraRecs  │  - Count of additional records
 </span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>│   - Creating flag   │
 </span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>└─────────────────────┘
 </span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
 </span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>┌─────────────────────┐
 </span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>│   Child Record 1    │  Index: 1
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>│   - UTXOs 20000+    │  - Second batch of outputs
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>│   - UTXOs 128+      │  - Second batch of outputs
 </span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>│   - Creating flag   │
 </span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>└─────────────────────┘
 </span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>
@@ -7894,22 +7894,18 @@
 </thead>
 <tbody>
 <tr>
-<td><code>utxo_store_batch_size</code></td>
-<td>20000</td>
-<td>UTXOs per record (triggers multi-record)</td>
+<td><code>utxostore_utxoBatchSize</code></td>
+<td>128</td>
+<td>UTXOs per record (more outputs than this triggers multi-record)</td>
 </tr>
 <tr>
-<td><code>utxo_store_externalize_all_transactions</code></td>
+<td><code>utxostore_externalizeAllTransactions</code></td>
 <td>false</td>
 <td>Force external storage for all transactions</td>
 </tr>
-<tr>
-<td><code>utxo_store_max_tx_size_in_store</code></td>
-<td>1MB</td>
-<td>Size threshold for external storage</td>
-</tr>
 </tbody>
 </table>
+<p>Note: the external-storage size threshold is not configurable — it's a compile-time constant, <code>MaxTxSizeInStoreInBytes = 32 * 1024</code> in <code>stores/utxo/aerospike/aerospike.go</code>.</p>
 <p><strong>Batch Size Impact:</strong></p>
 <ul>
 <li>Smaller batch = More records = Longer TTL</li>

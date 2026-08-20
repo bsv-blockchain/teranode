@@ -7547,7 +7547,7 @@
 <h2 id="1-description">1. Description<a class="headerlink" href="#1-description" title="Permanent link">&para;</a></h2>
 <p>The p2p package implements a peer-to-peer (P2P) server using <code>libp2p</code> (<code>github.com/libp2p/go-libp2p</code>, <code>https://libp2p.io</code>), a modular network stack that allows for direct peer-to-peer communication. The implementation follows an interface-based design pattern using the public <code>github.com/bsv-blockchain/go-p2p</code> package, with <code>p2p.NodeI</code> interface abstracting the concrete P2P node implementation to allow for better testability and modularity. This public package enables external developers to create custom P2P implementations that integrate with Teranode.</p>
 <p>The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.</p>
-<p>The p2p peers are part of a private network. This private network is managed by the p2p bootstrap service, which is responsible for bootstrapping the network and managing the network topology.</p>
+<p>The p2p peers can form a private network. Network bootstrapping is a configuration option, not a separate service: the P2P service reads the <code>p2p_bootstrap_peers</code> setting at startup to obtain initial DHT and relay entry points for peer discovery. Blanking it does not isolate the node — the client then falls back to the default public IPFS bootstrap peers — so a private network should point it at its own bootstrap servers, alongside <code>p2p_static_peers</code> and <code>p2p_dht_mode = off</code>.</p>
 <ol>
 <li>
 <p><strong>Initialization and Configuration</strong>:</p>
