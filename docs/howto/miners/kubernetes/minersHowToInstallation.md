@@ -1,6 +1,6 @@
 # How to Install Teranode with Kubernetes Helm
 
-Last modified: 29-October-2025
+Last modified: 1-July-2026
 
 ## Index
 

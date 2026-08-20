@@ -37,6 +37,15 @@ var sensitiveKeys = extractSensitiveKeys()
 
 const redactedValue = "********"
 
+// keyTagExempt is the sentinel `key` tag value marking a Settings field that is
+// deliberately not a configuration setting — runtime-computed (build info,
+// config context, process topology) or internal. Such a field is skipped by
+// extractFields, so it is never exported via ExportMetadata, and it is skipped
+// by TestNoMissingTags instead of being reported as an untagged field. Keeping
+// the exemption on the declaration means it travels with the field through
+// renames and moves.
+const keyTagExempt = "-"
+
 // ExportMetadata exports all settings with their metadata for the settings portal.
 // It uses reflection to extract struct tags on first call (cached), then combines
 // with current runtime values on each subsequent call.
@@ -116,6 +125,13 @@ func extractFields(typ reflect.Type, path []int, entries *[]metadataEntry) {
 
 		// Check if field has our metadata tags
 		key := field.Tag.Get("key")
+
+		// key:"-" marks a field as deliberately not a setting: emit no
+		// metadata entry and do not recurse into it.
+		if key == keyTagExempt {
+			continue
+		}
+
 		if key == "" {
 			// Check if it's a nested struct to recurse into
 			fieldType := field.Type

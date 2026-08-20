@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -54,9 +55,88 @@ func TestMetadataCoverage(t *testing.T) {
 	t.Logf("Category distribution: %+v", categoryCounts)
 }
 
-// TestNoMissingTags verifies that no fields have "Not in descriptions.go" comments.
+// TestNoMissingTags walks the Settings struct via reflection and fails if any
+// leaf (non-struct) field lacks the "key" struct tag that extractFields (see
+// export.go) relies on to expose settings via ExportMetadata. Nested structs
+// declared within the settings package are walked recursively; structs from
+// other packages (e.g. *chaincfg.Params) are opaque and left unchecked, since
+// they are not ours to tag.
+//
+// A field that is deliberately not a setting (runtime-computed or internal)
+// declares `key:"-"` (keyTagExempt) on itself and is skipped both here and by
+// ExportMetadata. The exemption lives on the declaration, so it survives
+// renaming or moving the field.
 func TestNoMissingTags(t *testing.T) {
-	// This test serves as documentation that migration is complete
-	// All fields should now have struct tags, no "Not in descriptions.go" comments should remain
-	t.Log("Migration complete: All 398 configurable fields have struct tags")
+	settingsPkgPath := reflect.TypeOf(Settings{}).PkgPath()
+
+	var missing []string
+
+	var walk func(typ reflect.Type, prefix string)
+	walk = func(typ reflect.Type, prefix string) {
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			fieldName := prefix + field.Name
+
+			// A non-empty tag is either a real setting key or the key:"-"
+			// exemption; both mean this field needs no further checking.
+			if field.Tag.Get("key") != "" {
+				continue
+			}
+
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Pointer {
+				fieldType = fieldType.Elem()
+			}
+
+			if fieldType.Kind() == reflect.Struct {
+				// Structs declared outside the settings package (e.g.
+				// *chaincfg.Params) are opaque - they are not ours to tag,
+				// so neither recurse into them nor flag them as missing.
+				if fieldType.PkgPath() != settingsPkgPath {
+					continue
+				}
+
+				walk(fieldType, fieldName+".")
+				continue
+			}
+
+			missing = append(missing, fieldName)
+		}
+	}
+
+	walk(reflect.TypeOf(Settings{}), "")
+
+	require.Empty(t, missing, `settings field(s) missing a "key" struct tag (add one, or tag the field key:"-" if it is genuinely not a setting)`)
+}
+
+// TestKeyTagExemptNotExported verifies the other half of the key:"-" contract:
+// an exempt field is skipped by extractFields, so no metadata entry is emitted
+// for it (in particular, no entry with the literal key "-", which would fail
+// TestMetadataCoverage's required-field assertions).
+func TestKeyTagExemptNotExported(t *testing.T) {
+	settings := &Settings{
+		ChainCfgParams: &chaincfg.MainNetParams,
+		Commit:         "abc123",
+		Version:        "1.0.0",
+		Context:        "test",
+		IsAllInOneMode: true,
+	}
+
+	registry := settings.ExportMetadata()
+
+	exemptFieldNames := map[string]bool{}
+
+	typ := reflect.TypeOf(Settings{})
+	for i := 0; i < typ.NumField(); i++ {
+		if typ.Field(i).Tag.Get("key") == keyTagExempt {
+			exemptFieldNames[typ.Field(i).Name] = true
+		}
+	}
+
+	require.NotEmpty(t, exemptFieldNames, `expected at least one key:"-" field on Settings`)
+
+	for _, setting := range registry.Settings {
+		require.NotEqual(t, keyTagExempt, setting.Key, "exempt sentinel leaked into exported metadata as a setting key")
+		require.False(t, exemptFieldNames[setting.Name], "exempt field %q was exported as a setting", setting.Name)
+	}
 }

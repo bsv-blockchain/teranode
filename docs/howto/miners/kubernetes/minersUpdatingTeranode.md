@@ -1,6 +1,6 @@
 # How to Update Teranode with Kubernetes Helm
 
-Last modified: 6-March-2025
+Last modified: 17-November-2025
 
 ## Introduction
 

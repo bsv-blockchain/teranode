@@ -1,9 +1,8 @@
 # Security Best Practices
 
-Last modified: 6-March-2025
+Last modified: 5-July-2025
 
 ## Firewall Configuration
-
 
 Here are some firewall configuration recommendations:
 
@@ -51,17 +50,10 @@ Review the ports exposed in the Kubernetes operator configuration file(s) and en
 
 - Ensure ports 9905 and 9906 are open for incoming connections to allow peer discovery and communication.
 
-
-
 !!! info "Important Security Principle"
     Remember, the exact firewall configuration will depend on your specific network setup, security requirements, and how you intend to operate your Teranode. Always follow the principle of least privilege, exposing only what is necessary for operation.
 
-
-
-
 ## Regular System Updates
-
-
 
 !!! tip "System Update Recommendations"
     In order to receive the latest bug fixes and vulnerability patches, please ensure you perform periodic system updates, as regularly as feasible. Please refer to the Teranode update process outlined in the Section 6 of this document.
