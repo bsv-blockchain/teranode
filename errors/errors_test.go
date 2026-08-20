@@ -1471,6 +1471,11 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 			expected: codes.Internal,
 		},
 		{
+			name:     "maps ERR_TX_MISSING_PARENT to codes.FailedPrecondition",
+			errCode:  ERR_TX_MISSING_PARENT,
+			expected: codes.FailedPrecondition,
+		},
+		{
 			name:     "unmapped code STORAGE_ERROR defaults to codes.Internal",
 			errCode:  ERR_STORAGE_ERROR,
 			expected: codes.Internal,
@@ -1515,6 +1520,60 @@ func TestWrapGRPCTxVerdictStatus(t *testing.T) {
 			require.Equal(t, tc.expected, st.Code())
 		})
 	}
+}
+
+// TestPublicCauseCodesHaveGRPCStatus is the guard that stops the next allowlist
+// addition repeating the ERR_TX_MISSING_PARENT slip. WrapGRPCPublic derives its
+// status from the public cause, so a code that is client-safe enough to surface
+// its message but has no row in ErrorCodeToGRPCCode ships that message inside a
+// codes.Internal status — the client is told the reason and simultaneously told
+// the node broke, and one that gates on st.Code() alone cannot classify it.
+func TestPublicCauseCodesHaveGRPCStatus(t *testing.T) {
+	for code := range publicCauseCodes {
+		require.NotEqual(t, codes.Internal, ErrorCodeToGRPCCode(code),
+			"%s is on publicCauseCodes but falls through to codes.Internal in ErrorCodeToGRPCCode; "+
+				"add a row for it, or drop it from the allowlist", code)
+	}
+}
+
+// TestWrapGRPCPublicMissingParent pins the gRPC half of the missing-parent
+// contract, the half TestPublicCauseAllowlist_MissingParent (in
+// services/propagation) does not reach: it covers UserMessage only.
+//
+// An out-of-order child is an ordering artifact — the same bytes are accepted
+// once the parent lands — so a caller must be able to retry it. That verdict has
+// to survive both halves of the wire: the status a client gating on st.Code()
+// reads, and the ERR code a client decoding the TError detail reconstructs.
+func TestWrapGRPCPublicMissingParent(t *testing.T) {
+	const (
+		childTxID  = "1111111111111111111111111111111111111111111111111111111111111111"
+		parentTxID = "2222222222222222222222222222222222222222222222222222222222222222"
+	)
+
+	// The chain propagation actually produces: the validator's missing-parent
+	// verdict, buried under two PROCESSING wrappers.
+	chain := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", childTxID,
+		NewProcessingError("[Validate][%s] error getting transaction input block heights", childTxID,
+			NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", childTxID, parentTxID)))
+
+	wrapped := WrapGRPCPublic(chain)
+
+	st, ok := status.FromError(wrapped)
+	require.True(t, ok)
+	require.Equal(t, codes.FailedPrecondition, st.Code(),
+		"a client gating on the transport status must not read an ordering artifact as a node fault")
+	require.Contains(t, st.Message(), parentTxID, "the missing parent must be named: %s", st.Message())
+
+	// And the detail must still reconstruct the application code, for clients
+	// that decode it rather than gating on the status.
+	reconstructed := UnwrapGRPC(wrapped)
+	require.NotNil(t, reconstructed)
+	require.Equal(t, ERR_TX_MISSING_PARENT, reconstructed.Code())
+	require.Contains(t, reconstructed.Message(), parentTxID)
+
+	// Nothing from outside the public cause may ride along.
+	require.NotContains(t, st.Message(), "failed to validate transaction")
+	require.NotContains(t, st.Message(), "input block heights")
 }
 
 // TestJoin tests the Join function to ensure it correctly combines multiple errors into a single error message.

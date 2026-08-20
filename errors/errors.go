@@ -779,7 +779,34 @@ var publicCauseCodes = map[ERR]struct{}{
 	ERR_TX_CONFLICTING:          {},
 	ERR_UTXO_SPENT:              {},
 	ERR_TX_LOCKED:               {},
+	// ERR_TX_MISSING_PARENT meets every bar above: its messages name transactions
+	// and nothing else, and "a parent this transaction spends is not in my utxo
+	// set" is the most actionable thing a submitter can be told — resubmit the
+	// parent, or resubmit this one after it lands. Call sites should name the
+	// child and the parent; one today does not (validator.extendTransaction says
+	// only "error extending transaction, parent tx not found"), which costs the
+	// client detail but never leaks node state.
+	//
+	// It is also the code whose absence did the most damage. Collapsing it to
+	// the outermost PROCESSING wrapper made an ordering artifact
+	// indistinguishable from a permanent validation failure, so clients that
+	// broadcast a chain across several requests terminalized their own
+	// children as REJECTED and cascaded that verdict onto the descendants.
+	ERR_TX_MISSING_PARENT: {},
 }
+
+// Deliberately NOT on the allowlist, recorded so the decision is not re-made by
+// accident:
+//
+//   - ERR_UTXO_FROZEN: freezing is administrative state set by the alert
+//     system, and whether to disclose it to an arbitrary submitter is a policy
+//     question rather than an error-plumbing one.
+//   - ERR_TX_COINBASE_IMMATURE: the message is built by the utxo store and
+//     embeds the node's block height and an internal batch id. It would qualify
+//     once it carries only the outpoint and the maturity height.
+//   - ERR_STORAGE_ERROR, ERR_SERVICE_ERROR, ERR_PROCESSING: faults in this
+//     node, not verdicts. Collapsing them is correct — a caller that cannot
+//     tell them apart from a rejection would terminalize on an outage.
 
 // isPublicCause reports whether code is on the client-safe allowlist.
 func isPublicCause(code ERR) bool {
@@ -1037,8 +1064,15 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	// application control-flow keys on the reconstructed ERR code, not the gRPC code.
 	case ERR_TX_INVALID, ERR_TX_LOCK_TIME, ERR_UTXO_NON_FINAL, ERR_TX_POLICY:
 		return codes.InvalidArgument
-	// Conflict/locked family: valid request, chain-state conflict.
-	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED:
+	// Conflict/locked family: valid request, chain-state conflict. TX_MISSING_PARENT
+	// belongs here rather than with the InvalidArgument rows above: the bytes are
+	// not the problem, the node's current utxo set is, and the same submission
+	// succeeds once the parent lands. Every code on publicCauseCodes must have a
+	// row in this switch — WrapGRPCPublic derives its status from the public cause,
+	// so an allowlisted code that falls through to codes.Internal returns the right
+	// message inside a transport status that says "this node broke", which is
+	// exactly the ambiguity the allowlist exists to remove.
+	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED, ERR_TX_MISSING_PARENT:
 		return codes.FailedPrecondition
 	default:
 		return codes.Internal

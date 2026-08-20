@@ -220,4 +220,6 @@ See [Reset Teranode](./minersHowToResetTeranode.md) for cleanup options.
 - [Start and Stop Docker Teranode](./minersHowToStopStartDockerTeranode.md)
 - [Syncing the Blockchain](./minersHowToSyncTheNode.md)
 - [Troubleshooting Docker Teranode](./minersHowToTroubleshooting.md)
+- [Monitoring Teranode](../minersHowToMonitoring.md)
+- [Prometheus Metrics Reference](../../../references/prometheusMetrics.md)
 - [teranode-quickstart README](https://github.com/bsv-blockchain/teranode-quickstart)
