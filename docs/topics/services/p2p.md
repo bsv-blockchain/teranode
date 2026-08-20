@@ -38,7 +38,7 @@ The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.c
 
 The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
-The p2p peers are part of a private network. This private network is managed by the p2p bootstrap service, which is responsible for bootstrapping the network and managing the network topology.
+The p2p peers can form a private network. Network bootstrapping is a configuration option, not a separate service: the P2P service reads the `p2p_bootstrap_peers` setting at startup to obtain initial DHT and relay entry points for peer discovery. Blanking it does not isolate the node — the client then falls back to the default public IPFS bootstrap peers — so a private network should point it at its own bootstrap servers, alongside `p2p_static_peers` and `p2p_dht_mode = off`.
 
 1. **Initialization and Configuration**:
 
@@ -148,7 +148,7 @@ The P2P server's `Init` function is in charge of server setup:
 
 2. **Asset HTTP Address Configuration**:
 
-    - Retrieves the Asset HTTP Address URL from the configuration using `gocore.Config().GetURL("asset_httpAddress")`.
+    - Retrieves the Asset HTTP Address URL from the settings, preferring `Asset.HTTPPublicAddress` and falling back to `Asset.HTTPAddress`.
 
 3. **Block Validation Client Initialization**:
 
@@ -169,11 +169,12 @@ The `Start` function is responsible for commencing the P2P service:
 2. **HTTP Endpoints**:
 
     - Sets up a health check endpoint (`/health`) that responds with "OK".
-    - Adds a WebSocket endpoint (`/ws`) for real-time communication via `s.HandleWebSocket`.
+    - Adds a WebSocket endpoint (`/p2p-ws`) for real-time communication via `s.HandleWebSocket`.
+    - Configures HTTP server timeouts (read header, read, write, idle) so slow or stalled clients cannot hold plain HTTP exchanges (or incomplete WebSocket upgrades) open indefinitely. Established WebSocket connections are exempt: connection deadlines are cleared on upgrade, so post-upgrade liveness is handled by separate WebSocket hardening, not these timeouts.
 
 3. **Start HTTP Server**:
 
-    - Initiates the HTTP server using a goroutine, which is executed via `s.StartHttp`.
+    - Starts the HTTP server via `s.StartHTTP`, which binds the listener synchronously (so configuration errors fail startup) and then serves in a goroutine.
 
 4. **PubSub Topics Setup**:
 
