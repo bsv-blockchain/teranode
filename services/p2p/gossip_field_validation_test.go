@@ -913,3 +913,68 @@ func TestPublishToNetwork_EnforcesTopicCap(t *testing.T) {
 	require.NoError(t, s.publishToNetwork(context.Background(), "test-subtree", []byte("{}")))
 	require.NotNil(t, published["test-subtree"])
 }
+
+// ChiR5 remainder: the egress hard-fail on a gossip-bounds violation must
+// actually fire for the structurally required announcements. An over-long
+// DataHubURL (static config) fails the block and subtree publishes loudly and
+// nothing reaches the network.
+func TestHandleBlockNotification_InvalidDataHubURLFailsLoudly(t *testing.T) {
+	s, published := capturePublishServer(t)
+	s.AssetHTTPAddressURL = "http://example.com/" + strings.Repeat("p", maxGossipURLLen)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42}, nil)
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, assert.AnError).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
+	s.blockchainClient = mockBlockchain
+
+	err := s.handleBlockNotification(context.Background(), model.GenesisBlockHeader.Hash())
+	require.ErrorContains(t, err, "failed gossip field validation")
+	require.Nil(t, published["test-block"], "an invalid block announcement must not be published")
+}
+
+func TestHandleSubtreeNotification_InvalidDataHubURLFailsLoudly(t *testing.T) {
+	s, published := capturePublishServer(t)
+	s.AssetHTTPAddressURL = "http://example.com/" + strings.Repeat("p", maxGossipURLLen)
+
+	err := s.handleSubtreeNotification(context.Background(), model.GenesisBlockHeader.Hash())
+	require.ErrorContains(t, err, "failed gossip field validation")
+	require.Nil(t, published["test-subtree"], "an invalid subtree announcement must not be published")
+}
+
+// ChiR5 remainder for rejected_tx: a self peer ID breaching the bound (only
+// producible by a broken P2P client) drops the re-broadcast without publishing.
+func TestRejectedTxHandler_InvalidSelfPeerIDNotPublished(t *testing.T) {
+	s, published := capturePublishServer(t)
+	s.P2PClient.(*MockServerP2PClient).peerID = peer.ID(strings.Repeat("x", 200))
+
+	value, err := proto.Marshal(&kafkamessage.KafkaRejectedTxTopicMessage{
+		TxHash: testBlockHashHex,
+		PeerId: "",
+		Reason: "some reason",
+	})
+	require.NoError(t, err)
+
+	handler := s.rejectedTxHandler(context.Background())
+	require.NoError(t, handler(&kafka.KafkaMessage{Value: value}))
+	require.Nil(t, published["test-rejected"], "a rejected_tx failing field validation must not be published")
+}
+
+// ChiR7: the committed-default shape (localhost DataHubURL) blanks the
+// node_status BaseURL via the once-evaluated static verdict, while block and
+// subtree announcements keep flowing (their DataHubURL is structurally
+// required; the once-per-process warn is the operator signal).
+func TestHandleNodeStatusNotification_LocalhostBaseURLBlanked(t *testing.T) {
+	s, published := capturePublishServer(t)
+	s.AssetHTTPAddressURL = "http://localhost:8090"
+
+	require.NoError(t, s.handleNodeStatusNotification(context.Background()))
+
+	captured := published["test-node-status"]
+	require.NotNil(t, captured)
+
+	var msg NodeStatusMessage
+	require.NoError(t, json.Unmarshal(captured, &msg))
+	require.Empty(t, msg.BaseURL, "a BaseURL peers would score under SSRF checks must be blanked from node_status")
+}

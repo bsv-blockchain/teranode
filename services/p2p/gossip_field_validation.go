@@ -16,7 +16,7 @@ import (
 const (
 	maxGossipPeerIDLen = 128  // libp2p peer IDs are ~52 chars base58
 	maxGossipHashLen   = 64   // hex-encoded 32-byte hash
-	maxGossipHeaderLen = 160  // hex-encoded 80-byte block header
+	maxGossipHeaderLen = 160  // hex-encoded 80-byte block header; exact size on purpose — headers are fixed-width, so headroom would only admit junk
 	maxGossipURLLen    = 2048 // DataHub / propagation URLs
 	maxGossipReasonLen = 1024 // rejected-tx reason (validator error text)
 )

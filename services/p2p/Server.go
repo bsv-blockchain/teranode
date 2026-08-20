@@ -171,6 +171,17 @@ type Server struct {
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
+	// staticURLCheckOnce evaluates the once-assigned outbound URL config
+	// (AssetHTTPAddressURL, PropagationURL) against the gossip bounds and SSRF
+	// rules a single time, caching the verdicts below. The publishers run every
+	// ~10s (node_status) and per announcement (block/subtree), so re-validating
+	// — and re-logging — a value that cannot change without a restart would
+	// spam the logs on the committed defaults (localhost asset_httpAddress)
+	// and bury real signals; same rationale as invalidPolicyWarnOnce.
+	staticURLCheckOnce sync.Once
+	assetURLErr        error // non-nil: AssetHTTPAddressURL breaches gossip bounds or receivers' SSRF checks
+	propagationURLErr  error // non-nil: PropagationURL breaches gossip bounds
+
 	// latestNodeStatus caches the most recent node status computed by
 	// getNodeStatusMessage (refreshed every publish tick and on best-block
 	// changes) so new websocket clients can be served without a blockchain
@@ -1367,7 +1378,11 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 
 	// Self-check against the bounds we enforce on ingress, so a local
 	// misconfiguration surfaces here as a loud error instead of getting this
-	// node scored and banned by every peer.
+	// node scored and banned by every peer. Unlike node_status, a violation
+	// hard-fails rather than degrading: every field here is structurally
+	// required — hash and header are machine-generated, and receivers score an
+	// empty DataHubURL just like a malformed one — so there is no safe reduced
+	// form of a block announcement to publish.
 	blockMessage.sanitizeFields()
 
 	if err := blockMessage.validateFields(); err != nil {
@@ -1375,12 +1390,11 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 	}
 
 	// An empty or unroutable DataHubURL is scored as a protocol violation by
-	// every receiver (checkDataHubURL); warn loudly but keep publishing, since
-	// suppressing would also silence dev setups that legitimately advertise
-	// private addresses to peers configured to accept them.
-	if err := s.validateDataHubURL(blockMessage.DataHubURL); err != nil {
-		s.logger.Warnf("[handleBlockNotification] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", blockMessage.DataHubURL, err)
-	}
+	// every receiver (checkDataHubURL); the once-per-process check below warns
+	// loudly but keeps publishing, since suppressing would also silence dev
+	// setups that legitimately advertise private addresses to peers configured
+	// to accept them.
+	s.checkStaticGossipURLs()
 
 	// The topic size cap on the marshalled bytes is enforced centrally in
 	// publishToNetwork.
@@ -1763,6 +1777,31 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	return msg
 }
 
+// checkStaticGossipURLs evaluates the static outbound URL config once,
+// logging each problem a single time per process. AssetHTTPAddressURL is
+// checked against both the gossip length/charset bound and the SSRF rules
+// receivers score on (validateDataHubURL), so the committed default —
+// localhost asset_httpAddress with asset_httpPublicAddress unset — produces
+// exactly one loud warning instead of an error per publish tick.
+func (s *Server) checkStaticGossipURLs() {
+	s.staticURLCheckOnce.Do(func() {
+		if err := checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen); err != nil {
+			s.assetURLErr = err
+		} else if err := s.validateDataHubURL(s.AssetHTTPAddressURL); err != nil {
+			s.assetURLErr = err
+		}
+
+		if s.assetURLErr != nil {
+			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", s.AssetHTTPAddressURL, s.assetURLErr)
+		}
+
+		if err := checkGossipString("propagation_url", s.PropagationURL, maxGossipURLLen); err != nil {
+			s.propagationURLErr = err
+			s.logger.Warnf("[checkStaticGossipURLs] PropagationURL breaches the gossip field bounds and will be omitted from node_status: %v", err)
+		}
+	})
+}
+
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	// Bound the status computation to a fraction of the publish interval so a
 	// wedged blockchain call cannot consume the whole tick budget and hand the
@@ -1832,19 +1871,15 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	// their SSRF check) blanks the field and keeps publishing — mirroring the
 	// blacklisted-BaseURL handling on ingress — so a pathological URL degrades
 	// sync-source discovery instead of taking the node off gossip entirely.
-	// Only PeerID (machine-generated) remains a hard failure.
-	if nodeStatusMessage.BaseURL != "" {
-		if err := checkGossipString("base_url", nodeStatusMessage.BaseURL, maxGossipURLLen); err != nil {
-			s.logger.Errorf("[handleNodeStatusNotification] invalid BaseURL, publishing node_status without it: %v", err)
-			nodeStatusMessage.BaseURL = ""
-		} else if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
-			s.logger.Errorf("[handleNodeStatusNotification] BaseURL would be scored as a protocol violation by peers (set asset_httpPublicAddress), publishing node_status without it: %v", err)
-			nodeStatusMessage.BaseURL = ""
-		}
+	// Only PeerID (machine-generated) remains a hard failure. The verdicts are
+	// computed (and logged) once: the URLs are static config.
+	s.checkStaticGossipURLs()
+
+	if s.assetURLErr != nil {
+		nodeStatusMessage.BaseURL = ""
 	}
 
-	if err := checkGossipString("propagation_url", nodeStatusMessage.PropagationURL, maxGossipURLLen); err != nil {
-		s.logger.Errorf("[handleNodeStatusNotification] invalid PropagationURL, publishing node_status without it: %v", err)
+	if s.propagationURLErr != nil {
 		nodeStatusMessage.PropagationURL = ""
 	}
 
@@ -1900,7 +1935,9 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 
 	// Self-check against the bounds we enforce on ingress, so a local
 	// misconfiguration surfaces here as a loud error instead of getting this
-	// node scored and banned by every peer.
+	// node scored and banned by every peer. Hard-fail rather than degrade:
+	// hash is machine-generated and receivers score an empty DataHubURL just
+	// like a malformed one, so there is no safe reduced form to publish.
 	subtreeMessage.sanitizeFields()
 
 	if err := subtreeMessage.validateFields(); err != nil {
@@ -1908,12 +1945,11 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 	}
 
 	// An empty or unroutable DataHubURL is scored as a protocol violation by
-	// every receiver (checkDataHubURL); warn loudly but keep publishing, since
-	// suppressing would also silence dev setups that legitimately advertise
-	// private addresses to peers configured to accept them.
-	if err := s.validateDataHubURL(subtreeMessage.DataHubURL); err != nil {
-		s.logger.Warnf("[handleSubtreeNotification] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", subtreeMessage.DataHubURL, err)
-	}
+	// every receiver (checkDataHubURL); the once-per-process check below warns
+	// loudly but keeps publishing, since suppressing would also silence dev
+	// setups that legitimately advertise private addresses to peers configured
+	// to accept them.
+	s.checkStaticGossipURLs()
 
 	// The topic size cap on the marshalled bytes is enforced centrally in
 	// publishToNetwork.
