@@ -1008,6 +1008,13 @@ func Test_handleMultipleTx_FirstClientErrorStatusWins(t *testing.T) {
 		return errors.NewUtxoNonFinalError("transaction is not final", errors.NewTxLockTimeError(nonFinalMsg))
 	}
 
+	// Block assembly refusing the transaction, and a store shedding load, both surface as
+	// ErrServiceUnavailable: temporary, and fixable by resubmitting later.
+	backpressureErr := func() error {
+		return errors.NewServiceUnavailableError("block assembly is full, not accepting new transactions")
+	}
+	hardFaultErr := func() error { return errors.NewStorageError("failed to save transaction") }
+
 	tests := []struct {
 		name       string
 		firstErr   error // returned for the first tx in submission order
@@ -1016,6 +1023,14 @@ func Test_handleMultipleTx_FirstClientErrorStatusWins(t *testing.T) {
 	}{
 		{"conflict first yields 409", conflictErr(), nonFinalErr(), http.StatusConflict},
 		{"non-final first yields 400", nonFinalErr(), conflictErr(), http.StatusBadRequest},
+		// Backpressure must reach the client as retryable, not as a node fault, and must not be
+		// masked by a client error on another transaction in the same batch.
+		{"backpressure alone yields 503", backpressureErr(), backpressureErr(), http.StatusServiceUnavailable},
+		{"backpressure outranks a client error", conflictErr(), backpressureErr(), http.StatusServiceUnavailable},
+		{"backpressure outranks a client error, either order", backpressureErr(), nonFinalErr(), http.StatusServiceUnavailable},
+		// A fault resubmitting cannot fix still dominates, in either submission order.
+		{"a hard fault outranks backpressure", hardFaultErr(), backpressureErr(), http.StatusInternalServerError},
+		{"a hard fault outranks backpressure, either order", backpressureErr(), hardFaultErr(), http.StatusInternalServerError},
 	}
 
 	for _, tc := range tests {

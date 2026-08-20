@@ -149,6 +149,33 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 		AllowFailFast: true,
 	}
 
+	// While block assembly holds its configured maximum of transactions in memory, keep validating
+	// peer-announced subtrees but stop adding their transactions to our mining template.
+	//
+	// This is a transaction ingress point like propagation, legacy netsync and the sendrawtransaction
+	// RPC, and on a multi-node network it carries most of the volume: subtrees are announced ahead of
+	// the block that contains them. Left ungated, block assembly keeps growing past the limit through
+	// this path while the other three refuse, so the limit would not bound RAM at all.
+	//
+	// Only the block assembly insert is skipped. The transactions are still validated, their UTXOs
+	// are still created and their metadata is still cached, so a later block carrying them validates
+	// normally. This mirrors what CheckSubtree already does while catching up blocks, where
+	// bulk-history transactions do not belong in the template either.
+	//
+	// Note that unlike the other three ingress points, this one does not refuse and so gets no retry:
+	// propagation, netsync and the RPC return an error and the sender resubmits, whereas a subtree
+	// transaction skipped here is not revisited when the flag clears. It reaches the mining template
+	// only when a block carrying it arrives, or on the next restart. The restart path works because
+	// the transaction is still created with UnminedSince set — that is driven by the absence of
+	// block IDs, not by this flag — so loadUnminedTransactions picks it up. The consequence to be
+	// aware of is that a transaction announced only during the full window, whose subtree is never
+	// mined by anyone, stays out of this node's template for the life of the process.
+	if u.blockchainClient != nil && u.blockchainClient.IsBlockAssemblyFull() {
+		prometheusSubtreeValidationTxsNotAddedToBlockAssemblyFull.Inc()
+
+		validationOptions = append(validationOptions, validator.WithAddTXToBlockAssembly(false))
+	}
+
 	// validate the subtree as if it is for the next block height
 	// this is because subtrees are always validated ahead of time before they are needed for a block
 	subtree, err := u.ValidateSubtreeInternal(ctx, v, bestBlockHeaderMeta.Height+1, *blockIDsMap, validationOptions...)

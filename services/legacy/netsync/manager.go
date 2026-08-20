@@ -1223,6 +1223,24 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 		return
 	}
 
+	// Drop new transactions while block assembly holds its configured maximum in memory. Legacy
+	// peers reach the validator directly rather than through propagation, so this is a separate
+	// ingress point that needs the same gate.
+	//
+	// The transaction is NOT added to rejectedTxns, because this is a transient condition rather
+	// than a fault in the transaction. Clearing the requested-transaction bookkeeping lets us fetch
+	// it again from a later inv message, once block assembly has room.
+	if sm.blockchainClient != nil && sm.blockchainClient.IsBlockAssemblyFull() {
+		sm.logger.Debugf("Dropping transaction %v from %s, block assembly is full", txHash, peer)
+
+		state.requestedTxns.Delete(*txHash)
+		sm.requestedTxns.Delete(*txHash)
+
+		prometheusLegacyNetsyncTxDroppedBlockAssemblyFull.Inc()
+
+		return
+	}
+
 	// Validate the transaction using the validation service
 	buf := bytes.NewBuffer(make([]byte, 0, tmsg.tx.MsgTx().SerializeSize()))
 	_ = tmsg.tx.MsgTx().Serialize(buf)
@@ -2398,6 +2416,20 @@ func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, 
 		if iv.Type == wire.InvTypeTx {
 			// Skip the transaction if it has already been rejected.
 			if _, exists = sm.rejectedTxns.Get(iv.Hash); exists {
+				return
+			}
+
+			// Do not ask for a transaction we would only discard on arrival. handleTxMsg drops
+			// transactions while block assembly holds its configured maximum in memory, and a
+			// dropped transaction never reaches the UTXO store, so haveInventory keeps reporting
+			// not-have and it is not recorded in rejectedTxns either. Without this check every
+			// later inv, from this peer and from every other peer announcing the same
+			// transaction, would re-issue getdata and re-download it in full, for as long as
+			// block assembly stays full — paying inbound bandwidth and deserialization for
+			// traffic we throw away, exactly while the node is short of memory.
+			if sm.blockchainClient != nil && sm.blockchainClient.IsBlockAssemblyFull() {
+				prometheusLegacyNetsyncTxInvsSkippedBlockAssemblyFull.Inc()
+
 				return
 			}
 		}

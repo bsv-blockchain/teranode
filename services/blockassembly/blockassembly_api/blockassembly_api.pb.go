@@ -762,6 +762,7 @@ type StateMessage struct {
 	CurrentHash           string                 `protobuf:"bytes,8,opt,name=currentHash,proto3" json:"currentHash,omitempty"`                     // the hash of the chaintip
 	RemoveMapCount        uint32                 `protobuf:"varint,9,opt,name=removeMapCount,proto3" json:"removeMapCount,omitempty"`              // the number of transactions in the remove map
 	Subtrees              []string               `protobuf:"bytes,10,rep,name=subtrees,proto3" json:"subtrees,omitempty"`                          // the hashes of the current subtrees
+	TxIngressFull         bool                   `protobuf:"varint,11,opt,name=txIngressFull,proto3" json:"txIngressFull,omitempty"`               // whether block assembly has reached its in-memory transaction limit
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -864,6 +865,13 @@ func (x *StateMessage) GetSubtrees() []string {
 		return x.Subtrees
 	}
 	return nil
+}
+
+func (x *StateMessage) GetTxIngressFull() bool {
+	if x != nil {
+		return x.TxIngressFull
+	}
+	return false
 }
 
 // Response containing the difficulty required for the next block (not the
@@ -1249,7 +1257,7 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\b_version\"\x1c\n" +
 	"\n" +
 	"OKResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x80\x03\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xa6\x03\n" +
 	"\fStateMessage\x12.\n" +
 	"\x12blockAssemblyState\x18\x01 \x01(\tR\x12blockAssemblyState\x124\n" +
 	"\x15subtreeProcessorState\x18\x02 \x01(\tR\x15subtreeProcessorState\x12\"\n" +
@@ -1263,7 +1271,8 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\vcurrentHash\x18\b \x01(\tR\vcurrentHash\x12&\n" +
 	"\x0eremoveMapCount\x18\t \x01(\rR\x0eremoveMapCount\x12\x1a\n" +
 	"\bsubtrees\x18\n" +
-	" \x03(\tR\bsubtrees\"\\\n" +
+	" \x03(\tR\bsubtrees\x12$\n" +
+	"\rtxIngressFull\x18\v \x01(\bR\rtxIngressFull\"\\\n" +
 	"\x1cGetCurrentDifficultyResponse\x12\x1e\n" +
 	"\n" +
 	"difficulty\x18\x01 \x01(\x01R\n" +

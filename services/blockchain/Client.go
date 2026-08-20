@@ -47,6 +47,7 @@ type Client struct {
 	running               *atomic.Bool                       // Flag indicating if client is running
 	conn                  *grpc.ClientConn                   // gRPC connection
 	fmsState              atomic.Pointer[FSMStateType]       // Current FSM state
+	blockAssemblyFull     blockAssemblyFullState             // Whether block assembly reached its in-memory transaction limit, and when it last said so
 	subscribers           []clientSubscriber                 // List of subscribers
 	subscribersMu         sync.Mutex                         // Mutex for subscribers list
 	lastBlockNotification *blockchain_api.Notification       // Last block notification received
@@ -214,6 +215,12 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 					newState := FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
 					c.fmsState.Store(&newState)
 					c.logger.Debugf("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
+				case model.NotificationType_BlockAssemblyFull:
+					// update the local ingress flag, so callers can read it without an RPC per transaction
+					full := blockAssemblyFullFromNotification(notification)
+					if c.blockAssemblyFull.set(full, time.Now()) {
+						c.logger.Infof("[Blockchain] Block assembly transaction ingress full=%t for %s", full, source)
+					}
 				default:
 					// send the notification to all subscribers
 					c.subscribersMu.Lock()
@@ -1834,6 +1841,35 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 	}
 
 	return &state.State, nil
+}
+
+// IsBlockAssemblyFull reports whether block assembly has reached its in-memory transaction limit.
+//
+// The value comes from a locally cached flag that the client updates from BlockAssemblyFull
+// notifications, so this is an atomic load and costs no RPC. Transaction ingress points call it
+// per transaction to decide whether to accept new work.
+//
+// The flag is eventually consistent. It defaults to false until the first notification arrives,
+// which is the safe default: a node accepts transactions rather than refusing them while it does
+// not yet know. Block assembly re-broadcasts the current value periodically, so a client that
+// starts or reconnects after a transition converges instead of holding a stale default.
+//
+// A cached refusal also expires. Block assembly only publishes while it has a limit configured, so
+// nothing would otherwise tell this client that an operator has turned the limit off, or that block
+// assembly has stopped, and ingress would stay refused until this process restarted. Once
+// blockAssemblyFullTTL passes with no announcement, the refusal lapses and this reports false again.
+func (c *Client) IsBlockAssemblyFull() bool {
+	full, expired := c.blockAssemblyFull.isFull(time.Now())
+	if expired {
+		// Warn, not debug: the limit has just stopped being enforced on this ingress point. Either
+		// block assembly was reconfigured or stopped, in which case this is expected, or the
+		// notification path between us and it has broken while it is still full, in which case this
+		// is the only signal that the node is about to start accepting unbounded work again. Logged
+		// once per expiry, not once per transaction.
+		c.logger.Warnf("[Blockchain] no block assembly full notification for %s, resuming transaction ingress", blockAssemblyFullTTL)
+	}
+
+	return full
 }
 
 // IsFSMCurrentState checks if the current FSM state matches the provided state.

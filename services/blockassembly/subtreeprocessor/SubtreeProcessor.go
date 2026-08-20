@@ -3874,10 +3874,13 @@ func (stp *SubtreeProcessor) checkMarkNotOnLongestChain(ctx context.Context, inv
 	return checkMarkNotOnLongestChain, nil
 }
 
-// setTxCountFromSubtrees recalculates the total transaction count
-// by summing transactions across all subtrees, the current subtree,
-// and the queue. This ensures the transaction count remains accurate
-// after chain modifications.
+// setTxCountFromSubtrees recalculates the transaction count by summing
+// transactions across all chained subtrees and the current subtree. This ensures
+// the transaction count remains accurate after chain modifications.
+//
+// The queue is deliberately excluded. txCount counts transactions that reached a
+// subtree, and the dequeue loop increments it as it adds each one. Callers that
+// need the full in-memory holding must add QueueLength separately.
 func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 	stp.txCount.Store(0)
 

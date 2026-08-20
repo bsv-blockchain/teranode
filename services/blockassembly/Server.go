@@ -2080,6 +2080,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		CurrentHash:           currentHeader.Hash().String(),
 		RemoveMapCount:        removeMapLen32,
 		Subtrees:              subtreeHashesStrings,
+		TxIngressFull:         ba.blockAssembler.IsTxIngressFull(),
 	}, nil
 }
 

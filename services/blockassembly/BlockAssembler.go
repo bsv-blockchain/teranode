@@ -42,6 +42,14 @@ const (
 	// polls for pending blocks during startup
 	pendingBlocksPollInterval = 1 * time.Second
 
+	// txIngressEvaluateInterval is the default interval at which the block assembler compares the
+	// transactions it holds in memory against the configured limit
+	txIngressEvaluateInterval = 1 * time.Second
+
+	// txIngressHeartbeatInterval is the default interval at which the block assembler re-announces
+	// the current ingress flag, so subscribers that missed a transition still converge
+	txIngressHeartbeatInterval = 10 * time.Second
+
 	// miningCandidateVersion is the block version advertised in mining candidates: 0x20000000 is
 	// the BIP9/versionbits base (top three bits 001, no deployment bits) and clears the BIP34/66/65
 	// mandatory floor (>= 4). Used for both the normal and empty-block candidates rather than
@@ -192,6 +200,22 @@ type BlockAssembler struct {
 	// unminedTransactionsLoading; must not be touched concurrently.
 	unminedDropHashes map[chainhash.Hash]struct{}
 
+	// txIngressFull indicates block assembly holds as many transactions in RAM as it is allowed to,
+	// and that the ingress points should stop accepting new transactions
+	txIngressFull atomic.Bool
+
+	// txIngressLimit is the high watermark at which txIngressFull is set. 0 disables the limit.
+	txIngressLimit uint64
+
+	// txIngressResume is the low watermark at which txIngressFull is cleared
+	txIngressResume uint64
+
+	// txIngressEvaluateInterval is how often the monitor compares what it holds against the limit,
+	// and txIngressHeartbeatInterval how often it re-announces the current flag. They are fields
+	// rather than constants so tests can drive the monitor without waiting on wall clock.
+	txIngressEvaluateInterval  time.Duration
+	txIngressHeartbeatInterval time.Duration
+
 	// wg tracks background goroutines for clean shutdown
 	wg sync.WaitGroup
 }
@@ -270,9 +294,53 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		currentRunningState: atomic.Value{},
 	}
 
+	b.txIngressLimit = tSettings.BlockAssembly.MaxTransactionsInMemory
+	b.txIngressResume = resumeWatermark(b.txIngressLimit, tSettings.BlockAssembly.MaxTransactionsInMemoryResume)
+
+	// Say so when a configured resume watermark was discarded. Silently substituting a derived value
+	// for an operator's explicit setting is how a misconfiguration survives to production: the node
+	// behaves sanely, so nothing draws attention to the ignored value.
+	if configuredResume := tSettings.BlockAssembly.MaxTransactionsInMemoryResume; b.txIngressLimit > 0 &&
+		configuredResume > 0 && configuredResume != b.txIngressResume {
+		logger.Warnf("[BlockAssembler] ignoring blockassembly_maxTransactionsInMemoryResume=%d, it must be below blockassembly_maxTransactionsInMemory=%d, using %d instead",
+			configuredResume, b.txIngressLimit, b.txIngressResume)
+	}
+	b.txIngressEvaluateInterval = txIngressEvaluateInterval
+	b.txIngressHeartbeatInterval = txIngressHeartbeatInterval
+
+	if b.txIngressLimit > 0 {
+		logger.Infof("[BlockAssembler] limiting transactions held in memory to %d, resuming ingress at %d",
+			b.txIngressLimit, b.txIngressResume)
+	}
+
 	b.setCurrentRunningState(StateStarting)
 
 	return b, nil
+}
+
+// resumeWatermark derives the low watermark at which transaction ingress resumes.
+//
+// A configured resume value is used as-is unless it is zero or not below the limit, in which case
+// it falls back to 90% of the limit. Requiring the resume value to sit strictly below the limit is
+// what gives the hysteresis: if the two were equal the node would flap between accepting and
+// refusing on every transaction once it settled at the limit.
+func resumeWatermark(limit, configuredResume uint64) uint64 {
+	if limit == 0 {
+		return 0
+	}
+
+	if configuredResume > 0 && configuredResume < limit {
+		return configuredResume
+	}
+
+	// 90% of the limit, expressed so it cannot overflow and stays exact for small limits
+	resume := limit - limit/10
+	if resume >= limit {
+		// only reachable for a limit of 1, where the only value below the limit is 0
+		return limit - 1
+	}
+
+	return resume
 }
 
 // TxCount returns the total number of transactions in the assembler.
@@ -289,6 +357,196 @@ func (b *BlockAssembler) TxCount() uint64 {
 //   - int64: Current queue length
 func (b *BlockAssembler) QueueLength() int64 {
 	return b.subtreeProcessor.QueueLength()
+}
+
+// TransactionsInMemory returns the number of transactions block assembly currently holds in RAM.
+//
+// This is the sum of the transactions that reached a subtree and those still waiting in the queue.
+// The two are counted separately because the subtree processor increments its own counter only once
+// a transaction is dequeued into a subtree.
+//
+// The result can under-report slightly, because the subtree processor removes a transaction from
+// the queue and increments its counter as two separate steps, so transactions can be in flight
+// between them. That does not matter against a limit sized to available RAM.
+//
+// The count includes the coinbase placeholder node that the first subtree always carries.
+//
+// Returns:
+//   - uint64: Transactions held in memory
+func (b *BlockAssembler) TransactionsInMemory() uint64 {
+	count := b.subtreeProcessor.TxCount()
+
+	if queued := b.subtreeProcessor.QueueLength(); queued > 0 {
+		count += uint64(queued)
+	}
+
+	return count
+}
+
+// IsTxIngressFull reports whether block assembly has reached its in-memory transaction limit.
+//
+// Returns:
+//   - bool: true while the ingress points should stop accepting new transactions
+func (b *BlockAssembler) IsTxIngressFull() bool {
+	return b.txIngressFull.Load()
+}
+
+// evaluateTxIngressFull recomputes the ingress flag from the transactions currently held in memory.
+//
+// Returns:
+//   - bool: the flag value after evaluation
+//   - bool: whether the flag changed
+func (b *BlockAssembler) evaluateTxIngressFull() (full bool, changed bool) {
+	// While the unmined set is reloading, what we hold does not yet describe what we are about to
+	// hold, so a refusal already in force must stand. Clearing it here would tell every ingress
+	// point there is room, moments before the reload takes that room back. Only the clearing
+	// direction is suppressed: applyTxIngressCount can set the flag but never clears it unless it
+	// is already set, so an assembler filling up during a reload still refuses at the limit.
+	if b.txIngressFull.Load() && b.unminedTransactionsLoading.Load() {
+		return true, false
+	}
+
+	return b.applyTxIngressCount(b.TransactionsInMemory())
+}
+
+// applyTxIngressCount moves the ingress flag for a given number of transactions held in memory.
+//
+// The flag moves on two different thresholds. It is set once the count reaches the limit, and
+// cleared only once the count falls back to the resume watermark. That hysteresis stops the node
+// flapping between accepting and refusing, which would otherwise produce a notification storm
+// every time a single transaction crossed the limit.
+//
+// This holds the hysteresis rule on its own, separate from measuring the subtree processor, so the
+// boundary behaviour can be exercised directly.
+//
+// Returns:
+//   - bool: the flag value after evaluation
+//   - bool: whether the flag changed
+func (b *BlockAssembler) applyTxIngressCount(count uint64) (full bool, changed bool) {
+	if b.txIngressLimit == 0 {
+		// the limit is disabled, so ingress is never refused
+		return false, b.txIngressFull.Swap(false)
+	}
+
+	wasFull := b.txIngressFull.Load()
+
+	switch {
+	case !wasFull && count >= b.txIngressLimit:
+		full = true
+	case wasFull && count <= b.txIngressResume:
+		full = false
+	default:
+		// between the watermarks, so hold the current value
+		return wasFull, false
+	}
+
+	if b.txIngressFull.Swap(full) == full {
+		return full, false
+	}
+
+	b.logger.Warnf("[BlockAssembler] transaction ingress full=%t, holding %d transactions in memory (limit %d, resume %d)",
+		full, count, b.txIngressLimit, b.txIngressResume)
+
+	return full, true
+}
+
+// publishTxIngressFull broadcasts the current ingress flag to the rest of the node.
+//
+// It goes over the blockchain notification bus rather than the FSM, because fullness is orthogonal
+// to the node lifecycle: a full node must stay RUNNING so that p2p sync, catchup and legacy sync
+// keep working. Ingress points cache the value and read it per transaction.
+func (b *BlockAssembler) publishTxIngressFull(ctx context.Context, full bool) {
+	if b.blockchainClient == nil {
+		return
+	}
+
+	if err := b.blockchainClient.SendNotification(ctx, blockchain.NewBlockAssemblyFullNotification(full)); err != nil {
+		b.logger.Errorf("[BlockAssembler] error publishing transaction ingress full=%t: %v", full, err)
+	}
+}
+
+// startTxIngressLimitMonitor watches how many transactions block assembly holds in memory and keeps
+// the rest of the node informed.
+//
+// It publishes on every transition, and re-announces a standing refusal on a slower heartbeat so a
+// subscriber that starts or reconnects after a transition converges rather than holding its
+// default. The monitor does nothing when the limit is disabled.
+//
+// The heartbeat is what keeps a refusal alive: the ingress points expire a cached full=true when the
+// heartbeat stops, so a block assembly that is reconfigured without a limit, or that stops
+// altogether, releases them rather than leaving them refusing forever. See blockAssemblyFullTTL in
+// services/blockchain. Only a refusal is re-announced, because that expiry is also how a subscriber
+// converges on not-full, so repeating not-full would add nothing.
+//
+// Start runs this before the slow parts of startup, so a process that restarted while full
+// re-establishes the refusal rather than letting it expire mid-reload.
+func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
+	if b.txIngressLimit == 0 {
+		b.logger.Infof("[BlockAssembler] no in-memory transaction limit configured, ingress is never refused")
+		return
+	}
+
+	// fall back to the defaults for an assembler that was not built through NewBlockAssembler,
+	// so a zero interval can never reach time.NewTicker
+	if b.txIngressEvaluateInterval <= 0 {
+		b.txIngressEvaluateInterval = txIngressEvaluateInterval
+	}
+
+	if b.txIngressHeartbeatInterval <= 0 {
+		b.txIngressHeartbeatInterval = txIngressHeartbeatInterval
+	}
+
+	b.wg.Add(1)
+
+	go func() {
+		defer b.wg.Done()
+
+		// Leave the gauge reporting "not refusing" when the monitor stops. Nothing else writes it, so
+		// a monitor that exits while full would otherwise leave a permanent 1 on a process that is no
+		// longer refusing anything, and any alert built on it would never clear.
+		defer prometheusBlockAssemblerTxIngressFull.Set(0)
+
+		evaluateTicker := time.NewTicker(b.txIngressEvaluateInterval)
+		defer evaluateTicker.Stop()
+
+		heartbeatTicker := time.NewTicker(b.txIngressHeartbeatInterval)
+		defer heartbeatTicker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				b.logger.Infof("[BlockAssembler] stopping transaction ingress limit monitor")
+				return
+
+			case <-evaluateTicker.C:
+				full, changed := b.evaluateTxIngressFull()
+				if changed {
+					b.publishTxIngressFull(ctx, full)
+					prometheusBlockAssemblerTxIngressFull.Set(boolToFloat64(full))
+				}
+
+			case <-heartbeatTicker.C:
+				// Re-announce a refusal, and only a refusal. That is the value the ingress points
+				// cannot recover on their own, because their cached full=true expires without it.
+				// A repeated full=false carries no information: a client that has heard nothing
+				// already accepts transactions, and one that missed the clearing transition
+				// converges through the same expiry. Repeating it would also clear a refusal this
+				// process has not yet re-established, while it is still reloading its unmined set.
+				if b.txIngressFull.Load() {
+					b.publishTxIngressFull(ctx, true)
+				}
+			}
+		}
+	}()
+}
+
+// boolToFloat64 converts a boolean to the 0/1 representation Prometheus gauges use.
+func boolToFloat64(b bool) float64 {
+	if b {
+		return 1
+	}
+
+	return 0
 }
 
 // SubtreeCount returns the total number of subtrees.
@@ -1059,6 +1317,17 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	if err = b.initState(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
+
+	// Start watching how many transactions we hold in memory before the slow parts of startup, not
+	// after them. AddTx is already enqueueing on the gRPC side by the time Start runs, and the
+	// ingress points expire a cached refusal once block assembly stops re-announcing it. If the
+	// monitor only started at the end of Start, a process that restarted while full would let every
+	// ingress point reopen partway through loadUnminedTransactions — which can run for minutes on a
+	// large backlog — and would take unlimited new work on top of a reload it already cannot fit.
+	//
+	// Starting here is safe: the flag begins false in a fresh process, and applyTxIngressCount only
+	// publishes on a transition, so an assembler that is still empty announces nothing.
+	b.startTxIngressLimitMonitor(ctx)
 
 	// Wait for any pending blocks to be processed before loading unmined transactions
 	if !b.skipWaitForPendingBlocks {

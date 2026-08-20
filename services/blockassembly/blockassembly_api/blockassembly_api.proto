@@ -251,6 +251,7 @@ message StateMessage {
   string currentHash = 8; // the hash of the chaintip
   uint32 removeMapCount = 9; // the number of transactions in the remove map
   repeated string subtrees = 10; // the hashes of the current subtrees
+  bool txIngressFull = 11; // whether block assembly has reached its in-memory transaction limit
 }
 
 // Response containing the difficulty required for the next block (not the

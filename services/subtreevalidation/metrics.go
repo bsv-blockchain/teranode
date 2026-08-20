@@ -53,6 +53,11 @@ var (
 	// including request processing and response generation.
 	prometheusSubtreeValidationValidateSubtreeHandler prometheus.Histogram
 
+	// prometheusSubtreeValidationTxsNotAddedToBlockAssemblyFull counts peer-announced subtrees whose
+	// transactions were validated but deliberately kept out of the mining template, because block
+	// assembly had reached its in-memory transaction limit.
+	prometheusSubtreeValidationTxsNotAddedToBlockAssemblyFull prometheus.Counter
+
 	// prometheusSubtreeValidationValidateSubtreeDuration tracks detailed validation processing time.
 	// This histogram provides granular timing information for the internal
 	// validation logic, separate from handler overhead.
@@ -151,6 +156,15 @@ func _initPrometheusMetrics() {
 			Name:      "validate_subtree_handler",
 			Help:      "Duration of subtree handler",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationTxsNotAddedToBlockAssemblyFull = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "subtrees_not_added_to_block_assembly_full",
+			Help:      "Number of peer-announced subtrees whose transactions were kept out of the mining template because block assembly reached its in-memory transaction limit",
 		},
 	)
 
