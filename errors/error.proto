@@ -39,6 +39,9 @@ enum ERR {
   BLOCK_INCOMPLETE=17;
   BLOCK_HEADER_CONTEXT=18;
   BLOCK_ERROR=19;
+  // Block errors 10-19 range is now FULL. A new block error code must widen this range (and the
+  // matching bound in errorCodeCategory in error_utils.go) before it can be added here; otherwise
+  // it falls outside 10-19 and is mis-bucketed.
   // Subtree errors 20-29
   SUBTREE_NOT_FOUND=20;
   SUBTREE_INVALID=21;

@@ -268,8 +268,18 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		teranodeBlock.SubtreeSlices = nil
 	}
 
+	// Derive the serving peer identity for the block-validation corrupt cap. Use the
+	// same identity netsync's own cap keys on (peer.Addr()) so the two caps agree on
+	// what a peer is. Peer.Addr() dereferences the peer with no nil-receiver guard, so
+	// guard here: a nil peer degrades to the empty-peerID no-cap defence rather than
+	// panicking.
+	peerID := ""
+	if peer != nil {
+		peerID = peer.Addr()
+	}
+
 	// call the process block wrapper, which will add tracing and logging
-	err = sm.ProcessBlock(ctx, teranodeBlock)
+	err = sm.ProcessBlock(ctx, teranodeBlock, peerID)
 	if err != nil {
 		return err
 	}
@@ -320,7 +330,7 @@ func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockH
 	return err
 }
 
-func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block) (err error) {
+func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block, peerID string) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "SyncManager:processBlock",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -339,7 +349,7 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 	// teranodeBlock.ID was set by model.NewBlock from the pre-assigned ID returned by prepareSubtrees.
 	// Read it from the struct here — avoids duplicating it as a parameter. It still has to travel as
 	// a separate proto field in the gRPC request because block.Bytes() does not serialize ID.
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy", teranodeBlock.ID); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, peerID, "legacy", teranodeBlock.ID); err != nil {
 		if errors.Is(err, errors.ErrBlockExists) {
 			sm.logger.Infof("[SyncManager:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
 			return nil

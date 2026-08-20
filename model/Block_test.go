@@ -451,7 +451,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 // Parity with bitcoin-sv CheckCoinbase (bad-cb-length): valid iff 2 <= size <= MaxCoinbaseScriptSigSize,
 // inclusive. See GitHub issue #1141.
 //
-// It also pins the check's CLASSIFICATION (freemans13 item 5 / bitcoin-sv/teranode#4692): the check
+// It also pins the check's CLASSIFICATION (bitcoin-sv/teranode#4692): the check
 // runs after the merkle binding, so on a bound body a bad length is genuine consensus invalidity
 // (condemn once), while on an unbound body it stays corrupt (re-download, never poison).
 func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {

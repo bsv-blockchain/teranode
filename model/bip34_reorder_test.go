@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -70,7 +71,7 @@ func bip34ReorderSettings(t *testing.T) *chaincfg.Params {
 	return &params
 }
 
-// TestBlock_Valid_BIP34Reorder is the freemans13 item 3 fix (bitcoin-sv/teranode#4692, C2/C3): the
+// TestBlock_Valid_BIP34Reorder is the bitcoin-sv/teranode#4692 fix: the
 // BIP34 coinbase-height check now runs AFTER the merkle binding, and is classified by whether the
 // body was merkle-bound. A merkle-MATCHING body with a wrong BIP34 height is genuine consensus
 // invalidity (condemn once, invalid=true); an UNBOUND body — subtrees present but no subtree store,
@@ -143,4 +144,53 @@ func TestBlock_Valid_BIP34Reorder(t *testing.T) {
 			"an unbound body must NEVER be poisoned (invalid=true) on a BIP34 failure")
 		require.Contains(t, err.Error(), "does not match block height")
 	})
+}
+
+// TestBlock_Valid_UnboundCoinbaseHeightDecodeFailureIsCorrupt is a RULE-GUARD (bitcoin-sv/teranode#4692),
+// not a live-leak regression: it pins that when coinbase-height EXTRACTION fails (the scriptSig is a
+// malformed height push, distinct from the height-mismatch case above) on an UNBOUND body, the
+// verdict is corrupt and NOT ErrBlockInvalid. The extraction path's reachable cause today is a
+// coinbase-height-decode error (BlockCoinbaseMissingHeight), which is not ErrBlockInvalid, so this
+// assertion holds regardless of whether Block.Valid wraps that typed cause — i.e. the test is NOT
+// mutation-provable against the wrap. Its job is to guard the classifier's invariant (an unbound
+// body is never poisoned) at the extraction-failure branch, and to lock the branch as reachable so a
+// future cause that IS ErrBlockInvalid cannot silently start leaking through it.
+func TestBlock_Valid_UnboundCoinbaseHeightDecodeFailureIsCorrupt(t *testing.T) {
+	const blockHeight = uint32(200) // at/after BIP0034Height (1) so the coinbase-height check runs
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = bip34ReorderSettings(t)
+
+	txHash, err := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+	require.NoError(t, err)
+
+	// A well-formed coinbase input (null prevout) so IsCoinbase holds, but a scriptSig whose height
+	// push cannot decode: OP_DATA4 (0x04) claims a 4-byte push with only 1 byte following. Length 2
+	// passes the bad-coinbase-length floor (>= 2), so extraction — not the length check — is what fails.
+	coinbase := bt.NewTx()
+	require.NoError(t, coinbase.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x04, 0x01})
+	require.True(t, coinbase.IsCoinbase(), "fixture must still be a coinbase")
+
+	// Subtrees present but NO subtree store: CheckMerkleRoot never runs, so merkleRootChecked stays
+	// false and the coinbase-height check runs on an UNBOUND body.
+	st, merkleRoot := buildSubtreeAndMerkleRoot(t, coinbase, *txHash)
+	hdr := minedHeaderVersion(t, 4, merkleRoot)
+
+	block, err := NewBlock(hdr, coinbase, []*chainhash.Hash{st.RootHash()}, 2, 123, blockHeight, 0)
+	require.NoError(t, err)
+
+	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+
+	valid, err := block.Valid(
+		context.Background(), ulogger.TestLogger{}, nil,
+		&panicTxMetaStore{}, oldBlockIDs, []*BlockHeader{}, []uint32{}, tSettings, nil,
+	)
+	require.False(t, valid)
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err),
+		"an unbound coinbase-height extraction failure must be corrupt (re-download), got: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid),
+		"an unbound body must NEVER be poisoned (invalid=true) on a coinbase-height extraction failure")
+	require.Contains(t, err.Error(), "error extracting coinbase height")
 }

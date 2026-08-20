@@ -616,6 +616,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		utxoStore,
 		validatorClient,
 		subtreeValidationClient,
+		p2pClient,
 	)
 
 	assert.NotNil(t, blockchainClient)

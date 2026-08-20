@@ -7,9 +7,10 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -54,9 +55,12 @@ func TestBlockValid_CorruptWhenFirstTxNotCoinbase(t *testing.T) {
 }
 
 // TestBlockValid_CorruptWhenFirstSubtreeHasNoNodes covers the empty-first-subtree body check in
-// block.Valid (bitcoin-sv/teranode#4692): a subtree that carries no nodes is a body-integrity defect,
-// classified corrupt (re-download), not invalid. The subtree slice is pre-populated so
-// GetAndValidateSubtrees takes its "already loaded" fast path and the empty-subtree guard runs.
+// block.Valid (bitcoin-sv/teranode#4692): a peer-supplied subtree that carries no nodes is a
+// body-integrity defect, classified corrupt (re-download), not invalid. The subtree is genuinely
+// PRESENT in the store but empty — a pre-set 0-node SubtreeSlices entry is deliberately treated as
+// "not loaded" (node-pool release semantics, Block.go GetAndValidateSubtrees), so the empty subtree
+// must be served from the store to reach the guard. Contrast: a subtree merely MISSING from the
+// store is a LOCAL storage failure and must NOT be blamed on the peer as corruption.
 func TestBlockValid_CorruptWhenFirstSubtreeHasNoNodes(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -69,26 +73,32 @@ func TestBlockValid_CorruptWhenFirstSubtreeHasNoNodes(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
-	empty, err := subtreepkg.NewTreeByLeafCount(2)
-	require.NoError(t, err)
-	require.Equal(t, 0, empty.Length(), "test fixture: the first subtree must have no nodes")
+	// A genuinely present-but-empty subtree blob: a well-behaved producer never writes one
+	// (Subtree.Serialize panics on RootHash() with zero nodes), so this is exactly the corrupt/
+	// hand-crafted peer input the guard defends against. Serialized layout (go-subtree):
+	// rootHash[32] | fees[8] | sizeInBytes[8] | numNodes[8]=0 | numConflictingNodes[8]=0.
+	key := chainhash.Hash{0x01}
+	emptySubtreeBlob := make([]byte, 64)
+	copy(emptySubtreeBlob[:32], key[:]) // rootHash field (cosmetic; not re-checked on load)
+
+	blobStore := blobmemory.New()
+	require.NoError(t, blobStore.Set(context.Background(), key[:], fileformat.FileTypeSubtree, emptySubtreeBlob))
 
 	block := &Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
 		TransactionCount: 1,
 		SizeInBytes:      123,
-		Subtrees:         []*chainhash.Hash{{0x01}},
-		// Pre-set (non-nil, len matches Subtrees) so GetAndValidateSubtrees skips loading and the
-		// empty-subtree guard is reached.
-		SubtreeSlices: []*subtreepkg.Subtree{empty},
+		Subtrees:         []*chainhash.Hash{&key},
+		// SubtreeSlices left nil so GetAndValidateSubtrees loads the (empty) subtree from the store.
 	}
 
-	valid, err := block.Valid(context.Background(), ulogger.TestLogger{}, &mockSubtreeStore{}, createTestUTXOStore(t),
+	valid, err := block.Valid(context.Background(), ulogger.TestLogger{}, blobStore, createTestUTXOStore(t),
 		txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
 
 	require.False(t, valid)
 	require.Error(t, err)
 	require.True(t, errors.IsBlockCorrupt(err), "an empty first subtree is a corrupt body, got: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "an empty first subtree must never poison the hash")
 	require.Contains(t, err.Error(), "first subtree has no nodes")
 }

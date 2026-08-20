@@ -365,16 +365,10 @@ func TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic(t *testing.T) 
 		block.Header.Nonce++
 	}
 
-	// Create a channel to signal when InvalidateBlock is called
-	invalidateBlockCalled := make(chan struct{})
-
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
-	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil).Run(func(args mock.Arguments) {
-		// Signal that InvalidateBlock was called
-		close(invalidateBlockCalled)
-	})
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	subChan := make(chan *blockchain_api.Notification, 1)
@@ -438,13 +432,9 @@ func TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic(t *testing.T) 
 	require.True(t, errors.IsBlockCorrupt(err), "a zeroed-merkle body is corrupt, not invalid")
 
 	// A corrupt body on the non-optimistic path is never invalidated (no AddBlock happened, so
-	// there is nothing to roll back). Give any stray background goroutine a brief window.
-	select {
-	case <-invalidateBlockCalled:
-		t.Fatal("corrupt block body must NOT be invalidated (bitcoin-sv/teranode#4692): it is re-downloaded, not poisoned")
-	case <-time.After(200 * time.Millisecond):
-		// correct: a corrupt body is never invalidated
-	}
+	// there is nothing to roll back). ValidateBlock is synchronous here — it has already returned —
+	// so assert deterministically that InvalidateBlock was never called, with no timer/sleep race.
+	mockBlockchain.AssertNotCalled(t, "InvalidateBlock", mock.Anything, block.Header.Hash())
 
 	require.False(t, mockKafka.IsPublishCalled(), "corrupt block body must not be published as invalid")
 }

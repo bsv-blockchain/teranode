@@ -59,14 +59,14 @@ func TestHandleBlockMsg_CorruptCapDropsBeforeHandleBlockDirect(t *testing.T) {
 	_, failed := sm.recentlyFailedBlocks.Get(blockHash)
 	require.False(t, failed, "the cap drop must not mark the block failed (preserves the no-NOT_FOUND-cascade property)")
 
-	// This is also the NON-headers-first half of the mode gate added for freemans13 item 3: the
+	// This is also the NON-headers-first half of the mode gate added for bitcoin-sv/teranode#4692: the
 	// pipeline refill must fire only in headers-first mode. refillHeaderBlockPipeline's only route to
 	// the blockchain client is GetBestBlockHeader (via current() and its own fallback), so its absence
 	// proves the refill did not run here.
 	blockchainClient.AssertNotCalled(t, "GetBestBlockHeader", mock.Anything)
 }
 
-// TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline covers freemans13 item 3
+// TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline covers bitcoin-sv/teranode#4692
 // (bitcoin-sv/teranode#4692): the cap gate runs AFTER the headerList entry and the requestedBlocks
 // slot have already been consumed, so in headers-first mode a capped delivery drains one in-flight
 // slot. Without a refill the remaining in-flight blocks each fail on their missing parent and

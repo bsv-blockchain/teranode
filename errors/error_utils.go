@@ -297,7 +297,7 @@ func GetErrorCategory(err error) string {
 	// IsMaliciousResponseError matches on "corrupt" — so without this early-out every corrupt-body
 	// error is attributed to "malicious" in telemetry instead of "block" (its code is inside the
 	// block range). Same ordering rule the routing sites follow: test the specific classifier first
-	// (freemans13 item 10 / bitcoin-sv/teranode#4692).
+	// (bitcoin-sv/teranode#4692).
 	if IsBlockCorrupt(err) {
 		return "block"
 	}

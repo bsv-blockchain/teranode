@@ -1523,6 +1523,16 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 						// corrupted body. Abort so the shared dispatch re-downloads a fresh body from
 						// another peer (releaseCatchupLock classifies it as corrupt_block_body).
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s has a corrupt body, aborting for re-download", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+						// Delete the peer-supplied .subtree blobs that just failed their integrity check.
+						// fetchAndStoreSubtree wrote them under FileTypeSubtreeToCheck without confirming
+						// they hash to the requested subtree, and findLocalSubtreeFile short-circuits on
+						// retry, so the bogus blob would be re-read from any peer until retention lapses.
+						// The fresh re-download re-writes them, so removal is safe. On a delete failure,
+						// preserve the corrupt classification (see the quick path) — never downgrade it.
+						if delErr := u.removeCatchupSubtreeFiles(gCtx, block); delErr != nil {
+							u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] block %s: failed to remove corrupt .subtree files: %v", blockUpTo.Hash().String(), block.Hash().String(), delErr)
+						}
 					} else if shouldReportConsensusMalicious(err) {
 						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
@@ -1624,13 +1634,18 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s has a corrupt body, aborting for re-download",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
 
-			// Delete the peer-supplied .subtree blobs before aborting (freemans13 item 9): the quick
+			// Delete the peer-supplied .subtree blobs before aborting (bitcoin-sv/teranode#4692): the quick
 			// path already wrote them (writeSubtreeFilesForBatch) under what readSubtree treats as an
 			// "already validated" marker. Keeping data that just FAILED its integrity check would let
 			// attacker-supplied content sit in the store and be re-applied on every retry. The fresh
 			// re-download re-writes them, so removal is safe.
 			if delErr := u.removeCatchupSubtreeFiles(ctx, block); delErr != nil {
-				return false, delErr
+				// A failed cleanup must not downgrade the corrupt classification to a local
+				// ProcessingError: returning delErr here would make the caller retry the SAME
+				// corrupt body as a transient local failure instead of re-downloading a fresh one.
+				// Log the cleanup failure and preserve the corrupt error.
+				u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: failed to remove corrupt .subtree files: %v",
+					catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), delErr)
 			}
 
 			return false, err
@@ -1656,13 +1671,13 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 // store on a failed quick
 // validation (bitcoin-sv/teranode#4692). Used on BOTH the plain quick-validation failure (before
 // falling back to normal validation, which re-creates the files) and the corrupt-body path (which
-// aborts for a fresh re-download from another peer; freemans13 item 9). Retaining data that FAILED
+// aborts for a fresh re-download from another peer; bitcoin-sv/teranode#4692). Retaining data that FAILED
 // its integrity check would otherwise let peer-supplied content sit under readSubtree's "already
 // validated" marker and be re-applied on every retry. A missing file is not an error.
 func (u *Server) removeCatchupSubtreeFiles(ctx context.Context, block *model.Block) error {
 	for _, subtreeHash := range block.Subtrees {
 		// Every type the retry path can read back, not just the promoted .subtree marker
-		// (freemans13 item 9 / bitcoin-sv/teranode#4692): the catchup fetch writes
+		// (bitcoin-sv/teranode#4692): the catchup fetch writes
 		// FileTypeSubtreeToCheck (get_blocks.go fetchAndStoreSubtree) and FileTypeSubtreeData
 		// (fetchAndStoreSubtreeData), and both are read back — findLocalSubtreeFile prefers
 		// subtreeToCheck, and model.Block.GetAndValidateSubtrees falls back to it. Leaving them behind

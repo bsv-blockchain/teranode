@@ -166,6 +166,13 @@ type revalidateBlockData struct {
 	// setting, which defaults to on.
 	disableOptimisticMining bool
 	isCatchupMode           bool
+
+	// optimisticallyAdded is true only when this block was optimistically AddBlock'd (added to the
+	// chain before block.Valid) and is being requeued after an InvalidateBlock failure on a corrupt
+	// verdict (bitcoin-sv/teranode#4692). It is the ONLY condition under which a corrupt revalidation
+	// verdict may invalidate the block: an already-accepted block re-validated to corrupt (e.g. a bad
+	// local subtree read) must never be poisoned. Defaults false on every ordinary retry/worker path.
+	optimisticallyAdded bool
 }
 
 // BlockValidation handles the core validation logic for blocks in Teranode.
@@ -200,7 +207,8 @@ type BlockValidation struct {
 
 	// p2pClient reports peer reputation events (e.g. striking a peer that served a
 	// corrupt block body, bitcoin-sv/teranode#4692). Optional and may be nil when BlockValidation
-	// runs without a P2P service; all uses are nil-guarded. Wired from Server.Init.
+	// runs without a P2P service; all uses are nil-guarded. Wired through NewBlockValidation's
+	// variadic opts before any goroutine starts, so it is never written post-construction.
 	p2pClient P2PClientI
 
 	// lastValidatedBlocks caches recently validated blocks for 2 minutes
@@ -374,6 +382,9 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 	txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, opts ...interface{},
 ) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
+	if tSettings.BlockValidation.OptimisticMining && !tSettings.BlockValidation.OptimisticMiningPeerBlocks {
+		logger.Warnf("optimistic mining is enabled but disabled on peer-served and catch-up blocks; set blockvalidation_optimistic_mining_peer_blocks to restore it (bitcoin-sv/teranode#4692)")
+	}
 	// Initialize Kafka producer for invalid blocks if configured
 	var invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
 
@@ -424,6 +435,16 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		revalidateWorkerStopped:       make(chan struct{}),
 		stats:                         gocore.NewStat("blockvalidation"),
 		mmapDir:                       tSettings.BlockValidation.SubtreeMmapDir,
+	}
+
+	// Wire the optional peer-reputation client from the variadic opts BEFORE any goroutine
+	// (stats ticker, blockchain subscription, revalidate worker) launches, so no worker can
+	// observe a half-initialised field. Callers that run without a P2P service pass none and
+	// bv.p2pClient stays nil (all uses are nil-guarded).
+	for _, o := range opts {
+		if c, ok := o.(P2PClientI); ok {
+			bv.p2pClient = c
+		}
 	}
 
 	go func() {
@@ -1994,8 +2015,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						if _, invErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invErr != nil {
 							// Invalidation failed → the block is still on-chain. Do NOT return silently.
 							// Re-queue revalidation to converge on invalidation once the store recovers.
+							// This is the ONLY site that flags the requeue optimisticallyAdded: the body
+							// was AddBlock'd before block.Valid, so a repeat corrupt verdict here MAY
+							// invalidate (bitcoin-sv/teranode#4692). Every other revalidation caller leaves
+							// the flag false so an already-accepted block is never poisoned on a corrupt read.
 							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added and InvalidateBlock FAILED; re-queuing revalidation to avoid a silently-accepted corrupt tip: %v", block.String(), invErr)
-							u.ReValidateBlock(block, baseURL)
+							u.enqueueRevalidation(revalidateBlockData{block: block, baseURL: baseURL, optimisticallyAdded: true})
 						} else {
 							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added; invalidated (invalidate route, not silently accepted) — opt-in optimistic peer mining until the block.Valid integrity-floor split lands", block.String())
 						}
@@ -2642,6 +2667,9 @@ func (u *BlockValidation) ReValidateBlockFromScratch(block *model.Block, baseURL
 }
 
 func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
+	// Public entry point: an ordinary revalidation was NOT optimistically added, so
+	// optimisticallyAdded stays false and a corrupt verdict here can never invalidate the
+	// block (bitcoin-sv/teranode#4692).
 	u.enqueueRevalidation(revalidateBlockData{block: block, baseURL: baseURL})
 }
 
@@ -2819,21 +2847,13 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		// A corrupt error normally means "nothing was added, re-download" — invalidating would poison a
 		// hash we hold no bound evidence against. The one exception is the opt-in optimistic peer path,
 		// where the body was AddBlock'd before block.Valid ran and a failed InvalidateBlock re-queued us
-		// here: there the block IS on-chain, so returning without invalidating leaves a silently
-		// accepted corrupt tip, which is what the re-queue exists to prevent. Gate on the block actually
-		// being in the store — not on the error alone — so the callers that never AddBlock'd (the
-		// GetBlockHeaders failure paths in ValidateBlockWithOptions) can never poison a hash through
-		// this branch (freemans13 item 4 / bitcoin-sv/teranode#4692). A lookup failure and a
-		// not-present block both leave the flag false: the direction that never poisons.
-		invalidateCorruptOnChain := false
-
-		if errors.IsBlockCorrupt(err) {
-			if exists, existsErr := u.GetBlockExists(ctx, blockData.block.Header.Hash()); existsErr != nil {
-				u.logger.Warnf("[ReValidateBlock][%s] corrupt body: could not confirm the block is stored, not invalidating: %v", blockData.block.String(), existsErr)
-			} else {
-				invalidateCorruptOnChain = exists
-			}
-		}
+		// here with optimisticallyAdded set: there the block IS on-chain, so returning without
+		// invalidating leaves a silently accepted corrupt tip, which is what the re-queue exists to
+		// prevent. Gate on that explicit requeue flag — NOT on GetBlockExists, which any already-accepted
+		// block re-validated to a corrupt verdict (e.g. a bad local subtree read) would satisfy and be
+		// wrongly poisoned (bitcoin-sv/teranode#4692). When the flag is false a corrupt verdict returns
+		// unwrapped without invalidating: the direction that never poisons an honest hash.
+		invalidateCorruptOnChain := errors.IsBlockCorrupt(err) && blockData.optimisticallyAdded
 
 		// ErrBlockIncomplete in a caught-up state is a floater (see isCaughtUp /
 		// the ValidateBlock handlers): invalidate so the revalidate worker
