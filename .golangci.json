@@ -73,6 +73,28 @@
         },
         {
           "linters": [
+            "depguard",
+            "forbidigo"
+          ],
+          "path": "compat/bsvec"
+        },
+        {
+          "linters": [
+            "depguard",
+            "forbidigo",
+            "prealloc"
+          ],
+          "path": "compat/bsvutil"
+        },
+        {
+          "linters": [
+            "depguard",
+            "forbidigo"
+          ],
+          "path": "compat/txscript"
+        },
+        {
+          "linters": [
             "forbidigo"
           ],
           "path": "pkg"
