@@ -2,6 +2,7 @@ package settings
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,7 +20,9 @@ import (
 // The check is value-shaped rather than key-name-based: gocore resolves
 // ${VAR} indirection from same-file entries (including context-suffixed
 // definitions), so a key hidden behind any variable name is caught where the
-// literal is defined, whatever it is called.
+// literal is defined, whatever it is called. Lines are parsed with gocore's
+// own rules (comment starts at the first '#' anywhere, key is everything left
+// of the first '=') so the guard sees every literal gocore sees.
 
 // allowedFixtures are the public throwaway values already published in the
 // repo's test configs and tooling. Never add a real value here.
@@ -50,73 +53,150 @@ var allowedFixtures = map[string]bool{
 	"285b49e6d910726a70f205086c39cbac6d8dcc47839053a21b1f614773bbc137": true,
 }
 
-// committedSettingsFiles are every settings-format file committed to the repo
-// (the deploy/util settings_local.conf files are force-added past .gitignore).
-var committedSettingsFiles = []string{
-	"../settings.conf",
-	"../compose/settings_test.conf",
-	"../deploy/docker/base/settings_local.conf",
-	"../deploy/docker/base/settings_local.conf.template",
-	"../util/servicemanager/example/settings_local.conf",
+// knownSettingsFiles must always be among the discovered scan targets; a
+// discovery bug can therefore never silently reduce the guard to zero files.
+var knownSettingsFiles = []string{
+	"settings.conf",
+	"compose/settings_test.conf",
+	"deploy/docker/base/settings_local.conf",
+	"deploy/docker/base/settings_local.conf.template",
+	"util/servicemanager/example/settings_local.conf",
 }
 
 var (
-	assignmentLine = regexp.MustCompile(`^([A-Za-z0-9_]+)((?:\.[A-Za-z0-9_-]+)*)\s*=\s*(.*)$`)
-
-	// Private key material shapes: 32- or 64-byte hex (Ed25519 seed or
-	// priv+pub), and base58 WIF. Compressed/uncompressed public keys are 33/65
-	// bytes (66/130 hex) and deliberately do not match.
-	hexKeyValue = regexp.MustCompile(`^[0-9a-fA-F]{64}$|^[0-9a-fA-F]{128}$`)
+	// hexKeyValue matches hex blobs long enough to be private key material
+	// (32-byte seeds and up, including the 96-byte legacy libp2p priv+pub+pub
+	// form that crypto.UnmarshalEd25519PrivateKey accepts as 192 hex chars).
+	// It mirrors the .gitleaks.toml rule's {64,}.
+	hexKeyValue = regexp.MustCompile(`^[0-9a-fA-F]{64,}$`)
 	wifKeyValue = regexp.MustCompile(`^[5KL9c][1-9A-HJ-NP-Za-km-z]{50,51}$`)
 
 	privateKeyName = regexp.MustCompile(`(?i)private_keys?$`)
+	varRefValue    = regexp.MustCompile(`^\$\{([^}]+)\}$`)
 )
 
-func normalizeValue(raw string) string {
-	value := strings.TrimSpace(raw)
-	if i := strings.Index(value, " #"); i >= 0 { // trailing comment
-		value = strings.TrimSpace(value[:i])
+// isKeyShapedHex reports hex blobs long enough to be private key material.
+// 66/130 chars are compressed/uncompressed public keys (alert_genesis_keys)
+// and are deliberately excluded.
+func isKeyShapedHex(v string) bool {
+	return hexKeyValue.MatchString(v) && len(v) != 66 && len(v) != 130
+}
+
+// parseAssignment parses a settings line exactly as gocore's processFile does:
+// everything from the first '#' is a comment, the key is everything left of
+// the first '=', and the context is everything from the key's first '.'.
+func parseAssignment(line string) (name, context, value string, ok bool) {
+	line, _, _ = strings.Cut(line, "#")
+
+	rawKey, rawValue, found := strings.Cut(line, "=")
+	if !found {
+		return "", "", "", false
 	}
 
-	return strings.Trim(value, `"`)
+	key := strings.TrimSpace(rawKey)
+	if key == "" {
+		return "", "", "", false
+	}
+
+	name, context = key, ""
+	if i := strings.Index(key, "."); i >= 0 {
+		name, context = key[:i], key[i:]
+	}
+
+	return name, context, strings.TrimSpace(rawValue), true
+}
+
+// discoverSettingsFiles enumerates every COMMITTED settings-format file via
+// git ls-files. Discovery must not walk the filesystem: a developer's local,
+// gitignored settings_local.conf legitimately holds real keys and must never
+// be scanned. Falls back to the known list when git is unavailable.
+func discoverSettingsFiles(t *testing.T, root string) []string {
+	out, err := exec.Command("git", "-C", root, "ls-files").Output()
+	if err != nil {
+		t.Logf("git ls-files unavailable (%v), falling back to the known settings file list", err)
+		return knownSettingsFiles
+	}
+
+	var files []string
+
+	for path := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		base := filepath.Base(path)
+
+		isSettings := strings.HasPrefix(base, "settings") &&
+			(strings.HasSuffix(base, ".conf") || strings.HasSuffix(base, ".conf.template") || strings.HasSuffix(base, ".conf.tmpl"))
+		if isSettings || strings.HasSuffix(base, ".conf.tmpl") {
+			files = append(files, path)
+		}
+	}
+
+	for _, known := range knownSettingsFiles {
+		require.Contains(t, files, known, "discovery must find every known committed settings file")
+	}
+
+	return files
 }
 
 func TestNoRealPrivateKeysCommitted(t *testing.T) {
-	for _, rel := range committedSettingsFiles {
-		path, err := filepath.Abs(rel)
-		require.NoError(t, err)
+	root, err := filepath.Abs("..")
+	require.NoError(t, err)
 
-		content, err := os.ReadFile(path)
+	for _, rel := range discoverSettingsFiles(t, root) {
+		content, err := os.ReadFile(filepath.Join(root, rel))
 		require.NoError(t, err, "committed settings file must exist: %s", rel)
 
-		for i, raw := range strings.Split(string(content), "\n") {
+		lines := strings.Split(string(content), "\n")
+
+		// One-hop ${VAR} resolution table so a key or fixture hidden behind a
+		// variable is still subject to both checks at the referencing line.
+		// Last non-empty wins, matching gocore; context-suffixed definitions
+		// are indexed by base name so they cannot dodge resolution.
+		defs := map[string]string{}
+
+		for _, raw := range lines {
+			if name, _, value, ok := parseAssignment(raw); ok {
+				if v := strings.Trim(value, `"`); v != "" {
+					defs[name] = v
+				}
+			}
+		}
+
+		for i, raw := range lines {
 			lineNo := i + 1
 
-			line := strings.TrimSpace(raw)
-			if line == "" || strings.HasPrefix(line, "#") {
+			name, context, value, ok := parseAssignment(raw)
+			if !ok {
 				continue
 			}
 
-			m := assignmentLine.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
+			// Multi-key settings (miner_wallet_private_keys) are read via
+			// getMultiString with '|' - check each element separately.
+			for part := range strings.SplitSeq(strings.Trim(value, `"`), "|") {
+				part = strings.Trim(strings.TrimSpace(part), `"`)
 
-			name, context := m[1], m[2]
+				if m := varRefValue.FindStringSubmatch(part); m != nil {
+					if resolved, exists := defs[m[1]]; exists {
+						part = resolved
+					}
+				}
 
-			value := normalizeValue(m[3])
-			if !hexKeyValue.MatchString(value) && !wifKeyValue.MatchString(value) {
-				continue
-			}
+				if !isKeyShapedHex(part) && !wifKeyValue.MatchString(part) {
+					continue
+				}
 
-			require.True(t, allowedFixtures[value],
-				"%s:%d: %s%s has a committed private-key-shaped value that is not a known public test fixture; real keys belong in an uncommitted settings_local.conf, env, or the generated p2p.key - if this leaked, rotate it",
-				rel, lineNo, name, context)
+				require.True(t, allowedFixtures[part],
+					"%s:%d: %s%s has a committed private-key-shaped value that is not a known public test fixture; real keys belong in an uncommitted settings_local.conf, env, or the generated p2p.key - if this leaked, rotate it",
+					rel, lineNo, name, context)
 
-			if privateKeyName.MatchString(name) {
-				require.NotEmpty(t, context,
-					"%s:%d: %s has a context-less committed key value; a bare default silently becomes every deployment's identity - leave it empty so the auto-generate path runs",
-					rel, lineNo, name)
+				// The structural ban on context-less defaults covers hex
+				// identity keys (this guard's subject). Context-less WIF
+				// wallet defaults (coinbase_wallet_private_key = ${PK1}) are
+				// pre-existing and tracked with the PK1-PK6 related finding
+				// on bitcoin-sv/teranode issue 4739.
+				if privateKeyName.MatchString(name) && isKeyShapedHex(part) {
+					require.NotEmpty(t, context,
+						"%s:%d: %s has a context-less committed key value; a bare default silently becomes every deployment's identity - leave it empty so the auto-generate path runs",
+						rel, lineNo, name)
+				}
 			}
 		}
 	}
