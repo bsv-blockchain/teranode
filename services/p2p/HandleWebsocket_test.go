@@ -1206,8 +1206,8 @@ func TestWSConnLimiter(t *testing.T) {
 			releases = append(releases, release)
 		}
 
-		require.True(t, l.bypassWarned,
-			"live trusted-bypass connections above the global cap must flag the caps as non-binding")
+		require.False(t, l.lastBypassWarn.IsZero(),
+			"live trusted-bypass connections above the global cap must warn that the caps are non-binding")
 
 		for _, release := range releases {
 			release()
@@ -1393,6 +1393,40 @@ func TestHandleWebSocket_InboundFrameLimits(t *testing.T) {
 
 		for i := 0; i < wsMaxInboundFrames+50; i++ {
 			if err := ws.WriteMessage(websocket.TextMessage, []byte("spam")); err != nil {
+				break // server already closed on us mid-flood, which is the point
+			}
+		}
+
+		requireServerClosed(t, ws)
+	})
+
+	// Control frames are handled inside gorilla's ReadMessage and never
+	// surface to the read loop, so the budget must be enforced in the
+	// ping/pong handlers or a control-frame flood spends read-path budget
+	// (and, for pongs, refreshes the idle deadline) unmetered.
+	t.Run("Ping flood disconnects", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		for i := 0; i < wsMaxInboundFrames+50; i++ {
+			if err := ws.WriteControl(websocket.PingMessage, []byte("p"), time.Now().Add(time.Second)); err != nil {
+				break // server already closed on us mid-flood, which is the point
+			}
+		}
+
+		requireServerClosed(t, ws)
+	})
+
+	t.Run("Pong flood disconnects", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		for i := 0; i < wsMaxInboundFrames+50; i++ {
+			if err := ws.WriteControl(websocket.PongMessage, []byte("p"), time.Now().Add(time.Second)); err != nil {
 				break // server already closed on us mid-flood, which is the point
 			}
 		}

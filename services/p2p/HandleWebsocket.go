@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
@@ -208,9 +209,10 @@ const (
 	// wsMaxReadBytes caps inbound message size; a message over the limit makes
 	// gorilla close the connection (1009). Clients are not expected to send data.
 	wsMaxReadBytes int64 = 1024
-	// wsMaxInboundFrames caps how many inbound frames a client may send per
-	// pongWait window; the endpoint is publish-only, so an admitted client
-	// must not be able to spend server read-path budget without bound.
+	// wsMaxInboundFrames caps how many inbound frames (data AND control:
+	// pings, pongs) a client may send per pongWait window; the endpoint is
+	// publish-only, so an admitted client must not be able to spend server
+	// read-path budget without bound.
 	wsMaxInboundFrames = 100
 	// wsCapWarnInterval throttles the connection-cap rejection warning: at most
 	// one WARN per interval so an ongoing saturation stays visible at default
@@ -308,15 +310,15 @@ func originAllowed(origin string, allowed []string) bool {
 // holds every public slot. Sources are keyed by the transport-level
 // RemoteAddr host, never by forwarded-for headers, which are caller-supplied.
 type wsConnLimiter struct {
-	mu           sync.Mutex
-	total        int64            // live connections from untrusted sources
-	perSource    map[string]int64 // live connections per untrusted source host
-	trustedLive  int64            // live connections admitted via the trusted bypass
-	bypassWarned bool             // trusted-bypass overload warning emitted
-	maxTotal     int64            // <= 0 disables both caps
-	maxPerSource int64
-	trusted      []*net.IPNet
-	logger       ulogger.Logger
+	mu             sync.Mutex
+	total          int64            // live connections from untrusted sources
+	perSource      map[string]int64 // live connections per untrusted source host
+	trustedLive    int64            // live connections admitted via the trusted bypass
+	lastBypassWarn time.Time        // last trusted-bypass overload warning (throttled to wsCapWarnInterval)
+	maxTotal       int64            // <= 0 disables both caps
+	maxPerSource   int64
+	trusted        []*net.IPNet
+	logger         ulogger.Logger
 }
 
 // newWSConnLimiter builds the admission controller. perSourceOverride selects
@@ -376,8 +378,10 @@ func (l *wsConnLimiter) acquire(remoteAddr string) (release func(), ok bool) {
 				l.mu.Lock()
 				l.trustedLive++
 
-				if l.maxTotal > 0 && l.trustedLive > l.maxTotal && !l.bypassWarned {
-					l.bypassWarned = true
+				// Throttled (not once-per-process) so a genuine "caps are not
+				// binding" condition stays visible for the process lifetime.
+				if now := time.Now(); l.maxTotal > 0 && l.trustedLive > l.maxTotal && now.Sub(l.lastBypassWarn) >= wsCapWarnInterval {
+					l.lastBypassWarn = now
 					l.logger.Warnf("More live /p2p-ws connections admitted via the trusted-source bypass (%d) than the global cap (%d); if a reverse proxy fronts this endpoint from a trusted address, the connection caps are not protecting it - preserve client source addresses or narrow p2p_websocket_trusted_source_cidrs", l.trustedLive, l.maxTotal)
 				}
 				l.mu.Unlock()
@@ -630,30 +634,63 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 
 		// Read pump: enforce a read deadline refreshed by pongs so half-open
 		// or silent connections are detected, and process control frames.
-		// Inbound data frames are tolerated (the dashboard's wstest page
-		// sends one) but budgeted per pongWait window - the endpoint is
+		// Inbound frames are tolerated (the dashboard's wstest page sends a
+		// data frame) but budgeted per pongWait window - the endpoint is
 		// publish-only, so a client streaming frames at line rate is abuse.
+		// The budget covers control frames too: gorilla answers pings and
+		// consumes pongs internally without ever returning from ReadMessage,
+		// so without counting them a ping/pong flood would spend read-path
+		// budget (and, for pongs, defeat the idle timeout) unmetered.
+		//
+		// The budget state is mutated only on the read goroutine - gorilla
+		// invokes the ping/pong handlers from within ReadMessage - so it
+		// needs no locking.
+		inbound, windowEnd := 0, time.Now().Add(to.pongWait)
+		overBudget := func() bool {
+			if now := time.Now(); now.After(windowEnd) {
+				inbound, windowEnd = 0, now.Add(to.pongWait)
+			}
+
+			inbound++
+
+			return inbound > wsMaxInboundFrames
+		}
+
 		ws.SetReadLimit(wsMaxReadBytes)
 		_ = ws.SetReadDeadline(time.Now().Add(to.pongWait))
+
 		ws.SetPongHandler(func(string) error {
+			if overBudget() {
+				return errors.NewProcessingError("websocket inbound frame budget exceeded")
+			}
+
 			return ws.SetReadDeadline(time.Now().Add(to.pongWait))
+		})
+
+		// Mirrors gorilla's default ping handler (reply with a pong echoing the
+		// payload, tolerate a concurrently sent close), plus the budget check.
+		ws.SetPingHandler(func(appData string) error {
+			if overBudget() {
+				return errors.NewProcessingError("websocket inbound frame budget exceeded")
+			}
+
+			err := ws.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(to.writeTimeout))
+			if err == websocket.ErrCloseSent {
+				return nil
+			}
+
+			return err
 		})
 
 		go func() {
 			defer close(readDone)
-
-			inbound, windowEnd := 0, time.Now().Add(to.pongWait)
 
 			for {
 				if _, _, err := ws.ReadMessage(); err != nil {
 					return
 				}
 
-				if now := time.Now(); now.After(windowEnd) {
-					inbound, windowEnd = 0, now.Add(to.pongWait)
-				}
-
-				if inbound++; inbound > wsMaxInboundFrames {
+				if overBudget() {
 					s.logger.Debugf("Websocket client exceeded inbound frame budget, closing connection")
 					return
 				}
