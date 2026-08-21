@@ -619,7 +619,11 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 // The bound is larger in magnitude but still finite, so a failure raised by a
 // catchup's own fetch is never charged to a later cycle nor dropped into a cleared
 // context. Making any fetch on that path fire-and-forget breaks this and requires the
-// cycle to be threaded from the caller instead.
+// cycle to be threaded from the caller instead — as would an injected
+// fetchSubtreeDataForBlockFn that does not preserve that join.
+// In adaptive-fetch optimistic mode the per-subtree fetch is skipped entirely, so on
+// that branch there is nothing to join and the guarantee holds vacuously rather than
+// by the join above.
 //
 // Not every caller is a catchup. RevalidateBlock reaches this path through
 // fetchSubtreeDataForBlock on its own gRPC goroutine with no interlock against a
