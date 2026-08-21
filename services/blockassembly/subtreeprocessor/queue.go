@@ -117,9 +117,9 @@ func (q *LockFreeQueue) length() int64 {
 
 // publish links a batch into the queue in a thread-safe manner, WITHOUT
 // mutating queueLength. It is the shared tail-swap-and-link core of both
-// enqueueBatch (which accounts for the length afterwards) and
-// enqueueBatchIfRoom (which reserves the length beforehand). The entire batch
-// receives a single timestamp when published.
+// enqueueBatch and enqueueBatchIfRoom, each of which reserves the batch's items
+// in queueLength before calling it. The entire batch receives a single timestamp
+// when published.
 //
 // Parameters:
 //   - nodes: The transaction nodes to add
@@ -139,52 +139,73 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 		prev.next.Store(batch)
 	}
 
-	// Mark the oldest pending timestamp on the empty->non-empty transition so
-	// the head-age gauge reads a real age rather than 0. The consumer resets it
-	// to 0 when it drains the last batch, so a CAS from 0 succeeds exactly for
-	// the batch that becomes the new head-of-line.
+	// Move the oldest-pending timestamp EARLIER toward this batch's time, never
+	// later. A producer sets it from 0 (the empty->non-empty transition) or lowers
+	// it when this batch predates the current latch, but it NEVER raises it. That
+	// one-directional rule is what makes the multi-producer race safe: with the
+	// latch at 0, producer A can link the true (older) head yet producer B links
+	// behind it and wins the store first; a plain CAS-from-0 would then leave B's
+	// LATER time and under-report the backlog age (the dangerous direction — the
+	// backpressure controller would fail to pause). Here A's corrective CAS(tB, tA)
+	// still lowers the latch to its older time, so it converges to the OLDEST
+	// pending time. A read landing in the gap between B's store and A's corrective
+	// CAS still sees the younger tB — a transient under-report — but that gap is one
+	// producer's own straight-line path from link to this loop (no I/O, lock or
+	// early return) and self-heals on A's very next CAS: a different class from the
+	// persistent, consumer-cadence-bounded under-report a plain CAS-from-0 leaves.
 	//
-	// The gauge is now a control input (the validator's ingest backpressure
-	// decides on it) as well as the stall alert, so it must read neither 0 while a
-	// backlog is present NOR non-zero while the queue is empty. Three mechanisms
-	// keep it consistent under the drain race without a lock or a timestamp
-	// comparison:
+	// batch.time is stamped before tail.Swap, so a stalled producer can carry a
+	// time earlier than the batch actually linked ahead of it; pulling the latch to
+	// that earlier time is an OVER-report (age reads older than the true head),
+	// bounded by the producers' inter-arrival gap and corrected by the consumer's
+	// next updateOldestPending. Over-report is the safe direction.
 	//
-	//  1. this CAS sets it whenever the queue was empty;
-	//  2. the consumer's empty-clear re-reads head.next after storing 0
-	//     (updateOldestPending), so a batch linked during that window is picked up
-	//     by value;
-	//  3. the consumer's EMPTY OBSERVATION — dequeueBatch/dequeueBatchUntil finding
-	//     head.next == nil — also runs that store-then-recheck, so a value this CAS
-	//     wrote after a drain had already emptied the queue cannot latch.
+	// The loop is lock-free and terminates: the common case (non-empty queue, this
+	// batch newer than the head) breaks on the first load with no store; a store
+	// runs only on the empty transition or a rarer out-of-order timestamp, and each
+	// failed CAS re-reads a latch another writer already moved toward this target or
+	// to 0, so progress is bounded by the finite set of concurrent writers.
 	//
-	// Every interleaving converges to the linked head's time, or to 0 when there is
-	// no linked head. Without (3), the link-then-CAS gap here left a non-zero age
-	// on an empty queue permanently: the drain loop's later passes all take the
-	// head.next == nil early return. With it, staleness is bounded by at most one
-	// drain-loop iteration (SubtreeProcessor's idle-sleep cadence).
-	q.oldestPendingMillis.CompareAndSwap(0, batch.time)
+	// An empty queue is covered separately by the headAgeMillis clamp, which reads
+	// 0 whenever queueLength is 0, so a stale non-zero latch left on an empty queue
+	// (e.g. a CAS that landed just after a drain) is never observed while it stays
+	// empty — including for the whole of a dequeue-free state transition. Should a
+	// batch then arrive while such a stale OLDER latch is still set, min-CAS leaves
+	// it (it only lowers), so the age reads slightly old: an OVER-report, the safe
+	// direction, bounded and cleared by the consumer's next updateOldestPending.
+	for {
+		cur := q.oldestPendingMillis.Load()
+		if cur != 0 && batch.time >= cur {
+			break
+		}
+
+		if q.oldestPendingMillis.CompareAndSwap(cur, batch.time) {
+			break
+		}
+	}
 }
 
 // enqueueBatch adds a batch of transactions to the queue unconditionally,
-// accounting for its items in queueLength AFTER publishing. It is the unbounded
-// path and remains byte-for-byte equivalent to the original queue.
+// accounting for its items in queueLength BEFORE publishing. It is the unbounded
+// path; it ignores maxItems but otherwise mirrors enqueueBatchIfRoom's
+// reserve-first ordering.
 //
-// Because it publishes before accounting, this path does NOT uphold the
-// queueLength >= published-outstanding invariant: for the brief window between
-// publish and Add the counter reads below the published count. It also ignores
-// maxItems entirely. Both are acceptable: this path feeds only the internal
-// AddBatch/AddDirectly callers, never the bounded ingest handlers, and the sole
-// consumer of the directional guarantee (the state-transition drain snapshot)
-// is fed only by the reservation path in production. Callers that need the
-// bound or the invariant must use enqueueBatchIfRoom.
+// Reserving before publishing upholds the queueLength >= published-outstanding
+// invariant on this path too: the counter is bumped before the batch is linked,
+// so its only transient miscount is an OVER-count (counter high for the brief
+// window before the link lands), never an under-count (counter reading below the
+// published count). That direction is load-bearing because queueLength is read as
+// an empty oracle — headAgeMillis clamps to 0 when it reads 0 — so it must never
+// read 0 while a batch is linked. Every other consumer (the state-transition
+// drain snapshot, the diagnostic gauges and RPCs) already tolerates a transient
+// one-batch over-count. Callers that need the bound must use enqueueBatchIfRoom.
 //
 // Parameters:
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
+	q.queueLength.Add(int64(len(nodes))) // gosec:nolint  reserve before publishing
 	q.publish(nodes, txInpoints)
-	q.queueLength.Add(int64(len(nodes))) // gosec:nolint
 }
 
 // enqueueBatchIfRoom adds a batch only if doing so would not push the number of
@@ -203,7 +224,7 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 // This reservation-first ordering is also what upholds the
 // queueLength >= published-outstanding invariant: the counter is incremented
 // before the batch is linked, so it never reads below the published count. The
-// unbounded enqueueBatch path does not share that ordering (see its comment).
+// unbounded enqueueBatch path now shares that ordering (see its comment).
 //
 // When maxItems <= 0 the queue is unbounded and this degrades to enqueueBatch.
 //
@@ -363,6 +384,18 @@ func (q *LockFreeQueue) updateOldestPending() {
 // Returns:
 //   - int64: The age of the oldest pending batch in milliseconds, or 0 if empty
 func (q *LockFreeQueue) headAgeMillis(now int64) int64 {
+	// An empty queue has no pending batch, so report age 0 even when a stale
+	// non-zero oldestPendingMillis is still latched — e.g. a producer CAS that
+	// landed just before a long state transition (reorg/move-forward), whose only
+	// clear runs on the dequeue paths that transition never takes. Reserve-first
+	// accounting (see enqueueBatch) makes queueLength a safe empty oracle: it can
+	// only over-count a linked batch, never read 0 while one is present, so this
+	// clamp can never mask a real backlog. Reads only atomics, never q.head, so it
+	// stays safe to call from a monitoring goroutine.
+	if q.queueLength.Load() == 0 {
+		return 0
+	}
+
 	oldest := q.oldestPendingMillis.Load()
 	if oldest == 0 {
 		return 0

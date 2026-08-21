@@ -529,15 +529,15 @@ func Test_headAgeGaugeConsumerEmptyClearReReadRepair(t *testing.T) {
 // below is the only place q.head is read).
 //
 // The two atomics cannot be sampled in one snapshot, so at the instant the queue
-// refills a transient (age==0, length>0) skew is possible: enqueueBatch links and
-// runs the gauge CAS before it increments the length, so once length>0 is visible
-// the gauge is already set, but a monitor that latched age==0 a moment earlier can
-// still pair it with a fresh length>0. A genuine regression — a latched stale 0
-// while a backlog is held (the exact defect the refusal-path refresh and the
-// empty-clear re-read remove) — instead persists across the consumer's passes. The
-// monitor therefore re-confirms a bounded number of times and flags only a
-// violation that does not clear, which is the strongest variant observable without
-// a q.head read.
+// refills a transient (age==0, length>0) skew is possible: enqueueBatch now
+// reserves the length BEFORE it links the batch and runs the gauge CAS, so a
+// monitor can see length>0 for a moment before the gauge is set. That transient
+// resolves as soon as the producer's very next step links and CASes. A genuine
+// regression — a latched stale 0 while a backlog is held (the exact defect the
+// refusal-path refresh and the empty-clear re-read remove) — instead persists
+// across the consumer's passes. The monitor therefore re-confirms a bounded number
+// of times and flags only a violation that does not clear, which is the strongest
+// variant observable without a q.head read.
 func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 	fixed := time.UnixMilli(1_700_000_000_000).UTC()
 

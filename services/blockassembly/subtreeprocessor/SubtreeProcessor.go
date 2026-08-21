@@ -1956,9 +1956,9 @@ func (stp *SubtreeProcessor) TxCount() uint64 {
 // back the value can transiently read slightly higher than the number of
 // dequeuable items, but it never reads lower than the published-outstanding
 // count — the directional guarantee the state-transition drain snapshot relies
-// on. Items added through the unbounded AddBatch path publish before accounting,
-// so that path can transiently read below the published count and bypasses the
-// cap entirely; it is not used by the ingest handlers.
+// on. The unbounded AddBatch path now reserves before publishing too, so it
+// upholds that same guarantee; it additionally bypasses the cap entirely and is
+// not used by the ingest handlers.
 //
 // Returns:
 //   - int64: Current queue length, in transactions
@@ -2038,7 +2038,11 @@ func (stp *SubtreeProcessor) QueueMaxItems() int64 {
 // Returns:
 //   - time.Duration: Age of the oldest queued batch, or 0 if the queue is empty
 func (stp *SubtreeProcessor) QueueHeadAge() time.Duration {
-	ageMillis := stp.queue.headAgeMillis(time.Now().UnixMilli())
+	// Use the queue's injectable clock, the same source publish stamps batches
+	// with, so the age is a difference of two readings of one clock rather than a
+	// mix of the fake clock and wall time — deterministic under a fake clock and
+	// consistent with every other queue time comparison.
+	ageMillis := stp.queue.headAgeMillis(stp.queue.clock.Now().UnixMilli())
 	return time.Duration(ageMillis) * time.Millisecond
 }
 
@@ -2629,9 +2633,10 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 }
 
 // AddBatch adds a batch of transaction nodes to the processor queue
-// unconditionally. This path bypasses the capacity bound and does not uphold the
-// queueLength >= published-outstanding invariant (it publishes before
-// accounting); callers needing the bound must use AddBatchIfRoom.
+// unconditionally. This path bypasses the capacity bound but, like
+// AddBatchIfRoom, reserves its items before publishing so it upholds the
+// queueLength >= published-outstanding invariant; callers needing the bound must
+// use AddBatchIfRoom.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add
