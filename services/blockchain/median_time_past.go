@@ -6,11 +6,16 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
 )
 
 // MedianTimeBlocks is the number of previous blocks used to calculate MTP (BIP113).
 // MTP is the median of the timestamps of the last 11 blocks.
-const MedianTimeBlocks = 11
+//
+// Read from the single declaration so the helpers that BUILD the median window here and the
+// checker that evaluates it in model cannot drift apart — drift would split the median rule
+// between block validation and transaction finality.
+const MedianTimeBlocks = settings.MedianTimeSpan
 
 // computeMTPForMissingHeight computes stored_mtp(targetHeight) = median([targetHeight-11, targetHeight-1])
 // from the block_time values already present in metas, for a block that is not yet persisted to the DB.
