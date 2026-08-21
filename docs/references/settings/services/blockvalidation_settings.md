@@ -39,6 +39,7 @@
 | BatchMissingTransactions | bool | false | blockvalidation_batch_missing_transactions | Missing transaction batching |
 | CheckSubtreeFromBlockTimeout | time.Duration | 5m | blockvalidation_check_subtree_from_block_timeout | Subtree validation timeout |
 | SubtreeDataFetchTimeout | time.Duration | 10m | blockvalidation_subtree_data_fetch_timeout | Bound on one detached subtree_data fetch (download + parse + store) |
+| SubtreeMetaPeerFetchTimeout | time.Duration | 30s | blockvalidation_subtree_meta_peer_fetch_timeout | Whole-peer budget for one subtree meta regeneration fetch (all 503 retries + body stream) |
 | CheckSubtreeFromBlockRetries | int | 5 | blockvalidation_check_subtree_from_block_retries | Subtree validation retries |
 | CheckSubtreeFromBlockRetryBackoffDuration | time.Duration | 30s | blockvalidation_check_subtree_from_block_retry_backoff_duration | Subtree retry backoff |
 | SecretMiningThreshold | uint32 | 99 | blockvalidation_secret_mining_threshold | **CRITICAL** - Secret mining detection |
@@ -102,14 +103,17 @@ For checkpoint-verified blocks, a fan-in pipeline overlaps I/O with processing:
   3. **Processor**: Creates/spends UTXOs and writes files in parallel per batch
 
 ### Transaction Metadata Processing
+
 - Cache and store processing work together with threshold-based fallback
 - Batch sizes and concurrency settings control performance
 
 ### Secret Mining Detection
+
 - `SecretMiningThreshold` uses `PreviousBlockHeaderCount` for analysis
 - Detection triggers when block difference exceeds threshold
 
 ### Two-Phase Double-Spend Detection
+
 - `RecentBlockIDsLimit` controls the size of the fast-path in-memory block ID window
 - Transactions mined in blocks within this window are detected immediately (fast path)
 - Transactions mined in older blocks trigger a blockchain service query (slow path)
@@ -117,6 +121,7 @@ For checkpoint-verified blocks, a fan-in pipeline overlaps I/O with processing:
 - Default of 50,000 covers approximately 347 days of blocks at 10-minute intervals
 
 ### Channel Buffer Management
+
 - `BlockFoundChBufferSize` and `CatchupChBufferSize` must accommodate processing loads
 
 ## Service Dependencies

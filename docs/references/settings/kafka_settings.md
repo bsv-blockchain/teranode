@@ -233,11 +233,11 @@ This constraint is validated during consumer creation for both URL-based and dir
 ### Validator Service
 
 - **Consumer**: `ValidatorTxsConfig` - consumes transactions for validation (optional)
-- **Producer**: `ValidatorTxsConfig` - publishes validation results (optional)
 - **Producer**: `RejectedTxConfig` - publishes rejected transactions
 
 ### Propagation Service
 
+- **Producer**: `ValidatorTxsConfig` - publishes new transactions to the Validator; when unset, Propagation calls the Validator directly instead
 - **Consumer**: `RejectedTxConfig` - consumes rejected transactions
 
 ### Block Persister Service

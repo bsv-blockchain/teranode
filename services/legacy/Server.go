@@ -252,7 +252,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (s *Server) Init(ctx context.Context) error {
 	var err error
 
-	wire.SetLimits(4000000000)
+	wire.SetLimits(maxWireBlockPayload)
 
 	// Stream-decode incoming "block" messages straight from the socket
 	// instead of buffering the full payload first. On multi-GB blocks the

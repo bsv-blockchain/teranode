@@ -1215,9 +1215,13 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger, params *chaincfg.P
 		// turn off foreign key checks when inserting the genesis block
 		if s.engine == util.Sqlite || s.engine == util.SqliteMemory {
 			_, _ = s.db.Exec("PRAGMA foreign_keys = OFF")
-		} else if s.engine == util.Postgres {
-			_, _ = s.db.Exec("SET session_replication_role = 'replica'")
 		}
+		// Postgres needs no equivalent: genesis is inserted with id=0 and
+		// parent_id=0, and a self-referencing row satisfies the
+		// blocks(parent_id) -> blocks(id) foreign key, so there is nothing to
+		// bypass. (session_replication_role is superuser-only and the
+		// teranode role is provisioned NOSUPERUSER, so setting it here would
+		// always fail.)
 
 		_, _, err = s.StoreBlock(context.Background(), genesisBlock, "", options.WithID(0), options.WithMinedSet(true), options.WithSubtreesSet(true))
 		if err != nil {
@@ -1229,8 +1233,6 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger, params *chaincfg.P
 		// turn foreign key checks back on
 		if s.engine == util.Sqlite || s.engine == util.SqliteMemory {
 			_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
-		} else if s.engine == util.Postgres {
-			_, _ = s.db.Exec("SET session_replication_role = 'origin'")
 		}
 	} else if !bytes.Equal(hash, params.GenesisHash[:]) {
 		// Check the chainParams genesis block hash is the same as the one in the database

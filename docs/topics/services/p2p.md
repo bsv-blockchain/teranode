@@ -38,7 +38,7 @@ The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.c
 
 The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
-The p2p peers are part of a private network. This private network is managed by the p2p bootstrap service, which is responsible for bootstrapping the network and managing the network topology.
+The p2p peers can form a private network. Network bootstrapping is a configuration option, not a separate service: the P2P service reads the `p2p_bootstrap_peers` setting at startup to obtain initial DHT and relay entry points for peer discovery. Blanking it does not isolate the node — the client then falls back to the default public IPFS bootstrap peers — so a private network should point it at its own bootstrap servers, alongside `p2p_static_peers` and `p2p_dht_mode = off`.
 
 1. **Initialization and Configuration**:
 

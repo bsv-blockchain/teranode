@@ -20,6 +20,7 @@
         - [3.3 P2P Service](#33-p2p-service)
         - [3.4 Legacy Service](#34-legacy-service)
         - [3.5 RPC Service](#35-rpc-service)
+        - [3.6 Pruner Service](#36-pruner-service)
     - [4. Stores](#4-stores)
         - [4.1 TX and Subtree Store (Blob Server)](#41-tx-and-subtree-store-blob-server)
         - [4.2 UTXO Store](#42-utxo-store)
@@ -420,6 +421,31 @@ The RPC Service provides compatibility with the Bitcoin RPC interface, allowing 
 
 You can read more about this service in the [RPC Service documentation](../services/rpc.md).
 
+### 3.6 Pruner Service
+
+The Pruner Service is an event-driven overlay service that removes stale UTXO data to prevent unbounded database growth.
+
+![Pruner_Service_Container_Diagram.png](../services/img/Pruner_Service_Container_Diagram.png)
+
+**Key Responsibilities:**
+
+- Respond to `BlockPersisted` or `Block` notifications — selected by `pruner_block_trigger` — instead of polling
+- Preserve parent transactions of old unmined transactions so they remain available for resubmission
+- Remove UTXO records marked for deletion once they reach their delete-at-height
+- Coordinate with the Block Persister so transaction data stays accessible until `.subtree_data` files are created
+- Clean up external transaction blobs from blob storage (S3/filesystem)
+
+![Pruner_Service_Component_Diagram.png](../services/img/Pruner_Service_Component_Diagram.png)
+
+**Key Processes:**
+
+- Subscribing to blockchain notifications to trigger pruning runs
+- Running a two-phase pruning process to prevent data loss
+- Coordinating with Block Persister during catchup
+- Managing a job queue and worker pool for pruning and blob-deletion work
+
+You can read more about this service in the [Pruner Service documentation](../services/pruner.md).
+
 ## 4. Stores
 
 ### 4.1 TX and Subtree Store (Blob Server)
@@ -573,6 +599,7 @@ The Teranode microservices communicate through a combination of synchronous gRPC
     - [P2P Service](../services/p2p.md)
     - [Legacy Service](../services/legacy.md)
     - [RPC Server](../services/rpc.md)
+    - [Pruner Service](../services/pruner.md)
 - Stores:
 
     - [Blob Server](../stores/blob.md)

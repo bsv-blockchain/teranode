@@ -267,6 +267,19 @@ Before fetching full block data, the catchup process verifies checkpoints to ens
 - Approximately 10x faster than full validation for historical blocks
 - Currently disabled pending additional testing (`useQuickValidation = false`)
 
+**Behaviour change — quick-validation window is bound to what this run verified:**
+
+The eligibility bound is the highest checkpoint whose hash was actually **matched against a
+header in the current catchup range**, not the highest checkpoint present in
+`ChainCfgParams.Checkpoints`. A checkpoint that is configured but sits outside the range being
+processed proves nothing about this session, so it no longer widens the window.
+
+Operational consequence: in each catchup range, the blocks above the last in-range checkpoint —
+the tail up to the peer's tip — fall back to full validation instead of quick validation. On a
+node syncing far below the highest checkpoint this is one tail per catchup range and only
+affects sync throughput, never which blocks are accepted. Sync of the checkpointed prefix is
+unaffected as long as ranges continue to span checkpoints.
+
 **Safety Guarantees:**
 
 Checkpoint verification ensures:
@@ -450,7 +463,7 @@ Validates transactions by spending their inputs in parallel:
 The quick validation path is only applied to blocks below verified checkpoints:
 
 - **Checkpoint Verification**: During catchup, checkpoints are verified in header chain (see Section 2.2.2)
-- **Eligibility Check**: `block.Height <= highestCheckpointHeight` determines if quick validation can be used
+- **Eligibility Check**: `block.Height <= highestCheckpointHeight` determines if quick validation can be used, where `highestCheckpointHeight` is the highest checkpoint **hash-verified in the current catchup run** — blocks above it fall back to full validation (see Section 2.2.2)
 - **Trust Assumption**: Blocks below checkpoints are known to be valid, allowing optimized processing
 - **Current Status**: Quick validation currently disabled (`useQuickValidation = false`) pending additional testing
 
