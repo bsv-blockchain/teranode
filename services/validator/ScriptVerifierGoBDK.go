@@ -312,22 +312,58 @@ func (v *scriptVerifierGoBDK) ValidateTransaction(tx *bt.Tx, blockHeight uint32,
 	return nil
 }
 
+// bdkCause turns the engine's own description of the failure into a typed link
+// on the error chain, carrying the verdict code the caller classified it under.
+//
+// The public error boundary (errors.UserMessage / PublicError) surfaces a
+// single code and message: the innermost cause whose code is on
+// publicCauseCodes, or the outermost code. errVerify is a bdkscript error, not
+// a *errors.Error, so wrapping it directly cannot work — errors.New converts a
+// foreign error to a code-0 link, which is never allowlisted. Every script and
+// standardness rejection therefore left this node as one of the bare constants
+// below, and the submitter was told only that validation failed; the reason
+// existed solely in this node's Warnf line.
+//
+// Giving the cause a code of its own is what carries it across, and it is safe
+// to surface: these strings come from svnode's static tables (bsv::DoSErrorString,
+// ScriptErrorString) — reject reasons like "insufficient-fee" and
+// "bad-txns-in-belowout", and script prose like "Script evaluated without error
+// but finished with a false/empty top stack element". They are verdicts about
+// the submitted transaction and name no node-internal state.
+//
+// A nil return is safe to pass on as the wrapped cause: errors.New only attaches
+// a non-nil one.
+func bdkCause(code errors.ERR, errVerify error) *errors.Error {
+	if errVerify == nil {
+		return nil
+	}
+
+	cause := errVerify.Error()
+	if cause == "" {
+		return nil
+	}
+
+	// %s, never cause-as-format: the string crosses a CGO boundary and must
+	// never be interpreted as a format string.
+	return errors.New(code, "%s", cause)
+}
+
 func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus bool) error {
 	var dosErr bdkscript.DoSError
 	if errors.As(errVerify, &dosErr) {
 		switch dosErr.Code() {
 		case bdkscript.DOS_ERR_NOT_STANDARD, bdkscript.DOS_ERR_SIGOPS_POLICY, bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION:
-			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		case bdkscript.DOS_ERR_INSUFFICIENT_FEE:
-			policyErr := errors.NewTxPolicyError("transaction fee is too low", errVerify)
+			policyErr := errors.NewTxPolicyError("transaction fee is too low", bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		default:
 			if dosErr.Code() <= bdkscript.DOS_ERR_OK || dosErr.Code() >= bdkscript.DOS_ERR_COUNT {
 				v.logger.Warnf("unknown BDK DoS error code=%d error=%v", dosErr.Code(), errVerify)
 			}
 
-			return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+			return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
 		}
 	}
 
@@ -335,17 +371,20 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 	if errors.As(errVerify, &scriptErr) {
 		errCode := scriptErr.Code()
 		if errCode == bdkscript.SCRIPT_ERR_CGO_EXCEPTION {
+			// A CGO exception is a fault in this node, not a verdict about the
+			// transaction: PROCESSING keeps it off the public-cause allowlist
+			// so no detail is surfaced, and the caller retries elsewhere.
 			return errors.NewProcessingError(errMsgInvalidTx, errVerify)
 		}
 
 		if (!consensus && bdkPolicyRelatedScriptError(errCode)) ||
 			(consensus && errCode == bdkscript.SCRIPT_ERR_STACK_SIZE) {
-			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		}
 	}
 
-	return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
+	return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
 }
 
 func bdkPolicyRelatedScriptError(errCode bdkscript.ScriptErrorCode) bool {

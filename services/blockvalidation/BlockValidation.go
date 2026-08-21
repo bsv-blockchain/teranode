@@ -80,6 +80,12 @@ type ValidateBlockOptions struct {
 	// When true, skips existence check and clears invalid flag after successful validation.
 	IsRevalidation bool
 
+	// IsRequeuedRetry marks an attempt that the revalidation worker started for a block that
+	// failed BEFORE it was stored. It exists solely to stop that retry from enqueuing itself
+	// again — it must NOT be confused with IsRevalidation, which asserts the block is already
+	// on the chain and marked invalid, a precondition this path does not meet.
+	IsRequeuedRetry bool
+
 	// PeerID is the P2P peer identifier used for reputation tracking.
 	// This is used to track peer behavior during subtree validation.
 	PeerID string
@@ -140,6 +146,27 @@ type revalidateBlockData struct {
 
 	// retries tracks the number of revalidation attempts
 	retries int
+
+	// useFullValidation sends the worker back through ValidateBlockWithOptions instead of
+	// reValidateBlock. Needed whenever the retry must reach a step reValidateBlock does not
+	// perform: AddBlock for a block that failed before it was stored, and the invalid-flag
+	// clearing that only runs under IsRevalidation.
+	useFullValidation bool
+
+	// isRevalidation preserves an operator reconsider request across the re-queue. Without it
+	// the retry re-enters with the flag false, trips the existence check, and is rejected with
+	// "block already exists as invalid" on every attempt.
+	isRevalidation bool
+
+	// peerID carries the serving peer through a notYetAdded re-entry so the retried
+	// validation attributes an invalid verdict to the same peer the first attempt would have.
+	peerID string
+
+	// disableOptimisticMining and isCatchupMode preserve the original caller's mode across a
+	// notYetAdded re-entry. Without them the retry resolves optimistic mining from the global
+	// setting, which defaults to on.
+	disableOptimisticMining bool
+	isCatchupMode           bool
 }
 
 // BlockValidation handles the core validation logic for blocks in Teranode.
@@ -241,6 +268,13 @@ type BlockValidation struct {
 	// blocking forever on a full channel after the worker is gone at shutdown.
 	revalidateWorkerStopped chan struct{}
 
+	// revalidateWorkerRunning is set when that consumer is launched. It answers the case
+	// revalidateWorkerStopped cannot: a worker that never STARTED never closes the stop
+	// signal either, so a producer facing a full channel would have no consumer and no
+	// escape and would park permanently. Set before the goroutine is spawned, so a producer
+	// can never observe "not running" for a worker that is about to drain.
+	revalidateWorkerRunning atomic.Bool
+
 	// stats tracks operational metrics for monitoring
 	stats *gocore.Stat
 
@@ -296,7 +330,10 @@ func (w *subtreeStoreWrapper) Set(ctx context.Context, key []byte, fileType file
 
 // createMetaRegenerator creates a SubtreeMetaRegenerator with the given peer URLs.
 // This is used to regenerate missing subtree meta files during block validation.
-// If peerURLs is empty and subtreeStore is nil, returns nil (regeneration not available).
+// peerURLs are DataHub base URLs, which already carry the peer's API prefix.
+// Returns nil (regeneration not available) when there is no source to regenerate
+// from — peerURLs empty and subtreeStore nil — or when utxoStore is nil, since
+// storeRegeneratedMeta needs its block height to compute the meta file's DAH.
 func (u *BlockValidation) createMetaRegenerator(peerURLs []string) model.SubtreeMetaRegeneratorI {
 	if u.subtreeStore == nil && len(peerURLs) == 0 {
 		return nil
@@ -307,8 +344,9 @@ func (u *BlockValidation) createMetaRegenerator(peerURLs []string) model.Subtree
 	}
 
 	wrapper := &subtreeStoreWrapper{store: u.subtreeStore}
-	return model.NewSubtreeMetaRegenerator(u.logger, wrapper, peerURLs, u.settings.Asset.APIPrefix,
-		u.utxoStore.GetBlockHeight, u.subtreeBlockHeightRetention)
+	return model.NewSubtreeMetaRegenerator(u.logger, wrapper, peerURLs,
+		u.utxoStore.GetBlockHeight, u.subtreeBlockHeightRetention,
+		u.settings.BlockValidation.SubtreeMetaPeerFetchTimeout)
 }
 
 // NewBlockValidation creates a new block validation instance with the provided dependencies.
@@ -363,19 +401,10 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeValidationClient:     subtreeValidationClient,
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute).
 			WithEvictionFunction(func(_ chainhash.Hash, block *model.Block) bool {
-				// Return pooled []Node backing slices to the per-class pool
-				// BEFORE closing the subtree. PutNodeSlice is cap-classified, so
-				// mmap-backed subtrees (whose nodes are not pool-sourced) are
-				// silently discarded — safe but ineffective, which is what we
-				// want.
+				// Pools heap-backed []Node slices, Closes mmap-backed subtrees
+				// (unmap + backing-file removal), and nils the entries — all
+				// under the block's subtree mutex.
 				releaseBlockNodes(block)
-
-				// Close mmap-backed subtrees when block expires from cache
-				for _, st := range block.SubtreeSlices {
-					if st != nil {
-						st.Close()
-					}
-				}
 				return true // allow eviction
 			}),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
@@ -737,6 +766,10 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	// start a worker to revalidate blocks
 	u.logger.Infof("[BlockValidation:start] starting reValidation goroutine")
 
+	// Set before the spawn, not inside it: a producer that saw "not running" for a worker
+	// already on its way would drop a block the worker was about to drain.
+	u.revalidateWorkerRunning.Store(true)
+
 	go func() {
 		// Signal producers (site 1's re-enqueue and ReValidateBlock) that this sole
 		// consumer is gone, so they don't block forever on a full channel at shutdown.
@@ -754,7 +787,24 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 				u.logger.Infof("[BlockValidation:start][%s] block revalidation Chan", blockData.block.String())
 
-				err := u.reValidateBlock(blockData)
+				// A block that never reached AddBlock has to go back through full validation:
+				// reValidateBlock re-checks an already-stored block and has no AddBlock on any
+				// path, so sending a not-yet-added block there would validate it and discard it.
+				// IsRequeuedRetry stops the retried attempt from enqueuing itself again, so the
+				// worker's retry counter below stays the only retry budget.
+				var err error
+				if blockData.useFullValidation {
+					err = u.ValidateBlockWithOptions(ctx, blockData.block, blockData.baseURL, &ValidateBlockOptions{
+						PeerID:                  blockData.peerID,
+						IsRequeuedRetry:         true,
+						IsRevalidation:          blockData.isRevalidation,
+						DisableOptimisticMining: blockData.disableOptimisticMining,
+						IsCatchupMode:           blockData.isCatchupMode,
+					})
+				} else {
+					err = u.reValidateBlock(blockData)
+				}
+
 				if err != nil {
 					prometheusBlockValidationReValidateBlockErr.Observe(float64(time.Since(startTime).Microseconds() / 1_000_000))
 					// Check if context is done before logging
@@ -770,6 +820,18 @@ func (u *BlockValidation) start(ctx context.Context) error {
 					if blockData.retries < 3 {
 						blockData.retries++
 						go func() {
+							// A not-yet-added retry runs inside its own runOncePerBlock
+							// closure, so re-enqueuing immediately would collide with that
+							// attempt's own gate entry and short-circuit again. Wait out the
+							// grace window here, off the worker.
+							if blockData.useFullValidation {
+								select {
+								case <-time.After(revalidateFromScratchDelay):
+								case <-ctx.Done():
+									return
+								}
+							}
+
 							// Guard the re-enqueue: on shutdown the consumer (this
 							// worker) exits, so an unguarded send would leak this
 							// goroutine forever on the full channel.
@@ -1241,6 +1303,14 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	if len(unsetMined) > 0 && unsetMined[0] {
 		u.logger.Warnf("[setTxMined][%s] block is marked as invalid, will attempt to unset tx mined", block.Hash().String())
 
+		// A block taken from lastValidatedBlocks arrives here with its subtrees
+		// still loaded. Overwriting SubtreeSlices below drops the only reference
+		// to them, and an mmap-backed subtree has no finalizer — its mapping and
+		// its temp backing file would survive until process exit. Release first.
+		if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+			u.logger.Warnf("[setTxMined][%s] failed closing subtrees before unset-mined reload: %v", block.Hash().String(), releaseErr)
+		}
+
 		block.SubtreeSlices = make([]*subtreepkg.Subtree, len(block.Subtrees))
 
 		// when the block is invalid, we might not have all the subtrees
@@ -1310,13 +1380,17 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
-	// Close mmap-backed subtrees and clear to free memory
-	for _, st := range block.SubtreeSlices {
-		if st != nil {
-			st.Close()
-		}
+	// Close mmap-backed subtrees and clear to free memory. Routed through
+	// ReleaseSubtreeNodes so the entries are nil-ed under the block's subtree
+	// mutex: this block may still be reachable via lastValidatedBlocks, whose
+	// TTL cleaner runs the same release concurrently. Nodes are not pooled here
+	// (put is nil): a block fetched fresh from the blockchain has no node
+	// allocator, so its slices never came from the pool. A block taken from
+	// lastValidatedBlocks does carry pool-allocated slices — recycling those is
+	// a possible improvement, not a requirement, and is left out of this change.
+	if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+		u.logger.Warnf("[setTxMined][%s] failed closing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
 	}
-	block.SubtreeSlices = nil
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
@@ -1359,6 +1433,18 @@ func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.
 
 // runOncePerBlock ensures validation runs only once per block.
 // If another goroutine is already validating, it waits and returns that result.
+// validationResultGrace is how long a finished validation's result stays published for
+// concurrent arrivals of the same block before runOncePerBlock drops the entry. Any re-entry
+// inside this window is answered from the stored result instead of re-validating.
+const validationResultGrace = 100 * time.Millisecond
+
+// revalidateFromScratchDelay is how long a not-yet-stored block waits before being queued for
+// another attempt. It MUST exceed validationResultGrace: the re-queue is raised from inside the
+// runOncePerBlock closure, so an attempt scheduled any sooner is answered by the failure that
+// caused it and never reaches AddBlock. Derived from the grace window rather than written as a
+// second independent timeout, so the two cannot drift apart.
+const revalidateFromScratchDelay = 2 * validationResultGrace
+
 func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *ValidateBlockOptions, validate func(opts *ValidateBlockOptions) error) error {
 	result := &validationResult{
 		done: make(chan struct{}),
@@ -1386,7 +1472,7 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 
 	// Cleanup after delay
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(validationResultGrace)
 		u.blocksCurrentlyValidating.Delete(*blockHash)
 	}()
 
@@ -1579,7 +1665,17 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
 		}
 
-		// Use cached headers if available (during catchup), otherwise fetch from blockchain
+		// Use cached headers if available (during catchup), otherwise fetch from blockchain.
+		//
+		// NOTE: the cached run must not be used for the median-time-past window.
+		// HeaderChainCache.collectPreviousHeaders returns only the headers preceding the block
+		// WITHIN the batch, so blocks 2..11 of a batch get a 1..10-header run whose oldest entry
+		// is the common ancestor rather than genesis — too short to evaluate the rule against,
+		// and CheckHeaderContextual rejects it as such (issue #1467). Today that never happens
+		// because every caller passing CachedHeaders also sets DisableOptimisticMining, and the
+		// non-optimistic branch below re-fetches a full run from the store. Anything that changes
+		// either of those must first make the cache top up short windows from the store — see
+		// issue #1499.
 		var blockHeaders []*model.BlockHeader
 		if opts.CachedHeaders != nil && len(opts.CachedHeaders) > 0 {
 			// Use provided cached headers
@@ -1616,7 +1712,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			previousBlockHeaderCount := u.settings.BlockValidation.PreviousBlockHeaderCount
 
 			var parentBlockHeadersMeta []*model.BlockHeaderMeta
-			blockHeaders, parentBlockHeadersMeta, err = u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, previousBlockHeaderCount)
+			blockHeaders, parentBlockHeadersMeta, err = u.parentHeaderRun(ctx, block, previousBlockHeaderCount)
 			if err != nil {
 				ctxLogger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseURL)
@@ -1656,20 +1752,48 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// difficulty checks must run first. It also means a peer cannot make us do
 		// full tx validation for a garbage header at zero cost.
 		//
-		// Skip difficulty validation for blocks at or below the highest checkpoint:
-		// these blocks are already verified by checkpoints. block.Height is settled
-		// against the parent before this function runs (Server.deriveBlockHeight on the
-		// peer route; catchup and the operator revalidation endpoint carry authoritative
-		// heights), and BelowCheckpoint applies the mandatory height > 0 guard, so a peer
-		// cannot obtain the skip by declaring height 0 or a fabricated sub-checkpoint
-		// height. The checkpoint hash-match itself was asserted above.
+		// The header hash must meet the target its OWN nBits declares. This is enforced for
+		// every block, including below-checkpoint ones: it is what makes the chainwork the
+		// block contributes (computed from those same declared bits in
+		// getCumulativeChainWork) honestly earned, and it is the cheap gate that stops a
+		// peer buying (fail-open) subtree validation with a garbage header. Unlike the
+		// expected-nBits rule below there is no historical exception to it — no block on any
+		// chain has ever been valid without meeting its own target — so enforcing it here
+		// cannot reject a real block. model.Block.Valid step 1 runs the identical check on
+		// every route that permanently accepts a block, so the accepted-block set is
+		// unchanged; running it here only moves the rejection earlier, ahead of the
+		// optimistic-mining AddBlock that would otherwise put the block on the chain first.
+		// This matters because BelowCheckpoint is true for EVERY height in
+		// 1..highestCheckpoint, not just the checkpoint heights themselves.
+		headerValid, _, err := block.Header.HasMetTargetDifficulty()
+		if !headerValid {
+			reason := "block does not meet target difficulty"
+			if err != nil {
+				reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
+			}
+			if !opts.IsRevalidation {
+				u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+		}
+
+		// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
+		// the difficulty schedule over that prefix is already certified by the pinned
+		// checkpoint hashes, and re-deriving it would require reproducing every historical
+		// retarget rule exactly. block.Height is settled against the parent before this
+		// function runs (Server.deriveBlockHeight on the peer route; catchup and the operator
+		// revalidation endpoint carry authoritative heights), and BelowCheckpoint applies the
+		// mandatory height > 0 guard, so a peer cannot obtain the skip by declaring height 0
+		// or a fabricated sub-checkpoint height. The checkpoint hash-match itself was
+		// asserted above.
 		skipDifficultyCheck := model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height)
 
 		if skipDifficultyCheck {
-			ctxLogger.Debugf("[ValidateBlock][%s] skipping difficulty validation for block at height %d (at or below highest checkpoint height %d)",
+			ctxLogger.Debugf("[ValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
 				block.Header.Hash().String(), block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
 		} else {
-			// First check that the nBits (difficulty target) is correct for this block
+			// Check that the nBits (difficulty target) is correct for this block
 			expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
 			if err != nil {
 				return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
@@ -1684,20 +1808,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
 					block.Header.Hash().String(), block.Header.Bits, expectedNBits)
-			}
-
-			// Then check that the block hash meets the difficulty target
-			headerValid, _, err := block.Header.HasMetTargetDifficulty()
-			if !headerValid {
-				reason := "block does not meet target difficulty"
-				if err != nil {
-					reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
-				}
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
-				}
-
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
 			}
 		}
 
@@ -1762,6 +1872,22 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					}
 
 					return errors.NewBlockInvalidError("[ValidateBlock][%s] block header failed contextual validation", block.Header.Hash().String(), err)
+				}
+
+				// Anything else is not the block's fault, so it must not be marked bad for it —
+				// and it has not been added yet, so returning alone would drop it until a peer
+				// re-announces. A header-context failure gets one more full attempt through the
+				// from-scratch path, which ends in AddBlock; shouldRequeueForHeaderContext holds
+				// the decision, shared with the non-optimistic site below.
+				//
+				// Reaching here means the run could not be repaired: parentHeaderRun already
+				// re-derived it by hash walk, which is not range-memoized, and that run was
+				// unusable too (or the walk itself failed). So the retry is the last resort it
+				// claims to be rather than the first — it exists for a cause transient enough to
+				// clear on its own, e.g. the store still settling after a restart. It cannot
+				// clear a stale batched answer; the hash walk above is what does that.
+				if shouldRequeueForHeaderContext(err, opts) {
+					u.ReValidateBlockFromScratch(block, baseURL, opts)
 				}
 
 				return err
@@ -1884,10 +2010,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 			}()
 		} else {
-			// get all 100 previous block headers on the main chain
+			// get all X previous block headers on the main chain, 100 is the default
 			u.logger.Infof(logValidateBlockGetBlockHeaders, block.Header.Hash().String())
 
-			blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
+			blockHeaders, blockHeadersMeta, err := u.parentHeaderRun(ctx, block, u.settings.BlockValidation.PreviousBlockHeaderCount)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseURL)
@@ -1923,6 +2049,16 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if errors.Is(err, errors.ErrStorageError) ||
 					errors.Is(err, errors.ErrServiceError) ||
 					errors.Is(err, errors.ErrProcessing) {
+					// Re-queue ONLY the header-context case (issue #1467): the parent-header run
+					// our own store returned was unanchored, unlinked or too short, and
+					// parentHeaderRun's hash-walk rebuild could not repair it either, so all
+					// that is left is to hope the cause clears. The block was never added, so
+					// returning alone would lose it. shouldRequeueForHeaderContext carries the
+					// reasoning and is shared with the optimistic site above.
+					if shouldRequeueForHeaderContext(err, opts) {
+						u.ReValidateBlockFromScratch(block, baseURL, opts)
+					}
+
 					return err
 				}
 
@@ -2030,20 +2166,24 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		// Cache the block BEFORE updating subtrees DAH to avoid race condition
 		// The setMined worker needs the block cached when it receives the BlockSubtreesSet notification
-		if u.hasValidSubtrees(block) {
-			u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), block.GetSubtreeSlicesCount())
-			u.lastValidatedBlocks.Set(*block.Hash(), block)
-		} else {
-			if !block.SubtreesLoaded() {
-				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), block.GetSubtreeSlicesCount(), len(block.Subtrees))
-			} else {
-				u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
-			}
-		}
-
-		// Only update subtrees DAH for non-optimistic mining
-		// (optimistic mining handles this in its background validation goroutine)
+		//
+		// Both are skipped under optimistic mining, which does them in its
+		// background validation goroutine instead. That goroutine may still be
+		// inside block.Valid on this same *Block, and nothing waits on
+		// optimisticMiningWg, so caching the block here would expose it to the
+		// 2-minute TTL eviction — whose callback releases the block's subtree
+		// nodes, nil-ing SubtreeSlices entries and returning pooled []Node
+		// slices while that validation is still reading them. The goroutine
+		// caches the block once Valid returns, which is the only Set on this
+		// path with a lifetime that outlives its reader.
 		if !useOptimisticMining {
+			if u.hasValidSubtrees(block) {
+				u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), block.GetSubtreeSlicesCount())
+				u.lastValidatedBlocks.Set(*block.Hash(), block)
+			} else {
+				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), block.GetSubtreeSlicesCount(), len(block.Subtrees))
+			}
+
 			// it's critical that we call updateSubtreesDAH() only when we know the block is valid
 			// This sends the BlockSubtreesSet notification which triggers setMined
 			if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
@@ -2136,6 +2276,132 @@ func (*BlockValidation) checkParentInvalid(parentMeta *model.BlockHeaderMeta) bo
 	return parentMeta != nil && parentMeta.Invalid
 }
 
+// shouldRequeueForHeaderContext reports whether a validation failure should be re-queued for
+// another full attempt through ReValidateBlockFromScratch.
+//
+// Only a header-context failure qualifies (issue #1467): the parent-header run our own store
+// returned was unusable and parentHeaderRun's hash-walk rebuild could not repair it either, so the
+// block is not at fault and has not been added — returning alone would drop it until a peer
+// re-announces.
+//
+// Deliberately NOT every retryable error. The revalidation worker is a single goroutine draining a
+// two-slot channel that retries three times with no backoff, so widening this turns a storage
+// outage into four full validation passes per block with catchup blocking on the send — and a
+// permanent failure such as model.Block.Valid's target-difficulty check, which is also reported as
+// a processing error, fails identically on every one of them.
+//
+// One predicate rather than the condition written out at each call site: the two sites answered
+// this differently for several commits, each defensible in isolation, and that is precisely the
+// drift a shared decision makes impossible.
+func shouldRequeueForHeaderContext(err error, opts *ValidateBlockOptions) bool {
+	return errors.Is(err, errors.ErrBlockHeaderContext) && !opts.IsRequeuedRetry
+}
+
+// parentHeaderRun returns the run of the block's ancestor headers that validation measures the
+// median-time-past rule over, newest-first, with their metadata.
+//
+// It fetches the run the cheap way — one batched blockchainClient.GetBlockHeaders — and then asks
+// model.Block.MedianTimeWindow whether what came back can actually carry the rule. When it cannot,
+// the run is re-derived by walking parent hashes and the walked run is used instead.
+//
+// The fallback is the point. GetBlockHeaders memoizes its answer per (startHash, count) key for up
+// to the store's chainWalkCacheTTL — ten minutes — so a caller that discovers the problem only when
+// the check fails cannot fix it by asking the same question again: every retry inside that window
+// replays the same unusable run. walkParentChain asks a different question, keyed by hash, which is
+// neither range-memoized nor sensitive to which block is canonical. netsync, subtreevalidation and
+// block assembly already reach for the same fallback when re-anchoring their own median windows.
+//
+// A walk that fails, or that produces a run no better than the batched one, is not an error here:
+// the batched run is returned unchanged and the usual header checks report on it as they always
+// did. The fallback can only turn a failure into a success, never reshape one.
+func (u *BlockValidation) parentHeaderRun(ctx context.Context, block *model.Block, count uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	headers, meta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, count)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// An empty run is the caller's signal to skip the median-time-past rule entirely, not a run
+	// to repair — matching CheckHeaderContextual and block.Valid.
+	if len(headers) == 0 {
+		return headers, meta, nil
+	}
+
+	_, windowErr := block.MedianTimeWindow(headers)
+	if windowErr == nil {
+		return headers, meta, nil
+	}
+
+	u.logger.Warnf("[ValidateBlock][%s] batched parent-header run cannot carry the median-time-past window, re-deriving it by hash walk: %s", block.Hash().String(), windowErr)
+
+	walked, walkedMeta, walkErr := u.walkParentChain(ctx, block.Header.HashPrevBlock, count)
+	if walkErr != nil {
+		u.logger.Warnf("[ValidateBlock][%s] hash-walk fallback failed, keeping the batched run: %s", block.Hash().String(), walkErr)
+
+		return headers, meta, nil
+	}
+
+	if _, windowErr := block.MedianTimeWindow(walked); windowErr != nil {
+		u.logger.Warnf("[ValidateBlock][%s] hash-walk fallback is no better than the batched run, keeping it: %s", block.Hash().String(), windowErr)
+
+		return headers, meta, nil
+	}
+
+	u.logger.Infof("[ValidateBlock][%s] rebuilt a %d-header parent run by hash walk", block.Hash().String(), len(walked))
+
+	return walked, walkedMeta, nil
+}
+
+// walkParentChain fetches up to depth block headers starting at startHash and walking backwards
+// via HashPrevBlock, stopping early at genesis. Each hop uses blockchainClient.GetBlockHeader,
+// which is keyed by hash rather than by (start, count) range — so unlike GetBlockHeaders it is
+// neither memoized per range nor dependent on which block is canonical at a given height, and
+// block contents are immutable once stored. That is what makes it a usable second opinion.
+//
+// Returned headers are ordered newest-first, matching blockchainClient.GetBlockHeaders' order, so
+// the two are interchangeable to callers.
+//
+// The cost is depth round-trips on a cold cache against one batched query, which is why this is a
+// fallback rather than the default. It runs only when the batched run cannot carry the
+// median-time-past window at all.
+//
+// Mirrors the same-named helpers in services/legacy/netsync and services/subtreevalidation —
+// duplicated by design (small, internal, avoids a new shared util package), differing only in also
+// returning the header metadata that block validation needs for block header IDs.
+func (u *BlockValidation) walkParentChain(ctx context.Context, startHash *chainhash.Hash, depth uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	headers := make([]*model.BlockHeader, 0, depth)
+	metas := make([]*model.BlockHeaderMeta, 0, depth)
+	cur := startHash
+
+	for i := uint64(0); i < depth; i++ {
+		if cur == nil {
+			return nil, nil, errors.NewProcessingError("walkParentChain: nil prev-block link at depth %d (walked off the chain)", i)
+		}
+
+		header, meta, err := u.blockchainClient.GetBlockHeader(ctx, cur)
+		if err != nil {
+			return nil, nil, errors.NewProcessingError("walkParentChain: failed at depth %d (hash %s)", i, cur.String(), err)
+		}
+
+		if header == nil || meta == nil {
+			return nil, nil, errors.NewProcessingError("walkParentChain: nil header or metadata at depth %d (hash %s) — possible transient cache miss", i, cur.String())
+		}
+
+		headers = append(headers, header)
+		metas = append(metas, meta)
+
+		// Stop at genesis. Its HashPrevBlock is the all-zero hash, not nil, so the nil guard
+		// above never fires — without this the walk asks GetBlockHeader for the zero hash and
+		// fails with "failed at depth N". A run that ends at genesis is a complete window.
+		if header.HashPrevBlock == nil || header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			break
+		}
+
+		cur = header.HashPrevBlock
+	}
+
+	return headers, metas, nil
+}
+
 func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason string) {
 	if u.invalidBlockKafkaProducer != nil {
 		u.logger.Infof("[ValidateBlock][%s] publishing invalid block to Kafka in background", block.Hash().String())
@@ -2211,10 +2477,53 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 //
 // The function logs the revalidation attempt and queues the block for processing.
 // No return value is provided as the operation is asynchronous.
-func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
-	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
+// ReValidateBlockFromScratch re-queues a block that failed BEFORE it was stored. The worker
+// re-enters ValidateBlockWithOptions, which ends in AddBlock — unlike ReValidateBlock, whose
+// worker path only re-checks blocks already on the chain and would validate this one and then
+// throw it away, leaving it absent until a peer re-announces it.
+func (u *BlockValidation) ReValidateBlockFromScratch(block *model.Block, baseURL string, opts *ValidateBlockOptions) {
+	data := revalidateBlockData{
+		block:             block,
+		baseURL:           baseURL,
+		peerID:            opts.PeerID,
+		useFullValidation: true,
+		// Carried so an operator reconsider request stays a reconsider request. Dropping it
+		// makes the retry trip the existence check and fail as "already exists as invalid"
+		// every attempt, and leaves the invalid flag uncleared.
+		isRevalidation: opts.IsRevalidation,
+		// Carry the caller's mode through. Rebuilding the options from scratch would resolve
+		// optimistic mining from the global setting (default true), handing a caller that
+		// deliberately disabled it — catchup does — the AddBlock-before-full-Valid branch it
+		// opted out of, and flipping its per-block logging from debug to info.
+		disableOptimisticMining: opts.DisableOptimisticMining,
+		isCatchupMode:           opts.IsCatchupMode,
+		// CachedHeaders is deliberately NOT carried: the run it holds is what failed, and the
+		// retry should re-fetch a fresh one from the store.
+	}
 
-	data := revalidateBlockData{block: block, baseURL: baseURL}
+	// Wait out the result-grace window off the caller's goroutine and off the worker: the
+	// re-queue is raised from inside the runOncePerBlock closure, so enqueuing immediately
+	// gets the retry answered from the failure that caused it. Waiting here rather than in the
+	// drain loop also keeps the single worker free and takes the blocking send off catchup.
+	go func() {
+		select {
+		case <-time.After(revalidateFromScratchDelay):
+		case <-u.revalidateWorkerStopped:
+			return
+		}
+
+		u.enqueueRevalidation(data)
+	}()
+}
+
+func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
+	u.enqueueRevalidation(revalidateBlockData{block: block, baseURL: baseURL})
+}
+
+func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
+	block := data.block
+
+	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
 
 	// Prefer an immediate enqueue whenever the channel has space (this also lets a
 	// stopped-worker test observe the routing decision). Only when the channel is
@@ -2223,6 +2532,16 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	select {
 	case u.revalidateBlockChan <- data:
 	default:
+		// A worker that never started never closes revalidateWorkerStopped, so the guarded
+		// send below would have neither a consumer nor an escape and would park this
+		// goroutine permanently. Blocking for backpressure is only correct while something
+		// is draining.
+		if !u.revalidateWorkerRunning.Load() {
+			u.logger.Warnf("[ReValidateBlock][%s] dropped: revalidation worker never started", block.String())
+
+			return
+		}
+
 		select {
 		case u.revalidateBlockChan <- data:
 		case <-u.revalidateWorkerStopped:
@@ -2304,15 +2623,22 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] block conflicts with hardcoded checkpoint", blockData.block.Hash().String(), err)
 	}
 
-	// Skip difficulty validation for blocks at or below the highest checkpoint
-	// These blocks are already verified by checkpoints, so we don't need to validate difficulty
+	// The header hash must meet the target its own nBits declares, below checkpoint or not
+	// — see the matching block in ValidateBlockWithOptions for why this half of the old
+	// skip is never safe to take. Enforced before the subtree work below.
+	if headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty(); !headerValid {
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
+	}
+
+	// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
+	// the difficulty schedule over that prefix is certified by the pinned checkpoint hashes.
 	skipDifficultyCheck := model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, blockData.block.Height)
 
 	if skipDifficultyCheck {
-		u.logger.Debugf("[reValidateBlock][%s] skipping difficulty validation for block at height %d (at or below highest checkpoint height %d)",
+		u.logger.Debugf("[reValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
 			blockData.block.Header.Hash().String(), blockData.block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
 	} else {
-		// First check that the nBits (difficulty target) is correct for this block
+		// Check that the nBits (difficulty target) is correct for this block
 		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock, int64(blockData.block.Header.Timestamp))
 		if err != nil {
 			return errors.NewServiceError("[reValidateBlock][%s] failed to get expected work required", blockData.block.Header.Hash().String(), err)
@@ -2323,18 +2649,12 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 			return errors.NewBlockInvalidError("[reValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
 				blockData.block.Header.Hash().String(), blockData.block.Header.Bits, expectedNBits)
 		}
-
-		// Then check that the block hash meets the difficulty target
-		headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty()
-		if !headerValid {
-			return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
-		}
 	}
 
 	// get all X previous block headers, 100 is the default
 	previousBlockHeaderCount := u.settings.BlockValidation.PreviousBlockHeaderCount
 
-	blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, blockData.block.Header.HashPrevBlock, previousBlockHeaderCount)
+	blockHeaders, blockHeadersMeta, err := u.parentHeaderRun(ctx, blockData.block, previousBlockHeaderCount)
 	if err != nil {
 		u.logger.Errorf("[reValidateBlock][%s] failed to get block headers: %s", blockData.block.String(), err)
 

@@ -19,6 +19,11 @@ func TestReValidateBlock_DoesNotBlockAfterWorkerStopped(t *testing.T) {
 		revalidateWorkerStopped: make(chan struct{}),
 	}
 
+	// The worker DID start, so the never-started drop must not answer this: without
+	// it enqueueRevalidation returns at that guard and the stopped-worker escape below
+	// is never exercised.
+	u.revalidateWorkerRunning.Store(true)
+
 	// Fill the channel so any further send would block.
 	u.revalidateBlockChan <- revalidateBlockData{}
 	u.revalidateBlockChan <- revalidateBlockData{}

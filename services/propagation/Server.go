@@ -686,18 +686,70 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 			return c.String(http.StatusBadRequest, "Invalid request body")
 		}
 
-		// Process the transaction and return appropriate response
-		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
+		// Process the transaction and return appropriate response. The parsed
+		// transaction comes back with the error so the failure can name it
+		// without parsing the body again: the only parse is the one inside
+		// processTransaction, which is guarded against a parser panic on
+		// adversarial input. It is nil exactly when there was nothing to name.
+		failedTx, err := ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
 			status := httpStatusForTxError(err)
 			if status >= 200 && status < 300 {
 				return c.String(status, "OK")
 			}
-			return c.String(status, "Failed to process transaction: "+errors.UserMessage(err))
+			return c.String(status, "Failed to process transaction: "+failureLine(failedTx, err))
 		}
 
 		return c.String(http.StatusOK, "OK")
 	}
+}
+
+// failureLine renders one failed transaction for a client-facing response
+// body: the public message, always naming the transaction it is about.
+//
+// The txid is not otherwise guaranteed to be there. The public error boundary
+// (errors.PublicError, and errors.UserMessage over it) surfaces the innermost
+// allowlisted cause and discards everything outside it — including the
+// "[ProcessTransaction][<txid>]" wrapper this package adds — so precisely the
+// failures with the most useful messages arrive anonymous:
+// "bad-txns-in-belowout", "insufficient-fee", "Script evaluated without error
+// but finished with a false/empty top stack element". A client submitting a
+// batch is then told that something failed, without being told what.
+//
+// The txid goes into the public message, and the line is then rendered by the
+// errors package itself, so the "CODE (n): " prefix stays at the head where
+// every existing consumer looks for it — including on errors.PublicError's own
+// fallback, which yields the bare literal "internal error" and would otherwise
+// produce a line with no code on it at all.
+//
+// tx may be nil (a parse failure, or a slot taken by context cancellation);
+// there is no transaction to name then, and the message is returned as-is.
+//
+// The txid is derived here, while rendering the line, rather than being
+// captured for every submission: a batch of N transactions with F failures
+// pays for F lookups rather than N. processTransactionInternal caches the
+// hash on the transaction, so each of those is a lookup and a hex encoding
+// rather than a re-serialization and a double-SHA.
+func failureLine(tx *bt.Tx, err error) string {
+	publicErr := errors.PublicError(err)
+	if publicErr == nil {
+		return ""
+	}
+
+	if tx == nil {
+		return publicErr.Error()
+	}
+
+	txid := tx.TxID()
+	if strings.Contains(publicErr.Message(), txid) {
+		// Already named — the outermost wrapper survived, or the cause names it
+		// itself. Don't say it twice.
+		return publicErr.Error()
+	}
+
+	// Rendered through errors.New so the code+message formatting has one owner.
+	// publicErr.Message() is passed as an argument, never as the format string.
+	return errors.New(publicErr.Code(), "[ProcessTransaction][%s] %s", txid, publicErr.Message()).Error()
 }
 
 // httpStatusForTxError maps a transaction processing error to the appropriate
@@ -775,6 +827,12 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// happen only after processingWg.Wait() establishes happens-before.
 		const maxSubmissions = maxTransactionsPerRequest + 1 // +1 for ctx-cancel slot
 		errSlots := make([]error, maxSubmissions)
+		// txSlots holds the transaction that occupies each submission slot, so a
+		// failure can name it. Only a pointer is stored; the txid is derived
+		// later, in failureLine, and only for the slots that actually failed.
+		// Slots used by parse errors and the ctx-cancel path stay nil — there is
+		// no transaction to name.
+		txSlots := make([]*bt.Tx, maxSubmissions)
 		nextSlot := 0
 		processingWg := sync.WaitGroup{}
 		totalNrTransactions := 0
@@ -891,6 +949,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			// Reserve a submission slot for this tx and dispatch the worker.
 			slot := nextSlot
 			nextSlot++
+			txSlots[slot] = tx
 			processingWg.Add(1)
 
 			go processOne(tx, slot)
@@ -915,7 +974,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// than a misleading 500.
 		aggStatus := http.StatusOK
 
-		for _, err := range errSlots[:nextSlot] {
+		for i, err := range errSlots[:nextSlot] {
 			if err == nil {
 				continue
 			}
@@ -927,7 +986,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 				continue
 			}
 
-			errMsgs = append(errMsgs, errors.UserMessage(err))
+			errMsgs = append(errMsgs, failureLine(txSlots[i], err))
 
 			switch {
 			case txStatus >= http.StatusInternalServerError:
@@ -1104,7 +1163,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 
 	ctxLogger.Debugf("[ProcessTransaction] processing transaction request")
 
-	if err := ps.processTransaction(ctx, req); err != nil {
+	if _, err := ps.processTransaction(ctx, req); err != nil {
 		ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
 
 		return nil, errors.WrapGRPCPublic(err)
@@ -1192,7 +1251,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			}
 
 			// just call the internal process transaction function for every transaction
-			if err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
+			if _, err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
 				// Use context-aware logger for trace correlation
@@ -1225,8 +1284,12 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 //   - req: transaction processing request
 //
 // Returns:
+//   - *bt.Tx: the parsed transaction, once parsing has succeeded, so a caller
+//     can name it in a client-facing failure without parsing the body a second
+//     time. nil when the body could not be parsed (or was rejected before
+//     parsing, on size), which is exactly when there is no transaction to name.
 //   - error: error if any processing step fails
-func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) error {
+func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*bt.Tx, error) {
 	ctx, span, endSpan := tracing.Tracer("propagation").Start(ctx, "processTransaction",
 		tracing.WithParentStat(ps.stats),
 	)
@@ -1242,7 +1305,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 			prometheusInvalidTransactions.Inc()
 			err := errors.NewTxInvalidError("[ProcessTransaction] transaction size %d exceeds maximum allowed size %d", txSize, maxTxSize)
 			span.RecordError(err)
-			return err
+			return nil, err
 		}
 	}
 
@@ -1264,18 +1327,18 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		err = errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
 		span.RecordError(err)
 
-		return err
+		return nil, err
 	}
 
 	if err = ps.processTransactionInternal(ctx, btTx); err != nil {
 		span.RecordError(err)
-		return err
+		return btTx, err
 	}
 
 	prometheusTransactionSize.Observe(float64(txSize))
 	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
-	return nil
+	return btTx, nil
 }
 
 // processTransactionInternal performs the core business logic for processing a transaction.
@@ -1303,6 +1366,15 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	)
 	defer endSpan(err)
 
+	// Cache the hash on the transaction. bt.Tx.TxIDChainHash re-serializes and
+	// double-hashes on every call unless SetTxHash has been used, and every
+	// ingest path asks for the txid repeatedly: the coinbase check below, the
+	// blob key, the Kafka message key, a Debugf argument that is evaluated
+	// whether or not debug logging is on, and every error message. Caching here
+	// covers HTTP /tx, gRPC, and HTTP /txs (which parses with ReadFrom and
+	// calls this directly), so one hash replaces all of them.
+	btTx.SetTxHash(btTx.TxIDChainHash())
+
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
@@ -1322,6 +1394,17 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
+	// This branch decides whether the submitter is ever told the verdict.
+	//
+	// With Kafka configured — kafka_validatortxsConfig is populated for the
+	// .operator context, so this is the production shape — a normal-sized
+	// transaction is published and this function returns nil, so /tx and /txs
+	// answer 200 OK before the validator has looked at it. Any rejection is
+	// discovered asynchronously and reaches the client through some other
+	// channel, if at all. Only two paths validate synchronously and can report a
+	// reason: the > KafkaMaxMessageBytes HTTP fallback just below, and the
+	// Kafka-less else-branch. Everything the surfaces above do with a rejection
+	// reason applies to those two and nothing else.
 	if ps.validatorKafkaProducerClient != nil {
 		txSize := len(txBytes)
 		maxKafkaMessageSize := ps.settings.Validator.KafkaMaxMessageBytes
@@ -1452,13 +1535,45 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 	// Check response status
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
-			btTx.TxID(), resp.StatusCode, string(body))
+		return ps.validatorRejection(ctx, btTx, resp, body)
 	}
 
 	ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", btTx.TxID())
 
 	return nil
+}
+
+// validatorRejection turns a non-OK response from the validator's /tx endpoint
+// into an error that says what actually happened to the transaction.
+//
+// This is the only path on which a Kafka-wired node answers a submitter with a
+// real verdict — every normal-sized transaction is published and answered 200 OK
+// before validation runs — so getting it wrong is not a corner case. It was
+// wrong: the whole response was wrapped as a SERVICE_ERROR, which is off
+// publicCauseCodes, so httpStatusForTxError classified a permanently invalid
+// transaction as a retryable 500, and the validator's rendered error chain —
+// file, line and function included — was spliced verbatim into a client-facing
+// body that errors.UserMessage could no longer strip, because by then it was
+// plain text inside one error's message.
+//
+// The validator attaches its public code and message as a header
+// (errors.AttachHTTPError). When it is there, that verdict is what the client is
+// told, under this node's [ProcessTransaction][<txid>] context, and the response
+// body goes to the log rather than into the returned error. When it is not —
+// an older validator, or a proxy answering on its behalf — the previous wrapping
+// stands (status and body included), so this degrades to the old behaviour
+// rather than losing the failure.
+func (ps *PropagationServer) validatorRejection(ctx context.Context, btTx *bt.Tx, resp *http.Response, body []byte) error {
+	verdict := errors.HTTPErrorFrom(resp.Header)
+	if verdict == nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+			btTx.TxID(), resp.StatusCode, string(body))
+	}
+
+	ps.logger.WithTraceContext(ctx).Warnf("[ProcessTransaction][%s] validator /tx endpoint rejected transaction: status=%d body=%s",
+		btTx.TxID(), resp.StatusCode, string(body))
+
+	return errors.New(verdict.Code(), "[ProcessTransaction][%s] %s", btTx.TxID(), verdict.Message())
 }
 
 // validateTransactionViaKafka sends a transaction to the validator through Kafka.

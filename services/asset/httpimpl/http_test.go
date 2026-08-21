@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -221,6 +222,67 @@ func TestNew(t *testing.T) {
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusUnauthorized, rec.Code) // Should return 401 when not authenticated
+	})
+}
+
+// TestGetBlockByHeightRouteRegistered verifies that http.go actually wires the
+// GetBlockByHeight handler up to routes under the API prefix (binary, hex, and
+// json variants), mirroring the by-hash triplet. GetBlockByHeight itself already
+// has thorough handler-level tests in GetBlock_test.go; this test exists to catch
+// the case where the handler exists but is never registered on the router.
+func TestGetBlockByHeightRouteRegistered(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	testSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			APIPrefix: "/api/v1",
+		},
+		Dashboard: settings.DashboardSettings{
+			Enabled: false,
+		},
+		SecurityLevelHTTP: 0, // HTTP mode
+	}
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(0)).Return(testBlock, nil)
+	// GetBlockByHeight(JSON) also looks up height+1 for the "nextblock" field.
+	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(1)).Return(nil, errors.ErrNotFound)
+
+	repo, err := repository.NewRepository(logger, testSettings, nil, nil, mockBlockchainClient, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	httpServer, err := New(logger, testSettings, repo, nil)
+	require.NoError(t, err)
+	require.NotNil(t, httpServer)
+
+	e := httpServer.e
+
+	t.Run("binary", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
+		assert.Equal(t, testBlockBytes, rec.Body.Bytes())
+	})
+
+	t.Run("hex", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0/hex", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, hex.EncodeToString(testBlockBytes), rec.Body.String())
+	})
+
+	t.Run("json", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0/json", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 	})
 }
 
