@@ -142,33 +142,44 @@ func TestHandleBlockTopic_DuplicatesStillNotify(t *testing.T) {
 	require.Len(t, s.notificationCh, 2, "duplicate announcements must still reach the notification channel")
 }
 
-// A peer re-announcing the same hash past the tolerance must accumulate spam
-// ban score and eventually be banned; peers within the tolerance, and peers
-// merely duplicating a seen hash, must not be scored.
-func TestHandleBlockTopic_RepeatAnnouncerScoredAsSpam(t *testing.T) {
-	s, reg, _, _ := newSeenHashTestServer(t)
+// Same-hash repeats are suppressed and surfaced to the operator, but NEVER
+// auto-scored: ReasonSpam at 50 points against the 100-point threshold would
+// turn a degraded honest peer (a crash-looping blockchain service replays its
+// tip on every 1s reconnect) into a 24h network-wide ban. Suppression alone
+// carries the security value; see seenHashRepeatWarnThreshold.
+func TestHandleBlockTopic_RepeatAnnouncerSuppressedButNeverBanned(t *testing.T) {
+	s, reg, producer, _ := newSeenHashTestServer(t)
 
 	blockHash := chainhash.HashH([]byte("spam replay block")).String()
-	tolerated := mustNewPeerID(t)
-	spammer := mustNewPeerID(t)
+	replayer := mustNewPeerID(t)
 
-	// Announcing 1 + tolerance times means every repeat is within the
-	// tolerance: no score, no ban. This pins the reorg allowance.
-	for i := 0; i <= seenHashSpamRepeatTolerance; i++ {
-		announceBlock(t, s, tolerated, blockHash)
+	for i := 0; i <= seenHashRepeatWarnThreshold+3; i++ {
+		announceBlock(t, s, replayer, blockHash)
 	}
-	require.False(t, reg.IsBannedPeer(tolerated.String()),
-		"repeats within the tolerance must not be scored")
 
-	// Two repeats past the tolerance score 50 points each against the default
-	// 100-point threshold: banned.
-	for i := 0; i <= seenHashSpamRepeatTolerance+2; i++ {
-		announceBlock(t, s, spammer, blockHash)
-	}
-	require.True(t, reg.IsBannedPeer(spammer.String()),
-		"repeat announcer past the tolerance must cross the ban threshold")
-	require.False(t, reg.IsBannedPeer(tolerated.String()),
-		"other announcers of the same hash must not be penalised")
+	require.False(t, reg.IsBannedPeer(replayer.String()),
+		"same-hash repeats must never accrue an automatic ban")
+	require.Len(t, drainPublished(producer), 1,
+		"only the replayer's first announcement may reach Kafka")
+}
+
+// A publish grant consumed while no Kafka producer is configured must be
+// returned, so the accounting never claims a publish that did not happen.
+func TestHandleBlockTopic_NilProducerReturnsGrant(t *testing.T) {
+	s, _, producer, _ := newSeenHashTestServer(t)
+	s.blocksKafkaProducerClient = nil
+
+	blockHash := chainhash.HashH([]byte("nil producer block")).String()
+	peerA := mustNewPeerID(t)
+
+	announceBlock(t, s, peerA, blockHash)
+
+	s.blocksKafkaProducerClient = producer
+	announceBlock(t, s, peerA, blockHash)
+
+	published := drainPublished(producer)
+	require.Len(t, published, 1, "the grant burned with no producer must be retryable")
+	require.Equal(t, blockHash, string(published[0].Key))
 }
 
 // When the Kafka producer is backlogged the announcement is dropped instead of

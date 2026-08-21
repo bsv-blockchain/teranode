@@ -57,6 +57,14 @@ const (
 	SourceTypeNormal  = "normal"
 	SourceTypeRetry   = "retry"
 	SourceTypeCatchup = "catchup"
+
+	// maxCatchupAlternatives bounds how many alternative sources are retained
+	// per block hash in catchupAlternatives. Each element holds a full
+	// deserialized block for up to the cache TTL, and failover only ever walks
+	// a handful of sources; the list length must not be left to the upstream
+	// per-hash announcement rate (p2p's ingest dedup admits a few per publish
+	// window, which compounds over the 10-minute entry TTL).
+	maxCatchupAlternatives = 3
 )
 
 // processBlockFound encapsulates information about a newly discovered block
@@ -171,7 +179,8 @@ type Server struct {
 	// processing of the same subtree from multiple miners
 	processBlockNotify *ttlcache.Cache[chainhash.Hash, bool]
 
-	// catchupAlternatives tracks alternative peer sources for blocks in catchup
+	// catchupAlternatives tracks alternative peer sources for blocks in
+	// catchup, at most maxCatchupAlternatives per hash.
 	catchupAlternatives *ttlcache.Cache[chainhash.Hash, []processBlockCatchup]
 
 	// blockCatchupAttempts counts catchup re-entry cycles per block hash within a
@@ -185,8 +194,11 @@ type Server struct {
 	// peerMaliciousCache is a short-lived cache of IsPeerMalicious verdicts.
 	// Every gossip-driven Kafka message costs two of these checks and each is
 	// a p2p gRPC that fans into a blockchain RPC, so an announcement flood
-	// would otherwise turn into an RPC storm. The TTL is short enough that a
-	// fresh ban still takes effect within seconds. Nil-safe: Server literals
+	// would otherwise turn into an RPC storm. reportCatchupMalicious
+	// invalidates the entry for a peer this node itself flags; bans raised by
+	// other routes (invalid-block/-subtree reports via Kafka, operator bans,
+	// other nodes' scoring) surface within the TTL, which is short enough
+	// that a fresh ban takes effect within seconds. Nil-safe: Server literals
 	// in tests that don't wire it get uncached lookups.
 	peerMaliciousCache *ttlcache.Cache[string, bool]
 
@@ -2215,9 +2227,11 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 			alternatives := u.catchupAlternatives.Get(*blockFound.hash)
 			if alternatives == nil || alternatives.Value() == nil {
 				u.catchupAlternatives.Set(*blockFound.hash, []processBlockCatchup{catchupBlock}, ttlcache.DefaultTTL)
-			} else {
-				// Append to existing alternatives
-				altList := alternatives.Value()
+			} else if altList := alternatives.Value(); len(altList) < maxCatchupAlternatives {
+				// Append to existing alternatives. Each element retains a full
+				// deserialized block for up to the entry TTL and failover only
+				// ever walks a handful of sources, so the list is capped rather
+				// than trusting the upstream per-hash announcement rate.
 				altList = append(altList, catchupBlock)
 				u.catchupAlternatives.Set(*blockFound.hash, altList, ttlcache.DefaultTTL)
 			}

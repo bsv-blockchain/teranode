@@ -226,19 +226,20 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 
 	u.logger.Warnf("[peer_metrics] Recording malicious attempt from peer %s: %s", peerID, reason)
 
+	// Drop the cached verdict up front, whether or not the report RPC below
+	// succeeds: this node has evidence against the peer NOW, and a stale
+	// not-malicious entry must not be served for up to the cache TTL
+	// mid-catchup while the report is retried or lost.
+	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCache.Delete(peerID)
+	}
+
 	// Report to P2P service if client is available
 	if u.p2pClient != nil {
 		if err := u.p2pClient.RecordCatchupMalicious(ctx, peerID); err != nil {
 			u.logger.Warnf("[peer_metrics] Failed to report malicious behavior to P2P service for peer %s: %v", peerID, err)
 			// Fall through to local metrics as backup
 		} else {
-			// Drop the cached verdict so the next isPeerMalicious check sees
-			// the flag this report may have raised, instead of serving a stale
-			// not-malicious entry for up to the cache TTL mid-catchup.
-			if u.peerMaliciousCache != nil {
-				u.peerMaliciousCache.Delete(peerID)
-			}
-
 			return // Successfully reported to P2P service
 		}
 	}

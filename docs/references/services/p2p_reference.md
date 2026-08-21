@@ -479,13 +479,13 @@ Records bytes downloaded from a peer via HTTP (typically from their DataHub).
 
 - `handleBlockTopic`: Handles incoming block messages and validates block announcements.
 - `handleSubtreeTopic`: Handles incoming subtree messages and processes subtree data.
-
-Both announcement handlers deduplicate by hash before publishing to Kafka: per short publish window only the first few distinct announcers of a hash are forwarded (keeping block validation's alternative-source failover fed, and re-opening every few seconds so colluding announcers cannot capture a hash's fetch sources), and a peer that keeps re-announcing the same hash past a generous tolerance accrues `spam` ban score. The Kafka publish is non-blocking; announcements dropped under producer backpressure stay retryable by later announcements of the same hash.
 - `handleRejectedTxTopic`: Handles rejected transaction notifications from peers.
 - `handleNodeStatusTopic`: Handles incoming node status update messages.
 - `processInvalidBlockMessage`: Processes notifications about invalid blocks from Kafka and bans the sending peer.
 - `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
 - `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
+
+Both announcement handlers deduplicate by hash before publishing to Kafka: per short publish window only the first few distinct announcers of a hash are forwarded (keeping block validation's alternative-source failover fed, and re-opening every few seconds so colluding announcers cannot capture a hash's fetch sources). A peer that keeps re-announcing the same hash is logged for the operator. The Kafka publish is non-blocking; announcements dropped under producer backpressure stay retryable by later announcements of the same hash.
 
 ### Message Structures
 

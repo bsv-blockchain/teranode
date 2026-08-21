@@ -115,6 +115,38 @@ func TestSeenHashCache_Check(t *testing.T) {
 		require.False(t, publish)
 		require.Equal(t, 1, repeats)
 	})
+
+	t.Run("untracked announcer cannot drain the budget across windows", func(t *testing.T) {
+		var c seenHashCache
+
+		// Fill the announcer tracking and spend the budget.
+		for i := 0; i < seenHashMaxAnnouncersPerHash; i++ {
+			c.Check("hash-a", fmt.Sprintf("peer-%d", i), now)
+		}
+
+		// Roll the publish window: the budget re-opens.
+		later := now.Add(seenHashPublishWindow)
+
+		// An announcer the bound excluded has prev == 0 on every announcement;
+		// it must not read as a fresh distinct announcer each time, or one
+		// identity would take the whole re-opened budget every window. It may
+		// take at most the single published == 0 retry grant.
+		publish, repeats := c.Check("hash-a", "peer-untracked", later)
+		require.True(t, publish, "the rollover retry grant is reachable once")
+		require.Zero(t, repeats)
+
+		for i := 0; i < 3; i++ {
+			publish, repeats = c.Check("hash-a", "peer-untracked", later)
+			require.False(t, publish, "an untracked announcer must not consume the distinct-announcer budget")
+			require.Zero(t, repeats, "untracked announcers stay uncounted")
+		}
+
+		// The remaining re-opened budget must still be available to a peer the
+		// tracking KNOWS is new... which cannot exist while the map is full, so
+		// a tracked repeat must also not take it.
+		publish, _ = c.Check("hash-a", "peer-0", later)
+		require.False(t, publish, "a tracked repeat must not take the re-opened budget")
+	})
 }
 
 func TestSeenHashCache_PublishFailed(t *testing.T) {

@@ -144,15 +144,15 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// seqno), so byte-identical announcements with fresh seqnos arrive as new
 	// messages, and each publish below is amplified downstream into gRPC
 	// round-trips, a store lookup and a peer-controlled HTTP fetch. Only the
-	// first few DISTINCT announcers per hash are published, keeping block
-	// validation's alternative-source failover fed; the peer bookkeeping above
-	// still ran, so registry state and ban attribution stay fresh for
+	// first few DISTINCT announcers per hash are published per window, keeping
+	// block validation's alternative-source failover fed; the peer bookkeeping
+	// above still ran, so registry state and ban attribution stay fresh for
 	// suppressed announcements. A peer that keeps re-announcing the same hash
-	// past the tolerance is scored with ReasonSpam.
+	// is surfaced to the operator once per TTL — deliberately not auto-scored,
+	// see seenHashRepeatWarnThreshold.
 	publish, peerRepeats := s.blockSeenHashes.Check(hash.String(), fromID, now)
-	if peerRepeats > seenHashSpamRepeatTolerance {
-		s.logger.Warnf("[handleBlockTopic] peer %s re-announced block %s %d times within the seen-hash TTL, applying spam ban score", fromID, hash.String(), peerRepeats)
-		s.applyBanScore(fromID, ReasonSpam)
+	if peerRepeats == seenHashRepeatWarnThreshold {
+		s.logger.Warnf("[handleBlockTopic] peer %s re-announced block %s more than %d times within the seen-hash TTL", fromID, hash.String(), seenHashRepeatWarnThreshold)
 	}
 
 	if !publish {
@@ -188,6 +188,10 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 			s.blockSeenHashes.PublishFailed(hash.String())
 			s.logger.Warnf("[handleBlockTopic] kafka blocks producer backlogged, dropped announcement of block %s from peer %s", hash.String(), fromID)
 		}
+	} else {
+		// No producer configured: nothing was published, so return the grant
+		// to keep the accounting honest.
+		s.blockSeenHashes.PublishFailed(hash.String())
 	}
 }
 
@@ -288,9 +292,8 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	// an announcement that gate drops does not mark the hash seen and thereby
 	// suppress a later, healthy announcement of the same subtree.
 	publish, peerRepeats := s.subtreeSeenHashes.Check(hash.String(), fromID, now)
-	if peerRepeats > seenHashSpamRepeatTolerance {
-		s.logger.Warnf("[handleSubtreeTopic] peer %s re-announced subtree %s %d times within the seen-hash TTL, applying spam ban score", fromID, hash.String(), peerRepeats)
-		s.applyBanScore(fromID, ReasonSpam)
+	if peerRepeats == seenHashRepeatWarnThreshold {
+		s.logger.Warnf("[handleSubtreeTopic] peer %s re-announced subtree %s more than %d times within the seen-hash TTL", fromID, hash.String(), seenHashRepeatWarnThreshold)
 	}
 
 	if !publish {
@@ -321,6 +324,10 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 			s.subtreeSeenHashes.PublishFailed(hash.String())
 			s.logger.Warnf("[handleSubtreeTopic] kafka subtrees producer backlogged, dropped announcement of subtree %s from peer %s", hash.String(), fromID)
 		}
+	} else {
+		// No producer configured (tests): return the grant to keep the
+		// accounting honest.
+		s.subtreeSeenHashes.PublishFailed(hash.String())
 	}
 }
 

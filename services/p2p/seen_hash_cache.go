@@ -41,33 +41,33 @@ const (
 	// where the only announcer's earlier publish may have been dropped.
 	seenHashPublishWindow = 15 * time.Second
 
-	// seenHashSpamRepeatTolerance is how many repeat announcements of the same
-	// hash by the same peer are tolerated within the TTL before each further
-	// repeat is scored as spam. Generous on purpose: the suppression above
-	// already removes the amplification, so scoring is a backstop against
-	// sustained abuse, not the primary control — and a degraded honest peer can
-	// repeat a hash surprisingly often. A crash-looping blockchain service
-	// replays its tip announcement on every subscription reconnect (the
-	// sender-side suppression in handleBlockNotification exists only on
-	// upgraded peers, and any interleaved side-chain block re-arms it), so the
-	// tolerance sits an order of magnitude above what a reconnect storm
-	// produces in one window. A replay flood still blows through it in about a
-	// second and, at 50 spam points per repeat against the default 100-point
-	// ban threshold, bans itself two repeats later.
-	seenHashSpamRepeatTolerance = 50
+	// seenHashRepeatWarnThreshold is how many repeat announcements of the same
+	// hash by the same peer are tolerated within the TTL before the handler
+	// logs a warning — ONCE per peer per hash per TTL. Deliberately a log and
+	// not a ban score: the suppression above already removes the amplification
+	// (a repeat costs this node only pre-suppression handler work), while a
+	// degraded honest peer can repeat a hash fast — a crash-looping blockchain
+	// service replays its tip on every 1s subscription reconnect, ~60
+	// repeats/minute, and the sender-side suppression in
+	// handleBlockNotification exists only on upgraded peers. ReasonSpam at 50
+	// points against the default 100-point threshold would turn two such
+	// windows into a 24h network-wide ban of an honest node; automated scoring
+	// of same-hash repeats is deferred to the rate-limiting work (issue 2870),
+	// and the warning gives operators the signal to ban manually meanwhile.
+	seenHashRepeatWarnThreshold = 50
 
-	// seenHashMaxAnnouncersPerHash bounds the per-hash announcer counts so a
-	// Sybil fleet announcing one hash cannot grow a single entry without limit.
-	// It exists only for repeat counting (the publish budget is far smaller),
-	// so it is kept low: the worst-case footprint is the PRODUCT of this and
-	// the size cap — up to defaultSeenHashCacheSize x this many stored peer-ID
-	// strings per topic — not the size cap alone. Two accepted scoring gaps:
-	// an identity introduced after the bound can replay the hash without
-	// accruing spam score, and a peer can reset its own counters by flooding
-	// enough distinct hashes to evict the entry (distinct hashes are not
-	// themselves scored). Both cost this node only pre-suppression handler
-	// work, never a Kafka publish — the scoring is a backstop, not a rate
-	// limit (see the tolerance above).
+	// seenHashMaxAnnouncersPerHash bounds the per-hash announcer tracking so a
+	// Sybil fleet announcing one hash cannot grow a single entry without
+	// limit. It is kept low because the worst-case footprint is the PRODUCT of
+	// this and the size cap — up to defaultSeenHashCacheSize x this many
+	// stored peer-ID strings per topic — not the size cap alone. An announcer
+	// the bound excluded is treated as a repeat by Check (never handed the
+	// distinct-announcer budget, never repeat-counted); the retry grant
+	// (published == 0) remains reachable to it, worth at most one publish per
+	// window. A peer can also shed its tracking by flooding enough distinct
+	// hashes to evict the entry, after which its next announcement publishes
+	// as fresh — bounded by the same per-window budget, and one reason the
+	// repeat threshold above only warns rather than scores.
 	seenHashMaxAnnouncersPerHash = 8
 )
 
@@ -79,9 +79,9 @@ const (
 //
 // Per hash it grants a publish budget (seenHashMaxPublishersPerHash distinct
 // announcers per seenHashPublishWindow) and keeps per-peer announcement counts
-// across the longer accounting TTL, so the handlers can score a peer that
-// keeps re-announcing the same hash (ReasonSpam) without penalising the normal
-// case of many distinct peers announcing one new block.
+// across the longer accounting TTL, so the handlers can warn about a peer that
+// keeps re-announcing the same hash without penalising the normal case of many
+// distinct peers announcing one new block.
 // A grant is optimistic: callers whose publish did not actually happen return
 // it via PublishFailed, so broker backpressure cannot permanently suppress a
 // hash and never resets the spam counters.
@@ -138,12 +138,15 @@ func (c *seenHashCache) initLocked() {
 // announcement should be published (publish) and how many times this peer had
 // announced the hash before within the window (peerRepeats).
 //
-// Publish is granted to the first seenHashMaxPublishersPerHash DISTINCT
-// announcers of a hash, and additionally to any announcement while no grant
-// has stuck (published == 0, i.e. every earlier grant was returned via
-// PublishFailed) so a hash can never be suppressed without having been handed
-// to Kafka at least once. A peer's own repeats are otherwise never published,
-// whatever the budget.
+// Publish is granted to the first seenHashMaxPublishersPerHash TRACKED
+// distinct announcers of a hash per publish window, and additionally to any
+// announcement while no grant has stuck in the current window (published ==
+// 0, i.e. every earlier grant was returned via PublishFailed, or the window
+// just rolled over) so a hash can never be suppressed without having been
+// handed to Kafka at least once. Repeats never take the distinct-announcer
+// budget — and neither does an announcer the tracking bound excluded, since
+// prev == 0 for such a peer on every announcement and treating it as new
+// would let one identity drain the budget every window unscored.
 func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool, peerRepeats int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -162,12 +165,13 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 				node.published = 0
 			}
 
-			prev := node.announcers[peerID]
-			if prev > 0 || len(node.announcers) < seenHashMaxAnnouncersPerHash {
+			prev, tracked := node.announcers[peerID]
+			if tracked || len(node.announcers) < seenHashMaxAnnouncersPerHash {
 				node.announcers[peerID] = prev + 1
+				tracked = true
 			}
 
-			publish = (prev == 0 && node.published < seenHashMaxPublishersPerHash) || node.published == 0
+			publish = (tracked && prev == 0 && node.published < seenHashMaxPublishersPerHash) || node.published == 0
 			if publish {
 				node.published++
 			}
