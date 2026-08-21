@@ -7398,6 +7398,34 @@
 <td>p2p_gossip_handler_concurrency</td>
 <td>Concurrent gossip handler workers per pubsub topic</td>
 </tr>
+<tr>
+<td>WebSocketMaxConnections</td>
+<td>int</td>
+<td>1000</td>
+<td>p2p_websocket_max_connections</td>
+<td>Maximum concurrent /p2p-ws websocket connections (0 disables the cap)</td>
+</tr>
+<tr>
+<td>WebSocketMaxConnectionsPerSource</td>
+<td>int</td>
+<td>0</td>
+<td>p2p_websocket_max_connections_per_source</td>
+<td>Per-source /p2p-ws cap: 0 = auto (max(4, cap/20)), -1 disables (needed behind a proxy/NAT)</td>
+</tr>
+<tr>
+<td>WebSocketAllowedOrigins</td>
+<td>[]string</td>
+<td>(empty)</td>
+<td>p2p_websocket_allowed_origins</td>
+<td>Allowed browser origins for /p2p-ws upgrades and HTTP CORS (empty allows all)</td>
+</tr>
+<tr>
+<td>WebSocketTrustedSourceCIDRs</td>
+<td>[]string</td>
+<td>127.0.0.1/32|::1/128</td>
+<td>p2p_websocket_trusted_source_cidrs</td>
+<td>Source CIDRs exempt from the /p2p-ws connection caps; loopback only by design - broader trust would void the caps behind an L7 ingress or NAT (see longdesc). Sentinel <code>none</code> disables the bypass (empty falls back to the default)</td>
+</tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>

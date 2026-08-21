@@ -7892,29 +7892,30 @@
 <li>
 <p>WebSocket Request Handling:</p>
 <ul>
-<li>An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.</li>
-<li>Data is sent over the WebSocket, using its dedicated client channel.</li>
-<li>If there's an error in sending data, the channel is removed from the <code>clientChannels</code>.</li>
+<li>An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client and registered in <code>clientChannels</code>.</li>
+<li>Concurrent connections are capped by <code>p2p_websocket_max_connections</code> (default 1000, 0 disables); requests beyond the cap are rejected with HTTP 503 before the upgrade. A per-source cap of max(4, cap/20) additionally bounds any single host (tunable via <code>p2p_websocket_max_connections_per_source</code>), and sources in <code>p2p_websocket_trusted_source_cidrs</code> bypass both caps so internal consumers such as the asset-service bridge can always reconnect. The trust list is loopback-only in all contexts by design - broader trust (e.g. RFC1918) would void the caps behind an L7 ingress or NAT gateway - and the sentinel value <code>none</code> disables the bypass entirely (e.g. when a reverse proxy terminates on the same host).</li>
+<li>When <code>p2p_websocket_allowed_origins</code> is set, browser requests whose <code>Origin</code> header is not in the list are rejected during the upgrade, and the same list drives the HTTP server's CORS policy (empty = allow all, the historical behaviour).</li>
+<li>Data is sent over the WebSocket, using its dedicated client channel. Every write carries a deadline so a slow client cannot wedge its writer goroutine.</li>
+<li>The server periodically pings each client and enforces a read deadline refreshed by pong replies; silent or half-open connections are detected and torn down.</li>
+<li>When the connection ends (client disconnect, read/write timeout, or shutdown), the socket is closed and the channel is removed from <code>clientChannels</code> on every exit path.</li>
 </ul>
 </li>
 <li>
-<p>The server listens for various types of events in a concurrent process:</p>
+<p>The server listens for notifications in a concurrent process:</p>
 <ul>
 <li>The server tracks all active client channels (<code>clientChannels</code>).</li>
-<li>When a new client connects, it is added to the <code>clientChannels</code>.</li>
-<li>If a client disconnects, it is removed from <code>clientChannels</code>.</li>
-<li>Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.</li>
 <li>When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.</li>
+<li>A client that fails to drain its channel within the broadcast timeout is evicted from <code>clientChannels</code> and its connection is closed, releasing its connection slot.</li>
 </ul>
 </li>
 </ul>
 <p>As a sequence:</p>
 <p><img alt="p2p_websocket_sequence_diagram.svg" src="../img/plantuml/p2p/p2p_websocket_sequence_diagram.svg" /></p>
 <ol>
-<li>A client requests a WebSocket connection to the server. The new client is added to the <code>newClientCh</code> queue, which then adds the client to the active client channels.</li>
-<li>The server enters a loop for WebSocket communication, where it can either receive new notifications or pings.</li>
-<li>For each new notification or ping, the server dispatches this data to all client channels.</li>
-<li>If there's a WebSocket error or the client disconnects, the client is added to the <code>deadClientCh</code> queue, which leads to its removal from the active client channels.</li>
+<li>A client requests a WebSocket connection to the server. After the origin check and the connection-cap check pass, the initial <code>node_status</code> message is queued to the client's channel first, and only then is the channel registered for broadcasts - this ordering guarantees the first message a client receives identifies this node (the asset service and the dashboard pin the node identity to it).</li>
+<li>The server enters a loop for WebSocket communication, where it can either receive new notifications or send keepalive pings.</li>
+<li>For each new notification, the server dispatches the data to all client channels.</li>
+<li>If there's a WebSocket error, a missed read/write deadline, or the client disconnects, the connection is closed and the client is removed from the active client channels.</li>
 </ol>
 <h3 id="27-ban-management-system">2.7. Ban Management System<a class="headerlink" href="#27-ban-management-system" title="Permanent link">&para;</a></h3>
 <p>The P2P service includes a ban management system that allows nodes to maintain a list of banned peers and handle ban-related events across the network.</p>
