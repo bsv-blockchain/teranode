@@ -188,6 +188,35 @@ func TestServerHelpers_ReconcileConnectionStates_ErrorAndGuardPaths(t *testing.T
 	require.True(t, got.IsConnected, "cut-short pass must not clear flags")
 }
 
+func TestServerHelpers_NewNeighbourFlaggedOnFirstMessage(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.settings.P2P.PeerMapCleanupInterval = time.Minute // production default
+	s.registryBatcher = newPeerRegistryBatcher(context.Background(), s.logger, s.peerRegistry, 0)
+
+	// Service starts with no peers connected yet.
+	client := &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{}}
+	s.P2PClient = client
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.startPeerMapCleanup(ctx)
+
+	// Now a peer dials in: the host has an open connection to it, and it
+	// authors a gossip message (node_status heartbeat). It must be flagged
+	// connected on that first message — not a reconcile tick later —
+	// because daemon.TestDaemon.ConnectToPeer polls the IsConnected-filtered
+	// GetPeers RPC with a 15s budget.
+	neighbour := mustNewPeerID(t)
+	client.peers = []p2pMessageBus.PeerInfo{
+		{ID: neighbour.String(), Addrs: []string{"/ip4/10.0.0.9/tcp/9905"}},
+	}
+	s.updatePeerLastMessageTime(neighbour.String(), "")
+
+	got, ok := reg.Get(neighbour.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "a connected, gossiping neighbour must be visible immediately, not one cleanup interval later")
+}
+
 func TestServerHelpers_GossipOnlyPublisherNeverFlaggedConnected(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 	s.registryBatcher = newPeerRegistryBatcher(context.Background(), s.logger, s.peerRegistry, 0)
@@ -201,7 +230,6 @@ func TestServerHelpers_GossipOnlyPublisherNeverFlaggedConnected(t *testing.T) {
 		{ID: neighbourID.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
 		{ID: publisherID.String()},
 	}}
-	s.refreshLiveConnIDs()
 
 	s.updatePeerLastMessageTime(neighbourID.String(), "")
 	s.updatePeerLastMessageTime(publisherID.String(), "")

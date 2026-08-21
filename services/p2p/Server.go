@@ -158,12 +158,15 @@ type Server struct {
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
-	// liveConnIDs holds the last snapshot of peer IDs with an open libp2p
-	// connection (map[string]struct{}), refreshed by reconcileConnectionStates.
-	// updatePeerLastMessageTime consults it so gossip-relayed publishers are
-	// never marked IsConnected. reconcileInFlight keeps ticker-driven
-	// reconcile passes from piling up when the registry is slow.
-	liveConnIDs       atomic.Value
+	// liveConnCache caches, per peer ID, whether the peer had an open libp2p
+	// connection when last checked (liveConnCacheEntry, expires after
+	// reputationCacheTTL). Written by isPeerIPBanned's existing GetPeers walk
+	// and by hasLiveConnection on a miss; updatePeerLastMessageTime consults
+	// it so gossip-relayed publishers are never marked IsConnected while a
+	// freshly connected neighbour is flagged on its first message.
+	// reconcileInFlight keeps ticker-driven reconcile passes from piling up
+	// when the registry is slow.
+	liveConnCache     sync.Map
 	reconcileInFlight atomic.Bool
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
@@ -1620,9 +1623,9 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Precisely: peers with an open libp2p connection that have authored at
 	// least one gossip message since process start — liveness derives from
 	// the message bus's topic-peer set, so a connected-but-silent peer is
-	// invisible and a fresh connection may register as gossip-only for up to
-	// one cleanup interval. Real teranode peers self-heal via the node_status
-	// heartbeat.
+	// invisible until its first message. A flag can lag reality by up to
+	// reputationCacheTTL after a connect and by up to one cleanup interval
+	// after a disconnect.
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
 		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)

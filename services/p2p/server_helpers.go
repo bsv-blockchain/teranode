@@ -888,6 +888,21 @@ func (s *Server) cleanupPeerMaps() {
 		s.ipBanCache.Delete(key)
 	}
 
+	// Evict expired liveConnCache entries: the liveness checks insert one
+	// entry per unique peer ID gossip is seen from.
+	var liveConnKeysToDelete []string
+	s.liveConnCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(liveConnCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				liveConnKeysToDelete = append(liveConnKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range liveConnKeysToDelete {
+		s.liveConnCache.Delete(key)
+	}
+
 	// Evict expired banStatusCache entries: shouldSkipBannedPeer inserts one
 	// entry per unique peer ID gossip is seen from.
 	var banStatusKeysToDelete []string
@@ -1017,10 +1032,12 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 	}
 
 	banned := false
+	live := false
 	for _, p := range s.P2PClient.GetPeers() {
 		if p.ID != peerID {
 			continue
 		}
+		live = len(p.Addrs) > 0
 		for _, addr := range p.Addrs {
 			if ip := extractIPFromMultiaddr(addr); ip != "" && s.banList.IsBanned(ip) {
 				banned = true
@@ -1031,6 +1048,10 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 	}
 
 	s.ipBanCache.Store(peerID, ipBanCacheEntry{banned: banned, expiresAt: now.Add(reputationCacheTTL)})
+	// This walk just observed the peer's connectedness; record it so the
+	// hasLiveConnection check that follows on the same gossip path does not
+	// have to repeat the walk.
+	s.cacheLiveConn(peerID, live, now)
 
 	return banned
 }
@@ -1131,10 +1152,6 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 
 	s.peerMapCleanupTicker = time.NewTicker(cleanupInterval)
 
-	// Seed the liveness snapshot so the gossip hot path has one before the
-	// first reconcile tick.
-	s.refreshLiveConnIDs()
-
 	go func() {
 		for {
 			select {
@@ -1164,17 +1181,16 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 // flooded registry cannot pin the reconcile goroutine (and its RPCs) forever.
 const reconcileTimeout = 30 * time.Second
 
-// refreshLiveConnIDs snapshots the set of peer IDs that currently have an
-// open libp2p connection and publishes it for hasLiveConnection. Liveness
-// comes from P2PClient.GetPeers(): verified against go-p2p-message-bus
-// v0.1.17 (client.go GetPeers), Addrs is built from
-// host.Network().ConnsToPeer — open connections only, not the peerstore —
-// while the peer list itself is every peer that ever authored a message on a
-// subscribed topic (gossip-only publishers included, never pruned). So the
+// snapshotLiveConnIDs returns the set of peer IDs that currently have an
+// open libp2p connection. Liveness comes from P2PClient.GetPeers(): verified
+// against go-p2p-message-bus v0.1.17 (client.go GetPeers), Addrs is built
+// from host.Network().ConnsToPeer — open connections only, not the peerstore
+// — while the peer list itself is every peer that ever authored a message on
+// a subscribed topic (gossip-only publishers included, never pruned). So the
 // Addrs filter is what separates live neighbours from gossip-only authors;
 // it is not redundant with the listing. This differs from the p2p service's
 // own GetPeers RPC, which is filtered to IsConnected registry entries.
-func (s *Server) refreshLiveConnIDs() map[string]struct{} {
+func (s *Server) snapshotLiveConnIDs() map[string]struct{} {
 	live := make(map[string]struct{})
 	if s.P2PClient != nil {
 		for _, p := range s.P2PClient.GetPeers() {
@@ -1183,21 +1199,53 @@ func (s *Server) refreshLiveConnIDs() map[string]struct{} {
 			}
 		}
 	}
-	s.liveConnIDs.Store(live)
 	return live
 }
 
-// hasLiveConnection reports whether the peer had an open libp2p connection at
-// the last reconcile snapshot. Before the first snapshot it returns false —
-// the safe direction: a real neighbour is flagged connected by the next
-// reconcile pass, while a gossip-relayed publisher must never be flagged.
+type liveConnCacheEntry struct {
+	live      bool
+	expiresAt time.Time
+}
+
+// cacheLiveConn records whether the peer had an open connection when a
+// GetPeers walk last saw it, valid for reputationCacheTTL.
+func (s *Server) cacheLiveConn(peerID string, live bool, now time.Time) {
+	s.liveConnCache.Store(peerID, liveConnCacheEntry{live: live, expiresAt: now.Add(reputationCacheTTL)})
+}
+
+// hasLiveConnection reports whether the peer has an open libp2p connection,
+// answered from liveConnCache (populated by isPeerIPBanned's walk, which the
+// gossip handlers run for the same peer immediately before this) or, on a
+// miss, by a targeted GetPeers walk cached for reputationCacheTTL. A freshly
+// connected neighbour is therefore visible on its first message, while a
+// gossip-relayed publisher walks once per TTL and stays unflagged. The answer
+// can be up to reputationCacheTTL stale after a disconnect; the reconcile
+// sweep corrects that within one cleanup interval.
 func (s *Server) hasLiveConnection(peerID string) bool {
-	m, _ := s.liveConnIDs.Load().(map[string]struct{})
-	if m == nil {
+	now := time.Now()
+	if v, ok := s.liveConnCache.Load(peerID); ok {
+		entry := v.(liveConnCacheEntry)
+		if now.Before(entry.expiresAt) {
+			return entry.live
+		}
+	}
+
+	if s.P2PClient == nil {
 		return false
 	}
-	_, ok := m[peerID]
-	return ok
+
+	live := false
+	for _, p := range s.P2PClient.GetPeers() {
+		if p.ID != peerID {
+			continue
+		}
+		live = len(p.Addrs) > 0
+		break
+	}
+
+	s.cacheLiveConn(peerID, live, now)
+
+	return live
 }
 
 // reconcileConnectionStates synchronizes the registry's IsConnected flags with
@@ -1213,7 +1261,7 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 		return
 	}
 
-	live := s.refreshLiveConnIDs()
+	live := s.snapshotLiveConnIDs()
 
 	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
 	defer cancel()

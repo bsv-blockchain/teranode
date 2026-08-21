@@ -368,11 +368,10 @@ func TestServer_GossipFlood_BoundedRegistryRPCs(t *testing.T) {
 	remote := mustNewPeerID(t)
 	mockP2P := new(MockServerP2PClient)
 	mockP2P.peerID = self
-	// The flooding peer is directly connected (live Addrs); seed the liveness
-	// snapshot so the hot path may flag it IsConnected.
+	// The flooding peer is directly connected (live Addrs), so the hot path's
+	// liveness check may flag it IsConnected.
 	mockP2P.peers = []p2pMessageBus.PeerInfo{{ID: remote.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
 	s.P2PClient = mockP2P
-	s.refreshLiveConnIDs()
 	s.notificationCh = make(chan *notificationMsg, 200)
 
 	const flood = 100
