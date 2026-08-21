@@ -40,6 +40,11 @@
 | PeerMapCleanupInterval | time.Duration | 1m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
 | PeerRegistryBatchInterval | time.Duration | 1s | p2p_peer_registry_batch_interval | Flush interval for batched peer-registry updates from gossip handlers |
 | GossipHandlerConcurrency | int | 4 | p2p_gossip_handler_concurrency | Concurrent gossip handler workers per pubsub topic |
+| WSMaxConnections | int | 10000 | p2p_wsMaxConnections | Global cap on concurrent /p2p-ws connections; 0 disables the cap |
+| WSMaxConnectionsPerIP | int | 100 | p2p_wsMaxConnectionsPerIP | Per-IP cap on concurrent /p2p-ws connections (IPv6 bucketed per /64); 0 disables the cap |
+| WSAllowedOrigins | []string | [] | p2p_wsAllowedOrigins | Extra allowed Origin header values for /p2p-ws (pipe-separated); same-host requests are always allowed |
+| HTTPRateLimit | int | 100 | p2p_httpRateLimit | Requests/sec per IP on the P2P HTTP server (/health, /p2p-ws); 0 disables it |
+| TrustedProxyCIDRs | string | "" | p2p_trustedProxyCIDRs | Pipe-separated CIDRs trusted for X-Forwarded-For extraction on the P2P HTTP server; setting this replaces Echo's implicit loopback/link-local/RFC1918 defaults rather than adding to them |
 
 ## Configuration Dependencies
 

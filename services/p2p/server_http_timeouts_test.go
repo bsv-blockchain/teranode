@@ -21,7 +21,8 @@ func TestSetupHTTPServerTimeouts(t *testing.T) {
 		logger: &ulogger.TestLogger{},
 	}
 
-	e := s.setupHTTPServer()
+	e, err := s.setupHTTPServer()
+	require.NoError(t, err)
 
 	require.Equal(t, httpReadHeaderTimeout, e.Server.ReadHeaderTimeout, "ReadHeaderTimeout must be set to bound the header phase")
 	require.Equal(t, httpReadTimeout, e.Server.ReadTimeout, "ReadTimeout must be set to bound the request read")
@@ -45,7 +46,8 @@ func TestHTTPServerClosesSlowHeaderClient(t *testing.T) {
 		logger: &ulogger.TestLogger{},
 	}
 
-	e := s.setupHTTPServer()
+	e, err := s.setupHTTPServer()
+	require.NoError(t, err)
 	e.Server.ReadHeaderTimeout = 200 * time.Millisecond
 	e.Server.ReadTimeout = 200 * time.Millisecond
 
@@ -98,7 +100,8 @@ func TestWebsocketSurvivesHTTPServerTimeouts(t *testing.T) {
 		startTime:      time.Now(),
 	}
 
-	e := s.setupHTTPServer()
+	e, err := s.setupHTTPServer()
+	require.NoError(t, err)
 	e.Server.ReadHeaderTimeout = 300 * time.Millisecond
 	e.Server.ReadTimeout = 300 * time.Millisecond
 	e.Server.WriteTimeout = 300 * time.Millisecond

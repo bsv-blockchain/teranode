@@ -82,6 +82,14 @@ func TestAssetSettings_LoaderReadsAllRateLimitKeys(t *testing.T) {
 					"loader must read asset_peerAuthAllowlist; otherwise the C3 allowlist gate cannot be turned on")
 			},
 		},
+		{
+			key:      "asset_wsAllowedOrigins",
+			override: "https://dashboard.example.com|https://ops.example.com",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, []string{"https://dashboard.example.com", "https://ops.example.com"}, s.Asset.WSAllowedOrigins,
+					"loader must read asset_wsAllowedOrigins; otherwise the /connection/websocket origin allowlist has no escape hatch")
+			},
+		},
 	}
 
 	for _, tc := range cases {

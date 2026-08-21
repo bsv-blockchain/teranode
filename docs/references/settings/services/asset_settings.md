@@ -51,6 +51,7 @@
 | TrustedProxyCIDRs | string | "" | asset_trustedProxyCIDRs | Pipe-separated CIDRs trusted for X-Forwarded-For extraction (fails Init if non-empty but unparseable) |
 | PeerAuthAllowlist | string | "" | asset_peerAuthAllowlist | Pipe-separated libp2p peer IDs eligible for tier elevation; empty = no peer is elevated |
 | PeerMinerReputationThreshold | float64 | 50.0 | asset_peerMinerReputationThreshold | Min reputation score for tierMiner classification |
+| WSAllowedOrigins | []string | [] | asset_wsAllowedOrigins | Extra allowed Origin header values for the Centrifuge /connection/websocket endpoint (pipe-separated); same-host requests are always allowed |
 
 **Rate-limit tiers:**
 

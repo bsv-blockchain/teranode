@@ -61,6 +61,73 @@ func TestP2PPeerMapSettings_LoaderReadsAllKeys(t *testing.T) {
 	}
 }
 
+// TestP2PSettings_LoaderReadsWebsocketHardeningKeys guards against the same
+// class of bug as settings/asset_settings_test.go's
+// TestAssetSettings_LoaderReadsAllRateLimitKeys: a struct field exists with a
+// `key:` tag but the hand-rolled loader in settings.go doesn't call
+// getInt/getMultiString for it, so the value stays at Go zero and the
+// documented setting (and its advertised default) is silently unreadable.
+//
+// This must go through NewSettings(), not a hand-built Settings{} literal -
+// a hand-built literal is exactly how this class of bug slipped through
+// review previously (see PR #1566 / services/p2p/HandleWebsocket_test.go's
+// TestHandleWebSocket_ConnectionCap).
+func TestP2PSettings_LoaderReadsWebsocketHardeningKeys(t *testing.T) {
+	type kv struct {
+		key      string
+		override string
+		check    func(t *testing.T, s *Settings)
+	}
+
+	cases := []kv{
+		{
+			key:      "p2p_wsMaxConnections",
+			override: "555",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 555, s.P2P.WSMaxConnections)
+			},
+		},
+		{
+			key:      "p2p_wsMaxConnectionsPerIP",
+			override: "9",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 9, s.P2P.WSMaxConnectionsPerIP)
+			},
+		},
+		{
+			key:      "p2p_wsAllowedOrigins",
+			override: "https://dashboard.example.com|https://ops.example.com",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, []string{"https://dashboard.example.com", "https://ops.example.com"}, s.P2P.WSAllowedOrigins)
+			},
+		},
+		{
+			key:      "p2p_httpRateLimit",
+			override: "77",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 77, s.P2P.HTTPRateLimit)
+			},
+		},
+		{
+			key:      "p2p_trustedProxyCIDRs",
+			override: "10.0.0.0/8",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, "10.0.0.0/8", s.P2P.TrustedProxyCIDRs)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			gocore.Config().Set(tc.key, tc.override)
+			t.Cleanup(func() { gocore.Config().Set(tc.key, "") })
+
+			s := NewSettings()
+			tc.check(t, s)
+		})
+	}
+}
+
 // TestP2PPeerMapSettings_DefaultsMatchTheServiceConstants pins the other half of
 // wiring keys that were previously inert: the defaults have to equal what the
 // node ran while they were dead, or turning them on is itself a behaviour
@@ -80,4 +147,17 @@ func TestP2PPeerMapSettings_DefaultsMatchTheServiceConstants(t *testing.T) {
 	require.Equal(t, 10000, s.P2P.PeerMapMaxSize)
 	require.Equal(t, 10*time.Minute, s.P2P.PeerMapTTL)
 	require.Equal(t, time.Minute, s.P2P.PeerMapCleanupInterval)
+}
+
+// TestP2PSettings_LoaderDefaults asserts that the documented defaults from
+// the `key:` struct tags actually land on the struct when no override is
+// present, not just Go's zero value.
+func TestP2PSettings_LoaderDefaults(t *testing.T) {
+	s := NewSettings()
+
+	require.Equal(t, 10000, s.P2P.WSMaxConnections)
+	require.Equal(t, 100, s.P2P.WSMaxConnectionsPerIP)
+	require.Equal(t, 100, s.P2P.HTTPRateLimit)
+	require.Empty(t, s.P2P.WSAllowedOrigins)
+	require.Empty(t, s.P2P.TrustedProxyCIDRs)
 }

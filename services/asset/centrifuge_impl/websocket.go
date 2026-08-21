@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/centrifugal/centrifuge"
 	"github.com/gorilla/websocket"
 )
@@ -105,7 +106,11 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	if c.CheckOrigin != nil {
 		upgrade.CheckOrigin = c.CheckOrigin
 	} else {
-		upgrade.CheckOrigin = sameHostOriginCheck()
+		// Default-deny fallback: same-host and non-browser (no Origin)
+		// requests only. The previous fallback was a stub that allowed
+		// nothing at all through an inverted condition; callers that want
+		// extra origins pass an explicit CheckOrigin.
+		upgrade.CheckOrigin = util.WebsocketOriginChecker(nil)
 	}
 
 	return &WebsocketHandler{
@@ -443,43 +448,4 @@ func (t *websocketTransport) Close(_ centrifuge.Disconnect) error {
 	t.mu.Unlock()
 
 	return t.conn.Close()
-}
-
-// sameHostOriginCheck creates a function to verify the origin of WebSocket connections.
-//
-// Returns:
-//   - func(r *http.Request) bool: Origin checking function
-func sameHostOriginCheck() func(r *http.Request) bool {
-	return func(r *http.Request) bool {
-		err := checkSameHost(r)
-		return err != nil
-	}
-}
-
-// checkSameHost verifies that the WebSocket connection originates from the same host.
-//
-// Parameters:
-//   - r: HTTP request to check
-//
-// Returns:
-//   - error: Error if origin check fails
-func checkSameHost(_ *http.Request) error {
-	return nil
-	// origin := r.Header.Get("Origin")
-	//
-	//	if origin == "" {
-	//		return nil
-	//	}
-	//
-	// u, err := url.Parse(origin)
-	//
-	//	if err != nil {
-	//		return errors.NewConfigurationError("failed to parse Origin header %q", origin, err)
-	//	}
-	//
-	//	if strings.EqualFold(r.Host, u.Host) {
-	//		return nil
-	//	}
-	//
-	// return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
 }

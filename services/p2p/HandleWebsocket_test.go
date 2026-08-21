@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
@@ -20,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -148,13 +151,11 @@ func TestHandleClientMessages(t *testing.T) {
 
 		ch := make(chan []byte, 1)
 		deadClientCh := make(chan chan []byte, 1)
-		ws := &testWebSocketConn{
-			t: t,
-		}
+		ws := newTestWebSocketConn(t, nil)
 
 		done := make(chan struct{})
 		go func() {
-			s.handleClientMessages(ws, ch, deadClientCh)
+			s.handleClientMessages(t.Context(), ws, ch, deadClientCh)
 			close(done)
 		}()
 
@@ -178,11 +179,11 @@ func TestHandleClientMessages(t *testing.T) {
 
 		ch := make(chan []byte, 1)
 		deadClientCh := make(chan chan []byte, 1)
-		ws := &testWebSocketConn{t: t, writeError: assert.AnError}
+		ws := newTestWebSocketConn(t, assert.AnError)
 
 		done := make(chan struct{})
 		go func() {
-			s.handleClientMessages(ws, ch, deadClientCh)
+			s.handleClientMessages(t.Context(), ws, ch, deadClientCh)
 			close(done)
 		}()
 
@@ -211,6 +212,15 @@ type testWebSocketConn struct {
 	t          *testing.T
 	writeCount int
 	writeError error
+	closeOnce  sync.Once
+	readBlock  chan struct{}
+	readLimit  atomic.Int64
+}
+
+var errTestConnClosed = errors.NewProcessingError("test websocket connection closed")
+
+func newTestWebSocketConn(t *testing.T, writeError error) *testWebSocketConn {
+	return &testWebSocketConn{t: t, writeError: writeError, readBlock: make(chan struct{})}
 }
 
 func (c *testWebSocketConn) WriteMessage(messageType int, data []byte) error {
@@ -221,12 +231,64 @@ func (c *testWebSocketConn) WriteMessage(messageType int, data []byte) error {
 }
 
 func (c *testWebSocketConn) Close() error {
+	c.closeOnce.Do(func() {
+		if c.readBlock != nil {
+			close(c.readBlock)
+		}
+	})
+
 	return nil
 }
 
 func (c *testWebSocketConn) ReadMessage() (messageType int, p []byte, err error) {
-	// Not used in the test but needed to satisfy the interface
-	return websocket.TextMessage, []byte{}, nil
+	// /p2p-ws is push-only; the read side exists only as a liveness probe.
+	// Block until the connection is closed rather than spinning.
+	<-c.readBlock
+
+	return websocket.TextMessage, nil, errTestConnClosed
+}
+
+func (c *testWebSocketConn) SetWriteDeadline(time.Time) error { return nil }
+
+func (c *testWebSocketConn) SetReadDeadline(time.Time) error { return nil }
+
+func (c *testWebSocketConn) SetReadLimit(limit int64) { c.readLimit.Store(limit) }
+
+func (c *testWebSocketConn) SetPongHandler(func(string) error) {}
+
+// TestStartReadPump_SetsReadLimit is the regression test for ChiR8: before
+// the fix, startReadPump never called SetReadLimit, so gorilla's default of
+// "unlimited" let a client declare an arbitrarily large frame and grow a
+// single heap buffer to match - a trivial remote OOM. The limit must be
+// applied before the connection ever reads a frame.
+func TestStartReadPump_SetsReadLimit(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+	}
+
+	ws := newTestWebSocketConn(t, nil)
+	_, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		s.startReadPump(ws, cancel)
+	}()
+
+	require.Eventually(t, func() bool { return ws.readLimit.Load() == wsMaxClientMessageBytes },
+		time.Second, 5*time.Millisecond,
+		"startReadPump must call SetReadLimit(%d) before entering the read loop", wsMaxClientMessageBytes)
+
+	require.NoError(t, ws.Close())
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("startReadPump did not exit after the connection closed")
+	}
 }
 
 func TestStartNotificationProcessor(t *testing.T) {
@@ -241,7 +303,6 @@ func TestStartNotificationProcessor(t *testing.T) {
 	}
 
 	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 1)
 	deadClientCh := make(chan chan []byte, 1)
 	notificationCh := make(chan *notificationMsg, 1)
 
@@ -255,7 +316,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 
 	go func() {
 		close(processorStarted)
-		s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+		s.startNotificationProcessor(clientChannels, deadClientCh, notificationCh, ctx)
 		close(processorDone)
 	}()
 
@@ -269,23 +330,23 @@ func TestStartNotificationProcessor(t *testing.T) {
 
 	t.Run("Add new client", func(t *testing.T) {
 		clientCh := make(chan []byte, 10)
-		newClientCh <- clientCh
+		// Registration is the caller's responsibility (see handleWebSocket);
+		// the processor no longer touches the client map on connect.
+		clientChannels.addClient(&wsClient{ch: clientCh})
 
-		// Wait for client to be added
-		time.Sleep(50 * time.Millisecond)
 		assert.True(t, clientChannels.contains(clientCh), errClientNotAdded)
 		assert.Equal(t, 1, clientChannels.count(), "Expected exactly one client")
 	})
 
 	t.Run("Send notification", func(t *testing.T) {
 		clientCh := make(chan []byte, 10)
-		newClientCh <- clientCh
-
-		// Wait for client to be added
-		time.Sleep(50 * time.Millisecond)
+		clientChannels.addClient(&wsClient{ch: clientCh})
 		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
 
-		// First, drain the initial node_status message
+		// The caller sends the initial node_status directly (see
+		// handleWebSocket), before addClient; simulate that here.
+		s.sendInitialNodeStatuses(ctx, clientCh)
+
 		select {
 		case msg := <-clientCh:
 			var initialMsg notificationMsg
@@ -318,10 +379,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 
 	t.Run("Remove client", func(t *testing.T) {
 		clientCh := make(chan []byte, 10)
-		newClientCh <- clientCh
-
-		// Wait for client to be added
-		time.Sleep(50 * time.Millisecond)
+		clientChannels.addClient(&wsClient{ch: clientCh})
 		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
 		initialCount := clientChannels.count()
 
@@ -335,10 +393,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 
 	t.Run("Broadcast timeout handling", func(t *testing.T) {
 		slowCh := make(chan []byte) // Unbuffered channel that will block
-		newClientCh <- slowCh
-
-		// Wait for client to be added
-		time.Sleep(50 * time.Millisecond)
+		clientChannels.addClient(&wsClient{ch: slowCh})
 		require.True(t, clientChannels.contains(slowCh), errClientNotAdded)
 		initialCount := clientChannels.count()
 
@@ -503,7 +558,6 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	}
 
 	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 100)
 	deadClientCh := make(chan chan []byte, 100)
 	notificationCh := make(chan *notificationMsg, 100)
 
@@ -512,7 +566,7 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 
 	processorDone := make(chan struct{})
 	go func() {
-		s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+		s.startNotificationProcessor(clientChannels, deadClientCh, notificationCh, ctx)
 		close(processorDone)
 	}()
 
@@ -529,18 +583,15 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	for i := 0; i < numMaliciousClients; i++ {
 		// Create unbuffered channel that will block when trying to send
 		maliciousChannels[i] = make(chan []byte)
-		newClientCh <- maliciousChannels[i]
+		clientChannels.addClient(&wsClient{ch: maliciousChannels[i]})
 	}
 
-	// Wait for all clients to be added
-	time.Sleep(100 * time.Millisecond)
 	require.Equal(t, numMaliciousClients, clientChannels.count(), "All malicious clients should be added")
 
 	// Add one legitimate client that will read messages
 	// Add it AFTER malicious clients to ensure it's processed last in the broadcast loop
 	legitimateCh := make(chan []byte, 100)
-	newClientCh <- legitimateCh
-	time.Sleep(50 * time.Millisecond)
+	clientChannels.addClient(&wsClient{ch: legitimateCh})
 
 	// Start reading from legitimate client in background
 	legitimateReceived := make(chan []byte, 1)
@@ -876,18 +927,20 @@ func TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor(t *testi
 	}
 
 	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 10)
 	deadClientCh := make(chan chan []byte, 10)
 	notificationCh := make(chan *notificationMsg, 10)
 
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+	go s.startNotificationProcessor(clientChannels, deadClientCh, notificationCh, ctx)
 
-	// Connect a client while the blockchain call cannot complete.
+	// Connect a client (as handleWebSocket now does: send the initial status
+	// directly, then register) while the blockchain call cannot complete.
+	// sendInitialNodeStatuses' own cache-miss fallback runs on a separate
+	// goroutine, so this must not block here either.
 	clientCh := make(chan []byte, 10)
-	newClientCh <- clientCh
+	s.sendInitialNodeStatuses(ctx, clientCh)
+	clientChannels.addClient(&wsClient{ch: clientCh})
 
-	require.Eventually(t, func() bool { return clientChannels.contains(clientCh) },
-		time.Second, 5*time.Millisecond, errClientNotAdded)
+	require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
 
 	// The processor must keep broadcasting while the initial node-status fetch
 	// is still blocked on the blockchain service.
@@ -938,17 +991,18 @@ func TestStartNotificationProcessor_InitialStatusPrecedesBroadcasts(t *testing.T
 	defer cancel()
 
 	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 10)
 	deadClientCh := make(chan chan []byte, 10)
 	notificationCh := make(chan *notificationMsg, 10)
 
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+	go s.startNotificationProcessor(clientChannels, deadClientCh, notificationCh, ctx)
 
-	// Register a client and broadcast a remote peer's node_status at the same
-	// time. The client must either see our own status first or miss the remote
-	// broadcast entirely (if it was processed before registration).
+	// Register a client exactly as handleWebSocket now does: send the
+	// initial status first, then addClient, so the client cannot become
+	// visible to a concurrently broadcast remote node_status until its own
+	// status has already been queued.
 	clientCh := make(chan []byte, 10)
-	newClientCh <- clientCh
+	s.sendInitialNodeStatuses(ctx, clientCh)
+	clientChannels.addClient(&wsClient{ch: clientCh})
 	notificationCh <- &notificationMsg{Type: "node_status", PeerID: "remote-node"}
 
 	select {
@@ -1258,4 +1312,299 @@ func TestHandleNodeStatusNotification_PublishBudgetSurvivesSlowCompute(t *testin
 	default:
 		t.Fatal("Publish was never called")
 	}
+}
+
+// The origin predicate itself is covered once, in
+// util.TestWebsocketOriginChecker. This test covers only what is specific to
+// the P2P service: which origins it feeds that predicate.
+//
+// The dev-server escape hatch is gated on the listen address rather than on
+// dashboard_devServerPorts, whose default is non-empty in every settings
+// context. Appending it unconditionally would leave
+// http(s)://localhost:5173/:4173 permanently allowlisted on every production
+// node, so any page an operator loads from one of those local ports could
+// open websockets to any node their browser can reach.
+func TestServer_wsAllowedOrigins_DevOriginsOnlyOnLoopback(t *testing.T) {
+	newServer := func(listenAddress string) *Server {
+		return &Server{
+			logger: &ulogger.TestLogger{},
+			settings: &settings.Settings{
+				P2P: settings.P2PSettings{HTTPListenAddress: listenAddress},
+				Dashboard: settings.DashboardSettings{
+					DevServerPorts: []int{5173, 4173},
+				},
+			},
+		}
+	}
+
+	allowsDevOrigin := func(s *Server) bool {
+		req := httptest.NewRequest(http.MethodGet, "http://localhost:9906/p2p-ws", nil)
+		req.Host = "localhost:9906"
+		req.Header.Set("Origin", "http://localhost:5173")
+
+		return util.WebsocketOriginChecker(s.wsAllowedOrigins())(req)
+	}
+
+	require.True(t, allowsDevOrigin(newServer("127.0.0.1:9906")),
+		"a loopback-bound p2p server must still allow the dev server so `make dev` keeps working")
+
+	require.False(t, allowsDevOrigin(newServer(":9906")),
+		"a wildcard-bound p2p server is network-reachable, so dev origins must not be allowlisted")
+
+	require.False(t, allowsDevOrigin(newServer("10.0.0.5:9906")),
+		"a network-bound p2p server must not allowlist dev origins")
+}
+
+// TestServer_wsAllowedOrigins_IncludesConfiguredOrigins verifies the
+// operator-configured p2p_wsAllowedOrigins reach the checker regardless of
+// the listen address.
+func TestServer_wsAllowedOrigins_IncludesConfiguredOrigins(t *testing.T) {
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				HTTPListenAddress: ":9906",
+				WSAllowedOrigins:  []string{"https://dashboard.example.com"},
+			},
+		},
+	}
+
+	require.Equal(t, []string{"https://dashboard.example.com"}, s.wsAllowedOrigins())
+}
+
+// TestWSConnLimiter_GlobalCap verifies that acquire rejects connections once
+// the global cap is reached, and that release frees the slot back up.
+func TestWSConnLimiter_GlobalCap(t *testing.T) {
+	limiter := newWSConnLimiter(2, 0)
+
+	release1, ok := limiter.acquire("10.0.0.1")
+	require.True(t, ok)
+
+	release2, ok := limiter.acquire("10.0.0.2")
+	require.True(t, ok)
+
+	_, ok = limiter.acquire("10.0.0.3")
+	require.False(t, ok, "third connection should be rejected once the global cap is reached")
+
+	release1()
+
+	release3, ok := limiter.acquire("10.0.0.3")
+	require.True(t, ok, "releasing a slot should allow a new connection")
+
+	release2()
+	release3()
+}
+
+// TestWSConnLimiter_PerIPCap verifies that acquire rejects connections from
+// the same IP once the per-IP cap is reached, while a different IP is
+// unaffected.
+func TestWSConnLimiter_PerIPCap(t *testing.T) {
+	limiter := newWSConnLimiter(0, 1)
+
+	release1, ok := limiter.acquire("10.0.0.1")
+	require.True(t, ok)
+
+	_, ok = limiter.acquire("10.0.0.1")
+	require.False(t, ok, "second connection from the same IP should be rejected once the per-IP cap is reached")
+
+	release2, ok := limiter.acquire("10.0.0.2")
+	require.True(t, ok, "a different IP must not be affected by another IP's cap")
+
+	release1()
+
+	release3, ok := limiter.acquire("10.0.0.1")
+	require.True(t, ok, "releasing the slot should allow the same IP to reconnect")
+
+	release2()
+	release3()
+}
+
+// TestWSConnLimiter_IPv6NormalisedToSlash64 verifies IPv6 addresses within
+// the same /64 share a per-IP bucket, preventing trivial evasion of the
+// per-IP cap by rotating addresses within one prefix.
+func TestWSConnLimiter_IPv6NormalisedToSlash64(t *testing.T) {
+	limiter := newWSConnLimiter(0, 1)
+
+	release1, ok := limiter.acquire("2001:db8::1")
+	require.True(t, ok)
+
+	_, ok = limiter.acquire("2001:db8::2")
+	require.False(t, ok, "a different address within the same /64 should share the cap")
+
+	release1()
+}
+
+// TestWSConnLimiter_ZeroDisablesCap verifies that a non-positive limit
+// disables the corresponding cap entirely.
+func TestWSConnLimiter_ZeroDisablesCap(t *testing.T) {
+	limiter := newWSConnLimiter(0, 0)
+
+	var releases []func()
+
+	for i := 0; i < 1000; i++ {
+		release, ok := limiter.acquire("10.0.0.1")
+		require.True(t, ok, "cap of 0 must not reject any connection")
+		releases = append(releases, release)
+	}
+
+	for _, release := range releases {
+		release()
+	}
+}
+
+// TestWSConnLimiter_PerIPCap_ConcurrentFirstTouch verifies that the per-IP
+// cap holds even when many goroutines race to acquire a slot for the same,
+// previously-unseen IP at the same time. perIPCounter's Get/Add/Get sequence
+// on the LRU cache is not atomic: two goroutines that both miss the cache can
+// each end up incrementing a different *atomic.Int64 (only one of which is
+// ever observed again via Get), letting the group of first-touch racers
+// collectively exceed maxPerIP.
+func TestWSConnLimiter_PerIPCap_ConcurrentFirstTouch(t *testing.T) {
+	const (
+		maxPerIP   = 2
+		goroutines = 16
+		trials     = 500
+	)
+
+	var peakGranted int64
+
+	for trial := 0; trial < trials; trial++ {
+		limiter := newWSConnLimiter(0, maxPerIP)
+
+		var (
+			ready   sync.WaitGroup
+			start   sync.WaitGroup
+			done    sync.WaitGroup
+			granted int64
+		)
+
+		start.Add(1)
+
+		for g := 0; g < goroutines; g++ {
+			ready.Add(1)
+			done.Add(1)
+
+			go func() {
+				defer done.Done()
+
+				ready.Done()
+				start.Wait()
+
+				if _, ok := limiter.acquire("10.0.0.1"); ok {
+					atomic.AddInt64(&granted, 1)
+				}
+			}()
+		}
+
+		ready.Wait()
+		start.Done()
+		done.Wait()
+
+		if granted > peakGranted {
+			peakGranted = granted
+		}
+	}
+
+	require.LessOrEqual(t, peakGranted, int64(maxPerIP),
+		"peak simultaneous grants (%d) exceeded the per-IP cap (%d) across %d trials of %d racing goroutines",
+		peakGranted, maxPerIP, trials, goroutines)
+}
+
+// TestHandleWebSocket_ConnectionCap verifies that once the configured global
+// connection cap is reached, a new /p2p-ws connection attempt is rejected
+// with HTTP 503 before the upgrade (and its per-connection channel/goroutine)
+// is even attempted.
+func TestHandleWebSocket_ConnectionCap(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:       settings.ListenModeFull,
+				EnableNAT:        false,
+				WSMaxConnections: 1,
+			},
+		},
+	}
+
+	notificationCh := make(chan *notificationMsg, 1)
+	handler := s.HandleWebSocket(notificationCh)
+
+	e := echo.New()
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := e.NewContext(r, w)
+		_ = handler(c)
+	}))
+	defer httpServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+
+	// First connection takes the only slot and stays open.
+	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer ws1.Close()
+
+	require.NoError(t, ws1.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, _, err = ws1.ReadMessage()
+	require.NoError(t, err, "should receive the initial node_status message")
+
+	// Second attempt must be rejected while the cap is held, without ever
+	// reaching the websocket upgrade.
+	resp, err := http.Get(httpServer.URL) //nolint:noctx // test-only, short-lived
+	require.NoError(t, err)
+
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+}
+
+// TestHandleWebSocket_DevServerOriginAllowedOnLoopback verifies end-to-end
+// that on a loopback-bound node the dashboard's Vite dev-server origin is
+// accepted even when p2p_wsAllowedOrigins is unset, so `make dev` keeps
+// working under the default-deny origin check, while an unrelated foreign
+// origin is still rejected.
+func TestHandleWebSocket_DevServerOriginAllowedOnLoopback(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:        settings.ListenModeFull,
+				EnableNAT:         false,
+				HTTPListenAddress: "127.0.0.1:9906",
+			},
+			Dashboard: settings.DashboardSettings{
+				DevServerPorts: []int{5173, 4173},
+			},
+		},
+	}
+
+	notificationCh := make(chan *notificationMsg, 1)
+	handler := s.HandleWebSocket(notificationCh)
+
+	e := echo.New()
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := e.NewContext(r, w)
+		_ = handler(c)
+	}))
+	defer httpServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+
+	t.Run("dev server origin is allowed", func(t *testing.T) {
+		header := http.Header{}
+		header.Set("Origin", "http://localhost:5173")
+
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+		require.NoError(t, err)
+		defer ws.Close()
+	})
+
+	t.Run("foreign origin is rejected", func(t *testing.T) {
+		header := http.Header{}
+		header.Set("Origin", "http://evil.example.com")
+
+		_, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+		require.Error(t, err)
+	})
 }

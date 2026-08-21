@@ -446,86 +446,29 @@ func TestWebsocketHandler_SubprotocolNegotiation(t *testing.T) {
 	})
 }
 
-func TestCheckSameHost(t *testing.T) {
-	tests := []struct {
-		name      string
-		origin    string
-		host      string
-		wantError bool
-	}{
-		{
-			name:      "same host",
-			origin:    "http://example.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "https origin for http request",
-			origin:    "https://example.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "different host",
-			origin:    "http://evil.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "missing origin",
-			origin:    "",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "same host with port",
-			origin:    "http://localhost:8080",
-			host:      "localhost:8080",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "different port",
-			origin:    "http://localhost:9090",
-			host:      "localhost:8080",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-	}
+// TestNewWebsocketHandler_DefaultCheckOriginIsDefaultDeny covers the
+// fallback used when WebsocketConfig.CheckOrigin is nil. It used to be a stub
+// with an inverted condition that rejected every request including same-host
+// ones; it is now the shared default-deny checker.
+func TestNewWebsocketHandler_DefaultCheckOriginIsDefaultDeny(t *testing.T) {
+	handler := NewWebsocketHandler(nil, WebsocketConfig{})
+	check := handler.upgrade.CheckOrigin
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://"+tt.host+"/ws", nil)
-			req.Host = tt.host
-			if tt.origin != "" {
-				req.Header.Set("Origin", tt.origin)
-			}
+	require.NotNil(t, check)
 
-			err := checkSameHost(req)
-			// checkSameHost is currently disabled and always returns nil
-			assert.NoError(t, err)
-		})
-	}
-}
+	sameHost := httptest.NewRequest("GET", "http://example.com/ws", nil)
+	sameHost.Host = "example.com"
+	sameHost.Header.Set("Origin", "http://example.com")
+	require.True(t, check(sameHost), "same-host origin must be allowed")
 
-func TestSameHostOriginCheck(t *testing.T) {
-	check := sameHostOriginCheck()
+	noOrigin := httptest.NewRequest("GET", "http://example.com/ws", nil)
+	noOrigin.Host = "example.com"
+	require.True(t, check(noOrigin), "non-browser clients send no Origin and must be allowed")
 
-	t.Run("allows same host", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://example.com/ws", nil)
-		req.Host = "example.com"
-		req.Header.Set("Origin", "http://example.com")
-
-		// Since checkSameHost always returns nil, sameHostOriginCheck returns err != nil, which is false
-		assert.False(t, check(req))
-	})
-
-	t.Run("rejects different host", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://example.com/ws", nil)
-		req.Host = "example.com"
-		req.Header.Set("Origin", "http://evil.com")
-
-		// Since checkSameHost always returns nil, sameHostOriginCheck returns err != nil, which is false
-		assert.False(t, check(req))
-	})
+	crossOrigin := httptest.NewRequest("GET", "http://example.com/ws", nil)
+	crossOrigin.Host = "example.com"
+	crossOrigin.Header.Set("Origin", "http://evil.com")
+	require.False(t, check(crossOrigin), "cross-origin request must be denied by default")
 }
 
 func TestWebsocketTransport_Methods(t *testing.T) {

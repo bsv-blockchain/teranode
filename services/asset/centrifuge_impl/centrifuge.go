@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/centrifugal/centrifuge"
 	"github.com/google/uuid"
@@ -245,6 +246,27 @@ func (c *Centrifuge) Init(_ context.Context) (err error) {
 	return c.centrifugeNode.Run()
 }
 
+// wsAllowedOrigins returns the operator-configured extra allowed origins for
+// the /connection/websocket endpoint, plus the dashboard's Vite dev-server
+// origins (settings.Dashboard.DevServerPorts) when - and only when - the
+// Asset HTTP server binds loopback, so `make dev` keeps working without
+// leaving http(s)://localhost:5173/:4173 permanently allowlisted on a
+// network-reachable node. Returns nil if settings are unavailable.
+func (c *Centrifuge) wsAllowedOrigins() []string {
+	if c.settings == nil {
+		return nil
+	}
+
+	origins := make([]string, 0, len(c.settings.Asset.WSAllowedOrigins))
+	origins = append(origins, c.settings.Asset.WSAllowedOrigins...)
+
+	if util.LoopbackListenAddress(c.settings.Asset.HTTPListenAddress) {
+		origins = append(origins, util.DevServerOrigins(c.settings.Dashboard.DevServerPorts)...)
+	}
+
+	return origins
+}
+
 // Start begins the Centrifuge server operation, setting up WebSocket handlers
 // and starting the P2P listener. It handles client connections and message routing.
 //
@@ -265,9 +287,7 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 	websocketHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
 		ReadBufferSize:     1024,
 		UseWriteBufferPool: true,
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
+		CheckOrigin:        util.WebsocketOriginChecker(c.wsAllowedOrigins()),
 	})
 	_ = c.httpServer.AddHTTPHandler("/connection/websocket", c.authMiddleware(websocketHandler))
 	_ = c.httpServer.AddHTTPHandler("/client/", http.FileServer(http.Dir("./client")))

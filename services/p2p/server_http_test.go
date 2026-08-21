@@ -33,7 +33,10 @@ func newHTTPTestServer(t *testing.T, name string, securityLevel int, certFile, k
 			},
 		},
 	}
-	s.e = s.setupHTTPServer()
+	var err error
+
+	s.e, err = s.setupHTTPServer()
+	require.NoError(t, err)
 
 	return s
 }

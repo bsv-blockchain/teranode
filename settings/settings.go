@@ -234,6 +234,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Streaming configuration
 			SubtreeDataStreamingChunkSize:   getInt("asset_subtreeDataStreamingChunkSize", 10000, alternativeContext...),
 			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 2, alternativeContext...),
+
+			// WebSocket (/connection/websocket) hardening
+			WSAllowedOrigins: getMultiString("asset_wsAllowedOrigins", "|", []string{}, alternativeContext...),
 		},
 		Block: BlockSettings{
 			MinedCacheMaxMB:                       getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
@@ -556,6 +559,12 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Gossip handler load management
 			PeerRegistryBatchInterval: getDuration("p2p_peer_registry_batch_interval", time.Second, alternativeContext...),
 			GossipHandlerConcurrency:  getInt("p2p_gossip_handler_concurrency", 4, alternativeContext...),
+			// WebSocket (/p2p-ws) hardening
+			WSMaxConnections:      getInt("p2p_wsMaxConnections", 10000, alternativeContext...),
+			WSMaxConnectionsPerIP: getInt("p2p_wsMaxConnectionsPerIP", 100, alternativeContext...),
+			WSAllowedOrigins:      getMultiString("p2p_wsAllowedOrigins", "|", []string{}, alternativeContext...),
+			HTTPRateLimit:         getInt("p2p_httpRateLimit", 100, alternativeContext...),
+			TrustedProxyCIDRs:     getString("p2p_trustedProxyCIDRs", "", alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),

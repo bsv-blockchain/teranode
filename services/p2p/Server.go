@@ -233,6 +233,8 @@ func NewServer(
 	subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) (*Server, error) {
+	initPrometheusMetrics()
+
 	logger.Debugf("Creating P2P service")
 
 	listenAddresses := tSettings.P2P.ListenAddresses
@@ -696,7 +698,7 @@ const (
 	httpIdleTimeout       = 120 * time.Second
 )
 
-func (s *Server) setupHTTPServer() *echo.Echo {
+func (s *Server) setupHTTPServer() (*echo.Echo, error) {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -706,6 +708,23 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 	e.Server.WriteTimeout = httpWriteTimeout
 	e.Server.IdleTimeout = httpIdleTimeout
 
+	// Configure real IP extraction for reverse proxy deployments. Without
+	// this, echo's default RealIP() fallback trusts the first
+	// X-Forwarded-For entry from any remote address, which lets an
+	// unauthenticated client forge a distinct key per request and bypass
+	// both the per-IP websocket connection cap and the HTTP rate limiter.
+	trustedProxyCIDRs := ""
+	if s.settings != nil {
+		trustedProxyCIDRs = s.settings.P2P.TrustedProxyCIDRs
+	}
+
+	ipExtractor, err := util.TrustedProxyIPExtractor(trustedProxyCIDRs, "[P2P] p2p_trustedProxyCIDRs")
+	if err != nil {
+		return nil, err
+	}
+
+	e.IPExtractor = ipExtractor
+
 	e.Use(middleware.Recover())
 
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
@@ -713,13 +732,20 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 		AllowMethods: []string{echo.GET},
 	}))
 
+	httpRateLimit := 0
+	if s.settings != nil {
+		httpRateLimit = s.settings.P2P.HTTPRateLimit
+	}
+
+	e.Use(newIPRateLimiter(httpRateLimit).Middleware())
+
 	e.GET("/health", func(c echo.Context) error {
 		return c.String(http.StatusOK, "OK")
 	})
 
 	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh))
 
-	return e
+	return e, nil
 }
 
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
@@ -769,7 +795,10 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	warmCancel()
 	s.logger.Infof("[Start] node status cache warmed (height=%d, fsm_state=%s, storage=%q)", warmStatus.BestHeight, warmStatus.FSMState, warmStatus.Storage)
 
-	s.e = s.setupHTTPServer()
+	s.e, err = s.setupHTTPServer()
+	if err != nil {
+		return errors.NewServiceError("failed to configure http server", err)
+	}
 
 	// StartHTTP binds the listener synchronously (serving happens in its own
 	// goroutine), so bind and TLS configuration errors fail startup here rather
