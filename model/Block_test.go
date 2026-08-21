@@ -1385,7 +1385,10 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	// A one-transaction block's merkle root IS its coinbase txid, so the header must be built
 	// against this coinbase for the body to be the coinbase-only block this test claims to
 	// validate. Block.Valid checks that identity and rejects a mismatched pair as corrupt.
-	blockHeader := minedHeaderVersion(t, 1, coinbase.TxIDChainHash())
+	// Anchor on the regtest genesis so the header satisfies BOTH constraints: its merkle root
+	// is the coinbase txid (the coinbase-only binding rule) and its parent is the regtest
+	// genesis the contextual-window check requires (issue 1467).
+	blockHeader := minedHeaderOnParent(t, 1, coinbase.TxIDChainHash(), regtestGenesisHeader(t).Hash())
 
 	b, err := NewBlock(
 		blockHeader,

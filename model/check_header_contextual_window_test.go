@@ -80,14 +80,25 @@ func newestFirst(chain []*BlockHeader) []*BlockHeader {
 func regtestGenesisParentChain(t *testing.T, child *BlockHeader) []*BlockHeader {
 	t.Helper()
 
+	genesis := regtestGenesisHeader(t)
+	require.True(t, genesis.Hash().IsEqual(child.HashPrevBlock), "regtest genesis must be the fixture block's parent")
+
+	return []*BlockHeader{genesis}
+}
+
+// regtestGenesisHeader returns the regtest genesis header. Split out of
+// regtestGenesisParentChain so a test that mines its own header can anchor it on the
+// same parent the contextual-window check requires (issue 1467).
+func regtestGenesisHeader(t *testing.T) *BlockHeader {
+	t.Helper()
+
 	genesisBytes, err := hex.DecodeString("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000")
 	require.NoError(t, err)
 
 	genesis, err := NewBlockHeaderFromBytes(genesisBytes)
 	require.NoError(t, err)
-	require.True(t, genesis.Hash().IsEqual(child.HashPrevBlock), "regtest genesis must be the fixture block's parent")
 
-	return []*BlockHeader{genesis}
+	return genesis
 }
 
 // buildChildBlock returns a coinbase-only block whose header carries the given
