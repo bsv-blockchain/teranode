@@ -823,7 +823,10 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 		// Verify that we have at least one subtree and that it has at least one node
 		if len(b.SubtreeSlices) == 0 {
-			return false, errors.NewBlockCorruptError("[BLOCK][%s] first subtree has no nodes", b.String())
+			// Body-derived: the reloaded body carried no subtrees at all. This is genuine
+			// corruption of the received body, so keep it corrupt (re-download, strike the
+			// serving peer). Distinct from the emptied-first-subtree case below.
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] block has no subtrees", b.String())
 		}
 
 		// Capture the entry once. Nothing here holds subtreeSlicesMu, so a
@@ -835,7 +838,15 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 
 		if len(firstSubtree.Nodes) == 0 {
-			return false, errors.NewBlockCorruptError("[BLOCK][%s] first subtree has no nodes", b.String())
+			// The first subtree was present and non-empty when CheckBlockSubtrees admitted it, but
+			// its Nodes slice was emptied afterwards by a concurrent release (the same window the
+			// nil sibling above guards). A peer-supplied zero-node subtree cannot reach here: on
+			// every peer-striking / invalid-persisting path CheckBlockSubtrees runs before
+			// block.Valid and rejects a zero-node subtree upstream (bitcoin-sv/teranode#4692). So
+			// this is a transient LOCAL condition, not peer corruption — return a processing error
+			// (retryable) like the released-first-subtree sibling, never a corrupt verdict that
+			// would strike an innocent peer.
+			return false, errors.NewProcessingError("[BLOCK][%s] first subtree emptied (released) during validation", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)

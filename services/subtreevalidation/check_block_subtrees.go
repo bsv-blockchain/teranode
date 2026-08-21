@@ -205,6 +205,17 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 				}
 			}
 
+			// Reject a zero-node subtree however it was obtained (bitcoin-sv/teranode#4692). The fetch
+			// branch above already errors on a zero-leaf count before storing, but a zero-node blob
+			// already sitting on disk reaches this point through the local-read branch with no other
+			// check. A subtree always carries at least one node, so an empty one here is junk; abort
+			// this subtree's worker so the block never reaches block.Valid with an empty subtree. This
+			// keeps the model-side "emptied first subtree" case reachable only via our own concurrent
+			// node release, not via peer-supplied data.
+			if subtreeToCheck.Length() == 0 {
+				return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
+			}
+
 			// Adaptive-fetch gate: when optimistic, skip subtreeData entirely.
 			//
 			// What this skip is: the work below is only a prewarm. It bulk-loads
@@ -1454,6 +1465,15 @@ func extendTxWithInBlockParents(tx *bt.Tx, parentMap map[chainhash.Hash]*bt.Tx) 
 // subtreepkg.NewIncompleteTreeByLeafCount, where the capacity argument would
 // otherwise drive an unbounded make() backed by attacker-controlled bytes.
 func validateSubtreeLeafCount(subtreeHash chainhash.Hash, leafCount, policyMax int) error {
+	// Reject a zero-node fetch explicitly (bitcoin-sv/teranode#4692). The downstream
+	// NewIncompleteTreeByLeafCount constructor already rejects a zero leaf count, but only
+	// incidentally (log2(0) drives a negative tree height); stating the rule here keeps the
+	// guarantee local and stable if that constructor ever changes. A subtree always carries at
+	// least one node.
+	if leafCount == 0 {
+		return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
+	}
+
 	if leafCount > policyMax {
 		return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree response exceeds policy max %d nodes (got %d)",
 			subtreeHash.String(), policyMax, leafCount)
