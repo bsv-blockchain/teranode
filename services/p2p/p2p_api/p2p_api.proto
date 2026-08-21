@@ -285,6 +285,10 @@ message AddBanScoreRequest {
     int64 catchup_attempts = 27;
     int64 catchup_successes = 28;
     int64 catchup_failures = 29;
+
+    // Raw height the peer advertised, before the unvalidated-lead cap that
+    // produces `height`. Telemetry only; `height` still drives sync decisions.
+    uint32 advertised_height = 30;
   }
 
   message GetPeerRegistryResponse {

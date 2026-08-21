@@ -21,6 +21,7 @@ func TestServer_PeerInfoToP2PProto_RoundTripFields(t *testing.T) {
 	bp := &blockchain.PeerInfo{
 		ID:                     "peer-1",
 		Height:                 100,
+		AdvertisedHeight:       962710,
 		BlockHash:              hash,
 		DataHubURL:             "http://peer.example",
 		BanScore:               42,
@@ -51,6 +52,8 @@ func TestServer_PeerInfoToP2PProto_RoundTripFields(t *testing.T) {
 	out := peerInfoToP2PProto(bp)
 	require.Equal(t, bp.ID, out.Id)
 	require.Equal(t, bp.Height, out.Height)
+	require.Equal(t, bp.AdvertisedHeight, out.AdvertisedHeight,
+		"the peers page reads this field; it must not collapse into the capped Height")
 	require.Equal(t, hash.String(), out.BlockHash)
 	require.Equal(t, bp.DataHubURL, out.DataHubUrl)
 	require.Equal(t, bp.BanScore, out.BanScore)

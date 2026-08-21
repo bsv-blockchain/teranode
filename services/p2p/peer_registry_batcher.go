@@ -60,6 +60,7 @@ const (
 type pendingPeerUpdate struct {
 	clientName       string
 	height           uint32
+	advertisedHeight uint32
 	blockHash        *chainhash.Hash
 	dataHubURL       string
 	storage          string
@@ -87,11 +88,26 @@ func (u *pendingPeerUpdate) merge(from *pendingPeerUpdate) {
 	}
 	if from.height > u.height {
 		u.height = from.height
+		u.advertisedHeight = from.advertisedHeight
 		if from.blockHash != nil {
 			u.blockHash = from.blockHash
 		}
-	} else if from.height == u.height && from.blockHash != nil {
-		u.blockHash = from.blockHash
+	} else if from.height == u.height {
+		// Same capped height: both observations are pinned to the same
+		// local+maxLead ceiling, so the capped value cannot break the tie.
+		// Prefer the higher raw claim, and take its paired hash with it; a
+		// losing observation's hash must not overwrite the winner's.
+		switch {
+		case from.advertisedHeight > u.advertisedHeight:
+			u.advertisedHeight = from.advertisedHeight
+			if from.blockHash != nil {
+				u.blockHash = from.blockHash
+			}
+		case from.advertisedHeight == u.advertisedHeight:
+			if from.blockHash != nil {
+				u.blockHash = from.blockHash
+			}
+		}
 	}
 	if from.dataHubURL != "" {
 		u.dataHubURL = from.dataHubURL
@@ -111,7 +127,7 @@ func (u *pendingPeerUpdate) merge(from *pendingPeerUpdate) {
 // hasInfo reports whether the update carries registration data worth pushing
 // even when the peer was registered recently.
 func (u *pendingPeerUpdate) hasInfo() bool {
-	return u.clientName != "" || u.height > 0 || u.blockHash != nil || u.dataHubURL != ""
+	return u.clientName != "" || u.height > 0 || u.advertisedHeight > 0 || u.blockHash != nil || u.dataHubURL != ""
 }
 
 // registryAssertState remembers when RegisterPeer / UpdateConnectionState were
@@ -263,13 +279,14 @@ func (b *peerRegistryBatcher) enqueue(peerID string, from *pendingPeerUpdate) bo
 
 // enqueueRegister records the peer's latest registration data, optionally
 // marking it as directly connected. Mirrors addPeer/addConnectedPeer.
-func (b *peerRegistryBatcher) enqueueRegister(peerID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string, connected bool) {
+func (b *peerRegistryBatcher) enqueueRegister(peerID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string, connected bool) {
 	b.enqueue(peerID, &pendingPeerUpdate{
-		clientName:    clientName,
-		height:        height,
-		blockHash:     blockHash,
-		dataHubURL:    dataHubURL,
-		markConnected: connected,
+		clientName:       clientName,
+		height:           heights.Height,
+		advertisedHeight: heights.AdvertisedHeight,
+		blockHash:        blockHash,
+		dataHubURL:       dataHubURL,
+		markConnected:    connected,
 	})
 }
 
@@ -397,6 +414,7 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 				TransportTypeSet: true,
 				ClientName:       u.clientName,
 				Height:           u.height,
+				AdvertisedHeight: u.advertisedHeight,
 				BlockHash:        u.blockHash,
 				DataHubURL:       u.dataHubURL,
 			}

@@ -869,6 +869,7 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 			ID:                     peerID,
 			ClientName:             p.ClientName,
 			Height:                 p.Height,
+			AdvertisedHeight:       p.AdvertisedHeight,
 			BlockHash:              blockHash,
 			DataHubURL:             p.DataHubUrl,
 			BanScore:               int(p.BanScore),

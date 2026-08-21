@@ -13,18 +13,22 @@ import (
 //
 // swagger:model PeerInfoResponse
 type PeerInfoResponse struct {
-	ID              string `json:"id"`
-	ClientName      string `json:"client_name"`
-	Height          uint32 `json:"height"`
-	BlockHash       string `json:"block_hash"`
-	DataHubURL      string `json:"data_hub_url"`
-	BanScore        int    `json:"ban_score"`
-	IsBanned        bool   `json:"is_banned"`
-	IsConnected     bool   `json:"is_connected"`
-	ConnectedAt     int64  `json:"connected_at"`
-	BytesReceived   uint64 `json:"bytes_received"`
-	LastBlockTime   int64  `json:"last_block_time"`
-	LastMessageTime int64  `json:"last_message_time"`
+	ID         string `json:"id"`
+	ClientName string `json:"client_name"`
+	// Height is capped against local progress and is what sync decisions use.
+	// AdvertisedHeight is the peer's raw claim. The two differ only while this
+	// node is catching up.
+	Height           uint32 `json:"height"`
+	AdvertisedHeight uint32 `json:"advertised_height"`
+	BlockHash        string `json:"block_hash"`
+	DataHubURL       string `json:"data_hub_url"`
+	BanScore         int    `json:"ban_score"`
+	IsBanned         bool   `json:"is_banned"`
+	IsConnected      bool   `json:"is_connected"`
+	ConnectedAt      int64  `json:"connected_at"`
+	BytesReceived    uint64 `json:"bytes_received"`
+	LastBlockTime    int64  `json:"last_block_time"`
+	LastMessageTime  int64  `json:"last_message_time"`
 
 	// Catchup metrics
 	CatchupAttempts        int64   `json:"catchup_attempts"`
@@ -86,18 +90,19 @@ func (h *HTTP) GetPeers(c echo.Context) error {
 		}
 
 		peerResponses = append(peerResponses, PeerInfoResponse{
-			ID:              peer.ID.String(),
-			ClientName:      peer.ClientName,
-			Height:          peer.Height,
-			BlockHash:       blockHashStr,
-			DataHubURL:      peer.DataHubURL,
-			BanScore:        peer.BanScore,
-			IsBanned:        peer.IsBanned,
-			IsConnected:     peer.IsConnected,
-			ConnectedAt:     peer.ConnectedAt.Unix(),
-			BytesReceived:   peer.BytesReceived,
-			LastBlockTime:   peer.LastBlockTime.Unix(),
-			LastMessageTime: peer.LastMessageTime.Unix(),
+			ID:               peer.ID.String(),
+			ClientName:       peer.ClientName,
+			Height:           peer.Height,
+			AdvertisedHeight: peer.AdvertisedHeight,
+			BlockHash:        blockHashStr,
+			DataHubURL:       peer.DataHubURL,
+			BanScore:         peer.BanScore,
+			IsBanned:         peer.IsBanned,
+			IsConnected:      peer.IsConnected,
+			ConnectedAt:      peer.ConnectedAt.Unix(),
+			BytesReceived:    peer.BytesReceived,
+			LastBlockTime:    peer.LastBlockTime.Unix(),
+			LastMessageTime:  peer.LastMessageTime.Unix(),
 
 			// Catchup-specific counters (timestamps below remain the generic
 			// interaction ones; catchup-scoped timestamps are not tracked).

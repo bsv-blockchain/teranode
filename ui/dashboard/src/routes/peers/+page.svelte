@@ -26,6 +26,7 @@
     id: string
     client_name?: string
     height: number
+    advertised_height: number
     block_hash: string
     data_hub_url: string
     ban_score: number
@@ -238,9 +239,15 @@
     const sorted = [...dataToSort]
     const multiplier = sortOrder === 'asc' ? 1 : -1
 
+    // The height column displays advertised_height (see its renderer), so sort
+    // on the same value. Sorting the capped `height` would order peers by a
+    // local ceiling they all share while this node catches up.
+    const sortValue = (row) =>
+      sortColumn === 'height' ? (row.advertised_height ?? 0) || (row.height ?? 0) : row[sortColumn]
+
     sorted.sort((a, b) => {
-      const aVal = a[sortColumn]
-      const bVal = b[sortColumn]
+      const aVal = sortValue(a)
+      const bVal = sortValue(b)
 
       // Handle null/undefined values
       if (aVal === null || aVal === undefined) return 1 * multiplier
@@ -525,11 +532,30 @@
       }
     },
     height: (idField, item, colId) => {
-      const value = item[colId]
+      // Show what the peer advertised so this matches the Network page. The
+      // registry's `height` is capped at local height + p2p_max_unvalidated_
+      // advertised_height_lead and only drives sync decisions, so surface it in
+      // the tooltip rather than as the headline number.
+      const syncHeight = item[colId] ?? 0
+      const advertised = item.advertised_height ?? 0
+      const display = advertised || syncHeight
+
+      // For older peers (advertised_height not yet sent), display falls back
+      // to the capped sync height — that is not what the peer advertised, so
+      // the tooltip must not claim it is.
+      let tooltip = advertised
+        ? `Advertised by peer: ${display.toLocaleString()}`
+        : `Sync height (capped): ${display.toLocaleString()}`
+      if (advertised && syncHeight && advertised !== syncHeight) {
+        tooltip += `\nSync height (capped): ${syncHeight.toLocaleString()}`
+        tooltip += '\nCapped while this node catches up; used for sync decisions only.'
+      }
+
       return {
-        component: RenderSpan,
+        component: RenderSpanWithTooltip,
         props: {
-          value: value ? value.toLocaleString() : '0',
+          value: display ? display.toLocaleString() : '0',
+          tooltip: tooltip,
           className: 'num',
         },
         value: '',
@@ -1003,7 +1029,7 @@
           </div>
           <div class="metric-item">
             <span class="metric-label">Height</span>
-            <span class="metric-value">#{selectedPeer.height?.toLocaleString() || '0'}</span>
+            <span class="metric-value">#{(selectedPeer.advertised_height || selectedPeer.height)?.toLocaleString() || '0'}</span>
           </div>
           <div class="metric-item">
             <span class="metric-label">DataHub URL</span>

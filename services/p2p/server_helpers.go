@@ -74,7 +74,17 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	s.logger.Infof("[handleBlockTopic] received block %s fromID %s", blockMessage.Hash, blockMessage.PeerID)
 
 	isSelf := s.isOwnMessage(fromID, blockMessage.PeerID)
+	// advertisedHeight is what the peer claimed (only clamped if implausible)
+	// and is reported as-is to WebSocket clients. registryHeight is the capped
+	// copy: it feeds the peer registry, which drives sync decisions. Reporting
+	// the cap as the peer's height makes a catching-up node show every peer at
+	// localHeight+maxLead.
+	// registryHeight's zero value is never used: the isSelf branch returns
+	// before addPeer, and the else branch always assigns it via
+	// sanitizeAdvertisedTip before addPeer is reached.
 	advertisedHeight := blockMessage.Height
+	var registryHeight uint32
+
 	if isSelf {
 		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
 		if err != nil {
@@ -82,7 +92,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		}
 	} else {
 		var ok bool
-		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
+		registryHeight, advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
 		if !ok {
 			return
 		}
@@ -121,7 +131,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 	// Store using the originator's peer ID
 	if peerID, err := peer.Decode(blockMessage.PeerID); err == nil {
-		s.addPeer(peerID, blockMessage.ClientName, advertisedHeight, hash, blockMessage.DataHubURL)
+		s.addPeer(peerID, blockMessage.ClientName, peerHeightClaim{Height: registryHeight, AdvertisedHeight: advertisedHeight}, hash, blockMessage.DataHubURL)
 		s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for peer %s", blockMessage.Hash, peerID)
 	}
 
@@ -571,11 +581,28 @@ func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 	return height
 }
 
-func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
+// maxPlausibleAdvertisedHeight bounds the raw advertised height reported to
+// operators (registry AdvertisedHeight, WebSocket notifications, RPC).
+// Unlike the sync-decision cap below, this is not tied to local progress: a
+// catching-up node legitimately reports peers hundreds of thousands of
+// blocks ahead of it, so tying a display bound to localHeight would clip
+// exactly the values this function exists to surface. Instead this is a
+// generous absolute sanity ceiling — at BSV's ~10-minute block interval it
+// is millennia away — that only rejects protocol-nonsense claims such as a
+// peer advertising height 4294967295 (uint32 max).
+const maxPlausibleAdvertisedHeight = 500_000_000
+
+func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (registryHeight, displayHeight uint32, hash *chainhash.Hash, ok bool) {
 	hash, err := chainhash.NewHashFromStr(advertisedHash)
 	if err != nil {
 		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash %q: %v", peerID, advertisedHash, err)
-		return 0, nil, false
+		return 0, 0, nil, false
+	}
+
+	displayHeight = advertisedHeight
+	if displayHeight > maxPlausibleAdvertisedHeight {
+		s.logger.Warnf("[sanitizeAdvertisedTip] clamping implausible advertised height from peer %s: %d exceeds plausibility ceiling %d", peerID, advertisedHeight, maxPlausibleAdvertisedHeight)
+		displayHeight = maxPlausibleAdvertisedHeight
 	}
 
 	maxLead := uint32(0)
@@ -590,18 +617,34 @@ func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, a
 
 	if uint64(advertisedHeight) > maxAcceptedHeight {
 		cappedHeight := uint32(maxAcceptedHeight)
-		s.logger.Warnf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, cappedHeight, localHeight, maxLead)
-		return cappedHeight, hash, true
+		// Debug, not Warn: the cap is a routine bound on what an unvalidated
+		// claim may influence during catchup, not a statement about the peer.
+		// A node syncing from genesis hits this on nearly every gossip message
+		// for as long as catchup runs.
+		s.logger.Debugf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, cappedHeight, localHeight, maxLead)
+		return cappedHeight, displayHeight, hash, true
 	}
 
-	return advertisedHeight, hash, true
+	return advertisedHeight, displayHeight, hash, true
+}
+
+// peerHeightClaim pairs a peer's sync-decision height with its raw advertised
+// claim. registerPeer / addPeer / addConnectedPeer / enqueueRegister take this
+// struct rather than two adjacent positional uint32s so a transposed call
+// cannot silently swap the sync-decision value and the operator-facing one.
+type peerHeightClaim struct {
+	// Height is capped against local progress; it drives sync decisions.
+	Height uint32
+	// AdvertisedHeight is the height the peer actually claimed (only clamped
+	// if implausible); it is reported to operators.
+	AdvertisedHeight uint32
 }
 
 // registerPeer is a fire-and-forget shorthand for the centralized registry's
 // RegisterPeer RPC, building the PeerInfo struct from libp2p-source data.
 // Used by addPeer / addConnectedPeer / InjectPeerForTesting which previously
 // shared a single Put helper on the local registry.
-func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) registerPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.peerRegistry == nil {
 		return
 	}
@@ -610,7 +653,8 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 		TransportType:    blockchain_api.TransportType_TRANSPORT_HTTP,
 		TransportTypeSet: true,
 		ClientName:       clientName,
-		Height:           height,
+		Height:           heights.Height,
+		AdvertisedHeight: heights.AdvertisedHeight,
 		BlockHash:        blockHash,
 		DataHubURL:       dataHubURL,
 	}
@@ -619,21 +663,21 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 	}
 }
 
-func (s *Server) addPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) addPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.registryBatcher != nil {
-		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, false)
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, heights, blockHash, dataHubURL, false)
 		return
 	}
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, heights, blockHash, dataHubURL)
 }
 
 // addConnectedPeer adds a peer and marks it as directly connected
-func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.registryBatcher != nil {
-		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, true)
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, heights, blockHash, dataHubURL, true)
 		return
 	}
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, heights, blockHash, dataHubURL)
 	if s.peerRegistry == nil {
 		return
 	}
@@ -650,7 +694,7 @@ func (s *Server) InjectPeerForTesting(peerID peer.ID, clientName, dataHubURL str
 		return
 	}
 
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, peerHeightClaim{Height: height, AdvertisedHeight: height}, blockHash, dataHubURL)
 	if err := s.peerRegistry.UpdateStorage(s.gCtx, peerID.String(), "full"); err != nil {
 		s.logger.Warnf("[InjectPeerForTesting] UpdateStorage %s failed: %v", peerID, err)
 	}

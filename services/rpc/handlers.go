@@ -1304,12 +1304,21 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 			}
 
 			for _, p := range newResult.resp {
+				// p.Height is capped at local height + p2p_max_unvalidated_advertised_height_lead
+				// and only drives sync decisions; report what the peer actually
+				// advertised. Older peers that predate AdvertisedHeight fall back
+				// to the capped value.
+				displayHeight := p.AdvertisedHeight
+				if displayHeight == 0 {
+					displayHeight = p.Height
+				}
+
 				info := &bsvjson.GetPeerInfoResult{
 					PeerID:         p.ID.String(),
 					Addr:           p.DataHubURL, // Use DataHub URL as address
 					SubVer:         p.ClientName,
-					CurrentHeight:  int32(p.Height),
-					StartingHeight: int32(p.Height), // Use current height as starting height
+					CurrentHeight:  int32(displayHeight),
+					StartingHeight: int32(displayHeight), // Use current height as starting height
 					BanScore:       int32(p.BanScore),
 					BytesRecv:      p.BytesReceived,
 					BytesSent:      0, // P2P doesn't track bytes sent currently

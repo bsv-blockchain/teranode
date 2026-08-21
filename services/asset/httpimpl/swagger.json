@@ -2881,6 +2881,11 @@
       "type": "object",
       "title": "PeerInfoResponse represents the JSON response for a single peer.",
       "properties": {
+        "advertised_height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "AdvertisedHeight"
+        },
         "ban_score": {
           "type": "integer",
           "format": "int64",
@@ -2955,6 +2960,7 @@
           "x-go-name": "DataHubURL"
         },
         "height": {
+          "description": "Height is capped against local progress and is what sync decisions use.\nAdvertisedHeight is the peer's raw claim. The two differ only while this\nnode is catching up.",
           "type": "integer",
           "format": "uint32",
           "x-go-name": "Height"

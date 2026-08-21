@@ -807,6 +807,12 @@ message PeerRegistryInfo {
   int64 catchup_attempts = 43;
   int64 catchup_successes = 44;
   int64 catchup_failures = 45;
+
+  // Raw height the peer advertised, before the unvalidated-lead cap that
+  // produces `height`. Telemetry only: `height` remains the value sync
+  // decisions read. While this node catches up the two differ, and reporting
+  // only the capped one makes every peer appear to sit at local+max_lead.
+  uint32 advertised_height = 46;
 }
 
 // RegisterPeerRequest registers or updates a peer in the centralized registry.

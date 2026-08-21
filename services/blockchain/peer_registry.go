@@ -65,6 +65,7 @@ type PeerInfo struct {
 	TransportTypeSet          bool // When true, TransportType was explicitly set by the caller
 	ClientName                string
 	Height                    uint32
+	AdvertisedHeight          uint32
 	DataHubURL                string
 	NetworkAddress            string
 	IsBanned                  bool
@@ -307,6 +308,12 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 	}
 	if info.Height > 0 {
 		existing.Height = info.Height
+	}
+	// Carried separately from Height: Height is capped against local progress
+	// for sync decisions, AdvertisedHeight is what the peer actually claimed
+	// and is reported to operators unchanged.
+	if info.AdvertisedHeight > 0 {
+		existing.AdvertisedHeight = info.AdvertisedHeight
 	}
 	if info.DataHubURL != "" {
 		existing.DataHubURL = info.DataHubURL
