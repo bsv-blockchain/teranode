@@ -410,6 +410,16 @@ type Store interface {
 	// Delete removes a UTXO and its associated metadata from the store.
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 
+	// DeleteComplete removes a transaction and every record it owns: the master
+	// record, all pagination (child) records, and any external blob(s). Unlike
+	// Delete — which on paginated backends removes only the master record — this
+	// leaves nothing behind, so a descendant spending any output gets a clean
+	// missing-parent answer rather than TX_LOCKED against a surviving locked
+	// pagination record. It is idempotent: an absent record, absent children and
+	// absent blobs are all treated as success. On a backend whose Delete is
+	// already complete (e.g. SQL) this is equivalent to Delete.
+	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
+
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 

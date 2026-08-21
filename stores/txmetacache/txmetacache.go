@@ -792,6 +792,24 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+// DeleteComplete removes the transaction from the durable store completely
+// (master record, pagination children and external blob(s)) via the wrapped
+// store, then drops the cache entry. Unlike Delete — which is cache-only — this
+// reaches the underlying store, so a caller (the validator's shed unwind) that
+// needs the whole record gone gets it. The durable delete runs first: if it
+// fails the cache entry is left in place and the error is returned, so the cache
+// never advertises a record as absent while it still exists in the store.
+func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	if err := t.utxoStore.DeleteComplete(ctx, hash); err != nil {
+		return err
+	}
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return nil
+}
+
 // appendHeightToValue appends the current block height to the end of the
 // txMetaBytes. Kept for compatibility with the existing ImprovedCache plumbing
 // (the v2 receiver in #912 uses the same pattern). PointerCache's bridge

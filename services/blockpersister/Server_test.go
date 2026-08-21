@@ -980,7 +980,8 @@ func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint3
 func (m *MockUTXOStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error { return nil }
+func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error         { return nil }
+func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error { return nil }
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }
