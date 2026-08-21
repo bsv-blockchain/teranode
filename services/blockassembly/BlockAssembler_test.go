@@ -867,10 +867,26 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		wg.Wait()
 
-		miningCandidate, subtree, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-		require.NoError(t, err)
-		assert.NotNil(t, miningCandidate)
-		assert.NotNil(t, subtree)
+		// wg.Wait() returns on the newSubtreeChan announcement, which
+		// processCompleteSubtree sends before it calls updatePrecomputedMiningData.
+		// GetMiningCandidate reads that pre-computed snapshot, so the announcement is not
+		// a safe point to assert from: asking for a candidate in between returns an empty
+		// template with CoinbaseValue equal to the subsidy alone and no subtrees, which is
+		// the CI flake this retry exists to close. Mirrors the waits already used by the
+		// max-block-size and coinbase-subsidy tests later in this file.
+		var (
+			miningCandidate *model.MiningCandidate
+			subtree         []*subtreepkg.Subtree
+		)
+
+		require.Eventually(t, func() bool {
+			var mcErr error
+
+			miningCandidate, subtree, mcErr = testItems.blockAssembler.GetMiningCandidate(ctx)
+
+			return mcErr == nil && miningCandidate != nil && len(subtree) == 1
+		}, 5*time.Second, 20*time.Millisecond, "mining candidate did not include the completed subtree in time")
+
 		// CoinbaseValue = block_subsidy (5B) + subtree_fees (5B + 222 + 334 = 5000000556)
 		// Note: tx4 and tx5 are in an incomplete subtree which is not included when there are complete subtrees
 		// The first complete subtree contains: auto-added coinbase placeholder (fee 0) + test coinbase (5B) + tx2 (222) + tx3 (334)

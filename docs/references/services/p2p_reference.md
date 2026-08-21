@@ -42,7 +42,7 @@ type Server struct {
     subtreePeerMap                    cappedPeerMap      // Which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
-    peerSelector                      *PeerSelector      // Stateless peer selection logic
+    peerSelector                      *PeerSelector      // Peer selection logic (+ SSRF-safe client for availability probes)
     syncCoordinator                   *SyncCoordinator   // Orchestrates sync operations
     syncConnectionTimes               sync.Map           // Map to track when we first connected to each sync peer (peerID -> timestamp)
 

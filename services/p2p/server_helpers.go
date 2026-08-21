@@ -384,6 +384,12 @@ func isLocalhostHostname(hostname string) bool {
 // - Loopback addresses (127.x.x.x, ::1)
 // - Private network addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x, fc00::/7)
 // - Link-local addresses (169.254.x.x, fe80::/10)
+//
+// This is a cheap static pre-filter only: it deliberately performs no DNS resolution, since
+// that would let a peer trigger a blocking lookup per announcement. A hostname that resolves
+// to an internal address therefore passes here and is stopped at connection time instead -
+// by the peer health check probe client and by the shared
+// block/subtree fetch client (util.NewSSRFSafeDialContext).
 func (s *Server) validateDataHubURL(urlStr string) error {
 	if urlStr == "" {
 		return errors.NewInvalidArgumentError("DataHubURL is empty")

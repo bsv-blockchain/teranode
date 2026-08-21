@@ -168,6 +168,23 @@ p2p_enable_mdns=false     # mDNS peer discovery
 p2p_allow_private_ips=false  # RFC1918 private networks
 ```
 
+`p2p_allow_private_ips` also governs the static SSRF check on peer-supplied DataHub URLs:
+with `true` that check is skipped entirely, so an announced URL naming a private, loopback or
+link-local address is accepted into the peer registry.
+
+It does **not** affect the connection-time guard. Every outbound request to a peer-supplied
+URL - availability probes and block/subtree fetches alike - refuses loopback (127.0.0.0/8,
+::1), link-local (169.254.0.0/16, fe80::/10) and unspecified addresses regardless of this
+setting, including when a peer hostname only resolves to one. Accepting such a URL therefore
+does not make it reachable. Private ranges are permitted at connection time on both paths,
+since peer fetches legitimately traverse private networks; the probe deliberately applies the
+same policy as the fetch path, so it never rejects a peer that catchup could have used.
+
+One caveat: if `HTTP_PROXY`/`HTTPS_PROXY` is set, outbound requests are dialled to the proxy
+and the proxy fetches the peer-supplied target on the node's behalf, which the address check
+cannot see. Deployments that need these checks to hold must not route peer fetches through a
+forward proxy.
+
 ### Peer Selection and Reputation
 
 For details on how peer selection and reputation scoring work, see [Peer Registry and Reputation System](../../../topics/features/peer_registry_reputation.md).
