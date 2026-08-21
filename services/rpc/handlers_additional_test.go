@@ -36,6 +36,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -3595,10 +3597,47 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		assert.True(t, success)
 	})
 
-	t.Run("one leg fails but the other succeeds - reports success", func(t *testing.T) {
+	t.Run("absent leg tolerated while the other clears - reports success", func(t *testing.T) {
+		// p2p clears; the legacy service is configured-but-absent and times out
+		// (#591). An absent leg (DeadlineExceeded/Unavailable) must be tolerated,
+		// so the successful p2p clear stands.
 		mockP2P := &mockP2PClient{
 			clearBannedFunc: func(ctx context.Context) error {
-				return errors.New(errors.ERR_ERROR, "p2p service error")
+				return nil
+			},
+		}
+
+		mockPeer := &mockLegacyPeerClient{
+			clearBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*peer_api.ClearBannedResponse, error) {
+				return nil, status.Error(codes.DeadlineExceeded, "legacy service absent")
+			},
+		}
+
+		s := &RPCServer{
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC:            settings.RPCSettings{ClientCallTimeout: 5 * time.Second},
+			},
+		}
+
+		result, err := handleClearBanned(context.Background(), s, nil, nil)
+
+		require.NoError(t, err)
+		success, ok := result.(bool)
+		require.True(t, ok)
+		require.True(t, success)
+	})
+
+	t.Run("shipped default: p2p service off (Unavailable), legacy clears - reports success", func(t *testing.T) {
+		// On the shipped deploy defaults the peer service is disabled but its
+		// client is still wired, so the p2p leg reports Unavailable. That is an
+		// absent leg, not a refusal, and there is no p2p ban list to lose.
+		mockP2P := &mockP2PClient{
+			clearBannedFunc: func(ctx context.Context) error {
+				return status.Error(codes.Unavailable, "peer service disabled")
 			},
 		}
 
@@ -3618,14 +3657,45 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 			},
 		}
 
-		// The p2p leg failed but the legacy leg cleared, so clearbanned reports
-		// success - matching handleSetBan. Only an all-legs-failed case is an error.
 		result, err := handleClearBanned(context.Background(), s, nil, nil)
 
 		require.NoError(t, err)
 		success, ok := result.(bool)
 		require.True(t, ok)
 		require.True(t, success)
+	})
+
+	t.Run("p2p refuses (Unauthenticated) while legacy clears - reports failure", func(t *testing.T) {
+		// The ChiR14 case: peer enabled + legacy enabled + admin key unset. The
+		// p2p leg is protected and returns Unauthenticated (a refusal, not an
+		// absence), while the unprotected legacy leg clears. Reporting success
+		// here would tell the operator bans are gone while every p2p ban survives.
+		mockP2P := &mockP2PClient{
+			clearBannedFunc: func(ctx context.Context) error {
+				return status.Error(codes.Unauthenticated, "invalid API key")
+			},
+		}
+
+		mockPeer := &mockLegacyPeerClient{
+			clearBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*peer_api.ClearBannedResponse, error) {
+				return &peer_api.ClearBannedResponse{Ok: true}, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC:            settings.RPCSettings{ClientCallTimeout: 5 * time.Second},
+			},
+		}
+
+		result, err := handleClearBanned(context.Background(), s, nil, nil)
+
+		require.Error(t, err)
+		require.Nil(t, result)
 	})
 
 	t.Run("only p2p client available", func(t *testing.T) {
@@ -4068,7 +4138,7 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
-		assert.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Failed to apply ban")
 	})
 
@@ -4106,7 +4176,7 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
-		assert.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Failed to remove ban")
 	})
 

@@ -58,6 +58,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -2281,27 +2283,38 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	s.logger.Debugf("in handleClearBanned")
 
-	// success tracks whether at least one applicable clear leg actually cleared.
-	// A legacy peer service that is configured but absent times out here by
-	// design (#591), so requiring every leg to succeed would fail the whole
-	// command on that expected timeout. Mirror handleSetBan: as long as one leg
-	// clears, report success; only fail when none did. lastErr keeps the most
-	// recent leg failure so the RPC error can name the cause instead of a bare
-	// "failed" (e.g. Unauthenticated when the admin key is unset/wrong).
+	// clearbanned is asymmetric: ClearBanned is in the p2p protected set but not
+	// the legacy one, so with the admin key unset the p2p leg returns
+	// Unauthenticated while the legacy leg clears unauthenticated. "Any leg
+	// succeeded" would then report success while every p2p ban survives.
+	//
+	// So distinguish a leg that is merely ABSENT (a configured-but-absent service
+	// times out or is Unavailable by design, #591 - tolerate it) from a leg that
+	// ANSWERED AND REFUSED (notably Unauthenticated, or a !Ok response - a real
+	// ban list was left untouched). success needs at least one leg to clear;
+	// refused fails the command even if another leg cleared. lastErr keeps a
+	// reason for the message when nothing cleared and nothing explicitly refused
+	// (e.g. all legs absent).
 	var (
 		success bool
+		refused string
 		lastErr string
 	)
 
 	// check if P2P service is available
 	if s.p2pClient != nil {
 		err := s.p2pClient.ClearBanned(ctx)
-		if err != nil {
+		switch {
+		case err == nil:
+			success = true
+		case legAbsent(err):
 			lastErr = err.Error()
 
+			s.logger.Warnf("P2P service unavailable while clearing banned list: %v", err)
+		default:
+			refused = err.Error()
+
 			s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
-		} else {
-			success = true
 		}
 	}
 	// check if legacy peer service is available
@@ -2314,30 +2327,39 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		cancel()
 
 		switch {
-		case err != nil:
+		case err == nil && resp != nil && resp.Ok:
+			success = true
+		case err != nil && legAbsent(err):
 			lastErr = err.Error()
 
+			s.logger.Warnf("Legacy peer service unavailable while clearing banned list: %v", err)
+		case err != nil:
+			refused = err.Error()
+
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
-		case resp == nil || !resp.Ok:
+		default:
 			// The p2p client turns !Ok into an error one layer down; the legacy
 			// client returns the response raw, so check Ok here too - otherwise a
 			// "did not clear" response would be counted as a successful clear.
-			lastErr = "legacy peer service reported the ban list was not cleared"
+			refused = "legacy peer service reported the ban list was not cleared"
 
 			s.logger.Warnf("Legacy peer service did not clear the ban list")
-		default:
-			success = true
 		}
 	}
 
-	// No applicable clear leg succeeded (every attempted leg failed - e.g. the
-	// admin API key is unset or wrong so calls are Unauthenticated - or none was
-	// available). clearbanned is an administrative control, so report the failure
-	// (as a server-side/internal error) rather than silently returning success.
-	if !success {
+	// Fail when any reachable leg refused (so an Unauthenticated p2p leg cannot be
+	// papered over by the unprotected legacy leg), or when no leg cleared at all
+	// (all absent, or none configured). clearbanned removes a security control, so
+	// report the failure (server-side/internal error) rather than a false success.
+	if refused != "" || !success {
+		reason := refused
+		if reason == "" {
+			reason = lastErr
+		}
+
 		msg := "Failed to clear banned list"
-		if lastErr != "" {
-			msg = fmt.Sprintf("%s: %s", msg, lastErr)
+		if reason != "" {
+			msg = fmt.Sprintf("%s: %s", msg, reason)
 		}
 
 		return nil, &bsvjson.RPCError{
@@ -2347,6 +2369,19 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	}
 
 	return true, nil
+}
+
+// legAbsent reports whether a gRPC error means the target service is merely
+// absent - a configured-but-not-running service times out or reports Unavailable
+// by design (#591) - as opposed to a service that answered and refused (e.g.
+// Unauthenticated when grpc_admin_api_key is unset), which must not be tolerated.
+func legAbsent(err error) bool {
+	switch status.Code(err) {
+	case codes.DeadlineExceeded, codes.Unavailable:
+		return true
+	default:
+		return false
+	}
 }
 
 // handleSetBan implements the setban command, which adds or removes an IP address or subnet
@@ -2407,8 +2442,15 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	// success tracks whether at least one applicable ban leg actually applied
 	// the ban; checked after the switch so the outcome no longer depends on
 	// which legs ran (previously a failed p2p ban was only surfaced when the
-	// legacy leg also ran and failed).
-	var success bool
+	// legacy leg also ran and failed). lastErr keeps the most recent leg reason
+	// so the RPC error can name the cause (e.g. Unauthenticated when the admin
+	// key is unset) instead of a bare "failed". Unlike clearbanned, both BanPeer
+	// and UnbanPeer are protected on p2p AND legacy, so a refused leg can't be
+	// masked by an unprotected sibling - any-leg-succeeds is safe here.
+	var (
+		success bool
+		lastErr string
+	)
 
 	// Handle the command
 	switch c.Command {
@@ -2439,6 +2481,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 				success = true
 				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 			} else {
+				lastErr = err.Error()
 				s.logger.Warnf("Error while trying to ban teranode peer: %v", err)
 			}
 		}
@@ -2457,8 +2500,10 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			cancel()
 
 			if err != nil {
+				lastErr = err.Error()
 				s.logger.Warnf("Error while trying to ban legacy peer: %v", err)
 			} else if resp == nil || !resp.Ok {
+				lastErr = "legacy peer service did not apply the ban"
 				s.logger.Warnf("Legacy peer service did not apply ban for %s", c.IPOrSubnet)
 			} else {
 				success = true
@@ -2471,6 +2516,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			if err == nil {
 				success = true
 			} else {
+				lastErr = err.Error()
 				s.logger.Errorf("Error while trying to unban teranode peer: %v", err)
 			}
 		}
@@ -2488,8 +2534,10 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			cancel()
 
 			if err != nil {
+				lastErr = err.Error()
 				s.logger.Errorf("Error while trying to unban legacy peer: %v", err)
 			} else if resp == nil || !resp.Ok {
+				lastErr = "legacy peer service did not remove the ban"
 				s.logger.Warnf("Legacy peer service did not remove ban for %s", c.IPOrSubnet)
 			} else {
 				success = true
@@ -2505,15 +2553,20 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 	// No applicable ban leg succeeded (every attempted leg failed, or none was
 	// available). setban is an administrative control, so report the failure
-	// rather than silently returning success.
+	// (as a server-side/internal error, naming the cause) rather than silently
+	// returning success.
 	if !success {
 		msg := "Failed to apply ban"
 		if c.Command == "remove" {
 			msg = "Failed to remove ban"
 		}
 
+		if lastErr != "" {
+			msg = fmt.Sprintf("%s: %s", msg, lastErr)
+		}
+
 		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInvalidParameter,
+			Code:    bsvjson.ErrRPCInternal.Code,
 			Message: msg,
 		}
 	}
