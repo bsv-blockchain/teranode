@@ -7436,6 +7436,11 @@
 <td>Number of subtrees currently in the block assembler subtree processor</td>
 </tr>
 <tr>
+<td><code>teranode_blockassembly_dequeue_staleness_seconds</code></td>
+<td>Gauge</td>
+<td>Seconds since the subtree processor's consumer goroutine last passed through its dequeue branch; growing alongside a non-zero <code>queued_transactions</code> means intake is queuing unboundedly because the consumer is stuck elsewhere</td>
+</tr>
+<tr>
 <td><code>teranode_blockassembly_tx_meta_get</code></td>
 <td>Histogram</td>
 <td>Histogram of reading tx meta data from txmeta store in block assembler</td>
