@@ -72,7 +72,12 @@ var (
 	wifKeyValue = regexp.MustCompile(`^[5KL9c][1-9A-HJ-NP-Za-km-z]{50,51}$`)
 
 	privateKeyName = regexp.MustCompile(`(?i)private_keys?$`)
-	varRefValue    = regexp.MustCompile(`^\$\{([^}]+)\}$`)
+	varRefAny      = regexp.MustCompile(`\$\{[^}]+\}`)
+
+	// keyShapedToken pre-filters candidate tokens on the RAW line, before
+	// comment stripping: a commented-out key is byte-for-byte as committed
+	// and as exposed as a live one, so it gets the same fixture check.
+	keyShapedToken = regexp.MustCompile(`[0-9a-zA-Z]{50,}`)
 )
 
 // isKeyShapedHex reports hex blobs long enough to be private key material.
@@ -146,10 +151,10 @@ func TestNoRealPrivateKeysCommitted(t *testing.T) {
 
 		lines := strings.Split(string(content), "\n")
 
-		// One-hop ${VAR} resolution table so a key or fixture hidden behind a
-		// variable is still subject to both checks at the referencing line.
-		// Last non-empty wins, matching gocore; context-suffixed definitions
-		// are indexed by base name so they cannot dodge resolution.
+		// ${VAR} resolution table so a key or fixture hidden behind variables
+		// is still subject to both checks at the referencing line. Last
+		// non-empty wins, matching gocore; context-suffixed definitions are
+		// indexed by base name so they cannot dodge resolution.
 		defs := map[string]string{}
 
 		for _, raw := range lines {
@@ -160,8 +165,44 @@ func TestNoRealPrivateKeysCommitted(t *testing.T) {
 			}
 		}
 
+		// Substring substitution iterated to a fixed point, like gocore's
+		// replaceVariables - so fragments concatenated as ${A}${B}${C}${D}
+		// assemble into the key the consumer would actually get. One
+		// deliberate divergence: gocore rewrites an unresolvable ${X} to
+		// {UNKNOWN}; a guard must not rewrite what it cannot see into
+		// something benign, so unresolved tokens stay put and the fixed-point
+		// check terminates the loop instead.
+		resolve := func(v string) string {
+			for i := 0; i < 8 && strings.Contains(v, "${"); i++ {
+				next := varRefAny.ReplaceAllStringFunc(v, func(m string) string {
+					if r, ok := defs[m[2:len(m)-1]]; ok {
+						return r
+					}
+					return m
+				})
+				if next == v {
+					break
+				}
+				v = next
+			}
+			return v
+		}
+
 		for i, raw := range lines {
 			lineNo := i + 1
+
+			// Raw-line pass: commented-out keys count - they are just as
+			// committed. Fixture-check every key-shaped token before comment
+			// stripping; the parsed pass below adds the structural checks.
+			for _, tok := range keyShapedToken.FindAllString(raw, -1) {
+				if !isKeyShapedHex(tok) && !wifKeyValue.MatchString(tok) {
+					continue
+				}
+
+				require.True(t, allowedFixtures[tok],
+					"%s:%d: committed private-key-shaped value that is not a known public test fixture (commented-out keys count - they are just as committed); if this leaked, rotate it",
+					rel, lineNo)
+			}
 
 			name, context, value, ok := parseAssignment(raw)
 			if !ok {
@@ -170,14 +211,8 @@ func TestNoRealPrivateKeysCommitted(t *testing.T) {
 
 			// Multi-key settings (miner_wallet_private_keys) are read via
 			// getMultiString with '|' - check each element separately.
-			for part := range strings.SplitSeq(strings.Trim(value, `"`), "|") {
+			for part := range strings.SplitSeq(resolve(strings.Trim(value, `"`)), "|") {
 				part = strings.Trim(strings.TrimSpace(part), `"`)
-
-				if m := varRefValue.FindStringSubmatch(part); m != nil {
-					if resolved, exists := defs[m[1]]; exists {
-						part = resolved
-					}
-				}
 
 				if !isKeyShapedHex(part) && !wifKeyValue.MatchString(part) {
 					continue
