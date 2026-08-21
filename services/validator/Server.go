@@ -426,8 +426,9 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 			SkipPolicyChecks:     kafkaMsg.Options.SkipPolicyChecks,
 			CreateConflicting:    kafkaMsg.Options.CreateConflicting,
 			// A queue-full shed on the ingest path must not advance the offset
-			// past an un-handed-off tx; retry the handoff in place until it
-			// drains or the consumer context is cancelled.
+			// past an un-handed-off tx; retry the handoff in place, bounded by
+			// validator_blockAssemblyShedRetryTimeout and then unwound and dropped
+			// (propagation has already returned success), not retried forever.
 			WaitForBlockAssembly: true,
 		}
 

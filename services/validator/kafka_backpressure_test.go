@@ -463,6 +463,55 @@ func TestBackpressure_FailOpenOnStaleSignal(t *testing.T) {
 	require.Equal(t, 0, c.consecutiveErrors)
 }
 
+// TestBackpressure_FailOpenResetsErrorStreak verifies that the fail-open resume
+// itself clears the consecutive-error streak (and the read-errors gauge with it),
+// so it does not climb without bound while reads keep failing.
+func TestBackpressure_FailOpenResetsErrorStreak(t *testing.T) {
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newTestController(reader, consumer)
+
+	ctx := context.Background()
+
+	// A hot read pauses the consumer.
+	reader.set(600, nil)
+	c.tick(ctx)
+	require.True(t, c.paused.Load())
+
+	// StaleErrorLimit consecutive errors trip the fail-open resume.
+	reader.set(0, errors.NewProcessingError("queue stats unavailable"))
+	for i := 0; i < c.cfg.StaleErrorLimit; i++ {
+		c.tick(ctx)
+	}
+	require.Equal(t, 1, consumer.resumeCount())
+	require.False(t, c.paused.Load())
+
+	// The streak is cleared by the resume itself, not only by a later good read.
+	require.Equal(t, 0, c.consecutiveErrors)
+
+	// A further failed read starts a fresh streak rather than continuing to climb.
+	c.tick(ctx)
+	require.Equal(t, 1, c.consecutiveErrors)
+}
+
+// TestBackpressure_RunZeroPollIntervalDoesNotPanic verifies the run loop clamps a
+// non-positive poll interval instead of panicking in time.NewTicker. The settings
+// loader disables the controller in that case, but a hand-built Settings — as the
+// repo's own tests use — can still reach run().
+func TestBackpressure_RunZeroPollIntervalDoesNotPanic(t *testing.T) {
+	initPrometheusMetrics()
+
+	cfg := testBackpressureConfig()
+	cfg.PollInterval = 0
+
+	c := newKafkaBackpressureController(ulogger.TestLogger{}, cfg, 0, &fakeReader{}, &fakeConsumer{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the run loop returns on the already-cancelled context after the ticker is built
+
+	require.NotPanics(t, func() { c.run(ctx) })
+}
+
 // TestBackpressure_DisabledOrNilClient verifies startKafkaBackpressure is a safe
 // no-op when disabled or when a required client is nil.
 func TestBackpressure_DisabledOrNilClient(t *testing.T) {

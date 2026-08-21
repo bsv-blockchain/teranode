@@ -1440,6 +1440,75 @@ func TestHandoffFloorAndRetryWindow(t *testing.T) {
 	}
 }
 
+// TestEffectiveBatcherFlushWait pins the effective flush wait the F5 startup guard
+// compares against handoffFloor. It must follow the block-assembly client's batcher
+// construction: no bound when batching is off or in drain mode; the ticker interval
+// supersedes the lazy first-item timeout when set; otherwise the lazy timeout.
+func TestEffectiveBatcherFlushWait(t *testing.T) {
+	tests := []struct {
+		name        string
+		batchSize   int
+		drainMode   bool
+		sendTimeout int
+		tickerMs    int
+		wantWait    time.Duration
+		wantKey     string
+		wantBounded bool
+	}{
+		{
+			name:        "lazy first-item timeout governs by default",
+			batchSize:   1024,
+			sendTimeout: 5,
+			wantWait:    5 * time.Millisecond,
+			wantKey:     "blockassembly_sendBatchTimeout",
+			wantBounded: true,
+		},
+		{
+			name:        "ticker interval supersedes the lazy timeout when set",
+			batchSize:   1024,
+			sendTimeout: 5,
+			tickerMs:    250,
+			wantWait:    250 * time.Millisecond,
+			wantKey:     "blockassembly_sendBatchTickerIntervalMillis",
+			wantBounded: true,
+		},
+		{
+			name:        "batching off: nothing is bounded",
+			batchSize:   0,
+			sendTimeout: 5000,
+			wantBounded: false,
+		},
+		{
+			name:        "drain mode flushes immediately: nothing is bounded",
+			batchSize:   1024,
+			drainMode:   true,
+			sendTimeout: 5000,
+			tickerMs:    5000,
+			wantBounded: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockAssembly.SendBatchSize = tc.batchSize
+			tSettings.BatcherDrainMode = tc.drainMode
+			tSettings.BlockAssembly.SendBatchTimeout = tc.sendTimeout
+			tSettings.BlockAssembly.SendBatchTickerIntervalMillis = tc.tickerMs
+
+			v := &Validator{settings: tSettings}
+
+			wait, key, bounded := v.effectiveBatcherFlushWait()
+			require.Equal(t, tc.wantBounded, bounded)
+
+			if tc.wantBounded {
+				require.Equal(t, tc.wantWait, wait)
+				require.Equal(t, tc.wantKey, key)
+			}
+		})
+	}
+}
+
 // TestValidatorSettings_UnwindTimeoutFallback pins the defensive arm of the two
 // duration accessors promoted to settings in this change.
 //
