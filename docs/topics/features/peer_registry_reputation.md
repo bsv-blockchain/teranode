@@ -101,7 +101,7 @@ The `PeerRegistry` is a thread-safe data store that maintains comprehensive info
 
 ### 3.2. Peer Selector
 
-The `PeerSelector` implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation. When HTTP health checking is enabled it probes candidate DataHub URLs before selecting (concurrently, with an overall deadline) and keeps a short-lived cache of probe results, so it is not a pure function.
+The `PeerSelector` implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation. When HTTP health checking is enabled it probes candidate DataHub URLs before selecting (concurrently, with an overall deadline) and keeps a short-lived cache of probe results, so it is not a pure function. Those URLs come from peers, so the probes use a client that refuses to connect to internal addresses even when a peer-supplied hostname only resolves to one.
 
 **Selection Criteria:**
 

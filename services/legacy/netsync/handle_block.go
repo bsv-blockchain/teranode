@@ -980,12 +980,13 @@ func (sm *SyncManager) candidateParentMedianTimeForBlock(ctx context.Context, pa
 // can re-anchor them with the same logic.
 //
 // A nil pointer (cur == nil) or a nil header response (header == nil) is
-// treated as a hard error. Production callers only invoke this when the
-// candidate height is at or above CSVHeight, which is well past the first
-// `depth` blocks of the chain — so we never legitimately walk off the
-// beginning of the chain. Tolerating short returns would silently produce
-// an incomplete MTP on a transient cache miss mid-chain; raising loudly
-// instead forces the caller to surface the underlying issue.
+// treated as a hard error. Walking off the BEGINNING of the chain is not one of
+// those cases: the loop breaks at genesis, because on teratestnet, tstn and stn
+// CSVHeight is 0, so a candidate can legitimately sit below the first `depth`
+// blocks and a genesis-terminated run is the correct short window there.
+// Tolerating other short returns would silently produce an incomplete MTP on a
+// transient cache miss mid-chain; raising loudly instead forces the caller to
+// surface the underlying issue.
 func (sm *SyncManager) walkParentChain(ctx context.Context, startHash *chainhash.Hash, depth uint64) ([]*model.BlockHeader, error) {
 	headers := make([]*model.BlockHeader, 0, depth)
 	cur := startHash
@@ -1005,6 +1006,15 @@ func (sm *SyncManager) walkParentChain(ctx context.Context, startHash *chainhash
 		}
 
 		headers = append(headers, header)
+
+		// Stop at genesis. Its HashPrevBlock is the all-zero hash, not nil, so the nil guard
+		// above never fires — without this the walk asks GetBlockHeader for the zero hash and
+		// fails with "failed at depth N". A run that ends at genesis is a complete window; the
+		// caller's genesis carve-out decides whether it is long enough.
+		if header.HashPrevBlock == nil || header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			break
+		}
+
 		cur = header.HashPrevBlock
 	}
 
@@ -1058,6 +1068,17 @@ func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []
 		return 0, errors.NewProcessingError("returned chain head does not match requested parent hash (possible reorg between header probe and fetch)")
 	}
 
+	// A run LONGER than the window is as wrong as one shorter than it, and just as invisible to
+	// the anchor and linkage checks: an over-long run is still anchored at the parent and still
+	// correctly linked, but its median covers blocks the consensus rule excludes. Unreachable
+	// while the only caller requests exactly MedianTimeBlocks, which the store cannot exceed;
+	// enforced so that all three copies of this helper — here, subtreevalidation, and block
+	// assembly's verifyParentChainRun — agree, and a later change to the request size fails
+	// loudly rather than silently widening the window in some of them.
+	if uint64(len(headers)) > blockchain.MedianTimeBlocks {
+		return 0, errors.NewProcessingError("run below parent %s holds %d headers, more than the %d the median window covers", parentHash.String(), len(headers), blockchain.MedianTimeBlocks)
+	}
+
 	for i := 1; i < len(headers); i++ {
 		if headers[i] == nil {
 			return 0, errors.NewProcessingError("nil header at depth %d", i)
@@ -1067,6 +1088,24 @@ func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []
 		cur := headers[i].Hash()
 		if prev == nil || cur == nil || !prev.IsEqual(cur) {
 			return 0, errors.NewProcessingError("parent-chain link broken at depth %d (possible reorg between header probe and fetch)", i)
+		}
+	}
+
+	// The anchor and link checks above cannot see a run truncated at its OLDEST
+	// end: such a run is still anchored at parentHash and still correctly
+	// linked, but the median comes out of a narrower window and stops being the
+	// consensus one. svnode cannot express that state — GetMedianTimePast walks
+	// pprev pointers, so its window is shorter than MedianTimeBlocks only when
+	// the chain itself ends at genesis. Re-establish that here, matching
+	// model.Block CheckHeaderContextual: a short run is legitimate only when its
+	// oldest header is genesis. On the batched path the error sends the caller to
+	// walkParentChain, which walks by hash — immune to the batched query's race — and
+	// stops at genesis, so it returns either the full window or a genuinely
+	// genesis-terminated one that this same carve-out then accepts.
+	if uint64(len(headers)) < blockchain.MedianTimeBlocks {
+		oldest := headers[len(headers)-1]
+		if oldest.HashPrevBlock == nil || !oldest.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			return 0, errors.NewProcessingError("parent-chain run holds only %d of %d headers and does not reach genesis, so its median is not the consensus median-time-past", len(headers), blockchain.MedianTimeBlocks)
 		}
 	}
 

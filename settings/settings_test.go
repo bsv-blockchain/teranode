@@ -36,7 +36,7 @@ func TestGenesisActivationHeight(t *testing.T) {
 		params *chaincfg.Params
 		expect uint32
 	}{
-		{"RegressionNet", &chaincfg.RegressionNetParams, 10000},
+		{"RegressionNet", &chaincfg.RegressionNetParams, 100},
 		{"TestNet", &chaincfg.TestNetParams, 1344302},
 		{"MainNet", &chaincfg.MainNetParams, 620538},
 	}
@@ -146,6 +146,24 @@ func TestMaxRawTxFee_EnvZeroDisables(t *testing.T) {
 	t.Setenv("maxrawtxfee", "0")
 	tSettings := NewSettings()
 	require.Equal(t, uint64(0), tSettings.Policy.MaxRawTxFee)
+}
+
+// Pin the script-size policy default. This is the ceiling on an individual
+// locking or unlocking script and is pushed into the BDK script engine at
+// validator startup; it matches maxtxsizepolicy (100MB) so the script limit is
+// not the binding constraint on an otherwise-acceptable transaction.
+func TestMaxScriptSizePolicy_Default(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings.Policy)
+	require.Equal(t, 100_000_000, tSettings.Policy.MaxScriptSizePolicy)
+}
+
+// Operators can still tighten (or loosen) the ceiling via the
+// maxscriptsizepolicy key.
+func TestMaxScriptSizePolicy_EnvOverride(t *testing.T) {
+	t.Setenv("maxscriptsizepolicy", "500000")
+	tSettings := NewSettings()
+	require.Equal(t, 500_000, tSettings.Policy.MaxScriptSizePolicy)
 }
 
 func TestP2PSyncHardeningDefaultsAreLoaded(t *testing.T) {

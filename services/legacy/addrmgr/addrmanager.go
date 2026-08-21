@@ -84,21 +84,25 @@ import (
 // The manager uses cryptographic randomization to prevent address correlation
 // attacks and implements various anti-DoS measures to maintain network health.
 type AddrManager struct {
-	logger         ulogger.Logger
-	mtx            sync.Mutex
-	peersFile      string
-	lookupFunc     func(string) ([]net.IP, error)
-	rand           *rand.Rand
-	key            [32]byte
-	addrIndex      map[string]*KnownAddress // address key to ka for all addrs.
-	addrNew        [newBucketCount]map[string]*KnownAddress
-	addrTried      [triedBucketCount]*list.List
-	started        int32
-	shutdown       int32
-	wg             sync.WaitGroup
-	quit           chan struct{}
-	nTried         int
-	nNew           int
+	logger     ulogger.Logger
+	mtx        sync.Mutex
+	peersFile  string
+	lookupFunc func(string) ([]net.IP, error)
+	rand       *rand.Rand
+	key        [32]byte
+	addrIndex  map[string]*KnownAddress // address key to ka for all addrs.
+	addrNew    [newBucketCount]map[string]*KnownAddress
+	addrTried  [triedBucketCount]*list.List
+	started    int32
+	shutdown   int32
+	wg         sync.WaitGroup
+	quit       chan struct{}
+	nTried     int
+	nNew       int
+	// lastGood is when any address was last confirmed good. Failures are
+	// counted at most once per address per interval between successes, so a
+	// spell of broken connectivity cannot condemn the whole book: see Attempt.
+	lastGood       time.Time
 	lamtx          sync.Mutex
 	localAddresses map[string]*localAddress
 }
@@ -847,6 +851,16 @@ func (a *AddrManager) AddressCache() []*wire.NetAddress {
 func (a *AddrManager) reset() {
 	a.addrIndex = make(map[string]*KnownAddress)
 
+	// Started just off zero so that "never counted" is strictly worse than
+	// "never succeeded". Attempt only counts a failure when the address's
+	// lastCountAttempt is BEFORE lastGood, and a zero lastGood is not after a
+	// zero lastCountAttempt — so leaving it zero would silently swallow every
+	// failure until the node's first successful version exchange, which is
+	// exactly the window in which the address book most needs to learn that
+	// its seeds are dead. svnode sets nLastGood = 1 in CAddrMan::Clear
+	// (addrman.h:505) for this reason.
+	a.lastGood = time.Unix(1, 0)
+
 	// fill key with bytes from a good random source.
 	io.ReadFull(crand.Reader, a.key[:])
 
@@ -999,9 +1013,27 @@ func (a *AddrManager) find(addr *wire.NetAddress) *KnownAddress {
 	return a.addrIndex[NetAddressKey(addr)]
 }
 
-// Attempt increases the given address' attempt counter and updates
-// the last attempt time.
-func (a *AddrManager) Attempt(addr *wire.NetAddress) {
+// Attempt records that a connection to the given address was attempted, and
+// counts the attempt against the address when countFailure says the attempt
+// deserves the blame.
+//
+// The distinction matters because attempts are what demote an address:
+// KnownAddress.chance divides its selection weight by 1.5 per attempt, and
+// isBad condemns an address that has failed three times without ever
+// succeeding. A node whose own link is down would otherwise walk its entire
+// book, fail against every address for reasons that are nothing to do with any
+// of them, and mark the lot bad — arriving back online with nowhere to dial.
+//
+// Two guards keep that from happening, both taken from svnode (CAddrMan::
+// Attempt_, addrman.cpp:316). The caller passes countFailure false unless the
+// node is demonstrably connected to other peers, so a failure only counts when
+// there is evidence the fault is at the far end. And an address is counted at
+// most once between successes anywhere, via lastGood, so one bad spell costs
+// each address a single strike rather than one per retry.
+//
+// The last-attempt time is always recorded: it feeds the "tried very recently"
+// term in chance, which is about pacing retries rather than judging addresses.
+func (a *AddrManager) Attempt(addr *wire.NetAddress, countFailure bool) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
 
@@ -1012,8 +1044,12 @@ func (a *AddrManager) Attempt(addr *wire.NetAddress) {
 		return
 	}
 
+	if countFailure && ka.lastCountAttempt.Before(a.lastGood) {
+		ka.lastCountAttempt = time.Now()
+		ka.attempts++
+	}
+
 	// set last tried time to now
-	ka.attempts++
 	ka.lastattempt = time.Now()
 }
 
@@ -1046,6 +1082,12 @@ func (a *AddrManager) Connected(addr *wire.NetAddress) {
 func (a *AddrManager) Good(addr *wire.NetAddress) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
+
+	// Recorded before the lookup, and even for an address we do not know,
+	// because it is evidence about the NETWORK rather than about one address:
+	// connectivity is working, so failures from here on say something about the
+	// peer that failed.
+	a.lastGood = time.Now()
 
 	ka := a.find(addr)
 	if ka == nil {
