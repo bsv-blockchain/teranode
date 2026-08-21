@@ -1708,7 +1708,7 @@ func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHas
 // mined in. An unmined parent (no recorded block heights) falls back to the
 // Genesis activation height (post-Genesis). On production networks this is exact
 // — a live unmined parent is always post-Genesis. On low-activation networks
-// (regtest=10000, stn=100) the fallback can misclassify a genuinely pre-Genesis
+// (regtest and stn both activate at 100) the fallback can misclassify a pre-Genesis
 // unmined parent as post-Genesis; this only over-retains a provably-unspendable
 // output (never over-excludes a spendable one), so it is safe and accepted. See
 // GetOutpointsFromExternalStore for the matching cache-coherence note.

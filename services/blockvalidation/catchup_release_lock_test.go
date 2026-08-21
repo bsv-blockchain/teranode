@@ -524,3 +524,77 @@ func TestRecordCatchupPeerFailure_SkipsLocalErrors(t *testing.T) {
 		require.True(t, recorded("broken-peer-genuine"), "a genuine peer failure must still be recorded")
 	})
 }
+
+// TestReleaseCatchupLock_HeaderContextErrorIsNotChargedToPeer pins the classification that keeps
+// an honest peer out of the demotion loop of issue 1368.
+//
+// When the parent-header run OUR OWN store returned cannot carry the median-time-past window
+// (issue 1467), the peer that served the block had no part in producing it. The switch in
+// releaseCatchupLock therefore classifies it local and leaves isPeerError false, and 9bd669e78
+// moved that case ABOVE errors.IsNetworkError to keep it there. Nothing pinned either fact.
+//
+// The ordering is the fragile half. errors.IsNetworkError matches a bare substring — "http",
+// "eof", "timeout" — anywhere in the whole chain, so if this switch is ever re-sorted, or if any
+// wrapper puts a peer baseURL into the message, a purely local failure is reclassified
+// network_error, isPeerError flips true, and the serving peer is charged for our own state.
+// The second subtest is the one that catches that: its message carries a peer URL, so it passes
+// only while the header-context case precedes IsNetworkError.
+func TestReleaseCatchupLock_HeaderContextErrorIsNotChargedToPeer(t *testing.T) {
+	tests := []struct {
+		name string
+		err  func() error
+	}{
+		{
+			name: "bare header-context error",
+			err: func() error {
+				return errors.NewBlockHeaderContextError("window is not anchored at the block's parent")
+			},
+		},
+		{
+			// The re-sort canary: "http" in the message text is all IsNetworkError needs.
+			name: "wrapped in a message carrying a peer URL",
+			err: func() error {
+				return errors.NewProcessingError(
+					"[catchup] failed validating block from http://peer1:8000",
+					errors.NewBlockHeaderContextError("window is not anchored at the block's parent"),
+				)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, _, _, cleanup := setupTestCatchupServer(t)
+			defer cleanup()
+
+			blocker := &blockingP2PClient{
+				maliciousStarted: make(chan struct{}),
+				release:          make(chan struct{}),
+			}
+			server.p2pClient = blocker
+
+			header := testhelpers.CreateTestHeaders(t, 1)[0]
+			catchupCtx := &CatchupContext{
+				blockUpTo: &model.Block{Header: header, Height: 1000},
+				baseURL:   "http://peer1:8000",
+				peerID:    "peer-123",
+				startTime: time.Now(),
+			}
+
+			require.NoError(t, server.acquireCatchupLock(catchupCtx))
+
+			relErr := tt.err()
+			server.releaseCatchupLock(catchupCtx, &relErr)
+
+			status := server.getCatchupStatusInternal()
+			require.NotNil(t, status.PreviousAttempt)
+			require.Equal(t, "local_header_context_error", status.PreviousAttempt.ErrorType,
+				"a run our own store produced must never be classified as the peer's fault")
+
+			blocker.mu.Lock()
+			defer blocker.mu.Unlock()
+			require.False(t, blocker.maliciousCalled, "a local header-context failure must not report malicious")
+			require.False(t, blocker.errorCalled, "a local header-context failure must not charge the peer")
+		})
+	}
+}

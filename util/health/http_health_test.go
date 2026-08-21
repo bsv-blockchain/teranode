@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCheckHTTPServerHealthyServer tests the health check against a healthy HTTP server
@@ -492,4 +493,37 @@ func BenchmarkCheckHTTPServer(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _, _ = check(ctx, false)
 	}
+}
+
+// TestCheckPeerHTTPServer_RejectsNilClient pins the fail-closed contract. A peer-supplied
+// address must never be probed with an unguarded client, so omitting the client is an error
+// rather than a silent fallback: the previous nil-defaulting behaviour meant a future peer
+// probe wired through the plain constructor would lose the SSRF guard without a trace.
+func TestCheckPeerHTTPServer_RejectsNilClient(t *testing.T) {
+	check := health.CheckPeerHTTPServer(nil, "http://peer.example/api/v1", "/bestblockheader")
+
+	status, msg, err := check(context.Background(), false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires an SSRF-safe client")
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	require.Contains(t, msg, "misconfigured")
+}
+
+// TestCheckPeerHTTPServer_UsesSuppliedClient checks the guarded path still works normally
+// when a client is supplied.
+func TestCheckPeerHTTPServer_UsesSuppliedClient(t *testing.T) {
+	var got string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	check := health.CheckPeerHTTPServer(&http.Client{Timeout: 2 * time.Second}, server.URL+"/api/v1", "/bestblockheader")
+
+	status, _, err := check(context.Background(), false)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "/api/v1/bestblockheader", got)
 }
