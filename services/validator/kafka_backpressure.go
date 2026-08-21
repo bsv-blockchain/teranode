@@ -18,6 +18,13 @@ import (
 // short enough that a genuinely overloaded node regains protection quickly.
 const cooldownDutyDivisor = 4
 
+// defaultKafkaBackpressurePollInterval mirrors the settings loader's default and
+// is the fallback the run loop clamps to when handed a non-positive interval.
+// The loader disables the controller when the interval is <= 0, but a hand-built
+// Settings (as tests use) can still reach the run loop, where a zero interval
+// would panic time.NewTicker.
+const defaultKafkaBackpressurePollInterval = 50 * time.Millisecond
+
 // queueStatsReader is the slim signal source the controller reads each tick. It
 // is satisfied by blockassembly.ClientI and deliberately narrow so the read can
 // never touch the subtree-processor main loop (GetBlockAssemblyQueueStats is
@@ -128,7 +135,16 @@ func (c *kafkaBackpressureController) run(ctx context.Context) {
 	c.logger.Infof("[Validator] kafka backpressure controller started (pause>=%s, resume<=%s, poll=%s, maxPause=%s, maxFailOpenCooldown=%s)",
 		c.cfg.PauseQueueAge, c.cfg.ResumeQueueAge, c.cfg.PollInterval, c.cfg.MaxPause, c.cfg.MaxFailOpenCooldown)
 
-	ticker := time.NewTicker(c.cfg.PollInterval)
+	pollInterval := c.cfg.PollInterval
+	if pollInterval <= 0 {
+		// A non-positive interval would panic time.NewTicker. The settings loader
+		// disables the controller in that case, but a hand-built Settings can
+		// still reach here, so clamp to the documented default.
+		c.logger.Warnf("[Validator] kafka backpressure: pollInterval=%s must be > 0; using %s", c.cfg.PollInterval, defaultKafkaBackpressurePollInterval)
+		pollInterval = defaultKafkaBackpressurePollInterval
+	}
+
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	defer c.resumeOnExit()
 
@@ -212,6 +228,12 @@ func (c *kafkaBackpressureController) onReadError(err error) {
 	if c.consecutiveErrors >= c.cfg.StaleErrorLimit && c.paused.Load() {
 		c.armFailOpenCooldown()
 		c.resume(fmt.Sprintf("stale signal: %d consecutive read errors", c.consecutiveErrors))
+
+		// The fail-open resume has acted on the streak, so clear it (and the
+		// gauge) rather than letting it climb without bound while reads keep
+		// failing.
+		c.consecutiveErrors = 0
+		prometheusKafkaBackpressureReadErrors.Set(0)
 	}
 }
 

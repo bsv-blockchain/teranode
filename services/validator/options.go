@@ -178,13 +178,15 @@ type Options struct {
 	PrefetchedParents map[chainhash.Hash]*meta.Data
 
 	// WaitForBlockAssembly makes a queue-full block-assembly handoff
-	// (ErrThresholdExceeded) retry in place until it succeeds or the request
-	// context is cancelled, instead of surfacing the shed to the caller. It is
-	// set only on the Kafka ingest path, where the alternative — letting the
-	// consumer offset advance past a transaction that never reached a mining
-	// template — would strand the transaction. Synchronous callers (gRPC, HTTP,
-	// propagation) leave it false so a shed surfaces promptly as
-	// ResourceExhausted rather than blocking the client indefinitely.
+	// (ErrThresholdExceeded) retry in place rather than surfacing the shed to the
+	// caller. The retry is bounded by validator_blockAssemblyShedRetryTimeout (2s
+	// default), not unbounded: if the window expires the transaction's UTXO-store
+	// work is unwound (see unwindShed) and it is dropped, silently, because
+	// propagation has already returned success on the ingest path. It is set only
+	// on the Kafka ingest path, where surfacing the shed would advance the
+	// consumer offset past a transaction that never reached a mining template.
+	// Synchronous callers (gRPC, HTTP, propagation) leave it false so a shed
+	// surfaces promptly as ResourceExhausted rather than blocking the client.
 	WaitForBlockAssembly bool
 
 	// OutpointOnlySpend enables the below-checkpoint fast path:
@@ -406,9 +408,9 @@ func WithOutpointOnlySpend(b bool) Option {
 }
 
 // WithWaitForBlockAssembly makes a queue-full block-assembly handoff retry in
-// place until it succeeds or the context is cancelled. See
-// Options.WaitForBlockAssembly for the contract — set only on the Kafka ingest
-// path.
+// place, bounded by validator_blockAssemblyShedRetryTimeout and then unwound and
+// dropped rather than retried forever. See Options.WaitForBlockAssembly for the
+// contract — set only on the Kafka ingest path.
 func WithWaitForBlockAssembly(wait bool) Option {
 	return func(o *Options) {
 		o.WaitForBlockAssembly = wait

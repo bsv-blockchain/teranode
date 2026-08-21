@@ -1212,15 +1212,15 @@ const queueFullPollInterval = 5 * time.Millisecond
 // one atomic and no added latency. When the queue is full it waits up to
 // QueueFullWaitTimeout for the dispatcher to make room, polling on a short
 // ticker. If room never appears the batch is shed with a ResourceExhausted-
-// mapped error; the transactions stay locked in the UTXO store and a client
-// resubmit re-drives the handoff.
+// mapped error; the validator then unwinds its UTXO-store work for the shed
+// transactions (see unwindShed) so a resubmit is an ordinary first submission.
 //
 // Caller cancellation (ctx.Done) is NOT a shed: it returns a context-cancelled
 // error without incrementing the shed counter and without the resource-exhausted
-// class, whose locked-shed recovery semantics do not apply to a cancelled call.
+// class, whose shed recovery semantics do not apply to a cancelled call.
 //
 // The wait is strictly bounded so it can never wedge the validator, whose
-// block-assembly client waits on an untimed, un-cancellable group.
+// block-assembly client honours the caller's context (group.Wait(ctx, 0)).
 func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) error {
 	if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
 		return nil

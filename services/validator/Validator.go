@@ -297,6 +297,20 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		logger.Warnf("[Validator] validator_blockAssemblyShedRetryTimeout=%s is not greater than the block-assembly handoff floor %s (blockassembly_queueFullWaitTimeout=%s plus validator_handoffRoundTripSlack=%s), so a queue-full handoff makes one bounded attempt with no retries and the effective ingest stall bound is %s, not the configured window; to restore retries either raise validator_blockAssemblyShedRetryTimeout above the floor or lower validator_handoffRoundTripSlack", v.shedRetryTimeout(), floor, tSettings.BlockAssembly.QueueFullWaitTimeout, v.handoffRoundTripSlack(), floor)
 	}
 
+	// The batched block-assembly client honours the caller's context, so the
+	// per-hand-off handoffFloor deadline now also bounds the batcher's effective
+	// first-item flush wait. At the shipped default that wait is a few milliseconds,
+	// comfortably inside the floor, but an operator who sets it large makes every
+	// hand-off exceed the floor and land in the ambiguous-hand-off-failure branch,
+	// which deliberately does not unwind — stranding a mined transaction with
+	// locked UTXOs whose children all fail TX_LOCKED and which the unmined reload
+	// cannot recover. The effective wait depends on the active batcher mode (see
+	// effectiveBatcherFlushWait), so the guard compares against that rather than a
+	// single key.
+	if flush, key, bounded := v.effectiveBatcherFlushWait(); bounded && flush >= v.handoffFloor() {
+		logger.Warnf("[Validator] %s=%s is the block-assembly batcher's effective first-item flush wait, which is not less than the block-assembly handoff floor %s, so in batch mode every hand-off can exceed its deadline and land in the ambiguous-hand-off-failure branch that leaves the transaction locked; lower %s below %s", key, flush, v.handoffFloor(), key, v.handoffFloor())
+	}
+
 	txmetaKafkaURL := v.settings.Kafka.TxMetaConfig
 	if txmetaKafkaURL == nil {
 		return nil, errors.NewConfigurationError("missing Kafka URL for txmeta")
@@ -1960,6 +1974,30 @@ func (v *Validator) handoffRoundTripSlack() time.Duration {
 	}
 
 	return defaultHandoffRoundTripSlack
+}
+
+// effectiveBatcherFlushWait returns the block-assembly client batcher's effective
+// first-item flush wait for the active batch mode, the settings key that governs
+// it, and whether that wait can bound a hand-off at all.
+//
+// It mirrors how blockassembly.NewClient builds the batcher: batching only applies
+// when blockassembly_sendBatchSize > 0; in drain mode (BatcherDrainMode) the
+// batcher flushes immediately so nothing is bounded; and a positive
+// blockassembly_sendBatchTickerIntervalMillis supersedes the lazy
+// blockassembly_sendBatchTimeout first-item wait (SetTickInterval). Both timeout
+// keys are applied in milliseconds. Keeping this in one place is what lets the
+// startup guard warn on the actually-effective wait rather than a key that may be
+// superseded (spurious warning) or absent (missed trap).
+func (v *Validator) effectiveBatcherFlushWait() (wait time.Duration, key string, bounded bool) {
+	if v.settings.BlockAssembly.SendBatchSize <= 0 || v.settings.BatcherDrainMode {
+		return 0, "", false
+	}
+
+	if ms := v.settings.BlockAssembly.SendBatchTickerIntervalMillis; ms > 0 {
+		return time.Duration(ms) * time.Millisecond, "blockassembly_sendBatchTickerIntervalMillis", true
+	}
+
+	return time.Duration(v.settings.BlockAssembly.SendBatchTimeout) * time.Millisecond, "blockassembly_sendBatchTimeout", true
 }
 
 // handoffFloor is the ceiling on a SINGLE block-assembly hand-off attempt.
