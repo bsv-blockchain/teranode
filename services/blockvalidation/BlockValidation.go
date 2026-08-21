@@ -2142,6 +2142,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					if !opts.IsRevalidation {
 						u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, reason)
 					}
+					// Drop the unvalidated peer-supplied subtree blobs this attempt left behind so a
+					// retry re-fetches instead of re-reading the body that just failed the block-level
+					// merkle check (bitcoin-sv/teranode#4692). A delete failure only logs — it must not
+					// downgrade the corrupt classification (mirrors the catchup corrupt path).
+					if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block); delErr != nil {
+						u.logger.Warnf("[ValidateBlock][%s] failed to clear failed subtree blobs: %v", block.Hash().String(), delErr)
+					}
 					return err
 				}
 
@@ -2376,6 +2383,35 @@ func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID s
 	if err := u.p2pClient.AddBanScore(ctx, peerID, p2pconstants.ReasonCorruptBlockBody.String()); err != nil {
 		u.logger.Warnf("[ValidateBlock][%s] failed to add ban score to peer %s for corrupt block body: %v", block.Hash().String(), peerID, err)
 	}
+}
+
+// removePeerSuppliedSubtreeToCheck deletes ONLY the unvalidated FileTypeSubtreeToCheck blobs for the
+// block's subtrees after a corrupt-body verdict on the RUNNING validation path
+// (bitcoin-sv/teranode#4692). CheckBlockSubtrees writes each peer-supplied subtree under
+// FileTypeSubtreeToCheck before block.Valid runs the block-level merkle check; a body whose subtrees
+// each hash correctly but whose roots do not combine to the header merkle root leaves those blobs on
+// disk, and findLocalSubtreeFile short-circuits to them on every retry. Deleting them forces a
+// re-fetch instead.
+//
+// It deliberately does NOT touch FileTypeSubtreeData, FileTypeSubtree or FileTypeSubtreeMeta. Unlike
+// the peer-supplied SubtreeToCheck marker (only ever written WithDeleteAt, never promoted), those
+// three can hold live, promoted-permanent data: block persistence promotes FileTypeSubtreeData with
+// SetDAH(…, 0) and the asset service serves it, and FileTypeSubtree/FileTypeSubtreeMeta are validated
+// content. Deleting any of them by subtree hash on a RUNNING corrupt verdict could destroy permanent
+// data of an already-persisted block or data being served. This is why it is narrower than the
+// catchup helper, where a fresh re-download re-creates everything.
+//
+// A missing file is not an error.
+func (u *BlockValidation) removePeerSuppliedSubtreeToCheck(ctx context.Context, block *model.Block) error {
+	for _, subtreeHash := range block.Subtrees {
+		if err := u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck); err != nil {
+			if !errors.Is(err, errors.ErrNotFound) {
+				return errors.NewProcessingError("[ValidateBlock] failed to remove %s file %s", fileformat.FileTypeSubtreeToCheck, subtreeHash.String(), err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // checkParentInvalid checks if the parent block is invalid. This is an optimization

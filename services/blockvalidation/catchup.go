@@ -495,6 +495,16 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			errorType = "validation_failure"
 			// Mark peer as malicious for validation failure (reported after unlock)
 			reportMalicious = true
+		case errors.Is(*err, errors.ErrBlockError):
+			// A bare ERR_BLOCK_ERROR on the catchup path is a LOCAL block-level decision, not the
+			// serving peer's fault: an oversized-block policy decline (excessiveblocksize) or the
+			// "given up waiting on previous blocks" ordering timeout. Peer-attributable failures use
+			// dedicated sentinels (corrupt / invalid / incomplete) handled above, so the generic
+			// ERR_BLOCK_ERROR code that survives to here cannot be one of them. Do not charge the
+			// peer — it may be the sole source ahead (bitcoin-sv/teranode#4692). Must follow the
+			// corrupt and invalid cases so it never shadows a peer-attributable verdict.
+			errorType = "local_block_policy_or_wait"
+			isPeerError = false
 		case errors.Is(*err, errors.ErrExternal):
 			// Every peer attempt failed to fetch subtree data. The individual failures
 			// were already attributed to the peers that produced them
