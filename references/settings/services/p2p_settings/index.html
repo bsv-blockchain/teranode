@@ -6070,6 +6070,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#gossipsub-mesh-protection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GossipSub Mesh Protection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#peer-map-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6911,6 +6922,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#gossipsub-mesh-protection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GossipSub Mesh Protection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#peer-map-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7350,6 +7372,27 @@
 <td><strong>CRITICAL</strong> - Allow RFC1918 private IP connections</td>
 </tr>
 <tr>
+<td>EnablePeerScoring</td>
+<td>bool</td>
+<td>true</td>
+<td>p2p_enable_peer_scoring</td>
+<td><strong>CRITICAL</strong> - GossipSub peer scoring (Sybil mesh protection); static/bootstrap peers exempt</td>
+</tr>
+<tr>
+<td>EnablePeerExchange</td>
+<td>bool</td>
+<td>true</td>
+<td>p2p_enable_peer_exchange</td>
+<td>GossipSub peer exchange (PX); requires EnablePeerScoring (startup error otherwise); inbound PX records currently refused</td>
+</tr>
+<tr>
+<td>PeerScoreIPColocationThreshold</td>
+<td>int</td>
+<td>10</td>
+<td>p2p_peer_score_ip_colocation_threshold</td>
+<td>Peers allowed per exact IP before the colocation penalty applies</td>
+</tr>
+<tr>
 <td>SyncCoordinatorPeriodicEvaluationInterval</td>
 <td>time.Duration</td>
 <td>30s</td>
@@ -7444,6 +7487,15 @@
 <ul>
 <li><code>StaticPeers</code> ensures persistent connections</li>
 <li><code>PeerCacheDir</code> for peer persistence</li>
+<li>When peer scoring is enabled, static and bootstrap peers become GossipSub <em>direct peers</em>: exempt from scoring, protected from connection-manager trimming, never grafted into the mesh (messages flow to them outside it). Static peer lists should be reciprocal (both sides list each other) or messages from the unlisted side arrive only via gossip pull.</li>
+</ul>
+<h3 id="gossipsub-mesh-protection">GossipSub Mesh Protection<a class="headerlink" href="#gossipsub-mesh-protection" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>EnablePeerScoring</code> (default true) applies penalty-only scoring: an IP-colocation penalty, a behaviour penalty (GRAFT/PRUNE flooding, broken IWANT promises), and a PX acceptance gate. It raises the cost of Sybil mesh capture; it does not award positive score.</li>
+<li>The IP-colocation penalty is applied <strong>by each remote peer</strong> that holds more than <code>PeerScoreIPColocationThreshold</code> (default 10) connections from the same source IP. An operator running more nodes than that behind one public IP (NAT, single cloud egress) is penalized by those remote peers, and <strong>no local setting on the operator's nodes changes that</strong> - disabling scoring locally only stops this node scoring others. Real mitigations: distinct public IPs, or reciprocal <code>StaticPeers</code> entries with the specific peers involved (direct peers are scoring-exempt). Note the exposure is per-observer: a remote peer holding only a few connections into the colocated set applies no penalty.</li>
+<li><code>PeerScoreIPColocationThreshold</code> tunes the local penalty without disabling scoring (lower it on networks with no legitimately colocated operators).</li>
+<li>With <code>AllowPrivateIPs</code> true, loopback, RFC1918, RFC6598, link-local, and IPv6 ULA ranges are whitelisted from the colocation penalty, so local/test multi-node clusters are unaffected.</li>
+<li><code>EnablePeerExchange</code> (default true) controls emitting PX records in PRUNE messages, and <strong>requires</strong> <code>EnablePeerScoring</code> (gossipsub v1.1 pairs PX with scoring) - the service refuses to start with PX on and scoring off. Inbound PX records are currently refused regardless (<code>AcceptPXThreshold</code> is set above the maximum attainable score): penalty-only scoring caps every score at 0, so accepting 0-scored records would let an attacker get itself dialed, and dialed peers register as outbound - bypassing gossipsub's Dhi graft refusal and Dout quota. This will be relaxed when positive (per-topic delivery) scoring exists.</li>
 </ul>
 <h3 id="peer-map-management">Peer Map Management<a class="headerlink" href="#peer-map-management" title="Permanent link">&para;</a></h3>
 <ul>
