@@ -40,6 +40,10 @@
 | PeerMapCleanupInterval | time.Duration | 1m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
 | PeerRegistryBatchInterval | time.Duration | 1s | p2p_peer_registry_batch_interval | Flush interval for batched peer-registry updates from gossip handlers |
 | GossipHandlerConcurrency | int | 4 | p2p_gossip_handler_concurrency | Concurrent gossip handler workers per pubsub topic |
+| WebSocketMaxConnections | int | 1000 | p2p_websocket_max_connections | Maximum concurrent /p2p-ws websocket connections (0 disables the cap) |
+| WebSocketMaxConnectionsPerSource | int | 0 | p2p_websocket_max_connections_per_source | Per-source /p2p-ws cap: 0 = auto (max(4, cap/20)), -1 disables (needed behind a proxy/NAT) |
+| WebSocketAllowedOrigins | []string | (empty) | p2p_websocket_allowed_origins | Allowed browser origins for /p2p-ws upgrades and HTTP CORS (empty allows all) |
+| WebSocketTrustedSourceCIDRs | []string | 127.0.0.1/32\|::1/128 | p2p_websocket_trusted_source_cidrs | Source CIDRs exempt from the /p2p-ws connection caps; loopback only by design - broader trust would void the caps behind an L7 ingress or NAT (see longdesc). Sentinel `none` disables the bypass (empty falls back to the default) |
 
 ## Configuration Dependencies
 
