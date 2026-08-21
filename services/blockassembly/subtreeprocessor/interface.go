@@ -310,8 +310,8 @@ type Interface interface {
 	// the number of batches. This indicates the processor's current workload.
 	// For items added through the bounded AddBatchIfRoom path it counts
 	// reserved-or-published items and never reads below the published-outstanding
-	// count; the unbounded AddBatch path publishes before accounting, so it can
-	// transiently read below that count and does not participate in the cap.
+	// count; the unbounded AddBatch path now reserves before publishing too, so it
+	// upholds that same guarantee and additionally does not participate in the cap.
 	//
 	// Returns:
 	//   - int64: Current queue length, in transactions
