@@ -171,6 +171,8 @@ type Server struct {
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
+	wsTimeouts *wsTimeouts // Test-only override of the /p2p-ws keepalive parameters (nil = defaults)
+
 	// staticURLCheckOnce evaluates the once-assigned outbound URL config
 	// (AssetHTTPAddressURL, PropagationURL) against the gossip bounds and SSRF
 	// rules a single time, caching the verdicts below. The publishers run every
@@ -734,8 +736,20 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 
 	e.Use(middleware.Recover())
 
+	// Restrict CORS to the configured websocket origins; an empty list keeps
+	// the historical allow-all behaviour. AllowOriginFunc reuses the same
+	// matcher as the websocket upgrade's CheckOrigin so both surfaces share
+	// one strict semantic (exact, case-insensitive; bare "*" wildcard) rather
+	// than echo's looser glob/subdomain matching.
+	var allowedOrigins []string
+	if s.settings != nil {
+		allowedOrigins = s.settings.P2P.WebSocketAllowedOrigins
+	}
+
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOriginFunc: func(origin string) (bool, error) {
+			return originAllowed(origin, allowedOrigins), nil
+		},
 		AllowMethods: []string{echo.GET},
 	}))
 
