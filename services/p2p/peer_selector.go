@@ -8,14 +8,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/health"
 )
 
 const (
+	// peerHealthCheckTimeout bounds a single peer availability probe.
+	peerHealthCheckTimeout = 2 * time.Second
+
 	// peerHealthCheckConcurrency bounds how many peer availability probes run at once.
 	peerHealthCheckConcurrency = 8
 
@@ -52,11 +57,17 @@ type SelectionCriteria struct {
 // randomized so a Sybil attacker cannot capture selection by grinding peer
 // IDs. When settings.P2P.HealthCheckEnabled is set it probes candidate DataHub
 // URLs over HTTP (bounded concurrency, overall deadline) and keeps a short-TTL
-// cache of those probe results, so it is neither pure nor stateless.
+// cache of those probe results, so it is neither pure nor stateless. Those URLs
+// are peer-supplied, so the probes go through an SSRF-safe client that
+// re-validates every resolved IP, under the same policy as the fetch path.
 type PeerSelector struct {
 	logger   ulogger.Logger
 	settings *settings.Settings
 	randIntN func(n int) int // injectable for tests; must return a uniform value in [0, n)
+
+	// httpClient probes peer-supplied DataHub URLs. Its dialer re-validates resolved IPs,
+	// so a hostname cannot be used to make the node probe an internal address.
+	httpClient *http.Client
 
 	// checkHealth probes a peer's DataHub URL; overridable in tests.
 	checkHealth func(ctx context.Context, dataHubURL string) (bool, error)
@@ -71,17 +82,27 @@ type PeerSelector struct {
 
 // NewPeerSelector creates a new peer selector
 func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSelector {
-	return &PeerSelector{
+	ps := &PeerSelector{
 		logger:   logger,
 		settings: settings,
 		// math/rand/v2 uses a per-thread ChaCha8 generator seeded from OS
 		// entropy; a remote attacker cannot observe or predict the stream, so
 		// crypto/rand is unnecessary for this tiebreak.
 		randIntN:          rand.IntN,
-		checkHealth:       checkPeerAvailability,
 		healthCheckBudget: peerHealthCheckBudget,
 		healthCache:       make(map[string]peerHealthCacheEntry),
 	}
+
+	// The probe target is peer-supplied, so it goes through a client whose dialer
+	// re-validates every resolved IP. It shares util.DefaultSSRFDialPolicy with the block and
+	// subtree fetch path deliberately: the probe only decides whether to fetch from a peer, so
+	// a stricter policy here would drop peers the fetch path is willing to talk to - a node
+	// whose peers resolve into RFC1918 would find no sync peer at all. checkPeerAvailability
+	// is bound as a method value so tests can still replace ps.checkHealth.
+	ps.httpClient = util.NewSSRFSafeHTTPClient(peerHealthCheckTimeout, util.DefaultSSRFDialPolicy)
+	ps.checkHealth = ps.checkPeerAvailability
+
+	return ps
 }
 
 // randomIndex returns a uniform value in [0, n), falling back to the package
@@ -588,18 +609,29 @@ func compareChainWork(a, b []byte) int {
 
 // checkPeerAvailability tests if a peer's DataHub URL is reachable via HTTP.
 // DataHubURL already includes /api/v1 prefix, so we just append the endpoint path.
-// Uses existing util/health infrastructure with built-in 2s timeout.
-func checkPeerAvailability(ctx context.Context, dataHubURL string) (bool, error) {
+// Any 2xx response counts as available; the probe is bounded by peerHealthCheckTimeout.
+//
+// The probe target is peer-supplied, so it goes through ps.httpClient, whose dialer
+// re-validates every resolved IP against util.DefaultSSRFDialPolicy.
+func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL string) (bool, error) {
 	if dataHubURL == "" {
 		return false, nil
 	}
 
 	// DataHubURL format: "https://host/api/v1"
 	// Append /bestblockheader to get full endpoint path
-	checker := health.CheckHTTPServer(dataHubURL, "/bestblockheader")
+	checker := health.CheckPeerHTTPServer(ps.httpClient, dataHubURL, "/bestblockheader")
 
-	statusCode, _, err := checker(ctx, false)
+	statusCode, msg, err := checker(ctx, false)
+	if statusCode == http.StatusOK {
+		return true, nil
+	}
 
-	// Only accept 200 OK - API endpoints should return exactly 200
-	return statusCode == http.StatusOK, err
+	// A non-2xx response carries no error, so surface the status message instead - the
+	// caller only logs the error and would otherwise log "unhealthy: <nil>".
+	if err == nil && msg != "" {
+		err = errors.NewServiceError("peer health check failed: %s", msg)
+	}
+
+	return false, err
 }

@@ -413,6 +413,8 @@ func TestHandleBlockTopic_BoundsInflatedAdvertisedHeight(t *testing.T) {
 	}
 }
 
+// The non-hex hash now trips the per-field charset bound (checkGossipHex)
+// before parseHash; the observable invariants are unchanged.
 func TestHandleBlockTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
@@ -532,7 +534,8 @@ func TestHandleSubtreeTopic_PeerMapKeyedByCanonicalHash(t *testing.T) {
 }
 
 // A malformed subtree hash must be rejected before any use: no WebSocket
-// notification, no peerMapEntry, and no peer-activity credit.
+// notification, no peerMapEntry, and no peer-activity credit. The non-hex hash
+// now trips the per-field charset bound (checkGossipHex) before parseHash.
 func TestHandleSubtreeTopic_RejectsMalformedHash(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
@@ -614,6 +617,9 @@ func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 	s.notificationCh = make(chan *notificationMsg, 1)
 
 	remote := mustNewPeerID(t)
+	// Pre-register so the ban-score sync onto PeerInfo is observable; the
+	// handler itself must not write anything for this message.
+	reg.Register(&blockchain.PeerInfo{ID: remote.String()})
 	msgBytes, err := json.Marshal(NodeStatusMessage{
 		PeerID:        remote.String(),
 		ClientName:    "client/1.0",
@@ -625,6 +631,10 @@ func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 
 	s.handleNodeStatusTopic(context.Background(), msgBytes, remote.String())
 
+	// node_status is telemetry: the malformed advertised tip is zeroed by
+	// sanitizeAdvertisedTip (and the raw hash blanked by sanitizePeerHexString)
+	// while the rest of the message keeps flowing, without penalising the
+	// sender. Nothing tip-related may reach the registry.
 	select {
 	case notification := <-s.notificationCh:
 		require.Equal(t, uint32(0), notification.BestHeight)
@@ -639,6 +649,7 @@ func TestHandleNodeStatusTopic_RejectsMalformedAdvertisedHash(t *testing.T) {
 	require.Nil(t, got.BlockHash)
 	require.Empty(t, got.ClientName)
 	require.Empty(t, got.DataHubURL)
+	require.Zero(t, got.BanScore, "a malformed advertised tip is sanitized, not scored")
 }
 
 func TestServerHelpers_AddProtocolViolation_AccumulatesScore(t *testing.T) {

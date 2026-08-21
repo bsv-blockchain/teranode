@@ -92,13 +92,24 @@ const (
 	//
 	// Block / subtree messages carry: hash (64 chars), height, DataHub URL,
 	// peer ID, 80B block header, client name. Realistic size is < 1KB.
+	// Block keeps extra headroom for the optional hex-encoded coinbase tx.
 	maxBlockMessageSize   = 32 * 1024 // 32KB
-	maxSubtreeMessageSize = 32 * 1024 // 32KB
-	// node_status messages are NodeStatusMessage JSON (~846B) plus connected
-	// peers list. Allow generous headroom for very large meshes.
-	maxNodeStatusMessageSize = 64 * 1024 // 64KB
-	// rejected_tx messages carry: tx hash, short reason string, peer ID.
-	maxRejectedTxMessageSize = 16 * 1024 // 16KB
+	maxSubtreeMessageSize = 8 * 1024  // 8KB
+	// node_status messages are NodeStatusMessage JSON, realistically ~1KB.
+	// (The old 64KB cap was headroom for a connected-peers list that never
+	// existed — ConnectedPeersCount has always been an int.) The per-field
+	// bounds cap the raw string bytes at ~5KB, but json.Marshal HTML-escapes
+	// some printable characters to six bytes each, so the marshalled form of a
+	// pathological-yet-valid message can exceed the raw sum; publishToNetwork
+	// therefore enforces these caps on every outbound payload (topicKindCaps),
+	// so a local config that would be dropped by peers fails loudly here
+	// instead.
+	maxNodeStatusMessageSize = 16 * 1024 // 16KB
+	// rejected_tx messages carry: tx hash, reason string, peer ID. Our egress
+	// truncates the reason to maxGossipReasonLen, but un-upgraded peers publish
+	// the untruncated validator error chain, so keep headroom for those during
+	// mixed-version operation.
+	maxRejectedTxMessageSize = 8 * 1024 // 8KB
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -159,6 +170,17 @@ type Server struct {
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
+
+	// staticURLCheckOnce evaluates the once-assigned outbound URL config
+	// (AssetHTTPAddressURL, PropagationURL) against the gossip bounds and SSRF
+	// rules a single time, caching the verdicts below. The publishers run every
+	// ~10s (node_status) and per announcement (block/subtree), so re-validating
+	// — and re-logging — a value that cannot change without a restart would
+	// spam the logs on the committed defaults (localhost asset_httpAddress)
+	// and bury real signals; same rationale as invalidPolicyWarnOnce.
+	staticURLCheckOnce sync.Once
+	assetURLErr        error // non-nil: AssetHTTPAddressURL breaches gossip bounds or receivers' SSRF checks
+	propagationURLErr  error // non-nil: PropagationURL breaches gossip bounds
 
 	// latestNodeStatus caches the most recent node status computed by
 	// getNodeStatusMessage (refreshed every publish tick and on best-block
@@ -654,10 +676,14 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		AssetHTTPAddressURLString = s.settings.Asset.HTTPAddress
 	}
 
-	s.AssetHTTPAddressURL = AssetHTTPAddressURLString
+	// Trim surrounding whitespace: a trailing newline picked up from a .env
+	// file, ConfigMap value, or shell substitution would otherwise make every
+	// patched peer score our announcements as a protocol violation
+	// (checkGossipString rejects non-printable runes).
+	s.AssetHTTPAddressURL = strings.TrimSpace(AssetHTTPAddressURLString)
 
 	// Set propagation URL - defaults to AssetHTTPAddressURL if not configured
-	propagationURL := s.settings.Asset.PropagationPublicURL
+	propagationURL := strings.TrimSpace(s.settings.Asset.PropagationPublicURL)
 	if propagationURL == "" {
 		propagationURL = s.AssetHTTPAddressURL
 	}
@@ -999,6 +1025,15 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			PeerID: s.P2PClient.GetID(),
 		}
 
+		// Self-check against the bounds we enforce on ingress: truncates the
+		// validator's reason text so it always passes remote validation.
+		rejectedTxMessage.sanitizeFields()
+
+		if err := rejectedTxMessage.validateFields(); err != nil {
+			s.logger.Errorf("[rejectedTxHandler] rejectedTxMessage failed gossip field validation, not publishing: %v", err)
+			return nil
+		}
+
 		msgBytes, err := json.Marshal(rejectedTxMessage)
 		if err != nil {
 			s.logger.Errorf("[rejectedTxHandler] json marshal error: %v", err)
@@ -1006,6 +1041,8 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			return err
 		}
 
+		// The topic size cap on the marshalled bytes is enforced centrally in
+		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
 		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
@@ -1154,13 +1191,31 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		return
 	}
 
-	// Bound the peer-controlled display strings before they reach WebSocket
-	// clients or the peer registry. Everything below this point works with the
-	// sanitized values.
-	sanitizeNodeStatusMessage(&nodeStatusMessage)
-
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
+
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing. This runs before field validation so
+	// a banned peer cannot keep triggering uncached AddBanScore RPCs.
+	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect (logging
+	// — including the spoof log below — registry write, WebSocket fan-out).
+	// Display strings are sanitized in place; a malformed protocol-format
+	// field (peer ID, URL) is a protocol violation, same as a spoofed peer ID
+	// — except for our own loopback message, which is dropped without
+	// self-penalising.
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
+
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
+		if !isSelf {
+			s.applyBanScore(peerID, ReasonProtocolViolation)
+		}
+		return
+	}
 
 	notificationBestHeight := nodeStatusMessage.BestHeight
 	// sanitizeAdvertisedTip below replaces this with a parsed hash, but only
@@ -1176,12 +1231,6 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
 		s.applyBanScore(peerID, ReasonProtocolViolation)
-		return
-	}
-
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing.
-	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
 		return
 	}
 
@@ -1331,6 +1380,28 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		ClientName: s.settings.ClientName,
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here as a loud error instead of getting this
+	// node scored and banned by every peer. Unlike node_status, a violation
+	// hard-fails rather than degrading: every field here is structurally
+	// required — hash and header are machine-generated, and receivers score an
+	// empty DataHubURL just like a malformed one — so there is no safe reduced
+	// form of a block announcement to publish.
+	blockMessage.sanitizeFields()
+
+	if err := blockMessage.validateFields(); err != nil {
+		return errors.NewError("blockMessage failed gossip field validation, not publishing", err)
+	}
+
+	// An empty or unroutable DataHubURL is scored as a protocol violation by
+	// every receiver (checkDataHubURL); the once-per-process check below warns
+	// loudly but keeps publishing, since suppressing would also silence dev
+	// setups that legitimately advertise private addresses to peers configured
+	// to accept them.
+	s.checkStaticGossipURLs()
+
+	// The topic size cap on the marshalled bytes is enforced centrally in
+	// publishToNetwork.
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
 		return errors.NewError("blockMessage - json marshal error", err)
@@ -1439,10 +1510,11 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		}
 	}
 
-	// Get client name from settings
+	// Get client name from settings. Sanitized so a locally misconfigured
+	// value cannot make remote peers score us for a protocol violation.
 	clientName := ""
 	if s.settings != nil {
-		clientName = s.settings.ClientName
+		clientName = sanitizePeerDisplayString(s.settings.ClientName, maxPeerDisplayStringLen)
 	}
 
 	// Get miner name from the best block metadata. This is extracted from the
@@ -1709,6 +1781,43 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	return msg
 }
 
+// checkStaticGossipURLs evaluates the static outbound URL config once,
+// logging each problem a single time per process. AssetHTTPAddressURL is
+// checked against both the gossip length/charset bound and the SSRF rules
+// receivers score on (validateDataHubURL), so the committed default —
+// localhost asset_httpAddress with asset_httpPublicAddress unset — produces
+// exactly one loud warning instead of an error per publish tick.
+//
+// The SSRF half is a heuristic, not a security property: validateDataHubURL
+// reads OUR AllowPrivateIPs, which governs what this node accepts from peers,
+// not what peers accept from us. A publisher at the default false whose peers
+// all run true withholds a private BaseURL those peers would have used —
+// judged the safer default, since the reverse mismatch gets the node scored.
+//
+// Only node_status degrades on a bad verdict (BaseURL blanked, message still
+// published): an empty BaseURL is legal there on ingress. Block and subtree
+// announcements are useless without a fetchable URL and receivers score an
+// empty DataHubURL just like a malformed one, so those publish unchanged and
+// the warning below is the operator's signal that peers will score them.
+func (s *Server) checkStaticGossipURLs() {
+	s.staticURLCheckOnce.Do(func() {
+		if err := checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen); err != nil {
+			s.assetURLErr = err
+		} else if err := s.validateDataHubURL(s.AssetHTTPAddressURL); err != nil {
+			s.assetURLErr = err
+		}
+
+		if s.assetURLErr != nil {
+			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", s.AssetHTTPAddressURL, s.assetURLErr)
+		}
+
+		if err := checkGossipString("propagation_url", s.PropagationURL, maxGossipURLLen); err != nil {
+			s.propagationURLErr = err
+			s.logger.Warnf("[checkStaticGossipURLs] PropagationURL breaches the gossip field bounds and will be omitted from node_status: %v", err)
+		}
+	})
+}
+
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	// Bound the status computation to a fraction of the publish interval so a
 	// wedged blockchain call cannot consume the whole tick budget and hand the
@@ -1767,9 +1876,51 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Storage:             msg.Storage,
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here instead of getting this node scored and
+	// banned by every peer. Local WebSocket clients already received the
+	// status above, so monitoring does not depend on this publish.
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
+
+	// The URLs are optional in a node_status: a violation (oversized or
+	// non-printable operator config, or a BaseURL peers would score under
+	// their SSRF check) blanks the field and keeps publishing — mirroring the
+	// blacklisted-BaseURL handling on ingress — so a pathological URL degrades
+	// sync-source discovery instead of taking the node off gossip entirely.
+	// Only PeerID (machine-generated) remains a hard failure. The verdicts are
+	// computed (and logged) once: the URLs are static config.
+	s.checkStaticGossipURLs()
+
+	if s.assetURLErr != nil {
+		nodeStatusMessage.BaseURL = ""
+	}
+
+	if s.propagationURLErr != nil {
+		nodeStatusMessage.PropagationURL = ""
+	}
+
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		return errors.NewError("nodeStatusMessage failed gossip field validation, not publishing", err)
+	}
+
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
 		return errors.NewError("nodeStatusMessage - json marshal error", err)
+	}
+
+	// JSON escaping can expand the in-bounds URLs enough to breach the topic
+	// cap peers enforce on the marshalled bytes. Degrade the same way as an
+	// invalid URL above — drop the optional URLs and re-marshal once — instead
+	// of hard-failing on config that every tick would resubmit;
+	// publishToNetwork still enforces the cap as the final backstop.
+	if len(msgBytes) > maxNodeStatusMessageSize && (nodeStatusMessage.BaseURL != "" || nodeStatusMessage.PropagationURL != "") {
+		s.logger.Errorf("[handleNodeStatusNotification] marshalled size %d exceeds cap %d, publishing node_status without the optional URLs", len(msgBytes), maxNodeStatusMessageSize)
+		nodeStatusMessage.BaseURL = ""
+		nodeStatusMessage.PropagationURL = ""
+
+		if msgBytes, err = json.Marshal(nodeStatusMessage); err != nil {
+			return errors.NewError("nodeStatusMessage - json marshal error", err)
+		}
 	}
 
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
@@ -1798,6 +1949,26 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		ClientName: s.settings.ClientName,
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here as a loud error instead of getting this
+	// node scored and banned by every peer. Hard-fail rather than degrade:
+	// hash is machine-generated and receivers score an empty DataHubURL just
+	// like a malformed one, so there is no safe reduced form to publish.
+	subtreeMessage.sanitizeFields()
+
+	if err := subtreeMessage.validateFields(); err != nil {
+		return errors.NewError("subtreeMessage failed gossip field validation, not publishing", err)
+	}
+
+	// An empty or unroutable DataHubURL is scored as a protocol violation by
+	// every receiver (checkDataHubURL); the once-per-process check below warns
+	// loudly but keeps publishing, since suppressing would also silence dev
+	// setups that legitimately advertise private addresses to peers configured
+	// to accept them.
+	s.checkStaticGossipURLs()
+
+	// The topic size cap on the marshalled bytes is enforced centrally in
+	// publishToNetwork.
 	msgBytes, err := json.Marshal(subtreeMessage)
 	if err != nil {
 		return errors.NewError("subtreeMessage - json marshal error", err)
