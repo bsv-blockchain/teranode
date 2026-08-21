@@ -1403,9 +1403,11 @@ func TestBlockValid_AcceptsP2SHCoinbaseOutput(t *testing.T) {
 
 		// The pin must hold at a POST-Genesis height: a (wrong) Genesis-gated
 		// P2SH rejection added to Block.Valid would not fire at height 0.
-		// Regression params: GenesisActivationHeight=10000, BIP0034Height is
-		// unreachable (BIP34 coinbase-height check stays off), BIP65/66 floors
-		// require header version 4 at this height.
+		// Regression params: BIP0034Height is unreachable, so the BIP34
+		// coinbase-height check stays off. The header built below is version 4,
+		// which clears the BIP65/66 floors whether or not this height has
+		// reached them — so the pin does not depend on where those floors sit
+		// relative to Genesis.
 		height := tSettings.ChainCfgParams.GenesisActivationHeight + 1
 
 		// The coinbase may claim at most fees+subsidy at this height (all outputs count).

@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1243,6 +1245,279 @@ func TestBanPeer(t *testing.T) {
 		inPeer.WaitForDisconnect()
 		outPeer.WaitForDisconnect()
 	}
+}
+
+// flakyWriter wraps an io.Writer and starts failing all writes once armed,
+// used to simulate a write error on an otherwise healthy connection.
+type flakyWriter struct {
+	w    io.Writer
+	fail atomic.Bool
+}
+
+func (f *flakyWriter) Write(p []byte) (int, error) {
+	if f.fail.Load() {
+		return 0, errors.New("simulated write error")
+	}
+
+	return f.w.Write(p)
+}
+
+func (f *flakyWriter) setUnderlying(w io.Writer) {
+	f.w = w
+}
+
+// opErrorWriter wraps an io.Writer and, once armed, fails all writes with a
+// *net.OpError wrapping syscall.EPIPE - a real broken-pipe error of the kind
+// shouldLogWriteError is meant to suppress from the Warnf path, unlike
+// flakyWriter's plain errors.New error.
+type opErrorWriter struct {
+	w    io.Writer
+	fail atomic.Bool
+}
+
+func (f *opErrorWriter) Write(p []byte) (int, error) {
+	if f.fail.Load() {
+		return 0, &net.OpError{Op: "write", Net: "tcp", Err: syscall.EPIPE}
+	}
+
+	return f.w.Write(p)
+}
+
+func (f *opErrorWriter) setUnderlying(w io.Writer) {
+	f.w = w
+}
+
+// logCounts is a minimal ulogger.Logger spy that counts calls per level,
+// embedding ulogger.TestLogger for the rest of the interface.
+type logCounts struct {
+	ulogger.TestLogger
+	debug atomic.Int32
+	info  atomic.Int32
+	warn  atomic.Int32
+}
+
+func (l *logCounts) Debugf(format string, args ...interface{}) { l.debug.Add(1) }
+func (l *logCounts) Infof(format string, args ...interface{})  { l.info.Add(1) }
+func (l *logCounts) Warnf(format string, args ...interface{})  { l.warn.Add(1) }
+
+// connectedPeerPairWithFlakyWriter wires an in-memory peer pair whose outbound
+// side writes through a flakyWriter, waits for the handshake to complete and
+// arms the write failure. The returned cleanup function tears the inbound peer
+// down.
+func connectedPeerPairWithFlakyWriter(t *testing.T) (outPeer *peer.Peer, cleanup func()) {
+	t.Helper()
+
+	fw := &flakyWriter{}
+
+	outPeer, cleanup = connectedPeerPairWithOutWriter(t, fw, ulogger.TestLogger{})
+
+	// Arm the write failure only after the handshake has completed so the
+	// negotiation itself is unaffected.
+	fw.fail.Store(true)
+
+	return outPeer, cleanup
+}
+
+// connectedPeerPairWithOutWriter wires an in-memory peer pair whose outbound
+// side writes through w (with w.w set to the underlying pipe writer), using
+// outLogger as the outbound peer's logger. Returns once the handshake has
+// completed. The returned cleanup function tears the inbound peer down.
+func connectedPeerPairWithOutWriter(t *testing.T, w interface {
+	io.Writer
+	setUnderlying(io.Writer)
+}, outLogger ulogger.Logger,
+) (outPeer *peer.Peer, cleanup func()) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	verack := make(chan struct{}, 4)
+	cfg := &peer.Config{
+		Listeners: peer.MessageListeners{
+			OnVerAck: func(p *peer.Peer, msg *wire.MsgVerAck) {
+				verack <- struct{}{}
+			},
+			OnWrite: func(p *peer.Peer, bytesWritten int, msg wire.Message, err error) {
+				if _, ok := msg.(*wire.MsgVerAck); ok {
+					verack <- struct{}{}
+				}
+			},
+		},
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		UserAgentComments:      []string{"comment"},
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               0,
+		TrickleInterval:        time.Second * 10,
+		TstAllowSelfConnection: true,
+	}
+
+	inR, outW := io.Pipe()
+	outR, inW := io.Pipe()
+
+	w.setUnderlying(outW)
+
+	inConn := &conn{raddr: "10.0.0.1:8333", Reader: inR, Writer: inW, Closer: inW}
+	outConn := &conn{raddr: "10.0.0.2:8333", Reader: outR, Writer: w, Closer: outW}
+
+	inPeer := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, cfg)
+	inPeer.AssociateConnection(inConn)
+
+	outPeer, err := peer.NewOutboundPeer(outLogger, tSettings, cfg, "10.0.0.2:8333")
+	require.NoError(t, err)
+	outPeer.AssociateConnection(outConn)
+
+	for i := 0; i < 4; i++ {
+		select {
+		case <-verack:
+		case <-time.After(2 * time.Second):
+			t.Fatal("verack timeout")
+		}
+	}
+
+	require.True(t, outPeer.Connected())
+
+	return outPeer, func() {
+		inPeer.DisconnectWithInfo("test cleanup")
+		inPeer.WaitForDisconnect()
+	}
+}
+
+// TestOutHandlerDisconnectsOnWriteError verifies that outHandler disconnects
+// the peer when writeMessage fails, rather than leaving the peer marked as
+// connected with a permanently stalled send queue.
+func TestOutHandlerDisconnectsOnWriteError(t *testing.T) {
+	outPeer, cleanup := connectedPeerPairWithFlakyWriter(t)
+	defer cleanup()
+
+	outPeer.QueueMessage(wire.NewMsgPing(1), nil)
+
+	disconnected := make(chan struct{})
+	go func() {
+		outPeer.WaitForDisconnect()
+		close(disconnected)
+	}()
+
+	select {
+	case <-disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("peer did not disconnect after a write error")
+	}
+
+	require.False(t, outPeer.Connected())
+}
+
+// TestOutHandlerDisconnectsBeforeSignallingDoneChan verifies outHandler
+// disconnects before it signals the message's done channel, matching upstream
+// btcd. A caller that queued a message with an unbuffered done channel and is
+// not yet receiving on it must not be able to wedge outHandler before the peer
+// is torn down.
+func TestOutHandlerDisconnectsBeforeSignallingDoneChan(t *testing.T) {
+	outPeer, cleanup := connectedPeerPairWithFlakyWriter(t)
+	defer cleanup()
+
+	// Deliberately unbuffered and not received from until the disconnect has
+	// been observed below.
+	doneChan := make(chan struct{})
+	outPeer.QueueMessage(wire.NewMsgPing(1), doneChan)
+
+	disconnected := make(chan struct{})
+	go func() {
+		outPeer.WaitForDisconnect()
+		close(disconnected)
+	}()
+
+	select {
+	case <-disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("peer did not disconnect after a write error before signalling doneChan")
+	}
+
+	require.False(t, outPeer.Connected())
+
+	// Release outHandler now that the disconnect has been observed.
+	select {
+	case <-doneChan:
+	case <-time.After(3 * time.Second):
+		t.Fatal("outHandler never signalled doneChan")
+	}
+}
+
+// TestDisconnectLogsOnceForRepeatedCalls verifies the disconnect reason is
+// logged by the call that actually disconnects the peer and not by the
+// subsequent no-op calls. Repeated write errors - one per message still queued
+// on a dead connection - must not each add a log line.
+func TestDisconnectLogsOnceForRepeatedCalls(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	p := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{
+		ChainParams: &chaincfg.MainNetParams,
+	})
+
+	logged := 0
+	logFunc := func(format string, args ...interface{}) {
+		logged++
+	}
+
+	p.DisconnectWithLogFunc("write error: first", logFunc)
+	p.DisconnectWithLogFunc("write error: second", logFunc)
+	p.DisconnectWithLogFunc("write error: third", logFunc)
+
+	require.Equal(t, 1, logged, "only the call that actually disconnects the peer should log at the caller's requested level")
+}
+
+// TestDisconnectDemotesLosingCallsToDebug verifies that disconnect reasons
+// which lose the race to be first (e.g. a ban or protocol-violation reason
+// racing an unrelated "peer stalled" disconnect) are not silently dropped -
+// they are still logged, just at Debug rather than the caller's requested
+// level, so they stay attributable without adding noise at the default level.
+func TestDisconnectDemotesLosingCallsToDebug(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	spy := &logCounts{}
+	p := peer.NewInboundPeer(spy, tSettings, &peer.Config{
+		ChainParams: &chaincfg.MainNetParams,
+	})
+
+	p.DisconnectWithInfo("peer stalled")
+	p.DisconnectWithWarning("ban score exceeded")
+
+	require.Equal(t, int32(1), spy.info.Load(), "the winning call logs at its requested level")
+	require.Equal(t, int32(0), spy.warn.Load(), "the losing call must not log at its requested level")
+	require.Equal(t, int32(1), spy.debug.Load(), "the losing call's reason must still be logged, at Debug")
+}
+
+// TestOutHandlerLogsWriteErrorDisconnect verifies that the outHandler write
+// error disconnect is always visible at Info level - even for a suppressed
+// *net.OpError like a broken pipe, where shouldLogWriteError gates only the
+// additional Warnf about the raw error, not the disconnect event itself.
+func TestOutHandlerLogsWriteErrorDisconnect(t *testing.T) {
+	t.Run("suppressed net.OpError still logs the disconnect at Info", func(t *testing.T) {
+		ow := &opErrorWriter{}
+		spy := &logCounts{}
+
+		outPeer, cleanup := connectedPeerPairWithOutWriter(t, ow, spy)
+		defer cleanup()
+
+		ow.fail.Store(true)
+		outPeer.QueueMessage(wire.NewMsgPing(1), nil)
+		outPeer.WaitForDisconnect()
+
+		require.Equal(t, int32(1), spy.info.Load(), "disconnect event must log at Info even for a suppressed error")
+		require.Equal(t, int32(0), spy.warn.Load(), "a broken-pipe net.OpError must not also log a Warnf")
+	})
+
+	t.Run("a plain write error still logs a Warnf in addition to the Info disconnect", func(t *testing.T) {
+		fw := &flakyWriter{}
+		spy := &logCounts{}
+
+		outPeer, cleanup := connectedPeerPairWithOutWriter(t, fw, spy)
+		defer cleanup()
+
+		fw.fail.Store(true)
+		outPeer.QueueMessage(wire.NewMsgPing(1), nil)
+		outPeer.WaitForDisconnect()
+
+		require.Equal(t, int32(1), spy.info.Load(), "disconnect event must log at Info")
+		require.Equal(t, int32(1), spy.warn.Load(), "a non-suppressed write error must also log a Warnf")
+	})
 }
 
 func NewTestServer(t *testing.T) (*legacy.Server, error) {
