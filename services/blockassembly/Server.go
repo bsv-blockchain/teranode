@@ -2481,9 +2481,11 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 //   - error: Any error encountered during block generation
 func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) error {
 	// Block assembly learns about a new tip from an asynchronous notification, so
-	// wait for its view to catch up before building a candidate on a tip the chain
-	// may already have left (issue 764).
-	ba.waitForAssemblerTip(ctx)
+	// wait for its view to catch up — and for the transition that moved it to
+	// finish — before building a candidate (issue 764).
+	if err := ba.waitForAssemblerTip(ctx); err != nil {
+		return err
+	}
 
 	// get a mining candidate
 	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
@@ -2538,47 +2540,89 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	return ba.waitForBestBlockHeaderUpdate(ctx, previousBestHash)
 }
 
-// waitForAssemblerTip waits, bounded, for block assembly's view of the chain tip
-// to match the blockchain's.
+// defaultGenerateTipWaitTimeout is the fallback bound when
+// BlockAssembly.GenerateTipWaitTimeout is unset or non-positive, so the wait is
+// never left unbounded and never collapses to zero.
+const defaultGenerateTipWaitTimeout = 30 * time.Second
+
+// waitForAssemblerTip waits, bounded, for block assembly to become level with the
+// chain tip AND return to its Running state.
 //
-// processNewBlockAnnouncement runs on the block assembler's own goroutine, so a
-// generate call arriving straight after a reorg (invalidateblock is the visible
-// case) can otherwise build its candidate on the pre-reorg tip, which
-// submitMiningSolution then rejects as stale. The blockchain tip is re-read each
-// pass so a chain that advances while waiting is not waited out in full.
+// Two conditions, not one. Level-with-the-tip alone is satisfied too early on the
+// very path this exists for: reset() publishes the new tip optimistically before
+// SubtreeProcessor.Reset runs (see the "Update the internal best block reference
+// before SubtreeProcessor.Reset" comment in BlockAssembler.reset), so a wait keyed
+// on the tip alone returns while the subtree processor is still being torn down and
+// the unmined set reloaded. The running state is the reliable done signal:
+// processNewBlockAnnouncement only transitions back to Running in its deferred exit,
+// after handleReorg and reset have returned. Requiring it also closes the MovingUp
+// window, in which GetMiningCandidate short-circuits to a transaction-less template
+// and generate would mine a coinbase-only block over queued transactions.
 //
-// A timeout is not an error: the caller proceeds and fails with the same stale
-// candidate error it would have hit without this wait.
-func (ba *BlockAssembly) waitForAssemblerTip(ctx context.Context) {
-	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+// No state is treated as unwaitable. Starting looks like one — an assembler that
+// was never started never leaves it — but Start sets Running from a goroutine, so
+// a generate arriving just after startup is legitimately in Starting and would be
+// failed spuriously by a fail-fast rule. The state alone cannot separate the two,
+// so the bound is what distinguishes them.
+//
+// The chain tip is re-read each pass so a chain that advances while waiting is not
+// waited out in full. A failed read is logged and retried rather than abandoning the
+// guard: the wait is cheap and already bounded, so a transient blockchain-service
+// blip should cost one poll, not the whole protection.
+//
+// Exceeding the bound is an error rather than a silent proceed. Building on state
+// that is still mid-rebuild is what this guard exists to prevent, and the spec's
+// valid-states row for GenerateBlocks is Running alone; a named failure is also far
+// more actionable for an operator than the "candidate is stale" they would otherwise
+// get. The trade is that a slow-but-healthy reset now fails the call instead of
+// possibly succeeding — deliberate, and the reason the bound defaults well above the
+// waitForBlockMinedSet budget it waits behind.
+func (ba *BlockAssembly) waitForAssemblerTip(ctx context.Context) error {
+	timeout := ba.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout
+	if timeout <= 0 {
+		timeout = defaultGenerateTipWaitTimeout
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		bestHeader, _, err := ba.blockAssembler.blockchainClient.GetBestBlockHeader(waitCtx)
+		bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(waitCtx)
 		if err != nil {
-			// Nothing to sync against. Leave the candidate path to report the
-			// failure it would have reported anyway.
-			ba.logger.Warnf("[generateBlock] could not read the chain tip to sync against: %v", err)
-			return
-		}
-
-		// A nil current header means the assembler has not loaded its best block
-		// yet, which is exactly what this loop waits for.
-		if currentHeader, _ := ba.blockAssembler.CurrentBlock(); currentHeader != nil &&
-			currentHeader.Hash().IsEqual(bestHeader.Hash()) {
-			return
+			// Do not misreport an expired deadline as a read failure: the ticker
+			// and waitCtx.Done() can become ready in the same instant and select
+			// may take the tick, leaving this call to fail on the dead context.
+			if waitCtx.Err() == nil {
+				ba.logger.Warnf("[generateBlock] could not read the chain tip to sync against, retrying: %v", err)
+			}
+		} else if ba.assemblerReady(bestHeader) {
+			return nil
 		}
 
 		select {
 		case <-waitCtx.Done():
-			ba.logger.Warnf("[generateBlock] timeout waiting for block assembly to reach chain tip %s", bestHeader.Hash())
-			return
+			return errors.NewProcessingError(
+				"[generateBlock] block assembly did not reach the chain tip within %s (state %s) - retry once it has caught up",
+				timeout, StateStrings[ba.blockAssembler.GetCurrentRunningState()])
 		case <-ticker.C:
 		}
 	}
+}
+
+// assemblerReady reports whether block assembly is level with bestHeader and has
+// finished whatever transition brought it there. A nil current header means the
+// assembler has not loaded its best block yet, which is a wait condition rather
+// than a failure.
+func (ba *BlockAssembly) assemblerReady(bestHeader *model.BlockHeader) bool {
+	currentHeader, _ := ba.blockAssembler.CurrentBlock()
+	if currentHeader == nil || !currentHeader.Hash().IsEqual(bestHeader.Hash()) {
+		return false
+	}
+
+	return ba.blockAssembler.GetCurrentRunningState() == StateRunning
 }
 
 // waitForBestBlockHeaderUpdate waits for the best block header to be updated after block submission

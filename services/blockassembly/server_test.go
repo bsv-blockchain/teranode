@@ -808,6 +808,10 @@ func TestGenerateBlocks_ErrorMessages(t *testing.T) {
 		server.SetSkipWaitForPendingBlocks(true)
 		require.NoError(t, server.Init(common.Ctx))
 
+		// Never Started, so the readiness wait in generateBlock runs to its
+		// bound; shorten it so the test does not pay the production default.
+		server.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout = 100 * time.Millisecond
+
 		req := &blockassembly_api.GenerateBlocksRequest{
 			Count: 3,
 		}
@@ -850,7 +854,7 @@ func TestGenerateBlocks_ZeroBlocks(t *testing.T) {
 
 // TestGenerateBlock_ErrorPaths tests error handling in generateBlock method
 func TestGenerateBlock_ErrorPaths(t *testing.T) {
-	t.Run("should handle mining error in generateBlock", func(t *testing.T) {
+	t.Run("should fail generate when the assembler never becomes ready", func(t *testing.T) {
 		common := testutil.NewCommonTestSetup(t)
 		subtreeStore := testutil.NewMemoryBlobStore()
 		blockchainClient := testutil.NewMemorySQLiteBlockchainClient(common.Logger, common.Settings, t)
@@ -862,10 +866,19 @@ func TestGenerateBlock_ErrorPaths(t *testing.T) {
 		server.SetSkipWaitForPendingBlocks(true)
 		require.NoError(t, server.Init(common.Ctx))
 
-		// Try to generate a block - this will fail in generateBlock method
+		// The assembler has been Init'd but never Started, so it never leaves
+		// Starting and generateBlock's readiness wait runs to its bound. Shorten
+		// the bound so the test does not pay the production default.
+		server.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout = 100 * time.Millisecond
+
+		// This assertion used to be Contains(err, "error"), which passed on the
+		// incidental wording of whatever came back. Worth being explicit that
+		// the mining path is NOT what fails here: with the assembler level and
+		// Running, this same setup generates a block successfully — the error
+		// was always the readiness race this PR fixes.
 		err := server.generateBlock(context.Background(), nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "error")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "did not reach the chain tip")
 	})
 }
 
