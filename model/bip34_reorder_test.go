@@ -36,7 +36,16 @@ func coinbaseEncodingHeight(t *testing.T, height uint32) *bt.Tx {
 func minedHeaderVersion(t *testing.T, version uint32, merkleRoot *chainhash.Hash) *BlockHeader {
 	t.Helper()
 
-	prevHash := chainhash.Hash{}
+	return minedHeaderOnParent(t, version, merkleRoot, &chainhash.Hash{})
+}
+
+// minedHeaderOnParent mines a header with the given version, merkle root and parent. Taking the
+// parent explicitly lets a caller satisfy both the coinbase-txid merkle binding and the
+// contextual-window rule that the parent chain be anchored at the block's parent (issue 1467).
+func minedHeaderOnParent(t *testing.T, version uint32, merkleRoot, prev *chainhash.Hash) *BlockHeader {
+	t.Helper()
+
+	prevHash := *prev
 	nBits, err := NewNBitFromString("207fffff")
 	require.NoError(t, err)
 
