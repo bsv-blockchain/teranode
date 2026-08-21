@@ -3192,6 +3192,13 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+// DeleteComplete removes a transaction and all its associated data. The SQL store
+// never paginates a transaction across records, so its Delete already removes the
+// whole transaction; DeleteComplete is therefore equivalent to Delete here.
+func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	return s.Delete(ctx, hash)
+}
+
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	if len(hashes) == 0 {
 		return make(map[chainhash.Hash][]uint32), nil

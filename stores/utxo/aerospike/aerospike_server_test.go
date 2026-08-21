@@ -1712,6 +1712,13 @@ func TestSmokeTests(t *testing.T) {
 		tests.DeleteThenUnspendRestoresParent(t, store)
 	})
 
+	t.Run("aerospike_delete_then_unspend_restores_parent_paginated", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.DeleteThenUnspendRestoresParentPaginated(t, store, tSettings.UtxoStore.UtxoBatchSize)
+	})
+
 	t.Run("aerospike_conflict_WAL_crash_recovery", func(t *testing.T) {
 		tests.ConflictWALCrashRecovery(t, store)
 	})

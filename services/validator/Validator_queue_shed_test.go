@@ -105,6 +105,25 @@ func (s *unlockSpy) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return s.Store.Delete(ctx, hash)
 }
 
+// DeleteComplete mirrors Delete's behaviour knobs. The shed unwind calls this
+// (not Delete), so without this override the deleteErr / deleteIsCacheOnly /
+// deletedHash knobs would go dead — the call would promote straight to the
+// embedded real store and the failure-path and verify-after-delete tests would
+// silently stop testing what they claim.
+func (s *unlockSpy) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	s.deletedHash = hash
+
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+
+	if s.deleteIsCacheOnly {
+		return nil
+	}
+
+	return s.Store.DeleteComplete(ctx, hash)
+}
+
 func (s *unlockSpy) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
 	if s.verifyErr != nil && s.deletedHash != nil && hash.IsEqual(s.deletedHash) {
 		s.verifyReadCalls++

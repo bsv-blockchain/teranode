@@ -2024,13 +2024,17 @@ func (v *Validator) handoffFloor() time.Duration {
 //
 // # Verify-after-delete
 //
-// The ordering argument only holds if Delete actually deleted. This method holds
-// a utxo.Store INTERFACE, and utxo.Store.Delete is not a trustworthy contract:
-// TxMetaCache advertises the full interface but implements Delete as a cache
-// eviction that never reaches the underlying record, while its spend and unspend
-// DO delegate. Trusting a nil return there would convert the safe intermediate
-// state into the dangerous one, and believe it succeeded. So the record is read
-// back, and anything other than "genuinely gone" aborts before unspending.
+// The ordering argument only holds if the delete actually deleted. This method
+// holds a utxo.Store INTERFACE and calls DeleteComplete (the cascading delete that
+// removes the master record, the pagination children and the external blob, so a
+// paginated transaction leaves nothing behind); its nil return is only as
+// trustworthy as the concrete implementation behind the interface. A decorator
+// could report success without the record having actually left the store — a cache
+// layer whose delete only touches its own cache is the illustrative case.
+// Trusting a nil return there would convert the safe intermediate state into the
+// dangerous one while believing it succeeded. So the record is read back, and
+// anything other than "genuinely gone" aborts before unspending — a generic guard
+// that holds for every decorator in the stack, including ones not yet written.
 //
 // # Why an inconclusive read fails CLOSED
 //
@@ -2095,7 +2099,7 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 	txHash := tx.TxIDChainHash()
 
 	if createdRecord {
-		if err := v.utxoStore.Delete(ctx, txHash); err != nil {
+		if err := v.utxoStore.DeleteComplete(ctx, txHash); err != nil {
 			prometheusValidatorShedUnwindFailures.Inc()
 			v.logger.Errorf("[unwindShed][%s] failed to delete the shed transaction record; leaving it locked for the unmined reload, outpoints %s deliberately stay spent so no competing spend can take the inputs of a surviving record: %v", txID, unwindOutpoints(spentUtxos), err)
 
@@ -2141,9 +2145,9 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 // Return shapes:
 //
 //	(true, nil)    ErrTxNotFound: provably deleted, safe to unspend.
-//	(false, nil)   the record is readable, so the store did not honour Delete
-//	               (TxMetaCache's cache-only Delete is the known case). Conclusive, so
-//	               it is not retried.
+//	(false, nil)   the record is readable, so the delete did not reach the record
+//	               (a decorator whose delete only touches its cache is the
+//	               illustrative case). Conclusive, so it is not retried.
 //	(false, err)   inconclusive after every attempt. The caller fails closed.
 //
 // The wait between attempts selects on ctx.Done() so shedUnwindTimeout actually cuts
