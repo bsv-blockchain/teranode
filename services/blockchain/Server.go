@@ -16,9 +16,11 @@
 package blockchain
 
 import (
+	"crypto/rand"
 	"container/ring"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -523,12 +525,31 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return errors.WrapGRPC(err)
 	}
 
+	// Get the API key for authentication
+	apiKey := b.settings.GRPCAdminAPIKey
+	if apiKey == "" {
+		// Generate a random API key if not provided
+		var err error
+		apiKey, err = generateRandomKey()
+		if err != nil {
+			return errors.NewServiceError("error generating random API key", err)
+		}
+
+		b.logger.Warnf("[Blockchain] grpc_admin_api_key is not set; a random key was generated so admin RPCs (SendNotification) are unreachable until a key is configured")
+	}
+
+	// Create auth options with protected methods
+	authOptions := &util.AuthOptions{
+		APIKey:           apiKey,
+		ProtectedMethods: blockchainAdminProtectedMethods(),
+	}
+
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, b.settings, "blockchain", b.settings.BlockChain.GRPCListenAddress, func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
 		blockchain_api.RegisterPeerRegistryServiceServer(server, b)
 		closeOnce.Do(func() { close(readyCh) })
-	}, nil); err != nil {
+	}, authOptions); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain][Start] can't start GRPC server", err))
 	}
 
@@ -3732,5 +3753,26 @@ func (b *Blockchain) cleanupExpiredBatchTokens() {
 			}
 			b.batchTokensMu.Unlock()
 		}
+	}
+}
+
+// generateRandomKey generates a random 32-byte API key encoded as hex.
+func generateRandomKey() (string, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain] failed to generate API key", err))
+	}
+
+	return hex.EncodeToString(key), nil
+}
+
+// blockchainAdminProtectedMethods returns the full gRPC method paths of every
+// state-mutating admin RPC on the BlockchainAPI; the auth interceptor requires
+// the admin API key for these. Read-only queries and internal data-plane
+// reporting RPCs stay unauthenticated because other services call them without
+// admin credentials. Any new mutating admin RPC must be added here.
+func blockchainAdminProtectedMethods() map[string]bool {
+	return map[string]bool{
+		"/blockchain_api.BlockchainAPI/SendNotification": true,
 	}
 }

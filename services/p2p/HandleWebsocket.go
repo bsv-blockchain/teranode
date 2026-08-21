@@ -66,9 +66,12 @@ type notificationMsg struct {
 // All operations on this map are protected by a read-write mutex to ensure
 // thread safety when multiple goroutines are adding, removing, or broadcasting
 // to client channels concurrently.
+//
+// Connection counting is exported via the count() method for monitoring purposes.
 type clientChannelMap struct {
 	sync.RWMutex                          // Protects concurrent access to the channels map
 	channels     map[chan []byte]struct{} // Set of active client channels (using struct{} for memory efficiency)
+	closed       bool                     // Track if the map has been closed
 }
 
 // newClientChannelMap creates a new thread-safe client channel registry.
@@ -172,6 +175,20 @@ func (cm *clientChannelMap) count() int {
 	return len(cm.channels)
 }
 
+// isClosed returns true if the client channel map has been closed.
+func (cm *clientChannelMap) isClosed() bool {
+	cm.RLock()
+	defer cm.RUnlock()
+	return cm.closed
+}
+
+// close marks the channel map as closed and prevents new connections.
+func (cm *clientChannelMap) close() {
+	cm.Lock()
+	defer cm.Unlock()
+	cm.closed = true
+}
+
 type WebSocketConn interface {
 	WriteMessage(messageType int, data []byte) error
 	Close() error
@@ -184,7 +201,15 @@ const (
 var (
 	upgrader = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
-			return true
+			// By default, only allow same-origin WebSocket connections.
+			// This prevents CSRF attacks from other domains.
+			// In production, operators should configure CORS properly instead of using wildcard (*)
+			// and should use TLS for WebSocket connections.
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			return origin == r.Host
 		},
 	}
 )
