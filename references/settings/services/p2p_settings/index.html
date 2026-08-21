@@ -7575,6 +7575,20 @@
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nv">p2p_enable_mdns</span><span class="o">=</span><span class="nb">false</span><span class="w">     </span><span class="c1"># mDNS peer discovery</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nv">p2p_allow_private_ips</span><span class="o">=</span><span class="nb">false</span><span class="w">  </span><span class="c1"># RFC1918 private networks</span>
 </span></code></pre></div>
+<p><code>p2p_allow_private_ips</code> also governs the static SSRF check on peer-supplied DataHub URLs:
+with <code>true</code> that check is skipped entirely, so an announced URL naming a private, loopback or
+link-local address is accepted into the peer registry.</p>
+<p>It does <strong>not</strong> affect the connection-time guard. Every outbound request to a peer-supplied
+URL - availability probes and block/subtree fetches alike - refuses loopback (127.0.0.0/8,
+::1), link-local (169.254.0.0/16, fe80::/10) and unspecified addresses regardless of this
+setting, including when a peer hostname only resolves to one. Accepting such a URL therefore
+does not make it reachable. Private ranges are permitted at connection time on both paths,
+since peer fetches legitimately traverse private networks; the probe deliberately applies the
+same policy as the fetch path, so it never rejects a peer that catchup could have used.</p>
+<p>One caveat: if <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code> is set, outbound requests are dialled to the proxy
+and the proxy fetches the peer-supplied target on the node's behalf, which the address check
+cannot see. Deployments that need these checks to hold must not route peer fetches through a
+forward proxy.</p>
 <h3 id="peer-selection-and-reputation">Peer Selection and Reputation<a class="headerlink" href="#peer-selection-and-reputation" title="Permanent link">&para;</a></h3>
 <p>For details on how peer selection and reputation scoring work, see <a href="../../../../topics/features/peer_registry_reputation/">Peer Registry and Reputation System</a>.</p>
 <p>Key settings affecting peer selection:</p>
