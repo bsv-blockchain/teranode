@@ -2,9 +2,13 @@ package blockassembly
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -37,6 +41,36 @@ func syncAssemblerToChainTip(t *testing.T, server *BlockAssembly) {
 	require.NoError(t, err)
 
 	server.blockAssembler.setBestBlockHeader(header, meta.Height)
+}
+
+// flakyTipClient fails its first failures calls to GetBestBlockHeader and then
+// behaves normally, so the retry branch can be exercised deterministically.
+type flakyTipClient struct {
+	blockchain.ClientI
+
+	mu       sync.Mutex
+	failures int
+	calls    int
+}
+
+func (c *flakyTipClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	c.mu.Lock()
+	c.calls++
+	shouldFail := c.calls <= c.failures
+	c.mu.Unlock()
+
+	if shouldFail {
+		return nil, nil, errors.NewServiceError("blockchain service unavailable")
+	}
+
+	return c.ClientI.GetBestBlockHeader(ctx)
+}
+
+func (c *flakyTipClient) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.calls
 }
 
 // TestWaitForAssemblerTip covers the branches the sequential end-to-end test
@@ -109,9 +143,29 @@ func TestWaitForAssemblerTip(t *testing.T) {
 		server.blockAssembler.setCurrentRunningState(StateRunning)
 		server.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout = 100 * time.Millisecond
 
+		start := time.Now()
 		err := server.waitForAssemblerTip(context.Background())
 		require.Error(t, err, "an assembler that never loads its best block times out")
 		require.Contains(t, err.Error(), "did not reach the chain tip")
+		// Without this the subtest would pass unchanged if a nil header started
+		// failing immediately, which is the opposite of what its name claims.
+		require.GreaterOrEqual(t, time.Since(start), 100*time.Millisecond,
+			"a nil current header must be waited out, not failed on immediately")
+	})
+
+	t.Run("a transient tip-read failure costs a poll, not the guard", func(t *testing.T) {
+		server := newTipWaitServer(t)
+		syncAssemblerToChainTip(t, server)
+		server.blockAssembler.setCurrentRunningState(StateRunning)
+
+		// Fail the first three reads. The wait must keep polling and still
+		// succeed: abandoning the guard on a blockchain-service blip was the
+		// whole of the ChiR4 defect.
+		flaky := &flakyTipClient{ClientI: server.blockchainClient, failures: 3}
+		server.blockchainClient = flaky
+
+		require.NoError(t, server.waitForAssemblerTip(context.Background()))
+		require.Greater(t, flaky.callCount(), 3, "the wait must have retried past the failures")
 	})
 
 	t.Run("a cancelled parent context ends the wait", func(t *testing.T) {

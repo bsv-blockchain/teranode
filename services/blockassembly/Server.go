@@ -2570,13 +2570,19 @@ const defaultGenerateTipWaitTimeout = 30 * time.Second
 // guard: the wait is cheap and already bounded, so a transient blockchain-service
 // blip should cost one poll, not the whole protection.
 //
-// Exceeding the bound is an error rather than a silent proceed. Building on state
-// that is still mid-rebuild is what this guard exists to prevent, and the spec's
-// valid-states row for GenerateBlocks is Running alone; a named failure is also far
-// more actionable for an operator than the "candidate is stale" they would otherwise
-// get. The trade is that a slow-but-healthy reset now fails the call instead of
-// possibly succeeding — deliberate, and the reason the bound defaults well above the
-// waitForBlockMinedSet budget it waits behind.
+// Exceeding the bound is an error rather than a silent proceed, and costs nothing:
+// while the assembler is still inside reset() its CurrentBlock is the invalidated
+// pre-reorg tip, so a call that proceeded would build on that parent and be rejected
+// as stale anyway. The error changes the text, not the outcome — but "did not reach
+// the chain tip, state resetting" tells an operator what to retry, where "candidate
+// is stale" does not.
+//
+// The bound cannot cover the whole awaited path and does not claim to.
+// subtreeProcessor.WaitForPendingBlocks runs ahead of the tip publish under
+// retry.WithInfiniteRetry, so it ends when the pending set drains or the assembler's
+// own context dies — never on this deadline. What the default is sized against is the
+// bounded component, waitForBlockMinedSet: 45 retries at 20ms base, factor 2, capped
+// at 2s, is ~78s worst case per invalid moveBack block.
 func (ba *BlockAssembly) waitForAssemblerTip(ctx context.Context) error {
 	timeout := ba.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout
 	if timeout <= 0 {
@@ -2586,7 +2592,13 @@ func (ba *BlockAssembly) waitForAssemblerTip(ctx context.Context) error {
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(25 * time.Millisecond)
+	// 5ms rather than something coarser because of what runs immediately before
+	// this on a multi-block generate: waitForBestBlockHeaderUpdate returns as
+	// soon as the assembler's tip changes, which happens at setBestBlockHeader,
+	// before the deferred return to StateRunning. So the next block's readiness
+	// check can arrive a few instructions early and pay a tick for it. Keeping
+	// the tick small bounds that dead time without coupling the two waits.
+	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {

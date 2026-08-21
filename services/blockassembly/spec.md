@@ -237,7 +237,7 @@ For any transaction failing validation, the operation SHALL mark it conflicting 
 
 **BA-CONFIG-008.** When `ChainCfgParams.GenerateSupported` is `false`, `GenerateBlocks` MUST return an error with message `generate is not supported`.
 
-**BA-CONFIG-009.** Before building each candidate, `GenerateBlocks` MUST wait for block assembly to be level with the Blockchain tip AND in the `Running` state. Being level alone is NOT sufficient: `reset()` publishes the new tip before `SubtreeProcessor.Reset` runs, so a wait keyed on the tip alone can return while the subtree processor is mid-rebuild, and the `MovingUp` window is one in which `GetMiningCandidate` short-circuits to a transaction-less template. The wait MUST be bounded by `blockassembly_generateTipWaitTimeout` (default `30s`), and exceeding that bound MUST fail the call rather than build a candidate. The default MUST remain above the `waitForBlockMinedSet` budget the wait sits behind (`blockvalidation_isParentMined_retry_max_retry`, roughly ten seconds by default).
+**BA-CONFIG-009.** Before building each candidate, `GenerateBlocks` MUST wait for block assembly to be level with the Blockchain tip AND in the `Running` state. Being level alone is NOT sufficient: `reset()` publishes the new tip before `SubtreeProcessor.Reset` runs, so a wait keyed on the tip alone can return while the subtree processor is mid-rebuild, and the `MovingUp` window is one in which `GetMiningCandidate` short-circuits to a transaction-less template. The wait MUST be bounded by `blockassembly_generateTipWaitTimeout` (default `90s`), and exceeding that bound MUST fail the call with an error naming the state rather than build a candidate. The default SHOULD exceed the bounded part of the awaited work: on the `invalidateblock` path that is `waitForBlockMinedSet`, whose budget is ~78s with the default `blockvalidation_isParentMined_retry_max_retry` of 45 (20ms base, factor 2, 2s cap). The wait CANNOT bound `subtreeProcessor.WaitForPendingBlocks`, which precedes it and retries indefinitely, so expiry MUST NOT be treated as evidence of a fault.
 
 ### Observability Contract (`BA-OBSERVABILITY-NNN`)
 
@@ -450,7 +450,7 @@ The Block Assembly service exposes 18 gRPC operations. Each is governed by the r
 | Field | Value |
 |---|---|
 | **Operation** | `GenerateBlocks` |
-| **Valid states** | `Running`, AND `ChainCfgParams.GenerateSupported == true`. A call arriving in `Resetting`, `Reorging` or `MovingUp` blocks until the assembler returns to `Running` (BA-CONFIG-009) rather than being rejected outright |
+| **Valid states** | `Running`, AND `ChainCfgParams.GenerateSupported == true`. A call arriving in ANY non-`Running` state blocks until the assembler reaches `Running` at the chain tip (BA-CONFIG-009) rather than being rejected outright; if the bound expires first the call fails. `Starting` is deliberately included: `Start` sets `Running` from a goroutine, so a call arriving just after startup is legitimately in `Starting` and the state alone cannot distinguish that from an assembler that was never started |
 | **Request validation** | Count is non-negative |
 | **Success effect** | Creates and submits the requested number of synthetic blocks |
 | **Error responses** | `generate is not supported` if `GenerateSupported == false`; `service not ready` during recovery; `did not reach the chain tip within <timeout>` when the BA-CONFIG-009 wait is exceeded |
@@ -555,12 +555,14 @@ stateDiagram-v2
 | `ResetBlockAssembly` (any variant) | reject (not ready) | reject (not ready) | accept | reject (already resetting) | reject | reject | reject (idle) |
 | `CheckBlockAssemblyValidateInputs` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
 | `CheckBlockAssembly` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
-| `GenerateBlocks` | reject (not ready) | reject (not ready) | accept (if `GenerateSupported`) | wait, then accept | wait, then accept | wait, then accept | reject (idle) |
+| `GenerateBlocks` | wait, then reject (bound expires) | reject (not ready) | accept (if `GenerateSupported`) | wait, then accept | wait, then accept | wait, then accept | reject (idle) |
 | `GetBlockAssemblyBlockCandidate` | reject | reject | accept | accept | accept | accept | reject (idle) |
 | `GetBlockAssemblyTxs` | reject | reject | accept | accept | accept | accept | reject (idle) |
 | `GetCandidateBlock` | reject | reject | accept | accept | accept | accept | reject (idle) |
 
 **BA-STATE-001.** The state machine SHALL conform to the per-operation matrix above. Implementation MUST NOT add or remove cells without spec amendment.
+
+> **Conformance gap (pre-existing).** The implementation also has `BlockchainSubscription` and `Reconciling` states (`StateStrings`, `BlockAssembler.go`), which the matrix has no columns for. `GenerateBlocks` treats both as waitable under BA-CONFIG-009. Adding the columns is out of scope for that requirement and is recorded here rather than left implicit.
 
 **BA-STATE-002.** Transitions out of `Resetting`, `Reorging`, `MovingUp`, and `Idle` MUST always end at `Running` (or remain in `Idle` while the Blockchain dependency is still failing). The operational state MUST NOT be permanently wedged in any transient state.
 

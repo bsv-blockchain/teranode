@@ -54,7 +54,16 @@ func TestGenerateAfterInvalidateBlock(t *testing.T) {
 		&blockassembly_api.GenerateBlocksRequest{Count: 1}),
 		"generate must succeed immediately after invalidateblock")
 
-	_, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
+	newTip, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
 	require.NoError(t, err)
-	require.Equal(t, uint32(3), meta.Height, "the generated block should extend the new tip")
+	require.Equal(t, uint32(3), meta.Height)
+
+	// Assert the property the fix is about, not a symptom of it. Height alone
+	// catches the regression only incidentally: a candidate built on the
+	// invalidated parent would land at height 4, or fail earlier and trip the
+	// require.NoError above. Pinning the parent says what "generate must build
+	// on the post-invalidate tip" actually means, and survives a change in how
+	// a bad candidate fails.
+	require.True(t, newTip.HashPrevBlock.IsEqual(block3.Header.HashPrevBlock),
+		"the generated block should extend the parent of the invalidated block")
 }
