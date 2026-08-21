@@ -1207,13 +1207,40 @@ func TestWSConnLimiter(t *testing.T) {
 		}
 
 		require.False(t, l.lastBypassWarn.IsZero(),
-			"live trusted-bypass connections above the global cap must warn that the caps are non-binding")
+			"live trusted-bypass connections above the warn threshold must warn that the caps are non-binding")
 
 		for _, release := range releases {
 			release()
 		}
 
 		require.Zero(t, l.trustedLive, "trusted releases must decrement the live bypass count")
+	})
+
+	t.Run("Trusted bypass below threshold does not warn", func(t *testing.T) {
+		// Default-shaped config: threshold is the per-source budget (50), so a
+		// legitimate same-host bridge holding a handful of connections never
+		// triggers the proxy warning.
+		l := newWSConnLimiter(1000, 0, []string{"127.0.0.0/8"}, logger)
+
+		for i := 0; i < 5; i++ {
+			_, ok := l.acquire("127.0.0.1:9000")
+			require.True(t, ok)
+		}
+
+		require.True(t, l.lastBypassWarn.IsZero(),
+			"a bridge-sized trusted population must not trigger the proxy warning")
+	})
+
+	t.Run("Sentinel none disables the bypass", func(t *testing.T) {
+		l := newWSConnLimiter(1, 0, []string{"127.0.0.1/32", "none"}, logger)
+
+		require.Empty(t, l.trusted, "the none sentinel must clear the trust list entirely")
+
+		_, ok := l.acquire("127.0.0.1:9000")
+		require.True(t, ok, "loopback counts against the caps, not the bypass")
+
+		_, ok = l.acquire("127.0.0.1:9001")
+		require.False(t, ok, "with trust disabled, loopback must be subject to the global cap")
 	})
 }
 

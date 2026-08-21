@@ -310,16 +310,24 @@ func originAllowed(origin string, allowed []string) bool {
 // holds every public slot. Sources are keyed by the transport-level
 // RemoteAddr host, never by forwarded-for headers, which are caller-supplied.
 type wsConnLimiter struct {
-	mu             sync.Mutex
-	total          int64            // live connections from untrusted sources
-	perSource      map[string]int64 // live connections per untrusted source host
-	trustedLive    int64            // live connections admitted via the trusted bypass
-	lastBypassWarn time.Time        // last trusted-bypass overload warning (throttled to wsCapWarnInterval)
-	maxTotal       int64            // <= 0 disables both caps
-	maxPerSource   int64
-	trusted        []*net.IPNet
-	logger         ulogger.Logger
+	mu                  sync.Mutex
+	total               int64            // live connections from untrusted sources
+	perSource           map[string]int64 // live connections per untrusted source host
+	trustedLive         int64            // live connections admitted via the trusted bypass
+	lastBypassWarn      time.Time        // last trusted-bypass overload warning (throttled to wsCapWarnInterval)
+	bypassWarnThreshold int64            // live trusted-bypass connections above this trigger the warning
+	maxTotal            int64            // <= 0 disables both caps
+	maxPerSource        int64
+	trusted             []*net.IPNet
+	logger              ulogger.Logger
 }
+
+// wsTrustNoneSentinel disables the trusted-source bypass entirely when used as
+// the sole value of p2p_websocket_trusted_source_cidrs. Needed because the
+// settings loader treats an empty configured value as "use the default", so an
+// empty list is otherwise inexpressible - e.g. for a reverse proxy terminating
+// on the same host, whose loopback source would silently bypass the caps.
+const wsTrustNoneSentinel = "none"
 
 // newWSConnLimiter builds the admission controller. perSourceOverride selects
 // the per-source cap: 0 derives max(4, maxTotal/20), a positive value is used
@@ -342,10 +350,22 @@ func newWSConnLimiter(maxTotal, perSourceOverride int64, trustedCIDRs []string, 
 		// Negative override, or auto with the global cap disabled: no per-source cap.
 	}
 
+	// Warn about a non-binding cap once trusted-bypass connections exceed what
+	// any single untrusted source could hold - far earlier than exhaustion.
+	l.bypassWarnThreshold = maxTotal
+	if l.maxPerSource > 0 && l.maxPerSource < maxTotal {
+		l.bypassWarnThreshold = l.maxPerSource
+	}
+
 	for _, cidr := range trustedCIDRs {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" {
 			continue
+		}
+
+		if strings.EqualFold(cidr, wsTrustNoneSentinel) {
+			l.trusted = nil
+			return l
 		}
 
 		_, ipNet, err := net.ParseCIDR(cidr)
@@ -380,9 +400,12 @@ func (l *wsConnLimiter) acquire(remoteAddr string) (release func(), ok bool) {
 
 				// Throttled (not once-per-process) so a genuine "caps are not
 				// binding" condition stays visible for the process lifetime.
-				if now := time.Now(); l.maxTotal > 0 && l.trustedLive > l.maxTotal && now.Sub(l.lastBypassWarn) >= wsCapWarnInterval {
+				// The threshold is the per-source budget an untrusted host
+				// would get, so a fronting proxy surfaces long before it
+				// could exhaust the global cap.
+				if now := time.Now(); l.bypassWarnThreshold > 0 && l.trustedLive > l.bypassWarnThreshold && now.Sub(l.lastBypassWarn) >= wsCapWarnInterval {
 					l.lastBypassWarn = now
-					l.logger.Warnf("More live /p2p-ws connections admitted via the trusted-source bypass (%d) than the global cap (%d); if a reverse proxy fronts this endpoint from a trusted address, the connection caps are not protecting it - preserve client source addresses or narrow p2p_websocket_trusted_source_cidrs", l.trustedLive, l.maxTotal)
+					l.logger.Warnf("Live /p2p-ws connections admitted via the trusted-source bypass (%d) exceed the per-source budget an untrusted host would get (%d); if a reverse proxy fronts this endpoint from a trusted address, the connection caps are not protecting it - preserve client source addresses, narrow p2p_websocket_trusted_source_cidrs, or set it to %q", l.trustedLive, l.bypassWarnThreshold, wsTrustNoneSentinel)
 				}
 				l.mu.Unlock()
 
