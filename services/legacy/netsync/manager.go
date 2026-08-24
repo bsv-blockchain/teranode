@@ -1915,6 +1915,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 					}
 				}
 
+				// Unlike the orphan-continuation branch above, this is a headers-first pull sync with
+				// no other mechanism to recover a dropped block: actively re-request the same hash
+				// instead of only waiting for a spontaneous re-announcement (bitcoin-sv/teranode#4692).
+				sm.requestMissingBlocks(peer, bmsg.blockHash)
+
 				return err
 			}
 

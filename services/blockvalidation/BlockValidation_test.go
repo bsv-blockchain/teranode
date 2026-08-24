@@ -1789,7 +1789,15 @@ func Test_validateBlockSubtrees(t *testing.T) {
 	})
 }
 
-func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
+// TestBlockValidation_UnboundCoinbaseLengthTamperBreaksMerkleBinding tampers the coinbase's
+// unlocking script AFTER the block was built around the original coinbase txid, which changes the
+// coinbase txid and so breaks the merkle binding the header already committed to. The body never
+// reaches the merkle-bound branch of block.Valid's coinbase-length check (step 4b): CheckMerkleRoot
+// (step 8) fails first, on the same unbound-body principle, and the block stays corrupt with
+// nothing persisted (bitcoin-sv/teranode#4692). The bound case — a genuinely merkle-matching body
+// whose coinbase length is bad — is covered separately at the service level in
+// TestValidateBlock_CoinbaseLengthBinding_Service, where it is condemned invalid.
+func TestBlockValidation_UnboundCoinbaseLengthTamperBreaksMerkleBinding(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1804,17 +1812,20 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	// Create a valid block, then tamper with coinbase script length
+	// Create a valid block, then tamper with coinbase script length after the fact — this changes
+	// the coinbase txid, which the header's merkle root no longer commits to.
 	block := createValidBlock(t, tSettings, txMetaStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore)
 	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01}) // Too short
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test")
-	// bitcoin-sv/teranode#4692: bad coinbase length is a tier-2 body-derived check → BLOCK_CORRUPT
-	// (re-download + strike), not BLOCK_INVALID (poison).
 	require.ErrorContains(t, err, "BLOCK_CORRUPT")
 	require.True(t, errors.IsBlockCorrupt(err))
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
+
+	exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
+	require.NoError(t, existsErr)
+	require.False(t, exists, "a corrupt (unbound) block must never be persisted")
 }
 
 func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore utxostore.Store, subtreeValidationClient subtreevalidation.Interface, blockchainClient blockchain.ClientI, txStore blob.Store, subtreeStore blob.Store) *model.Block {

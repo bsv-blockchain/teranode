@@ -1657,8 +1657,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// bad-version in ContextualCheckBlockHeader ahead of the body/coinbase checks; teranode does not
 		// replicate that exact error ordering at this outer stage. A complete below-floor block is
 		// rejected by block.Valid with the bad-version token; a below-floor block that ALSO fails the
-		// outer coinbase prechecks below returns earlier with the documented non-parity reason
-		// (block-incomplete or bad-coinbase-length) instead. Either way the block is rejected.
+		// outer nil-coinbase precheck below returns earlier with the documented non-parity reason
+		// (block-incomplete) instead. Either way the block is rejected.
 		if block.CoinbaseTx == nil || block.CoinbaseTx.Inputs == nil || len(block.CoinbaseTx.Inputs) == 0 {
 			// Use BlockIncomplete rather than BlockInvalid — a missing coinbase likely means the peer
 			// doesn't have full block data (e.g. seeded peer). Don't store as invalid so we can
@@ -1674,18 +1674,15 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockIncompleteError("[ValidateBlock][%s] coinbase tx is nil or empty", block.Header.Hash().String())
 		}
 
-		// check the coinbase length
-		if len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(u.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
-			// Outer, pre-binding body check: a bad coinbase length in the received body
-			// cannot condemn the hash. Strike the serving peer and return corrupt for
-			// re-download; never persist invalid=true (bitcoin-sv/teranode#4692). Skip the strike on
-			// revalidation (stale announcing-peer ID); mirrors the neighbouring storeInvalidBlock gating.
-			if !opts.IsRevalidation {
-				u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "bad coinbase length")
-			}
-
-			return errors.NewBlockCorruptError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
-		}
+		// The bad-coinbase-length check used to also run here, on the unbound body, before
+		// block.Valid ever ran — but that intercepted every bad-length body, including a
+		// merkle-bound one whose coinbase is the miner's own committed (and thus genuinely
+		// invalid) coinbase, before step 4b's binding-aware classification (model.Block.Valid,
+		// bindClassifiedError) could ever run. It has been removed so every body flows into
+		// block.Valid: an unbound body still returns corrupt (re-download, strike, never
+		// persisted) exactly as before, and a bound body with a bad coinbase length is now
+		// correctly condemned as invalid instead of being indefinitely re-downloaded under the
+		// corrupt-attempt cap (bitcoin-sv/teranode#4692).
 
 		// Checkpoint enforcement (defense-in-depth): a block whose height matches a hardcoded
 		// checkpoint MUST match the checkpoint hash, mirroring the catchup header pipeline.

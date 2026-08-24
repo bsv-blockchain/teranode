@@ -64,6 +64,7 @@ type CatchupContext struct {
 	highestCheckpointHeight uint32 // Highest checkpoint height hash-verified in THIS catchup run (not the highest configured checkpoint)
 	catchupError            error  // Any error encountered during catchup
 	incompleteBlockHash     string // Block hash reported when a peer serves an incomplete block
+	corruptBlockHash        string // Block hash reported when a peer serves a corrupt block body
 
 	// failedPeers records the peers that actually failed to serve data during this
 	// catchup cycle, deduplicated by peer ID (last error message wins). Written from
@@ -381,9 +382,11 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 		reportMalicious       bool
 		reportPeerErr         bool
 		reportIncompleteBlock bool
+		reportCorruptBlock    bool
 		peerID                string
 		errorMsg              string
 		incompleteBlockHash   string
+		corruptBlockHash      string
 		failedPeers           map[string]string
 	)
 
@@ -481,8 +484,15 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// re-downloaded; double-charging here would penalize a possibly-sole-source peer
 			// twice. Must precede the ErrBlockInvalid case (corrupt uses a dedicated sentinel,
 			// so it would not match it anyway).
+			//
+			// Peer selection still needs a genuine signal, distinct from the cosmetic UI string
+			// isPeerError=false leaves this with: report the dedicated corrupt_block_body failure
+			// kind below, mirroring the incomplete-block case, so catch-up peer selection can stop
+			// re-picking a peer that keeps serving corrupt bodies (bitcoin-sv/teranode#4692).
 			errorType = "corrupt_block_body"
 			isPeerError = false
+			reportCorruptBlock = true
+			corruptBlockHash = ctx.corruptBlockHash
 		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
 			// Gated on the same predicate validateBlocksOnChannel and
 			// processCatchupChItem use, rather than on the case ordering above it.
@@ -596,7 +606,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	// Make the fire-and-forget reputation gRPC calls outside the lock with a bounded
 	// context, so a stalled P2P service can neither hold activeCatchupCtxMu nor outlive
 	// shutdown. These are best-effort; failures are logged inside the helpers.
-	if reportMalicious || reportPeerErr || reportIncompleteBlock || len(failedPeers) > 0 {
+	if reportMalicious || reportPeerErr || reportIncompleteBlock || reportCorruptBlock || len(failedPeers) > 0 {
 		rpcCtx, cancel := context.WithTimeout(context.Background(), catchupReputationReportTimeout)
 		defer cancel()
 
@@ -667,6 +677,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		if reportIncompleteBlock {
 			u.reportCatchupFailureWithKind(rpcCtx, peerID, catchupFailureKindBlockIncomplete, incompleteBlockHash)
+		}
+
+		if reportCorruptBlock {
+			u.reportCatchupFailureWithKind(rpcCtx, peerID, catchupFailureKindCorruptBlockBody, corruptBlockHash)
 		}
 	}
 
@@ -1534,6 +1548,10 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 						// another peer (releaseCatchupLock classifies it as corrupt_block_body).
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s has a corrupt body, aborting for re-download", blockUpTo.Hash().String(), block.Hash().String(), peerID)
 
+						// Capture the hash so releaseCatchupLock can feed catch-up peer selection with
+						// a dedicated corrupt_block_body failure kind (bitcoin-sv/teranode#4692).
+						catchupCtx.corruptBlockHash = block.Hash().String()
+
 						// Delete the peer-supplied .subtree blobs that just failed their integrity check.
 						// fetchAndStoreSubtree wrote them under FileTypeSubtreeToCheck without confirming
 						// they hash to the requested subtree, and findLocalSubtreeFile short-circuits on
@@ -1643,6 +1661,10 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "quick validation: corrupt block body")
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s has a corrupt body, aborting for re-download",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			// Capture the hash so releaseCatchupLock can feed catch-up peer selection with a
+			// dedicated corrupt_block_body failure kind (bitcoin-sv/teranode#4692).
+			catchupCtx.corruptBlockHash = block.Hash().String()
 
 			// Delete the peer-supplied .subtree blobs before aborting (bitcoin-sv/teranode#4692): the quick
 			// path already wrote them (writeSubtreeFilesForBatch) under what readSubtree treats as an

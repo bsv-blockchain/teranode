@@ -100,6 +100,19 @@ func TestBlockCorruptSurvivesRealServerWrapper(t *testing.T) {
 		"wrapping a corrupt cause in block-invalid leaks it as block-invalid — do not do this")
 }
 
+// TestNewBlockCorruptErrorStripsWrappedInvalidCause verifies the wrapped-chain guard: even
+// if a call site passes an ErrBlockInvalid-classified cause as the wrapped argument, the
+// resulting error must classify as corrupt only, never also as invalid — otherwise a
+// poisoning branch gated on errors.Is(_, ErrBlockInvalid) could fire for a corrupt body.
+func TestNewBlockCorruptErrorStripsWrappedInvalidCause(t *testing.T) {
+	cause := NewBlockInvalidError("cause")
+
+	err := NewBlockCorruptError("msg", cause)
+
+	require.True(t, IsBlockCorrupt(err))
+	require.False(t, Is(err, ErrBlockInvalid), "guard must strip the collision, not just log it")
+}
+
 // TestBlockCorruptGRPCCodeDefault documents the intended mapping: like ERR_BLOCK_INVALID,
 // ERR_BLOCK_CORRUPT has no explicit row in ErrorCodeToGRPCCode and falls to the
 // codes.Internal default. No caller branches on the gRPC code; control flow keys on the

@@ -923,21 +923,15 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	}
 
 	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
-	// Parity with bitcoin-sv CheckCoinbase (bad-cb-length): inclusive 2 <= size <= MaxCoinbaseScriptSigSize.
-	// IsCoinbase() above guarantees exactly one input, so Inputs[0] is safe to index; a nil
-	// UnlockingScript is treated as length 0 and fails the lower bound, matching an empty scriptSig.
 	// Deliberately AFTER the merkle binding (bitcoin-sv/teranode#4692): a bound
 	// body's coinbase IS the miner's committed coinbase, so a bad length on it is genuine consensus
 	// invalidity and condemnable once (svnode marks the block index failed); on an unbound body it
 	// stays corrupt so it is re-downloaded, never poisoned. Ordered before the BIP34 height check so
 	// a truncated scriptSig is reported as bad-cb-length rather than as a coinbase-height extraction
-	// failure.
-	scriptSigLen := 0
-	if us := b.CoinbaseTx.Inputs[0].UnlockingScript; us != nil {
-		scriptSigLen = len(*us)
-	}
-
-	if scriptSigLen < 2 || scriptSigLen > int(settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
+	// failure. The bound itself is factored into CoinbaseScriptSigLengthInBounds below so the
+	// quick-validation path (services/blockvalidation/quick_validate.go), which never calls Valid,
+	// can enforce the identical rule instead of carrying its own copy.
+	if !CoinbaseScriptSigLengthInBounds(b.CoinbaseTx, settings.ChainCfgParams) {
 		return false, bindErr("[BLOCK][%s] bad coinbase length", b.String())
 	}
 
@@ -1060,6 +1054,29 @@ func bindClassifiedError(merkleRootChecked bool, format string, args ...interfac
 	}
 
 	return errors.NewBlockCorruptError(format, args...)
+}
+
+// CoinbaseScriptSigLengthInBounds reports whether the coinbase scriptSig (unlocking script)
+// length is within the consensus bound: parity with bitcoin-sv CheckCoinbase (bad-cb-length),
+// inclusive 2 <= size <= params.MaxCoinbaseScriptSigSize. The caller must guarantee coinbaseTx has
+// at least one input before calling (Valid's step 4b above relies on IsCoinbase() for that; the
+// quick-validation path's own nil/empty check gives the same guarantee) — Inputs[0] is indexed
+// unconditionally. A nil UnlockingScript is treated as length 0 and fails the lower bound,
+// matching an empty scriptSig.
+//
+// Deliberately a predicate rather than an error-returning check: the verdict for a breach is
+// bound-vs-unbound and belongs to the caller, so there is no classification for this function to
+// pick. Valid's step 4b above turns a false into bindErr's binding-aware verdict, and the
+// quick-validation path (services/blockvalidation/quick_validate.go) — which never calls Valid,
+// and so would otherwise never enforce this rule at all — applies its own binding determination
+// for that route.
+func CoinbaseScriptSigLengthInBounds(coinbaseTx *bt.Tx, params *chaincfg.Params) bool {
+	scriptSigLen := 0
+	if us := coinbaseTx.Inputs[0].UnlockingScript; us != nil {
+		scriptSigLen = len(*us)
+	}
+
+	return scriptSigLen >= 2 && scriptSigLen <= int(params.MaxCoinbaseScriptSigSize)
 }
 
 // releaseTxMap returns b.txMap to the pool (in-memory variant) or closes the
