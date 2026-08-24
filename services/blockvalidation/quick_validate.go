@@ -251,6 +251,10 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		}
 	}
 
+	if err := u.checkQuickValidationCoinbaseLength(block, "quickValidateBlock"); err != nil {
+		return err
+	}
+
 	return u.commitBlock(ctx, block, peerID, "quickValidateBlock")
 }
 
@@ -330,7 +334,38 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		}
 	}
 
+	if err := u.checkQuickValidationCoinbaseLength(block, "quickValidateBlockAsync"); err != nil {
+		return err
+	}
+
 	return u.commitBlock(ctx, block, peerID, "quickValidateBlockAsync")
+}
+
+// checkQuickValidationCoinbaseLength enforces model.CoinbaseScriptSigLengthInBounds on the
+// quick-validation path, which never calls block.Valid and so would otherwise never run its step
+// 4b at all (bitcoin-sv/teranode#4692). Called once, after subtree processing (if any) has already
+// returned successfully, so the binding state below is settled rather than guessed:
+//   - block.Subtrees non-empty: processBlockSubtrees / processBlockSubtreesPipelineAsync's common
+//     tail (validateSubtrees) already ran CheckMerkleRoot successfully — the body IS merkle-bound,
+//     so a bad length here is genuine consensus invalidity, condemnable once.
+//   - block.Subtrees empty: nothing on this route asserts model's coinbase-only binding rule
+//     (header merkle root == coinbase txid) for a no-subtrees body, so it is UNBOUND here — a bad
+//     length stays corrupt (re-download), never poisoned, mirroring model's rule rather than
+//     inventing a new one.
+//
+// This is defence-in-depth, not a commonly-reachable path: quick validation only runs for blocks
+// at or below the highest hash-verified checkpoint for this catchup run (catchup.go,
+// tryQuickValidation).
+func (u *BlockValidation) checkQuickValidationCoinbaseLength(block *model.Block, caller string) error {
+	if !model.CoinbaseScriptSigLengthInBounds(block.CoinbaseTx, u.settings.ChainCfgParams) {
+		if len(block.Subtrees) > 0 {
+			return errors.NewBlockInvalidError("[%s][%s] bad coinbase length", caller, block.Hash().String())
+		}
+
+		return errors.NewBlockCorruptError("[%s][%s] bad coinbase length", caller, block.Hash().String())
+	}
+
+	return nil
 }
 
 // commitBlock performs the shared final commit for the quick-validation path:

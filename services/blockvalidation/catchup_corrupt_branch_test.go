@@ -22,9 +22,12 @@ import (
 type catchupReportRecorder struct {
 	P2PClientI
 
-	mu           sync.Mutex
-	malicious    []string
-	genericError []string
+	mu             sync.Mutex
+	malicious      []string
+	genericError   []string
+	failureKinds   []string
+	failureHashes  []string
+	failurePeerIDs []string
 }
 
 func (m *catchupReportRecorder) RecordCatchupMalicious(_ context.Context, peerID string) error {
@@ -39,6 +42,19 @@ func (m *catchupReportRecorder) UpdateCatchupError(_ context.Context, peerID, _ 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.genericError = append(m.genericError, peerID)
+
+	return nil
+}
+
+// RecordCatchupFailureWithKind records the dedicated failure-kind calls releaseCatchupLock makes
+// (bitcoin-sv/teranode#4692) — the incomplete-block and corrupt-body reputation signals both route
+// through here, distinct from the generic malicious/peer-error reports above.
+func (m *catchupReportRecorder) RecordCatchupFailureWithKind(_ context.Context, peerID, failureKind, blockHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failurePeerIDs = append(m.failurePeerIDs, peerID)
+	m.failureKinds = append(m.failureKinds, failureKind)
+	m.failureHashes = append(m.failureHashes, blockHash)
 
 	return nil
 }
@@ -59,6 +75,20 @@ func (m *catchupReportRecorder) genericErrorReported() []string {
 	copy(out, m.genericError)
 
 	return out
+}
+
+func (m *catchupReportRecorder) failuresWithKindReported() ([]string, []string, []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	peerIDs := make([]string, len(m.failurePeerIDs))
+	copy(peerIDs, m.failurePeerIDs)
+	kinds := make([]string, len(m.failureKinds))
+	copy(kinds, m.failureKinds)
+	hashes := make([]string, len(m.failureHashes))
+	copy(hashes, m.failureHashes)
+
+	return peerIDs, kinds, hashes
 }
 
 // newReleaseCatchupBlock builds a minimal, well-formed block to stand in as the catchup target
@@ -90,24 +120,28 @@ func newReleaseCatchupBlock(t *testing.T) *model.Block {
 // (bitcoin-sv/teranode#4692). A corrupt terminal error must classify as "corrupt_block_body",
 // which is NOT a generic peer error: the serving peer was already struck at the corrupt site and
 // an honest relay can forward a corrupted body, so releaseCatchupLock must neither report it
-// malicious nor open a generic peer-error window. The positive control confirms a genuine
-// ErrBlockInvalid does the opposite (classified "validation_failure", peer reported malicious),
-// so the corrupt case is a real, distinct decision — not a branch that can never fire.
+// malicious nor open a generic peer-error window. It still feeds catch-up peer selection a
+// genuine, correctly-labelled signal via the dedicated corrupt_block_body failure kind — the
+// generic-peer-error suppression above would otherwise leave selection with zero signal at all.
+// The positive control confirms a genuine ErrBlockInvalid does the opposite (classified
+// "validation_failure", peer reported malicious), so the corrupt case is a real, distinct
+// decision — not a branch that can never fire.
 //
 // Mutation proof: deleting `case errors.IsBlockCorrupt(*err)` from the classification switch drops a
 // corrupt error to the switch defaults (errorType "unknown_error", isPeerError true), which reddens
 // both the ErrorType assertion and the "no generic peer-error report" assertion below.
 func TestReleaseCatchupLock_CorruptBodyClassifiedNonPeer(t *testing.T) {
-	t.Run("corrupt body is non-peer, not malicious", func(t *testing.T) {
+	t.Run("corrupt body is non-peer, not malicious, but feeds peer selection", func(t *testing.T) {
 		rec := &catchupReportRecorder{}
 		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
 
 		block := newReleaseCatchupBlock(t)
 		catchupCtx := &CatchupContext{
-			blockUpTo: block,
-			baseURL:   "http://peer",
-			peerID:    "peer-corrupt",
-			startTime: time.Now(),
+			blockUpTo:        block,
+			baseURL:          "http://peer",
+			peerID:           "peer-corrupt",
+			startTime:        time.Now(),
+			corruptBlockHash: block.Hash().String(),
 		}
 
 		corruptErr := error(errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
@@ -120,6 +154,12 @@ func TestReleaseCatchupLock_CorruptBodyClassifiedNonPeer(t *testing.T) {
 			"a corrupt body must NOT flag the serving peer malicious (bitcoin-sv/teranode#4692)")
 		require.Empty(t, rec.genericErrorReported(),
 			"a corrupt body must NOT open a generic peer-error window (isPeerError=false)")
+
+		peerIDs, kinds, hashes := rec.failuresWithKindReported()
+		require.Equal(t, []string{"peer-corrupt"}, peerIDs,
+			"a corrupt body must feed catch-up peer selection via RecordCatchupFailureWithKind")
+		require.Equal(t, []string{catchupFailureKindCorruptBlockBody}, kinds)
+		require.Equal(t, []string{block.Hash().String()}, hashes)
 	})
 
 	t.Run("consensus-invalid body is malicious (positive control)", func(t *testing.T) {

@@ -226,7 +226,42 @@ func NewBlockInvalidError(message string, params ...interface{}) *Error {
 // not ERR_BLOCK_INVALID, so it never matches errors.Is(err, ErrBlockInvalid) on the
 // poison paths (extends the transient-vs-invalid split from PR #1036 / a0790830b).
 func NewBlockCorruptError(message string, params ...interface{}) *Error {
-	return New(ERR_BLOCK_CORRUPT, message, params...)
+	return New(ERR_BLOCK_CORRUPT, message, sanitizeCorruptParams(params)...)
+}
+
+// sanitizeCorruptParams guards against a call site wrapping an invalid-classified cause
+// into a corrupt error: New's trailing-error handling would chain it as wrappedErr, and
+// since (*Error).Is walks that chain, the resulting corrupt error would also satisfy
+// errors.Is(_, ErrBlockInvalid) and could slip past a poisoning branch that gates
+// specifically on IsBlockCorrupt (bitcoin-sv/teranode#4692). No call site does this today;
+// this is a runtime backstop for a programming error, not a condition to route around. Silent by
+// design (this package does not otherwise log): it replaces the offending argument with a plain
+// error carrying the same message text — New still wraps it (preserving the "cause -> message"
+// rendering) but as a bare error rather than an *Error, so the resulting chain never carries
+// ERR_BLOCK_INVALID.
+//
+// Never mutates the caller's slice: params is variadic, so a caller passing an existing slice
+// via NewBlockCorruptError(msg, args...) still owns it. A substitution copies first, on the
+// (expected-empty) slow path only.
+func sanitizeCorruptParams(params []interface{}) []interface{} {
+	var sanitized []interface{} // allocated lazily, only once a substitution is actually needed
+
+	for i, p := range params {
+		if err, ok := p.(error); ok && Is(err, ErrBlockInvalid) {
+			if sanitized == nil {
+				sanitized = make([]interface{}, len(params))
+				copy(sanitized, params)
+			}
+
+			sanitized[i] = stderrors.New(err.Error())
+		}
+	}
+
+	if sanitized != nil {
+		return sanitized
+	}
+
+	return params
 }
 
 // IsBlockCorrupt reports whether err (or anything it wraps, including across a gRPC

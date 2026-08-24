@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	blockchain2 "github.com/bsv-blockchain/teranode/services/blockchain"
@@ -18,9 +19,13 @@ import (
 // TestHandleBlockMsg_CorruptBody_NotMarkedFailed pins the netsync corrupt branch
 // (bitcoin-sv/teranode#4692): when HandleBlockDirect returns a corrupt-body verdict (here a
 // merkle-root mismatch on the unified route), handleBlockMsg must (1) record the corrupt failure
-// against the SERVING peer's identity (peer.Addr()) toward the per-(hash, peerID) cap, and (2) NOT
+// against the SERVING peer's identity (peer.Addr()) toward the per-(hash, peerID) cap, (2) NOT
 // mark the block in recentlyFailedBlocks — marking it would suppress its own descendants as a
-// NOT_FOUND cascade, poisoning an honest re-download. It returns the corrupt error (not nil).
+// NOT_FOUND cascade, poisoning an honest re-download — and (3) actively re-request the same hash
+// via requestMissingBlocks rather than only waiting for a spontaneous re-announcement, mirroring
+// the orphan-continuation branch. It returns the corrupt error (not nil). Properties (2) and (3)
+// must hold simultaneously: the skip prevents poisoning descendants, while the re-request is what
+// actually recovers the dropped block in this headers-first pull sync.
 //
 // Mutation proof: deleting the `if errors.IsBlockCorrupt(err)` branch makes a corrupt error fall
 // through to `recentlyFailedBlocks.Set(...)` (and skip the corrupt-attempt record), reddening both
@@ -52,6 +57,8 @@ func TestHandleBlockMsg_CorruptBody_NotMarkedFailed(t *testing.T) {
 	blockHash := msgBlock.Header.BlockHash()
 
 	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	bestHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
 	blockchainClient := &blockchain2.Mock{}
 	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
 	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
@@ -60,6 +67,9 @@ func TestHandleBlockMsg_CorruptBody_NotMarkedFailed(t *testing.T) {
 	parentMeta := &model.BlockHeaderMeta{Height: uint32(height) - 1}
 	blockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
 		Return(&model.BlockHeader{}, parentMeta, nil)
+	// requestMissingBlocks' own dependencies, so the corrupt branch's re-request can be observed.
+	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestHeader, &model.BlockHeaderMeta{Height: 100}, nil)
+	blockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return([]*chainhash.Hash{bestHeader.Hash()}, nil)
 
 	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
 
@@ -97,4 +107,9 @@ func TestHandleBlockMsg_CorruptBody_NotMarkedFailed(t *testing.T) {
 	// re-downloadable corrupt body.
 	_, failed := sm.recentlyFailedBlocks.Get(blockHash)
 	require.False(t, failed, "a corrupt body must NOT be marked recentlyFailed (would poison its descendants)")
+
+	// (3) Re-request fired: requestMissingBlocks calls GetBestBlockHeader then GetBlockLocator
+	// before pushing a getblocks message to the peer.
+	blockchainClient.AssertCalled(t, "GetBestBlockHeader", mock.Anything)
+	blockchainClient.AssertCalled(t, "GetBlockLocator", mock.Anything, mock.Anything, mock.Anything)
 }
