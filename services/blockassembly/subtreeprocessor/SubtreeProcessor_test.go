@@ -2934,6 +2934,9 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.UseDynamicSubtreeSize = true
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
+		// Keep the minimum below the initial size so the anti-creep gate (2x minimum)
+		// does not suppress the increase this test expects.
+		settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		done := make(chan struct{})
@@ -3031,6 +3034,17 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 
 			// Set the new header after recording intervals
 			stp.InitCurrentBlockHeader(newHeader)
+
+			// Seed the utilization ring with near-full subtrees. Adding a few nodes to a
+			// 1024-item subtree never completes one, so the ring would otherwise stay
+			// empty; dynamic sizing requires utilization samples (it no longer adjusts
+			// from block timing alone), so provide them explicitly here.
+			nodeRing := stp.subtreeNodeCounts
+			for k := 0; k < 5; k++ {
+				nodeRing.Value = 1000
+				nodeRing = nodeRing.Next()
+			}
+
 			stp.adjustSubtreeSize()
 
 			blockHeader = newHeader
@@ -3052,6 +3066,9 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.UseDynamicSubtreeSize = true
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
+		// Keep the minimum below the initial size so the anti-creep gate (2x minimum)
+		// does not suppress the increase this test expects.
+		settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		done := make(chan struct{})
@@ -3145,6 +3162,17 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 			stp.blockIntervals = append(stp.blockIntervals, time.Duration(2)*time.Second/time.Duration(5)) // 2s/5 subtrees = 400ms per subtree
 			t.Logf("DEBUG: Block intervals after block %d: %v\n", i, stp.blockIntervals)
 			stp.InitCurrentBlockHeader(newHeader)
+
+			// Seed the utilization ring with near-full subtrees. Adding a few nodes to a
+			// 1024-item subtree never completes one, so the ring would otherwise stay
+			// empty; dynamic sizing requires utilization samples (it no longer adjusts
+			// from block timing alone), so provide them explicitly here.
+			nodeRing := stp.subtreeNodeCounts
+			for k := 0; k < 5; k++ {
+				nodeRing.Value = 1000
+				nodeRing = nodeRing.Next()
+			}
+
 			stp.adjustSubtreeSize()
 
 			blockHeader = newHeader
