@@ -16,6 +16,7 @@ package blockassembly
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -285,20 +286,182 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	go ba.runBlockSubmissionListener(ctx, listenerDone)
 
 	go func() {
+		// Stall bookkeeping lives in observeDequeueStall (dequeue_stall.go) so
+		// the decision is testable without driving this goroutine's 5s tick.
+		var stallState dequeueStallState
+
 		for {
 			select {
 			case <-ctx.Done():
 				ba.logger.Infof("Stopping block assembler metrics updater")
 				return
 			case <-time.After(5 * time.Second):
-				prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-				prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
-				prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+				stallState = ba.sampleBlockAssemblerMetrics(stallState, time.Now())
 			}
 		}
 	}()
 
 	return nil
+}
+
+// sampleBlockAssemblerMetrics performs one tick of the metrics updater:
+// publishes the block assembler gauges, folds the intake-queue observation into
+// the stall state, and logs whatever that observation calls for. It returns the
+// next stall state.
+//
+// It is a method rather than inline in the updater goroutine so the tick can be
+// driven directly in tests. The goroutine waits on a hard-coded
+// time.After(5 * time.Second), so anything left inline is only reachable by a
+// test willing to wait out real tick intervals - which is why the reduced
+// repeat cadence and the recovery arithmetic went unexercised for so long.
+// Taking now as a parameter keeps the whole tick deterministic.
+func (ba *BlockAssembly) sampleBlockAssemblerMetrics(stallState dequeueStallState, now time.Time) dequeueStallState {
+	prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+
+	queueLength := ba.blockAssembler.QueueLength()
+	prometheusBlockAssemblerQueuedTransactions.Set(float64(queueLength))
+
+	prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+
+	// Sampled with the rest of the tick so the report can name the cause rather
+	// than list candidates: a stale timestamp means a wedged consumer only once
+	// the consumer exists. Like the other three, a plain atomic load, so it
+	// stays answerable while the consumer's select loop is blocked.
+	//
+	// Read BEFORE the dequeue timestamp, and the order is load-bearing.
+	// SubtreeProcessor.Start stores the re-seeded timestamp and then sets this
+	// flag, in that order. Go's atomics are sequentially consistent, so reading
+	// the flag first means a true reading guarantees the following load observes
+	// the re-seed - small staleness, no incident. Reading the timestamp first
+	// admits the one interleaving that lies: a pre-Start timestamp paired with a
+	// post-Start flag, which classifies a routine restart as a wedged consumer
+	// and warns "intake is growing unbounded" - the exact false alarm this
+	// classification exists to prevent. A false reading is honest either way,
+	// since the tick is then reported as startup regardless of staleness.
+	consumerStarted := ba.blockAssembler.ConsumerStarted()
+
+	// now is sampled before the timestamp is read, so a consumer that stamps in
+	// that window leaves staleness fractionally negative. Floor it: a gauge
+	// claiming the consumer last ran in the future is nonsense on a dashboard,
+	// and zero is the honest reading for "it just ran".
+	staleness := now.Sub(ba.blockAssembler.LastDequeueTime())
+	if staleness < 0 {
+		staleness = 0
+	}
+
+	prometheusBlockAssemblerDequeueStalenessSeconds.Set(staleness.Seconds())
+
+	// Captured before the fold, which resets the state on the closing edge.
+	stallBeganBeforeConsumerStarted := stallState.beforeConsumerStarted
+
+	stallState, stallEvent, stalledFor := observeDequeueStall(stallState, now, queueLength, staleness, consumerStarted)
+
+	switch stallEvent {
+	case dequeueStallBegan, dequeueStallContinues:
+		ba.reportDequeueStall(stallEvent, queueLength, staleness, consumerStarted, stallState.sawQueuedWork)
+	case dequeueStallEnded:
+		// Only the closing edge needs the latch: by here the consumer has
+		// necessarily started, so the live reading cannot distinguish a startup
+		// gap from a wedge that recovered.
+		if stallBeganBeforeConsumerStarted {
+			ba.logger.Infof("block assembler intake queue consumer started after %s and is now dequeuing", stalledFor.Round(time.Second))
+		} else {
+			ba.logger.Infof("block assembler intake queue consumer recovered, was stalled for %s", stalledFor.Round(time.Second))
+		}
+	case dequeueStallNone:
+	}
+
+	return stallState
+}
+
+// reportDequeueStall logs the opening or a repeat of a dequeue stall.
+//
+// Which of the three consumer lifecycle states explains the incident decides
+// the message, and whether the queue has held work at any point during the
+// incident decides the level. Those are separate questions and conflating them
+// is what makes an operator stop reading the line: a consumer that has not
+// reached its dequeue branch for the threshold is always worth a record, but
+// only work stacking up behind it means anything is at risk. A large
+// moveForwardBlock on a quiet node trips the threshold legitimately and reports
+// at info; the same staleness with transactions queued is issue #1429 and
+// warns.
+//
+// The level comes from the incident-wide latch, not from this tick's depth.
+// Depth is a single sample of a number the blocking handler is itself draining,
+// so keying the level on it directly would let a live incident report at info
+// on the ticks that land just after a drain.
+//
+// consumerStarted is read live by the caller rather than taken from the
+// incident's latch, because a startup gap always closes the moment the
+// consumer starts - SubtreeProcessor.Start re-seeds the dequeue timestamp - so
+// a repeat while it is still false is still startup, and a repeat once it is
+// true is a genuine wedge. Only the closing edge needs the latch.
+func (ba *BlockAssembly) reportDequeueStall(event dequeueStallEvent, queueLength int64, staleness time.Duration, consumerStarted, sawQueuedWork bool) {
+	stale := staleness.Round(time.Second)
+
+	switch {
+	case !consumerStarted:
+		// Expected on any node whose unmined reload outlasts the threshold, so
+		// this is not a warning: gRPC ingest comes up in BlockAssembly.Start,
+		// while BlockAssembler.Start only reaches subtreeProcessor.Start after
+		// loadUnminedTransactions, which takes minutes on a busy node. Still
+		// reported, because a reload that never returns looks exactly like this
+		// and would otherwise be silent.
+		//
+		// The duration is time since the subtree processor was constructed, not
+		// how long anything has been queued - on this path nothing has stamped
+		// the timestamp since the constructor seeded it. Saying "queued for"
+		// would overstate by minutes on a node that starts ingesting late in
+		// the reload window.
+		if event == dequeueStallBegan {
+			ba.logger.Infof("block assembler intake queue has %d transactions queued and the consumer has not started yet - normal during startup while BlockAssembler.Start loads unmined transactions with ingest already accepting; the subtree processor was created %s ago and the queue drains as soon as the consumer starts", queueLength, stale)
+		} else {
+			ba.logger.Infof("block assembler intake queue consumer still has not started %s after the subtree processor was created, %d transactions queued - if this persists, the unmined transaction reload in BlockAssembler.Start is stuck", stale, queueLength)
+		}
+
+	case ba.blockAssembler.ConsumerExited():
+		// A different fault with a different remedy, and the reason it has to
+		// be told apart: the wedge message sends the operator to find which
+		// select branch owns the loop, and here there is no loop. Nothing will
+		// drain the queue again for the lifetime of the process, while the
+		// service carries on reporting itself healthy.
+		ba.logger.Errorf("block assembler intake queue consumer has exited and will not restart - it last reached its dequeue branch %s ago and %d transactions are queued behind it, so block assembly is dead while the service stays up; look for a recovered panic from the subtree processor above, which the dequeue branch is not otherwise protected against", stale, queueLength)
+
+	case sawQueuedWork:
+		// Issue #1429 proper: the consumer exists, is not dequeuing, and work
+		// is accumulating behind it. Keyed on the latch rather than on this
+		// tick's depth, so a blocking handler that drains the queue from inside
+		// its own branch cannot quietly downgrade a live incident.
+		if event == dequeueStallBegan {
+			ba.logger.Warnf("block assembler intake queue has %d transactions queued but the consumer has not dequeued for %s - intake is growing unbounded; the subtree processor's select loop is currently in state %q (reorg/moveForwardBlock/resetBlocks/get* all suppress dequeue, and a state of \"dequeue\" means the branch itself is blocked storing or announcing a subtree)", queueLength, stale, ba.subtreeProcessorStateName())
+		} else {
+			ba.logger.Warnf("block assembler intake queue still stalled: consumer has not dequeued for %s, %d transactions queued, subtree processor select loop currently in state %q", stale, queueLength, ba.subtreeProcessorStateName())
+		}
+
+	default:
+		// Stale consumer, and no work has been seen queued at any point in this
+		// incident. Nothing is at risk, so this does not page anyone - but the
+		// consumer has still been away from its branch for longer than any
+		// handler should hold it, which is worth a record on its own. If work
+		// does arrive while it is still away, the latch escalates the next
+		// report to a warning.
+		ba.logger.Infof("block assembler intake queue consumer has not dequeued for %s but no work has queued up behind it, so nothing is at risk - the subtree processor's select loop is currently in state %q", stale, ba.subtreeProcessorStateName())
+	}
+}
+
+// subtreeProcessorStateName is the human-readable name of the select-loop
+// branch the subtree processor is currently in, for the stall messages above.
+// A plain atomic load, so it stays answerable while the loop is blocked, which
+// is precisely when it is asked for. Unknown values are rendered rather than
+// dropped, so a State added without a StateStrings entry degrades to a number
+// instead of an empty string in the middle of a diagnostic line.
+func (ba *BlockAssembly) subtreeProcessorStateName() string {
+	state := ba.blockAssembler.subtreeProcessor.GetCurrentRunningState()
+	if name, ok := subtreeprocessor.StateStrings[state]; ok {
+		return name
+	}
+
+	return fmt.Sprintf("unknown(%d)", state)
 }
 
 // GetBlockAssembler returns the BlockAssembler instance.

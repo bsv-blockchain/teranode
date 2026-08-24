@@ -335,7 +335,11 @@ type SubtreeProcessor struct {
 	// startOnce ensures the processing goroutine is only started once
 	startOnce sync.Once
 
-	// stopped indicates the worker goroutine has exited (set on context cancellation)
+	// stopped indicates the worker goroutine has exited. Set on EVERY exit
+	// path - clean context cancellation, panic recovery, and fall-through -
+	// by the deferred close in Start, so it answers "is there still a
+	// consumer" and not merely "was shutdown requested". ConsumerExited
+	// exposes it for exactly that question.
 	stopped atomic.Bool
 
 	// precomputedMiningData holds pre-computed data for mining candidate generation.
@@ -389,6 +393,40 @@ type SubtreeProcessor struct {
 	// clock is the source of wall time for codepaths that need a deterministic
 	// substitute in tests (validFromMillis calculations). Replaced in tests.
 	clock clock
+
+	// lastDequeueMillis holds the wall-clock Unix milliseconds of the most
+	// recent pass through the default: dequeue branch of the Start() select
+	// loop (stored at the top of that branch, before any dequeue work
+	// happens). It advances once per loop iteration regardless of whether
+	// the queue was empty, so LastDequeueTime() reports how long the single
+	// consumer has been away from that branch - the signal that was missing
+	// during the incident recorded at dequeueDuringBlockMovement's docstring
+	// (35+ minutes at 558 GB RSS with queue depth alone giving no warning).
+	// Seeded in NewSubtreeProcessor and again in Start() so it never reads as
+	// the zero time, which would misreport "stalled since the epoch". The
+	// constructor seed matters because BlockAssembly.Init starts the metrics
+	// updater, and BlockAssembly.Start brings the gRPC ingest path up, both
+	// before BlockAssembler.Start reaches stp.Start(ctx) -
+	// loadUnminedTransactions runs in between and can take minutes, during
+	// which the queue is already being filled.
+	lastDequeueMillis atomic.Int64
+
+	// consumerStarted records whether Start has launched the consumer. It is
+	// set by Start itself, immediately before the goroutine is spawned, so a
+	// true reading means "the consumer exists" rather than "the select loop has
+	// executed" - which is the distinction that matters here, because the
+	// dequeue timestamp is re-seeded in the same breath and so already reads
+	// fresh from that moment on.
+	//
+	// It exists so the stall signal can tell "the consumer is wedged" from "the
+	// consumer does not exist yet": BlockAssembly.Init starts the metrics
+	// updater and BlockAssembly.Start brings gRPC ingest up, both before
+	// BlockAssembler.Start reaches stp.Start(ctx), with loadUnminedTransactions
+	// in between. On a busy node that reload takes minutes while AddTx is
+	// already enqueueing, so a non-empty queue and a stale dequeue timestamp is
+	// the ordinary startup path, not a fault. Without this the signal reports
+	// every restart as an unbounded-growth incident.
+	consumerStarted atomic.Bool
 }
 
 type State uint32
@@ -564,6 +602,8 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		opts(stp)
 	}
 
+	stp.lastDequeueMillis.Store(stp.clock.Now().UnixMilli())
+
 	// If mmap dir is configured, recreate first subtree with mmap backing
 	if stp.mmapDir != "" {
 		mmapSubtree, mmapErr := subtreepkg.NewTreeByLeafCountMmap(initialItemsPerFile, stp.mmapDir)
@@ -631,6 +671,21 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 		stp.processorCtx.Store(&ctxToStore)
 
 		stp.setCurrentRunningState(StateRunning)
+
+		// Re-seed lastDequeueMillis before the loop starts. The constructor
+		// already seeded it, but that value may be minutes stale by now
+		// (loadUnminedTransactions runs between the two), and staleness
+		// accrued before the consumer existed must not be attributed to it.
+		//
+		// These two stores must stay in this order. A reader that sees
+		// consumerStarted true must be guaranteed to see the re-seeded
+		// timestamp, or it pairs a pre-Start timestamp with a post-Start flag
+		// and reports a routine restart as a wedged consumer. Go's atomics are
+		// sequentially consistent, so the guarantee holds as long as the seed
+		// is stored first here and the flag is read first there - see the
+		// matching note in BlockAssembly.sampleBlockAssemblerMetrics.
+		stp.lastDequeueMillis.Store(stp.clock.Now().UnixMilli())
+		stp.consumerStarted.Store(true)
 
 		go func() {
 			// Recover from panics (e.g., send on closed channel during shutdown).
@@ -977,6 +1032,13 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					}
 
 				default:
+					// Record that the consumer passed through this branch
+					// before doing any dequeue work, so a slow or wedged
+					// step further down still counts as "the consumer was
+					// just here" for this iteration's timestamp. One atomic
+					// store per iteration; see LastDequeueTime's docstring.
+					stp.lastDequeueMillis.Store(stp.clock.Now().UnixMilli())
+
 					stp.setCurrentRunningState(StateDequeue)
 
 					// Phase 1: Dequeue multiple batches
@@ -1884,12 +1946,69 @@ func (stp *SubtreeProcessor) TxCount() uint64 {
 	return stp.txCount.Load()
 }
 
-// QueueLength returns the current length of the transaction queue.
+// QueueLength returns the number of transactions currently queued, not the
+// number of batches - see LockFreeQueue.length for why that distinction
+// matters.
 //
 // Returns:
-//   - int64: Current queue length
+//   - int64: Current queue length, in transactions
 func (stp *SubtreeProcessor) QueueLength() int64 {
 	return stp.queue.length()
+}
+
+// LastDequeueTime returns the wall-clock time of the most recent pass through
+// the Start() goroutine's default: dequeue branch - i.e. the last moment the
+// single consumer was available to drain the queue. It advances on every
+// iteration of that branch, whether or not a batch was actually dequeued, so
+// a growing gap between this value and now while QueueLength() is non-zero
+// means every other case in the select (reorg, move-forward-block, reset,
+// get*, etc.) has been preventing dequeue - not that ingest has merely
+// slowed down. Callers should compare against QueueLength() together: a deep
+// but actively-draining queue is normal and self-correcting, whereas a
+// non-empty queue with a stale LastDequeueTime is not.
+//
+// Returns:
+//   - time.Time: the last time the dequeue branch ran
+func (stp *SubtreeProcessor) LastDequeueTime() time.Time {
+	return time.UnixMilli(stp.lastDequeueMillis.Load())
+}
+
+// ConsumerStarted reports whether Start has begun running the consumer
+// goroutine. A stale LastDequeueTime only means the consumer is wedged once
+// this is true; before then it means the consumer has not been started yet,
+// which is the ordinary state for the minutes BlockAssembler.Start spends in
+// loadUnminedTransactions with gRPC ingest already accepting transactions.
+//
+// Like LastDequeueTime this is a plain atomic load, so it stays answerable
+// while the consumer's select loop is blocked.
+//
+// Returns:
+//   - bool: true once the consumer goroutine has been started
+func (stp *SubtreeProcessor) ConsumerStarted() bool {
+	return stp.consumerStarted.Load()
+}
+
+// ConsumerExited reports whether the consumer goroutine has exited. It is the
+// third lifecycle answer the stall signal needs, alongside ConsumerStarted:
+// a stale LastDequeueTime means the consumer is wedged only if there is still
+// a consumer. If it has exited the queue will never drain again, and telling
+// an operator to go and find which select branch is occupying the loop sends
+// them after the one thing that is not happening.
+//
+// The goroutine's deferred close stores this on every exit path, panic
+// recovery included, so a consumer killed by a panic in the dequeue branch -
+// which runHandlerWithRecover does not cover - is reported as exited rather
+// than as wedged. During an ordinary shutdown it also reads true, which is
+// honest; the stall threshold is long enough that a clean shutdown finishes
+// well before an incident could open.
+//
+// Like the other lifecycle reads this is a plain atomic load, so it stays
+// answerable whatever the consumer is doing.
+//
+// Returns:
+//   - bool: true once the consumer goroutine has exited
+func (stp *SubtreeProcessor) ConsumerExited() bool {
+	return stp.stopped.Load()
 }
 
 // SubtreeCount returns the total number of subtrees.
@@ -4910,7 +5029,7 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 	//
 	//  1. Time: validFromMillis = clock.Now() at function entry (or
 	//     clock.Now() - DoubleSpendWindow when that filter is enabled).
-	//     The queue filter at queue.go:96 holds back any batch whose
+	//     The queue filter in LockFreeQueue.dequeueBatch holds back any batch whose
 	//     enqueue timestamp is >= this value, so we only drain batches
 	//     that existed before this moment. Batches arriving during the
 	//     drain stay queued and roll forward to the next state-transition
@@ -4924,12 +5043,13 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 	//     total work at the snapshot.
 	//
 	// Previous form left validFromMillis=0 when DoubleSpendWindow=0,
-	// which disables the queue filter entirely (queue.go:96 short-circuits
-	// on `validFromMillis > 0`). And the items-bound compared
+	// which disables the queue filter entirely (LockFreeQueue.dequeueBatch
+	// short-circuits on `validFromMillis > 0`). And the items-bound compared
 	// `nrBatchesProcessed` to `queueLength`, but queue.length() returns
-	// total *items* (queue.go:71 / 75 add len(nodes)), not batches. With
-	// ~1k items/batch and ingest at line-rate, neither bound fired — the
-	// scaling-2 pod sat for 35+ minutes at 558 GB RSS inside this loop.
+	// total *items* (LockFreeQueue.enqueueBatch adds len(nodes)), not
+	// batches. With ~1k items/batch and ingest at line-rate, neither bound
+	// fired — the scaling-2 pod sat for 35+ minutes at 558 GB RSS inside
+	// this loop.
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		itemsProcessed := int64(0)
