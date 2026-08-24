@@ -141,16 +141,25 @@ func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	// The per-client buffer is the entire grace a slow consumer gets: a full
 	// buffer means the client is at least that many notifications behind, so
 	// it is evicted and its connection closed rather than waited on.
+	evicted := 0
+
 	for _, ch := range channels {
 		select {
 		case ch <- data:
 			// Data sent successfully
 		default:
-			logger.Errorf("Websocket client send buffer full, evicting client and closing connection")
-			initPrometheusMetrics()
-			prometheusP2PWebsocketClientsEvicted.Inc()
 			cm.evict(ch)
+			evicted++
 		}
+	}
+
+	// One summary line per broadcast, not one per client: a mass-eviction
+	// event (network blip, attacker at the connection cap) must not turn
+	// into thousands of synchronous log writes on this hot loop.
+	if evicted > 0 {
+		initPrometheusMetrics()
+		prometheusP2PWebsocketClientsEvicted.Add(float64(evicted))
+		logger.Errorf("Evicted %d websocket clients with full send buffers and closed their connections", evicted)
 	}
 }
 

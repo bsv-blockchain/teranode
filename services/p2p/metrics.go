@@ -47,7 +47,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "p2p",
 			Name:      "websocket_clients_evicted_total",
-			Help:      "Number of websocket clients evicted from the broadcast fan-out because their send buffer stayed full",
+			Help:      "Number of websocket clients evicted from the broadcast fan-out because their send buffer was full when a broadcast reached them",
 		},
 	)
 }
