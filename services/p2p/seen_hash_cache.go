@@ -16,7 +16,8 @@ const (
 	// defaultSeenHashCacheTTL is how long an entry keeps its per-peer repeat
 	// accounting. Suppression itself is governed by the much shorter publish
 	// window below; this longer window only has to outlast a replay campaign
-	// so spam scoring can accumulate across it.
+	// so the per-peer repeat counts can reach seenHashRepeatWarnThreshold and
+	// give the operator one signal per peer per hash.
 	defaultSeenHashCacheTTL = 2 * time.Minute
 
 	// seenHashMaxPublishersPerHash is how many DISTINCT announcers of one hash
@@ -35,10 +36,18 @@ const (
 	// that win the announcement race own every fetch source block validation
 	// is given for that hash for two minutes. With the window, a captured
 	// budget re-opens in seconds, and the steady-state amplification is
-	// bounded at the budget per window per hash. Note the rollover also lets
-	// one repeat announcement through per window (the published == 0 retry
-	// path) — a few messages per minute, which matters in sparse topologies
-	// where the only announcer's earlier publish may have been dropped.
+	// bounded at the budget per window per hash. The rollover also lets one
+	// repeat announcement through per window (the published == 0 retry path)
+	// — a few messages per minute, which matters in sparse topologies where
+	// the only announcer's earlier publish may have been dropped — but that
+	// grant is refused to any peer that took a grant in the PREVIOUS window,
+	// so once the announcer tracking is full (when the retry grant is the only
+	// reachable one) a single persistent announcer cannot hold it across
+	// consecutive windows and an honest late announcer gets it within a window
+	// or two. A fleet alternating two or more identities can still rotate the
+	// retry grant between them; that residual needs identity-cost rate
+	// limiting (issue 2870), not more state here, and each such identity is
+	// surfaced by the repeat warn threshold below.
 	seenHashPublishWindow = 15 * time.Second
 
 	// seenHashRepeatWarnThreshold is how many repeat announcements of the same
@@ -84,7 +93,7 @@ const (
 // distinct peers announcing one new block.
 // A grant is optimistic: callers whose publish did not actually happen return
 // it via PublishFailed, so broker backpressure cannot permanently suppress a
-// hash and never resets the spam counters.
+// hash and never resets the repeat counts.
 //
 // Like cappedPeerMap there is no unbounded mode: an unconfigured zero value
 // falls back to the defaults above.
@@ -98,14 +107,33 @@ type seenHashCache struct {
 
 // seenHashNode is the list payload: the key, when the hash was first announced
 // in the current accounting window, when the current publish window opened,
-// how many publish grants are outstanding or spent in it, and how many times
-// each peer has announced the hash.
+// how many publish grants are outstanding or spent in it, who took them (this
+// window and last — the rollover retry grant is refused to last window's
+// grantees), and how many times each peer has announced the hash.
 type seenHashNode struct {
 	hash               string
 	firstSeen          time.Time
 	publishWindowStart time.Time
 	published          int
+	grantees           map[string]struct{}
+	prevGrantees       map[string]struct{}
 	announcers         map[string]int
+}
+
+// recordGranteeLocked notes that peerID took a publish grant in the current
+// window, so the next window's rollover retry grant can be refused to it. The
+// set is bounded: under repeated PublishFailed cycles many peers can be
+// granted in one window, and past the bound the newest grantees simply go
+// unrecorded — the denial then errs toward allowing a retry, never toward
+// suppressing one.
+func (n *seenHashNode) recordGranteeLocked(peerID string) {
+	if n.grantees == nil {
+		n.grantees = make(map[string]struct{}, seenHashMaxPublishersPerHash)
+	}
+
+	if len(n.grantees) < seenHashMaxAnnouncersPerHash {
+		n.grantees[peerID] = struct{}{}
+	}
 }
 
 // capLocked returns the size cap in force. Callers must hold the mutex.
@@ -143,10 +171,12 @@ func (c *seenHashCache) initLocked() {
 // announcement while no grant has stuck in the current window (published ==
 // 0, i.e. every earlier grant was returned via PublishFailed, or the window
 // just rolled over) so a hash can never be suppressed without having been
-// handed to Kafka at least once. Repeats never take the distinct-announcer
-// budget — and neither does an announcer the tracking bound excluded, since
-// prev == 0 for such a peer on every announcement and treating it as new
-// would let one identity drain the budget every window unscored.
+// handed to Kafka at least once — except a peer that took a grant in the
+// previous window, so the rollover grant rotates away from a persistent
+// announcer. Repeats never take the distinct-announcer budget — and neither
+// does an announcer the tracking bound excluded, since prev == 0 for such a
+// peer on every announcement and treating it as new would let one identity
+// drain the budget every window unscored.
 func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool, peerRepeats int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -160,9 +190,12 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 			// Re-open a spent publish budget on the short window, keeping the
 			// announcer counts: suppression is meant to collapse the seconds-long
 			// announcement burst, while the repeat accounting spans the full TTL.
+			// Last window's grantees are remembered so the single rollover retry
+			// grant cannot be won by the same identity every window.
 			if now.Sub(node.publishWindowStart) >= seenHashPublishWindow {
 				node.publishWindowStart = now
 				node.published = 0
+				node.prevGrantees, node.grantees = node.grantees, nil
 			}
 
 			prev, tracked := node.announcers[peerID]
@@ -171,9 +204,13 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 				tracked = true
 			}
 
-			publish = (tracked && prev == 0 && node.published < seenHashMaxPublishersPerHash) || node.published == 0
+			_, heldLastWindow := node.prevGrantees[peerID]
+
+			publish = (tracked && prev == 0 && node.published < seenHashMaxPublishersPerHash) ||
+				(node.published == 0 && !heldLastWindow)
 			if publish {
 				node.published++
+				node.recordGranteeLocked(peerID)
 			}
 
 			return publish, prev
@@ -183,6 +220,8 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 		node.firstSeen = now
 		node.publishWindowStart = now
 		node.published = 1
+		node.grantees = map[string]struct{}{peerID: {}}
+		node.prevGrantees = nil
 		node.announcers = map[string]int{peerID: 1}
 		c.order.MoveToBack(element)
 
@@ -207,6 +246,7 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 		firstSeen:          now,
 		publishWindowStart: now,
 		published:          1,
+		grantees:           map[string]struct{}{peerID: {}},
 		announcers:         map[string]int{peerID: 1},
 	})
 
@@ -214,9 +254,9 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 }
 
 // PublishFailed returns a publish grant for hash that did not result in an
-// actual publish (producer backpressure, marshal failure), so a later
-// announcement can retry. The announcer counts are deliberately kept: a
-// backlogged broker must not reset spam accounting.
+// actual publish (producer backpressure, marshal failure, no producer), so a
+// later announcement can retry. The announcer counts are deliberately kept: a
+// backlogged broker must not reset the repeat accounting.
 func (c *seenHashCache) PublishFailed(hash string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

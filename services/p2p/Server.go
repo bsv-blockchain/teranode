@@ -160,6 +160,7 @@ type Server struct {
 	blockSeenHashes                   seenHashCache                  // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
 	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
 	lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
+	lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -1815,6 +1816,16 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return nil
 	}
 
+	// Mirror of the consecutive-duplicate guard in handleBlockNotification: a
+	// flapping notification source must not re-gossip the same subtree hash
+	// with a fresh seqno, which reads as a replay to receivers. Distinct
+	// subtrees stream constantly, so only a replayed notification can repeat
+	// the immediately preceding hash.
+	if last := s.lastAnnouncedSubtreeHash.Load(); last != nil && last.IsEqual(hash) {
+		s.logger.Debugf("[handleSubtreeNotification] suppressing repeat announcement of subtree %s", hash.String())
+		return nil
+	}
+
 	var msgBytes []byte
 
 	subtreeMessage := SubtreeMessage{
@@ -1832,6 +1843,8 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {
 		return errors.NewError("subtreeMessage - publish error", err)
 	}
+
+	s.lastAnnouncedSubtreeHash.Store(hash)
 
 	return nil
 }

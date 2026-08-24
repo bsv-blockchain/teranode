@@ -116,6 +116,38 @@ func TestSeenHashCache_Check(t *testing.T) {
 		require.Equal(t, 1, repeats)
 	})
 
+	t.Run("persistent announcer cannot hold the rollover grant across consecutive windows", func(t *testing.T) {
+		var c seenHashCache
+
+		// Window 0: a fleet fills the announcer tracking and takes every
+		// distinct grant, so from window 1 on the rollover retry grant is the
+		// only reachable one.
+		for i := 0; i < seenHashMaxAnnouncersPerHash; i++ {
+			c.Check("hash-a", fmt.Sprintf("attacker-%d", i), now)
+		}
+
+		// Window 1: attacker-0 (a window-0 grantee) hammers the boundary. It
+		// must be refused the retry grant, leaving it open for the honest
+		// announcer arriving later in the window.
+		w1 := now.Add(seenHashPublishWindow)
+		for i := 0; i < 3; i++ {
+			publish, _ := c.Check("hash-a", "attacker-0", w1)
+			require.False(t, publish, "last window's grantee must not win the rollover grant")
+		}
+
+		publish, _ := c.Check("hash-a", "peer-honest", w1)
+		require.True(t, publish, "the honest late announcer must reach Kafka within a window")
+
+		// Window 2: the honest announcer held window 1's grant, so now IT is
+		// refused and attacker-0 (which held nothing in window 1) is eligible
+		// again - the grant rotates rather than being owned.
+		w2 := w1.Add(seenHashPublishWindow)
+		publish, _ = c.Check("hash-a", "peer-honest", w2)
+		require.False(t, publish, "last window's grantee is refused, whoever it is")
+		publish, _ = c.Check("hash-a", "attacker-0", w2)
+		require.True(t, publish, "a peer that held nothing last window is eligible again")
+	})
+
 	t.Run("untracked announcer cannot drain the budget across windows", func(t *testing.T) {
 		var c seenHashCache
 

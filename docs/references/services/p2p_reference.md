@@ -43,6 +43,7 @@ type Server struct {
     blockSeenHashes                   seenHashCache      // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
     subtreeSeenHashes                 seenHashCache      // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
     lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
+    lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Stateless peer selection logic

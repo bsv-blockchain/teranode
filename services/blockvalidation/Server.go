@@ -404,7 +404,13 @@ func New(
 			// hold the suppression open past the safety-net TTL.
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, bool](),
 		),
-		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
+		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](
+			ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10*time.Minute),
+			// Read on every duplicate announcement for a hash in catchup;
+			// touch-on-hit would let that stream hold the retained blocks past
+			// the TTL. Same reasoning as processBlockNotify above.
+			ttlcache.WithDisableTouchOnHit[chainhash.Hash, []processBlockCatchup](),
+		),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),
 			// Do not extend the window on reads: the cooldown runs a fixed time from

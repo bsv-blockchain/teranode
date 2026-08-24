@@ -291,3 +291,37 @@ func TestHandleBlockNotification_SuppressesConsecutiveDuplicateTip(t *testing.T)
 	require.NoError(t, s.handleBlockNotification(context.Background(), &tipA), "reorg back to the previous tip")
 	require.Equal(t, 3, countBlockPublishes(), "a reorg back to a recent hash must still announce")
 }
+
+// The subtree announce path carries the same consecutive-duplicate guard as
+// the block path: a replayed notification must not re-gossip, while distinct
+// subtrees stream through unaffected.
+func TestHandleSubtreeNotification_SuppressesConsecutiveDuplicate(t *testing.T) {
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
+
+	s, p2pClient := newGateTestServer(t, mockBlockchain)
+	p2pClient.peerID = mustNewPeerID(t)
+	s.AssetHTTPAddressURL = "http://asset.example"
+
+	countSubtreePublishes := func() int {
+		n := 0
+		for _, call := range p2pClient.Calls {
+			if call.Method == "Publish" && call.Arguments.String(1) == s.subtreeTopicName {
+				n++
+			}
+		}
+		return n
+	}
+
+	subtreeA := chainhash.HashH([]byte("subtree A"))
+	subtreeB := chainhash.HashH([]byte("subtree B"))
+
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), &subtreeA))
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), &subtreeA), "replayed subtree notification")
+	require.Equal(t, 1, countSubtreePublishes(), "a replayed subtree notification must not re-announce")
+
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), &subtreeB))
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), &subtreeA), "a re-notified earlier subtree is not a consecutive duplicate")
+	require.Equal(t, 3, countSubtreePublishes())
+}
