@@ -116,7 +116,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlock(ctx, ch)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	result, err := s.blockToJSON(ctx, b, *c.Verbosity)
@@ -187,7 +187,7 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlockByHeight(ctx, c.Height)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return s.blockToJSON(ctx, b, *c.Verbosity)
@@ -264,7 +264,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	// Load the raw block bytes from the database.
 	b, meta, err := s.blockchainClient.GetBlockHeader(ctx, ch)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	if !*c.Verbose {
@@ -730,7 +730,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		// Decode the provided address.
 		addr, err := bsvutil.DecodeAddress(encodedAddr, s.settings.ChainCfgParams)
 		if err != nil {
-			return nil, rpcError(err, bsvjson.ErrRPCInvalidAddressOrKey, "Invalid address or key: ")
+			return nil, s.rpcError(err, bsvjson.ErrRPCInvalidAddressOrKey, "Invalid address or key: ")
 		}
 
 		// Ensure the address is one of the supported types and that
@@ -848,7 +848,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// Use 0 for the tag to represent local node.
 	tx, err := bt.NewTxFromBytes(serializedTx)
 	if err != nil {
-		return nil, rpcError(err, bsvjson.ErrRPCDeserialization, txRejectedPrefix)
+		return nil, s.rpcError(err, bsvjson.ErrRPCDeserialization, txRejectedPrefix)
 	}
 
 	s.logger.Debugf("tx to send: %v", tx)
@@ -857,7 +857,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	if s.txStore != nil {
 		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
 		if err != nil {
-			return nil, rpcError(err, bsvjson.ErrRPCInternal.Code, "Failed to store transaction: ")
+			return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Failed to store transaction: ")
 		}
 	}
 
@@ -876,7 +876,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 		// gRPC client serialises the extended bytes instead of wire bytes.
 		if !tx.IsExtended() {
 			if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
-				return nil, rpcError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
+				return nil, s.rpcSubmitError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
 			}
 			tx.SetExtended(true)
 		}
@@ -900,7 +900,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
 	_, err = s.validatorClient.Validate(ctx, tx, 0)
 	if err != nil {
-		return nil, rpcError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
+		return nil, s.rpcSubmitError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
 	}
 
 	// Return the transaction ID as a hex string per Bitcoin RPC spec
@@ -1033,7 +1033,7 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 	// check address
 	_, err := bsvutil.DecodeAddress(c.Address, s.settings.ChainCfgParams)
 	if err != nil {
-		return nil, rpcError(err, bsvjson.ErrRPCInvalidAddressOrKey, "")
+		return nil, s.rpcError(err, bsvjson.ErrRPCInvalidAddressOrKey, "")
 	}
 
 	// Generate blocks and return their hashes
@@ -1332,13 +1332,13 @@ func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 
 	txs, err := s.blockAssemblyClient.GetTransactionHashes(ctx)
 	if err != nil {
-		return nil, rpcError(err, bsvjson.ErrRPCInternal.Code, "Error retrieving raw mempool: ")
+		return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Error retrieving raw mempool: ")
 	}
 
 	if verbose != nil && *verbose {
 		miningCandidate, err := s.blockAssemblyClient.GetMiningCandidate(ctx)
 		if err != nil {
-			return nil, rpcError(err, bsvjson.ErrRPCInternal.Code, "Error retrieving mining candidate: ")
+			return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code, "Error retrieving mining candidate: ")
 		}
 
 		result := bsvjson.GetRawMempoolVerboseResult{
@@ -1843,7 +1843,7 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 
 	_, err = s.blockchainClient.InvalidateBlock(ctx, ch)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return nil, nil
@@ -1908,8 +1908,7 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	s.logger.Infof("[handleReconsiderBlock] revalidating block %s", ch)
 	err = s.blockValidationClient.RevalidateBlock(ctx, *ch)
 	if err != nil {
-		s.logger.Errorf("[handleReconsiderBlock] block revalidation failed for %s: %v", ch, err)
-		return nil, rpcError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
 	}
 
 	s.logger.Infof("[handleReconsiderBlock] block %s successfully reconsidered and validated", ch)
@@ -1918,7 +1917,7 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	err = s.reconsiderInvalidChildren(ctx, ch)
 	if err != nil {
 		s.logger.Errorf("[handleReconsiderBlock] failed to reconsider child blocks: %v", err)
-		return nil, rpcError(err, bsvjson.ErrRPCInternal.Code,
+		return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code,
 			fmt.Sprintf("Block %s was reconsidered but failed to reconsider children: ", ch))
 	}
 

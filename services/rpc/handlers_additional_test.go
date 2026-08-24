@@ -1272,7 +1272,14 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 
 		_, err := handleGetBlock(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "blockchain error")
+
+		// getblock names a block, so it goes through rpcLookupError. This
+		// failure is not a not-found, so it keeps the internal code - and the
+		// internal text stays in the log rather than on the wire.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "blockchain error")
 	})
 
 	t.Run("block not on main chain should return -1 confirmations", func(t *testing.T) {
@@ -1457,7 +1464,11 @@ func TestHandleGetBlockByHeightComprehensive(t *testing.T) {
 
 		_, err := handleGetBlockByHeight(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "block not found at height")
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "block not found at height")
 	})
 }
 
@@ -1580,7 +1591,11 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 
 		_, err := handleGetBlockHeader(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "header not found")
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "header not found")
 	})
 
 	t.Run("successful block header retrieval with verbose=false", func(t *testing.T) {
@@ -2487,7 +2502,9 @@ func TestHandleGetRawMempoolComprehensive(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Error retrieving raw mempool")
-		assert.Contains(t, rpcErr.Message, "failed to get tx hashes")
+		// The site's context stays; the internal cause does not. It could be a
+		// gRPC dial target or the storage layer's own text. See rpc_errors.go.
+		assert.NotContains(t, rpcErr.Message, "failed to get tx hashes")
 	})
 
 	t.Run("verbose mode - get mining candidate error", func(t *testing.T) {
@@ -2522,7 +2539,7 @@ func TestHandleGetRawMempoolComprehensive(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Error retrieving mining candidate")
-		assert.Contains(t, rpcErr.Message, "failed to get mining candidate")
+		assert.NotContains(t, rpcErr.Message, "failed to get mining candidate")
 	})
 
 	t.Run("requires block assembly client", func(t *testing.T) {
@@ -2718,7 +2735,14 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		assert.Equal(t, expectedError, err)
+
+		// invalidateblock names a block, so it goes through rpcLookupError:
+		// the caller gets a typed RPC error, and an internal failure that is
+		// not a not-found keeps the internal code without the internal text.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "blockchain service unavailable")
 	})
 
 	t.Run("nil blockchain client", func(t *testing.T) {
@@ -2767,7 +2791,11 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		assert.Equal(t, context.Canceled, err)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.Equal(t, context.Canceled.Error(), rpcErr.Message)
 	})
 
 	t.Run("zero block hash", func(t *testing.T) {
