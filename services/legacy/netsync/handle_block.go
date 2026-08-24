@@ -268,14 +268,21 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		teranodeBlock.SubtreeSlices = nil
 	}
 
-	// Derive the serving peer identity for the block-validation corrupt cap. Use the
-	// same identity netsync's own cap keys on (peer.Addr()) so the two caps agree on
-	// what a peer is. Peer.Addr() dereferences the peer with no nil-receiver guard, so
-	// guard here: a nil peer degrades to the empty-peerID no-cap defence rather than
-	// panicking.
+	// Derive the serving peer identity for the block-validation corrupt cap. The two caps'
+	// keys intentionally differ only by the "legacy:" namespace prefix below: netsync's own
+	// cap (recordCorruptBlockAttempt) keys on the bare peer.Addr(), while this value threaded
+	// into blockValidation.ProcessBlock carries the prefix — both are still derived from the
+	// identical peer.Addr() call, so they still bound the same serving connection. The
+	// divergence exists solely so nothing downstream of blockvalidation can mistake this value
+	// for a libp2p peer ID: isLegacyPeerID (services/blockvalidation/peer_metrics_helpers.go)
+	// makes isPeerMalicious and penalizeCorruptBlockPeer treat any "legacy:"-prefixed value the
+	// same as an empty peerID, so it never reaches p2pClient.AddBanScore/IsPeerMalicious and
+	// therefore never reaches the centralized peer registry at all (bitcoin-sv/teranode#4692).
+	// Peer.Addr() dereferences the peer with no nil-receiver guard, so guard here: a nil peer
+	// degrades to the empty-peerID no-cap defence rather than panicking.
 	peerID := ""
 	if peer != nil {
-		peerID = peer.Addr()
+		peerID = "legacy:" + peer.Addr()
 	}
 
 	// call the process block wrapper, which will add tracing and logging

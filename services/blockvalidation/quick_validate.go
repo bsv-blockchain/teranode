@@ -42,11 +42,27 @@ type SubtreeWriteJob struct {
 	BlockHeight   uint32              // For DAH calculation
 	SubtreeIdx    int                 // For logging
 	AlreadyExists bool                // Skip write if already exists
+	// Done, when set, is counted down exactly once this job has been fully handled (written,
+	// skipped, or errored) by a worker — never per worker-goroutine exit. tryQuickValidation
+	// waits on it before running cleanup, so cleanup can never race ahead of a still-in-flight
+	// write for the same block (bitcoin-sv/teranode#4692). Nil-guarded everywhere it is used, so a
+	// job constructed without one (existing tests, or a future direct caller of
+	// subtreeWriteWorker) never panics on a nil receiver.
+	Done *sync.WaitGroup
 }
 
 // subtreeWriteWorker processes subtree write jobs from a channel.
 // If any write fails, it returns an error which cancels the errgroup context,
 // propagating the failure to all other goroutines including UTXO processing.
+//
+// Each received job's handling is wrapped in an immediately-invoked function so that
+// job.Done.Done() (bitcoin-sv/teranode#4692) is scoped to that ONE job, not to this worker
+// goroutine's eventual exit: a bare `defer job.Done.Done()` placed directly in the `case` body
+// would defer to when subtreeWriteWorker itself returns (channel close, ctx cancellation, or an
+// error) — i.e. after every block in the whole catch-up run, not this job's own block. Placed
+// that way, a caller blocked in wg.Wait() for exactly this job would never observe it complete
+// until the entire run finished, a real deadlock. The closure form covers every exit for this
+// job — AlreadyExists, a serialize error, a store error, and success — in one place.
 func (u *BlockValidation) subtreeWriteWorker(ctx context.Context, writeJobsChan <-chan *SubtreeWriteJob) error {
 	for {
 		select {
@@ -58,28 +74,38 @@ func (u *BlockValidation) subtreeWriteWorker(ctx context.Context, writeJobsChan 
 				return nil
 			}
 
-			if job.AlreadyExists {
-				// Subtree already exists with assembly's finite DAH — no change needed.
-				// The block persister will promote to permanent when the block is confirmed.
-				continue
-			}
+			if err := func() error {
+				if job.Done != nil {
+					defer job.Done.Done()
+				}
 
-			// Serialize lazily at write time to avoid holding bytes in the channel buffer
-			subtreeBytes, err := job.Subtree.Serialize()
-			if err != nil {
-				return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to serialize subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
-			}
+				if job.AlreadyExists {
+					// Subtree already exists with assembly's finite DAH — no change needed.
+					// The block persister will promote to permanent when the block is confirmed.
+					return nil
+				}
 
-			// Write the subtree file with finite DAH (temporary until block persister confirms)
-			dah := job.BlockHeight + u.subtreeBlockHeightRetention
-			if err := u.subtreeStore.Set(ctx,
-				job.SubtreeHash[:],
-				fileformat.FileTypeSubtree,
-				subtreeBytes,
-				bloboptions.WithAllowOverwrite(true),
-				bloboptions.WithDeleteAt(dah),
-			); err != nil {
-				return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to store subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
+				// Serialize lazily at write time to avoid holding bytes in the channel buffer
+				subtreeBytes, err := job.Subtree.Serialize()
+				if err != nil {
+					return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to serialize subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
+				}
+
+				// Write the subtree file with finite DAH (temporary until block persister confirms)
+				dah := job.BlockHeight + u.subtreeBlockHeightRetention
+				if err := u.subtreeStore.Set(ctx,
+					job.SubtreeHash[:],
+					fileformat.FileTypeSubtree,
+					subtreeBytes,
+					bloboptions.WithAllowOverwrite(true),
+					bloboptions.WithDeleteAt(dah),
+				); err != nil {
+					return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to store subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
+				}
+
+				return nil
+			}(); err != nil {
+				return err
 			}
 		}
 	}
@@ -115,6 +141,15 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 		}
 
 		block.SubtreeSlices[subtreeIdx] = fullSubtree
+
+		// Memoize for uniformity with the freshly-built branch below (bitcoin-sv/teranode#4692):
+		// subtreeWriteWorker's AlreadyExists branch returns before ever calling Serialize() on
+		// this job (job.Subtree is left nil below), so there is no writer-side race for THIS
+		// path today — verified by reading subtreeWriteWorker's job-handling closure. Calling
+		// RootHash() here anyway is cheap and safe: it either finds st.rootHash already
+		// populated by deserialization or computes it once here, before any other goroutine
+		// could read this object, and is nil-safe on an empty subtree.
+		_ = fullSubtree.RootHash()
 
 		return &SubtreeWriteJob{
 			SubtreeHash:   subtreeHash,
@@ -157,6 +192,19 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 
 	// Set on block for merkle validation (synchronous)
 	block.SubtreeSlices[subtreeIdx] = fullSubtree
+
+	// Memoize the root hash on THIS (building) goroutine, before the job is handed to the
+	// async writer (bitcoin-sv/teranode#4692). go-subtree's RootHash() lazily computes and
+	// caches into st.rootHash on first call, with no locking around the memoization write.
+	// The write worker's Serialize() calls RootHash() too, and CheckMerkleRoot's Duplicate()
+	// concurrently reads st.rootHash on this SAME object once stage 3's g.Wait() hands off to
+	// validateSubtrees — a write on the worker goroutine racing a read on the merkle-check
+	// goroutine over the same field. Calling RootHash() once here — before the channel send,
+	// which gives the worker its happens-before edge — means every later call, on either
+	// goroutine, hits the already-populated fast path (`if st.rootHash != nil`) and only ever
+	// reads. RootHash() is nil-safe on an empty subtree (returns nil rather than panicking),
+	// so no separate emptiness guard is needed here.
+	_ = fullSubtree.RootHash()
 
 	return &SubtreeWriteJob{
 		SubtreeHash:   subtreeHash,
@@ -272,23 +320,33 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 //   - writeJobsChan: Channel to send write jobs to background workers
 //
 // Returns:
+//   - *sync.WaitGroup: counts every write job THIS call queued to the shared async subtree
+//     writer, non-nil on every return path (bitcoin-sv/teranode#4692) — already Wait()-safe (zero
+//     pending) when block.Subtrees is empty or a failure occurred before any job was queued, so
+//     the caller never needs a nil check
+//   - map[chainhash.Hash]map[fileformat.FileType]struct{}: exactly which (hash, fileType) pairs
+//     this call itself freshly wrote, for removeCatchupSubtreeFiles to restrict deletion to
 //   - error: If validation fails or context is cancelled
-func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *model.Block, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) error {
+func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *model.Block, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (*sync.WaitGroup, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "quickValidateBlockAsync",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[quickValidateBlockAsync][%s] performing async quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
 
+	// Already Wait()-safe (zero pending): used on every path that never reaches
+	// processBlockSubtreesPipelineAsync, so this function's *sync.WaitGroup return is never nil.
+	emptyWG := &sync.WaitGroup{}
+
 	// Enforce the block-version floor before any body/coinbase inspection (header-first parity
 	// with svnode ContextualCheckBlockHeader). Needs only header version, height, and params.
 	if err := model.CheckBlockVersion(block.Header.Version, block.Height, u.settings.ChainCfgParams); err != nil {
-		return errors.NewBlockInvalidError("[quickValidateBlockAsync][%s] outdated block version", block.Hash().String(), err)
+		return emptyWG, nil, errors.NewBlockInvalidError("[quickValidateBlockAsync][%s] outdated block version", block.Hash().String(), err)
 	}
 
 	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
 	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
-		return errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+		return emptyWG, nil, errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
 	}
 
 	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it through
@@ -299,8 +357,10 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 	}
 
 	var (
-		err error
-		id  uint64
+		err            error
+		id             uint64
+		wg             = emptyWG
+		freshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}
 	)
 
 	if len(block.Subtrees) > 0 {
@@ -309,16 +369,16 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		if prefetchDepth <= 0 {
 			prefetchDepth = 2 // Default for async mode
 		}
-		_, err = u.processBlockSubtreesPipelineAsync(ctx, block, prefetchDepth, writeJobsChan, outpointOnly)
+		_, wg, freshlyWritten, err = u.processBlockSubtreesPipelineAsync(ctx, block, prefetchDepth, writeJobsChan, outpointOnly)
 		if err != nil {
 			// Preserve a corrupt-body verdict from validateSubtrees (bitcoin-sv/teranode#4692) instead
 			// of shadowing it with an outer ErrProcessing, so the caller re-downloads a
 			// fresh body rather than treating it as a transient processing error.
 			if errors.IsBlockCorrupt(err) {
-				return err
+				return wg, freshlyWritten, err
 			}
 
-			return errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to process block subtrees", block.Hash().String(), err)
+			return wg, freshlyWritten, errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
 	}
 
@@ -326,19 +386,19 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 	if block.ID == 0 {
 		id, err = u.blockchainClient.AssignBlockID(ctx, block.Hash())
 		if err != nil {
-			return errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to assign block ID", block.Hash().String(), err)
+			return wg, freshlyWritten, errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to assign block ID", block.Hash().String(), err)
 		}
 		block.ID, err = blockIDToUint32(id, block.Hash().String())
 		if err != nil {
-			return err
+			return wg, freshlyWritten, err
 		}
 	}
 
 	if err := u.checkQuickValidationCoinbaseLength(block, "quickValidateBlockAsync"); err != nil {
-		return err
+		return wg, freshlyWritten, err
 	}
 
-	return u.commitBlock(ctx, block, peerID, "quickValidateBlockAsync")
+	return wg, freshlyWritten, u.commitBlock(ctx, block, peerID, "quickValidateBlockAsync")
 }
 
 // checkQuickValidationCoinbaseLength enforces model.CoinbaseScriptSigLengthInBounds on the
@@ -669,12 +729,24 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 //
 // Returns:
 //   - uint64: Existing BlockID if retry detected, 0 otherwise
+//   - *sync.WaitGroup: counts every write job THIS call queued to writeJobsChan; the caller must
+//     wait on it (context-aware, never bare — see tryQuickValidation) before trusting that a
+//     failed attempt's writes have all settled, since the shared write-worker pool outlives this
+//     one call (bitcoin-sv/teranode#4692)
+//   - map[chainhash.Hash]map[fileformat.FileType]struct{}: exactly which (hash, fileType) pairs
+//     this call itself freshly wrote, for removeCatchupSubtreeFiles to restrict deletion to
 //   - error: If processing fails or context is cancelled
-func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob, outpointOnly bool) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob, outpointOnly bool) (uint64, *sync.WaitGroup, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 	var existingBlockID uint64
 	blockIDSet := false
+
+	// Scoped to this one block's call (bitcoin-sv/teranode#4692): wg tracks every write job queued
+	// below, and freshness tracks which (hash, fileType) pairs were freshly written. Neither is
+	// reused across blocks or across attempts.
+	wg := &sync.WaitGroup{}
+	freshness := newSubtreeFreshness()
 
 	// Channel for prefetched batches (subtrees read, txs not extended)
 	prefetchChan := make(chan *SubtreeProcessingBatch, prefetchDepth)
@@ -768,7 +840,7 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 			batchG.Go(func() error {
 				buildStart := time.Now()
 				// Build subtrees and queue write jobs (doesn't wait for I/O)
-				err := u.buildSubtreeJobsForBatch(batchCtx, block, batch, writeJobsChan)
+				err := u.buildSubtreeJobsForBatch(batchCtx, block, batch, writeJobsChan, wg, freshness)
 				buildDuration = time.Since(buildStart)
 				return err
 			})
@@ -785,10 +857,12 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 	})
 
 	if err := g.Wait(); err != nil {
-		return 0, err
+		return 0, wg, freshness.snapshot(), err
 	}
 
-	return u.validateSubtrees(ctx, block, existingBlockID)
+	resultID, err := u.validateSubtrees(ctx, block, existingBlockID)
+
+	return resultID, wg, freshness.snapshot(), err
 }
 
 // validateSubtrees validates subtree sizes and merkle root after processing.
@@ -1528,10 +1602,14 @@ func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *
 //   - block: The block being processed
 //   - batch: The processed batch with extended transactions
 //   - writeJobsChan: Channel to send write jobs to background workers
+//   - wg: per-block WaitGroup (bitcoin-sv/teranode#4692); Add(1) happens here, at enqueue time,
+//     never inside the worker — see the ordering-invariant comment on the send loop below
+//   - freshness: records (hash, FileTypeSubtree) for every index this batch is about to freshly
+//     write, so removeCatchupSubtreeFiles can later restrict deletion to exactly those pairs
 //
 // Returns:
 //   - error: If building subtrees fails or context is cancelled
-func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch, writeJobsChan chan<- *SubtreeWriteJob) error {
+func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch, writeJobsChan chan<- *SubtreeWriteJob, wg *sync.WaitGroup, freshness *subtreeFreshness) error {
 	// Build subtrees in parallel (CPU-bound work)
 	buildG, buildCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(u.logger, buildG, u.settings.BlockValidation.SubtreeBatchWriteConcurrency)
@@ -1564,14 +1642,39 @@ func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *m
 		return err
 	}
 
-	// Queue all jobs to the channel (non-blocking with context check)
+	// Freshness is already known synchronously here — fullSubtreeExists was computed during
+	// prefetch, before any write is queued — so this does NOT need anything back from the
+	// asynchronous subtreeWriteWorker (bitcoin-sv/teranode#4692).
+	for i := 0; i < batchSize; i++ {
+		if !batch.fullSubtreeExists[i] {
+			freshness.markFresh(batch.subtreeHashes[i], fileformat.FileTypeSubtree)
+		}
+	}
+
+	// Queue all jobs to the channel (non-blocking with context check).
+	//
+	// Ordering invariant (bitcoin-sv/teranode#4692), stated explicitly because getting it backwards
+	// reopens the exact race this barrier exists to close: wg.Add(1) MUST happen here, at enqueue
+	// time, before the channel send — never inside subtreeWriteWorker. If Add happened in the
+	// worker instead, there would be a window between this send and a worker actually receiving
+	// the job during which it is neither counted by Add nor observable any other way; a Wait()
+	// call landing in that window would see a WaitGroup with nothing added yet and return
+	// immediately, missing the in-flight write entirely.
 	for _, job := range jobs {
 		if job == nil {
 			continue
 		}
+
+		wg.Add(1)
+		job.Done = wg
+
 		select {
 		case writeJobsChan <- job:
 		case <-ctx.Done():
+			// The job was never handed to a worker, so nothing will ever call Done() for
+			// it — do so here, or a cancelled send would leave the count permanently
+			// non-zero and hang a later Wait().
+			wg.Done()
 			return ctx.Err()
 		}
 	}

@@ -28,6 +28,50 @@ func (f *failureCountingP2PClient) RecordCatchupFailureWithKind(_ context.Contex
 	return nil
 }
 
+// isPeerMaliciousCallRecorder is a P2PClientI whose IsPeerMalicious records that it was called
+// and always answers true; every other method hits the nil embedded interface and panics. Used to
+// prove a gated peerID never reaches the p2p client at all (bitcoin-sv/teranode#4692).
+type isPeerMaliciousCallRecorder struct {
+	P2PClientI
+	called bool
+}
+
+func (r *isPeerMaliciousCallRecorder) IsPeerMalicious(_ context.Context, _ string) (bool, string, error) {
+	r.called = true
+	return true, "should never be reached for a gated peerID", nil
+}
+
+// TestIsPeerMalicious_GatesEmptyAndLegacyPeerIDs pins the legacy-peerID gate (bitcoin-sv/teranode#4692):
+// a "legacy:"-namespaced peerID must be treated exactly like an empty one — isPeerMalicious returns
+// false without ever querying the p2p client, removing the per-block gRPC round-trip on the legacy
+// hot path. A real (non-legacy, non-empty) peerID must still be queried, proving the gate is
+// specific to the legacy namespace rather than disabling the check entirely.
+func TestIsPeerMalicious_GatesEmptyAndLegacyPeerIDs(t *testing.T) {
+	t.Run("empty peerID: gated, no client call", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.False(t, u.isPeerMalicious(context.Background(), ""))
+		require.False(t, rec.called, "an empty peerID must never reach the p2p client")
+	})
+
+	t.Run("legacy-prefixed peerID: gated, no client call", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.False(t, u.isPeerMalicious(context.Background(), "legacy:1.2.3.4:8333"))
+		require.False(t, rec.called, "a legacy-prefixed peerID must never reach the p2p client")
+	})
+
+	t.Run("real peerID: not gated, client is queried", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.True(t, u.isPeerMalicious(context.Background(), "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"))
+		require.True(t, rec.called, "a genuine libp2p peerID must still be queried")
+	})
+}
+
 // TestReportCatchupFailureForError_SkipsAlreadyReported guards the
 // one-failure-per-attempt invariant: when a lower layer (the header-fetch
 // stage) has already recorded the failure, the top-level handler must not

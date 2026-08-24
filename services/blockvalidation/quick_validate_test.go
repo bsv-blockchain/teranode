@@ -949,7 +949,7 @@ func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 		// goroutine is needed.
 		writeJobsChan := make(chan *SubtreeWriteJob, 16)
 
-		err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
+		_, _, err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
 		require.NoError(t, err)
 
 		assertCreatedLocked(t, suite.MockUTXOStore, true)
@@ -970,7 +970,7 @@ func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 		// goroutine is needed.
 		writeJobsChan := make(chan *SubtreeWriteJob, 16)
 
-		err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
+		_, _, err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
 		require.NoError(t, err)
 
 		assertCreatedLocked(t, suite.MockUTXOStore, false)
@@ -991,7 +991,7 @@ func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 		// goroutine is needed.
 		writeJobsChan := make(chan *SubtreeWriteJob, 16)
 
-		err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
+		_, _, err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
 		require.NoError(t, err)
 
 		assertCreatedLocked(t, suite.MockUTXOStore, true)
