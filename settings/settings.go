@@ -532,6 +532,13 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerMapMaxSize:         getInt("p2p_peer_map_max_size", 10000, alternativeContext...),
 			PeerMapTTL:             getDuration("p2p_peer_map_ttl", 10*time.Minute, alternativeContext...),
 			PeerMapCleanupInterval: getDuration("p2p_peer_map_cleanup_interval", time.Minute, alternativeContext...),
+			// Centralized peer registry (services/blockchain) TTL+LRU cleanup
+			// configuration. Defaults match the struct tag defaults, so wiring
+			// these keys does not change behaviour for a deployment that never
+			// set them.
+			PeerRegistryMaxSize:         getInt("p2p_peer_registry_max_size", 10000, alternativeContext...),
+			PeerRegistryTTL:             getDuration("p2p_peer_registry_ttl", 24*time.Hour, alternativeContext...),
+			PeerRegistryCleanupInterval: getDuration("p2p_peer_registry_cleanup_interval", time.Hour, alternativeContext...),
 			// Sync manager configuration
 			ForceSyncPeer:                         getString("p2p_force_sync_peer", "", alternativeContext...),
 			NodeStatusTopic:                       getString("p2p_node_status_topic", "", alternativeContext...),

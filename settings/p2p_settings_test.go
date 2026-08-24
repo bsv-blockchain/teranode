@@ -82,6 +82,79 @@ func TestP2PPeerMapSettings_DefaultsMatchTheServiceConstants(t *testing.T) {
 	require.Equal(t, time.Minute, s.P2P.PeerMapCleanupInterval)
 }
 
+// TestP2PPeerRegistrySettings_LoaderReadsAllKeys guards the same class of bug
+// TestP2PPeerMapSettings_LoaderReadsAllKeys documents for the peer map: all
+// three PeerRegistry* fields carry `key:` and `default:` struct tags, but
+// settings are populated by explicit getInt/getDuration calls rather than by
+// reflection over those tags, and no call existed for them — so the
+// centralized peer registry's cleanup interval was always Go-zero, and
+// services/blockchain/peer_registry.go:934-937 returns immediately when
+// interval <= 0, meaning the TTL+LRU eviction loop never started regardless
+// of what an operator put in settings.conf.
+//
+// A default-value assertion cannot catch a relapse on its own here either:
+// the defaults below are exactly what the code fell back to while the loader
+// never read the keys. Only an override proves the key is read.
+func TestP2PPeerRegistrySettings_LoaderReadsAllKeys(t *testing.T) {
+	cases := []struct {
+		key      string
+		override string
+		check    func(t *testing.T, s *Settings)
+	}{
+		{
+			key:      "p2p_peer_registry_max_size",
+			override: "4242",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 4242, s.P2P.PeerRegistryMaxSize,
+					"loader must read p2p_peer_registry_max_size; otherwise the LRU cap is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_peer_registry_ttl",
+			override: "7m",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 7*time.Minute, s.P2P.PeerRegistryTTL,
+					"loader must read p2p_peer_registry_ttl; otherwise the idle TTL is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_peer_registry_cleanup_interval",
+			override: "23s",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 23*time.Second, s.P2P.PeerRegistryCleanupInterval,
+					"loader must read p2p_peer_registry_cleanup_interval; otherwise the cleanup loop never starts")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			gocore.Config().Set(tc.key, tc.override)
+			t.Cleanup(func() { gocore.Config().Set(tc.key, "") })
+
+			tc.check(t, NewSettings())
+		})
+	}
+}
+
+// TestP2PPeerRegistrySettings_DefaultsMatchTheStructTags pins the other half
+// of wiring these keys: the defaults populated by NewSettings() have to equal
+// the struct tag defaults in P2PSettings (settings/p2p_settings.go), which in
+// turn match services/blockchain/Server.go's own fallback for TTL, so turning
+// the loader on is not itself a behaviour change for a deployment that never
+// set these keys.
+func TestP2PPeerRegistrySettings_DefaultsMatchTheStructTags(t *testing.T) {
+	for _, key := range []string{"p2p_peer_registry_max_size", "p2p_peer_registry_ttl", "p2p_peer_registry_cleanup_interval"} {
+		gocore.Config().Set(key, "")
+	}
+
+	s := NewSettings()
+
+	require.Equal(t, 10000, s.P2P.PeerRegistryMaxSize)
+	require.Equal(t, 24*time.Hour, s.P2P.PeerRegistryTTL)
+	require.Equal(t, time.Hour, s.P2P.PeerRegistryCleanupInterval)
+}
+
 // TestP2PGossipSubMeshProtectionSettings guards the GossipSub Sybil-defence
 // wiring: peer scoring and peer exchange must default to enabled (scoring off
 // with PX on is the spec-violating state that lets Sybil peers capture the

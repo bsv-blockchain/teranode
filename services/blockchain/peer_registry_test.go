@@ -11,8 +11,10 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1038,6 +1040,65 @@ func TestCentralizedPeerRegistry_StartCleanup_ZeroIntervalIsNoOp(t *testing.T) {
 	require.NotPanics(t, func() {
 		r.StartCleanup(context.Background(), 0, time.Hour, 0)
 	})
+	r.Close()
+}
+
+// TestCentralizedPeerRegistry_StartCleanup_WiredFromSettings is the
+// load-bearing test for the settings.go fix: it drives StartCleanup with the
+// exact values settings.NewSettings() produces for
+// p2p_peer_registry_cleanup_interval/_ttl/_max_size, rather than
+// hand-written constants. Before that fix, NewSettings() always returned Go-
+// zero for all three regardless of what settings.conf said, and
+// StartCleanup(ctx, 0, ...) returns immediately (services/blockchain/peer_registry.go:934-937)
+// — so the loop never ran in production. A test that only calls StartCleanup
+// with literal non-zero arguments cannot catch that regression; this one
+// fails again the moment the settings.go wiring is reverted.
+func TestCentralizedPeerRegistry_StartCleanup_WiredFromSettings(t *testing.T) {
+	gocore.Config().Set("p2p_peer_registry_cleanup_interval", "5ms")
+	gocore.Config().Set("p2p_peer_registry_ttl", "10ms")
+	gocore.Config().Set("p2p_peer_registry_max_size", "1")
+	t.Cleanup(func() {
+		gocore.Config().Set("p2p_peer_registry_cleanup_interval", "")
+		gocore.Config().Set("p2p_peer_registry_ttl", "")
+		gocore.Config().Set("p2p_peer_registry_max_size", "")
+	})
+
+	tSettings := settings.NewSettings()
+	require.Equal(t, 5*time.Millisecond, tSettings.P2P.PeerRegistryCleanupInterval,
+		"settings.NewSettings() must read the cleanup interval override")
+	require.Equal(t, 10*time.Millisecond, tSettings.P2P.PeerRegistryTTL)
+	require.Equal(t, 1, tSettings.P2P.PeerRegistryMaxSize)
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// "connected" is actively in use (e.g. a live gossip connection / current
+	// catchup source) and must survive both the TTL and the LRU phase even
+	// though it is never touched again after registration. "stale" has no
+	// such protection and is registered first so the LRU phase, if it ran
+	// before the TTL phase evicted "stale" on its own, would still pick it
+	// over "connected" by recency.
+	r.Register(&PeerInfo{ID: "stale"})
+	r.Register(&PeerInfo{ID: "connected"})
+	r.UpdateConnectionState("connected", true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	r.StartCleanup(ctx,
+		tSettings.P2P.PeerRegistryCleanupInterval,
+		tSettings.P2P.PeerRegistryTTL,
+		tSettings.P2P.PeerRegistryMaxSize,
+	)
+
+	require.Eventually(t, func() bool {
+		_, staleStillPresent := r.Get("stale")
+		return !staleStillPresent
+	}, time.Second, 5*time.Millisecond, "settings-derived cleanup loop must evict the stale peer")
+
+	got, ok := r.Get("connected")
+	require.True(t, ok, "an actively-connected peer must never be evicted by the settings-derived cleanup loop")
+	require.True(t, got.IsConnected)
+
 	r.Close()
 }
 
