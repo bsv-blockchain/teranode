@@ -175,14 +175,14 @@ the ConfigMap. They are supplied through a Kubernetes Secret named
 `teranode-operator-secrets`, which the Cluster CR references via `spec.envFrom`. This
 Secret is intentionally not committed to the repository — you must create it yourself.
 
-`grpc_admin_api_key` is **required**. It authenticates every state-mutating P2P
-`PeerService` RPC, including the peer-reputation and validated-chain-progress reports
-that decide which peer this node syncs from. The `operator` context binds that gRPC
-port on all interfaces, and `settings.conf` ships the placeholder `testkey` — a value
-published in this repository, so it authenticates nobody. Teranode therefore **refuses
-to start** on mainnet or testnet with a placeholder or short (<16 character) key while
-that port is widely bound. Generate a strong random value, for example
-`openssl rand -hex 32`.
+`grpc_admin_api_key` is **required** for a working node. It authenticates every
+state-mutating P2P `PeerService` RPC, including the peer-reputation and
+validated-chain-progress reports that decide which peer this node syncs from, and the
+`operator` context binds that gRPC port on all interfaces. It is deliberately not
+committed to this repository, and well-known placeholders such as `testkey` are
+rejected and ignored — the server then uses a random key, so every protected RPC,
+including the internal reporters, fails with `Unauthenticated`. Generate a strong
+random value, for example `openssl rand -hex 32`.
 
 Create it with a manifest (replace the example values with your own credentials):
 

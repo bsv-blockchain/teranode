@@ -81,3 +81,69 @@ func TestP2PPeerMapSettings_DefaultsMatchTheServiceConstants(t *testing.T) {
 	require.Equal(t, 10*time.Minute, s.P2P.PeerMapTTL)
 	require.Equal(t, time.Minute, s.P2P.PeerMapCleanupInterval)
 }
+
+// TestP2PGossipSubMeshProtectionSettings guards the GossipSub Sybil-defence
+// wiring: peer scoring and peer exchange must default to enabled (scoring off
+// with PX on is the spec-violating state that lets Sybil peers capture the
+// mesh), and both keys must actually be read by the loader so operators can
+// override them.
+//
+// gocore resolves key.<context> first, so overrides are set at the precedence
+// that wins under the ambient context (same pattern as the batcher tests) and
+// the default assertion only runs under contexts with no .conf override.
+func TestP2PGossipSubMeshProtectionSettings(t *testing.T) {
+	keys := []string{"p2p_enable_peer_scoring", "p2p_enable_peer_exchange"}
+	ctx := gocore.Config().GetContext()
+	winKey := func(key string) string {
+		if ctx != "" {
+			return key + "." + ctx
+		}
+		return key
+	}
+
+	t.Run("defaults are secure", func(t *testing.T) {
+		for _, key := range keys {
+			gocore.Config().Set(winKey(key), "")
+		}
+
+		s := NewSettings()
+
+		require.True(t, s.P2P.EnablePeerScoring, "peer scoring must default to enabled (Sybil mesh protection)")
+		require.True(t, s.P2P.EnablePeerExchange, "peer exchange must default to enabled (safe with scoring on)")
+	})
+
+	t.Run("loader reads overrides", func(t *testing.T) {
+		for _, key := range keys {
+			gocore.Config().Set(winKey(key), "false")
+		}
+		t.Cleanup(func() {
+			for _, key := range keys {
+				gocore.Config().Set(winKey(key), "")
+			}
+		})
+
+		s := NewSettings()
+
+		require.False(t, s.P2P.EnablePeerScoring, "loader must read p2p_enable_peer_scoring under context %q", ctx)
+		require.False(t, s.P2P.EnablePeerExchange, "loader must read p2p_enable_peer_exchange under context %q", ctx)
+	})
+}
+
+// TestP2PPeerScoreIPColocationThreshold_LoaderReadsKey guards the colocation
+// threshold override: set at the winning precedence for the ambient context,
+// it must be read back (field-exists-but-loader-never-reads-it bug).
+func TestP2PPeerScoreIPColocationThreshold_LoaderReadsKey(t *testing.T) {
+	const key = "p2p_peer_score_ip_colocation_threshold"
+	ctx := gocore.Config().GetContext()
+	winKey := key
+	if ctx != "" {
+		winKey = key + "." + ctx
+	}
+
+	require.Equal(t, 10, NewSettings().P2P.PeerScoreIPColocationThreshold, "default must match the library default of 10")
+
+	gocore.Config().Set(winKey, "3")
+	t.Cleanup(func() { gocore.Config().Set(winKey, "") })
+
+	require.Equal(t, 3, NewSettings().P2P.PeerScoreIPColocationThreshold, "loader must read %s under context %q", key, ctx)
+}

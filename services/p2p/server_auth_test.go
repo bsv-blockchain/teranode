@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -549,117 +548,6 @@ func (l *warnRecorder) Errorf(format string, args ...interface{}) {
 	l.errors = append(l.errors, fmt.Sprintf(format, args...))
 }
 
-// TestWarnIfGRPCExposed covers the case the API key cannot defend: a listener on
-// every interface with a key an attacker already knows or can guess. The
-// warning is the only signal an operator gets, so it must fire exactly when the
-// combination is dangerous and stay quiet otherwise.
-func TestWarnIfGRPCExposed(t *testing.T) {
-	// Deliberately readable rather than a random-looking hex blob: the test only
-	// needs a key that is neither the placeholder nor shorter than the minimum,
-	// and a high-entropy literal here trips secret scanners for no reason.
-	const strongKey = "not-a-real-key-just-long-enough"
-
-	tests := []struct {
-		name       string
-		listenAddr string
-		apiKey     string
-		wantWarn   bool
-	}{
-		{"wide bind with placeholder key", ":9904", placeholderAdminAPIKey, true},
-		{"wide bind with short key", ":9904", "short-key", true},
-		{"wildcard IPv4 with placeholder key", "0.0.0.0:9904", placeholderAdminAPIKey, true},
-		{"wildcard IPv6 with placeholder key", "[::]:9904", placeholderAdminAPIKey, true},
-		{"wide bind with strong key", ":9904", strongKey, false},
-		{"loopback with placeholder key", "localhost:9904", placeholderAdminAPIKey, false},
-		{"specific interface with placeholder key", "10.0.1.50:9904", placeholderAdminAPIKey, false},
-		// An empty key means a random one was generated, which is not guessable;
-		// grpcAuthOptions warns about that case separately.
-		{"wide bind with no configured key", ":9904", "", false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			logger := &warnRecorder{}
-			s := &Server{logger: logger, settings: regtestSettings()}
-
-			require.NoError(t, s.checkGRPCExposure(tc.listenAddr, tc.apiKey), "regtest must never refuse to start")
-
-			if !tc.wantWarn {
-				require.Empty(t, logger.warnings)
-				return
-			}
-
-			require.Len(t, logger.warnings, 1)
-			require.Contains(t, logger.warnings[0], tc.listenAddr)
-			require.NotContains(t, logger.warnings[0], tc.apiKey, "the warning must not leak the key")
-		})
-	}
-}
-
-// regtestSettings returns settings pinned to regtest, where an exposed bind with
-// a placeholder key warns instead of refusing to start.
-func regtestSettings() *settings.Settings {
-	tSettings := settings.NewSettings()
-	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
-
-	return tSettings
-}
-
-// TestCheckGRPCExposureFailsClosedOnPublicNetworks covers the finding that the
-// new authentication is nominal in the one shipped context that widens the bind:
-// settings.conf ships grpc_admin_api_key = testkey, a constant published in this
-// repository, and the operator context runs on mainnet. Starting in that state
-// would let anyone who can reach the port forge validated chain progress, so on
-// every network but regtest it has to be an error rather than a log line.
-func TestCheckGRPCExposureFailsClosedOnPublicNetworks(t *testing.T) {
-	publicNets := []*chaincfg.Params{
-		&chaincfg.MainNetParams,
-		&chaincfg.TestNetParams,
-		&chaincfg.TeraTestNetParams,
-		&chaincfg.StnParams,
-	}
-
-	for _, params := range publicNets {
-		t.Run(params.Name+"/placeholder key refused", func(t *testing.T) {
-			logger := &warnRecorder{}
-			tSettings := settings.NewSettings()
-			tSettings.ChainCfgParams = params
-
-			s := &Server{logger: logger, settings: tSettings}
-
-			err := s.checkGRPCExposure(":9904", placeholderAdminAPIKey)
-			require.Error(t, err, "a wide bind with the published placeholder key must refuse to start")
-			require.Contains(t, err.Error(), params.Name)
-			require.NotContains(t, err.Error(), placeholderAdminAPIKey, "the error must not echo the key")
-		})
-
-		t.Run(params.Name+"/short key refused", func(t *testing.T) {
-			tSettings := settings.NewSettings()
-			tSettings.ChainCfgParams = params
-
-			s := &Server{logger: &warnRecorder{}, settings: tSettings}
-			require.Error(t, s.checkGRPCExposure(":9904", "short"))
-		})
-
-		t.Run(params.Name+"/strong key allowed", func(t *testing.T) {
-			tSettings := settings.NewSettings()
-			tSettings.ChainCfgParams = params
-
-			s := &Server{logger: &warnRecorder{}, settings: tSettings}
-			require.NoError(t, s.checkGRPCExposure(":9904", "not-a-real-key-just-long-enough"))
-		})
-
-		t.Run(params.Name+"/loopback bind allowed", func(t *testing.T) {
-			tSettings := settings.NewSettings()
-			tSettings.ChainCfgParams = params
-
-			s := &Server{logger: &warnRecorder{}, settings: tSettings}
-			require.NoError(t, s.checkGRPCExposure("localhost:9904", placeholderAdminAPIKey),
-				"loopback keeps the port unreachable, so a weak key is not exploitable")
-		})
-	}
-}
-
 // TestWarnIfUnreachableBind covers the mirror-image misconfiguration the loopback
 // default can introduce for a settings context this repository does not ship: a
 // routable client address meeting a loopback bind, which silently stops catchup
@@ -713,7 +601,24 @@ func TestNewClientWarnsWhenAPIKeyMissing(t *testing.T) {
 		t.Cleanup(func() { _ = client.(*Client).Close() })
 
 		require.Len(t, logger.warnings, 1)
-		require.Contains(t, logger.warnings[0], "grpc_admin_api_key is not set")
+		require.Contains(t, logger.warnings[0], "grpc_admin_api_key is unset or a well-known placeholder")
+	})
+
+	t.Run("placeholder key warns", func(t *testing.T) {
+		// The server ignores placeholders and uses a random key, so a client
+		// that sent one would be rejected: the client must not log a reassuring
+		// "using API key" line that contradicts the server.
+		tSettings := settings.NewSettings()
+		tSettings.GRPCAdminAPIKey = "testkey"
+
+		logger := &warnRecorder{}
+
+		client, err := NewClientWithAddress(context.Background(), logger, "localhost:19906", tSettings)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = client.(*Client).Close() })
+
+		require.Len(t, logger.warnings, 1)
+		require.Contains(t, logger.warnings[0], "well-known placeholder")
 	})
 
 	t.Run("configured key does not warn", func(t *testing.T) {
@@ -728,23 +633,6 @@ func TestNewClientWarnsWhenAPIKeyMissing(t *testing.T) {
 
 		require.Empty(t, logger.warnings)
 	})
-}
-
-func TestBindsAllInterfaces(t *testing.T) {
-	for addr, want := range map[string]bool{
-		":9906":            true,
-		"0.0.0.0:9906":     true,
-		"[::]:9906":        true,
-		"localhost:9906":   false,
-		"127.0.0.1:9906":   false,
-		"[::1]:9906":       false,
-		"10.0.1.50:9906":   false,
-		"peer.internal:99": false,
-		"not-an-address":   false,
-		"":                 false,
-	} {
-		require.Equal(t, want, bindsAllInterfaces(addr), "bindsAllInterfaces(%q)", addr)
-	}
 }
 
 const testDataPlaneAPIKey = "data-plane-test-key"

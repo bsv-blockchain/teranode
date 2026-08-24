@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -83,7 +84,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		GRPCRetryBackoff:           getDuration("grpc_retry_backoff", 250*time.Millisecond, alternativeContext...),
 		SecurityLevelGRPC:          getInt("security_level_grpc", 0, alternativeContext...),
 		UsePrometheusGRPCMetrics:   getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
-		GRPCAdminAPIKey:            getString("grpc_admin_api_key", "", alternativeContext...),
+		GRPCAdminAPIKey:            strings.TrimSpace(getString("grpc_admin_api_key", "", alternativeContext...)),
 		GlobalBlockHeightRetention: globalBlockHeightRetention,
 		BatcherDrainMode:           getBool("batcher_drainMode", false, alternativeContext...),
 		BatcherBackground:          getBool("batcher_background", true, alternativeContext...),
@@ -548,6 +549,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EnableNAT:       getBool("p2p_enable_nat", false, alternativeContext...),        // Default false - UPnP scans gateway
 			EnableMDNS:      getBool("p2p_enable_mdns", false, alternativeContext...),       // Default false to prevent LAN scanning
 			AllowPrivateIPs: getBool("p2p_allow_private_ips", false, alternativeContext...), // Default false for production safety
+			// GossipSub mesh protection: scoring on by default (Sybil defence), PX requires scoring
+			EnablePeerScoring:              getBool("p2p_enable_peer_scoring", true, alternativeContext...),
+			EnablePeerExchange:             getBool("p2p_enable_peer_exchange", true, alternativeContext...),
+			PeerScoreIPColocationThreshold: getInt("p2p_peer_score_ip_colocation_threshold", 10, alternativeContext...),
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback:                   getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
 			SyncCoordinatorPeriodicEvaluationInterval: getDuration("p2p_sync_coordinator_periodic_evaluation_interval", 30*time.Second, alternativeContext...),

@@ -104,11 +104,11 @@ func TestGenSplitTopology(t *testing.T) {
 		}
 	}
 
-	// Core sidecar bundles the leftover services (rpc, alert, etc.) so RPC
-	// stays reachable and ancillary services aren't stranded.
+	// Core sidecar bundles the leftover services (rpc, persisters, etc.) so
+	// RPC stays reachable and ancillary services aren't stranded. Alert is
+	// deliberately absent: it is non-functional in this rig and stays off.
 	for _, want := range []string{
 		`"-rpc=1"`,
-		`"-alert=1"`,
 		`"-blockpersister=1"`,
 		`"-utxopersister=1"`,
 		`"-pruner=1"`,

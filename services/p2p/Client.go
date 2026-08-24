@@ -59,13 +59,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string, tSettings *settings.Settings) (ClientI, error) {
 	// Include the admin API key in the connection options
 	apiKey := tSettings.GRPCAdminAPIKey
-	if apiKey != "" {
-		logger.Infof("[P2P Client] Using API key for authentication")
+	if apiKey == "" || util.IsPlaceholderAdminAPIKey(apiKey) {
+		// A placeholder is ignored by the server (which uses a random key), so a
+		// client that sent it would still be rejected; warn instead of logging a
+		// reassuring "using API key" line that contradicts the server.
+		logger.Warnf("[P2P Client] grpc_admin_api_key is unset or a well-known placeholder; admin RPCs (ban, unban, connect/disconnect peer) will fail with Unauthenticated because the server ignores placeholders and uses a random key")
 	} else {
-		// Every state-mutating PeerService RPC needs the key, including the
-		// catchup and validation reporters this client sends on the hot path.
-		// Warn here as well as server-side: this is where the rejections surface.
-		logger.Warnf("[P2P Client] grpc_admin_api_key is not set; peer reporting and admin calls to the P2P service will be rejected as unauthenticated")
+		logger.Infof("[P2P Client] Using API key for authentication")
 	}
 
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{

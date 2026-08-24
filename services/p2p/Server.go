@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/go-chaincfg"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -48,6 +47,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/grpc"
@@ -214,6 +214,142 @@ type Server struct {
 	// localHeightCache is a short-lived cache of the local best height used by
 	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
 	localHeightCache atomic.Pointer[localHeightCacheEntry]
+}
+
+// privateIPColocationWhitelist returns local-network ranges for exemption from the
+// GossipSub IP-colocation penalty. Deployments that deliberately allow private IPs
+// (local/test clusters) run many nodes behind one IP; without the exemption the
+// peers above the colocation threshold on that IP would be permanently
+// mesh-ineligible.
+func privateIPColocationWhitelist() []*net.IPNet {
+	// Loopback, RFC1918, RFC6598 shared space, IPv4 link-local, IPv6 ULA and
+	// IPv6 link-local: the ranges a local/test cluster can legitimately share.
+	cidrs := []string{
+		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"100.64.0.0/10", "169.254.0.0/16",
+		"::1/128", "fc00::/7", "fe80::/10",
+	}
+
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			// The list is constant: a parse failure is a programming error, and
+			// silently skipping it would reintroduce the penalty this exists to prevent.
+			panic(fmt.Sprintf("privateIPColocationWhitelist: bad constant CIDR %q: %v", cidr, err))
+		}
+		nets = append(nets, n)
+	}
+
+	return nets
+}
+
+// buildP2PMessageBusConfig maps Teranode P2P settings onto the message bus config.
+//
+// GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
+// protocol misbehaviour (GRAFT flooding, broken IWANT promises). Static and bootstrap
+// peers are exempt: the bus registers them as GossipSub direct peers. Peer exchange is
+// inverted here because the settings key is expressed as an enable flag while the bus
+// config expresses it as a disable flag. PX enabled without scoring is the
+// spec-violating state this wiring exists to eliminate, so it is a configuration error.
+func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Settings, privKey crypto.PrivKey, protocolVersion, dhtMode string, advertiseAddresses []string) (p2pMessageBus.Config, error) {
+	if tSettings.P2P.EnablePeerExchange && !tSettings.P2P.EnablePeerScoring {
+		return p2pMessageBus.Config{}, errors.NewConfigurationError("p2p_enable_peer_exchange requires p2p_enable_peer_scoring (gossipsub v1.1 pairs PX with scoring); disable peer exchange or enable scoring")
+	}
+
+	conf := p2pMessageBus.Config{
+		PrivateKey:          privKey,
+		Name:                tSettings.ClientName,
+		Logger:              logger,
+		PeerCacheFile:       p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
+		BootstrapPeers:      tSettings.P2P.BootstrapPeers,
+		StaticPeers:         tSettings.P2P.StaticPeers,
+		ProtocolVersion:     protocolVersion,
+		DHTMode:             dhtMode,
+		DHTCleanupInterval:  tSettings.P2P.DHTCleanupInterval,
+		EnableNAT:           tSettings.P2P.EnableNAT,
+		EnableMDNS:          tSettings.P2P.EnableMDNS,
+		AllowPrivateIPs:     tSettings.P2P.AllowPrivateIPs,
+		EnablePeerScoring:   tSettings.P2P.EnablePeerScoring,
+		DisablePeerExchange: !tSettings.P2P.EnablePeerExchange,
+	}
+
+	if tSettings.P2P.EnablePeerScoring {
+		params := p2pMessageBus.DefaultPeerScoreParams()
+		if t := tSettings.P2P.PeerScoreIPColocationThreshold; t > 0 {
+			params.IPColocationFactorThreshold = t
+		}
+		// When private IPs are deliberately allowed, exempt local-network ranges from
+		// the IP-colocation penalty so multi-node local/test clusters behind one IP
+		// stay mesh-eligible.
+		if tSettings.P2P.AllowPrivateIPs {
+			params.IPColocationFactorWhitelist = privateIPColocationWhitelist()
+		}
+
+		thresholds := p2pMessageBus.DefaultPeerScoreThresholds()
+		// Penalty-only params cap every score at 0, so a positive threshold means
+		// "never accept PX". Until per-topic delivery scoring can lift honest peers
+		// above 0, refuse attacker-supplied peer records outright: pxConnect dials
+		// mark those peers outbound, which bypasses gossipsub's Dhi graft refusal
+		// and satisfies the Dout quota - the strongest half of the Sybil attack.
+		thresholds.AcceptPXThreshold = 1
+
+		conf.PeerScoreParams = params
+		conf.PeerScoreThresholds = thresholds
+
+		// Observability: scoring failure modes are silent (a peer below 0 is never
+		// grafted; below the graylist threshold its gossip is ignored), so log any
+		// negatively-scored peers with the worst offender for attribution. Warn only
+		// on transition or material change - a persistent graylisted swarm must not
+		// produce a warn line on every inspection tick.
+		graylistThreshold := thresholds.GraylistThreshold
+		var inspectMu sync.Mutex
+		var lastGraylisted int
+		var lastWorstPeer peer.ID
+		conf.PeerScoreInspect = func(snapshots map[peer.ID]*pubsub.PeerScoreSnapshot) {
+			var negative, graylisted int
+			var worst float64
+			var worstPeer peer.ID
+			for pid, snap := range snapshots {
+				if snap == nil || snap.Score >= 0 {
+					continue
+				}
+				negative++
+				if snap.Score <= worst {
+					worst = snap.Score
+					worstPeer = pid
+				}
+				if snap.Score < graylistThreshold {
+					graylisted++
+				}
+			}
+
+			inspectMu.Lock()
+			changed := graylisted != lastGraylisted || worstPeer != lastWorstPeer
+			lastGraylisted, lastWorstPeer = graylisted, worstPeer
+			inspectMu.Unlock()
+
+			if graylisted > 0 && changed {
+				logger.Warnf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
+			} else if negative > 0 {
+				logger.Debugf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
+			}
+		}
+
+		logger.Infof("[p2p] gossipsub peer scoring enabled: ip-colocation weight %.0f threshold %d (whitelisted ranges %d), graylist %.0f, acceptPX %.0f, peer exchange %v",
+			params.IPColocationFactorWeight, params.IPColocationFactorThreshold,
+			len(params.IPColocationFactorWhitelist), thresholds.GraylistThreshold,
+			thresholds.AcceptPXThreshold, tSettings.P2P.EnablePeerExchange)
+	} else {
+		logger.Warnf("[p2p] gossipsub peer scoring DISABLED (p2p_enable_peer_scoring=false), peer exchange %v", tSettings.P2P.EnablePeerExchange)
+	}
+
+	if len(advertiseAddresses) > 0 {
+		conf.AnnounceAddrs = advertiseAddresses
+		conf.Port = tSettings.P2P.Port
+	}
+
+	return conf, nil
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -424,24 +560,9 @@ func NewServer(
 		logger.Infof("[silent mode] DHT disabled - node will not participate in peer discovery")
 	}
 
-	conf := p2pMessageBus.Config{
-		PrivateKey:         privKey,
-		Name:               tSettings.ClientName,
-		Logger:             logger,
-		PeerCacheFile:      p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
-		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
-		StaticPeers:        tSettings.P2P.StaticPeers,
-		ProtocolVersion:    bitcoinProtocolVersion,
-		DHTMode:            dhtMode,
-		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
-		EnableNAT:          tSettings.P2P.EnableNAT,
-		EnableMDNS:         tSettings.P2P.EnableMDNS,
-		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
-	}
-
-	if len(advertiseAddresses) > 0 {
-		conf.AnnounceAddrs = advertiseAddresses
-		conf.Port = tSettings.P2P.Port
+	conf, err := buildP2PMessageBusConfig(logger, tSettings, privKey, bitcoinProtocolVersion, dhtMode, advertiseAddresses)
+	if err != nil {
+		return nil, err
 	}
 
 	p2pClient, err := p2pMessageBus.NewClient(conf)
@@ -1066,20 +1187,23 @@ func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 }
 
 // grpcAuthOptions builds the auth configuration for the PeerService listener.
-// When no key is configured a random one is generated, which leaves every
-// protected RPC unreachable rather than open - the safe direction, since these
-// RPCs steer sync-peer selection.
+// Placeholder and weak-key handling lives in util.ValidateAdminAPIKey, which is
+// shared with the legacy and RPC services; a placeholder is ignored so the
+// random-key path below applies instead. When no usable key is configured that
+// leaves every protected RPC unreachable rather than open - the safe direction,
+// since these RPCs steer sync-peer selection.
 func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
 	listenAddress := s.settings.P2P.GRPCListenAddress
-	configuredKey := s.settings.GRPCAdminAPIKey
 
-	if err := s.checkGRPCExposure(listenAddress, configuredKey); err != nil {
-		return nil, err
+	apiKey := s.settings.GRPCAdminAPIKey
+	if util.ValidateAdminAPIKey(s.logger, "P2P", apiKey, listenAddress, s.settings.SecurityLevelGRPC) {
+		// Configured key is a well-known placeholder; ignore it and fall back to
+		// the random-key path below rather than trusting a world-readable value.
+		apiKey = ""
 	}
 
 	s.warnIfUnreachableBind(listenAddress, s.settings.P2P.GRPCAddress)
 
-	apiKey := configuredKey
 	if apiKey == "" {
 		var err error
 
@@ -1088,48 +1212,13 @@ func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
 			return nil, errors.NewServiceError("error generating random API key", err)
 		}
 
-		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated, so every state-mutating PeerService RPC (bans, reputation, connect/disconnect, and the catchup/validation reporters called by block and subtree validation) will reject callers until a key is configured")
+		s.logger.Warnf("[P2P] grpc_admin_api_key is not set or is a placeholder; a random key was generated, so every state-mutating PeerService RPC (bans, reputation, connect/disconnect, and the catchup/validation reporters called by block and subtree validation) will reject callers until a strong key is configured")
 	}
 
 	return &util.AuthOptions{
 		APIKey:           apiKey,
 		ProtectedMethods: authProtectedMethods(),
 	}, nil
-}
-
-const (
-	// placeholderAdminAPIKey is the value settings.conf ships so local and CI
-	// deployments work out of the box. It is public, so it authenticates nobody.
-	placeholderAdminAPIKey = "testkey"
-
-	// minStrongAdminAPIKeyLen matches the threshold cmd/diagnose flags as weak.
-	minStrongAdminAPIKeyLen = 16
-)
-
-// checkGRPCExposure handles the one combination the auth interceptor cannot save:
-// a listener bound to every interface while the API key is guessable. Anyone who
-// can reach the port then holds a valid key, and the protected RPCs decide
-// sync-peer selection and peer reputation - so "authenticated" would be nominal.
-//
-// settings.conf ships grpc_admin_api_key = testkey, a constant published in this
-// repository, and the operator context both widens the bind and runs on a real
-// network. On any network but regtest that combination is refused outright rather
-// than warned about: a node that will not start is recoverable in one step, while
-// a node that starts with a public key on a public port hands an attacker the
-// sync-peer choice. regtest keeps the warning so local, CI and docker stacks -
-// which are all regtest - work unchanged.
-func (s *Server) checkGRPCExposure(listenAddress, configuredKey string) error {
-	if !bindsAllInterfaces(listenAddress) || !weakAdminAPIKey(configuredKey) {
-		return nil
-	}
-
-	if s.settings.ChainCfgParams != nil && s.settings.ChainCfgParams.Name != chaincfg.RegressionNetParams.Name {
-		return errors.NewConfigurationError("[P2P] refusing to start on %s: gRPC is listening on all interfaces (%s) with a placeholder or short grpc_admin_api_key, which authenticates nobody - set grpc_admin_api_key to a strong secret (%d+ chars), or bind p2p_grpcListenAddress to loopback", s.settings.ChainCfgParams.Name, listenAddress, minStrongAdminAPIKeyLen)
-	}
-
-	s.logger.Warnf("[P2P] gRPC is listening on all interfaces (%s) with a placeholder or short grpc_admin_api_key; set a strong key (%d+ chars) and restrict the port, or anyone who can reach it can forge peer reputation and validated chain progress", listenAddress, minStrongAdminAPIKeyLen)
-
-	return nil
 }
 
 // warnIfUnreachableBind flags the mirror-image misconfiguration: other services
@@ -1166,32 +1255,6 @@ func addressIsLoopbackOnly(address string) bool {
 	ip := net.ParseIP(host)
 
 	return ip != nil && ip.IsLoopback()
-}
-
-// weakAdminAPIKey reports whether the configured key offers no real protection.
-// An empty key is excluded: the caller has already generated a random one and
-// warned separately, and that key is not guessable.
-func weakAdminAPIKey(configuredKey string) bool {
-	return configuredKey != "" &&
-		(configuredKey == placeholderAdminAPIKey || len(configuredKey) < minStrongAdminAPIKeyLen)
-}
-
-// bindsAllInterfaces reports whether a listen address has no host part, or an
-// unspecified one in any of its spellings. A specific non-loopback IP is
-// deliberately not flagged: that is an operator naming an interface on purpose.
-func bindsAllInterfaces(listenAddress string) bool {
-	host, _, err := net.SplitHostPort(listenAddress)
-	if err != nil {
-		return false
-	}
-
-	if host == "" {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-
-	return ip != nil && ip.IsUnspecified()
 }
 
 // authProtectedMethods returns the full gRPC method paths of every
