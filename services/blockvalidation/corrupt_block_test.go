@@ -100,6 +100,20 @@ func TestPenalizeCorruptBlockPeer_NoopWhenNoAttribution(t *testing.T) {
 	require.Empty(t, fake.recorded(), "no strike without an attributable peer")
 }
 
+// TestPenalizeCorruptBlockPeer_LegacyPeerIDNoop pins the legacy-peerID gate (bitcoin-sv/teranode#4692):
+// a "legacy:"-namespaced peerID must be gated exactly like an empty one, so AddBanScore is never
+// called on the centralized registry — legacy attribution stays exclusively in
+// services/legacy/peer_server.go's own strikeIfCorruptBlockBody, avoiding the phantom registry
+// entry and the double charge.
+func TestPenalizeCorruptBlockPeer_LegacyPeerIDNoop(t *testing.T) {
+	block := newCorruptTestBlock(t)
+
+	fake := &corruptStrikeP2PClient{}
+	bv := &BlockValidation{logger: ulogger.TestLogger{}, p2pClient: fake}
+	bv.penalizeCorruptBlockPeer(context.Background(), "legacy:1.2.3.4:8333", block, "x")
+	require.Empty(t, fake.recorded(), "a legacy-namespaced peerID must never reach AddBanScore")
+}
+
 // TestIsUnvalidatablePeerError_CorruptIsNotUnvalidatable pins the routing invariant
 // (bitcoin-sv/teranode#4692): a corrupt block body must NOT be treated as give-up/malicious, so
 // catchup re-downloads from another peer instead of poisoning. Genuine consensus
