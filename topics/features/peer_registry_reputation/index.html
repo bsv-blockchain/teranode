@@ -7620,7 +7620,7 @@
 <tr>
 <td><code>IsConnected</code></td>
 <td><code>bool</code></td>
-<td>Whether peer is directly connected</td>
+<td>Whether the peer has an open libp2p connection AND has authored at least one gossip message since process start (liveness derives from the message bus's topic-peer set, so a connected-but-silent peer stays unflagged — and, unflagged, is evictable like any idle entry once its activity exceeds <code>p2p_peer_registry_ttl</code>). Set on the gossip path for live senders — a new neighbour is flagged on its first message — reconciled both ways by a periodic sweep in the p2p service (no libp2p disconnect callback exists; a stale flag can persist for up to one <code>p2p_peer_map_cleanup_interval</code> after a disconnect), and never restored from persistence</td>
 </tr>
 <tr>
 <td><code>IsBanned</code></td>
