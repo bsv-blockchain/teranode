@@ -122,12 +122,6 @@ func (cm *clientChannelMap) evict(ch chan []byte) {
 	}
 }
 
-// maxConcurrentBroadcasts caps the number of in-flight broadcast goroutines so a
-// notification burst with many connected clients can't exhaust goroutines/timers.
-// Declared as a var (not const) so tests can override it; not exposed to settings
-// because the cap is an internal resource ceiling, not a behavioural knob.
-var maxConcurrentBroadcasts = 256
-
 func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	// Get a snapshot of channels under the lock
 	cm.RLock()
@@ -138,48 +132,26 @@ func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	}
 	cm.RUnlock()
 
-	if len(channels) == 0 {
-		return
-	}
-
-	// Send to all channels in parallel without holding the lock
-	// This prevents O(N) delay accumulation from blocking clients.
-	// Clamp poolSize to at least 1 so a misconfigured/test-overridden cap can't
-	// deadlock the loop: with capacity 0, sem <- struct{}{} would block forever
-	// because the receiving goroutine is launched only after the send returns.
-	poolSize := max(maxConcurrentBroadcasts, 1)
-	sem := make(chan struct{}, poolSize)
-
-	var wg sync.WaitGroup
+	// Non-blocking send to every client. This runs inline on the single
+	// notification processor goroutine, so it must never wait on a client:
+	// any wall-clock spent per slow consumer delays every other client's
+	// notifications and backs notificationCh up into producer-side drops
+	// (previously a client that kept its buffer full cost up to 1s per
+	// broadcast, letting a pool of slow readers stall the fan-out forever).
+	// The per-client buffer is the entire grace a slow consumer gets: a full
+	// buffer means the client is at least that many notifications behind, so
+	// it is evicted and its connection closed rather than waited on.
 	for _, ch := range channels {
-		wg.Add(1)
-		sem <- struct{}{} // blocks if pool is full — caps in-flight goroutines
-		go func(ch chan []byte) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			timer := time.NewTimer(time.Second)
-			defer func() {
-				// Ensure timer resources are released promptly when the send succeeds.
-				if !timer.Stop() {
-					// If the timer already fired concurrently, drain to avoid keeping the value queued on timer.C.
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-			}()
-			select {
-			case ch <- data:
-				// Data sent successfully
-			case <-timer.C:
-				logger.Errorf("Timeout sending data to client, closing connection")
-				// Evict the timed-out client and close its connection so it
-				// cannot linger muted while holding a connection slot.
-				cm.evict(ch)
-			}
-		}(ch)
+		select {
+		case ch <- data:
+			// Data sent successfully
+		default:
+			logger.Errorf("Websocket client send buffer full, evicting client and closing connection")
+			initPrometheusMetrics()
+			prometheusP2PWebsocketClientsEvicted.Inc()
+			cm.evict(ch)
+		}
 	}
-	wg.Wait() // Wait for all sends to complete
 }
 
 func (cm *clientChannelMap) contains(ch chan []byte) bool {

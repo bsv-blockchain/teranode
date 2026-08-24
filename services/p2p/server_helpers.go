@@ -115,6 +115,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		ClientName: blockMessage.ClientName,
 	}:
 	default:
+		notificationDropped("block")
 		s.logger.Warnf("[handleBlockTopic] notification channel full, dropped block notification for %s", blockMessage.Hash)
 	}
 
@@ -256,6 +257,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		ClientName: subtreeMessage.ClientName,
 	}:
 	default:
+		notificationDropped("subtree")
 		s.logger.Warnf("[handleSubtreeTopic] notification channel full, dropped subtree notification for %s", subtreeMessage.Hash)
 	}
 
