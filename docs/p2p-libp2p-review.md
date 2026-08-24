@@ -123,7 +123,7 @@ Already covered above:
 ### Blocker
 
 1. ~~**`StaticPeers` is dead code in `services/p2p/`.**~~ **Resolved.** Wired through `go-p2p-message-bus` v0.1.17 (`services/p2p/Server.go:334`).
-2. ~~**`PeerRegistry` has no eviction policy.**~~ **Resolved.** TTL + LRU eviction added (`services/p2p/peer_registry.go` `Cleanup`, with `p2p_peer_registry_max_size`/`_ttl`/`_cleanup_interval` settings). Connected and banned peers are exempt.
+2. ~~**`PeerRegistry` has no eviction policy.**~~ **Resolved.** TTL + LRU eviction added (`services/blockchain/peer_registry.go` `Cleanup`, with `p2p_peer_registry_max_size`/`_ttl`/`_cleanup_interval` settings). Banned peers are exempt; connected peers only while active within the TTL, and a periodic reconciliation sweep in the p2p service clears stale `IsConnected` flags (no libp2p disconnect callback exists).
 3. **Pre-relay topic validators (`pubsub.RegisterTopicValidator`).** Per-topic size caps now run in handlers (mitigates the worst payloads), but schema and rate are still enforced *after* gossipsub fan-out. Closing this gap is a library change: extend `go-p2p-message-bus` so callers can register a validator function, then teranode supplies one per topic. Highest-leverage hardening change still outstanding.
 
 ### Should-fix

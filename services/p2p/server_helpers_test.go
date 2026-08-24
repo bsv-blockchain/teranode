@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -67,6 +68,188 @@ func mustNewPeerID(t *testing.T) peer.ID {
 	pid, err := peer.IDFromPrivateKey(priv)
 	require.NoError(t, err)
 	return pid
+}
+
+func TestServerHelpers_ReconcileConnectionStates_SyncsBothDirections(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	liveID := mustNewPeerID(t)
+	goneID := mustNewPeerID(t)
+	unknownID := mustNewPeerID(t)
+	missedID := mustNewPeerID(t)
+
+	s.addConnectedPeer(liveID, "", 0, nil, "")
+	s.addConnectedPeer(goneID, "", 0, nil, "")
+	s.addConnectedPeer(unknownID, "", 0, nil, "")
+	// missed is live but its messages arrived before the liveness snapshot
+	// included it, so the hot path only registered it as gossiped.
+	s.addPeer(missedID, "", 0, nil, "")
+
+	// live and missed have open connections (Addrs populated from the host's
+	// connections), gone is a known topic peer whose connection closed
+	// (no Addrs), unknown is not reported by the client at all.
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
+		{ID: liveID.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
+		{ID: missedID.String(), Addrs: []string{"/ip4/10.0.0.2/tcp/9905"}},
+		{ID: goneID.String()},
+	}}
+
+	s.reconcileConnectionStates(context.Background())
+
+	got, ok := reg.Get(liveID.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "peer with a live connection keeps its flag")
+
+	got, ok = reg.Get(goneID.String())
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "disconnected topic peer is cleared")
+
+	got, ok = reg.Get(unknownID.String())
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "peer unknown to the client is cleared")
+
+	got, ok = reg.Get(missedID.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "live peer the hot path missed is flagged")
+}
+
+func TestServerHelpers_StartPeerMapCleanup_RunsReconcile(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.settings.P2P.PeerMapCleanupInterval = 10 * time.Millisecond
+	s.registryBatcher = newPeerRegistryBatcher(context.Background(), s.logger, s.peerRegistry, 0)
+
+	stale := mustNewPeerID(t)
+	s.addConnectedPeer(stale, "", 0, nil, "")
+
+	// Known topic peer with no open connection: the ticker-driven reconcile
+	// must clear its stale connected flag.
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{{ID: stale.String()}}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.startPeerMapCleanup(ctx)
+
+	require.Eventually(t, func() bool {
+		got, ok := reg.Get(stale.String())
+		return ok && !got.IsConnected
+	}, 5*time.Second, 10*time.Millisecond, "ticker-driven reconcile must clear the stale flag")
+}
+
+func TestServerHelpers_ReconcileConnectionStates_ErrorAndGuardPaths(t *testing.T) {
+	// Nil client / nil registry: no-ops, no panic.
+	s, _ := newServerWithLocalRegistry(t)
+	s.reconcileConnectionStates(context.Background())
+
+	s2 := &Server{logger: ulogger.TestLogger{}, P2PClient: &MockServerP2PClient{}}
+	s2.reconcileConnectionStates(context.Background())
+
+	// ListPeers failure: the pass is skipped and flags stay untouched.
+	s3, reg3 := newServerWithLocalRegistry(t)
+	stale := mustNewPeerID(t)
+	s3.addConnectedPeer(stale, "", 0, nil, "")
+	counting := newCountingRegistryClient(s3.peerRegistry)
+	s3.peerRegistry = counting
+	s3.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{{ID: stale.String()}}}
+
+	counting.failListPeers = assert.AnError
+	s3.reconcileConnectionStates(context.Background())
+	got, _ := reg3.Get(stale.String())
+	require.True(t, got.IsConnected, "flags untouched when ListPeers fails")
+	counting.failListPeers = nil
+
+	// UpdateConnectionState failures: the loop logs and continues, covering
+	// both the clear and the flag direction.
+	live := mustNewPeerID(t)
+	s3.addPeer(live, "", 0, nil, "")
+	s3.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
+		{ID: stale.String()},
+		{ID: live.String(), Addrs: []string{"/ip4/10.0.0.9/tcp/9905"}},
+	}}
+	counting.failUpdateConnectionState = assert.AnError
+	s3.reconcileConnectionStates(context.Background())
+	got, _ = reg3.Get(stale.String())
+	require.True(t, got.IsConnected, "clear direction skipped on RPC error")
+	got, _ = reg3.Get(live.String())
+	require.False(t, got.IsConnected, "flag direction skipped on RPC error")
+	counting.failUpdateConnectionState = nil
+
+	// Canceled context: the pass is cut short inside the loop, before any
+	// update. Pin the branch: ListPeers must have succeeded (one more call)
+	// and no UpdateConnectionState may have been attempted — otherwise this
+	// case would be indistinguishable from the ListPeers-error path.
+	listCallsBefore := counting.callCount("ListPeers")
+	updateCallsBefore := counting.callCount("UpdateConnectionState")
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	s3.reconcileConnectionStates(canceled)
+	require.Equal(t, listCallsBefore+1, counting.callCount("ListPeers"), "cut-short must happen after a successful ListPeers")
+	require.Equal(t, updateCallsBefore, counting.callCount("UpdateConnectionState"), "cut-short must happen before any update")
+	got, _ = reg3.Get(stale.String())
+	require.True(t, got.IsConnected, "cut-short pass must not clear flags")
+}
+
+func TestServerHelpers_NewNeighbourFlaggedOnFirstMessage(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.settings.P2P.PeerMapCleanupInterval = time.Minute // production default
+	s.registryBatcher = newPeerRegistryBatcher(context.Background(), s.logger, s.peerRegistry, 0)
+
+	// Service starts with no peers connected yet.
+	client := &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{}}
+	s.P2PClient = client
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.startPeerMapCleanup(ctx)
+
+	// Now a peer dials in: the host has an open connection to it, and it
+	// authors a gossip message (node_status heartbeat). It must be flagged
+	// connected on that first message — not a reconcile tick later —
+	// because daemon.TestDaemon.ConnectToPeer polls the IsConnected-filtered
+	// GetPeers RPC with a 15s budget.
+	neighbour := mustNewPeerID(t)
+	client.peers = []p2pMessageBus.PeerInfo{
+		{ID: neighbour.String(), Addrs: []string{"/ip4/10.0.0.9/tcp/9905"}},
+	}
+	s.updatePeerLastMessageTime(neighbour.String(), "")
+
+	got, ok := reg.Get(neighbour.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "a connected, gossiping neighbour must be visible immediately, not one cleanup interval later")
+}
+
+func TestServerHelpers_GossipOnlyPublisherNeverFlaggedConnected(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	s.registryBatcher = newPeerRegistryBatcher(context.Background(), s.logger, s.peerRegistry, 0)
+
+	neighbourID := mustNewPeerID(t)
+	publisherID := mustNewPeerID(t)
+
+	// Only the neighbour has an open connection; the publisher's messages
+	// arrive relayed through the mesh (FromID is the pubsub author).
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
+		{ID: neighbourID.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
+		{ID: publisherID.String()},
+	}}
+
+	s.updatePeerLastMessageTime(neighbourID.String(), "")
+	s.updatePeerLastMessageTime(publisherID.String(), "")
+
+	got, ok := reg.Get(neighbourID.String())
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "directly connected sender is flagged")
+
+	got, ok = reg.Get(publisherID.String())
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "gossip-relayed publisher must not be flagged connected")
+
+	// The publisher keeps gossiping across a reconcile pass: the flag must
+	// converge to false (stay false), not flap back, so the entry remains
+	// subject to TTL/LRU cleanup.
+	s.reconcileConnectionStates(context.Background())
+	s.updatePeerLastMessageTime(publisherID.String(), "")
+
+	got, _ = reg.Get(publisherID.String())
+	require.False(t, got.IsConnected, "flag must not flap back for a peer without a live connection")
 }
 
 func TestServerHelpers_AddPeer_Registers(t *testing.T) {

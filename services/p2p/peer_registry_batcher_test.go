@@ -12,6 +12,7 @@ import (
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,15 @@ type countingRegistryClient struct {
 	blockchain.PeerRegistryClientI
 	mu    sync.Mutex
 	calls map[string]int
+	// onRegister / onUpdateConnectionState / onUpdateLastMessageTime, when
+	// set, run during the RPC — lets tests interleave out-of-band batcher
+	// calls with an in-flight flush cycle. The fail* errors, when set, are
+	// returned by the RPC.
+	onRegister                func()
+	onUpdateConnectionState   func()
+	onUpdateLastMessageTime   func()
+	failListPeers             error
+	failUpdateConnectionState error
 }
 
 func newCountingRegistryClient(inner blockchain.PeerRegistryClientI) *countingRegistryClient {
@@ -44,16 +54,36 @@ func (c *countingRegistryClient) callCount(method string) int {
 
 func (c *countingRegistryClient) RegisterPeer(ctx context.Context, info *blockchain.PeerInfo) error {
 	c.count("RegisterPeer")
+	if c.onRegister != nil {
+		c.onRegister()
+	}
 	return c.PeerRegistryClientI.RegisterPeer(ctx, info)
 }
 
 func (c *countingRegistryClient) UpdateConnectionState(ctx context.Context, peerID string, connected bool) error {
 	c.count("UpdateConnectionState")
+	if c.onUpdateConnectionState != nil {
+		c.onUpdateConnectionState()
+	}
+	if c.failUpdateConnectionState != nil {
+		return c.failUpdateConnectionState
+	}
 	return c.PeerRegistryClientI.UpdateConnectionState(ctx, peerID, connected)
+}
+
+func (c *countingRegistryClient) ListPeers(ctx context.Context, transportFilter *blockchain_api.TransportType, minReputation float64, minHeight uint32, excludeBanned, sortByStorage bool) ([]*blockchain.PeerInfo, error) {
+	c.count("ListPeers")
+	if c.failListPeers != nil {
+		return nil, c.failListPeers
+	}
+	return c.PeerRegistryClientI.ListPeers(ctx, transportFilter, minReputation, minHeight, excludeBanned, sortByStorage)
 }
 
 func (c *countingRegistryClient) UpdateLastMessageTime(ctx context.Context, peerID string) error {
 	c.count("UpdateLastMessageTime")
+	if c.onUpdateLastMessageTime != nil {
+		c.onUpdateLastMessageTime()
+	}
 	return c.PeerRegistryClientI.UpdateLastMessageTime(ctx, peerID)
 }
 
@@ -143,6 +173,114 @@ func TestPeerRegistryBatcher_SkipsReassertWithinTTL(t *testing.T) {
 	require.Equal(t, 1, counting.callCount("RegisterPeer"), "recently asserted peer must not be re-registered")
 	require.Equal(t, 1, counting.callCount("UpdateConnectionState"))
 	require.Equal(t, 2, counting.callCount("UpdateLastMessageTime"))
+}
+
+func TestPeerRegistryBatcher_ForgetAssertStateForcesReassert(t *testing.T) {
+	b, counting, reg := newBatcherWithCountingRegistry()
+	pid := mustNewPeerID(t).String()
+
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	require.Equal(t, 1, counting.callCount("UpdateConnectionState"))
+
+	// The reconciler clears the registry flag out-of-band and drops the
+	// batcher's reassert memory; the peer's next message must re-mark it
+	// connected instead of being skipped as recently asserted.
+	require.NoError(t, counting.UpdateConnectionState(context.Background(), pid, false))
+	b.forgetAssertState(pid)
+
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+
+	got, ok := reg.Get(pid)
+	require.True(t, ok)
+	require.True(t, got.IsConnected, "reconnecting peer must be re-marked connected after forgetAssertState")
+}
+
+func TestPeerRegistryBatcher_ForgetAssertStateDuringFlushNotResurrected(t *testing.T) {
+	b, counting, _ := newBatcherWithCountingRegistry()
+	pid := mustNewPeerID(t).String()
+
+	// Assert connected once so lastAsserted holds a fresh connectedAt.
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	require.Equal(t, 1, counting.callCount("UpdateConnectionState"))
+
+	// Next cycle sends a register (new client name) but no connection assert
+	// (still within registryReassertTTL). A reconciler forgetAssertState lands
+	// mid-flush, after the loop snapshotted the peer's assert state.
+	counting.onRegister = func() { b.forgetAssertState(pid) }
+	b.enqueueRegister(pid, "client/2.0", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	counting.onRegister = nil
+	require.Equal(t, 1, counting.callCount("UpdateConnectionState"), "still within reassert TTL")
+
+	// The stale connectedAt must not have been resurrected by the in-flight
+	// flush: the peer's next message re-asserts connected immediately.
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	require.Equal(t, 2, counting.callCount("UpdateConnectionState"), "forgotten assert state must force a re-assert on the next flush")
+}
+
+func TestPeerRegistryBatcher_ForgetDuringConnectOnlyFlushZerosSnapshot(t *testing.T) {
+	b, counting, _ := newBatcherWithCountingRegistry()
+	pid := mustNewPeerID(t).String()
+
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+
+	// Age only the connection assert so the next flush re-asserts connected
+	// without re-registering.
+	b.mu.Lock()
+	st := b.lastAsserted[pid]
+	st.connectedAt = time.Now().Add(-2 * registryReassertTTL)
+	b.lastAsserted[pid] = st
+	b.mu.Unlock()
+
+	counting.onUpdateConnectionState = func() { b.forgetAssertState(pid) }
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+	counting.onUpdateConnectionState = nil
+
+	// A forget that raced the cycle zeroes the WHOLE snapshot, including the
+	// connect assert this cycle sent: the reconciler's clear may have landed
+	// after that RPC, and keeping connectedAt would mask it (see the
+	// reconnect-after-masked-clear test below for the observable failure).
+	b.mu.Lock()
+	st = b.lastAsserted[pid]
+	b.mu.Unlock()
+	require.True(t, st.connectedAt.IsZero(), "connect assert must be forgotten even though this cycle sent it")
+	require.True(t, st.registeredAt.IsZero(), "stale registeredAt must not be resurrected")
+}
+
+func TestPeerRegistryBatcher_ReconnectAfterMaskedClearIsReflagged(t *testing.T) {
+	b, counting, reg := newBatcherWithCountingRegistry()
+	pid := mustNewPeerID(t).String()
+
+	// Cycle 1 asserts connected=true. Mid-flush — after the connect RPC has
+	// already landed — the reconciler clears the flag and forgets the assert
+	// state. The reconciler's write is the later one, so the registry ends at
+	// false while the batcher just asserted true.
+	counting.onUpdateLastMessageTime = func() {
+		reg.UpdateConnectionState(pid, false)
+		b.forgetAssertState(pid)
+	}
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.enqueueLastMessage(pid)
+	b.flushOnce(context.Background())
+	counting.onUpdateLastMessageTime = nil
+
+	got, ok := reg.Get(pid)
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "the reconciler's clear landed last")
+
+	// The peer reconnects and gossips: its next message must re-flag it
+	// immediately, not up to registryReassertTTL later.
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+
+	got, _ = reg.Get(pid)
+	require.True(t, got.IsConnected, "a reconnected, gossiping peer must be re-flagged connected on its next message")
 }
 
 func TestPeerRegistryBatcher_NewInfoForcesRegister(t *testing.T) {
@@ -264,12 +402,15 @@ func TestServer_GossipFlood_BoundedRegistryRPCs(t *testing.T) {
 	setServerLocalHeight(t, s, 100)
 
 	self := mustNewPeerID(t)
+	remote := mustNewPeerID(t)
 	mockP2P := new(MockServerP2PClient)
 	mockP2P.peerID = self
+	// The flooding peer is directly connected (live Addrs), so the hot path's
+	// liveness check may flag it IsConnected.
+	mockP2P.peers = []p2pMessageBus.PeerInfo{{ID: remote.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
 	s.P2PClient = mockP2P
 	s.notificationCh = make(chan *notificationMsg, 200)
 
-	remote := mustNewPeerID(t)
 	const flood = 100
 	for i := 0; i < flood; i++ {
 		blockHash := chainhash.HashH([]byte(fmt.Sprintf("block %d", i))).String()

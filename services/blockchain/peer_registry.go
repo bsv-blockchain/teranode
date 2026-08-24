@@ -924,9 +924,9 @@ func (r *CentralizedPeerRegistry) StartPeriodicSave(ctx context.Context, interva
 
 // StartCleanup starts a background goroutine that periodically runs
 // Cleanup(maxSize, ttl) so the in-memory registry cannot grow unboundedly
-// under churn. Connected and banned peers are exempt; expired bans are
-// normalised before each pass so a stale IsBanned flag can't keep an idle
-// peer alive forever. The goroutine exits on the first of: ctx cancellation
+// under churn. Banned peers are exempt, connected peers only while active
+// within ttl; expired bans are normalised before each pass so a stale
+// IsBanned flag can't keep an idle peer alive forever. The goroutine exits on the first of: ctx cancellation
 // OR Close().
 //
 // A zero or negative interval disables the loop (caller's choice — useful
@@ -1310,7 +1310,8 @@ func (r *CentralizedPeerRegistry) RecordCatchupError(peerID string, errMsg strin
 // Cleanup evicts stale peers to bound memory and lookup cost. Phase 1 (TTL)
 // drops peers whose recency timestamp is older than ttl. Phase 2 (LRU) then
 // drops oldest-first until the non-exempt portion of the registry fits under
-// maxSize. Connected peers and banned peers are exempt from both phases.
+// maxSize. Banned peers are exempt from both phases; connected peers are
+// exempt only while their activity is within ttl (see isCleanupExempt).
 // A maxSize of 0 disables the LRU phase. Returns (expired, lru) counts.
 //
 // Recency is taken from peerActivity(info), which uses LastSeen as the canonical
@@ -1329,7 +1330,7 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 	expired := 0
 
 	for id, info := range r.peers {
-		if isCleanupExempt(info) {
+		if isCleanupExempt(info, now, ttl) {
 			continue
 		}
 		if last := peerActivity(info); !last.IsZero() && now.Sub(last) <= ttl {
@@ -1350,7 +1351,7 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 	candidates := make([]candidate, 0, len(r.peers))
 	exemptCount := 0
 	for id, info := range r.peers {
-		if isCleanupExempt(info) {
+		if isCleanupExempt(info, now, ttl) {
 			exemptCount++
 			continue
 		}
@@ -1378,9 +1379,20 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 }
 
 // isCleanupExempt reports whether a peer must be retained regardless of TTL or
-// size pressure. Caller must hold the registry lock.
-func isCleanupExempt(info *PeerInfo) bool {
-	return info.IsConnected || info.IsBanned
+// size pressure. Banned peers are always retained. IsConnected only exempts a
+// peer whose activity is still within ttl: the flag is asserted by the p2p
+// service on every gossip message but there is no libp2p disconnect signal to
+// clear it, so a stale flag must not pin an entry in the registry forever.
+// Caller must hold the registry lock.
+func isCleanupExempt(info *PeerInfo, now time.Time, ttl time.Duration) bool {
+	if info.IsBanned {
+		return true
+	}
+	if !info.IsConnected {
+		return false
+	}
+	last := peerActivity(info)
+	return !last.IsZero() && now.Sub(last) <= ttl
 }
 
 // peerActivity returns the canonical freshness timestamp used by Cleanup —
