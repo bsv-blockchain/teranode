@@ -7278,8 +7278,8 @@
 <h2 id="authentication">Authentication<a class="headerlink" href="#authentication" title="Permanent link">&para;</a></h2>
 <p>The Legacy Service implements an authentication system for its gRPC API:</p>
 <ul>
-<li>Uses the <code>GRPCAdminAPIKey</code> setting for protected methods</li>
-<li>Automatically generates a secure 32-byte random API key if none is provided</li>
+<li>Uses the <code>GRPCAdminAPIKey</code> setting for protected methods; source it from an environment variable or secret store, not committed configuration (well-known placeholders such as <code>testkey</code> are ignored at startup, logged and treated as unset). A configured key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive.</li>
+<li>If none is provided, generates a random key at startup; this generated key is never logged and leaves the protected methods unreachable (fail-closed) until an operator configures a shared key that both the server and its internal clients read</li>
 <li>Restricts access to sensitive methods (BanPeer, UnbanPeer) through API key authentication</li>
 <li>Protected methods require the API key to be provided in the gRPC metadata</li>
 </ul>

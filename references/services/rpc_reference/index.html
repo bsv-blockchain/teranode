@@ -8526,14 +8526,14 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 <h3 id="grpc-api-key-authentication">GRPC API Key Authentication<a class="headerlink" href="#grpc-api-key-authentication" title="Permanent link">&para;</a></h3>
 <p>For GRPC services, certain administrative operations require additional API key authentication:</p>
 <ul>
-<li><strong>Protected Methods</strong>: <code>BanPeer</code> and <code>UnbanPeer</code> operations in both P2P and Legacy GRPC services require API key authentication</li>
-<li><strong>Configuration</strong>: Set via <code>grpc_admin_api_key</code> setting in the configuration file</li>
-<li><strong>Auto-generation</strong>: If no API key is configured, the system generates a random 32-byte key at startup</li>
-<li><strong>Usage</strong>: API key must be included in GRPC requests as metadata with the key <code>x-api-key</code></li>
+<li><strong>Protected Methods</strong>: state-mutating admin operations require API key authentication. On the P2P service these are <code>BanPeer</code>, <code>UnbanPeer</code>, <code>ClearBanned</code>, <code>AddBanScore</code>, <code>ResetReputation</code>, <code>ConnectPeer</code> and <code>DisconnectPeer</code>; on the Legacy service, <code>BanPeer</code> and <code>UnbanPeer</code>.</li>
+<li><strong>Configuration</strong>: Set via the <code>grpc_admin_api_key</code> setting. Source it from an environment variable or secret store, not committed configuration; well-known placeholders (e.g. <code>testkey</code>, <code>changeme</code>) are ignored at startup (logged and treated as unset).</li>
+<li><strong>Fail-closed default</strong>: if no API key is configured (or a placeholder is ignored), the server generates a random key at startup. This <em>generated</em> key is never logged, and it leaves the protected admin RPCs unreachable until an operator sets a shared key that both the server and its internal clients read.</li>
+<li><strong>Usage</strong>: API key must be included in GRPC requests as metadata with the key <code>x-api-key</code>.</li>
 </ul>
 <div class="admonition warning">
 <p class="admonition-title">Security Note</p>
-<p>The API key provides administrative access to ban/unban operations. Ensure it is properly secured and not exposed in logs or configuration files in production environments.</p>
+<p>The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer <code>securityLevelGRPC &gt;= 2</code> (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a <em>configured</em> key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.</p>
 </div>
 <h2 id="general-format">General Format<a class="headerlink" href="#general-format" title="Permanent link">&para;</a></h2>
 <div class="admonition info">

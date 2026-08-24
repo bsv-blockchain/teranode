@@ -10028,7 +10028,7 @@
 <ul>
 <li><strong>Ban/Unban Operations</strong>: <code>BanPeer</code> and <code>UnbanPeer</code> methods in both P2P and Legacy services require API key authentication for security.</li>
 </ul>
-<p>The API key is configured via the <code>grpc_admin_api_key</code> setting. If no API key is provided, the system will automatically generate a random 32-byte API key at startup, which will be logged for reference. The API key must be included in GRPC requests as metadata with the key <code>x-api-key</code>.</p>
+<p>The API key is configured via the <code>grpc_admin_api_key</code> setting and must be included in GRPC requests as metadata with the key <code>x-api-key</code>. Source it from an environment variable or secret store rather than committing it to configuration; a <em>configured</em> key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive. Well-known placeholders such as <code>testkey</code> or <code>changeme</code> are ignored at startup (logged and treated as unset). If no API key is provided, the server generates a random key at startup; this generated key is never logged and leaves these admin operations unreachable (fail-closed) until an operator configures a shared key that both the server and its internal clients read.</p>
 <h2 id="2-architecture">2. Architecture<a class="headerlink" href="#2-architecture" title="Permanent link">&para;</a></h2>
 <p><img alt="RPC_Component_Context_Diagram.png" src="../img/RPC_Component_Context_Diagram.png" /></p>
 <p>The following diagram provides additional detail showing the RPC Service's internal structure and external service connections:</p>
