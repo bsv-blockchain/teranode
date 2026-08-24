@@ -9,8 +9,8 @@ generated from it and must never be hand-edited.
 ## The objective
 
 Give Teranode e2e coverage equivalent to bitcoin-sv's functional test suite
-(279 scripts, baseline commit `879fc8b42`, checked out at
-`/Users/sg/bsv-blockchain/bitcoin-sv/test/functional`), and an honest, reviewable
+(279 scripts, baseline commit `879fc8b42`, checked out locally at
+`<your-checkout>/bitcoin-sv/test/functional`), and an honest, reviewable
 record of every place the two nodes genuinely differ.
 
 **Both halves count.** A gap found and written up well is worth as much as a port

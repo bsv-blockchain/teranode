@@ -12,6 +12,260 @@
 # holds up stays honest, and so a gap cannot be quietly forgotten. Validated by
 # TestRegistryGaps; see PORTING.md "Gap register".
 gaps:
+  - id: no-ban-score-for-invalid-transactions
+    title: "A peer can send unlimited invalid transactions for free: no ban score, no disconnect"
+    kind: defect
+    status: open
+    impact: >-
+      Found while porting bsv-invalid-transactions.py, half of whose scenarios are
+      built on the expectation that an invalid transaction is charged for.
+
+      bitcoin-sv charges 100 ban-score points for a transaction that fails script
+      verification, against a default -banscore of 100, so the FIRST bad
+      transaction disconnects and bans the sender. Upstream leans on this
+      deliberately: one scenario sets -banscore=10000000 to observe the
+      not-yet-banned state, another sets -banscore=1 to observe the ban, and a
+      third raises it to 101 specifically so that a single bad parent's 100 points
+      do not ban the peer before the rest of the scenario can run. The comment
+      there spells the arithmetic out.
+
+      Teranode charges nothing. MEASURED: ten distinct script-invalid transactions
+      from one peer, with legacy_config_BanThreshold overridden to 1 so that any
+      score at all would ban. All ten drew their own reject, the peer stayed
+      connected, and listbanned stayed empty.
+
+      READ FROM CODE, which is the stronger evidence and explains why no threshold
+      matters: the whole legacy service contains exactly two addBanScore call
+      sites - an oversized getdata (peer_server.go:1438) and a malformed message
+      (addBanScore(100, 0, cmd)). Neither is transaction validation. The
+      transaction-failure path in SyncManager.handleTxMsg logs at
+      netsync/manager.go:1284, pushes a reject at :1288, and returns. Nothing
+      charges the peer, so the ban threshold is unreachable from this path however
+      it is configured.
+
+      This is the transaction twin of unsupported-inv-type-ignored-not-disconnected
+      (raised as issue 4781), and the two are worth reading together: in both cases
+      the mechanism to charge a peer exists and is used elsewhere one function away,
+      and in both cases the cheap-to-send message is the unpoliced one. Here the
+      asymmetry is sharper, because a script-invalid transaction costs the node a
+      full GoBDK script verification - real CPU - while an unsupported inv vector
+      costs only a goroutine.
+
+      Bounded honestly. Validation cost is what an attacker buys, and Teranode's
+      economics do not depend on ban scoring: rejected transactions never reach
+      block assembly, and rejectedTxns remembers a refused hash so the same one is
+      not re-requested. So this is a work-amplification and hygiene problem rather
+      than a route to consensus damage. NOT ESTABLISHED: how expensive the most
+      expensive cheaply-constructed invalid transaction is to verify, which is what
+      would size the exposure. The ten transactions here were trivial ones.
+    plan: >-
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4793, with the
+      measurement also recorded on issue 4699 to settle its partial verdict. The
+      fix is small and the
+      pattern is already in the tree: charge a ban score where the transaction
+      failure is handled, as the getdata handler does, and let the existing
+      BanThreshold machinery do the rest. bitcoin-sv's 100-points-for-a-script-
+      failure is the obvious number to copy, since it makes one bad transaction
+      sufficient and that is the behaviour every upstream test is written against.
+
+      Two things to decide rather than inherit. Whether every validation failure
+      should score the same - a fee that is too low is a policy disagreement and
+      arguably not misbehaviour, while a script that cannot verify is - and
+      bitcoin-sv does distinguish these. And whether the orphan path should charge
+      too, which interacts with orphan-rejection-not-reported-to-peer: a peer that
+      parks invalid orphans currently pays nothing and is told nothing.
+
+      Worth settling alongside issue 4781 rather than separately, since the question
+      is the same one: what a legacy peer is charged for, and by which handlers.
+    blocks: []
+    blocks_hooks: []
+    found_while_porting: bsv-invalid-transactions.py
+  - id: orphan-rejection-not-reported-to-peer
+    title: "An orphan that fails validation once its parent arrives is refused silently, and three bugs sit in that one function"
+    kind: defect
+    status: open
+    impact: >-
+      Found while porting bsv-invalid-transactions.py, whose second scenario sends
+      low-fee children before their parents and then asserts that every child draws
+      a reject once its fee can finally be assessed.
+
+      Teranode assesses them, refuses them, and tells the peer nothing. MEASURED:
+      three low-fee orphans held with no reject while their parents were unknown -
+      correct, and what upstream expects - then both parents accepted, then three
+      internal failures logged as TX_INVALID (31) -> TX_POLICY (39) "transaction fee
+      is too low" -> insufficient-fee, and ZERO rejects on the wire. The orphans
+      never reached block assembly, so the node's decision was right; only the
+      reporting is missing.
+
+      The direct path and the orphan path diverge on this, a few lines apart.
+      handleTxMsg logs at netsync/manager.go:1284 and then pushes a reject at :1288.
+      processOrphanTransactions logs at :1346 and then `continue`s. No reject, no
+      rejectedTxns entry, no ban score.
+
+      Reading that function turned up two more defects in it, both worth fixing at
+      the same time and neither costing coverage here:
+
+      1. THE LOG NAMES THE WRONG TRANSACTION. Line 1346 is
+      sm.logger.Errorf("Failed to process orphan transaction %v: %v", txHash, err),
+      but txHash is the function's parameter - the PARENT whose acceptance triggered
+      the walk - not the orphan that failed. MEASURED, and it is how this was
+      noticed: three failures printed the same outer hash with three different inner
+      [Validate][...] hashes. An operator reading the log cannot tell which
+      transaction was refused, and it looks like one transaction failing three
+      times. The value wanted is orphanTx.tx.TxIDChainHash().
+
+      2. THE CONFLICTING-ORPHAN BRANCH DELETES THE WRONG KEY. At :1341 the
+      double-spend case does sm.orphanTxs.Delete(*txHash) - again the parent, not
+      the orphan - under a comment reading "remove the tx from the orphan pool, it
+      is a double spend". READ FROM CODE, not measured: the conflicting orphan
+      therefore stays in the pool and the parent's entry is removed instead. Same
+      variable mix-up as the log line, which suggests one careless pass rather than
+      two independent slips.
+
+      Also, and stated as a nuisance rather than a leak because the bound is real:
+      an orphan that fails permanently is left in the pool by the `continue`, so it
+      is re-validated on every later parent acceptance that names it as a child
+      until it ages out. orphanTxs is an expiringmap built with
+      Legacy.OrphanEvictionDuration and WithMaxSize(Legacy.MaxOrphanTxs), so it is
+      bounded in both time and size and cannot grow without limit - this is not
+      another instance of the unbounded-orphan-pool class of defect. Deleting the
+      orphan on a terminal failure would still be the right thing.
+
+      Operationally the reporting gap costs a peer operator the ability to learn
+      that a transaction they sent was refused at all - not merely why, which is the
+      separate complaint in opaque-tx-reject-reason. A transaction sent as an orphan
+      simply disappears.
+    plan: >-
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4789. Three separable fixes in one
+      function, in the order they matter.
+
+      Push a reject when an orphan fails terminally, mirroring what handleTxMsg
+      already does, and record it in rejectedTxns so the node does not re-request
+      it. The peer that sent the orphan is known, so nothing needs plumbing through.
+      Note the reason string will be as uninformative as every other one until
+      opaque-tx-reject-reason is settled; that is an argument for fixing them
+      together, not for delaying this.
+
+      Correct the log to name orphanTx rather than txHash. One-line change, and it
+      is the difference between a usable log and a misleading one.
+
+      Correct the Delete at :1341 to remove the orphan rather than the parent, and
+      delete the orphan on other terminal failures too rather than leaving it to
+      age out.
+
+      Care needed on one distinction: ErrTxMissingParent and ErrTxLocked are handled
+      above and must keep skipping silently, because an orphan waiting on a SECOND
+      parent has not failed and must not draw a reject. Upstream relies on exactly
+      that - its fourth scenario asserts the orphans stay quiet while one parent is
+      permanently missing - and the port asserts it too, so a fix that rejects too
+      eagerly will fail that subtest rather than pass silently.
+    blocks: []
+    blocks_hooks: []
+    found_while_porting: bsv-invalid-transactions.py
+  - id: sigops-limit-absent-pre-genesis
+    title: "The pre-Genesis block sigops consensus limit is not implemented, and is unreachable behind checkpoints on every network that has them"
+    kind: product-decision
+    status: open
+    impact: >-
+      Found while porting bsv-sigopslimit-consensus-test.py, and recorded with its
+      severity deliberately talked DOWN, because the reachability analysis is most
+      of the finding.
+
+      bitcoin-sv caps signature operations per block before Genesis and drops the
+      cap after. GetMaxBlockSigOpsConsensusBeforeGenesis (src/config.cpp:825) is
+      (1 + (blockSize-1)/ONE_MEGABYTE) * MAX_BLOCK_SIGOPS_PER_MB_BEFORE_GENESIS,
+      so 20000 for any block up to a megabyte, counted by
+      GetSigOpCountWithoutP2SH over every input scriptSig and output scriptPubKey,
+      and enforced at validation.cpp:5805 only while !IsProtocolActive(era,
+      Genesis) - the comment there reads "Sigops are not counted after Genesis
+      anymore". Over the limit is REJECT_INVALID (16) "bad-blk-sigops" with DoS
+      100.
+
+      READ FROM CODE: Teranode counts signature operations per block nowhere, on
+      either side of the fork. No MAX_BLOCK_SIGOPS constant, no per-block
+      accumulator, nothing in model.Block.Valid. The only sigops setting is
+      maxtxsigopscountspolicy, which is per TRANSACTION, is handed to BDK as
+      SetMaxSigOpsPostGenesisPolicy - so POST-Genesis policy, not the pre-Genesis
+      consensus rule - and is 4294967295 in settings.conf. Teranode's own
+      documentation for that field says "BTC/BCH impose sigops limits per block and
+      transaction; BSV removed this restriction". The two strings a block-level
+      limit would need, bad-txns-too-many-sigops and high-sigops, appear in
+      services/rpc/Server.go only inside a commented-out block.
+
+      MEASURED, on regtest with the Genesis activation height moved to 6: a block
+      at height 5 whose legacy sigop count is exactly 20001 - one over
+      bitcoin-sv's allowance for a block of its size - is accepted and becomes the
+      tip. The count was asserted, not assumed, the way upstream asserts it. A
+      sibling block at exactly 20000 is also accepted, which both nodes agree on.
+      Above the activation height the same 20001-sigop block is accepted, which is
+      also agreement.
+
+      WHY THIS IS NOT FILED AS A DEFECT, and the part worth checking before anyone
+      changes that: the rule only ever applies below the Genesis activation height,
+      and on every network where that range is non-trivial it sits entirely below
+      the last checkpoint. Read from go-chaincfg v1.6.0: mainnet activates Genesis
+      at 620538 and carries 34 checkpoints up to height 945000; testnet activates
+      at 1344302 and carries 19 up to 1730000. So a fabricated pre-Genesis fork
+      cannot be adopted on either - it fails the checkpoint hash-match, which
+      #1387 recently tightened on the direct validate path. TeraTestNet and
+      TeraScalingTestNet activate Genesis at height 1, so they have no pre-Genesis
+      range to speak of. That leaves STN (activates at 100, no checkpoints) and
+      regtest (10000, no checkpoints) - the second being why this port can measure
+      the divergence at all.
+
+      So the honest summary is: a consensus rule bitcoin-sv enforces and Teranode
+      does not, unreachable on every network where it would matter, reachable only
+      where it does not.
+
+      NOT ESTABLISHED, and it is the question that decides whether this matters:
+      whether Teranode intends to be able to validate the pre-Genesis chain
+      WITHOUT trusting checkpoints. If it does, this is one missing rule among
+      what is probably a family of them - upstream's genesis_upgrade_tests package
+      covers about eleven more pre-Genesis limits (max ops per script, max script
+      number length, max stack size, the multisig public key limit, P2SH
+      acceptance, the CSV/CLTV sunset, transaction size limits), and none of them
+      was checked here. If it does not, then relying on checkpoints for the
+      historical range is coherent, and the useful action is to write that down
+      rather than to implement anything.
+    plan: >-
+      UNLOGGED - awaiting review, and this one may well be a documentation change
+      rather than a defect. Raised as a product-decision rather than a defect
+      deliberately: the current design is coherent if checkpoints are accepted as
+      the mechanism for the pre-Genesis range, and implementing a historical
+      consensus rule is not a small change to make on a test's say-so.
+
+      What the review should settle is the single question above - whether
+      independent validation of the pre-Genesis chain is a goal. Everything else
+      follows from it.
+
+      If it is, the scope is not this one rule: audit the pre-Genesis side of
+      genesis_upgrade_tests as a set, since the eleven-odd other limits there were
+      not checked and the presumption from this one is that they are absent too.
+      That is a piece of work worth sizing before starting, not a fix.
+
+      If it is not, then the change is to say so where someone will find it -
+      alongside the checkpoint list, or in the settings documentation for
+      maxtxsigopscountspolicy, which currently explains that BSV removed the
+      per-block limit without noting that the pre-Genesis one is unimplemented
+      rather than inapplicable.
+
+      Worth doing either way, and cheap: the port asserts the current behaviour in
+      tripwires, so whichever way this is decided, the day a limit appears the
+      test fails and says which gap to revisit.
+
+      One correction to the port, made after it landed: the over-limit tripwire was
+      originally a bare require.NoError, which reported "the gap has been fixed" for
+      ANY ProcessBlock error. It fired once in a full-suite run and did not
+      reproduce in two subsequent runs, so the cause was a transient failure under
+      suite load rather than a sigops rejection - but the message asserted the
+      opposite and cost time to rule out. The assertion now inspects the error and
+      only claims the tripwire fired when the refusal actually mentions sigops.
+      Recorded because the lesson generalises to every tripwire in this package: a
+      tripwire that cannot tell its own trigger from an unrelated failure is worse
+      than no tripwire, because it lies with authority.
+    blocks: []
+    blocks_hooks: []
+    found_while_porting: bsv-sigopslimit-consensus-test.py
   - id: reconsiderblock-ignores-ancestors
     title: "reconsiderblock refuses a block whose ancestor is still invalid, where bitcoin-sv clears both"
     kind: defect
@@ -157,7 +411,7 @@ gaps:
       question was not answered here because it needs a reading of the C++ engine
       rather than the Go tree.
     plan: >-
-      UNLOGGED - awaiting review. Answer the GoBDK question first, because it decides
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4792. Answer the GoBDK question first, because it decides
       whether this is a documentation defect or a missing defence.
 
       If GoBDK already bounds script execution, the fix is to stop advertising
@@ -611,6 +865,140 @@ gaps:
       disconnect assertion.
     blocks: [disconnect_ban.py]
     blocks_hooks: []
+  - id: block-before-parent-dropped-and-not-reconsidered
+    title: "A block delivered before its parent is reported accepted, silently not retained, and never reconsidered when the parent arrives"
+    kind: defect
+    status: open
+    impact: >-
+      Found while porting p2p-fullblocktest.py, whose b12/b13/b14 sequence exists
+      to test exactly this: upstream withholds b12, delivers b13, asserts b13 is
+      accepted but does not become the tip, then delivers b12 and asserts the tip
+      becomes b13. Teranode does the first half and not the second.
+
+      MEASURED, on a chain where b12 and b13 are a two-block branch off a common
+      ancestor and b13 is one block higher than the current tip. ProcessBlock for
+      b13, whose parent b12 has never been delivered, returns NIL - no error - and
+      the tip correctly does not move. So far this matches upstream. b12 is then
+      delivered and is itself accepted: it appears in getchaintips at its own
+      height with status valid-headers. The tip does NOT advance to b13, and b13
+      does not appear in getchaintips at all - not as valid-headers, not as
+      valid-fork, not as invalid. It is simply absent, so it was not retained
+      anywhere the node will revisit.
+
+      MEASURED, and it is what makes this a defect rather than a design choice:
+      re-delivering the IDENTICAL b13 immediately afterwards succeeds and the tip
+      advances to it within milliseconds. Nothing about the block changed. The
+      only difference is that its parent was known at the moment of delivery. So
+      the block was valid and connectable all along, and the first delivery threw
+      it away.
+
+      Two separable problems. The first is the false success: ProcessBlock returns
+      no error for a block it discards, so a caller cannot tell "accepted" from
+      "silently dropped" and has no signal that a re-send is required. The second
+      is the absent retention: a block whose parent is not yet known is neither
+      queued nor recorded, so the parent's later arrival triggers no
+      reconsideration. bitcoin-sv holds such a block and connects it when the
+      parent lands, which is what upstream's assertion encodes.
+
+      NOT ESTABLISHED, and it decides the severity rather than the correctness.
+      Whether the legacy wire path can deliver blocks out of order in normal
+      operation. netsync requests blocks in order and the catchup machinery is
+      built around that, so the reachable route may be limited to direct
+      ProcessBlock callers rather than to a remote peer. If a peer CAN cause it -
+      by announcing two blocks whose getdata responses race, for instance - then a
+      node can silently miss a block and only recover when some later mechanism
+      re-offers it. That was not driven here and should not be assumed either way.
+
+      Also not established: whether any higher-level retry eventually re-offers
+      the dropped block in a running node. The test observes a single delivery and
+      a 30-second window, not a live peer session.
+    plan: >-
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4794. Establish reachability from the wire before
+      sizing this, since that is what separates a caller-contract wart from a
+      block-loss bug: drive two blocks over wirepeer in reverse order and see
+      whether the same drop occurs, rather than reasoning from netsync's ordering
+      guarantees. That test is cheap and belongs in this package regardless of the
+      outcome.
+
+      Independently of reachability, the false success is worth fixing on its own
+      and is the smaller change: ProcessBlock should tell the caller that a block
+      could not be connected because its parent is unknown, rather than returning
+      nil for a block it drops. A typed error the caller can branch on would let
+      the legacy service decide whether to request the parent, hold the block, or
+      discard it deliberately.
+
+      The retention half is the larger question and is really a design decision:
+      whether Teranode should hold an unconnectable block at all. It already holds
+      unconnectable TRANSACTIONS in a bounded orphan pool with an eviction
+      duration and a size cap, so the pattern and its safety argument exist in the
+      tree - see the orphan pool discussed in
+      orphan-rejection-not-reported-to-peer. A bounded equivalent for blocks would
+      make the upstream assertion pass and would close the block-loss route if one
+      exists. Doing nothing is defensible only if reachability from a peer is
+      shown to be impossible.
+
+      Until decided, the port asserts Teranode's actual behaviour as a tripwire -
+      that b12's arrival does NOT connect b13, and that a re-delivery does - so
+      the day this is fixed the test fails and says so.
+    blocks: []
+    blocks_hooks: []
+    found_while_porting: p2p-fullblocktest.py
+  - id: merkle-proof-rpcs-unimplemented
+    title: "None of the four merkle-proof RPCs answer, so no port can obtain or verify a transaction inclusion proof"
+    kind: product-decision
+    status: open
+    impact: >-
+      Found while porting merkle_blocks.py, then confirmed against merkle_proof.py.
+      Both scripts are built entirely on merkle-proof RPCs - every assertion in
+      either one calls at least one of them - so neither can be ported at all
+      rather than ported partially.
+
+      MEASURED, each against a running daemon rather than inferred from the
+      dispatch table, because the two halves fail differently and the codes
+      matter. bitcoin-sv's Core-inherited pair answers -1 "Command unimplemented":
+      gettxoutproof and verifytxoutproof are both wired to handleUnimplemented
+      (services/rpc/Server.go:197 and :216). Note that parameter validation runs
+      FIRST, so a malformed call returns -32602 and only a well-formed call
+      reaches the unimplemented handler - worth knowing for anyone probing this.
+      BSV's own pair does not exist at all: getmerkleproof and verifymerkleproof
+      are absent from Server.go and return -32601 "Method not found".
+
+      So all four are unavailable, by two different routes, and the BSV-specific
+      pair is the one Teranode would more plausibly be expected to have.
+
+      WHY THIS IS RECORDED AS A PRODUCT DECISION rather than a defect. Implementing
+      them widens Teranode's public RPC surface, which this exercise deliberately
+      does not do - the same reasoning that holds submitblock-rpc and
+      net-rpcs-unimplemented. It is worth noting that Teranode's data model should
+      make a proof CHEAP to produce rather than expensive: a subtree is already a
+      merkle structure over transactions, and the gap register's
+      legacy-wire-message-subset entry makes the same observation about gethdrsen,
+      which wants a coinbase merkle proof. So the obstacle here is an API decision,
+      not a missing capability.
+
+      NOT ESTABLISHED: whether the asset server already exposes an equivalent
+      proof over HTTP. If it does, these ports might be restructured against that
+      surface instead of waiting for the RPCs, and the cost of this gap drops to
+      nearly nothing. That was not checked, and checking it is the cheapest next
+      step here.
+    plan: >-
+      UNLOGGED - awaiting review, and the first question is not whether to
+      implement the RPCs. Check whether the asset server already serves a
+      transaction inclusion proof. Teranode's subtrees are merkle structures over
+      exactly the transactions a proof needs, so an equivalent may already be
+      reachable over HTTP, in which case merkle_blocks.py and merkle_proof.py can
+      be restructured against it and this gap costs no coverage.
+
+      If it does not exist anywhere, then this belongs with submitblock-rpc and
+      net-rpcs-unimplemented as one decision about how wide Teranode's public RPC
+      surface should be, taken deliberately and not as a side effect of wanting two
+      tests to pass. Of the four, getmerkleproof and verifymerkleproof are the pair
+      worth arguing for: they are BSV's own, and an SPV client asking a node to
+      prove a transaction is in a block is the use case the subtree model already
+      serves internally.
+    blocks: [merkle_blocks.py, merkle_proof.py]
+    blocks_hooks: []
+    found_while_porting: merkle_blocks.py
   - id: listbanned-duplicate-entries
     title: "listbanned reports every ban twice when both peer services are running"
     kind: defect
@@ -960,7 +1348,7 @@ gaps:
       operator has no supported way to lift that for infrastructure they control.
       Separately, misbehaviour bans cannot be suppressed for a trusted peer.
     plan: >-
-      UNLOGGED - awaiting review. Report as a defect if the user agrees; the two
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4791; the two
       halves are separable and only the first is unambiguously a bug.
 
       Fix for the first: re-derive config.whitelists after
@@ -1313,7 +1701,7 @@ gaps:
       reproduces the grinding-halt failure, or is absorbed harmlessly by
       peerStates, is not established either way.
     plan: >-
-      UNLOGGED - awaiting review. Report as a defect, with the reachability
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4800. Report as a defect, with the reachability
       question carried into it rather than resolved first, since the fix is the
       same either way and cheaper than the investigation.
 
@@ -1389,7 +1777,7 @@ gaps:
       advertisement and sends a 1.9 MiB inv would therefore be disconnected by
       Teranode for doing what Teranode invited.
     plan: >-
-      UNLOGGED - awaiting review. Report as a protocol-conformance defect. Three
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4799. Report as a protocol-conformance defect. Three
       separable pieces, in the order they matter.
 
       First, honour the peer's declared limit when sizing outbound messages. The
@@ -1468,7 +1856,7 @@ gaps:
       is exactly what fixing that gap means - a peer can declare 1 byte, or the
       1.5 GB the filler case produced, and Teranode will size real messages from it.
     plan: >-
-      UNLOGGED - awaiting review. Report as a defect, and carry the ordering
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4798. Report as a defect, and carry the ordering
       constraint into it, because it is the substantive point: this should be fixed
       BEFORE or TOGETHER WITH protoconf-payload-limit-not-honoured, never after.
       Validating a value nobody reads is housekeeping; reading a value nobody
@@ -1847,7 +2235,7 @@ gaps:
       transaction was refused without access to our logs, and it costs Teranode's own
       callers the ability to branch on the reason.
     plan: >-
-      UNLOGGED - awaiting review. Report as a defect, and worth reviewing together
+      Raised as https://github.com/bitcoin-sv/teranode/issues/4790, and worth reviewing together
       with opaque-block-reject-reason since the two share a fix strategy and a
       caution, and a single decision should cover both.
 
@@ -1968,8 +2356,9 @@ entries:
     waived_assertions: []
   - name: assumevalid.py
     bucket: A
-    status: todo
+    status: blocked
     needs: [wirepeer]
+    reason: "Teranode has no -assumevalid counterpart: grepping the whole tree for assumevalid/AssumeValid, in Go and in settings.conf, returns nothing outside vendored code. The script's entire design is a comparison between one node without the setting and two with it, so there is nothing to configure differently. It also needs three nodes syncing from each other and a 2202-block chain to bury the bad block by two weeks' work, and multi-node pairing is unavailable - see peer-id-empty-under-test-context for the native P2P route and headers-announcement-disconnects plus legacy-block-announcement for the wire route."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -2174,8 +2563,9 @@ entries:
       400,000,001 the guard actually allows.
   - name: bsv-block-download-timeout.py
     bucket: A
-    status: todo
+    status: blocked
     needs: [wirepeer]
+    reason: "Needs two settings Teranode does not have - grepping the tree for blockdownloadslowfetchtimeout and streamsendratelimit returns nothing - and three nodes, one deliberately rate-limited so another times out fetching from it and refetches elsewhere. Multi-node pairing is unavailable; see assumevalid.py's reason for the two blocked routes."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -2189,7 +2579,7 @@ entries:
   - name: bsv-block-propagation-priority.py
     bucket: A
     status: todo
-    needs: [wirepeer, funding-shim]
+    needs: [wirepeer]
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -2209,7 +2599,8 @@ entries:
     waived_assertions: []
   - name: bsv-block-stalling-test.py
     bucket: A
-    status: todo
+    status: blocked
+    reason: "Its only assertion is a log assertion - assert(not check_for_log_msg(self, \"stalling block download\", \"/node2\")) - so it is blocked on log-assertions-unreachable, and there is nothing else in the script to assert instead. It also needs multiple nodes syncing from each other, and configures -maxmempool and -maxmempoolsizedisk, which have no counterpart because Teranode has no mempool. The 6 GB excessiveblocksize/blockmaxsize would need reconsidering separately."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -2601,14 +2992,14 @@ entries:
   - name: bsv-donotcheck-relay-collision-multi.py
     bucket: A
     status: todo
-    needs: [wirepeer, funding-shim]
+    needs: [wirepeer]
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
   - name: bsv-donotcheck-relay-collision.py
     bucket: A
     status: todo
-    needs: [wirepeer, funding-shim]
+    needs: [wirepeer]
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -3064,10 +3455,17 @@ entries:
       this exercise established whether Teranode implements any of it.
   - name: bsv-getdata.py
     bucket: A
-    status: todo
-    needs: [wirepeer, funding-shim]
-    ported_to: ""
-    upstream_assertions: []
+    status: ported
+    needs: [wirepeer]
+    ported_to: "TestBSVGetData"
+    upstream_assertions:
+      - "a GETDATA naming an unknown block hash draws no action - no block message is returned for it"
+      - "a GETDATA naming a known block hash returns that block in a BLOCK message"
+      - "the unknown block hash never appears among the blocks received"
+      - "at least one block is received across the exercise"
+      - "a GETDATA naming an unknown transaction hash returns a NOTFOUND message naming that hash"
+      - "a GETDATA naming a known transaction hash returns that transaction in a TX message"
+      - "exactly one transaction is received, since only one was ever requested"
     waived_assertions: []
   - name: bsv-getrawmempool-rpc-rest.py
     bucket: C
@@ -3094,11 +3492,45 @@ entries:
     waived_assertions: []
   - name: bsv-invalid-transactions.py
     bucket: A
-    status: todo
+    status: ported-partial
     needs: [wirepeer]
-    ported_to: ""
-    upstream_assertions: []
-    waived_assertions: []
+    ported_to: "TestBSVInvalidTransactions"
+    upstream_assertions:
+      - "scenario 1: a low-fee transaction from a non-whitelisted peer draws a reject naming it"
+      - "scenario 1: the rejected low-fee transaction is not relayed to a second peer"
+      - "scenario 2: a low-fee transaction from a whitelisted peer draws a reject naming it"
+      - "scenario 2: the rejected low-fee transaction IS relayed to a second peer, because the sender is whitelisted"
+      - "scenario 3: a bad-signature transaction draws a reject naming it"
+      - "scenario 3: the bad-signature transaction is not relayed to a second peer"
+      - "scenario 3: with a ban threshold far above one failure's score, the sender stays connected"
+      - "scenario 4: with a ban threshold of 1, the bad-signature sender is disconnected"
+      - "scenario 4: with a ban threshold of 1, listbanned holds exactly one entry afterwards"
+      - "orphan scenario 1: children sent before their parents are not in the mempool and draw no reject"
+      - "orphan scenario 1: once both parents are sent, the parents and every child are all in the mempool"
+      - "orphan scenario 1: nothing is rejected at any point"
+      - "orphan scenario 2: low-fee children sent before their parents are not in the mempool and draw no reject"
+      - "orphan scenario 2: after the first parent, only that parent is in the mempool and nothing is rejected yet"
+      - "orphan scenario 2: after the second parent, both parents are in the mempool"
+      - "orphan scenario 2: every low-fee child then draws a reject naming it"
+      - "orphan scenario 2: the peer is not banned for the low-fee children"
+      - "orphan scenario 3: bad-signature children sent before their parents draw no reject and are not in the mempool"
+      - "orphan scenario 3: after both parents, both parents are in the mempool and only they are"
+      - "orphan scenario 3: the peer is disconnected and listbanned holds one entry"
+      - "orphan scenario 4: children of one valid and one bad-signature parent draw no reject while held"
+      - "orphan scenario 4: the valid parent is accepted and is the only thing in the mempool"
+      - "orphan scenario 4: the invalid parent is rejected, and only it is rejected"
+      - "orphan scenario 4: the children are never accepted, since one parent can never exist"
+      - "orphan scenario 4: the peer is not banned, upstream raising banscore to 101 so one bad parent does not ban it"
+    waived_assertions:
+      - "scenario 2: a low-fee transaction from a whitelisted peer draws a reject naming it: the scenario cannot be set up at all. No whitelist can be in force in Teranode - loadConfig parses config.Whitelists into the list isWhitelisted reads, and setConfigValuesFromSettings then overwrites the string list afterwards without re-deriving it - so there is no way to be the whitelisted peer and no way to distinguish this scenario from scenario 1. See the legacy-whitelist-inert gap. The reject half is reproduced in scenario 1, which is the same assertion against the same code path."
+      - "scenario 2: the rejected low-fee transaction IS relayed to a second peer, because the sender is whitelisted: same cause - the whitelist cannot be in force, so the behaviour that depends on it cannot be observed. Worth noting the port does prove relay works: scenario 1 carries a control that sends a valid transaction on the same connection and asserts the second peer receives a tx inv for it, so the not-relayed assertions there are not vacuously true."
+      - "scenario 4: with a ban threshold of 1, the bad-signature sender is disconnected: Teranode charges no ban score for an invalid transaction, so no threshold can be crossed - see the no-ban-score-for-invalid-transactions gap. Measured with legacy_config_BanThreshold overridden to 1: ten distinct script-invalid transactions drew ten rejects and left the peer connected. The port asserts that as a tripwire, and asserts the rejects are exactly the transactions sent, so the subtest still measures something rather than merely observing an absence."
+      - "scenario 4: with a ban threshold of 1, listbanned holds exactly one entry afterwards: same cause. The port asserts listbanned is empty, as a tripwire."
+      - "orphan scenario 2: every low-fee child then draws a reject naming it: Teranode assesses and refuses them but never tells the peer - the orphan path logs at netsync/manager.go:1346 and continues, where the direct path pushes a reject at :1288. See the orphan-rejection-not-reported-to-peer gap. The port asserts the refusal is real by checking none of the children reaches block assembly, and asserts the absent reject as a tripwire, so both halves of the divergence are pinned."
+      - "orphan scenario 3: bad-signature children sent before their parents draw no reject and are not in the mempool: not reproduced as a separate scenario. Its distinguishing assertion is the ban that follows, which cannot happen (see above), and its held-then-refused shape is exactly scenario 2's with a script failure instead of a fee failure - both reach the same processOrphanTransactions branch and produce the same silent refusal. Scenario 4 covers a script-invalid parent, which is the more interesting case because the orphans then can never be validated at all."
+      - "orphan scenario 3: after both parents, both parents are in the mempool and only they are: as above - covered by scenario 2's equivalent assertions."
+      - "orphan scenario 3: the peer is disconnected and listbanned holds one entry: no ban score is charged, as above."
+      - "scenario 3: with a ban threshold far above one failure's score, the sender stays connected: reproduced, but for a different reason than upstream's, and recorded here so the difference is not lost. Upstream stays connected because one failure's 100 points are below its 10000000 threshold. Teranode stays connected because nothing is charged at any threshold. The outcome matches; the mechanism does not."
   - name: bsv-journal-mempool-reorg-ordering.py
     bucket: C
     status: not-applicable
@@ -3444,35 +3876,40 @@ entries:
       - "the node logs 'Failed to process version: (Badly formatted association ID': unreproducible in principle, not just because the log is unreachable from an in-process TestDaemon. The two nodes fail at different layers on identical input - bitcoin-sv decodes the trailing field and finds it is not a well-formed association ID, whereas go-wire rejects it during decoding because the 0xFE varint prefix declares 1118481 bytes against MaxAssociationIDLen 129 (measured). Teranode never constructs a MsgVersion, so no association handling runs, and there is no equivalent format check to reach anyway: peer.NewAssociation takes the ID bytes as given and validates nothing."
   - name: bsv-p2p_inv_msg_time_order.py
     bucket: A
-    status: todo
-    needs: [wirepeer, funding-shim]
-    ported_to: ""
-    upstream_assertions: []
+    status: ported
+    needs: [wirepeer]
+    ported_to: "TestBSVP2PInvMsgTimeOrder"
+    upstream_assertions:
+      - "every transaction accepted from one peer is announced by inv to a second, separate peer"
+      - "the number of transactions announced equals the number sent - no duplicates, none missing"
     waived_assertions: []
   - name: bsv-p2p_inv_msg_time_order2.py
     bucket: A
-    status: todo
-    needs: [wirepeer, funding-shim]
-    ported_to: ""
-    upstream_assertions: []
+    status: ported
+    needs: [wirepeer]
+    ported_to: "TestBSVP2PInvMsgTimeOrder2"
+    upstream_assertions:
+      - "with inventory relay held back, a single inv message carries every queued transaction rather than one inv per transaction"
+      - "the order transactions are announced in preserves the order they were sent and validated in, tested as order-preservation over a possible subsequence rather than equality"
     waived_assertions: []
   - name: bsv-p2sh-wallet.py
-    bucket: A
-    status: todo
-    needs: [wirepeer, funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Teranode declines every wallet RPC by design: getnewaddress, sendtoaddress, getbalance, listtransactions, listunspent, signrawtransaction, importprivkey, listsinceblock, settxfee and getwalletinfo are all routed to handleAskWallet in services/rpc/Server.go, which answers \"this implementation requires a wallet\"; resendwallettransactions, zapwallettxes and fundrawtransaction are not in the dispatch table at all. Key custody and wallet state live outside the node. This script's own comment says it checks \"behavior of the Wallet when trying to spend pre and post genesis P2SH script\", driven by importprivkey into two nodes' wallets, so there is no counterpart to port - unlike the scripts that merely USE the wallet to obtain funds and sign, which port fine by doing both client-side (see bsv-getdata.py)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
   - name: bsv-p2sh.py
     bucket: A
     status: todo
-    needs: [wirepeer, funding-shim]
+    needs: [wirepeer]
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
   - name: bsv-parallel-block-downloads.py
     bucket: A
-    status: todo
+    status: blocked
+    reason: "Three nodes wired into a specific topology - node2 attached only to a deliberately slow node1, then reattached to node0 mid-download so a parallel fetch is triggered - which multi-node pairing cannot express; see assumevalid.py's reason for the two blocked routes. Independently blocked three more ways: -streamsendratelimit and -blockdownloadslowfetchtimeout do not exist in Teranode, getpeerinfo has no inflight field to poll for the in-flight block, and the closing assertion is a log assertion (log-assertions-unreachable)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -3801,11 +4238,19 @@ entries:
     waived_assertions: []
   - name: bsv-script-op_pushdata.py
     bucket: A
-    status: todo
-    needs: [wirepeer, funding-shim]
-    ported_to: ""
-    upstream_assertions: []
-    waived_assertions: []
+    status: ported-partial
+    needs: [wirepeer]
+    ported_to: "TestBSVScriptOpPushData"
+    upstream_assertions:
+      - "a transaction whose output pushes 0xff bytes via OP_PUSHDATA1 is accepted, and OP_SIZE inside that script agrees with the declared length"
+      - "the OP_PUSHDATA1 output can then be spent, which is what actually executes the script"
+      - "a transaction whose output pushes 0xffff bytes via OP_PUSHDATA2 is accepted, and OP_SIZE agrees"
+      - "the OP_PUSHDATA2 output can then be spent"
+      - "a transaction whose output pushes 0x3b110000 bytes - about 991 MB - via OP_PUSHDATA4 is accepted, and OP_SIZE agrees"
+      - "the OP_PUSHDATA4 output can then be spent"
+    waived_assertions:
+      - "a transaction whose output pushes 0x3b110000 bytes - about 991 MB - via OP_PUSHDATA4 is accepted, and OP_SIZE agrees: the magnitude is not reproduced, and this is a HARNESS limit rather than a Teranode one, which is stated plainly rather than dressed up. Upstream lifts every relevant policy to unlimited (-maxtxsizepolicy=0, -maxscriptsizepolicy=0, -maxstackmemoryusagepolicy=0, -maxmempool=3GB) to carry a roughly 1 GB transaction. Teranode's defaults are maxscriptsizepolicy 500000 and maxtxsizepolicy 10485760 and could be overridden the same way, but an in-process TestDaemon cannot carry a 1 GB transaction through propagation and block assembly. What the script's name and its three cases are actually about - which push opcode the encoding selects and whether OP_SIZE agrees with it - IS reproduced: the port uses 0x20000, above OP_PUSHDATA2's 0xffff ceiling, so the OP_PUSHDATA4 path runs on the same code. What is lost is the size-limit half at that scale, not the encoding. Verified by negative control: encoding the expected length one byte off makes all three cases fail, so the comparison is genuinely executed and not passing vacuously."
+      - "the OP_PUSHDATA4 output can then be spent: reproduced at 0x20000 rather than 0x3b110000, for the reason above."
   - name: bsv-selfish-mining.py
     bucket: A
     status: todo
@@ -3845,11 +4290,36 @@ entries:
     waived_assertions: []
   - name: bsv-sigopslimit-consensus-test.py
     bucket: A
-    status: todo
+    status: ported-partial
     needs: [wirepeer]
-    ported_to: ""
-    upstream_assertions: []
-    waived_assertions: []
+    ported_to: "TestBSVSigopsLimitConsensus"
+    upstream_assertions:
+      - "the initial chain leaves the tip below the Genesis activation height"
+      - "a pre-Genesis block with exactly MAX_BLOCK_SIGOPS_PER_MB sigops (OP_CHECKSIG) is accepted"
+      - "the accepted block's legacy sigop count is exactly MAX_BLOCK_SIGOPS_PER_MB"
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB+1 sigops (OP_CHECKSIG) is rejected with RejectResult(16, bad-blk-sigops)"
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB/20 OP_CHECKMULTISIG is accepted, and its legacy sigop count is exactly MAX_BLOCK_SIGOPS_PER_MB"
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB/20+1 OP_CHECKMULTISIG is rejected with RejectResult(16, bad-blk-sigops), and its count is MAX_BLOCK_SIGOPS_PER_MB+1"
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB OP_CHECKSIGVERIFY is accepted, and its count is exactly MAX_BLOCK_SIGOPS_PER_MB"
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB+1 OP_CHECKSIGVERIFY is rejected with RejectResult(16, bad-blk-sigops)"
+      - "each rejected pre-Genesis block leaves the tip unchanged, since the next block builds on the same parent"
+      - "a post-Genesis block with MAX_BLOCK_SIGOPS_PER_MB sigops (OP_CHECKSIG) is accepted"
+      - "a post-Genesis block with MAX_BLOCK_SIGOPS_PER_MB+1 sigops (OP_CHECKSIG) is accepted"
+      - "a post-Genesis block with MAX_BLOCK_SIGOPS_PER_MB/20+1 OP_CHECKMULTISIG is accepted"
+      - "a post-Genesis block with MAX_BLOCK_SIGOPS_PER_MB OP_CHECKSIGVERIFY is accepted"
+      - "a post-Genesis block with MAX_BLOCK_SIGOPS_PER_MB+1 OP_CHECKSIGVERIFY is accepted"
+      - "a post-Genesis block of ONE_MEGABYTE+500 bytes carrying MAX_BLOCK_SIGOPS_PER_MB_POST_GENESIS (1000000) sigops is accepted"
+    waived_assertions:
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB+1 sigops (OP_CHECKSIG) is rejected with RejectResult(16, bad-blk-sigops): Teranode counts signature operations per block nowhere, on either side of the Genesis activation height, so there is no rejection to observe - see the sigops-limit-absent-pre-genesis gap. The port asserts the opposite outcome in a clearly labelled tripwire: the block is accepted and becomes the tip. It also asserts, as upstream does, that the block's legacy sigop count really is MAX_BLOCK_SIGOPS_PER_MB+1, so the acceptance is a divergence and not an accounting error on this side."
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB/20+1 OP_CHECKMULTISIG is rejected with RejectResult(16, bad-blk-sigops), and its count is MAX_BLOCK_SIGOPS_PER_MB+1: same absent rule. Not reproduced as a separate case because it differs from the OP_CHECKSIG case above only in how upstream's counter scores one opcode (20 rather than 1), and with no counter on this side there is nothing for the distinction to exercise. The port's legacySigopCount helper does implement the x20 rule, so the variant is one line away if a limit is ever added."
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB+1 OP_CHECKSIGVERIFY is rejected with RejectResult(16, bad-blk-sigops): same absent rule, and OP_CHECKSIGVERIFY scores identically to OP_CHECKSIG under upstream's counting, so this case is the OP_CHECKSIG case with a different opcode byte. Nothing on the Teranode side distinguishes them."
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB/20 OP_CHECKMULTISIG is accepted, and its legacy sigop count is exactly MAX_BLOCK_SIGOPS_PER_MB: the acceptance half is reproduced for OP_CHECKSIG. Repeating it per opcode measures the same nothing three times, since acceptance is unconditional here."
+      - "a pre-Genesis block with MAX_BLOCK_SIGOPS_PER_MB OP_CHECKSIGVERIFY is accepted, and its count is exactly MAX_BLOCK_SIGOPS_PER_MB: as above."
+      - "a post-Genesis block with MAX_BLOCK_SIGOPS_PER_MB/20+1 OP_CHECKMULTISIG is accepted: as above, on the post-Genesis side."
+      - "a post-Genesis block with MAX_BLOCK_SIGOPS_PER_MB OP_CHECKSIGVERIFY is accepted: as above."
+      - "a post-Genesis block with MAX_BLOCK_SIGOPS_PER_MB+1 OP_CHECKSIGVERIFY is accepted: as above."
+      - "a post-Genesis block of ONE_MEGABYTE+500 bytes carrying MAX_BLOCK_SIGOPS_PER_MB_POST_GENESIS (1000000) sigops is accepted: upstream pads to just over one megabyte because its allowance scales per megabyte, so the case checks that crossing into a second megabyte does not reintroduce a limit. With no limit on either side of the fork and none scaling with size, building a megabyte block buys no assertion. The port keeps its blocks small and records instead the arithmetic upstream relies on: GetMaxBlockSigOpsConsensusBeforeGenesis is (1 + (size-1)/1e6) * 20000, so the allowance for every block at or below one megabyte is the same 20000 the port uses."
+      - "each rejected pre-Genesis block leaves the tip unchanged, since the next block builds on the same parent: nothing is rejected, so there is no unchanged tip to assert. The port asserts the converse throughout - each accepted block becomes the tip - which is what makes the divergence visible rather than implied."
   - name: bsv-soft-rejected-blocks.py
     bucket: B
     status: blocked
@@ -4014,8 +4484,9 @@ entries:
     waived_assertions: []
   - name: decodescript.py
     bucket: A
-    status: todo
+    status: blocked
     needs: [wirepeer]
+    reason: "decodescript is handleUnimplemented in services/rpc/Server.go:165, and the script does nothing else - every assertion is a decodescript call comparing asm, type and the p2sh address it derives. Implementing it would widen Teranode's public RPC surface, which GOAL.md puts outside this exercise, so this is left blocked rather than unblocked by adding an RPC. Unlike the net RPCs it is not a peer-administration call, so it is not covered by the net-rpcs-unimplemented gap; it is a pure decoder with no node state behind it, which is the argument for implementing it if anyone wants to."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4061,8 +4532,9 @@ entries:
     waived_assertions: []
   - name: example_test.py
     bucket: A
-    status: todo
+    status: blocked
     needs: [wirepeer]
+    reason: "Blocked today because its two node assertions - that blocks propagate to a connected node and that each is announced exactly once - need multi-node block announcement, which legacy-block-announcement and headers-announcement-disconnects block. BUT THE STATUS IS PROBABLY WRONG: this is upstream's documentation-by-example for its own Python framework rather than a test of node behaviour. The docstring calls it \"An example functional test\" and the body teaches PEP8 import ordering, where self.log may and may not be called, and how to subclass P2PEventHandler. Porting a template that exists to explain mininode.py has little value once wirepeer replaces mininode.py, and PORTING.md is the equivalent document here. That reading makes it bucket C / not-applicable, but moving an entry between buckets on a judgement about intent is a decision GOAL.md reserves for the user, so it is left blocked and flagged instead."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4075,7 +4547,8 @@ entries:
     waived_assertions: []
   - name: getblock-from-dataTemplate.1.0.0.py
     bucket: A
-    status: todo
+    status: blocked
+    reason: "PROBABLY BELONGS IN BUCKET C, and left blocked only because moving it there is the user's call. The fixture is a pregenerated bitcoind 1.0.0 data directory, copied into place by setup_chain from test/functional/data/dataTemplate.1.0.0/node0/regtest, and the assertions are about bitcoind's on-disk representation: that blocks written before CDiskBlockMetaData existed carry no size field, so getblock at verbosity 3 omits 'size' while verbosity 2 reads the whole block from disk, computes it, and reports 834. Teranode cannot load a bitcoind data directory - headers live in its own SQL blockchain store and transaction data in the subtree and block stores - and has no CDiskBlockMetaData counterpart, so there is no lazily-computed-and-persisted block size to observe. Nothing about the RPC contract is being tested here that getblock coverage elsewhere would not cover."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4123,9 +4596,9 @@ entries:
     upstream_assertions: []
     waived_assertions: []
   - name: importprunedfunds.py
-    bucket: A
-    status: todo
-    needs: [funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Teranode declines every wallet RPC by design: getnewaddress, sendtoaddress, getbalance, listtransactions, listunspent, signrawtransaction, importprivkey, listsinceblock, settxfee and getwalletinfo are all routed to handleAskWallet in services/rpc/Server.go, which answers \"this implementation requires a wallet\"; resendwallettransactions, zapwallettxes and fundrawtransaction are not in the dispatch table at all. Key custody and wallet state live outside the node. This script's subject is importing pruned funds into a wallet via importprivkey and importprunedfunds, so there is no counterpart to port - unlike the scripts that merely USE the wallet to obtain funds and sign, which port fine by doing both client-side (see bsv-getdata.py)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4193,9 +4666,9 @@ entries:
     upstream_assertions: []
     waived_assertions: []
   - name: listsinceblock.py
-    bucket: A
-    status: todo
-    needs: [funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Teranode declines every wallet RPC by design: getnewaddress, sendtoaddress, getbalance, listtransactions, listunspent, signrawtransaction, importprivkey, listsinceblock, settxfee and getwalletinfo are all routed to handleAskWallet in services/rpc/Server.go, which answers \"this implementation requires a wallet\"; resendwallettransactions, zapwallettxes and fundrawtransaction are not in the dispatch table at all. Key custody and wallet state live outside the node. This script's subject is listsinceblock's wallet-history semantics when handed a block no longer on the main chain, so there is no counterpart to port - unlike the scripts that merely USE the wallet to obtain funds and sign, which port fine by doing both client-side (see bsv-getdata.py)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4266,15 +4739,19 @@ entries:
     waived_assertions: []
   - name: merkle_blocks.py
     bucket: A
-    status: todo
-    needs: [funding-shim]
+    status: blocked
+    needs: [wirepeer]
+    gaps: [merkle-proof-rpcs-unimplemented, peer-id-empty-under-test-context]
+    reason: "Every assertion calls gettxoutproof or verifytxoutproof, both of which answer -1 \"Command unimplemented\" (measured). Also wants four nodes, which peer-id-empty-under-test-context blocks. Mis-tagged as funding-shim: the wallet use is incidental and the port could fund itself, but there is nothing to assert against."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
   - name: merkle_proof.py
     bucket: A
-    status: todo
-    needs: [funding-shim]
+    status: blocked
+    needs: [wirepeer]
+    gaps: [merkle-proof-rpcs-unimplemented]
+    reason: "Built on getmerkleproof (8 calls) and verifymerkleproof (6), neither of which exists in Teranode's dispatch table - both answer -32601 \"Method not found\" (measured). Mis-tagged as funding-shim for the same reason as merkle_blocks.py: the funding is incidental, the proof RPCs are the subject."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4340,9 +4817,9 @@ entries:
     upstream_assertions: []
     waived_assertions: []
   - name: multiwallet.py
-    bucket: A
-    status: todo
-    needs: [funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Teranode declines every wallet RPC by design: getnewaddress, sendtoaddress, getbalance, listtransactions, listunspent, signrawtransaction, importprivkey, listsinceblock, settxfee and getwalletinfo are all routed to handleAskWallet in services/rpc/Server.go, which answers \"this implementation requires a wallet\"; resendwallettransactions, zapwallettxes and fundrawtransaction are not in the dispatch table at all. Key custody and wallet state live outside the node. This script's subject is loading multiple wallet files (-wallet=w1..w3) and getwalletinfo, so there is no counterpart to port - unlike the scripts that merely USE the wallet to obtain funds and sign, which port fine by doing both client-side (see bsv-getdata.py)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4376,9 +4853,9 @@ entries:
       - "getaddednodeinfo on an unknown node raises -24 Node has not been added: unimplemented"
       - "the node initiates the ping via nodes[0].ping(): ping is unimplemented, so the test peer pings the node instead"
   - name: notifications.py
-    bucket: A
-    status: todo
-    needs: [funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Teranode declines every wallet RPC by design: getnewaddress, sendtoaddress, getbalance, listtransactions, listunspent, signrawtransaction, importprivkey, listsinceblock, settxfee and getwalletinfo are all routed to handleAskWallet in services/rpc/Server.go, which answers \"this implementation requires a wallet\"; resendwallettransactions, zapwallettxes and fundrawtransaction are not in the dispatch table at all. Key custody and wallet state live outside the node. This script's subject is the -walletnotify and -blocknotify hooks writing files on wallet events, so there is no counterpart to port - unlike the scripts that merely USE the wallet to obtain funds and sign, which port fine by doing both client-side (see bsv-getdata.py)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4496,8 +4973,10 @@ entries:
       - "the three 31-and-62-second sample points: not reproduced at upstream's constants. Teranode's negotiateTimeout is 30 seconds where bitcoin-sv's deadline is 60, so the port samples at 28 and 33 seconds against its own constant, taken from services/legacy/peer/peer.go:63 rather than hardcoded. Rescaled openly rather than silently: the whole subject of this script is wall-clock behaviour, so the port costs ~33s against upstream's 62 and attaches all three peers at once so one wait covers them."
   - name: p2p-txn_propagation.py
     bucket: A
-    status: todo
-    needs: [funding-shim, wirepeer]
+    status: blocked
+    needs: [wirepeer]
+    gaps: [getpeerinfo-omits-txninvsize, peer-id-empty-under-test-context]
+    reason: "Mis-tagged as funding-shim; it drives no wallet RPC at all. The script is built entirely on getpeerinfo's txninvsize field (lines 52-55, 76-78), reading per-peer inv queue depth to assert that relay queues fill and then drain. Teranode maintains that queue but never publishes its depth - see the getpeerinfo-omits-txninvsize gap. It also needs eight nodes meshed together, which peer-id-empty-under-test-context blocks. Blocked on those two gaps rather than on funding."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4533,9 +5012,11 @@ entries:
     upstream_assertions: []
     waived_assertions: []
   - name: prioritise_transaction.py
-    bucket: A
-    status: todo
-    needs: [wirepeer, funding-shim]
+    bucket: B
+    status: blocked
+    needs: [test-hook-rpcs]
+    upstream_hooks: [prioritisetransaction]
+    reason: "Mis-tagged as funding-shim; the funding is incidental. The script's subject is the prioritisetransaction RPC (line 61), which raises a low-fee transaction's mining priority so the assertions at lines 69-71 can observe which of three low-payers survives in the mempool. prioritisetransaction is not in Teranode's RPC dispatch table at all. Depends on a bitcoin-sv test-hook RPC, so bucket B: needs a Teranode equivalent or a restructured assertion (see PORTING.md, Phase 6)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4547,9 +5028,9 @@ entries:
     upstream_assertions: []
     waived_assertions: []
   - name: pruning.py
-    bucket: A
-    status: todo
-    needs: [funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Tests bitcoind's block-file pruning: -prune, manual pruneblockchain calls, and the on-disk blk*.dat files it deletes, warning in its own header that it needs 4GB of disk and 30 minutes to two hours. Teranode has no block files to prune. Blocks are persisted by the Block Persister and the data model is subtrees and a UTXO store, so retention is a pruner SERVICE operating over UTXO and subtree data (settings/pruner_settings.go) rather than deletion of sequential block files. There is no counterpart to the thing being tested."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4575,16 +5056,16 @@ entries:
     upstream_assertions: []
     waived_assertions: []
   - name: resendwallettransactions.py
-    bucket: A
-    status: todo
-    needs: [funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Teranode declines every wallet RPC by design: getnewaddress, sendtoaddress, getbalance, listtransactions, listunspent, signrawtransaction, importprivkey, listsinceblock, settxfee and getwalletinfo are all routed to handleAskWallet in services/rpc/Server.go, which answers \"this implementation requires a wallet\"; resendwallettransactions, zapwallettxes and fundrawtransaction are not in the dispatch table at all. Key custody and wallet state live outside the node. This script's subject is the resendwallettransactions RPC and -walletbroadcast, so there is no counterpart to port - unlike the scripts that merely USE the wallet to obtain funds and sign, which port fine by doing both client-side (see bsv-getdata.py)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
   - name: rest.py
-    bucket: A
-    status: todo
-    needs: [funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Tests bitcoind's REST interface - /rest/block, /rest/tx, /rest/headers, /rest/chaininfo, /rest/mempool and /rest/getutxos - including its binary, hex and JSON encodings per endpoint. Teranode exposes no /rest/ surface; the equivalent read path is the asset server, whose routes, encodings and semantics are a different API rather than a renamed one. Porting this would be writing a new test for a different interface, not porting this one."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
@@ -4752,9 +5233,9 @@ entries:
     upstream_assertions: []
     waived_assertions: []
   - name: zapwallettxes.py
-    bucket: A
-    status: todo
-    needs: [funding-shim]
+    bucket: C
+    status: not-applicable
+    reason: "Teranode declines every wallet RPC by design: getnewaddress, sendtoaddress, getbalance, listtransactions, listunspent, signrawtransaction, importprivkey, listsinceblock, settxfee and getwalletinfo are all routed to handleAskWallet in services/rpc/Server.go, which answers \"this implementation requires a wallet\"; resendwallettransactions, zapwallettxes and fundrawtransaction are not in the dispatch table at all. Key custody and wallet state live outside the node. This script's subject is wallet persistence across restart and the zapwallettxes flag, so there is no counterpart to port - unlike the scripts that merely USE the wallet to obtain funds and sign, which port fine by doing both client-side (see bsv-getdata.py)."
     ported_to: ""
     upstream_assertions: []
     waived_assertions: []
