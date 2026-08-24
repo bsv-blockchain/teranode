@@ -2,6 +2,10 @@ package settings
 
 import (
 	"net"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,7 +41,16 @@ var shippedP2PContexts = []string{
 //
 // Both halves have been shipped broken before, in different contexts, so the
 // invariant is checked rather than left to review.
+//
+// This reads committed settings.conf directly instead of going through
+// NewSettings, which layers a developer's gitignored settings_local.conf on top.
+// Otherwise a local override of either key - entirely reasonable when pointing a
+// local node at a containerised p2p - would fail this test for a reason nobody
+// else can reproduce, and the mirror case would let a local override mask a real
+// regression in the committed file.
 func TestP2PGRPCBindMatchesClientAddress(t *testing.T) {
+	conf := readCommittedSettingsConf(t)
+
 	for _, settingsContext := range shippedP2PContexts {
 		name := settingsContext
 		if name == "" {
@@ -45,23 +58,13 @@ func TestP2PGRPCBindMatchesClientAddress(t *testing.T) {
 		}
 
 		t.Run(name, func(t *testing.T) {
-			var tSettings *Settings
-			if settingsContext == "" {
-				tSettings = NewSettings()
-			} else {
-				tSettings = NewSettings(settingsContext)
-			}
+			clientAddr, ok := conf.resolve("p2p_grpcAddress", settingsContext)
+			require.True(t, ok, "p2p_grpcAddress must be set in settings.conf")
 
-			clientAddr := tSettings.P2P.GRPCAddress
-			listenAddr := tSettings.P2P.GRPCListenAddress
+			listenAddr, ok := conf.resolve("p2p_grpcListenAddress", settingsContext)
+			require.True(t, ok, "p2p_grpcListenAddress must be set in settings.conf")
 
-			require.NotEmpty(t, listenAddr, "p2p_grpcListenAddress must be set")
-			require.NotEmpty(t, clientAddr, "p2p_grpcAddress must be set")
-
-			clientIsLocal := addressIsLoopback(t, clientAddr)
-			listenIsLocal := addressIsLoopback(t, listenAddr)
-
-			require.Equal(t, clientIsLocal, listenIsLocal,
+			require.Equal(t, addressIsLoopback(clientAddr), addressIsLoopback(listenAddr),
 				"p2p_grpcAddress (%s) and p2p_grpcListenAddress (%s) disagree on whether p2p is reached across the network: "+
 					"either give the client a routable address or keep the bind on loopback",
 				clientAddr, listenAddr)
@@ -69,15 +72,77 @@ func TestP2PGRPCBindMatchesClientAddress(t *testing.T) {
 	}
 }
 
-// addressIsLoopback reports whether an address targets only the local host. A
-// scheme-qualified address (the k8s:/// resolver form) is never loopback.
-func addressIsLoopback(t *testing.T, address string) bool {
+// settingsConf is the committed settings.conf parsed as key -> value, keys
+// retaining their ".context" suffix exactly as written.
+type settingsConf map[string]string
+
+// resolve mimics the context-layered lookup: try the fully qualified key, then
+// drop one trailing context segment at a time, then the bare key.
+func (c settingsConf) resolve(key, settingsContext string) (string, bool) {
+	for ctx := settingsContext; ctx != ""; {
+		if v, ok := c[key+"."+ctx]; ok {
+			return v, true
+		}
+
+		idx := strings.LastIndex(ctx, ".")
+		if idx < 0 {
+			break
+		}
+
+		ctx = ctx[:idx]
+	}
+
+	v, ok := c[key]
+
+	return v, ok
+}
+
+var settingsLineRE = regexp.MustCompile(`^([A-Za-z0-9_.]+)\s*=\s*(.*)$`)
+
+// readCommittedSettingsConf parses the repository's settings.conf. Values keep
+// their ${VAR} placeholders: only the host half of each address is inspected,
+// and every port in these keys is a placeholder.
+func readCommittedSettingsConf(t *testing.T) settingsConf {
 	t.Helper()
 
+	path := filepath.Join("..", "settings.conf")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "committed settings.conf must be readable at %s", path)
+
+	conf := make(settingsConf)
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		m := settingsLineRE.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+
+		// Strip a trailing comment, then surrounding quotes.
+		value := m[2]
+		if idx := strings.Index(value, " #"); idx >= 0 {
+			value = value[:idx]
+		}
+
+		conf[m[1]] = strings.Trim(strings.TrimSpace(value), `"`)
+	}
+
+	require.NotEmpty(t, conf, "parsed no settings from settings.conf")
+
+	return conf
+}
+
+// addressIsLoopback reports whether an address targets only the local host. A
+// scheme-qualified address (the k8s:/// resolver form) is never loopback.
+func addressIsLoopback(address string) bool {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		// No host:port shape at all (e.g. "k8s:///peer.ns.svc:9906" splits on
-		// the last colon and still yields a host, so this is a genuine oddity).
+		// No host:port shape at all; treat as routable rather than loopback.
 		return false
 	}
 

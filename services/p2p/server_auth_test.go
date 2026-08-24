@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -105,6 +106,10 @@ var readOnlyMethodsByField = map[string]map[string]bool{
 		"IsBanned":   true,
 		"ListBanned": true,
 	},
+	// blockchainClient is guarded because its interface exposes ReportPeerFailure,
+	// a peer-state write that feeds peer selection. No public handler touches it
+	// today; listing it keeps a future one from shipping unauthenticated.
+	"blockchainClient": {},
 	"registryBatcher":  {},
 	"syncCoordinator":  {},
 	"peerSelector":     {},
@@ -533,10 +538,15 @@ func TestGRPCAuthOptionsProtectEveryMutatingRPC(t *testing.T) {
 type warnRecorder struct {
 	ulogger.TestLogger
 	warnings []string
+	errors   []string
 }
 
 func (l *warnRecorder) Warnf(format string, args ...interface{}) {
 	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
+
+func (l *warnRecorder) Errorf(format string, args ...interface{}) {
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
 }
 
 // TestWarnIfGRPCExposed covers the case the API key cannot defend: a listener on
@@ -570,9 +580,9 @@ func TestWarnIfGRPCExposed(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			logger := &warnRecorder{}
-			s := &Server{logger: logger}
+			s := &Server{logger: logger, settings: regtestSettings()}
 
-			s.warnIfGRPCExposed(tc.listenAddr, tc.apiKey)
+			require.NoError(t, s.checkGRPCExposure(tc.listenAddr, tc.apiKey), "regtest must never refuse to start")
 
 			if !tc.wantWarn {
 				require.Empty(t, logger.warnings)
@@ -582,6 +592,107 @@ func TestWarnIfGRPCExposed(t *testing.T) {
 			require.Len(t, logger.warnings, 1)
 			require.Contains(t, logger.warnings[0], tc.listenAddr)
 			require.NotContains(t, logger.warnings[0], tc.apiKey, "the warning must not leak the key")
+		})
+	}
+}
+
+// regtestSettings returns settings pinned to regtest, where an exposed bind with
+// a placeholder key warns instead of refusing to start.
+func regtestSettings() *settings.Settings {
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
+
+	return tSettings
+}
+
+// TestCheckGRPCExposureFailsClosedOnPublicNetworks covers the finding that the
+// new authentication is nominal in the one shipped context that widens the bind:
+// settings.conf ships grpc_admin_api_key = testkey, a constant published in this
+// repository, and the operator context runs on mainnet. Starting in that state
+// would let anyone who can reach the port forge validated chain progress, so on
+// every network but regtest it has to be an error rather than a log line.
+func TestCheckGRPCExposureFailsClosedOnPublicNetworks(t *testing.T) {
+	publicNets := []*chaincfg.Params{
+		&chaincfg.MainNetParams,
+		&chaincfg.TestNetParams,
+		&chaincfg.TeraTestNetParams,
+		&chaincfg.StnParams,
+	}
+
+	for _, params := range publicNets {
+		t.Run(params.Name+"/placeholder key refused", func(t *testing.T) {
+			logger := &warnRecorder{}
+			tSettings := settings.NewSettings()
+			tSettings.ChainCfgParams = params
+
+			s := &Server{logger: logger, settings: tSettings}
+
+			err := s.checkGRPCExposure(":9904", placeholderAdminAPIKey)
+			require.Error(t, err, "a wide bind with the published placeholder key must refuse to start")
+			require.Contains(t, err.Error(), params.Name)
+			require.NotContains(t, err.Error(), placeholderAdminAPIKey, "the error must not echo the key")
+		})
+
+		t.Run(params.Name+"/short key refused", func(t *testing.T) {
+			tSettings := settings.NewSettings()
+			tSettings.ChainCfgParams = params
+
+			s := &Server{logger: &warnRecorder{}, settings: tSettings}
+			require.Error(t, s.checkGRPCExposure(":9904", "short"))
+		})
+
+		t.Run(params.Name+"/strong key allowed", func(t *testing.T) {
+			tSettings := settings.NewSettings()
+			tSettings.ChainCfgParams = params
+
+			s := &Server{logger: &warnRecorder{}, settings: tSettings}
+			require.NoError(t, s.checkGRPCExposure(":9904", "not-a-real-key-just-long-enough"))
+		})
+
+		t.Run(params.Name+"/loopback bind allowed", func(t *testing.T) {
+			tSettings := settings.NewSettings()
+			tSettings.ChainCfgParams = params
+
+			s := &Server{logger: &warnRecorder{}, settings: tSettings}
+			require.NoError(t, s.checkGRPCExposure("localhost:9904", placeholderAdminAPIKey),
+				"loopback keeps the port unreachable, so a weak key is not exploitable")
+		})
+	}
+}
+
+// TestWarnIfUnreachableBind covers the mirror-image misconfiguration the loopback
+// default can introduce for a settings context this repository does not ship: a
+// routable client address meeting a loopback bind, which silently stops catchup
+// because every caller gets connection-refused and nothing else surfaces it.
+func TestWarnIfUnreachableBind(t *testing.T) {
+	tests := []struct {
+		name       string
+		listenAddr string
+		clientAddr string
+		wantError  bool
+	}{
+		{"routable client, loopback bind", "localhost:9904", "p2p-1:9904", true},
+		{"routable IP client, loopback bind", "127.0.0.1:9904", "10.0.0.5:9904", true},
+		{"routable client, wide bind", ":9904", "p2p-1:9904", false},
+		{"loopback client, loopback bind", "localhost:9904", "localhost:9904", false},
+		{"loopback client, wide bind", ":9904", "localhost:9904", false},
+		{"no client address configured", "localhost:9904", "", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logger := &warnRecorder{}
+			s := &Server{logger: logger}
+
+			s.warnIfUnreachableBind(tc.listenAddr, tc.clientAddr)
+
+			if tc.wantError {
+				require.Len(t, logger.errors, 1)
+				require.Contains(t, logger.errors[0], tc.clientAddr)
+				require.Contains(t, logger.errors[0], tc.listenAddr)
+			} else {
+				require.Empty(t, logger.errors)
+			}
 		})
 	}
 }

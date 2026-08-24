@@ -656,6 +656,10 @@ Only read-only queries (`GetPeers`, `GetPeer`, `GetPeerRegistry`, `GetPeersForCa
 
 `p2p_grpcListenAddress` binds to loopback by default; widen it only when the service is reached from another container or pod, and set a strong `grpc_admin_api_key` when you do. The shipped `docker.m`, `docker.ss` and `operator` contexts widen it because those topologies run P2P in its own container or pod.
 
+Because `settings.conf` ships the placeholder `grpc_admin_api_key = testkey` — a value published in this repository, so it authenticates nobody — the service **refuses to start** when a bind on all interfaces meets a placeholder or short (<16 character) key on any network other than regtest. A node that will not start is recoverable in one step; a node that starts with a public key on a public port hands an attacker the sync-peer choice. On regtest (local, CI and the docker stacks) this is a warning only, so those stacks work unchanged.
+
+The mirror-image misconfiguration is logged as an error at startup: a routable `p2p_grpcAddress` meeting a loopback `p2p_grpcListenAddress` means block and subtree validation get connection-refused on every call. That failure is otherwise silent — the reporters and `selectBestPeersForCatchup` only warn, and no health check covers the p2p client — so the node would simply stop finding catchup peers while its port healthcheck stayed green.
+
 Note that the read-only RPCs are still a reconnaissance surface: `GetPeerRegistry` and `GetPeersForCatchup` return the full peer set including peer IDs, DataHub URLs, heights, reputation and ban state. Where the bind is widened - in particular the `operator` context, which fronts the peer gRPC port with an ingress - keep the port reachable only from inside the cluster.
 
 ## Related Documents

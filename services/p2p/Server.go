@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -1069,7 +1070,16 @@ func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 // protected RPC unreachable rather than open - the safe direction, since these
 // RPCs steer sync-peer selection.
 func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
-	apiKey := s.settings.GRPCAdminAPIKey
+	listenAddress := s.settings.P2P.GRPCListenAddress
+	configuredKey := s.settings.GRPCAdminAPIKey
+
+	if err := s.checkGRPCExposure(listenAddress, configuredKey); err != nil {
+		return nil, err
+	}
+
+	s.warnIfUnreachableBind(listenAddress, s.settings.P2P.GRPCAddress)
+
+	apiKey := configuredKey
 	if apiKey == "" {
 		var err error
 
@@ -1080,8 +1090,6 @@ func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
 
 		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated, so every state-mutating PeerService RPC (bans, reputation, connect/disconnect, and the catchup/validation reporters called by block and subtree validation) will reject callers until a key is configured")
 	}
-
-	s.warnIfGRPCExposed(s.settings.P2P.GRPCListenAddress, s.settings.GRPCAdminAPIKey)
 
 	return &util.AuthOptions{
 		APIKey:           apiKey,
@@ -1098,16 +1106,66 @@ const (
 	minStrongAdminAPIKeyLen = 16
 )
 
-// warnIfGRPCExposed flags the one combination the auth interceptor cannot save:
+// checkGRPCExposure handles the one combination the auth interceptor cannot save:
 // a listener bound to every interface while the API key is guessable. Anyone who
 // can reach the port then holds a valid key, and the protected RPCs decide
-// sync-peer selection and peer reputation.
-func (s *Server) warnIfGRPCExposed(listenAddress, configuredKey string) {
+// sync-peer selection and peer reputation - so "authenticated" would be nominal.
+//
+// settings.conf ships grpc_admin_api_key = testkey, a constant published in this
+// repository, and the operator context both widens the bind and runs on a real
+// network. On any network but regtest that combination is refused outright rather
+// than warned about: a node that will not start is recoverable in one step, while
+// a node that starts with a public key on a public port hands an attacker the
+// sync-peer choice. regtest keeps the warning so local, CI and docker stacks -
+// which are all regtest - work unchanged.
+func (s *Server) checkGRPCExposure(listenAddress, configuredKey string) error {
 	if !bindsAllInterfaces(listenAddress) || !weakAdminAPIKey(configuredKey) {
-		return
+		return nil
+	}
+
+	if s.settings.ChainCfgParams != nil && s.settings.ChainCfgParams.Name != chaincfg.RegressionNetParams.Name {
+		return errors.NewConfigurationError("[P2P] refusing to start on %s: gRPC is listening on all interfaces (%s) with a placeholder or short grpc_admin_api_key, which authenticates nobody - set grpc_admin_api_key to a strong secret (%d+ chars), or bind p2p_grpcListenAddress to loopback", s.settings.ChainCfgParams.Name, listenAddress, minStrongAdminAPIKeyLen)
 	}
 
 	s.logger.Warnf("[P2P] gRPC is listening on all interfaces (%s) with a placeholder or short grpc_admin_api_key; set a strong key (%d+ chars) and restrict the port, or anyone who can reach it can forge peer reputation and validated chain progress", listenAddress, minStrongAdminAPIKeyLen)
+
+	return nil
+}
+
+// warnIfUnreachableBind flags the mirror-image misconfiguration: other services
+// are told to dial a routable address while the listener only accepts loopback,
+// so every call fails with connection-refused. That matters because the failure
+// is otherwise silent - selectBestPeersForCatchup and the reporters only warn,
+// and no health check covers the p2p client, so the node simply stops finding
+// catchup peers while its port healthcheck stays green.
+//
+// This one warns rather than refusing to start: a sidecar-mesh topology can
+// legitimately present a routable service address while the app itself listens
+// on loopback, so a hard failure here could break a valid deployment.
+func (s *Server) warnIfUnreachableBind(listenAddress, clientAddress string) {
+	if clientAddress == "" || !addressIsLoopbackOnly(listenAddress) || addressIsLoopbackOnly(clientAddress) {
+		return
+	}
+
+	s.logger.Errorf("[P2P] p2p_grpcAddress (%s) is routable but p2p_grpcListenAddress (%s) only accepts loopback, so block and subtree validation cannot reach this service: widen the bind, or point the client address at loopback", clientAddress, listenAddress)
+}
+
+// addressIsLoopbackOnly reports whether an address can only be reached from the
+// local host. Anything it cannot parse as host:port is treated as routable, so
+// the check never fires on an address shape it does not understand.
+func addressIsLoopbackOnly(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }
 
 // weakAdminAPIKey reports whether the configured key offers no real protection.
