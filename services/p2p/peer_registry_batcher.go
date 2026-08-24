@@ -487,16 +487,18 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 			// above, and recording the assertion would suppress the peer's
 			// re-registration for registryReassertTTL after its next message.
 			if !b.isRemovedLocked(peerID) {
-				// A forgetAssertState() may also have raced the RPCs: keep
-				// only the assertions this cycle actually sent so the
-				// forgotten (stale) part of the snapshot is not resurrected.
+				// A forgetAssertState() may also have raced the RPCs. Zero the
+				// whole snapshot, including the halves this cycle sent: the
+				// reconciler's clear may have landed AFTER this cycle's
+				// UpdateConnectionState(true), in which case the registry holds
+				// false and keeping connectedAt would suppress the re-assert on
+				// the peer's next message for registryReassertTTL. The batcher
+				// cannot tell from inside the cycle which write landed last, so
+				// forgetting everything is the only safe reading; the cost is
+				// one redundant RegisterPeer + UpdateConnectionState on the
+				// peer's next message, bounded by real reconciler clears.
 				if _, forgotten := b.assertForgottenDuringFlush[peerID]; forgotten {
-					if !sendRegister {
-						st.registeredAt = time.Time{}
-					}
-					if !sendConnected {
-						st.connectedAt = time.Time{}
-					}
+					st = registryAssertState{}
 				}
 				b.recordAssertStateLocked(peerID, st)
 			}

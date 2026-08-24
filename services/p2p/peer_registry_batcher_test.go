@@ -25,11 +25,13 @@ type countingRegistryClient struct {
 	blockchain.PeerRegistryClientI
 	mu    sync.Mutex
 	calls map[string]int
-	// onRegister / onUpdateConnectionState, when set, run during the RPC —
-	// lets tests interleave out-of-band batcher calls with an in-flight
-	// flush cycle. The fail* errors, when set, are returned by the RPC.
+	// onRegister / onUpdateConnectionState / onUpdateLastMessageTime, when
+	// set, run during the RPC — lets tests interleave out-of-band batcher
+	// calls with an in-flight flush cycle. The fail* errors, when set, are
+	// returned by the RPC.
 	onRegister                func()
 	onUpdateConnectionState   func()
+	onUpdateLastMessageTime   func()
 	failListPeers             error
 	failUpdateConnectionState error
 }
@@ -79,6 +81,9 @@ func (c *countingRegistryClient) ListPeers(ctx context.Context, transportFilter 
 
 func (c *countingRegistryClient) UpdateLastMessageTime(ctx context.Context, peerID string) error {
 	c.count("UpdateLastMessageTime")
+	if c.onUpdateLastMessageTime != nil {
+		c.onUpdateLastMessageTime()
+	}
 	return c.PeerRegistryClientI.UpdateLastMessageTime(ctx, peerID)
 }
 
@@ -217,7 +222,7 @@ func TestPeerRegistryBatcher_ForgetAssertStateDuringFlushNotResurrected(t *testi
 	require.Equal(t, 2, counting.callCount("UpdateConnectionState"), "forgotten assert state must force a re-assert on the next flush")
 }
 
-func TestPeerRegistryBatcher_ForgetDuringConnectOnlyFlushZerosRegisteredAt(t *testing.T) {
+func TestPeerRegistryBatcher_ForgetDuringConnectOnlyFlushZerosSnapshot(t *testing.T) {
 	b, counting, _ := newBatcherWithCountingRegistry()
 	pid := mustNewPeerID(t).String()
 
@@ -237,13 +242,45 @@ func TestPeerRegistryBatcher_ForgetDuringConnectOnlyFlushZerosRegisteredAt(t *te
 	b.flushOnce(context.Background())
 	counting.onUpdateConnectionState = nil
 
-	// The connect assert this cycle actually sent is kept; the not-sent
-	// register half of the forgotten snapshot must not be resurrected.
+	// A forget that raced the cycle zeroes the WHOLE snapshot, including the
+	// connect assert this cycle sent: the reconciler's clear may have landed
+	// after that RPC, and keeping connectedAt would mask it (see the
+	// reconnect-after-masked-clear test below for the observable failure).
 	b.mu.Lock()
 	st = b.lastAsserted[pid]
 	b.mu.Unlock()
-	require.False(t, st.connectedAt.IsZero(), "connect assert sent this cycle is kept")
+	require.True(t, st.connectedAt.IsZero(), "connect assert must be forgotten even though this cycle sent it")
 	require.True(t, st.registeredAt.IsZero(), "stale registeredAt must not be resurrected")
+}
+
+func TestPeerRegistryBatcher_ReconnectAfterMaskedClearIsReflagged(t *testing.T) {
+	b, counting, reg := newBatcherWithCountingRegistry()
+	pid := mustNewPeerID(t).String()
+
+	// Cycle 1 asserts connected=true. Mid-flush — after the connect RPC has
+	// already landed — the reconciler clears the flag and forgets the assert
+	// state. The reconciler's write is the later one, so the registry ends at
+	// false while the batcher just asserted true.
+	counting.onUpdateLastMessageTime = func() {
+		reg.UpdateConnectionState(pid, false)
+		b.forgetAssertState(pid)
+	}
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.enqueueLastMessage(pid)
+	b.flushOnce(context.Background())
+	counting.onUpdateLastMessageTime = nil
+
+	got, ok := reg.Get(pid)
+	require.True(t, ok)
+	require.False(t, got.IsConnected, "the reconciler's clear landed last")
+
+	// The peer reconnects and gossips: its next message must re-flag it
+	// immediately, not up to registryReassertTTL later.
+	b.enqueueRegister(pid, "", 0, nil, "", true)
+	b.flushOnce(context.Background())
+
+	got, _ = reg.Get(pid)
+	require.True(t, got.IsConnected, "a reconnected, gossiping peer must be re-flagged connected on its next message")
 }
 
 func TestPeerRegistryBatcher_NewInfoForcesRegister(t *testing.T) {

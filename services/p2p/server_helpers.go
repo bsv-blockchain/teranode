@@ -1316,6 +1316,15 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 
 	live := s.snapshotLiveConnIDs()
 
+	// Seed the per-peer liveness cache from the snapshot just built: nearly
+	// free (bounded by open connections), and it tightens the hot path right
+	// after this pass — a peer this pass is about to clear must not be
+	// re-flagged off a stale cached "live" for the next few seconds.
+	now := time.Now()
+	for id := range live {
+		s.cacheLiveConn(id, true, now)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
 	defer cancel()
 
@@ -1339,14 +1348,22 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s false failed: %v", info.ID, err)
 				continue
 			}
-			// Drop the batcher's reassert memory so a peer that reconnects
-			// gets re-marked connected on its next message instead of being
+			// Overwrite any stale cached "live" so the hot path cannot
+			// re-flag this peer off a pre-disconnect cache entry, and drop
+			// the batcher's reassert memory so a peer that reconnects gets
+			// re-marked connected on its next message instead of being
 			// skipped as recently asserted.
+			s.cacheLiveConn(info.ID, false, time.Now())
 			if s.registryBatcher != nil {
 				s.registryBatcher.forgetAssertState(info.ID)
 			}
 			cleared++
 		case !info.IsConnected && isLive:
+			// Deliberately no batcher poke here, unlike the clear branch: the
+			// batcher's assert memory is either absent (next message asserts
+			// anyway) or stale past the reassert TTL, and at worst the peer's
+			// next message re-sends one redundant, idempotent
+			// UpdateConnectionState(true). Not worth coupling for.
 			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, true); err != nil {
 				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s true failed: %v", info.ID, err)
 				continue
