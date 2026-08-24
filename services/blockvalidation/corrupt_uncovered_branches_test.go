@@ -131,7 +131,7 @@ func TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 	// this block has a single subtree), so no consumer goroutine is needed.
 	writeJobsChan := make(chan *SubtreeWriteJob, 16)
 
-	err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
+	_, _, err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
 	require.Error(t, err)
 	require.True(t, errors.IsBlockCorrupt(err),
 		"a corrupt subtree verdict must be returned unwrapped on the async path, got: %v", err)
@@ -141,13 +141,24 @@ func TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 
 // TestTryQuickValidation_CorruptPath pins the catchup quick-path corrupt branch
 // (bitcoin-sv/teranode#4692): when quickValidateBlockAsync returns a corrupt-body verdict,
-// tryQuickValidation must (1) strike the serving peer, (2) delete the peer-supplied .subtree blobs
-// so the failed content is not re-applied on retry, and (3) return (false, corruptErr) — aborting
-// for a fresh re-download rather than falling through to normal validation of the SAME corrupt body
-// (which would return (true, nil)).
+// tryQuickValidation must (1) strike the serving peer, (2) delete only the (hash, fileType) pair
+// THIS attempt itself freshly wrote — FileTypeSubtree, built and queued by buildSubtreeJobsForBatch
+// before the merkle check fails — so the failed content is not re-applied on retry, (3) leave
+// FileTypeSubtreeToCheck/FileTypeSubtreeData untouched here, since this test passes no fetch-phase
+// freshness (nil) — the case where the fetch phase DID mark them fresh, and cleanup must delete
+// them too, is covered separately by
+// TestTryQuickValidation_CorruptPath_MergesFetchAndQuickFreshness — and (4) return (false,
+// corruptErr) — aborting for a fresh re-download rather than falling through to normal validation
+// of the SAME corrupt body (which would return (true, nil)).
+//
+// A real subtreeWriteWorker drains writeJobsChan so the wg.Wait() barrier before cleanup has
+// something to wait for; without a consumer the queued job would never be marked done and cleanup
+// would never run.
 //
 // Mutation proof: deleting the `u.removeCatchupSubtreeFiles` call in this branch leaves the
-// FileTypeSubtreeToCheck blob present after the call, reddening the "blob removed" assertion.
+// freshly-written FileTypeSubtree blob present after the call, reddening the "blob removed"
+// assertion; reverting to the old wide per-hash delete would also delete
+// FileTypeSubtreeToCheck/FileTypeSubtreeData, reddening the "untouched" assertions.
 func TestTryQuickValidation_CorruptPath(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
 	defer suite.Cleanup()
@@ -161,10 +172,14 @@ func TestTryQuickValidation_CorruptPath(t *testing.T) {
 	block.Header.HashMerkleRoot = &chainhash.Hash{}
 	subtreeHash := block.Subtrees[0]
 
-	// The peer-supplied blob is present before the corrupt drop.
-	present, err := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-	require.NoError(t, err)
-	require.True(t, present, "the .subtree-to-check blob must exist before the corrupt drop")
+	// The peer-supplied blobs (fetched by an earlier, different producer, before quick validation
+	// ever runs) are present before the corrupt drop. FileTypeSubtree does not exist yet — it is
+	// only written during this attempt's own build+queue phase.
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
+		present, err := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
+		require.NoError(t, err)
+		require.True(t, present, "%s must exist before the corrupt drop", ft)
+	}
 
 	catchupCtx := &CatchupContext{
 		blockUpTo:               block,
@@ -176,26 +191,133 @@ func TestTryQuickValidation_CorruptPath(t *testing.T) {
 	}
 
 	writeJobsChan := make(chan *SubtreeWriteJob, 16)
+	// Drain the channel with a real worker so the job this attempt queues is actually written
+	// (and Done()'d), letting tryQuickValidation's context-aware wait resolve promptly rather than
+	// only on suite.Ctx's 30s timeout.
+	go func() { _ = suite.Server.blockValidation.subtreeWriteWorker(suite.Ctx, writeJobsChan) }()
 
-	tryNormal, err := suite.Server.tryQuickValidation(suite.Ctx, block, catchupCtx, "peer-corrupt", "http://peer", writeJobsChan)
+	tryNormal, err := suite.Server.tryQuickValidation(suite.Ctx, block, catchupCtx, "peer-corrupt", "http://peer", writeJobsChan, nil)
 	require.Error(t, err)
 	require.True(t, errors.IsBlockCorrupt(err), "the corrupt verdict must propagate, got: %v", err)
 	require.False(t, tryNormal, "a corrupt quick-path verdict must NOT fall through to normal validation of the same body")
 
 	require.Equal(t, []string{"peer-corrupt"}, rec.struck(), "the serving peer must be struck for the corrupt body")
 
-	// removeCatchupSubtreeFiles ran: the peer-supplied blob is gone, so it cannot be re-applied.
-	stillThere, err := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	// removeCatchupSubtreeFiles ran and deleted exactly the freshly-written FileTypeSubtree blob.
+	stillThereSubtree, err := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)
-	require.False(t, stillThere, "the corrupt .subtree-to-check blob must be removed after the corrupt drop")
+	require.False(t, stillThereSubtree, "the freshly-written FileTypeSubtree blob must be removed after the corrupt drop")
+
+	// The pre-existing, non-freshly-written blobs must survive: provenance is per-(hash,
+	// fileType), so cleanup must not sweep siblings this attempt never touched.
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
+		stillThere, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
+		require.NoError(t, existsErr)
+		require.True(t, stillThere, "%s was never freshly written by this attempt and must survive cleanup", ft)
+	}
 }
 
-// TestValidateBlocksOnChannel_CorruptBody_CleansUpAndPreservesClassification pins the F2 cleanup on
+// TestTryQuickValidation_CorruptPath_MergesFetchAndQuickFreshness drives the real full-pipeline
+// shape (bitcoin-sv/teranode#4692): a blockForValidation carrying fetch-phase freshness for
+// FileTypeSubtreeToCheck and FileTypeSubtreeData (exactly what fetchSubtreeDataForBlock records
+// and orderedDelivery attaches to the item in production) enters quick validation via
+// validateBlocksOnChannel, quick validation builds and queues FileTypeSubtree before its final
+// merkle check fails corrupt, and cleanup must delete ALL THREE same-attempt fresh types —
+// merging the fetch phase's freshness with quick validation's own — while leaving a second,
+// unrelated hash (present in the store but never marked fresh by anything this attempt did)
+// completely untouched. Without threading item.freshlyWritten into tryQuickValidation and merging
+// it with quickValidateBlockAsync's own snapshot, FileTypeSubtreeToCheck/FileTypeSubtreeData would
+// survive the corrupt drop and findLocalSubtreeFile would reuse them on the very next retry —
+// reopening the reuse bug this whole cleanup exists to close, just for the fetched types instead
+// of the built one.
+//
+// Mutation proof: dropping the mergeFreshlyWritten call in tryQuickValidation's corrupt branch (or
+// passing nil instead of item.freshlyWritten at its call site) leaves FileTypeSubtreeToCheck and
+// FileTypeSubtreeData present after cleanup, reddening the "same-attempt fresh types deleted"
+// assertions; widening removeCatchupSubtreeFiles back to a per-hash delete would instead delete
+// the untouched sibling hash's blobs, reddening the "unrelated hash untouched" assertions.
+func TestTryQuickValidation_CorruptPath_MergesFetchAndQuickFreshness(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+	setupQuickValidateMocks(suite)
+
+	rec := &banScoreRecorder{}
+	suite.Server.blockValidation.p2pClient = rec
+
+	block := buildOneSubtreeBlock(t, suite, 100)
+	// Zero the header merkle root so quickValidateBlockAsync's final merkle check fails corrupt,
+	// AFTER this block's own FileTypeSubtree has already been built and queued.
+	block.Header.HashMerkleRoot = &chainhash.Hash{}
+	subtreeHash := block.Subtrees[0]
+
+	// A second, unrelated hash this attempt never touched at all — e.g. an already-persisted,
+	// permanently-promoted subtree a doctored body could name. Present in the store, absent from
+	// every freshness set, so it must survive regardless of what happens to subtreeHash.
+	untouchedHash := chainhash.HashH([]byte("untouched-sibling"))
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData, fileformat.FileTypeSubtree} {
+		require.NoError(t, suite.Server.subtreeStore.Set(suite.Ctx, untouchedHash[:], ft, []byte{0x01}))
+	}
+
+	// The fetch phase's own freshness for THIS block's hash — what fetchSubtreeDataForBlock would
+	// have recorded and orderedDelivery would have attached to blockForValidation.freshlyWritten
+	// in the real pipeline.
+	fetchFreshlyWritten := map[chainhash.Hash]map[fileformat.FileType]struct{}{
+		*subtreeHash: {
+			fileformat.FileTypeSubtreeToCheck: {},
+			fileformat.FileTypeSubtreeData:    {},
+		},
+	}
+
+	catchupCtx := &CatchupContext{
+		blockUpTo:               block,
+		baseURL:                 "http://peer",
+		peerID:                  "peer-corrupt",
+		startTime:               time.Now(),
+		useQuickValidation:      true,
+		highestCheckpointHeight: 1000,
+	}
+
+	writeJobsChan := make(chan *SubtreeWriteJob, 16)
+	go func() { _ = suite.Server.blockValidation.subtreeWriteWorker(suite.Ctx, writeJobsChan) }()
+
+	validateBlocksChan := make(chan blockForValidation, 1)
+	validateBlocksChan <- blockForValidation{block: block, freshlyWritten: fetchFreshlyWritten}
+	close(validateBlocksChan)
+
+	var size atomic.Int64
+	size.Store(1)
+
+	err := suite.Server.validateBlocksOnChannel(validateBlocksChan, suite.Ctx, catchupCtx, &size, writeJobsChan)
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "the corrupt verdict must propagate, got: %v", err)
+	require.Equal(t, []string{"peer-corrupt"}, rec.struck(), "the serving peer must be struck for the corrupt body")
+
+	// All three same-attempt fresh types for THIS hash are gone: quick validation's own
+	// FileTypeSubtree, and the fetch phase's FileTypeSubtreeToCheck/FileTypeSubtreeData.
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
+		exists, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
+		require.NoError(t, existsErr)
+		require.False(t, exists, "%s was freshly written by this attempt (fetch phase or quick validation) and must be removed", ft)
+	}
+
+	// The unrelated sibling hash was never marked fresh by anything this attempt did, and must
+	// survive untouched.
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData, fileformat.FileTypeSubtree} {
+		exists, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, untouchedHash[:], ft)
+		require.NoError(t, existsErr)
+		require.True(t, exists, "%s belongs to an unrelated hash this attempt never wrote and must survive", ft)
+	}
+}
+
+// TestValidateBlocksOnChannel_CorruptBody_CleansUpAndPreservesClassification pins the cleanup on
 // the FULL-validation catchup branch (bitcoin-sv/teranode#4692): when validateBlocksOnChannel's
 // ValidateBlockWithOptions returns a corrupt-body verdict (here a merkle-root mismatch), the branch
-// must (1) delete the peer-supplied FileTypeSubtreeToCheck and FileTypeSubtreeData blobs so the
-// failed content cannot be re-applied on retry, and (2) preserve the ORIGINAL corrupt classification
-// out of the loop (never downgraded to a local storage/processing error, never poisoned invalid).
+// must (1) delete exactly the (hash, fileType) pairs this attempt's fetch phase marked freshly
+// written — simulated here via item.freshlyWritten, since this test drives validateBlocksOnChannel
+// directly rather than through the full fetchBlocksConcurrently pipeline that normally populates it
+// — so the failed content cannot be re-applied on retry, and (2) preserve the ORIGINAL corrupt
+// classification out of the loop (never downgraded to a local storage/processing error, never
+// poisoned invalid).
 //
 // Mutation proof: deleting the new u.removeCatchupSubtreeFiles call in the corrupt branch leaves both
 // blobs present after the call, reddening the removal assertions.
@@ -247,8 +369,18 @@ func TestValidateBlocksOnChannel_CorruptBody_CleansUpAndPreservesClassification(
 		useQuickValidation: false, // force the normal (full) validation path, not the quick path
 	}
 
+	// Simulate the fetch phase's output: this is what fetchSubtreeDataForBlock would have
+	// returned had this test driven the full pipeline, rather than validateBlocksOnChannel
+	// directly (bitcoin-sv/teranode#4692).
+	freshlyWritten := map[chainhash.Hash]map[fileformat.FileType]struct{}{
+		*subtreeHash: {
+			fileformat.FileTypeSubtreeToCheck: {},
+			fileformat.FileTypeSubtreeData:    {},
+		},
+	}
+
 	validateBlocksChan := make(chan blockForValidation, 1)
-	validateBlocksChan <- blockForValidation{block: block}
+	validateBlocksChan <- blockForValidation{block: block, freshlyWritten: freshlyWritten}
 	close(validateBlocksChan)
 
 	var size atomic.Int64
@@ -259,7 +391,7 @@ func TestValidateBlocksOnChannel_CorruptBody_CleansUpAndPreservesClassification(
 	require.True(t, errors.IsBlockCorrupt(err), "the corrupt classification must survive the catchup loop, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a corrupt body must never be poisoned invalid")
 
-	// The F2 cleanup ran: both peer-supplied blobs are gone.
+	// The cleanup ran: both peer-supplied, freshly-written blobs are gone.
 	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
 		stillThere, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
 		require.NoError(t, existsErr)

@@ -2373,7 +2373,12 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID string, block *model.Block, reason string) {
 	u.logger.Warnf("[ValidateBlock][%s] corrupt block body from peer %s: %s", block.Hash().String(), peerID, reason)
 
-	if u.p2pClient == nil || peerID == "" {
+	// A "legacy:"-namespaced peerID is gated the same as an empty one (bitcoin-sv/teranode#4692):
+	// the legacy netsync path already strikes the serving connection directly in
+	// services/legacy/peer_server.go (strikeIfCorruptBlockBody's own +10), so routing it into
+	// AddBanScore here as well would create a phantom centralized-registry entry (no p2p code
+	// path can see or clear it on disconnect) and double-charge the peer for one corrupt body.
+	if u.p2pClient == nil || peerID == "" || isLegacyPeerID(peerID) {
 		return
 	}
 

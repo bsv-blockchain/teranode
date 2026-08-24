@@ -36,12 +36,19 @@ type resultItem struct {
 	index             int
 	err               error
 	contributingPeers map[string]struct{} // peers that provided subtree data for this block
+	// freshlyWritten records, per (hash, fileType), exactly which peer-supplied subtree blobs
+	// THIS fetch attempt itself wrote for this block — as opposed to found already present
+	// locally. removeCatchupSubtreeFiles restricts deletion to these pairs on a later corrupt
+	// verdict (bitcoin-sv/teranode#4692), so a doctored body naming an already-persisted hash never
+	// triggers deletion of that hash's promoted blobs.
+	freshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}
 }
 
 // blockForValidation wraps a block with metadata about which peers contributed data
 type blockForValidation struct {
 	block             *model.Block
 	contributingPeers map[string]struct{}
+	freshlyWritten    map[chainhash.Hash]map[fileformat.FileType]struct{}
 }
 
 // fetchBlocksConcurrently fetches blocks from a peer using a high-performance worker pool architecture.
@@ -230,15 +237,16 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 			optimistic := modeAtSample == adaptivefetch.ModeOptimistic
 
 			var contributingPeers map[string]struct{}
+			var freshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}
 			var err error
 			if optimistic {
-				contributingPeers, err = nil, nil
+				contributingPeers, freshlyWritten, err = nil, nil, nil
 			} else {
 				fetchFn := u.fetchSubtreeDataForBlockFn
 				if fetchFn == nil {
 					fetchFn = u.fetchSubtreeDataForBlock
 				}
-				contributingPeers, err = fetchFn(ctx, work.block, peerID, baseURL)
+				contributingPeers, freshlyWritten, err = fetchFn(ctx, work.block, peerID, baseURL)
 			}
 
 			if err != nil {
@@ -275,6 +283,7 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 				block:             work.block,
 				index:             work.index,
 				contributingPeers: contributingPeers,
+				freshlyWritten:    freshlyWritten,
 			}
 
 			select {
@@ -324,7 +333,7 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 					u.logger.Debugf("[catchup:orderedDelivery][%s] delivering block %s at index %d (received %d/%d)", blockUpTo.Hash().String(), orderedResult.block.Hash().String(), nextIndex, receivedCount, totalBlocks)
 
 					select {
-					case validateBlocksChan <- blockForValidation{block: orderedResult.block, contributingPeers: orderedResult.contributingPeers}:
+					case validateBlocksChan <- blockForValidation{block: orderedResult.block, contributingPeers: orderedResult.contributingPeers, freshlyWritten: orderedResult.freshlyWritten}:
 						delete(results, nextIndex)
 						nextIndex++
 						// Note: size counter is decremented by validateBlocksOnChannel after processing
@@ -355,8 +364,11 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 // and stores them in the subtreeStore for later use by block validation.
 // This function fetches both the subtree (for subtreeToCheck) and raw subtree data concurrently.
 // When parallel fetching is enabled, subtrees are distributed across multiple peers at max height.
-// Returns a map of peer IDs that contributed subtree data for this block.
-func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, error) {
+// Returns a map of peer IDs that contributed subtree data for this block, and the set of
+// (hash, fileType) pairs this call itself freshly wrote — as opposed to found already present
+// locally — for removeCatchupSubtreeFiles to later restrict deletion to on a corrupt verdict
+// (bitcoin-sv/teranode#4692).
+func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(gCtx, "fetchSubtreeDataForBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[catchup:fetchSubtreeDataForBlock][%s] fetching subtree data for block with %d subtrees", block.Hash().String(), len(block.Subtrees)),
@@ -366,8 +378,12 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 	if len(block.Subtrees) == 0 {
 		u.logger.Debugf("[catchup:fetchSubtreeDataForBlock] Block %s has no subtrees, skipping", block.Hash().String())
 
-		return nil, nil
+		return nil, nil, nil
 	}
+
+	// Scoped to this single fetch attempt for this block — never reused across blocks or
+	// across attempts (bitcoin-sv/teranode#4692).
+	freshness := newSubtreeFreshness()
 
 	// Track which peers contributed subtree data for this block
 	var peersMu sync.Mutex
@@ -413,7 +429,7 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 		capturedBaseURL := fetchBaseURL
 
 		g.Go(func() error {
-			servingPeerID, err := u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, capturedPeerID, capturedBaseURL)
+			servingPeerID, err := u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, capturedPeerID, capturedBaseURL, freshness)
 			if err != nil {
 				return err
 			}
@@ -428,14 +444,14 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 
 	// Wait for all subtree fetching to complete
 	if err := g.Wait(); err != nil {
-		return nil, errors.NewServiceError("[catchup:fetchSubtreeDataForBlock] Failed to fetch subtree data for block %s", block.Hash().String(), err)
+		return nil, nil, errors.NewServiceError("[catchup:fetchSubtreeDataForBlock] Failed to fetch subtree data for block %s", block.Hash().String(), err)
 	}
 
-	return contributingPeers, nil
+	return contributingPeers, freshness.snapshot(), nil
 }
 
 // fetchAndStoreSubtree fetches and stores only the subtree (for subtreeToCheck)
-func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, peerID, baseURL string, bypassCache bool) (*subtreepkg.Subtree, error) {
+func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, peerID, baseURL string, bypassCache bool, freshness *subtreeFreshness) (*subtreepkg.Subtree, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtree",
 		tracing.WithParentStat(u.stats),
 		// tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtree] fetching subtree for %s", subtreeHash.String()),
@@ -525,6 +541,12 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 		return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to store subtreeToCheck for %s", subtreeHash.String(), err)
 	}
 
+	// This attempt itself just wrote FileTypeSubtreeToCheck for this hash — eligible for
+	// removeCatchupSubtreeFiles to delete later if this block turns out corrupt
+	// (bitcoin-sv/teranode#4692). The localExists branch above never reaches here, so a
+	// pre-existing (possibly permanently-promoted) blob for this hash is never marked fresh.
+	freshness.markFresh(*subtreeHash, fileformat.FileTypeSubtreeToCheck)
+
 	// Reputation is credited post-validation in validateBlocksOnChannel via reportValidBlockForPeers
 
 	return subtree, nil
@@ -546,7 +568,7 @@ func subtreeDataFetchTimeout(tSettings *settings.Settings) time.Duration {
 
 // fetchAndStoreSubtreeData fetches and stores only the subtreeData
 func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
-	subtree *subtreepkg.Subtree, peerID, baseURL string, bypassCache bool) (err error) {
+	subtree *subtreepkg.Subtree, peerID, baseURL string, bypassCache bool, freshness *subtreeFreshness) (err error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeData",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeData][%s] Fetching subtree data from peer %s (%s) for subtree %s", block.Hash().String(), peerID, baseURL, subtreeHash.String()),
@@ -702,6 +724,12 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 		return errors.NewStorageError("[catchup:fetchAndStoreSubtreeData] Failed to store subtreeData for %s", subtreeHash.String(), err)
 	}
 
+	// This attempt itself just wrote FileTypeSubtreeData for this hash — eligible for
+	// removeCatchupSubtreeFiles to delete later if this block turns out corrupt
+	// (bitcoin-sv/teranode#4692). The subtreeDataExists early return above never reaches here, so
+	// a pre-existing (possibly permanently-promoted) blob for this hash is never marked fresh.
+	freshness.markFresh(*subtreeHash, fileformat.FileTypeSubtreeData)
+
 	return nil
 }
 
@@ -709,13 +737,13 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 // single peer. With bypassCache set, both requests carry a cache-busting query
 // parameter.
 func (u *Server) fetchSubtreeAndDataFromPeer(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
-	peerID, baseURL string, bypassCache bool) error {
-	subtree, err := u.fetchAndStoreSubtree(ctx, block, subtreeHash, peerID, baseURL, bypassCache)
+	peerID, baseURL string, bypassCache bool, freshness *subtreeFreshness) error {
+	subtree, err := u.fetchAndStoreSubtree(ctx, block, subtreeHash, peerID, baseURL, bypassCache, freshness)
 	if err != nil {
 		return err
 	}
 
-	return u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL, bypassCache)
+	return u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL, bypassCache, freshness)
 }
 
 // tryPeerForSubtree fetches subtree + subtreeData from one peer, retrying that same
@@ -732,8 +760,8 @@ func (u *Server) fetchSubtreeAndDataFromPeer(ctx context.Context, block *model.B
 // subtree file makes the retry's /subtree fetch a local load, so only subtree_data
 // is re-requested.
 func (u *Server) tryPeerForSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
-	peerID, baseURL string) error {
-	err := u.fetchSubtreeAndDataFromPeer(ctx, block, subtreeHash, peerID, baseURL, false)
+	peerID, baseURL string, freshness *subtreeFreshness) error {
+	err := u.fetchSubtreeAndDataFromPeer(ctx, block, subtreeHash, peerID, baseURL, false, freshness)
 	if err == nil {
 		return nil
 	}
@@ -748,7 +776,7 @@ func (u *Server) tryPeerForSubtree(ctx context.Context, block *model.Block, subt
 
 	u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Peer %s served an unusable response for subtree %s, retrying with cache bypass: %v", peerID, subtreeHash.String(), err)
 
-	bypassErr := u.fetchSubtreeAndDataFromPeer(ctx, block, subtreeHash, peerID, baseURL, true)
+	bypassErr := u.fetchSubtreeAndDataFromPeer(ctx, block, subtreeHash, peerID, baseURL, true, freshness)
 	if bypassErr != nil {
 		u.recordCatchupPeerFailure(peerID, bypassErr)
 	}
@@ -761,7 +789,7 @@ func (u *Server) tryPeerForSubtree(ctx context.Context, block *model.Block, subt
 // at max height before giving up.
 // Returns the peer ID that actually served the data and any error.
 func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
-	peerID, baseURL string) (string, error) {
+	peerID, baseURL string, freshness *subtreeFreshness) (string, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeAndSubtreeData",
 		tracing.WithParentStat(u.stats),
 		// tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeAndSubtreeData] fetching subtree and data for %s", subtreeHash.String()),
@@ -769,7 +797,7 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 	defer deferFn()
 
 	// Try the primary peer first.
-	err := u.tryPeerForSubtree(ctx, block, subtreeHash, peerID, baseURL)
+	err := u.tryPeerForSubtree(ctx, block, subtreeHash, peerID, baseURL, freshness)
 	if err == nil {
 		return peerID, nil
 	}
@@ -802,7 +830,7 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 					continue
 				}
 
-				altErr := u.tryPeerForSubtree(ctx, block, subtreeHash, altPeerID, altBaseURL)
+				altErr := u.tryPeerForSubtree(ctx, block, subtreeHash, altPeerID, altBaseURL, freshness)
 				if altErr == nil {
 					u.logger.Infof("[catchup:fetchAndStoreSubtreeAndSubtreeData] Successfully fetched subtree %s from alternative peer %s", subtreeHash.String(), altPeerID)
 					return altPeerID, nil

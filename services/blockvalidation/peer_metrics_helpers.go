@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -17,7 +18,25 @@ const (
 	// strikes separately) got zero signal toward future peer selection, so selection could
 	// keep re-picking the same peer (bitcoin-sv/teranode#4692).
 	catchupFailureKindCorruptBlockBody = "corrupt_block_body"
+
+	// legacyPeerIDPrefix marks a peerID as originating from the legacy netsync path
+	// (services/legacy/netsync/handle_block.go), rather than a libp2p peer ID. The prefix
+	// guarantees the value can never collide with or be mistaken for a real libp2p peer ID
+	// anywhere downstream (logs, caches, metrics) — defence in depth alongside the
+	// isLegacyPeerID gates below, which are what actually stop it reaching the centralized
+	// peer registry (bitcoin-sv/teranode#4692).
+	legacyPeerIDPrefix = "legacy:"
 )
+
+// isLegacyPeerID reports whether peerID was namespaced by the legacy netsync path rather than
+// being a real p2p identity. isPeerMalicious and penalizeCorruptBlockPeer treat it the same as an
+// empty peerID (bitcoin-sv/teranode#4692): legacy attribution already happens exclusively in
+// services/legacy/peer_server.go's own +10 strike, so routing this value into the centralized
+// peer registry as well would add an extra gRPC round-trip, create a phantom registry entry no
+// p2p code path can see or clear on disconnect, and double-charge the peer for one corrupt body.
+func isLegacyPeerID(peerID string) bool {
+	return strings.HasPrefix(peerID, legacyPeerIDPrefix)
+}
 
 // reportCatchupAttempt reports a catchup attempt to the P2P service.
 // Falls back to local metrics if P2P client is unavailable.
@@ -307,7 +326,7 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 // Returns:
 //   - bool: True if peer is malicious
 func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
-	if peerID == "" {
+	if peerID == "" || isLegacyPeerID(peerID) {
 		return false
 	}
 

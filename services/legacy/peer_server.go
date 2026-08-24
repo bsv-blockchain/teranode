@@ -1268,9 +1268,11 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 				sp.server.logger.Errorf("block processing failed: %v", err)
 
 				// Corrupt block body (bitcoin-sv/teranode#4692): strike THIS serving peer — the legacy
-				// layer is where the peer identity actually lives (the netsync ProcessBlock
-				// path carries no usable peerID). Extracted to a method so the attribution is
-				// unit-testable without driving the whole read loop.
+				// layer is where the peer identity actually lives. A namespaced form of it is now
+				// threaded through the netsync ProcessBlock path too, but blockvalidation's own
+				// isLegacyPeerID gate intentionally excludes it from that package's own
+				// strike/malicious-check, so attribution stays exclusively here. Extracted to a
+				// method so the attribution is unit-testable without driving the whole read loop.
 				sp.strikeIfCorruptBlockBody(err)
 
 				if shouldDisconnectOnBlockErr(err) {
@@ -1407,8 +1409,10 @@ const banScoreCorruptBlockBody = 10
 // peer when err (or anything it wraps, across the ProcessBlock gRPC boundary) is a
 // corrupt block body (bitcoin-sv/teranode#4692), and reports whether err was corrupt. Attribution
 // is inherent: sp is the peer whose blockProcessed result produced err, so the penalty
-// always lands on a real (non-empty) serving peer — unlike an out-of-band peerID that
-// the netsync ProcessBlock path leaves empty. A single strike stays below the ban
+// always lands on a real serving peer, independently of the "legacy:"-namespaced peerID
+// also threaded through the netsync ProcessBlock path — blockvalidation's own
+// isLegacyPeerID gate keeps that value out of its strike/malicious-check, so this remains
+// the only place a legacy corrupt body is attributed. A single strike stays below the ban
 // threshold (addBanScore only disconnects past it), so an honest one-off transport
 // corruption does not rotate the sync peer.
 func (sp *serverPeer) strikeIfCorruptBlockBody(err error) bool {

@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
@@ -223,7 +224,7 @@ type Server struct {
 	// fetchSubtreeDataForBlockFn is the function used by blockWorker to fetch
 	// subtree data for a block. Production code always uses the real method;
 	// tests override this field before dispatching work to blockWorker.
-	fetchSubtreeDataForBlockFn func(ctx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, error)
+	fetchSubtreeDataForBlockFn func(ctx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error)
 
 	// peerCircuitBreakers manages circuit breakers for each peer to prevent
 	// cascading failures and protect against misbehaving peers
@@ -1323,7 +1324,7 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 		} else if peer != nil {
 			baseURL = peer.DataHubURL
 		}
-		if _, err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
+		if _, _, err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
 			return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to fetch missing subtree data", block.String(), err))
 		}
 	}
@@ -2406,9 +2407,11 @@ func (u *Server) recordCorruptAttempt(blockHash *chainhash.Hash, peerID string) 
 // processBlockFound, so a corrupt delivery is counted exactly once regardless of route and the cap
 // cannot be bypassed by hammering ProcessBlock directly. A corrupt result records toward the cap; a
 // genuine success clears it (so an honest body resets the count). Only true validation outcomes
-// reach here — the exists / catchup / cap-exhausted early returns never call this, so a cap-hit
-// skip (which returns nil) can never clear its own cooldown. Non-corrupt errors (transient /
-// service / invalid) leave the counter untouched.
+// reach here — the exists / catchup / cap-exhausted early returns never call this. The cap-exhausted
+// return is itself a corrupt-classified error, not nil, so it plays no part in this accounting;
+// this function's own peerID=="" fail-open guard is what actually keeps it from recording under an
+// unidentified delivery. Non-corrupt errors (transient / service / invalid) leave the counter
+// untouched.
 func (u *Server) accountCorruptAttempt(blockHash *chainhash.Hash, peerID string, validationErr error) {
 	if validationErr == nil {
 		u.clearCorruptAttempts(blockHash, peerID)
