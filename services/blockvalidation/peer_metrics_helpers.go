@@ -12,6 +12,14 @@ const (
 	catchupFailureKindGeneric         = "generic"
 	catchupFailureKindBlockIncomplete = "block_incomplete"
 
+	// catchupFailureKindCorruptBlockBody feeds catch-up peer selection a genuine reputation
+	// signal for a corrupt body, mirroring catchupFailureKindBlockIncomplete: without a
+	// dedicated kind, a corrupt-serving peer left isPeerError=false (the cosmetic UI-string
+	// suppression is still correct — it is not the malicious/AddBanScore path, which already
+	// strikes separately) got zero signal toward future peer selection, so selection could
+	// keep re-picking the same peer (bitcoin-sv/teranode#4692).
+	catchupFailureKindCorruptBlockBody = "corrupt_block_body"
+
 	// peerMaliciousCacheTTL bounds how stale a cached IsPeerMalicious verdict
 	// may be served. Long enough to shed the per-message RPC fan-out under an
 	// announcement flood, short enough that a freshly banned peer is refused
