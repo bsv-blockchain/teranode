@@ -505,6 +505,150 @@ type SubtreeStore interface {
 	GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
 }
 
+// medianTimeBlocks is the number of blocks the median-time-past rule is evaluated over —
+// svnode's CBlockIndex::nMedianTimeSpan (src/block_index.h). It is a consensus constant, not a
+// tunable: changing it forks the chain.
+//
+// The same value is the floor on blockvalidation_previous_block_header_count, which is what
+// block validation fetches for this check. Both read it from one declaration so they cannot
+// drift, and that declaration lives in settings because settings cannot import model without an
+// import cycle.
+const medianTimeBlocks = settings.MedianTimeSpan
+
+// verifyMedianWindowLinkage checks that window is a contiguous run of headers, each linked to
+// the next by hash. window is ordered newest-first when newestFirst is true, oldest-first
+// otherwise. svnode gets this for free by walking pprev pointers; here the headers arrive as a
+// caller-supplied slice, so an unlinked run has to be detected explicitly.
+func verifyMedianWindowLinkage(window []*BlockHeader, newestFirst bool) error {
+	for i := 0; i < len(window)-1; i++ {
+		childIdx, parentIdx := i, i+1
+		if !newestFirst {
+			childIdx, parentIdx = i+1, i
+		}
+
+		child, parent := window[childIdx], window[parentIdx]
+
+		// Both headers get hashed below, and BlockHeader.Bytes clones HashPrevBlock and
+		// HashMerkleRoot without guarding either, so a header missing one panics. Report the
+		// position instead — the offending header cannot be named by hash.
+		if !hashableHeader(child) {
+			return errors.NewProcessingError("header at window position %d is missing a hash field", childIdx)
+		}
+
+		if !hashableHeader(parent) {
+			return errors.NewProcessingError("header at window position %d is missing a hash field", parentIdx)
+		}
+
+		if !child.HashPrevBlock.IsEqual(parent.Hash()) {
+			return errors.NewProcessingError("header %s does not follow %s", child.Hash().String(), parent.Hash().String())
+		}
+	}
+
+	return nil
+}
+
+// hashableHeader reports whether bh can be hashed without panicking. BlockHeader.Bytes clones
+// HashPrevBlock and HashMerkleRoot with no nil guard, so a hand-built header missing either
+// takes down the caller. Headers from NewBlockHeaderFromBytes and from the store always
+// populate both; this covers everything else.
+func hashableHeader(bh *BlockHeader) bool {
+	return bh != nil && bh.HashPrevBlock != nil && bh.HashMerkleRoot != nil
+}
+
+// MedianTimeWindow selects the median-time-past window out of a caller-supplied run of ancestor
+// headers and verifies it is fit to measure the rule over, returning the selected headers in the
+// order they were supplied.
+//
+// svnode's CBlockIndex::GetMedianTimePast walks pprev pointers from the parent, which makes three
+// properties structural. Here the headers arrive as a slice, so all three are checked, and a run
+// that fails any of them yields ErrBlockHeaderContext — the supplied context is wrong, which is
+// not evidence the block is bad, and block validation persists invalid verdicts:
+//
+//   - the run must be anchored at the block's parent (issue #1467 — the old tail-slice selection
+//     measured the oldest headers of a newest-first run, ~90 blocks below the parent);
+//   - the selected window must be a linked chain, so that a forward-ordered run starting at the
+//     parent cannot yield a median over the parent's descendants;
+//   - a window shorter than 11 must reach genesis, so that a caller simply holding fewer headers
+//     cannot shrink the window while the chain behind it is long.
+//
+// Exported so a caller can establish that a run is usable BEFORE committing to it. That matters
+// because the cheapest source of these runs, blockchainClient.GetBlockHeaders, memoizes its answer
+// per (startHash, count) key: a caller that discovers the problem only when the check fails cannot
+// fix it by asking the same question again, and needs to re-derive the run by hash instead.
+//
+// Callers must not pass an empty run: with no ancestors there is no window, which is the caller's
+// signal to skip the rule (as CheckHeaderContextual and Valid do) rather than a shape this can
+// report on.
+func (b *Block) MedianTimeWindow(currentChain []*BlockHeader) ([]*BlockHeader, error) {
+	currentChainLength := len(currentChain)
+	if currentChainLength == 0 {
+		return nil, errors.NewBlockHeaderContextError("[BLOCK] no ancestor headers supplied, cannot evaluate median time past")
+	}
+
+	pruneLength := medianTimeBlocks
+	if currentChainLength < pruneLength {
+		pruneLength = currentChainLength
+	}
+
+	// The window is anchored by parent hash, so a header with no parent hash cannot be anchored
+	// at all. Reject before the switch: the fall-through error below formats the block, and
+	// hashing a header whose HashPrevBlock is nil panics.
+	if b.Header.HashPrevBlock == nil {
+		return nil, errors.NewBlockHeaderContextError("[BLOCK] block header carries no parent hash, cannot evaluate median time past")
+	}
+
+	// The window must be the headers ADJACENT to the parent, so anchor it on whichever end of the
+	// run the parent sits at rather than assuming an order.
+	var (
+		window      []*BlockHeader
+		newestFirst bool
+	)
+
+	switch {
+	case hashableHeader(currentChain[0]) && currentChain[0].Hash().IsEqual(b.Header.HashPrevBlock):
+		// newest-first (GetBlockHeaders order): the parent and its predecessors lead the run
+		window = currentChain[:pruneLength]
+		newestFirst = true
+	case hashableHeader(currentChain[currentChainLength-1]) && currentChain[currentChainLength-1].Hash().IsEqual(b.Header.HashPrevBlock):
+		// oldest-first: the parent and its predecessors end the run
+		window = currentChain[currentChainLength-pruneLength:]
+	default:
+		// The supplied run is not this block's parent chain: a context error on the caller's
+		// side, not proof the block is invalid — do not mark the block bad for it.
+		return nil, errors.NewBlockHeaderContextError("[BLOCK][%s] currentChain (%d headers) is not anchored at the block's parent %s, cannot evaluate median time past", b.String(), currentChainLength, b.Header.HashPrevBlock.String())
+	}
+
+	for _, bh := range window {
+		if bh == nil {
+			return nil, errors.NewBlockHeaderContextError("[BLOCK][%s] nil header in the median-time-past window", b.String())
+		}
+	}
+
+	// Anchoring fixes only which END of the run is used. svnode walks pprev pointers, so its
+	// window is a linked chain by construction and is shorter than 11 only when the chain
+	// itself ends at genesis. Both guarantees have to be re-established here, because
+	// currentChain is caller-supplied: without them a forward-ordered run starting at the
+	// parent yields a median over the parent's descendants, and a short run from a caller that
+	// simply held fewer headers yields a median over fewer than 11 blocks while the chain
+	// behind it is long. Either way the median silently stops being the consensus one.
+	if err := verifyMedianWindowLinkage(window, newestFirst); err != nil {
+		return nil, errors.NewBlockHeaderContextError("[BLOCK][%s] median-time-past window is not a linked chain", b.String(), err)
+	}
+
+	if pruneLength < medianTimeBlocks {
+		oldest := window[pruneLength-1]
+		if !newestFirst {
+			oldest = window[0]
+		}
+
+		if oldest.HashPrevBlock == nil || !oldest.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			return nil, errors.NewBlockHeaderContextError("[BLOCK][%s] median-time-past window holds only %d headers and does not reach genesis, cannot evaluate median time past", b.String(), pruneLength)
+		}
+	}
+
+	return window, nil
+}
+
 // CheckHeaderContextual runs the header checks whose outcome depends on wall-clock time
 // (time.Now()) or on the current chain: the 2-hours-in-the-future timestamp bound, the
 // median-time-past rule, and the mandatory block-version floor (BIP34/66/65). It mirrors the
@@ -518,8 +662,19 @@ type SubtreeStore interface {
 // optimistic AddBlock to close that gap (issue #1149). Valid() also calls it so the check remains a
 // single source of truth.
 //
-// currentChain is the run of previous headers ending at the block's parent; when empty the
-// median-time-past rule is skipped (same as Valid()). Returns nil when the header passes.
+// currentChain is a run of this block's ancestor headers with the block's parent at one end:
+// newest-first with the parent at index 0 — the order both block-validation header sources
+// produce, blockchainClient.GetBlockHeaders and the catchup HeaderChainCache — or oldest-first
+// with the parent last. The median-time-past window is anchored on whichever end carries the
+// parent.
+//
+// Selecting that window and establishing it is fit to measure the rule over is MedianTimeWindow's
+// job; a run it rejects fails here with ErrBlockHeaderContext rather than a block-invalid error,
+// because the supplied context being wrong is not evidence the block is bad and block validation
+// persists invalid verdicts.
+//
+// When currentChain is empty the median-time-past rule is skipped (same as Valid()). Returns nil
+// when the header passes.
 func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *settings.Settings, logger ulogger.Logger) error {
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	twoHoursToTheFutureTimestampUint32, err := safeconversion.Int64ToUint32(time.Now().Add(2 * time.Hour).Unix())
@@ -531,18 +686,17 @@ func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *set
 		return errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.String())
 	}
 
-	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
-	// if we don't have 11 blocks then use what we have
-	pruneLength := 11
-	currentChainLength := len(currentChain)
+	// 3. Check that the block's timestamp is strictly after the median timestamp of the 11
+	// blocks ending at its parent (fewer only when the chain itself ends at genesis, as in
+	// svnode).
 	// if the current chain length is 0 skip this test
-	if currentChainLength > 0 {
-		if currentChainLength < pruneLength {
-			pruneLength = currentChainLength
+	if len(currentChain) > 0 {
+		lastTimeStamps, err := b.MedianTimeWindow(currentChain)
+		if err != nil {
+			return err
 		}
 
-		// prune the last few timestamps from the current chain
-		lastTimeStamps := currentChain[currentChainLength-pruneLength:]
+		pruneLength := len(lastTimeStamps)
 		prevTimeStamps := make([]time.Time, pruneLength)
 
 		for i, bh := range lastTimeStamps {
@@ -670,13 +824,25 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 
 		// Verify that we have at least one subtree and that it has at least one node
-		if len(b.SubtreeSlices) == 0 || len(b.SubtreeSlices[0].Nodes) == 0 {
+		if len(b.SubtreeSlices) == 0 {
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
+		}
+
+		// Capture the entry once. Nothing here holds subtreeSlicesMu, so a
+		// concurrent release (cache eviction, TTL cleaner) can nil it between
+		// any two reads — see the header comment on ReleaseSubtreeNodes.
+		firstSubtree := b.SubtreeSlices[0]
+		if firstSubtree == nil {
+			return false, errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", b.String())
+		}
+
+		if len(firstSubtree.Nodes) == 0 {
 			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
+		if !firstSubtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), firstSubtree.Nodes[0].Hash.String())
 		}
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
@@ -932,6 +1098,9 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 
 	for i := 0; i < len(b.SubtreeSlices); i++ {
 		subtree := b.SubtreeSlices[i]
+		if subtree == nil {
+			return errors.NewProcessingError("[checkBlockRewardAndFees][%s] subtree %d of %d was released during validation", b.String(), i, len(b.SubtreeSlices))
+		}
 
 		sum := subtreeFees + subtree.Fees
 		if sum < subtreeFees {
@@ -980,8 +1149,14 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 
 	// set the expected subtree size based on the first subtree in the block
 	subtreeSize := 0
+
 	if len(b.SubtreeSlices) > 0 {
-		subtreeSize = b.SubtreeSlices[0].Size()
+		firstSubtree := b.SubtreeSlices[0]
+		if firstSubtree == nil {
+			return errors.NewProcessingError("[checkDuplicateTransactions][%s] first subtree was released during validation", b.String())
+		}
+
+		subtreeSize = firstSubtree.Size()
 	}
 
 	// Size both map variants from the loaded block body rather than the
@@ -1016,6 +1191,9 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		subIdx := subIdx
 		subtree := b.SubtreeSlices[subIdx]
 
+		// Hand the captured pointer to the goroutine. A nil entry is reported
+		// through the group rather than by returning here, so the goroutines
+		// already in flight are still waited on before we unwind.
 		g.Go(func() (err error) {
 			return b.checkDuplicateTransactionsInSubtree(subtree, subIdx, subtreeSize)
 		})
@@ -1068,6 +1246,13 @@ func (b *Block) txMapEntryCount() uint64 {
 // Returns:
 // - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
 func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx, subtreeSize int) (err error) {
+	// The caller reads SubtreeSlices without holding subtreeSlicesMu, so the
+	// entry it captured may have been nil-ed by a concurrent release. Transient
+	// — the block is requeued and reloaded, never invalidated.
+	if subtree == nil {
+		return errors.NewProcessingError("[checkDuplicateTransactionsInSubtree][%s] subtree %d was released during validation", b.String(), subIdx)
+	}
+
 	var idx64 uint64
 
 	// All subtrees before subIdx are full-size (the per-block invariant enforced by
@@ -1221,6 +1406,16 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
 	validationCtx *validationContext, subtree *subtreepkg.Subtree, sIdx int) error {
+	// Guard before the tracing call below, which dereferences the subtree's
+	// root hash: Subtree.RootHash() returns a nil *chainhash.Hash on a nil
+	// receiver and chainhash.Hash.String() has a value receiver, so a nil entry
+	// here panics — in an errgroup goroutine with no recover, killing the node.
+	// The caller reads SubtreeSlices without holding subtreeSlicesMu, so a
+	// concurrent release can nil the entry it captured.
+	if subtree == nil {
+		return errors.NewProcessingError("[validateSubtree][%s] subtree %d was released during validation", b.String(), sIdx)
+	}
+
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validateSubtree",
 		tracing.WithLogMessage(logger, "[validateSubtree][%s][%s:%d] called", b.String(), subtree.RootHash().String(), sIdx),
 	)
@@ -1571,7 +1766,12 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		missing := false
 
 		for i := range b.Subtrees {
-			if b.SubtreeSlices[i] == nil {
+			// A non-nil *Subtree with zero Nodes is not loaded: ReleaseNodes
+			// (via blockvalidation's node pooling) strips the Nodes backing
+			// slice while the pointer stays in SubtreeSlices. Trusting it here
+			// made requeued revalidations fail "first subtree has no nodes" on
+			// valid blocks instead of reloading from the store.
+			if b.SubtreeSlices[i] == nil || len(b.SubtreeSlices[i].Nodes) == 0 {
 				missing = true
 				break
 			}
@@ -1581,6 +1781,15 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			// already loaded
 			return nil
 		}
+	}
+
+	// Close whatever survived the loaded-check before dropping the slice.
+	// Reallocating over an mmap-backed survivor would leak its mapping and its
+	// backing file, since nothing else holds a reference once the slice header
+	// is replaced. Nodes are not pooled here: the pool's put function lives in
+	// blockvalidation and this path has no access to it.
+	if closeErr := b.releaseSubtreeNodesLocked(nil); closeErr != nil {
+		logger.Warnf("[BLOCK][%s][ID %d] failed closing subtrees before reload: %v", b.Hash().String(), b.ID, closeErr)
 	}
 
 	b.SubtreeSlices = make([]*subtreepkg.Subtree, len(b.Subtrees))
@@ -1693,13 +1902,15 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		if subtree == nil {
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.String(), b.ID, sIdx, nrOfSubtrees)
+			// b.Hash().String(), not b.String(): we hold b.subtreeSlicesMu and
+			// String() takes it again — sync.RWMutex is not reentrant.
+			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
 		}
 		if sIdx == 0 {
 			subtreeSize = subtree.Length()
 		} else if subtree.Length() != subtreeSize && sIdx != nrOfSubtrees-1 {
 			// all subtrees need to be the same size as the first tree, except the last one
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.String(), b.ID, sIdx, subtree.Length(), subtreeSize)
+			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.Hash().String(), b.ID, sIdx, subtree.Length(), subtreeSize)
 		}
 	}
 
@@ -1710,6 +1921,51 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	// TODO something with conflicts
 
 	return nil
+}
+
+// ReleaseSubtreeNodes releases every loaded subtree under the block's subtree
+// mutex: each heap-backed subtree's Nodes backing slice is handed to put
+// (mmap-backed subtrees are skipped — their backing is the mapped region, and
+// pooling it after munmap would be a use-after-free), each subtree is Closed
+// (unmapping and removing the backing file for mmap-backed subtrees; a no-op
+// for heap-backed ones), and each SubtreeSlices entry is nil-ed so every
+// loaded-check sees the subtree as missing and a later revalidation reloads
+// from the store. Safe to call multiple times; nil entries are skipped.
+//
+// Returns the joined Close errors, if any. A failed Close means a mapping was
+// not torn down (or its backing file not removed), which grows the address
+// space with no other signal — model.Block has no logger, so the caller is
+// expected to log it.
+func (b *Block) ReleaseSubtreeNodes(put func([]subtreepkg.Node)) error {
+	b.subtreeSlicesMu.Lock()
+	defer b.subtreeSlicesMu.Unlock()
+
+	return b.releaseSubtreeNodesLocked(put)
+}
+
+// releaseSubtreeNodesLocked is ReleaseSubtreeNodes' body. The caller must hold
+// b.subtreeSlicesMu for writing.
+func (b *Block) releaseSubtreeNodesLocked(put func([]subtreepkg.Node)) error {
+	var closeErrs []error
+
+	for i, st := range b.SubtreeSlices {
+		if st == nil {
+			continue
+		}
+
+		nodes := st.ReleaseNodes()
+		if nodes != nil && put != nil && !st.IsMmapBacked() {
+			put(nodes)
+		}
+
+		if err := st.Close(); err != nil {
+			closeErrs = append(closeErrs, errors.NewProcessingError("subtree %d", i, err))
+		}
+
+		b.SubtreeSlices[i] = nil
+	}
+
+	return errors.Join(closeErrs...)
 }
 
 // SubtreesLoaded checks if subtrees are loaded and valid.
@@ -1808,8 +2064,15 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		// because for a complete subtree Height = Ceil(Log2(Length)) and that
 		// relationship is preserved by deserialization (which re-derives Height
 		// from numLeaves).
-		targetLength := b.SubtreeSlices[0].Length()
-		targetHeight := b.SubtreeSlices[0].Height
+		// Re-read rather than reuse the loop above: without subtreeSlicesMu a
+		// concurrent release can nil an entry between the two passes.
+		firstSubtree := b.SubtreeSlices[0]
+		if firstSubtree == nil {
+			return errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", b.String())
+		}
+
+		targetLength := firstSubtree.Length()
+		targetHeight := firstSubtree.Height
 
 		// Lift correctness depends on the first subtree's leaf count being a power
 		// of two — that's what makes the partitioned top-tree composition match
@@ -1825,6 +2088,10 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 		for i, sub := range b.SubtreeSlices {
 			isLast := i == len(b.SubtreeSlices)-1
+
+			if sub == nil {
+				return errors.NewProcessingError("[BLOCK][%s] subtree %d of %d was released during validation", b.String(), i, len(b.SubtreeSlices))
+			}
 
 			if !isLast && sub.Length() != targetLength {
 				return errors.NewBlockInvalidError(
@@ -1851,7 +2118,12 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		// non-power-of-two final subtrees is what lets the legacy-block
 		// partitioner stay at maxItems instead of degenerating to tiny subtrees
 		// for adversarial transaction counts — see issue #901.
-		if last := b.SubtreeSlices[len(b.SubtreeSlices)-1]; last.Length() < targetLength {
+		last := b.SubtreeSlices[len(b.SubtreeSlices)-1]
+		if last == nil {
+			return errors.NewProcessingError("[BLOCK][%s] final subtree was released during validation", b.String())
+		}
+
+		if last.Length() < targetLength {
 			liftedRoot, err := last.RootHashPadded(targetHeight)
 			if err != nil {
 				return errors.NewProcessingError("[BLOCK][%s] failed lifting final subtree", b.String(), err)

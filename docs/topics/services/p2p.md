@@ -38,7 +38,7 @@ The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.c
 
 The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
-The p2p peers are part of a private network. This private network is managed by the p2p bootstrap service, which is responsible for bootstrapping the network and managing the network topology.
+The p2p peers can form a private network. Network bootstrapping is a configuration option, not a separate service: the P2P service reads the `p2p_bootstrap_peers` setting at startup to obtain initial DHT and relay entry points for peer discovery. Blanking it does not isolate the node — the client then falls back to the default public IPFS bootstrap peers — so a private network should point it at its own bootstrap servers, alongside `p2p_static_peers` and `p2p_dht_mode = off`.
 
 1. **Initialization and Configuration**:
 
@@ -309,26 +309,27 @@ All notifications collected from the Block and Validator listeners are sent over
 
 - WebSocket Request Handling:
 
-    - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.
-    - Data is sent over the WebSocket, using its dedicated client channel.
-    - If there's an error in sending data, the channel is removed from the `clientChannels`.
+    - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client and registered in `clientChannels`.
+    - Concurrent connections are capped by `p2p_websocket_max_connections` (default 1000, 0 disables); requests beyond the cap are rejected with HTTP 503 before the upgrade. A per-source cap of max(4, cap/20) additionally bounds any single host (tunable via `p2p_websocket_max_connections_per_source`), and sources in `p2p_websocket_trusted_source_cidrs` bypass both caps so internal consumers such as the asset-service bridge can always reconnect. The trust list is loopback-only in all contexts by design - broader trust (e.g. RFC1918) would void the caps behind an L7 ingress or NAT gateway - and the sentinel value `none` disables the bypass entirely (e.g. when a reverse proxy terminates on the same host).
+    - When `p2p_websocket_allowed_origins` is set, browser requests whose `Origin` header is not in the list are rejected during the upgrade, and the same list drives the HTTP server's CORS policy (empty = allow all, the historical behaviour).
+    - Data is sent over the WebSocket, using its dedicated client channel. Every write carries a deadline so a slow client cannot wedge its writer goroutine.
+    - The server periodically pings each client and enforces a read deadline refreshed by pong replies; silent or half-open connections are detected and torn down.
+    - When the connection ends (client disconnect, read/write timeout, or shutdown), the socket is closed and the channel is removed from `clientChannels` on every exit path.
 
-- The server listens for various types of events in a concurrent process:
+- The server listens for notifications in a concurrent process:
 
     - The server tracks all active client channels (`clientChannels`).
-    - When a new client connects, it is added to the `clientChannels`.
-    - If a client disconnects, it is removed from `clientChannels`.
-    - Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
     - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
+    - A client that fails to drain its channel within the broadcast timeout is evicted from `clientChannels` and its connection is closed, releasing its connection slot.
 
 As a sequence:
 
 ![p2p_websocket_sequence_diagram.svg](img/plantuml/p2p/p2p_websocket_sequence_diagram.svg)
 
-1. A client requests a WebSocket connection to the server. The new client is added to the `newClientCh` queue, which then adds the client to the active client channels.
-2. The server enters a loop for WebSocket communication, where it can either receive new notifications or pings.
-3. For each new notification or ping, the server dispatches this data to all client channels.
-4. If there's a WebSocket error or the client disconnects, the client is added to the `deadClientCh` queue, which leads to its removal from the active client channels.
+1. A client requests a WebSocket connection to the server. After the origin check and the connection-cap check pass, the initial `node_status` message is queued to the client's channel first, and only then is the channel registered for broadcasts - this ordering guarantees the first message a client receives identifies this node (the asset service and the dashboard pin the node identity to it).
+2. The server enters a loop for WebSocket communication, where it can either receive new notifications or send keepalive pings.
+3. For each new notification, the server dispatches the data to all client channels.
+4. If there's a WebSocket error, a missed read/write deadline, or the client disconnects, the connection is closed and the client is removed from the active client channels.
 
 ### 2.7. Ban Management System
 

@@ -512,54 +512,8 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return nil, errors.NewProcessingError("couldn't read previous block hash from file", err)
 	}
 
-	var (
-		txProcessed    uint64
-		utxosProcessed uint64
-	)
-
 	g.Go(func() error {
-		defer close(utxoWrapperCh)
-
-	OUTER:
-		for {
-			select {
-			case <-gCtx.Done():
-				// Context canceled, stop reading lines
-				logger.Infof("Context cancelled, stopping reading UTXOWrapper")
-				return gCtx.Err()
-
-			default:
-				var utxoWrapper *utxopersister.UTXOWrapper
-
-				utxoWrapper, err = utxopersister.NewUTXOWrapperFromReader(gCtx, reader)
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						break OUTER
-					}
-
-					logger.Errorf("Failed to read UTXO: %v", err)
-					return errors.NewProcessingError("failed to read UTXO", err)
-				}
-
-				select {
-				case <-gCtx.Done():
-					logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
-					return gCtx.Err()
-
-				case utxoWrapperCh <- utxoWrapper:
-					txProcessed++
-					utxosProcessed += uint64(len(utxoWrapper.UTXOs))
-
-					if txProcessed%1_000_000 == 0 {
-						logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
-					}
-				}
-			}
-		}
-
-		logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
-
-		return nil
+		return readUTXOWrapperFile(gCtx, logger, f, reader, utxoWrapperCh)
 	})
 
 	if err = g.Wait(); err != nil {
@@ -575,6 +529,88 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	}
 
 	return &utxoSetTip{hash: hash, height: height}, nil
+}
+
+// readUTXOWrapperFile reads UTXOWrapper records from reader (backed by f) and
+// sends them to utxoWrapperCh until the record stream is exhausted, then
+// closes the channel.
+//
+// The underlying UTXOWrapperFromReader/errors.Is(err, io.EOF) EOF detection
+// cannot tell a clean end-of-records boundary apart from a file truncated
+// mid-record: both surface as an error whose message contains "EOF" (a real
+// truncation trips io.ErrUnexpectedEOF, whose message "unexpected EOF"
+// contains "EOF" as a substring), so errors.Is treats them identically via
+// this package's substring-matching Is fallback. To make truncation
+// detection exact, every snapshot file carries a trailing 16-byte footer
+// (utxopersister.GetFooter) recording the txCount/utxoCount it was written
+// with; once the read loop ends for any reason, that footer is compared
+// against what was actually processed, and a mismatch is reported as an
+// error instead of silently treated as success.
+func readUTXOWrapperFile(ctx context.Context, logger ulogger.Logger, f *os.File, reader *bufio.Reader, utxoWrapperCh chan<- *utxopersister.UTXOWrapper) error {
+	defer close(utxoWrapperCh)
+
+	var (
+		txProcessed    uint64
+		utxosProcessed uint64
+		err            error
+	)
+
+OUTER:
+	for {
+		select {
+		case <-ctx.Done():
+			// Context canceled, stop reading lines
+			logger.Infof("Context cancelled, stopping reading UTXOWrapper")
+			return ctx.Err()
+
+		default:
+			var utxoWrapper *utxopersister.UTXOWrapper
+
+			utxoWrapper, err = utxopersister.NewUTXOWrapperFromReader(ctx, reader)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break OUTER
+				}
+
+				logger.Errorf("Failed to read UTXO: %v", err)
+				return errors.NewProcessingError("failed to read UTXO", err)
+			}
+
+			select {
+			case <-ctx.Done():
+				logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
+				return ctx.Err()
+
+			case utxoWrapperCh <- utxoWrapper:
+				txProcessed++
+				utxosProcessed += uint64(len(utxoWrapper.UTXOs))
+
+				if txProcessed%1_000_000 == 0 {
+					logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
+				}
+			}
+		}
+	}
+
+	// The read loop above only knows the record stream ended - it cannot
+	// distinguish a clean footer boundary from a truncated file (see the
+	// doc comment above). Validate against the file's own footer counts so
+	// a genuinely truncated snapshot is reported as an error rather than
+	// silently accepted.
+	expectedTxCount, expectedUTXOCount, footerErr := utxopersister.GetFooter(f)
+	if footerErr != nil {
+		return errors.NewProcessingError("failed to read snapshot footer", footerErr)
+	}
+
+	if expectedTxCount != txProcessed || expectedUTXOCount != utxosProcessed {
+		return errors.NewProcessingError(
+			"snapshot file truncated: expected %d transactions/%d UTXOs, processed %d/%d",
+			expectedTxCount, expectedUTXOCount, txProcessed, utxosProcessed)
+	}
+
+	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
+
+	return nil
 }
 
 // worker processes UTXOWrapper messages from the channel and stores them in the UTXO store.

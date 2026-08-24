@@ -241,6 +241,11 @@ func (r *CentralizedPeerRegistry) Load(ctx context.Context, store blob.Store, tt
 	r.peers = make(map[string]*PeerInfo, len(peers))
 	for _, p := range peers {
 		entry := clonePeerInfo(p)
+		// A persisted connection flag cannot be true across a restart; the
+		// p2p reconciliation sweep re-flags live peers. Restoring it as-is
+		// would report phantom connections and exempt the entries from
+		// cleanup until the first sweep.
+		entry.IsConnected = false
 		r.peers[entry.ID] = &entry
 	}
 

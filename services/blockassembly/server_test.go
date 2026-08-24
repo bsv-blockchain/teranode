@@ -135,6 +135,8 @@ func TestCheckBlockAssembly(t *testing.T) {
 		mockSubtreeProcessor.On("TxCount").Return(uint64(0)).Maybe()
 		mockSubtreeProcessor.On("QueueLength").Return(int64(0)).Maybe()
 		mockSubtreeProcessor.On("SubtreeCount").Return(0).Maybe()
+		mockSubtreeProcessor.On("LastDequeueTime").Return(time.Now()).Maybe()
+		mockSubtreeProcessor.On("ConsumerStarted").Return(true).Maybe()
 
 		server.blockAssembler.subtreeProcessor = mockSubtreeProcessor
 

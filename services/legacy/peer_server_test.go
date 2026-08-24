@@ -311,8 +311,6 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 		outboundPeers:   txmap.NewSyncedMap[int32, *serverPeer](),
 		persistentPeers: txmap.NewSyncedMap[int32, *serverPeer](),
 		banned:          txmap.NewSyncedMap[string, time.Time](),
-		outboundGroups:  txmap.NewSyncedMap[string, int](),
-		connectionCount: txmap.NewSyncedMap[string, int](),
 	}
 	state.inboundPeers.Set(1, sp)
 
@@ -1153,12 +1151,12 @@ func TestServerPeerOnVersionRespectsDisableBanning(t *testing.T) {
 	}
 }
 
-// TestServerOutboundGroupCountExists tests the OutboundGroupCount method exists
-func TestServerOutboundGroupCountExists(t *testing.T) {
+// TestServerOutboundGroupsExists tests the OutboundGroups method exists
+func TestServerOutboundGroupsExists(t *testing.T) {
 	// This method requires complex channel setup and peer state management
 	// We'll just verify the method exists on server
 	s := &server{}
-	assert.NotNil(t, s.OutboundGroupCount)
+	assert.NotNil(t, s.OutboundGroups)
 }
 
 // TestServerPeerPushAddrMsgExists tests the pushAddrMsg method exists

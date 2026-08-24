@@ -159,6 +159,13 @@ type peerRegistryBatcher struct {
 	// fresh post-removal data flushes next cycle. Nil when no flush is
 	// running; reset at the end of each cycle.
 	removedDuringFlush map[string]struct{}
+	// assertForgottenDuringFlush records forgetAssertState calls that arrive
+	// while a flush cycle is processing its snapshot, so the cycle's re-record
+	// step does not resurrect the pre-forget assert state it read earlier.
+	// Nil when no flush is running; reset at the end of each cycle. Bounded at
+	// registryBatcherMaxPending; a dropped entry only means the reconciler's
+	// clear can be masked for up to registryReassertTTL before self-healing.
+	assertForgottenDuringFlush map[string]struct{}
 
 	// flushMu serializes flush cycles (ticker, stop, and synchronous mode).
 	flushMu sync.Mutex
@@ -291,6 +298,30 @@ func (b *peerRegistryBatcher) enqueueStorage(peerID, storage string) {
 	b.enqueue(peerID, &pendingPeerUpdate{storage: storage})
 }
 
+// forgetAssertState drops only the peer's reassert memory, so the next flush
+// re-registers it and re-asserts its connection state. Used when the registry's
+// IsConnected flag is cleared out-of-band by the connection-state reconciler:
+// without this, the batcher could skip re-asserting connected=true for up to
+// registryReassertTTL after the peer reconnects. Pending updates and tombstones
+// are untouched — the peer is not being removed. The flush-scoped set stops an
+// in-flight flushOnce from resurrecting the pre-forget snapshot it read before
+// this call (it re-records assert state after its RPCs complete).
+//
+// A pending markConnected enqueued before the reconciler's clear may still
+// flush afterwards and re-assert true for a peer that just disconnected. That
+// is deliberate convergence, not a bug: zeroing connectedAt here guarantees
+// the re-assert is actually sent (not skipped as recently asserted), the
+// wrong-way flag lasts at most one batch interval, and the next reconcile
+// pass clears it again — this time with nothing pending.
+func (b *peerRegistryBatcher) forgetAssertState(peerID string) {
+	b.mu.Lock()
+	delete(b.lastAsserted, peerID)
+	if b.assertForgottenDuringFlush != nil && len(b.assertForgottenDuringFlush) < registryBatcherMaxPending {
+		b.assertForgottenDuringFlush[peerID] = struct{}{}
+	}
+	b.mu.Unlock()
+}
+
 // forget clears the peer's batcher state and leaves a removal tombstone.
 // Called when the peer is removed from the registry (disconnect, ban): pending
 // updates for a removed peer are stale, an in-flight flush must not resurrect
@@ -343,12 +374,14 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 		// persistent tombstone, but must not let this loop push the peer's
 		// stale pre-removal snapshot.
 		b.removedDuringFlush = make(map[string]struct{})
+		b.assertForgottenDuringFlush = make(map[string]struct{})
 	}
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
 		b.removedDuringFlush = nil
+		b.assertForgottenDuringFlush = nil
 		b.mu.Unlock()
 	}()
 
@@ -454,6 +487,19 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 			// above, and recording the assertion would suppress the peer's
 			// re-registration for registryReassertTTL after its next message.
 			if !b.isRemovedLocked(peerID) {
+				// A forgetAssertState() may also have raced the RPCs. Zero the
+				// whole snapshot, including the halves this cycle sent: the
+				// reconciler's clear may have landed AFTER this cycle's
+				// UpdateConnectionState(true), in which case the registry holds
+				// false and keeping connectedAt would suppress the re-assert on
+				// the peer's next message for registryReassertTTL. The batcher
+				// cannot tell from inside the cycle which write landed last, so
+				// forgetting everything is the only safe reading; the cost is
+				// one redundant RegisterPeer + UpdateConnectionState on the
+				// peer's next message, bounded by real reconciler clears.
+				if _, forgotten := b.assertForgottenDuringFlush[peerID]; forgotten {
+					st = registryAssertState{}
+				}
 				b.recordAssertStateLocked(peerID, st)
 			}
 			b.mu.Unlock()

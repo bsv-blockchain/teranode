@@ -138,7 +138,7 @@ For GRPC services, certain administrative operations require additional API key 
 
 - **Ban/Unban Operations**: `BanPeer` and `UnbanPeer` methods in both P2P and Legacy services require API key authentication for security.
 
-The API key is configured via the `grpc_admin_api_key` setting. If no API key is provided, the system will automatically generate a random 32-byte API key at startup, which will be logged for reference. The API key must be included in GRPC requests as metadata with the key `x-api-key`.
+The API key is configured via the `grpc_admin_api_key` setting and must be included in GRPC requests as metadata with the key `x-api-key`. Source it from an environment variable or secret store rather than committing it to configuration; a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive. Well-known placeholders such as `testkey` or `changeme` are ignored at startup (logged and treated as unset). If no API key is provided, the server generates a random key at startup; this generated key is never logged and leaves these admin operations unreachable (fail-closed) until an operator configures a shared key that both the server and its internal clients read.
 
 ## 2. Architecture
 

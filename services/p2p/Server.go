@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/grpc"
@@ -92,13 +94,24 @@ const (
 	//
 	// Block / subtree messages carry: hash (64 chars), height, DataHub URL,
 	// peer ID, 80B block header, client name. Realistic size is < 1KB.
+	// Block keeps extra headroom for the optional hex-encoded coinbase tx.
 	maxBlockMessageSize   = 32 * 1024 // 32KB
-	maxSubtreeMessageSize = 32 * 1024 // 32KB
-	// node_status messages are NodeStatusMessage JSON (~846B) plus connected
-	// peers list. Allow generous headroom for very large meshes.
-	maxNodeStatusMessageSize = 64 * 1024 // 64KB
-	// rejected_tx messages carry: tx hash, short reason string, peer ID.
-	maxRejectedTxMessageSize = 16 * 1024 // 16KB
+	maxSubtreeMessageSize = 8 * 1024  // 8KB
+	// node_status messages are NodeStatusMessage JSON, realistically ~1KB.
+	// (The old 64KB cap was headroom for a connected-peers list that never
+	// existed — ConnectedPeersCount has always been an int.) The per-field
+	// bounds cap the raw string bytes at ~5KB, but json.Marshal HTML-escapes
+	// some printable characters to six bytes each, so the marshalled form of a
+	// pathological-yet-valid message can exceed the raw sum; publishToNetwork
+	// therefore enforces these caps on every outbound payload (topicKindCaps),
+	// so a local config that would be dropped by peers fails loudly here
+	// instead.
+	maxNodeStatusMessageSize = 16 * 1024 // 16KB
+	// rejected_tx messages carry: tx hash, reason string, peer ID. Our egress
+	// truncates the reason to maxGossipReasonLen, but un-upgraded peers publish
+	// the untruncated validator error chain, so keep headroom for those during
+	// mixed-version operation.
+	maxRejectedTxMessageSize = 8 * 1024 // 8KB
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -158,7 +171,31 @@ type Server struct {
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
+	// liveConnCache caches, per peer ID, whether the peer had an open libp2p
+	// connection when last checked (liveConnCacheEntry, expires after
+	// reputationCacheTTL). Written by isPeerIPBanned's existing GetPeers walk
+	// and by hasLiveConnection on a miss; updatePeerLastMessageTime consults
+	// it so gossip-relayed publishers are never marked IsConnected while a
+	// freshly connected neighbour is flagged on its first message.
+	// reconcileInFlight keeps ticker-driven reconcile passes from piling up
+	// when the registry is slow.
+	liveConnCache     sync.Map
+	reconcileInFlight atomic.Bool
+
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
+
+	wsTimeouts *wsTimeouts // Test-only override of the /p2p-ws keepalive parameters (nil = defaults)
+
+	// staticURLCheckOnce evaluates the once-assigned outbound URL config
+	// (AssetHTTPAddressURL, PropagationURL) against the gossip bounds and SSRF
+	// rules a single time, caching the verdicts below. The publishers run every
+	// ~10s (node_status) and per announcement (block/subtree), so re-validating
+	// — and re-logging — a value that cannot change without a restart would
+	// spam the logs on the committed defaults (localhost asset_httpAddress)
+	// and bury real signals; same rationale as invalidPolicyWarnOnce.
+	staticURLCheckOnce sync.Once
+	assetURLErr        error // non-nil: AssetHTTPAddressURL breaches gossip bounds or receivers' SSRF checks
+	propagationURLErr  error // non-nil: PropagationURL breaches gossip bounds
 
 	// latestNodeStatus caches the most recent node status computed by
 	// getNodeStatusMessage (refreshed every publish tick and on best-block
@@ -188,6 +225,142 @@ type Server struct {
 	// localHeightCache is a short-lived cache of the local best height used by
 	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
 	localHeightCache atomic.Pointer[localHeightCacheEntry]
+}
+
+// privateIPColocationWhitelist returns local-network ranges for exemption from the
+// GossipSub IP-colocation penalty. Deployments that deliberately allow private IPs
+// (local/test clusters) run many nodes behind one IP; without the exemption the
+// peers above the colocation threshold on that IP would be permanently
+// mesh-ineligible.
+func privateIPColocationWhitelist() []*net.IPNet {
+	// Loopback, RFC1918, RFC6598 shared space, IPv4 link-local, IPv6 ULA and
+	// IPv6 link-local: the ranges a local/test cluster can legitimately share.
+	cidrs := []string{
+		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"100.64.0.0/10", "169.254.0.0/16",
+		"::1/128", "fc00::/7", "fe80::/10",
+	}
+
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			// The list is constant: a parse failure is a programming error, and
+			// silently skipping it would reintroduce the penalty this exists to prevent.
+			panic(fmt.Sprintf("privateIPColocationWhitelist: bad constant CIDR %q: %v", cidr, err))
+		}
+		nets = append(nets, n)
+	}
+
+	return nets
+}
+
+// buildP2PMessageBusConfig maps Teranode P2P settings onto the message bus config.
+//
+// GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
+// protocol misbehaviour (GRAFT flooding, broken IWANT promises). Static and bootstrap
+// peers are exempt: the bus registers them as GossipSub direct peers. Peer exchange is
+// inverted here because the settings key is expressed as an enable flag while the bus
+// config expresses it as a disable flag. PX enabled without scoring is the
+// spec-violating state this wiring exists to eliminate, so it is a configuration error.
+func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Settings, privKey crypto.PrivKey, protocolVersion, dhtMode string, advertiseAddresses []string) (p2pMessageBus.Config, error) {
+	if tSettings.P2P.EnablePeerExchange && !tSettings.P2P.EnablePeerScoring {
+		return p2pMessageBus.Config{}, errors.NewConfigurationError("p2p_enable_peer_exchange requires p2p_enable_peer_scoring (gossipsub v1.1 pairs PX with scoring); disable peer exchange or enable scoring")
+	}
+
+	conf := p2pMessageBus.Config{
+		PrivateKey:          privKey,
+		Name:                tSettings.ClientName,
+		Logger:              logger,
+		PeerCacheFile:       p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
+		BootstrapPeers:      tSettings.P2P.BootstrapPeers,
+		StaticPeers:         tSettings.P2P.StaticPeers,
+		ProtocolVersion:     protocolVersion,
+		DHTMode:             dhtMode,
+		DHTCleanupInterval:  tSettings.P2P.DHTCleanupInterval,
+		EnableNAT:           tSettings.P2P.EnableNAT,
+		EnableMDNS:          tSettings.P2P.EnableMDNS,
+		AllowPrivateIPs:     tSettings.P2P.AllowPrivateIPs,
+		EnablePeerScoring:   tSettings.P2P.EnablePeerScoring,
+		DisablePeerExchange: !tSettings.P2P.EnablePeerExchange,
+	}
+
+	if tSettings.P2P.EnablePeerScoring {
+		params := p2pMessageBus.DefaultPeerScoreParams()
+		if t := tSettings.P2P.PeerScoreIPColocationThreshold; t > 0 {
+			params.IPColocationFactorThreshold = t
+		}
+		// When private IPs are deliberately allowed, exempt local-network ranges from
+		// the IP-colocation penalty so multi-node local/test clusters behind one IP
+		// stay mesh-eligible.
+		if tSettings.P2P.AllowPrivateIPs {
+			params.IPColocationFactorWhitelist = privateIPColocationWhitelist()
+		}
+
+		thresholds := p2pMessageBus.DefaultPeerScoreThresholds()
+		// Penalty-only params cap every score at 0, so a positive threshold means
+		// "never accept PX". Until per-topic delivery scoring can lift honest peers
+		// above 0, refuse attacker-supplied peer records outright: pxConnect dials
+		// mark those peers outbound, which bypasses gossipsub's Dhi graft refusal
+		// and satisfies the Dout quota - the strongest half of the Sybil attack.
+		thresholds.AcceptPXThreshold = 1
+
+		conf.PeerScoreParams = params
+		conf.PeerScoreThresholds = thresholds
+
+		// Observability: scoring failure modes are silent (a peer below 0 is never
+		// grafted; below the graylist threshold its gossip is ignored), so log any
+		// negatively-scored peers with the worst offender for attribution. Warn only
+		// on transition or material change - a persistent graylisted swarm must not
+		// produce a warn line on every inspection tick.
+		graylistThreshold := thresholds.GraylistThreshold
+		var inspectMu sync.Mutex
+		var lastGraylisted int
+		var lastWorstPeer peer.ID
+		conf.PeerScoreInspect = func(snapshots map[peer.ID]*pubsub.PeerScoreSnapshot) {
+			var negative, graylisted int
+			var worst float64
+			var worstPeer peer.ID
+			for pid, snap := range snapshots {
+				if snap == nil || snap.Score >= 0 {
+					continue
+				}
+				negative++
+				if snap.Score <= worst {
+					worst = snap.Score
+					worstPeer = pid
+				}
+				if snap.Score < graylistThreshold {
+					graylisted++
+				}
+			}
+
+			inspectMu.Lock()
+			changed := graylisted != lastGraylisted || worstPeer != lastWorstPeer
+			lastGraylisted, lastWorstPeer = graylisted, worstPeer
+			inspectMu.Unlock()
+
+			if graylisted > 0 && changed {
+				logger.Warnf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
+			} else if negative > 0 {
+				logger.Debugf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
+			}
+		}
+
+		logger.Infof("[p2p] gossipsub peer scoring enabled: ip-colocation weight %.0f threshold %d (whitelisted ranges %d), graylist %.0f, acceptPX %.0f, peer exchange %v",
+			params.IPColocationFactorWeight, params.IPColocationFactorThreshold,
+			len(params.IPColocationFactorWhitelist), thresholds.GraylistThreshold,
+			thresholds.AcceptPXThreshold, tSettings.P2P.EnablePeerExchange)
+	} else {
+		logger.Warnf("[p2p] gossipsub peer scoring DISABLED (p2p_enable_peer_scoring=false), peer exchange %v", tSettings.P2P.EnablePeerExchange)
+	}
+
+	if len(advertiseAddresses) > 0 {
+		conf.AnnounceAddrs = advertiseAddresses
+		conf.Port = tSettings.P2P.Port
+	}
+
+	return conf, nil
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -398,24 +571,9 @@ func NewServer(
 		logger.Infof("[silent mode] DHT disabled - node will not participate in peer discovery")
 	}
 
-	conf := p2pMessageBus.Config{
-		PrivateKey:         privKey,
-		Name:               tSettings.ClientName,
-		Logger:             logger,
-		PeerCacheFile:      p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
-		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
-		StaticPeers:        tSettings.P2P.StaticPeers,
-		ProtocolVersion:    bitcoinProtocolVersion,
-		DHTMode:            dhtMode,
-		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
-		EnableNAT:          tSettings.P2P.EnableNAT,
-		EnableMDNS:         tSettings.P2P.EnableMDNS,
-		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
-	}
-
-	if len(advertiseAddresses) > 0 {
-		conf.AnnounceAddrs = advertiseAddresses
-		conf.Port = tSettings.P2P.Port
+	conf, err := buildP2PMessageBusConfig(logger, tSettings, privKey, bitcoinProtocolVersion, dhtMode, advertiseAddresses)
+	if err != nil {
+		return nil, err
 	}
 
 	p2pClient, err := p2pMessageBus.NewClient(conf)
@@ -654,10 +812,14 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		AssetHTTPAddressURLString = s.settings.Asset.HTTPAddress
 	}
 
-	s.AssetHTTPAddressURL = AssetHTTPAddressURLString
+	// Trim surrounding whitespace: a trailing newline picked up from a .env
+	// file, ConfigMap value, or shell substitution would otherwise make every
+	// patched peer score our announcements as a protocol violation
+	// (checkGossipString rejects non-printable runes).
+	s.AssetHTTPAddressURL = strings.TrimSpace(AssetHTTPAddressURLString)
 
 	// Set propagation URL - defaults to AssetHTTPAddressURL if not configured
-	propagationURL := s.settings.Asset.PropagationPublicURL
+	propagationURL := strings.TrimSpace(s.settings.Asset.PropagationPublicURL)
 	if propagationURL == "" {
 		propagationURL = s.AssetHTTPAddressURL
 	}
@@ -708,8 +870,20 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 
 	e.Use(middleware.Recover())
 
+	// Restrict CORS to the configured websocket origins; an empty list keeps
+	// the historical allow-all behaviour. AllowOriginFunc reuses the same
+	// matcher as the websocket upgrade's CheckOrigin so both surfaces share
+	// one strict semantic (exact, case-insensitive; bare "*" wildcard) rather
+	// than echo's looser glob/subdomain matching.
+	var allowedOrigins []string
+	if s.settings != nil {
+		allowedOrigins = s.settings.P2P.WebSocketAllowedOrigins
+	}
+
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOriginFunc: func(origin string) (bool, error) {
+			return originAllowed(origin, allowedOrigins), nil
+		},
 		AllowMethods: []string{echo.GET},
 	}))
 
@@ -855,6 +1029,12 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	go s.publishNodeStatus(ctx)
 
 	apiKey := s.settings.GRPCAdminAPIKey
+	if util.ValidateAdminAPIKey(s.logger, "P2P", apiKey, s.settings.P2P.GRPCListenAddress, s.settings.SecurityLevelGRPC) {
+		// Configured key is a well-known placeholder; ignore it and fall back to
+		// the random-key path below rather than trusting a world-readable value.
+		apiKey = ""
+	}
+
 	if apiKey == "" {
 		// Generate a random API key if not provided
 		apiKey, err = generateRandomKey()
@@ -999,6 +1179,15 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			PeerID: s.P2PClient.GetID(),
 		}
 
+		// Self-check against the bounds we enforce on ingress: truncates the
+		// validator's reason text so it always passes remote validation.
+		rejectedTxMessage.sanitizeFields()
+
+		if err := rejectedTxMessage.validateFields(); err != nil {
+			s.logger.Errorf("[rejectedTxHandler] rejectedTxMessage failed gossip field validation, not publishing: %v", err)
+			return nil
+		}
+
 		msgBytes, err := json.Marshal(rejectedTxMessage)
 		if err != nil {
 			s.logger.Errorf("[rejectedTxHandler] json marshal error: %v", err)
@@ -1006,6 +1195,8 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			return err
 		}
 
+		// The topic size cap on the marshalled bytes is enforced centrally in
+		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
 		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
@@ -1064,8 +1255,6 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 		return
 	}
 
-	// Mark sender as connected and update last message time
-	// The sender is the peer we're directly connected to
 	// Note: We don't have the sender's client name here, only the originator's
 	senderID, err := peer.Decode(from)
 	if err != nil {
@@ -1073,7 +1262,16 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 		return
 	}
 
-	s.addConnectedPeer(senderID, "", 0, nil, "")
+	// Only mark the sender connected when it has a live libp2p connection.
+	// FromID is the pubsub author, not the immediate hop, so gossip-relayed
+	// messages arrive "from" peers we never dialled; flagging those connected
+	// would exempt them from registry cleanup and let a flood of self-signed
+	// messages under fresh peer IDs grow the registry without bound.
+	if s.hasLiveConnection(from) {
+		s.addConnectedPeer(senderID, "", 0, nil, "")
+	} else {
+		s.addPeer(senderID, "", 0, nil, "")
+	}
 	s.touchLastMessageTime(senderID)
 
 	// Also update for the originator if different (gossiped message)
@@ -1154,13 +1352,31 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		return
 	}
 
-	// Bound the peer-controlled display strings before they reach WebSocket
-	// clients or the peer registry. Everything below this point works with the
-	// sanitized values.
-	sanitizeNodeStatusMessage(&nodeStatusMessage)
-
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
+
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing. This runs before field validation so
+	// a banned peer cannot keep triggering uncached AddBanScore RPCs.
+	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect (logging
+	// — including the spoof log below — registry write, WebSocket fan-out).
+	// Display strings are sanitized in place; a malformed protocol-format
+	// field (peer ID, URL) is a protocol violation, same as a spoofed peer ID
+	// — except for our own loopback message, which is dropped without
+	// self-penalising.
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
+
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
+		if !isSelf {
+			s.applyBanScore(peerID, ReasonProtocolViolation)
+		}
+		return
+	}
 
 	notificationBestHeight := nodeStatusMessage.BestHeight
 	// sanitizeAdvertisedTip below replaces this with a parsed hash, but only
@@ -1176,12 +1392,6 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
 		s.applyBanScore(peerID, ReasonProtocolViolation)
-		return
-	}
-
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing.
-	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
 		return
 	}
 
@@ -1331,6 +1541,28 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		ClientName: s.settings.ClientName,
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here as a loud error instead of getting this
+	// node scored and banned by every peer. Unlike node_status, a violation
+	// hard-fails rather than degrading: every field here is structurally
+	// required — hash and header are machine-generated, and receivers score an
+	// empty DataHubURL just like a malformed one — so there is no safe reduced
+	// form of a block announcement to publish.
+	blockMessage.sanitizeFields()
+
+	if err := blockMessage.validateFields(); err != nil {
+		return errors.NewError("blockMessage failed gossip field validation, not publishing", err)
+	}
+
+	// An empty or unroutable DataHubURL is scored as a protocol violation by
+	// every receiver (checkDataHubURL); the once-per-process check below warns
+	// loudly but keeps publishing, since suppressing would also silence dev
+	// setups that legitimately advertise private addresses to peers configured
+	// to accept them.
+	s.checkStaticGossipURLs()
+
+	// The topic size cap on the marshalled bytes is enforced centrally in
+	// publishToNetwork.
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
 		return errors.NewError("blockMessage - json marshal error", err)
@@ -1439,10 +1671,11 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		}
 	}
 
-	// Get client name from settings
+	// Get client name from settings. Sanitized so a locally misconfigured
+	// value cannot make remote peers score us for a protocol violation.
 	clientName := ""
 	if s.settings != nil {
-		clientName = s.settings.ClientName
+		clientName = sanitizePeerDisplayString(s.settings.ClientName, maxPeerDisplayStringLen)
 	}
 
 	// Get miner name from the best block metadata. This is extracted from the
@@ -1602,6 +1835,12 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 	// Get connected peers count from the registry. The registry also holds
 	// gossiped/disconnected peers, so count only directly connected ones.
+	// Precisely: peers with an open libp2p connection that have authored at
+	// least one gossip message since process start — liveness derives from
+	// the message bus's topic-peer set, so a connected-but-silent peer is
+	// invisible until its first message. A flag can lag reality by up to
+	// reputationCacheTTL after a connect and by up to one cleanup interval
+	// after a disconnect.
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
 		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
@@ -1709,6 +1948,43 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	return msg
 }
 
+// checkStaticGossipURLs evaluates the static outbound URL config once,
+// logging each problem a single time per process. AssetHTTPAddressURL is
+// checked against both the gossip length/charset bound and the SSRF rules
+// receivers score on (validateDataHubURL), so the committed default —
+// localhost asset_httpAddress with asset_httpPublicAddress unset — produces
+// exactly one loud warning instead of an error per publish tick.
+//
+// The SSRF half is a heuristic, not a security property: validateDataHubURL
+// reads OUR AllowPrivateIPs, which governs what this node accepts from peers,
+// not what peers accept from us. A publisher at the default false whose peers
+// all run true withholds a private BaseURL those peers would have used —
+// judged the safer default, since the reverse mismatch gets the node scored.
+//
+// Only node_status degrades on a bad verdict (BaseURL blanked, message still
+// published): an empty BaseURL is legal there on ingress. Block and subtree
+// announcements are useless without a fetchable URL and receivers score an
+// empty DataHubURL just like a malformed one, so those publish unchanged and
+// the warning below is the operator's signal that peers will score them.
+func (s *Server) checkStaticGossipURLs() {
+	s.staticURLCheckOnce.Do(func() {
+		if err := checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen); err != nil {
+			s.assetURLErr = err
+		} else if err := s.validateDataHubURL(s.AssetHTTPAddressURL); err != nil {
+			s.assetURLErr = err
+		}
+
+		if s.assetURLErr != nil {
+			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", s.AssetHTTPAddressURL, s.assetURLErr)
+		}
+
+		if err := checkGossipString("propagation_url", s.PropagationURL, maxGossipURLLen); err != nil {
+			s.propagationURLErr = err
+			s.logger.Warnf("[checkStaticGossipURLs] PropagationURL breaches the gossip field bounds and will be omitted from node_status: %v", err)
+		}
+	})
+}
+
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	// Bound the status computation to a fraction of the publish interval so a
 	// wedged blockchain call cannot consume the whole tick budget and hand the
@@ -1767,9 +2043,51 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Storage:             msg.Storage,
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here instead of getting this node scored and
+	// banned by every peer. Local WebSocket clients already received the
+	// status above, so monitoring does not depend on this publish.
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
+
+	// The URLs are optional in a node_status: a violation (oversized or
+	// non-printable operator config, or a BaseURL peers would score under
+	// their SSRF check) blanks the field and keeps publishing — mirroring the
+	// blacklisted-BaseURL handling on ingress — so a pathological URL degrades
+	// sync-source discovery instead of taking the node off gossip entirely.
+	// Only PeerID (machine-generated) remains a hard failure. The verdicts are
+	// computed (and logged) once: the URLs are static config.
+	s.checkStaticGossipURLs()
+
+	if s.assetURLErr != nil {
+		nodeStatusMessage.BaseURL = ""
+	}
+
+	if s.propagationURLErr != nil {
+		nodeStatusMessage.PropagationURL = ""
+	}
+
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		return errors.NewError("nodeStatusMessage failed gossip field validation, not publishing", err)
+	}
+
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
 		return errors.NewError("nodeStatusMessage - json marshal error", err)
+	}
+
+	// JSON escaping can expand the in-bounds URLs enough to breach the topic
+	// cap peers enforce on the marshalled bytes. Degrade the same way as an
+	// invalid URL above — drop the optional URLs and re-marshal once — instead
+	// of hard-failing on config that every tick would resubmit;
+	// publishToNetwork still enforces the cap as the final backstop.
+	if len(msgBytes) > maxNodeStatusMessageSize && (nodeStatusMessage.BaseURL != "" || nodeStatusMessage.PropagationURL != "") {
+		s.logger.Errorf("[handleNodeStatusNotification] marshalled size %d exceeds cap %d, publishing node_status without the optional URLs", len(msgBytes), maxNodeStatusMessageSize)
+		nodeStatusMessage.BaseURL = ""
+		nodeStatusMessage.PropagationURL = ""
+
+		if msgBytes, err = json.Marshal(nodeStatusMessage); err != nil {
+			return errors.NewError("nodeStatusMessage - json marshal error", err)
+		}
 	}
 
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
@@ -1798,6 +2116,26 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		ClientName: s.settings.ClientName,
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here as a loud error instead of getting this
+	// node scored and banned by every peer. Hard-fail rather than degrade:
+	// hash is machine-generated and receivers score an empty DataHubURL just
+	// like a malformed one, so there is no safe reduced form to publish.
+	subtreeMessage.sanitizeFields()
+
+	if err := subtreeMessage.validateFields(); err != nil {
+		return errors.NewError("subtreeMessage failed gossip field validation, not publishing", err)
+	}
+
+	// An empty or unroutable DataHubURL is scored as a protocol violation by
+	// every receiver (checkDataHubURL); the once-per-process check below warns
+	// loudly but keeps publishing, since suppressing would also silence dev
+	// setups that legitimately advertise private addresses to peers configured
+	// to accept them.
+	s.checkStaticGossipURLs()
+
+	// The topic size cap on the marshalled bytes is enforced centrally in
+	// publishToNetwork.
 	msgBytes, err := json.Marshal(subtreeMessage)
 	if err != nil {
 		return errors.NewError("subtreeMessage - json marshal error", err)
@@ -1996,6 +2334,18 @@ func (s *Server) Stop(ctx context.Context) error {
 		coordCancel()
 	}
 
+	// Stop the peer map cleanup ticker before closing the P2P client: a
+	// reconcile tick against a closed client sees zero live connections and
+	// would clear IsConnected on every registry peer during shutdown. This is
+	// best-effort — Stop() only prevents future ticks, it does not cancel a
+	// pass the last tick already launched, and nothing waits on
+	// reconcileInFlight. A shutdown mass-clear is harmless regardless: Load
+	// resets IsConnected on restore, so it has no persistent consequence.
+	if s.peerMapCleanupTicker != nil {
+		s.peerMapCleanupTicker.Stop()
+		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
+	}
+
 	// Stop the underlying P2P node
 	if s.P2PClient != nil {
 		collect("stop P2P node", s.P2PClient.Close())
@@ -2025,12 +2375,6 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	if s.e != nil {
 		collect("shutdown Echo server", s.e.Shutdown(ctx))
-	}
-
-	// Stop the peer map cleanup ticker
-	if s.peerMapCleanupTicker != nil {
-		s.peerMapCleanupTicker.Stop()
-		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
 	}
 
 	// Stop the registry batcher (performs a final flush of pending updates,

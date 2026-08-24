@@ -48,21 +48,35 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		return
 	}
 
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing (and before field validation and the
+	// spoof check, so a banned peer cannot keep triggering uncached
+	// AddBanScore RPCs). Own messages are identified by the real sender, not
+	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
+	// skip; genuine own messages return at the self check below.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect (logging
+	// — including the spoof log below — registry write, WebSocket fan-out).
+	// Display-only free text is sanitized in place; a malformed
+	// protocol-format field is a protocol violation. The self check is on
+	// fromID alone so a peer claiming our ID cannot dodge the score.
+	blockMessage.sanitizeFields()
+
+	if err = blockMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleBlockTopic] invalid block message field from peer %s: %v", fromID, err)
+		if fromID != s.P2PClient.GetID() {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+
 	// Check that fromID matches the block peer ID
 	if fromID != blockMessage.PeerID {
 		s.logger.Errorf("[handleBlockTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, blockMessage.PeerID)
 		s.addProtocolViolation(fromID)
-		return
-	}
-
-	// ClientName is free-form peer-controlled text that is relayed to WebSocket
-	// clients and stored in the peer registry; bound it before either happens.
-	blockMessage.ClientName = sanitizePeerDisplayString(blockMessage.ClientName, maxPeerDisplayStringLen)
-
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing. Own messages skip the registry
-	// round-trip; they return at the isOwnMessage check below.
-	if !s.isOwnMessage(fromID, blockMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
 		return
 	}
 
@@ -73,7 +87,9 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 	s.logger.Infof("[handleBlockTopic] received block %s fromID %s", blockMessage.Hash, blockMessage.PeerID)
 
-	isSelf := s.isOwnMessage(fromID, blockMessage.PeerID)
+	// The spoof check above proved fromID == blockMessage.PeerID, so the
+	// sender comparison alone decides self.
+	isSelf := fromID == s.P2PClient.GetID()
 	advertisedHeight := blockMessage.Height
 	if isSelf {
 		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
@@ -184,21 +200,33 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing (and before field validation and the
+	// spoof check, so a banned peer cannot keep triggering uncached
+	// AddBanScore RPCs). Own messages are identified by the real sender, not
+	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
+	// skip; genuine own messages return at the self check below.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect:
+	// display-only free text is sanitized in place, a malformed
+	// protocol-format field drops the message and scores the sender.
+	subtreeMessage.sanitizeFields()
+
+	if err = subtreeMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleSubtreeTopic] invalid subtree message field from peer %s: %v", fromID, err)
+		if fromID != s.P2PClient.GetID() {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+
 	// Check that fromID matches the subtree peer ID
 	if fromID != subtreeMessage.PeerID {
 		s.logger.Errorf("[handleSubtreeTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, subtreeMessage.PeerID)
 		s.addProtocolViolation(fromID)
-		return
-	}
-
-	// ClientName is free-form peer-controlled text that is relayed to WebSocket
-	// clients and stored in the peer registry; bound it before either happens.
-	subtreeMessage.ClientName = sanitizePeerDisplayString(subtreeMessage.ClientName, maxPeerDisplayStringLen)
-
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing. Own messages skip the registry
-	// round-trip; they return at the isOwnMessage check below.
-	if !s.isOwnMessage(fromID, subtreeMessage.PeerID) && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
 		return
 	}
 
@@ -231,8 +259,9 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		s.logger.Warnf("[handleSubtreeTopic] notification channel full, dropped subtree notification for %s", subtreeMessage.Hash)
 	}
 
-	// Ignore our own messages
-	if s.isOwnMessage(fromID, subtreeMessage.PeerID) {
+	// Ignore our own messages. The spoof check above proved fromID equals the
+	// claimed PeerID, so the sender comparison alone decides self.
+	if fromID == s.P2PClient.GetID() {
 		s.logger.Debugf("[handleSubtreeTopic] ignoring own subtree message for %s", subtreeMessage.Hash)
 		return
 	}
@@ -384,6 +413,12 @@ func isLocalhostHostname(hostname string) bool {
 // - Loopback addresses (127.x.x.x, ::1)
 // - Private network addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x, fc00::/7)
 // - Link-local addresses (169.254.x.x, fe80::/10)
+//
+// This is a cheap static pre-filter only: it deliberately performs no DNS resolution, since
+// that would let a peer trigger a blocking lookup per announcement. A hostname that resolves
+// to an internal address therefore passes here and is stopped at connection time instead -
+// by the peer health check probe client and by the shared
+// block/subtree fetch client (util.NewSSRFSafeDialContext).
 func (s *Server) validateDataHubURL(urlStr string) error {
 	if urlStr == "" {
 		return errors.NewInvalidArgumentError("DataHubURL is empty")
@@ -463,6 +498,28 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
+	// Drop messages from banned peers before any registration or further
+	// processing (and before field validation and the spoof check, so a
+	// banned peer cannot keep triggering uncached AddBanScore RPCs). Own
+	// messages are identified by the real sender, not the claimed PeerID, so
+	// a banned peer spoofing our ID cannot dodge the skip.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect:
+	// display-only free text is sanitized in place, a malformed
+	// protocol-format field drops the message and scores the sender.
+	rejectedTxMessage.sanitizeFields()
+
+	if err = rejectedTxMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleRejectedTxTopic] invalid rejected tx message field from peer %s: %v", fromID, err)
+		if fromID != s.P2PClient.GetID() {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+
 	// Check that fromID matches the rejected tx peer ID
 	if fromID != rejectedTxMessage.PeerID {
 		s.logger.Errorf("[handleRejectedTxTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, rejectedTxMessage.PeerID)
@@ -470,13 +527,10 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
-	if s.isOwnMessage(fromID, rejectedTxMessage.PeerID) {
+	// The spoof check above proved fromID equals the claimed PeerID, so the
+	// sender comparison alone decides self.
+	if fromID == s.P2PClient.GetID() {
 		s.logger.Debugf("[handleRejectedTxTopic] ignoring own rejected tx message for %s", rejectedTxMessage.TxID)
-		return
-	}
-
-	// Drop messages from banned peers before any registration or further processing.
-	if s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
 		return
 	}
 	s.logger.Debugf("[handleRejectedTxTopic] received rejected tx %s fromID %s (reason: %s)",
@@ -574,7 +628,11 @@ func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
 	hash, err := chainhash.NewHashFromStr(advertisedHash)
 	if err != nil {
-		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash %q: %v", peerID, advertisedHash, err)
+		// Log the length, never the value: node_status deliberately feeds the
+		// raw advertised hash through here (sanitizeAdvertisedTip must see what
+		// the peer actually sent), so this is the one place a peer-controlled
+		// string of near-message-cap size could otherwise reach the logs.
+		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash (len %d): %v", peerID, len(advertisedHash), err)
 		return 0, nil, false
 	}
 
@@ -888,6 +946,21 @@ func (s *Server) cleanupPeerMaps() {
 		s.ipBanCache.Delete(key)
 	}
 
+	// Evict expired liveConnCache entries: the liveness checks insert one
+	// entry per unique peer ID gossip is seen from.
+	var liveConnKeysToDelete []string
+	s.liveConnCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(liveConnCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				liveConnKeysToDelete = append(liveConnKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range liveConnKeysToDelete {
+		s.liveConnCache.Delete(key)
+	}
+
 	// Evict expired banStatusCache entries: shouldSkipBannedPeer inserts one
 	// entry per unique peer ID gossip is seen from.
 	var banStatusKeysToDelete []string
@@ -929,11 +1002,6 @@ func (s *Server) cleanupPeerMaps() {
 
 // startPeerMapCleanup starts the periodic cleanup goroutine
 // Helper methods to reduce redundancy
-
-// isOwnMessage checks if a message is from this node
-func (s *Server) isOwnMessage(from string, peerID string) bool {
-	return from == s.P2PClient.GetID() || peerID == s.P2PClient.GetID()
-}
 
 // shouldSkipBannedPeer checks if we should skip a message from a banned peer:
 // score-based bans live in the centralized peer registry, operator IP/subnet
@@ -1017,10 +1085,12 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 	}
 
 	banned := false
+	live := false
 	for _, p := range s.P2PClient.GetPeers() {
 		if p.ID != peerID {
 			continue
 		}
+		live = len(p.Addrs) > 0
 		for _, addr := range p.Addrs {
 			if ip := extractIPFromMultiaddr(addr); ip != "" && s.banList.IsBanned(ip) {
 				banned = true
@@ -1031,6 +1101,10 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 	}
 
 	s.ipBanCache.Store(peerID, ipBanCacheEntry{banned: banned, expiresAt: now.Add(reputationCacheTTL)})
+	// This walk just observed the peer's connectedness; record it so the
+	// hasLiveConnection check that follows on the same gossip path does not
+	// have to repeat the walk.
+	s.cacheLiveConn(peerID, live, now)
 
 	return banned
 }
@@ -1139,11 +1213,168 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 				return
 			case <-s.peerMapCleanupTicker.C:
 				s.cleanupPeerMaps()
+				// Reconcile on its own goroutine so a slow registry can never
+				// delay the cache sweep above (the only expirer of the
+				// reputation/ban caches); skip the tick if the previous pass
+				// is still running.
+				if s.reconcileInFlight.CompareAndSwap(false, true) {
+					go func() {
+						defer s.reconcileInFlight.Store(false)
+						s.reconcileConnectionStates(ctx)
+					}()
+				}
 			}
 		}
 	}()
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
+}
+
+// reconcileTimeout bounds one reconcileConnectionStates pass so a wedged or
+// flooded registry cannot pin the reconcile goroutine (and its RPCs) forever.
+const reconcileTimeout = 30 * time.Second
+
+// snapshotLiveConnIDs returns the set of peer IDs that currently have an
+// open libp2p connection. Liveness comes from P2PClient.GetPeers(): verified
+// against go-p2p-message-bus v0.1.17 (client.go GetPeers), Addrs is built
+// from host.Network().ConnsToPeer — open connections only, not the peerstore
+// — while the peer list itself is every peer that ever authored a message on
+// a subscribed topic (gossip-only publishers included, never pruned). So the
+// Addrs filter is what separates live neighbours from gossip-only authors;
+// it is not redundant with the listing. This differs from the p2p service's
+// own GetPeers RPC, which is filtered to IsConnected registry entries.
+func (s *Server) snapshotLiveConnIDs() map[string]struct{} {
+	live := make(map[string]struct{})
+	if s.P2PClient != nil {
+		for _, p := range s.P2PClient.GetPeers() {
+			if len(p.Addrs) > 0 {
+				live[p.ID] = struct{}{}
+			}
+		}
+	}
+	return live
+}
+
+type liveConnCacheEntry struct {
+	live      bool
+	expiresAt time.Time
+}
+
+// cacheLiveConn records whether the peer had an open connection when a
+// GetPeers walk last saw it, valid for reputationCacheTTL.
+func (s *Server) cacheLiveConn(peerID string, live bool, now time.Time) {
+	s.liveConnCache.Store(peerID, liveConnCacheEntry{live: live, expiresAt: now.Add(reputationCacheTTL)})
+}
+
+// hasLiveConnection reports whether the peer has an open libp2p connection,
+// answered from liveConnCache (populated by isPeerIPBanned's walk, which the
+// gossip handlers run for the same peer immediately before this) or, on a
+// miss, by a targeted GetPeers walk cached for reputationCacheTTL. A freshly
+// connected neighbour is therefore visible on its first message, while a
+// gossip-relayed publisher walks once per TTL and stays unflagged. The answer
+// can be up to reputationCacheTTL stale after a disconnect; the reconcile
+// sweep corrects that within one cleanup interval.
+func (s *Server) hasLiveConnection(peerID string) bool {
+	now := time.Now()
+	if v, ok := s.liveConnCache.Load(peerID); ok {
+		entry := v.(liveConnCacheEntry)
+		if now.Before(entry.expiresAt) {
+			return entry.live
+		}
+	}
+
+	if s.P2PClient == nil {
+		return false
+	}
+
+	live := false
+	for _, p := range s.P2PClient.GetPeers() {
+		if p.ID != peerID {
+			continue
+		}
+		live = len(p.Addrs) > 0
+		break
+	}
+
+	s.cacheLiveConn(peerID, live, now)
+
+	return live
+}
+
+// reconcileConnectionStates synchronizes the registry's IsConnected flags with
+// actual libp2p connectedness, in both directions: it clears the flag on
+// entries with no live connection and sets it on live peers the hot path
+// missed (their messages arrived before the liveness snapshot included them).
+// Nothing else ever clears the flag: go-p2p-message-bus exposes no disconnect
+// callback (see networkDisconnector) and the only other clearing site is the
+// ban path (removePeer), so without this sweep every flagged peer would stay
+// cleanup-exempt in the registry for the life of the process.
+func (s *Server) reconcileConnectionStates(ctx context.Context) {
+	if s.P2PClient == nil || s.peerRegistry == nil {
+		return
+	}
+
+	live := s.snapshotLiveConnIDs()
+
+	// Seed the per-peer liveness cache from the snapshot just built: nearly
+	// free (bounded by open connections), and it tightens the hot path right
+	// after this pass — a peer this pass is about to clear must not be
+	// re-flagged off a stale cached "live" for the next few seconds.
+	now := time.Now()
+	for id := range live {
+		s.cacheLiveConn(id, true, now)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
+
+	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	if err != nil {
+		s.logger.Warnf("[reconcileConnectionStates] ListPeers failed: %v", err)
+		return
+	}
+
+	cleared, flagged := 0, 0
+	for _, info := range peers {
+		if ctx.Err() != nil {
+			s.logger.Warnf("[reconcileConnectionStates] pass cut short (%v) after clearing %d and flagging %d peers", ctx.Err(), cleared, flagged)
+			return
+		}
+
+		_, isLive := live[info.ID]
+		switch {
+		case info.IsConnected && !isLive:
+			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, false); err != nil {
+				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s false failed: %v", info.ID, err)
+				continue
+			}
+			// Overwrite any stale cached "live" so the hot path cannot
+			// re-flag this peer off a pre-disconnect cache entry, and drop
+			// the batcher's reassert memory so a peer that reconnects gets
+			// re-marked connected on its next message instead of being
+			// skipped as recently asserted.
+			s.cacheLiveConn(info.ID, false, time.Now())
+			if s.registryBatcher != nil {
+				s.registryBatcher.forgetAssertState(info.ID)
+			}
+			cleared++
+		case !info.IsConnected && isLive:
+			// Deliberately no batcher poke here, unlike the clear branch: the
+			// batcher's assert memory is either absent (next message asserts
+			// anyway) or stale past the reassert TTL, and at worst the peer's
+			// next message re-sends one redundant, idempotent
+			// UpdateConnectionState(true). Not worth coupling for.
+			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, true); err != nil {
+				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s true failed: %v", info.ID, err)
+				continue
+			}
+			flagged++
+		}
+	}
+
+	if cleared > 0 || flagged > 0 {
+		s.logger.Infof("[reconcileConnectionStates] reconciled connection flags: %d cleared, %d flagged live", cleared, flagged)
+	}
 }
 
 // startPeerRegistryCleanup and startPeerRegistryCacheSave have been removed.

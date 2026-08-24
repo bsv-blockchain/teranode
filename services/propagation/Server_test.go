@@ -1112,11 +1112,18 @@ func Test_handleSingleTx_NonFinalReturns400(t *testing.T) {
 
 	body, err := io.ReadAll(rec.Body)
 	require.NoError(t, err)
-	// The body carries EXACTLY the allowlisted reason: the outer PROCESSING code
-	// and the wrapped chain do not leak into it.
-	expectedReason := fmt.Sprintf("%s (%d): %s", errors.ERR_TX_LOCK_TIME.String(), errors.ERR_TX_LOCK_TIME, nonFinalMsg)
+	// The body carries the allowlisted reason and the id of the transaction it
+	// is about, and nothing else: the outer PROCESSING code and the rest of the
+	// wrapped chain do not leak into it.
+	//
+	// The txid is added by failureLine, because the allowlisted cause shadows
+	// the "[ProcessTransaction][<txid>]" wrapper that would otherwise carry it —
+	// a client correlating responses would otherwise have an anonymous verdict.
+	txid := siblingTxs(t, 1)[0].TxID()
+	expectedReason := fmt.Sprintf("%s (%d): [ProcessTransaction][%s] %s",
+		errors.ERR_TX_LOCK_TIME.String(), errors.ERR_TX_LOCK_TIME, txid, nonFinalMsg)
 	require.Equal(t, "Failed to process transaction: "+expectedReason, string(body))
-	require.NotContains(t, string(body), "PROCESSING")
+	require.NotContains(t, string(body), "PROCESSING (")
 }
 
 // TestProcessTransaction_NonFinalGRPCStatus covers the gRPC ProcessTransaction
@@ -1621,9 +1628,12 @@ func TestProcessTransaction_ExceedsMaxSize(t *testing.T) {
 		Tx: tx.ExtendedBytes(),
 	}
 
-	err := ps.processTransaction(context.Background(), req)
+	parsed, err := ps.processTransaction(context.Background(), req)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds maximum allowed size")
+	// Rejected on size before the body is ever parsed, so there is no
+	// transaction to hand back for the caller to name.
+	assert.Nil(t, parsed)
 }
 
 // TestCheckDuplicateInputs tests the duplicate input detection.

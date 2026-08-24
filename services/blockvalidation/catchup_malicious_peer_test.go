@@ -255,6 +255,12 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
+		// Anchored parent-chain runs for every honest-chain block being validated:
+		// CheckHeaderContextual requires GetBlockHeaders(parent) to actually return the
+		// parent's chain (issue 1467). Registered before the catch-all below so testify
+		// matches these first.
+		registerParentChainHeaders(mockBlockchainClient, mainnetHeaders, 1000)
+
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 1000, ID: 1}}, nil).Maybe()
@@ -438,9 +444,10 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		)
 
 		// Mock validation for honest chain headers (excluding common ancestor which is
-		// already mocked as existing). Their heights sit above our UTXO height (1000),
-		// so the common-ancestor walk stops at bestBlockHeader instead of treating
-		// unprocessed honest blocks as potential ancestors.
+		// already mocked as existing). Their heights sit above our own chain tip (1000,
+		// the height GetBestBlockHeader is mocked with above), so the common-ancestor
+		// walk stops at bestBlockHeader instead of treating blocks we hold but have not
+		// adopted as potential ancestors.
 		for i := 1; i < len(mainnetHeaders); i++ {
 			header := mainnetHeaders[i]
 			mockBlockchainClient.On("GetBlockExists", mock.Anything, header.Hash()).
