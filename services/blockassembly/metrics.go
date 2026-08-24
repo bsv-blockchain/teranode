@@ -74,6 +74,7 @@ var (
 	prometheusBlockAssemblerSubtreeStoredHist           prometheus.Histogram
 	prometheusBlockAssemblerConflictIntentsPending      prometheus.Gauge
 	prometheusBlockAssemblerConflictIntentReplay        *prometheus.CounterVec
+	prometheusBlockAssemblerDequeueStalenessSeconds     prometheus.Gauge
 )
 
 var (
@@ -228,6 +229,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "subtrees",
 			Help:      "Number of subtrees currently in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerDequeueStalenessSeconds = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "dequeue_staleness_seconds",
+			Help:      "Seconds since the subtree processor's consumer goroutine last passed through its dequeue branch. A value growing alongside a non-zero queued_transactions means intake is queuing unboundedly because the consumer is stuck elsewhere (reorg/move-forward-block/reset/etc), not that ingest has merely slowed (issue #1429).",
 		},
 	)
 

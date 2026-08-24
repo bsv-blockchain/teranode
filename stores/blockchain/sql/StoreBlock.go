@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -956,7 +957,9 @@ func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint3
 	// MTP requires at least 11 previous blocks
 	// For early blocks (height < 11), return 0
 	// MTP of block N is the median of timestamps from blocks [N-11, N-1] (previous 11 blocks)
-	const medianTimeBlocks = 11
+	// The span is the consensus constant (svnode CBlockIndex::nMedianTimeSpan), declared once in
+	// settings so this store, model.medianTimeBlocks and the header-count floor cannot drift.
+	const medianTimeBlocks = settings.MedianTimeSpan
 	if height < medianTimeBlocks {
 		return 0, nil
 	}

@@ -8,6 +8,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -134,6 +135,21 @@ func (m *MockSubtreeProcessor) TxCount() uint64 {
 func (m *MockSubtreeProcessor) QueueLength() int64 {
 	args := m.Called()
 	return args.Get(0).(int64)
+}
+
+func (m *MockSubtreeProcessor) LastDequeueTime() time.Time {
+	args := m.Called()
+	return args.Get(0).(time.Time)
+}
+
+func (m *MockSubtreeProcessor) ConsumerStarted() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
+func (m *MockSubtreeProcessor) ConsumerExited() bool {
+	args := m.Called()
+	return args.Bool(0)
 }
 
 func (m *MockSubtreeProcessor) SubtreeCount() int {

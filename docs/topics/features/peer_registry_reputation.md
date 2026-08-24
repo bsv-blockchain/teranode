@@ -83,7 +83,7 @@ The `PeerRegistry` is a thread-safe data store that maintains comprehensive info
 | `DataHubURL` | `string` | URL for fetching blocks/subtrees from peer |
 | `Storage` | `string` | Storage mode: "full", "pruned", or empty |
 | `ReputationScore` | `float64` | Overall reliability score (0-100) |
-| `IsConnected` | `bool` | Whether peer is directly connected |
+| `IsConnected` | `bool` | Whether the peer has an open libp2p connection AND has authored at least one gossip message since process start (liveness derives from the message bus's topic-peer set, so a connected-but-silent peer stays unflagged — and, unflagged, is evictable like any idle entry once its activity exceeds `p2p_peer_registry_ttl`). Set on the gossip path for live senders — a new neighbour is flagged on its first message — reconciled both ways by a periodic sweep in the p2p service (no libp2p disconnect callback exists; a stale flag can persist for up to one `p2p_peer_map_cleanup_interval` after a disconnect), and never restored from persistence |
 | `IsBanned` | `bool` | Whether peer is currently banned |
 
 **Interaction Metrics:**
@@ -101,7 +101,7 @@ The `PeerRegistry` is a thread-safe data store that maintains comprehensive info
 
 ### 3.2. Peer Selector
 
-The `PeerSelector` implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation. When HTTP health checking is enabled it probes candidate DataHub URLs before selecting (concurrently, with an overall deadline) and keeps a short-lived cache of probe results, so it is not a pure function.
+The `PeerSelector` implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation. When HTTP health checking is enabled it probes candidate DataHub URLs before selecting (concurrently, with an overall deadline) and keeps a short-lived cache of probe results, so it is not a pure function. Those URLs come from peers, so the probes use a client that refuses to connect to internal addresses even when a peer-supplied hostname only resolves to one.
 
 **Selection Criteria:**
 

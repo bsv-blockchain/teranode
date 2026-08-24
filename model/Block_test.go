@@ -590,15 +590,15 @@ func TestBlock_CheckHeaderContextual(t *testing.T) {
 
 		now := uint32(time.Now().Unix()) // nolint:gosec
 
-		// 11 previous headers all stamped "now"; their median is "now".
-		currentChain := make([]*BlockHeader, 11)
-		for i := range currentChain {
-			currentChain[i] = &BlockHeader{Timestamp: now}
-		}
+		// 11 properly linked previous headers stamped now-10..now; their median is now-5.
+		// The chain must be anchored at the block's parent for the median window to be
+		// evaluated (issue #1467), so the block is anchored on the chain's tip.
+		currentChain := buildLinkedChain(t, 11, now-10)
 
 		// Block timestamp equal to the median violates the strictly-after rule, while staying
 		// well inside the 2-hours-in-the-future bound so the earlier check passes.
-		block := buildBlock(t, now)
+		block := buildBlock(t, now-5)
+		block.Header.HashPrevBlock = currentChain[len(currentChain)-1].Hash()
 
 		err := block.CheckHeaderContextual(currentChain, tSettings, logger)
 		require.Error(t, err)
@@ -1361,20 +1361,15 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
 
-	currentChain := make([]*BlockHeader, 11)
+	// The parent chain must be anchored at the block's parent (issue 1467); the fixture
+	// block is regtest block 1, so its parent chain is the regtest genesis header.
+	currentChain := regtestGenesisParentChain(t, blockHeader)
 	currentChainIDs := make([]uint32, 11)
 
 	for i := 0; i < 11; i++ {
-		currentChain[i] = &BlockHeader{
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			// set the last 11 block header timestamps to be less than the current timestamps
-			Timestamp: 1231469665 - uint32(i), // nolint:gosec
-		}
 		currentChainIDs[i] = uint32(i) // nolint:gosec
 	}
 
-	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, currentChain, currentChainIDs, settings, nil)
 	require.NoError(t, err)
@@ -1421,9 +1416,14 @@ func TestBlockValid_AcceptsP2SHCoinbaseOutput(t *testing.T) {
 		bits, err := NewNBitFromString("207fffff")
 		require.NoError(t, err)
 
+		// A linked parent chain stamped in the past; the block's header must be anchored
+		// on its tip because CheckHeaderContextual evaluates the median-time-past window
+		// against the headers adjacent to the block's parent (issue 1467).
+		parentChain := buildLinkedChain(t, 11, uint32(time.Now().Unix())-100) // nolint:gosec
+
 		blockHeader := &BlockHeader{
 			Version:        4,
-			HashPrevBlock:  &chainhash.Hash{},
+			HashPrevBlock:  parentChain[len(parentChain)-1].Hash(),
 			HashMerkleRoot: coinbase.TxIDChainHash(),
 			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
 			Bits:           *bits,
@@ -1454,21 +1454,14 @@ func TestBlockValid_AcceptsP2SHCoinbaseOutput(t *testing.T) {
 		utxoStore, err := sql.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
 		require.NoError(t, err)
 
-		currentChain := make([]*BlockHeader, 11)
 		currentChainIDs := make([]uint32, 11)
-
 		for i := 0; i < 11; i++ {
-			currentChain[i] = &BlockHeader{
-				HashPrevBlock:  &chainhash.Hash{},
-				HashMerkleRoot: &chainhash.Hash{},
-				Timestamp:      blockHeader.Timestamp - 100 - uint32(i), // nolint:gosec
-			}
 			currentChainIDs[i] = uint32(i) // nolint:gosec
 		}
 
 		oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-		return b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
+		return b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, parentChain, currentChainIDs, tSettings, nil)
 	}
 
 	t.Run("control: unmodified coinbase is accepted", func(t *testing.T) {
@@ -1612,17 +1605,12 @@ func TestBlock_Valid_DupTxDetected_NilSubtreeStore(t *testing.T) {
 	// Pre-populate SubtreeSlices so Valid can reach checkDuplicateTransactions without a subtree store.
 	b.SubtreeSlices = []*subtreepkg.Subtree{subtree}
 
-	currentChain := make([]*BlockHeader, 11)
+	// Anchored at the fixture block's real parent, the regtest genesis (issue 1467).
+	currentChain := regtestGenesisParentChain(t, blockHeader)
 	currentChainIDs := make([]uint32, 11)
 	for i := 0; i < 11; i++ {
-		currentChain[i] = &BlockHeader{
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      1231469665 - uint32(i), // nolint:gosec
-		}
 		currentChainIDs[i] = uint32(i) // nolint:gosec
 	}
-	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
@@ -5655,17 +5643,12 @@ func TestBlock_Valid_DupTxDetected_DiskMapDirs(t *testing.T) {
 			// CVE-2012-2459 test pattern above).
 			b.SubtreeSlices = []*subtreepkg.Subtree{subtree}
 
-			currentChain := make([]*BlockHeader, 11)
+			// Anchored at the fixture block's real parent, the regtest genesis (issue 1467).
+			currentChain := regtestGenesisParentChain(t, blockHeader)
 			currentChainIDs := make([]uint32, 11)
 			for i := 0; i < 11; i++ {
-				currentChain[i] = &BlockHeader{
-					HashPrevBlock:  &chainhash.Hash{},
-					HashMerkleRoot: &chainhash.Hash{},
-					Timestamp:      1231469665 - uint32(i), // nolint:gosec
-				}
 				currentChainIDs[i] = uint32(i) // nolint:gosec
 			}
-			currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 			oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
