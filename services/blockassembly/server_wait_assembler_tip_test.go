@@ -168,6 +168,54 @@ func TestWaitForAssemblerTip(t *testing.T) {
 		require.Greater(t, flaky.callCount(), 3, "the wait must have retried past the failures")
 	})
 
+	t.Run("waits while the assembler is behind the chain, then proceeds", func(t *testing.T) {
+		// The issue 764 shape, and the one the running-state check alone cannot
+		// see. The subscription loop enters StateBlockchainSubscription only once
+		// it dequeues the notification, so between the store committing a new tip
+		// and that dequeue the assembler sits in Running holding a stale
+		// CurrentBlock. Every other waiting subtest here syncs the assembler to
+		// the chain first and varies only the state, which left the tip
+		// comparison in assemblerReady covered by nothing.
+		server := newTipWaitServer(t)
+
+		tip, meta, err := server.blockchainClient.GetBestBlockHeader(context.Background())
+		require.NoError(t, err)
+
+		stale := staleHeader(t, tip)
+		server.blockAssembler.setBestBlockHeader(stale, meta.Height)
+		server.blockAssembler.setCurrentRunningState(StateRunning)
+
+		go func() {
+			time.Sleep(80 * time.Millisecond)
+			server.blockAssembler.setBestBlockHeader(tip, meta.Height)
+		}()
+
+		start := time.Now()
+		require.NoError(t, server.waitForAssemblerTip(context.Background()))
+		require.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond,
+			"a Running assembler on a stale tip must not be treated as ready")
+	})
+
+	t.Run("a running assembler that never catches up times out", func(t *testing.T) {
+		// The same divergence, never resolved. Running alone would return
+		// immediately and generate would build on the pre-reorg parent.
+		server := newTipWaitServer(t)
+
+		tip, meta, err := server.blockchainClient.GetBestBlockHeader(context.Background())
+		require.NoError(t, err)
+
+		server.blockAssembler.setBestBlockHeader(staleHeader(t, tip), meta.Height)
+		server.blockAssembler.setCurrentRunningState(StateRunning)
+		server.settings.BlockAssembly.GenerateTipWaitTimeout = 100 * time.Millisecond
+
+		start := time.Now()
+		err = server.waitForAssemblerTip(context.Background())
+		require.Error(t, err, "a stale tip must not be reported as ready just because the state is Running")
+		require.Contains(t, err.Error(), "did not reach the chain tip")
+		require.GreaterOrEqual(t, time.Since(start), 100*time.Millisecond,
+			"the divergence must be waited out, not failed on immediately")
+	})
+
 	t.Run("a cancelled parent context ends the wait", func(t *testing.T) {
 		server := newTipWaitServer(t)
 		syncAssemblerToChainTip(t, server)
@@ -181,4 +229,19 @@ func TestWaitForAssemblerTip(t *testing.T) {
 		require.Less(t, time.Since(start), 2*time.Second,
 			"the parent deadline must bound the wait, not just the configured timeout")
 	})
+}
+
+// staleHeader returns a header that is valid but is not the one passed in, so a
+// tip comparison against it must fail. Hash() recomputes from the bytes, so
+// changing any field of a copy is enough.
+func staleHeader(t *testing.T, tip *model.BlockHeader) *model.BlockHeader {
+	t.Helper()
+
+	stale := *tip
+	stale.Nonce = tip.Nonce + 1
+
+	require.False(t, stale.Hash().IsEqual(tip.Hash()),
+		"the fixture must actually differ from the chain tip or the subtest proves nothing")
+
+	return &stale
 }

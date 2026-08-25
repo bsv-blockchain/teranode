@@ -2540,10 +2540,18 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	return ba.waitForBestBlockHeaderUpdate(ctx, previousBestHash)
 }
 
-// defaultGenerateTipWaitTimeout is the fallback bound when
-// BlockAssembly.GenerateTipWaitTimeout is unset or non-positive, so the wait is
-// never left unbounded and never collapses to zero.
-const defaultGenerateTipWaitTimeout = 30 * time.Second
+// tipWaitReconcileGrace is how long the wait tolerates a mismatch before asking
+// the assembler to reconcile. A transition already in flight resolves on its own
+// in milliseconds, and nudging then would add work to the very path being waited
+// on; a mismatch still present after this long is the shape that never converges.
+const tipWaitReconcileGrace = time.Second
+
+// Tip-poll interval bounds. The wait starts fine and backs off - see the comment
+// in waitForAssemblerTip for why each end is where it is.
+const (
+	minTipPollInterval = 5 * time.Millisecond
+	maxTipPollInterval = 250 * time.Millisecond
+)
 
 // waitForAssemblerTip waits, bounded, for block assembly to become level with the
 // chain tip AND return to its Running state.
@@ -2555,9 +2563,10 @@ const defaultGenerateTipWaitTimeout = 30 * time.Second
 // on the tip alone returns while the subtree processor is still being torn down and
 // the unmined set reloaded. The running state is the reliable done signal:
 // processNewBlockAnnouncement only transitions back to Running in its deferred exit,
-// after handleReorg and reset have returned. Requiring it also closes the MovingUp
-// window, in which GetMiningCandidate short-circuits to a transaction-less template
-// and generate would mine a coinbase-only block over queued transactions.
+// after handleReorg and reset have returned. Requiring it also means a call cannot
+// start while the assembler is in MovingUp; that is a consequence of waiting for
+// Running, not a guarantee this wait offers - nothing here stops the assembler
+// entering MovingUp again once the wait has returned.
 //
 // No state is treated as unwaitable. Starting looks like one — an assembler that
 // was never started never leaves it — but Start sets Running from a goroutine, so
@@ -2584,44 +2593,93 @@ const defaultGenerateTipWaitTimeout = 30 * time.Second
 // bounded component, waitForBlockMinedSet: 45 retries at 20ms base, factor 2, capped
 // at 2s, is ~78s worst case per invalid moveBack block.
 func (ba *BlockAssembly) waitForAssemblerTip(ctx context.Context) error {
-	timeout := ba.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout
+	timeout := ba.settings.BlockAssembly.GenerateTipWaitTimeout
 	if timeout <= 0 {
-		timeout = defaultGenerateTipWaitTimeout
+		timeout = settings.DefaultGenerateTipWaitTimeout
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 5ms rather than something coarser because of what runs immediately before
-	// this on a multi-block generate: waitForBestBlockHeaderUpdate returns as
-	// soon as the assembler's tip changes, which happens at setBestBlockHeader,
-	// before the deferred return to StateRunning. So the next block's readiness
-	// check can arrive a few instructions early and pay a tick for it. Keeping
-	// the tick small bounds that dead time without coupling the two waits.
-	ticker := time.NewTicker(5 * time.Millisecond)
+	// Start fine because of what runs immediately before this on a multi-block
+	// generate: waitForBestBlockHeaderUpdate returns as soon as the assembler's
+	// tip changes, which happens at setBestBlockHeader, before the deferred
+	// return to StateRunning. So the next block's readiness check can arrive a
+	// few instructions early and pay a tick for it.
+	//
+	// Then back off, because that window closes within tens of milliseconds and
+	// past it the fine tick buys nothing. Each pass costs a GetBestBlockHeader
+	// round trip aimed at the blockchain service - the same dependency whose
+	// latency is the reason for waiting, and which is concurrently serving the
+	// GetBlockIsMined polls waitForBlockMinedSet is issuing for the very work
+	// being awaited. Holding 200 reads/second for the rest of the bound would aim
+	// load at exactly the wrong place; backing off also means tick and bound no
+	// longer have to be weighed against each other whenever either moves.
+	interval := minTipPollInterval
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	// The assembler learns of a new tip from an asynchronous notification, and
+	// the blockchain client drops notifications to a subscriber it cannot feed
+	// fast enough. If that has happened, nothing in this loop converges on its
+	// own and "retry once it has caught up" would advise an action that fails
+	// identically every time - on regtest especially, where generate is the only
+	// source of new blocks and no later arrival re-triggers anything. Asking for
+	// a reconcile is a non-blocking send that coalesces by construction, so the
+	// cost of being wrong is nil.
+	start := time.Now()
+	nudged := false
 
 	for {
 		bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(waitCtx)
-		if err != nil {
+
+		switch {
+		case err != nil:
 			// Do not misreport an expired deadline as a read failure: the ticker
 			// and waitCtx.Done() can become ready in the same instant and select
 			// may take the tick, leaving this call to fail on the dead context.
 			if waitCtx.Err() == nil {
 				ba.logger.Warnf("[generateBlock] could not read the chain tip to sync against, retrying: %v", err)
 			}
-		} else if ba.assemblerReady(bestHeader) {
+		case ba.assemblerReady(bestHeader):
 			return nil
+		case !nudged && time.Since(start) > tipWaitReconcileGrace:
+			nudged = true
+
+			ba.logger.Warnf("[generateBlock] block assembly still behind the chain tip after %s, asking it to reconcile", tipWaitReconcileGrace)
+			ba.blockAssembler.triggerReconcile()
 		}
 
 		select {
 		case <-waitCtx.Done():
-			return errors.NewProcessingError(
-				"[generateBlock] block assembly did not reach the chain tip within %s (state %s) - retry once it has caught up",
-				timeout, StateStrings[ba.blockAssembler.GetCurrentRunningState()])
+			return ba.tipWaitExpiredError(ctx, timeout)
 		case <-ticker.C:
+			if interval < maxTipPollInterval {
+				interval *= 2
+				ticker.Reset(interval)
+			}
 		}
 	}
+}
+
+// tipWaitExpiredError distinguishes the two ways the bounded wait ends, because
+// they call for opposite actions and the effective bound is the smaller of the
+// two. On the generate RPC the caller's deadline is rpc_timeout, which defaults
+// to 30s and so sits below the configured bound: on that path the caller giving
+// up first is the ordinary expiry, not the rare one, and reporting it as "block
+// assembly did not catch up in 90s" would name a budget that was never spent.
+func (ba *BlockAssembly) tipWaitExpiredError(ctx context.Context, timeout time.Duration) error {
+	state := StateStrings[ba.blockAssembler.GetCurrentRunningState()]
+
+	if ctx.Err() != nil {
+		return errors.NewProcessingError(
+			"[generateBlock] caller gave up before block assembly reached the chain tip (state %s) - the effective bound is the smaller of blockassembly_generateTipWaitTimeout (%s) and the caller's own deadline, which on the generate RPC is rpc_timeout; raise both together",
+			state, timeout)
+	}
+
+	return errors.NewProcessingError(
+		"[generateBlock] block assembly did not reach the chain tip within %s (state %s) - retry once it has caught up",
+		timeout, state)
 }
 
 // assemblerReady reports whether block assembly is level with bestHeader and has

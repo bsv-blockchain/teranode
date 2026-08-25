@@ -802,8 +802,11 @@ func TestGenerateBlocks_ErrorMessages(t *testing.T) {
 		utxoStore := testutil.NewSQLiteMemoryUTXOStore(common.Ctx, common.Logger, common.Settings, t)
 		_ = utxoStore.SetBlockHeight(0)
 
-		// Create server without mining service - this will cause GenerateBlocks to fail
-		// but will still exercise the error message formatting code
+		// The mining service is nil, but that is not what fails here: the
+		// assembler below is Init'd and never Started, so it stays in Starting
+		// and the readiness wait runs to its bound first. Same diagnosis as
+		// TestGenerateBlock_ErrorPaths further down. What this exercises is the
+		// per-block error formatting, which is what the assertions pin.
 		server := New(common.Logger, common.Settings, nil, utxoStore, subtreeStore, blockchainClient)
 		server.SetSkipWaitForPendingBlocks(true)
 		require.NoError(t, server.Init(common.Ctx))
@@ -816,16 +819,19 @@ func TestGenerateBlocks_ErrorMessages(t *testing.T) {
 			Count: 3,
 		}
 
-		// This will fail due to missing mining service, but the error message
-		// will include "error generating block 1 of 3" which demonstrates
-		// the enhanced error formatting is working
+		// Fails in the readiness wait, and the error message carries
+		// "error generating block 1 of 3", which is the formatting under test.
 		_, err := server.GenerateBlocks(context.Background(), req)
 
-		// Verify we get an error (expected due to missing mining service)
-		assert.Error(t, err)
-		// The error message should contain the block number format
-		assert.Contains(t, err.Error(), "error generating block")
-		assert.Contains(t, err.Error(), "of 3")
+		require.Error(t, err)
+		// The cause cannot be pinned here the way TestGenerateBlock_ErrorPaths
+		// pins it: that test calls generateBlock directly, while GenerateBlocks
+		// returns through errors.WrapGRPC, which renders as
+		// "rpc error: code = Internal desc = error generating block 1 of 3" and
+		// drops the wrapped chain. So this asserts the formatting it is named
+		// for, and the comment above carries the cause instead.
+		require.Contains(t, err.Error(), "error generating block")
+		require.Contains(t, err.Error(), "of 3")
 	})
 }
 
