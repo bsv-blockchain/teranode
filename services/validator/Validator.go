@@ -516,8 +516,19 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 
 	if err != nil {
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
-			// TODO should this also announce transactions with missing parents etc.?
-			if errors.Is(err, errors.ErrTxInvalid) {
+			// Announce ErrTxMissingParent alongside ErrTxInvalid. This is only the
+			// observability half of the Kafka trust-boundary fix: the validatortxs
+			// topic runs 32 partitions keyed by txid and is consumed concurrently,
+			// so a child can be processed before its parent, producing
+			// ErrTxMissingParent here. WithLogErrorAndMoveOn() still commits the
+			// Kafka offset and the transaction is still silently dropped from the
+			// submitter's point of view - this change only makes that drop
+			// observable (rejected-tx topic) instead of a log line nobody acts on.
+			// The real fix - an orphan pool like services/legacy/netsync already
+			// has, so the child is retried once its parent lands - is deliberately
+			// deferred and not part of this change.
+			missingParent := errors.Is(err, errors.ErrTxMissingParent)
+			if errors.Is(err, errors.ErrTxInvalid) || missingParent {
 				if v.blockchainClient != nil {
 					var (
 						state *blockchain.FSMStateType
@@ -540,9 +551,18 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 
 				txID := tx.TxIDChainHash().String()
 
+				// Keep "missing parent" and genuinely-invalid rejections
+				// distinguishable in the Reason text: a submitter should retry a
+				// missing-parent rejection (the parent may still be in flight) but
+				// give up on a genuinely-invalid one.
+				reason := err.Error()
+				if missingParent {
+					reason = "missing parent: " + reason
+				}
+
 				m := &kafkamessage.KafkaRejectedTxTopicMessage{
 					TxHash: txID,
-					Reason: err.Error(),
+					Reason: reason,
 					PeerId: "", // Empty peer_id indicates internal rejection
 				}
 

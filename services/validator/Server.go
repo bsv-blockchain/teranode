@@ -357,16 +357,21 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		height := kafkaMsg.Height
 
-		options := &Options{
-			SkipUtxoCreation:     kafkaMsg.Options.SkipUtxoCreation,
-			AddTXToBlockAssembly: kafkaMsg.Options.AddTXToBlockAssembly,
-			SkipPolicyChecks:     kafkaMsg.Options.SkipPolicyChecks,
-			CreateConflicting:    kafkaMsg.Options.CreateConflicting,
-		}
+		options := optionsFromKafkaMessage(kafkaMsg.Options)
 
 		// should not pass in a height when validating from Kafka, should just be current utxo store height
 		if _, err = v.validator.ValidateWithOptions(ctx, tx, height, options); err != nil {
-			prometheusInvalidTransactions.Inc()
+			// ErrTxMissingParent here means the tx merely arrived before its
+			// parent on this Kafka topic's 32 concurrent partitions - it is not
+			// evidence of an attack or a malformed tx, so count it separately
+			// from prometheusInvalidTransactions to keep that counter usable as
+			// a signal for genuinely invalid/attack traffic.
+			if errors.Is(err, errors.ErrTxMissingParent) {
+				prometheusMissingParentTransactions.Inc()
+			} else {
+				prometheusInvalidTransactions.Inc()
+			}
+
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 
 			return err
@@ -392,6 +397,31 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	return nil
+}
+
+// optionsFromKafkaMessage converts the wire-level KafkaTxValidationOptions into
+// the validator's internal Options, treating a nil options message the same as
+// one whose fields are all absent/false.
+//
+// KafkaTxValidationOptions is an optional-presence proto3 message field
+// (kafka_messages.proto), so a producer that omits it entirely - including a
+// foreign or crafted producer on the validatortxs topic, which is not
+// authenticated - unmarshals with kafkaMsg.Options == nil. The in-tree
+// producer (propagation's validateTransactionViaKafka) always populates
+// Options from validator.NewDefaultOptions(), so falling back to those same
+// defaults here means an omitted Options field can never be more permissive
+// than what the trusted producer already sends.
+func optionsFromKafkaMessage(opts *kafkamessage.KafkaTxValidationOptions) *Options {
+	if opts == nil {
+		return NewDefaultOptions()
+	}
+
+	return &Options{
+		SkipUtxoCreation:     opts.SkipUtxoCreation,
+		AddTXToBlockAssembly: opts.AddTXToBlockAssembly,
+		SkipPolicyChecks:     opts.SkipPolicyChecks,
+		CreateConflicting:    opts.CreateConflicting,
+	}
 }
 
 // Stop gracefully shuts down the validator server and all associated components.

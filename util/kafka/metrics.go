@@ -29,6 +29,30 @@ func initProducerMetrics() {
 	prometheusMetricsInitOnce.Do(_initProducerMetrics)
 }
 
+var prometheusConsumerPanicsRecovered *prometheus.CounterVec
+
+var prometheusConsumerMetricsInitOnce sync.Once
+
+// initConsumerMetrics lazily registers consumer-side metrics. Named
+// consistently with the gRPC-side grpc_panics_recovered_total counter
+// (added independently for the gRPC panic barrier) so the two panic
+// barriers are easy to find together on a dashboard.
+func initConsumerMetrics() {
+	prometheusConsumerMetricsInitOnce.Do(_initConsumerMetrics)
+}
+
+func _initConsumerMetrics() {
+	prometheusConsumerPanicsRecovered = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_consumer",
+			Name:      "panics_recovered_total",
+			Help:      "Total panics recovered from Kafka message handlers, keyed by topic. Each occurrence is a bug or a malformed/malicious message; the process keeps running and the offending message is committed (not retried) to avoid a poison-message wedge.",
+		},
+		[]string{"topic"},
+	)
+}
+
 func _initProducerMetrics() {
 	prometheusBytesWritten = promauto.NewCounter(
 		prometheus.CounterOpts{

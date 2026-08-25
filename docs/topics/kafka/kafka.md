@@ -13,6 +13,7 @@
     - [Consumer Resilience](#consumer-resilience)
 4. [Configuration](#4-configuration)
     - [TLS and Authentication](#tls-and-authentication)
+    - [Trust Model and Network Isolation](#trust-model-and-network-isolation)
 5. [Operational Guidelines](#5-operational-guidelines)
     - [Performance Tuning](#performance-tuning)
     - [Reliability Considerations](#reliability-considerations)
@@ -193,7 +194,9 @@ KAFKA_TLS_CA_FILE = /etc/teranode/certs/kafka-ca.pem
 KAFKA_TLS_CERT_FILE = /etc/teranode/certs/client-cert.pem
 KAFKA_TLS_KEY_FILE = /etc/teranode/certs/client-key.pem
 
-# Kafka broker URLs (using TLS port)
+# Kafka broker URLs. 9093 here is a conventional external TLS listener, not the
+# deployment shipped in this repository — there, 9093 is pandaproxy and the broker
+# listens PLAINTEXT-only on 9092. See "Trust Model and Network Isolation" below.
 KAFKA_HOSTS = kafka1.example.com:9093,kafka2.example.com:9093
 ```
 
@@ -204,6 +207,106 @@ KAFKA_ENABLE_TLS = true
 KAFKA_TLS_SKIP_VERIFY = true  # Only for testing!
 kafka_enable_debug_logging = true  # For troubleshooting
 ```
+
+### Trust Model and Network Isolation
+
+The manifests and compose files shipped in this repository (`deploy/kubernetes/kafka/`,
+`deploy/docker/base/`) run Kafka/Redpanda with **no broker ACLs, no SASL, and a plaintext
+listener by default**. `KAFKA_ENABLE_TLS` is `false` out of the box, so client-side mTLS
+(described above) is available but not active until an operator turns it on. Nothing in the
+default deployment restricts *who* can connect to the broker or *which* topics a connected
+client may write to.
+
+This means the security boundary for Kafka, as shipped, is **network isolation, not
+authentication**: any workload with network reach to the Kafka Service can publish or
+consume on any topic, including forging messages onto topics other services trust.
+
+- `deploy/kubernetes/kafka/kafka-shared-networkpolicy.yaml` restricts ingress to the Kafka
+  pods to same-namespace traffic only, as a default-deny boundary against workloads outside
+  the namespace **on clusters whose CNI plugin enforces NetworkPolicy**. This is a real
+  prerequisite, and it fails open silently: any apiserver accepts and stores the object
+  regardless, `kubectl get networkpolicy` shows it as present either way, and a cluster whose
+  CNI does not implement NetworkPolicy simply ignores it with no error. Verify enforcement
+  before relying on it — the manifest carries a probe command in its header comment. The
+  policy is also intentionally a coarse, same-namespace allowlist rather than a per-service
+  one: there is no consistent pod-label scheme shared across every producer/consumer service
+  and deployment style (docker-compose-derived manifests vs. the operator-managed CRs in
+  `deploy/kubernetes/teranode/`) to key a tighter selector off. Treat it as a floor, not a
+  substitute for proper multi-tenant segmentation.
+- For non-Kubernetes deployments, `deploy/docker/base/docker-services.yml` already publishes
+  the broker (`9092`), pandaproxy (`9093`) and schema registry (host `9096` → container
+  `8081`) bound to `127.0.0.1`, so they are not reachable off-host by default. Two residual
+  gaps: any container on the `teranode-network` bridge still reaches the broker directly on
+  `kafka-shared:9092`, and the stacks under `compose/` do not all have that loopback binding
+  (`docker-compose-ss.yml` publishes `9092`/`9093` on all interfaces). On bare metal, restrict
+  those ports with a firewall rule.
+- Not every topic carries the same trust weight if that boundary is breached. The
+  characterisation below covers every topic wired into the Go code, and holds only under the
+  default settings shipped in `settings.conf`.
+    - `blocks`, `subtrees`, `invalid-blocks`, `invalid-subtrees`, `rejectedtx`,
+      `tx-policy-rejected` and `legacy-inv` carry pointers or advisory data that downstream
+      services re-validate or treat as unblessed input, so forged messages cannot inject data.
+      Two qualifications: the `URL` field on `blocks` and `subtrees` is attacker-chosen and
+      only scheme-checked (`http`/`https`, plus the literal `legacy`) with no restriction on
+      the host, so produce access gives an outbound-fetch primitive from the validating pods,
+      aimed at any host and driven at any rate the producer chooses; and `legacy-inv` messages
+      are dropped unless they name a currently connected peer, in which case they drive
+      getdata requests for attacker-chosen hashes to that peer.
+    - `txmeta` message contents are written directly into the in-memory tx-metadata cache, and
+      a cache hit makes subtree validation treat the transaction as already known — it is
+      never fetched or validated at all. The cached `fee`, `sizeInBytes` and parent inpoints
+      are then written into the subtree and subtree-meta files this node stores and serves,
+      where they feed the block fee/reward check and the order-and-blessed check. Proof-of-work
+      and the authoritative UTXO store still bound what can ultimately get confirmed —
+      forged `txmeta` entries cannot forge transactions or double-spend — but the reachable
+      surface is wider than a single skipped signature check.
+    - `validatortxs` (empty by default, populated in the `.operator` context, i.e. exactly the
+      Kubernetes deployment this NetworkPolicy targets) carries the raw transaction *and* the
+      validation options applied to it — `skipPolicyChecks`, `skipUtxoCreation`,
+      `addTXToBlockAssembly`, `createConflicting`. The Validator takes all four from the
+      message as-is, with no check that the producer was entitled to request them, so produce
+      access to this topic means choosing the validation mode a transaction is processed
+      under (`skipPolicyChecks` maps to consensus-mode validation, bypassing local policy).
+      The `options` field itself is optional-presence on the wire; a message that omits it
+      falls back to the validator's own defaults (`services/validator/Server.go`,
+      `optionsFromKafkaMessage`) — the same defaults the in-tree Propagation producer already
+      sends — rather than crashing or silently becoming more permissive. More generally, the
+      Kafka consumer now recovers a panic in any topic's handler instead of letting it take
+      down the process (`util/kafka/kafka_consumer.go`), so a malformed message on this or any
+      other topic is a logged, counted event, not an outage.
+    - `blocks-final` is the one topic whose contents leave the node. The legacy sync manager
+      relays each message's hash and 80-byte header to every connected legacy P2P peer without
+      checking proof-of-work, without consulting the blockchain store, and without verifying
+      that the header hashes to the hash in the message key. The bound on this is real:
+      forged messages cannot get an invalid block accepted anywhere, because receiving peers
+      still check proof-of-work and chain connectivity, and this node cannot serve a block it
+      does not have. What they do is turn this node into a source of junk block announcements,
+      at whatever rate the producer chooses — grounds for peer misbehaviour scoring or a ban.
+  Treat write access to `txmeta`, `validatortxs` and `blocks-final` as the topics that carry
+  real weight.
+
+**Operators running Kafka in a shared or multi-tenant cluster, or subject to compliance
+requirements, should not rely on network isolation alone.** On top of the NetworkPolicy:
+
+- Enable `KAFKA_ENABLE_TLS` (and provide `KAFKA_TLS_CA_FILE`/`KAFKA_TLS_CERT_FILE`/
+  `KAFKA_TLS_KEY_FILE` for mutual TLS) as documented above — the client side is wired into
+  every producer and consumer path already, it is simply off by default. **The client flag on
+  its own is not enough.** The Redpanda instance shipped here starts with
+  `--kafka-addr PLAINTEXT://0.0.0.0:9092` and nothing else
+  (`deploy/kubernetes/kafka/kafka-shared-deployment.yaml`, `deploy/docker/base/docker-services.yml`),
+  so turning client TLS on against it breaks connectivity rather than securing anything.
+  Enabling mTLS also requires configuring a broker TLS listener with broker certificates, and
+  adding that listener's port to `kafka-shared-networkpolicy.yaml` — the policy hard-codes
+  `9092`/`9093`/`8081`, so a TLS listener on a fourth port is silently blocked by it.
+- Configure broker-side ACLs restricting write access to the weighty topics to the identity
+  of their legitimate producer — `txmeta` and `validatortxs` to the Validator and Propagation
+  services respectively, `blocks-final` to the Blockchain service — and, more generally,
+  restricting produce/consume per topic to the services that need it. Teranode does not implement or configure broker ACLs itself —
+  this is a Kafka/Redpanda broker-side configuration and certificate-distribution decision
+  that has to be made per deployment, and is out of scope for the client library to enforce.
+- There is currently no SASL/SCRAM support in the Kafka client (`util/kafka/`). Where broker
+  ACLs require SASL rather than mTLS-based identity, that is a gap requiring further client
+  work, not something enabled by an existing setting.
 
 ## 5. Operational Guidelines
 

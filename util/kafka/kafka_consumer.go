@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -798,7 +799,39 @@ func wrapConsumerFn(ctx context.Context, logger ulogger.Logger, topic string, co
 		}
 	}
 
-	return consumerFn
+	return recoverConsumerFn(logger, topic, consumerFn)
+}
+
+// recoverConsumerFn wraps consumerFn with a panic barrier. There is no other
+// recover() in this package: a handler panic (e.g. a malformed message that
+// crashes an assumption baked into a handler, such as a proto3 optional
+// message field that was omitted) runs inside a per-partition goroutine
+// spawned by Start/startInMemory and would otherwise be process-fatal.
+//
+// A recovered panic is always treated as "handled" (nil returned, so the
+// record is committed/marked and never redelivered), regardless of the
+// withRetryAndMoveOn/withRetryAndStop/withLogErrorAndMoveOn option configured
+// for the topic. Retrying or leaving a panicking message uncommitted would
+// redeliver it on every rebalance/restart, and a message that panics the
+// handler on attempt 1 will panic identically on attempt N - that is a
+// self-inflicted outage indistinguishable from a wedged consumer. Skipping
+// past it is the only choice that cannot wedge the consumer; the panic is
+// logged with its stack trace and counted so it is not silently swallowed.
+func recoverConsumerFn(logger ulogger.Logger, topic string, consumerFn func(message *KafkaMessage) error) func(message *KafkaMessage) error {
+	initConsumerMetrics()
+
+	return func(msg *KafkaMessage) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[kafka_consumer] recovered panic processing kafka message on topic %s (key: %s): %v\n%s",
+					topic, messageKey(msg), r, debug.Stack())
+				prometheusConsumerPanicsRecovered.WithLabelValues(topic).Inc()
+				err = nil
+			}
+		}()
+
+		return consumerFn(msg)
+	}
 }
 
 // inMemoryConsumerHandler implements the handler for in-memory consumer
