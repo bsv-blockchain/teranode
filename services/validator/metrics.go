@@ -149,8 +149,14 @@ var (
 	prometheusValidatorShedUnwindTotal prometheus.Counter
 
 	// prometheusValidatorShedUnwindFailures counts unwinds whose delete or unspend
-	// failed. A non-zero value means a transaction was left locked, or its inputs
-	// left spent; the error log carries the txid and the outpoints to recover from.
+	// returned an error, whatever the outcome then was. It is the "something in the
+	// unwind failed at all" signal and deliberately overlaps the two counters below:
+	// a delete that failed after the master record had already gone still counts
+	// here, even though the unwind went on to unspend the inputs successfully —
+	// shed_unwind_residue_total is the one that says so. What every increment
+	// guarantees is an error log carrying the txid and the outpoints; what it no
+	// longer implies on its own is that the transaction was left locked or its
+	// inputs left spent.
 	prometheusValidatorShedUnwindFailures prometheus.Counter
 
 	// prometheusValidatorShedUnwindAborted counts unwinds abandoned by the
@@ -167,6 +173,13 @@ var (
 	// spent by a record whose deletion is unconfirmed; the error log carries the txid
 	// and the outpoints to reconcile from.
 	prometheusValidatorShedUnwindUnverified prometheus.Counter
+
+	// prometheusValidatorShedUnwindResidue counts unwinds whose complete delete
+	// failed AFTER the master record had already gone: nothing mineable survives
+	// and the inputs are safely unspent, but orphan pagination children and/or an
+	// external blob may remain. Counted in addition to shed_unwind_failures_total,
+	// which is the "the delete failed at all" signal.
+	prometheusValidatorShedUnwindResidue prometheus.Counter
 
 	// prometheusValidatorShedDroppedTotal counts transactions dropped after the
 	// bounded block-assembly handoff retry on the Kafka ingest path. Propagation has
@@ -458,7 +471,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "validator",
 			Name:      "shed_unwind_failures_total",
-			Help:      "Number of shed unwinds whose delete or unspend failed, leaving the transaction locked or its inputs spent",
+			Help:      "Number of shed unwinds whose delete or unspend returned an error; pair with shed_unwind_residue_total, shed_unwind_aborted_total and shed_unwind_unverified_total to see what the failure left behind",
 		},
 	)
 
@@ -477,6 +490,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "shed_unwind_unverified_total",
 			Help:      "Number of shed unwinds abandoned because the record's deletion could not be confirmed after the bounded retry, leaving its inputs spent",
+		},
+	)
+
+	prometheusValidatorShedUnwindResidue = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_residue_total",
+			Help:      "Number of shed unwinds where the master record was deleted but the rest of the cascade failed, leaving orphan pagination children or an external blob",
 		},
 	)
 

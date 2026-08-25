@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -510,6 +512,117 @@ func TestBackpressure_RunZeroPollIntervalDoesNotPanic(t *testing.T) {
 	cancel() // the run loop returns on the already-cancelled context after the ticker is built
 
 	require.NotPanics(t, func() { c.run(ctx) })
+}
+
+// deadlineRecordingReader records the deadline of the context each read is handed,
+// so the per-poll bound tick actually applies is observable rather than inferred.
+// It records the time REMAINING at the moment of the read rather than the absolute
+// deadline, so the assertion is exact instead of racing the scheduler.
+type deadlineRecordingReader struct {
+	mu        sync.Mutex
+	remaining time.Duration
+	hasDDL    bool
+	calls     int
+
+	ageMillis int64
+}
+
+func (r *deadlineRecordingReader) GetBlockAssemblyQueueStats(ctx context.Context) (blockassembly.QueueStats, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.calls++
+
+	var deadline time.Time
+
+	deadline, r.hasDDL = ctx.Deadline()
+	r.remaining = time.Until(deadline)
+
+	return blockassembly.QueueStats{HeadAge: time.Duration(r.ageMillis) * time.Millisecond}, nil
+}
+
+// TestBackpressure_ZeroReadTimeoutStillReads covers the missing lower bound on
+// ReadTimeout. PollInterval is clamped in run(), but ReadTimeout was passed to
+// context.WithTimeout verbatim: a zero deadline has already expired when the read
+// starts, so EVERY read fails and the controller silently never pauses anything —
+// the failure mode the feature exists to prevent, with no signal that it is off.
+// The settings loader disables the controller on a non-positive value, but a
+// hand-built Settings (as the repo's own tests use) still reaches tick.
+func TestBackpressure_ZeroReadTimeoutStillReads(t *testing.T) {
+	initPrometheusMetrics()
+
+	cfg := testBackpressureConfig()
+	cfg.ReadTimeout = 0
+
+	reader := &deadlineRecordingReader{ageMillis: 600}
+	consumer := &fakeConsumer{}
+
+	c := newKafkaBackpressureController(ulogger.TestLogger{}, cfg, 0, reader, consumer)
+
+	c.tick(context.Background())
+
+	require.Equal(t, 1, reader.calls, "the read was attempted")
+	require.True(t, reader.hasDDL, "the read is still bounded by a deadline")
+	require.Positive(t, reader.remaining, "a zero configured timeout must not hand the read an already-expired deadline")
+	require.LessOrEqual(t, reader.remaining, defaultKafkaBackpressureReadTimeout,
+		"the fallback deadline is the documented default, not an unbounded read")
+
+	require.Equal(t, 0, c.consecutiveErrors, "the read succeeded rather than failing on an expired context")
+	require.True(t, c.paused.Load(), "a hot queue must still pause; a zero read timeout silently disabled that")
+	require.Equal(t, 1, consumer.pauseCount())
+}
+
+// TestBackpressure_DarkSignalWarnsOnceWhileRunning covers the other half of the
+// error-streak behaviour. While the consumer is RUNNING there is no pause to fail
+// open from, so the streak keeps climbing — that is deliberate (it is the "how long
+// has the signal been dark" reading) and is asserted here so it cannot be
+// "corrected" into a reset that loses the measurement. What was missing is
+// visibility: a dark signal was only ever reported at Debugf. Exactly one warning
+// per dark stretch, re-armed by a good read.
+func TestBackpressure_DarkSignalWarnsOnceWhileRunning(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &capturingLogger{}
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+
+	c := newKafkaBackpressureController(logger, testBackpressureConfig(), 0, reader, consumer)
+
+	ctx := context.Background()
+	const darkSignalWarning = "queue-stats signal dark after"
+
+	ticks := c.cfg.StaleErrorLimit + 3
+
+	reader.set(0, errors.NewProcessingError("queue stats unavailable"))
+
+	for i := 0; i < ticks; i++ {
+		c.tick(ctx)
+	}
+
+	require.False(t, c.paused.Load(), "precondition: the consumer was never paused, so the fail-open arm never runs")
+	require.Equal(t, 0, consumer.pauseCount())
+	require.Equal(t, 0, consumer.resumeCount())
+
+	require.Equal(t, ticks, c.consecutiveErrors,
+		"with the consumer running the streak is meant to climb — it is the dark-signal duration, and only a good read clears it")
+	require.Equal(t, float64(ticks), testutil.ToFloat64(prometheusKafkaBackpressureReadErrors))
+
+	require.Equal(t, 1, strings.Count(logger.joined(), darkSignalWarning),
+		"a dark signal must be visible above Debugf, and exactly once — not at the poll cadence")
+
+	// A good read clears the streak and re-arms the warning.
+	reader.set(50, nil)
+	c.tick(ctx)
+	require.Equal(t, 0, c.consecutiveErrors)
+
+	reader.set(0, errors.NewProcessingError("queue stats unavailable"))
+
+	for i := 0; i < c.cfg.StaleErrorLimit; i++ {
+		c.tick(ctx)
+	}
+
+	require.Equal(t, 2, strings.Count(logger.joined(), darkSignalWarning),
+		"a fresh dark stretch after the signal came back warns again")
 }
 
 // TestBackpressure_DisabledOrNilClient verifies startKafkaBackpressure is a safe

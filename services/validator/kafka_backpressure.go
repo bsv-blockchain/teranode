@@ -25,6 +25,13 @@ const cooldownDutyDivisor = 4
 // would panic time.NewTicker.
 const defaultKafkaBackpressurePollInterval = 50 * time.Millisecond
 
+// defaultKafkaBackpressureReadTimeout mirrors the settings loader's default and
+// is the fallback tick uses when handed a non-positive read timeout. The loader
+// disables the controller in that case, but a hand-built Settings can still reach
+// tick, where a zero deadline expires before the read starts, so every read fails
+// and the controller silently never pauses anything.
+const defaultKafkaBackpressureReadTimeout = 100 * time.Millisecond
+
 // queueStatsReader is the slim signal source the controller reads each tick. It
 // is satisfied by blockassembly.ClientI and deliberately narrow so the read can
 // never touch the subtree-processor main loop (GetBlockAssemblyQueueStats is
@@ -106,8 +113,19 @@ type kafkaBackpressureController struct {
 	failOpenResumeAt time.Time
 	failOpenCooldown time.Duration
 
-	// consecutiveErrors counts back-to-back failed reads for fail-open.
+	// consecutiveErrors counts back-to-back failed reads for fail-open. Only a
+	// good read clears it (tick) — while the consumer is RUNNING nothing else
+	// does, and that is deliberate: with no pause to fail open from, the streak
+	// and the kafka_backpressure_read_errors gauge are the "how long has the
+	// queue-stats signal been dark" reading. The reset inside onReadError's
+	// fail-open arm exists only because that arm has ACTED on the streak.
 	consecutiveErrors int
+
+	// darkSignalLogged latches the single warning emitted the first time the
+	// streak crosses StaleErrorLimit with the consumer running, so a dark signal
+	// is visible above Debugf without spamming at the poll cadence. Cleared by a
+	// good read.
+	darkSignalLogged bool
 }
 
 // newKafkaBackpressureController builds a controller. It does not start any
@@ -144,6 +162,13 @@ func (c *kafkaBackpressureController) run(ctx context.Context) {
 		pollInterval = defaultKafkaBackpressurePollInterval
 	}
 
+	if c.cfg.ReadTimeout <= 0 {
+		// Symmetric with the poll-interval clamp: a non-positive deadline expires
+		// before the read starts, so the controller would never pause anything. The
+		// fallback is applied per read by readTimeout().
+		c.logger.Warnf("[Validator] kafka backpressure: readTimeout=%s must be > 0; using %s", c.cfg.ReadTimeout, defaultKafkaBackpressureReadTimeout)
+	}
+
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	defer c.resumeOnExit()
@@ -158,10 +183,21 @@ func (c *kafkaBackpressureController) run(ctx context.Context) {
 	}
 }
 
+// readTimeout returns the per-poll read deadline, falling back to the documented
+// default when the configured value is non-positive. It is applied here rather
+// than clamped once in run so a directly-driven tick is covered too.
+func (c *kafkaBackpressureController) readTimeout() time.Duration {
+	if c.cfg.ReadTimeout > 0 {
+		return c.cfg.ReadTimeout
+	}
+
+	return defaultKafkaBackpressureReadTimeout
+}
+
 // tick performs one poll-and-decide cycle. The read is bounded by a per-poll
 // deadline so the controller can never inherit a downstream stall.
 func (c *kafkaBackpressureController) tick(ctx context.Context) {
-	readCtx, cancel := context.WithTimeout(ctx, c.cfg.ReadTimeout)
+	readCtx, cancel := context.WithTimeout(ctx, c.readTimeout())
 	stats, err := c.reader.GetBlockAssemblyQueueStats(readCtx)
 	cancel()
 
@@ -172,6 +208,7 @@ func (c *kafkaBackpressureController) tick(ctx context.Context) {
 
 	// A good read clears the fail-open error streak.
 	c.consecutiveErrors = 0
+	c.darkSignalLogged = false
 	prometheusKafkaBackpressureReadErrors.Set(0)
 
 	c.reportedWindow = c.observeReportedWindow(stats.DoubleSpendWindow)
@@ -234,6 +271,15 @@ func (c *kafkaBackpressureController) onReadError(err error) {
 		// failing.
 		c.consecutiveErrors = 0
 		prometheusKafkaBackpressureReadErrors.Set(0)
+	}
+
+	// With the consumer RUNNING there is no pause to fail open from, so the streak
+	// keeps climbing by design and nothing above Debugf would say the signal has
+	// gone dark. Emit exactly one warning per dark stretch.
+	if c.consecutiveErrors >= c.cfg.StaleErrorLimit && !c.paused.Load() && !c.darkSignalLogged {
+		c.darkSignalLogged = true
+
+		c.logger.Warnf("[Validator] kafka backpressure: queue-stats signal dark after %d consecutive read errors with the consumer running; no pause can be applied until it returns: %v", c.consecutiveErrors, err)
 	}
 }
 
