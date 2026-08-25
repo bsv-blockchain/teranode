@@ -1001,12 +1001,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// submission interrupted between the create and the hand-off (shutdown
 			// mid-retry, or an unwind that itself failed). Those causes are
 			// bit-for-bit indistinguishable in the store, and the unmined reload on
-			// the next block-assembly start recovers all of them — so the state is
-			// counted and logged rather than answered differently.
+			// the next block-assembly start restores the LOCK STATE for all of them
+			// (the record itself is intact on every cause listed above) — so the
+			// state is counted and logged rather than answered differently.
 			if txMetaData.Locked && len(txMetaData.BlockIDs) == 0 && !txMetaData.Conflicting {
 				prometheusValidatorExistingTxLockedUnmined.Inc()
 
-				v.logger.Warnf("[Validate][%s] resubmit of an existing transaction that is locked and unmined; returning success, recovery is the unmined reload (cause is indistinguishable between conflict resolution and an interrupted submission)", txID)
+				v.logger.Warnf("[Validate][%s] resubmit of an existing transaction that is locked and unmined; returning success, recovery is the unmined reload's unlock (cause is indistinguishable between conflict resolution and an interrupted submission)", txID)
 			}
 
 			return txMetaData, nil
@@ -2042,10 +2043,10 @@ func (v *Validator) handoffFloor() time.Duration {
 }
 
 // unwindShed reverses this call's UTXO-store work after a queue-full shed, so a
-// shed leaves no trace: the transaction is either fully accepted (spent, created,
-// handed off, unlocked) or not accepted at all, and a resubmit is then an
-// ordinary first submission rather than an already-exists success for a
-// transaction that reached no subtree and no template.
+// successful shed leaves no trace: the transaction is either fully accepted
+// (spent, created, handed off, unlocked) or not accepted at all, and a resubmit
+// is then an ordinary first submission rather than an already-exists success for
+// a transaction that reached no subtree and no template.
 //
 // # Ordering is load-bearing: Delete the record FIRST, then Unspend the inputs
 //
@@ -2064,8 +2065,8 @@ func (v *Validator) handoffFloor() time.Duration {
 //
 // The ordering argument only holds if the delete actually deleted. This method
 // holds a utxo.Store INTERFACE and calls DeleteComplete (the cascading delete that
-// removes the master record, the pagination children and the external blob, so a
-// paginated transaction leaves nothing behind); its nil return is only as
+// removes the master record first, then the pagination children and the external
+// blob, so a paginated transaction leaves nothing behind); its nil return is only as
 // trustworthy as the concrete implementation behind the interface. A decorator
 // could report success without the record having actually left the store — a cache
 // layer whose delete only touches its own cache is the illustrative case.
@@ -2073,6 +2074,21 @@ func (v *Validator) handoffFloor() time.Duration {
 // dangerous one while believing it succeeded. So the record is read back, and
 // anything other than "genuinely gone" aborts before unspending — a generic guard
 // that holds for every decorator in the stack, including ones not yet written.
+//
+// # The same rule applies inside the cascade
+//
+// DeleteComplete removes the MASTER record first and its pagination children and
+// external blob(s) after, for the reason above one level down: the master is the
+// only record that can be lifted into a mining template, so it must be the first
+// thing to go. The reverse order (children first) leaves, on any failure, a master
+// whose outputs live on records that no longer exist — a transaction this node will
+// mine and then refuse to serve most of the outputs of, and whose missing children
+// nothing in the node recreates.
+//
+// What a failed cascade can leave instead is orphan pagination children: locked,
+// therefore unspendable, no longer enumerable (the child count lived on the master),
+// and adopted by a later create of the same txid, which restores a coherent record.
+// The trade is deliberate: unreachable residue over wrongly reachable residue.
 //
 // # Why an inconclusive read fails CLOSED
 //
@@ -2096,11 +2112,14 @@ func (v *Validator) handoffFloor() time.Duration {
 // treated as inconclusive, which converts most transient store errors into a
 // definitive answer.
 //
-// Aborting leaves the transaction exactly as the shed found it (present, Locked,
-// inputs spent), which is the pre-change behaviour with the unmined reload as its
-// backstop. That makes the unwind correct through every decorator in the stack,
-// including ones not yet written, at the cost of one GetMeta on a path that only
-// runs when the node is already shedding.
+// Aborting leaves the transaction as the shed found it (present, Locked, inputs
+// spent) whenever the record is still readable — under the master-first cascade
+// that means the master delete itself failed and nothing else was touched, so the
+// unmined reload is still the backstop it always was. The read-back is what
+// establishes which case this is, which is why it runs even when the delete
+// reported an error. That makes the unwind correct through every decorator in the
+// stack, including ones not yet written, at the cost of one GetMeta on a path that
+// only runs when the node is already shedding.
 //
 // # Preconditions (all hold by construction on this path)
 //
@@ -2136,20 +2155,34 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 
 	txHash := tx.TxIDChainHash()
 
-	if createdRecord {
-		if err := v.utxoStore.DeleteComplete(ctx, txHash); err != nil {
-			prometheusValidatorShedUnwindFailures.Inc()
-			v.logger.Errorf("[unwindShed][%s] failed to delete the shed transaction record; leaving it locked for the unmined reload, outpoints %s deliberately stay spent so no competing spend can take the inputs of a surviving record: %v", txID, unwindOutpoints(spentUtxos), err)
+	// pendingErr carries a delete failure whose residue was proved harmless past the
+	// unspend, so a caller observing the outcome still sees the failure.
+	var pendingErr error
 
-			return err
+	if createdRecord {
+		deleteErr := v.utxoStore.DeleteComplete(ctx, txHash)
+		if deleteErr != nil {
+			prometheusValidatorShedUnwindFailures.Inc()
 		}
 
-		// Verify-after-delete: only unspend once the record is provably gone.
+		// Verify-after-delete: only unspend once the record is provably gone. The
+		// read-back runs even after a failed delete: under the master-first cascade a
+		// failure can mean either "nothing was touched" or "the master is gone and the
+		// residue is unreachable", and only the master read tells the two apart.
 		gone, verifyErr := v.verifyRecordDeleted(ctx, txHash)
 
 		switch {
+		case gone && deleteErr != nil:
+			prometheusValidatorShedUnwindResidue.Inc()
+			v.logger.Errorf("[unwindShed][%s] complete delete failed after the master record was already gone, so nothing mineable survives and the inputs are being unspent; orphan pagination children and/or the external blob may remain until a create of the same transaction adopts them, outpoints %s: %v", txID, unwindOutpoints(spentUtxos), deleteErr)
+
+			pendingErr = deleteErr
 		case gone:
 			// Provably deleted; fall through to the unspend.
+		case verifyErr == nil && deleteErr != nil:
+			v.logger.Errorf("[unwindShed][%s] complete delete failed with the master record still present, so the transaction is intact and stays locked for the unmined reload to restore, outpoints %s deliberately stay spent so no competing spend can take the inputs of a surviving record: %v", txID, unwindOutpoints(spentUtxos), deleteErr)
+
+			return deleteErr
 		case verifyErr == nil:
 			prometheusValidatorShedUnwindAborted.Inc()
 			v.logger.Errorf("[unwindShed][%s] store reported a successful delete but the record is still readable; aborting before unspend, outpoints %s deliberately stay spent to avoid freeing the inputs of a surviving record", txID, unwindOutpoints(spentUtxos))
@@ -2164,7 +2197,7 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 	}
 
 	if len(spentUtxos) == 0 {
-		return nil
+		return pendingErr
 	}
 
 	if err := v.utxoStore.Unspend(ctx, spentUtxos); err != nil {
@@ -2174,7 +2207,7 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 		return err
 	}
 
-	return nil
+	return pendingErr
 }
 
 // verifyRecordDeleted reports whether the record is provably gone, retrying a failed

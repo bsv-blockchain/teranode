@@ -228,7 +228,14 @@ func TestSetLockedBatch_ChildRecordFailure(t *testing.T) {
 	requireBatchCompleted(t, group)
 
 	require.Error(t, bad.result, "item with a failing child record must surface the error")
-	require.Contains(t, bad.result.Error(), "error from setLocked child")
+	require.Contains(t, bad.result.Error(), "child boom", "the store's own reason is still carried")
+
+	// The message an operator actually sees when block-assembly start fails on this:
+	// it has to name the transaction and WHICH pagination record rejected the unlock,
+	// because the caller only wraps it with a count.
+	require.Contains(t, bad.result.Error(), "[setLocked]", "the failing operation is named")
+	require.Contains(t, bad.result.Error(), bad.txHash.String(), "the failing transaction is named")
+	require.Contains(t, bad.result.Error(), "pagination child record 1", "the failing pagination record is named")
 
 	require.NoError(t, good.result, "sibling with all children OK is unaffected")
 }

@@ -59,6 +59,7 @@ package aerospike
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -136,25 +137,56 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+// deleteCompleteChildAttempts and deleteCompleteChildBackoff bound the retry of
+// the pagination-child pass. The master is already gone by then, so a failure
+// here leaves orphan children that no later DeleteComplete can enumerate — the
+// retry is the only in-band chance to finish the job. It shares the caller's
+// budget (validator_shedUnwindTimeout on the shed path), so the wait selects on
+// ctx.Done() rather than sleeping blind.
+const (
+	deleteCompleteChildAttempts = 2
+	deleteCompleteChildBackoff  = 5 * time.Millisecond
+)
+
 // DeleteComplete removes a transaction and all of its associated records: the
 // master record, every pagination (child) record counted by TotalExtraRecs, and
 // any external blob(s) (.tx and .outputs). Delete only removes the master record
 // (a partial deletion — see Delete), which leaves the pagination records of a
 // paginated transaction behind with locked=true; a descendant spending a
 // high-numbered output then addresses a surviving locked record and gets
-// TX_LOCKED. DeleteComplete leaves nothing behind, so a descendant of any output
-// gets the clean missing-parent answer instead.
+// TX_LOCKED. On success DeleteComplete leaves nothing behind, so a descendant of
+// any output gets the clean missing-parent answer instead. What a FAILED cascade
+// can leave is described under the ordering section below.
 //
-// It is idempotent: an absent master (ErrKeyNotFound), absent child records, and
-// absent blobs are all treated as success, so a retry of a partially-completed
-// cascade converges to nil.
+// It is idempotent in the sense a caller needs: an absent master (ErrKeyNotFound),
+// absent child records and absent blobs are all treated as success, so a retry
+// never errors on work an earlier attempt already did. It is not a repair — once
+// the master is gone the child count is gone with it, so a retry returns nil at
+// the master read without reaching any orphan child or blob a failed cascade left
+// behind.
 //
-// Ordering and failure semantics: children and blob(s) are removed first, and the
-// master is deleted last. The master is the record verifyRecordDeleted reads, so
-// deleting it last means any genuine failure in the earlier steps leaves the
-// master present and returns an error — the shed unwind then fails closed (inputs
-// stay spent, record present + locked, recovered by the unmined reload) rather
-// than unspending against a half-deleted record.
+// Ordering and failure semantics: the MASTER record is deleted FIRST, then the
+// pagination children, then the blob(s). The master is the only record that can
+// be read back by Get, enumerated by the unmined iterator or lifted into a mining
+// template, so it is the first thing that must go — and it is the record
+// verifyRecordDeleted reads, so a failure of this first step leaves the whole
+// transaction intact (present, Locked, inputs spent), which the shed unwind then
+// treats exactly as it always did: fail closed, unmined reload as the backstop.
+//
+// A failure AFTER the master is gone leaves orphan pagination children (and
+// possibly a blob). They are locked, therefore unspendable, and they are no
+// longer enumerable, because the child count lived on the master — which is why
+// the child pass is retried here (deleteCompleteChildAttempts) rather than left
+// to a later DeleteComplete, whose master read would return nil immediately. A
+// later create of the same txid adopts them: it writes every record CREATE_ONLY,
+// so the master is recreated, the surviving children report KEY_EXISTS, and the
+// unmined reload's SetLocked then clears their stale locked bin.
+//
+// The order children-first was rejected: every failure it can take leaves a
+// master whose outputs live on records that no longer exist — a transaction this
+// node will mine and then answer TX_NOT_FOUND for on every output above
+// utxostore_utxoBatchSize, with nothing in the node to recreate a pagination
+// child. Unreachable residue is preferred over wrongly reachable residue.
 func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	policy := aerospike.NewPolicy()
 
@@ -166,8 +198,11 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	// Read TotalExtraRecs from the master to discover how many pagination children exist.
 	masterRecord, aErr := s.client.Get(policy, key, fields.TotalExtraRecs.String())
 	if aErr != nil {
-		// The master is deleted last, so its absence means the cascade already
-		// completed (or the tx never existed): nothing left to do.
+		// Nothing addressable is left: the child count lived on the master, so an
+		// absent master means the tx never existed, the cascade completed, or it
+		// failed after step 1 and left orphans this call can no longer enumerate.
+		// Returning nil keeps the cascade idempotent, and a failed READ leaves the
+		// record intact, which is why it is separated from the not-found case.
 		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
 			return nil
 		}
@@ -182,14 +217,22 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 		}
 	}
 
-	// 1. Delete pagination children (records 1..childCount).
+	// 1. Delete the master record first, so any failure from here on leaves nothing
+	// that can be read back, enumerated or mined.
+	if err := s.Delete(ctx, hash); err != nil {
+		return err
+	}
+
+	// 2. Delete pagination children (records 1..childCount).
 	if childCount > 0 {
-		if err := s.deleteChildRecords(hash, childCount); err != nil {
-			return err
+		if err := s.deleteChildRecordsWithRetry(ctx, hash, childCount); err != nil {
+			return errors.NewStorageError("complete delete removed the master record for %s but %d pagination child record(s) could not be deleted; they survive as locked, unspendable orphans until a create of the same transaction adopts them", hash.String(), childCount, err)
 		}
 	}
 
-	// 2. Delete external blob(s). Del treats a missing blob as success, so this is idempotent.
+	// 3. Delete external blob(s). Del treats a missing blob as success, so this is
+	// idempotent. One attempt only — an orphan blob carries no UTXO semantics and is
+	// overwritten by a later create of the same transaction.
 	if s.externalStore != nil {
 		if err := s.externalStore.Del(ctx, hash[:], fileformat.FileTypeTx); err != nil {
 			return errors.NewStorageError("error deleting external tx blob for complete delete", err)
@@ -200,8 +243,39 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 		}
 	}
 
-	// 3. Delete the master record last, so any earlier failure leaves it present.
-	return s.Delete(ctx, hash)
+	return nil
+}
+
+// deleteChildRecordsWithRetry runs deleteChildRecords up to
+// deleteCompleteChildAttempts times. The master is already gone when this runs,
+// so this is the last point at which the children can be found by count; the
+// wait between attempts selects on ctx.Done() so the caller's budget really cuts
+// it short.
+func (s *Store) deleteChildRecordsWithRetry(ctx context.Context, hash *chainhash.Hash, childCount int) error {
+	var lastErr error
+
+	for attempt := 0; attempt < deleteCompleteChildAttempts; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(deleteCompleteChildBackoff)
+
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+
+		if err := s.deleteChildRecords(hash, childCount); err != nil {
+			lastErr = err
+			continue
+		}
+
+		return nil
+	}
+
+	return lastErr
 }
 
 // deleteChildRecords batch-deletes the pagination records 1..childCount for a

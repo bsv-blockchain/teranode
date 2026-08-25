@@ -54,6 +54,12 @@ type unlockSpy struct {
 	// removing the underlying record.
 	deleteIsCacheOnly bool
 
+	// deleteErrAfterRemoving models the master-first cascade failing after the
+	// master is gone: the record really is deleted, and DeleteComplete still
+	// reports the failure of a later step. It is the state the residue arm of
+	// unwindShed exists for.
+	deleteErrAfterRemoving bool
+
 	// deletedHash records the hash Delete was called with, so the verify knobs below
 	// can be scoped to the unwind's own read-back and cannot perturb the unrelated
 	// GetMeta calls earlier in validation.
@@ -114,6 +120,14 @@ func (s *unlockSpy) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 	s.deletedHash = hash
 
 	if s.deleteErr != nil {
+		if s.deleteErrAfterRemoving {
+			// The master really goes first, and the cascade then fails on a later
+			// step — the half-completed shape, not a delete that did nothing.
+			if err := s.Store.DeleteComplete(ctx, hash); err != nil {
+				return err
+			}
+		}
+
 		return s.deleteErr
 	}
 
@@ -581,16 +595,63 @@ func TestValidate_ShedUnwindFailureLeavesTxLockedAndStillSheds(t *testing.T) {
 	initPrometheusMetrics()
 
 	failuresBefore := testutil.ToFloat64(prometheusValidatorShedUnwindFailures)
+	abortedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindAborted)
 
 	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
 	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "an unwind failure must not change the error the caller sees")
 
 	require.Equal(t, failuresBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindFailures))
+	require.Equal(t, abortedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindAborted),
+		"a delete that reported failure is not the same condition as a store that did not honour a successful delete")
 
 	require.Equal(t, 0, spy.unspendCalls, "a failed Delete must not be followed by an Unspend")
 	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the parent's output stays spent while the record survives")
 	require.True(t, metaLocked(t, realStore, childTx.TxIDChainHash()).Locked, "the tx is left locked for the unmined-reload backstop")
 	require.Equal(t, 0, spy.unlockCalls)
+}
+
+// Test 11b2 — the residue arm: the cascade removed the master record and then failed
+// on a later step. The record is provably gone, so the ordering invariant no longer
+// forbids the unspend — nothing survives that a competing double-spend could collide
+// with, and nothing survives that can be lifted into a mining template. Under the old
+// master-last order this same failure left the master alive and the inputs burnt; the
+// point of the change is that the inputs come back.
+//
+// The residue itself (orphan pagination children, an external blob) is a store-level
+// shape and is pinned at that level; what this test pins is the decision the validator
+// takes on it, and that the log line says what was left behind.
+func TestValidate_ShedUnwindUnspendsWhenDeleteFailedButRecordIsGone(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_unwind_residue", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+	spy.deleteErr = errors.NewStorageError("pagination child delete failed after the master record was removed")
+	spy.deleteErrAfterRemoving = true
+
+	initPrometheusMetrics()
+
+	residueBefore := testutil.ToFloat64(prometheusValidatorShedUnwindResidue)
+	failuresBefore := testutil.ToFloat64(prometheusValidatorShedUnwindFailures)
+	abortedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindAborted)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	require.Equal(t, 1, spy.unspendCalls, "a delete that is provably gone must be followed by the unspend; this is the burnt-inputs fix")
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the inputs are returned rather than burnt")
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.Equal(t, 0, spy.unlockCalls, "a shed never unlocks; it deletes")
+
+	require.Equal(t, residueBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindResidue),
+		"the residue outcome is counted distinctly from a delete that left the record intact")
+	require.Equal(t, failuresBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindFailures),
+		"the delete still errored, so the 'something failed at all' counter moves too")
+	require.Equal(t, abortedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindAborted),
+		"a delete that reported failure is not a store that did not honour a successful delete")
+
+	logged := logger.joined()
+	require.Contains(t, logged, outpointOf(parentTx, 0), "the residue arm names the outpoints it unspent")
+	require.Contains(t, logged, "orphan pagination children", "an arm is only actionable if it says what is left behind")
 }
 
 // Test 11c — the verify-after-delete guard. A store whose Delete returns nil while

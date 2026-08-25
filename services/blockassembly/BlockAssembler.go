@@ -3154,7 +3154,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 	// unlock any locked transactions
 	if len(lockedTransactions) > 0 {
 		if err = b.utxoStore.SetLocked(ctx, lockedTransactions, false); err != nil {
-			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions: %v", len(lockedTransactions), err)
+			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions so block assembly cannot start on this attempt; the store error below names the transaction and the record that rejected the unlock: %v", len(lockedTransactions), err)
 		} else {
 			b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 		}
@@ -3596,7 +3596,7 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 	// Unlock any locked transactions
 	if len(lockedTransactions) > 0 {
 		if err = b.utxoStore.SetLocked(ctx, lockedTransactions, false); err != nil {
-			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions: %v", len(lockedTransactions), err)
+			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions so block assembly cannot start on this attempt; the store error below names the transaction and the record that rejected the unlock: %v", len(lockedTransactions), err)
 		}
 		b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 	}
