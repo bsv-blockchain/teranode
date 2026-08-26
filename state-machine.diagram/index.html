@@ -6689,13 +6689,14 @@
 
 
 <h1 id="state-machine">State Machine<a class="headerlink" href="#state-machine" title="Permanent link">&para;</a></h1>
-<p>The mermaid diagram outlined below represents the various states and events that dictate the functionality of the node. To create and visualize the state machine diagram, you can use https://mermaid.live/. This tool allows you to generate the diagram visualization interactively.</p>
+<p>The mermaid diagram outlined below represents the various states and events that dictate the functionality of the node. To create and visualize the state machine diagram, you can use <a href="https://mermaid.live/">https://mermaid.live/</a>. This tool allows you to generate the diagram visualization interactively.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>stateDiagram-v2
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    [*] --&gt; IDLE
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    CATCHINGBLOCKS --&gt; RUNNING: RUN
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    IDLE --&gt; RUNNING: RUN
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    RUNNING --&gt; CATCHINGBLOCKS: CATCHUPBLOCKS
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    RUNNING --&gt; IDLE: STOP
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    IDLE --&gt; CATCHINGBLOCKS: CATCHUPBLOCKS
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    IDLE --&gt; RUNNING: RUN
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    RUNNING --&gt; CATCHINGBLOCKS: CATCHUPBLOCKS
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    RUNNING --&gt; IDLE: STOP
 </span></code></pre></div>
 
 

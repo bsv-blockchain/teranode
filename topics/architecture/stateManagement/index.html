@@ -7319,13 +7319,13 @@
 <p>The FSM handles the following state <strong>transitions</strong>:</p>
 <ul>
 <li><strong>Run</strong>: Transitions to <em>Running</em> from <em>Idle</em> or <em>CatchingBlocks</em></li>
-<li><strong>CatchupBlocks</strong>: Transitions to <em>CatchingBlocks</em> from <em>Running</em></li>
+<li><strong>CatchupBlocks</strong>: Transitions to <em>CatchingBlocks</em> from <em>Running</em> or <em>Idle</em></li>
 <li><strong>Stop</strong>: Transitions to <em>Idle</em> from <em>Running</em></li>
 </ul>
 <p>Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command <code>go run services/blockchain/fsm_visualizer/main.go</code>. The generated <code>docs/state-machine.diagram.md</code> can be visualized using <a href="https://mermaid.live/">https://mermaid.live/</a>.</p>
 <h2 id="3-functionality">3. Functionality<a class="headerlink" href="#3-functionality" title="Permanent link">&para;</a></h2>
 <h3 id="31-state-machine-initialization">3.1. State Machine Initialization<a class="headerlink" href="#31-state-machine-initialization" title="Permanent link">&para;</a></h3>
-<p>As part of its own initialization, the Blockchain service initializes the FSM in the <strong>Idle</strong> state, before it transitions to a Running state.</p>
+<p>As part of its own initialization, the Blockchain service restores the FSM to the state it last persisted. A node with no persisted state (a fresh node) starts in <strong>CatchingBlocks</strong> so that it begins downloading blocks immediately rather than waiting to be moved out of <strong>Idle</strong>; it is promoted to <strong>Running</strong> only once catch-up completes above the network's highest checkpoint.</p>
 <h3 id="32-accessing-the-state-machine">3.2. Accessing the State Machine<a class="headerlink" href="#32-accessing-the-state-machine" title="Permanent link">&para;</a></h3>
 <h4 id="321-access-via-command-line-interface-recommended">3.2.1. Access via Command-Line Interface (Recommended)<a class="headerlink" href="#321-access-via-command-line-interface-recommended" title="Permanent link">&para;</a></h4>
 <p>The Teranode Command-Line Interface (teranode-cli) provides the most direct and recommended approach for interacting with the State Machine. The CLI abstracts the underlying API calls and offers a straightforward interface for both operators and developers.</p>
@@ -7356,7 +7356,9 @@
 </ul>
 <h3 id="33-state-machine-states">3.3. State Machine States<a class="headerlink" href="#33-state-machine-states" title="Permanent link">&para;</a></h3>
 <h4 id="331-fsm-idle-state">3.3.1. FSM: Idle State<a class="headerlink" href="#331-fsm-idle-state" title="Permanent link">&para;</a></h4>
-<p>The Blockchain service always starts in an <code>Idle</code> state. In this state:</p>
+<p>A node reaches <code>Idle</code> either by being stopped from <code>Running</code>, or by having
+persisted <code>Idle</code> before a restart. A fresh node no longer starts here — it starts
+in <code>CatchingBlocks</code> (see section 3.1). In this state:</p>
 <ul>
 <li>No operations are permitted</li>
 <li>All services are inactive</li>
@@ -7376,7 +7378,9 @@
 <li>❌ Create subtrees (or propagate them)</li>
 <li>❌ Create blocks (mine candidates)</li>
 </ul>
-<p>All services will wait for the FSM to transition to the <code>Running</code> state before starting their operations. As such, the node should see no activity until the FSM transitions to the <code>Running</code> state.</p>
+<p>Services wait for the FSM to leave <code>Idle</code> before starting their operations — any
+non-Idle state, including <code>CatchingBlocks</code>, releases them (see section 3.5). As
+such, the node should see no activity for as long as the FSM stays in <code>Idle</code>.</p>
 <p>The node can also return back to the <code>Idle</code> state from <code>Running</code>, however this can only be triggered by a manual / external request.</p>
 <h4 id="332-fsm-running-state">3.3.2. FSM: Running State<a class="headerlink" href="#332-fsm-running-state" title="Permanent link">&para;</a></h4>
 <p>The <code>Running</code> state represents the node actively participating in the network. In this state:</p>
@@ -7396,7 +7400,10 @@
 <p>Once the FSM transitions to the <code>Running</code> state, all services will start their normal operations.</p>
 <p>The Block Assembler will only mine blocks when the node is in the <code>Running</code> state. The Block Assembler will never mine blocks under any other node state.</p>
 <h4 id="333-fsm-catching-blocks-state">3.3.3. FSM: Catching Blocks State<a class="headerlink" href="#333-fsm-catching-blocks-state" title="Permanent link">&para;</a></h4>
-<p>The <code>CatchingBlocks</code> state represents the node catching up on blocks. This state is triggered by BlockValidation when the node needs to catch up with the network. In this state:</p>
+<p>The <code>CatchingBlocks</code> state represents the node catching up on blocks. It is entered
+either by BlockValidation, when a running node finds it has fallen behind the
+network, or at startup, because a fresh node with no persisted state boots
+straight into it (see section 3.1). In this state:</p>
 <p>Allowed Operations in Catching Blocks State:</p>
 <ul>
 <li>✅ Process external transactions</li>
