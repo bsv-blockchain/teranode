@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"net"
 	"net/url"
@@ -854,8 +855,23 @@ func (sm *SyncManager) startSync() {
 }
 
 func (sm *SyncManager) resetFeeFilterToDefault() {
-	if sm.currentFeeFilter.Load() != uint64(bsvutil.SatoshiPerBitcoin*sm.settings.Policy.MinMiningTxFee) {
-		feeFilter := wire.NewMsgFeeFilter(int64(sm.settings.Policy.MinMiningTxFee)) // nolint:gosec
+	// MinMiningTxFee is configured in BSV/kB while the wire feefilter message
+	// carries satoshis/kB. Convert with math.Round, not truncation: IEEE-754
+	// cannot represent some decimal rates exactly (0.00000250 stores as
+	// 0.0000024999...), and truncating the raw float dropped the value to 0
+	// sat/kB for every real configuration, so peers were told this node wants
+	// all transactions regardless of its fee policy. This mirrors the
+	// conversion pushed into BDK by newScriptVerifierGoBDK.
+	satoshisPerKB := int64(math.Round(sm.settings.Policy.MinMiningTxFee * bsvutil.SatoshiPerBitcoin))
+	if satoshisPerKB < 0 {
+		// A negative rate is rejected at validator startup, but the legacy
+		// service can run in a process without a validator; never advertise a
+		// wrapped-around filter.
+		satoshisPerKB = 0
+	}
+
+	if sm.currentFeeFilter.Load() != uint64(satoshisPerKB) {
+		feeFilter := wire.NewMsgFeeFilter(satoshisPerKB)
 
 		for p := range sm.peerStates.Range() {
 			if p == nil {
@@ -869,7 +885,7 @@ func (sm *SyncManager) resetFeeFilterToDefault() {
 			p.QueueMessage(feeFilter, nil)
 		}
 
-		sm.currentFeeFilter.Store(uint64(bsvutil.SatoshiPerBitcoin * sm.settings.Policy.MinMiningTxFee))
+		sm.currentFeeFilter.Store(uint64(satoshisPerKB))
 	}
 }
 

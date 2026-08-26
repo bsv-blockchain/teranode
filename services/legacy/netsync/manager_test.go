@@ -1826,3 +1826,60 @@ func TestHandleNewPeerMsg_SkipsDisconnectedPeer(t *testing.T) {
 
 	require.False(t, sm.peerStates.Exists(disconnectedPeer), "disconnected peer must not be registered in peerStates")
 }
+
+// TestResetFeeFilterToDefault_AdvertisesSatoshisPerKB verifies that the
+// feefilter message sent to legacy peers carries the configured policy minimum
+// converted to satoshis/kB. MinMiningTxFee is configured in BSV/kB; before the
+// fix the raw float was truncated to int64, so every real configuration
+// advertised a filter of 0 sat/kB and peers relayed all transactions regardless
+// of this node's fee policy. The rate 0.00000250 is chosen deliberately: it is
+// stored as 0.0000024999... in IEEE-754, so this also pins the math.Round
+// (rather than truncating) conversion, matching newScriptVerifierGoBDK.
+func TestResetFeeFilterToDefault_AdvertisesSatoshisPerKB(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	sm := &SyncManager{
+		ctx:         context.Background(),
+		settings:    test.CreateBaseTestSettings(t),
+		logger:      ulogger.TestLogger{},
+		chainParams: chainParams,
+		peerStates:  txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+	sm.settings.Policy.MinMiningTxFee = 0.00000250 // 250 sat/kB
+
+	var gotFee atomic.Int64
+	gotFee.Store(-1)
+
+	remoteCfg := peer.Config{
+		Listeners: peer.MessageListeners{
+			OnFeeFilter: func(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+				gotFee.Store(msg.MinFee)
+			},
+		},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      chainParams,
+	}
+	localCfg := peer.Config{
+		Listeners:        peer.MessageListeners{},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      chainParams,
+	}
+
+	remote, smPeer, err := MakeConnectedPeers(t, remoteCfg, localCfg, 103)
+	require.NoError(t, err)
+	require.True(t, remote.Connected())
+
+	sm.peerStates.Set(smPeer, &peerSyncState{})
+
+	// Simulate the raised catch-up filter so the reset takes the send path.
+	sm.currentFeeFilter.Store(uint64(bsvutil.SatoshiPerBitcoin))
+
+	sm.resetFeeFilterToDefault()
+
+	require.True(t, WaitUntil(func() bool { return gotFee.Load() == 250 }, 2*time.Second),
+		"peer must receive the policy minimum in satoshis/kB, not the truncated BSV/kB float")
+	require.Equal(t, uint64(250), sm.currentFeeFilter.Load(),
+		"internal marker must record the same satoshis/kB value the peers were sent")
+}
