@@ -7224,6 +7224,13 @@
 <td>Service-level kill switch, all operations return early</td>
 </tr>
 <tr>
+<td>GenerateTipWaitTimeout</td>
+<td>time.Duration</td>
+<td>90s</td>
+<td>blockassembly_generateTipWaitTimeout</td>
+<td>Bounds the generate readiness wait; effective bound is min(this, caller deadline)</td>
+</tr>
+<tr>
 <td>GRPCAddress</td>
 <td>string</td>
 <td>"localhost:8085"</td>
