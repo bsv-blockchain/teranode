@@ -335,6 +335,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_validator_send_to_blockvalidation_kafka` | Histogram | Histogram of sending transactions to block validation kafka   |
 | `teranode_validator_send_to_p2p_kafka`             | Histogram | Histogram of sending rejected transactions to p2p kafka       |
 | `teranode_validator_set_tx_meta`                   | Histogram | Histogram of validator set tx meta                            |
+| `teranode_validator_parent_commit_retries`         | Counter   | Retries spent waiting for a parent transaction to finish committing, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
+| `teranode_validator_parent_commit_exhausted`       | Counter   | Transactions rejected because the parent-commit retry budget ran out, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
 
 ## TxMetaCache Service Metrics
 

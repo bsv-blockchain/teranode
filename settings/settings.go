@@ -270,6 +270,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		},
 		BlockAssembly: BlockAssemblySettings{
 			Disabled:                             getBool("blockassembly_disabled", false, alternativeContext...),
+			GenerateTipWaitTimeout:               getDuration("blockassembly_generateTipWaitTimeout", DefaultGenerateTipWaitTimeout, alternativeContext...),
 			GRPCAddress:                          getString("blockassembly_grpcAddress", "localhost:8085", alternativeContext...),
 			GRPCListenAddress:                    getString("blockassembly_grpcListenAddress", ":8085", alternativeContext...),
 			GRPCMaxRetries:                       getInt("blockassembly_grpcMaxRetries", 3, alternativeContext...),
@@ -688,6 +689,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...), // ping/pong interval is 2 mins, so we set this to 125s to be sure
 			MaxAddnodePeers:                  getInt("legacy_maxAddnodePeers", 8, alternativeContext...),
 			ReplenishInterval:                getDuration("legacy_replenishInterval", 2*time.Second, alternativeContext...),
+			MaxFeelerPeers:                   getInt("legacy_maxFeelerPeers", 1, alternativeContext...),
+			FeelerInterval:                   getDuration("legacy_feelerInterval", 120*time.Second, alternativeContext...),
+			FeelerHandshakeTimeout:           getDuration("legacy_feelerHandshakeTimeout", 25*time.Second, alternativeContext...),
 			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
 			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
 			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),

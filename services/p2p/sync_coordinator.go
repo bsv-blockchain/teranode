@@ -809,9 +809,15 @@ func (sc *SyncCoordinator) checkFSMState() {
 		return // Transition handled, no further action needed
 	}
 
-	// When FSM is RUNNING, we need to find a new sync peer and trigger catchup
-	if *currentState == blockchain_api.FSMStateType_RUNNING {
-		// Check if we should attempt reputation recovery
+	// Proactively drive sync whenever the node is catching up or running.
+	//   CATCHINGBLOCKS: fresh boot or restart-while-behind — pick the best peer
+	//     ahead and trigger a pull. blockvalidation dedups overlapping catchups
+	//     via its isCatchingUp CAS, so triggering here is safe.
+	//   RUNNING: steady state — keep following the best peer.
+	// The coordinator never fires RUN; promotion to RUNNING stays with
+	// blockvalidation catchup completion / legacy, both checkpoint-gated.
+	if *currentState == blockchain_api.FSMStateType_RUNNING ||
+		*currentState == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 		sc.considerReputationRecovery()
 
 		sc.handleRunningState()

@@ -470,11 +470,17 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 	ctxLogger := v.logger.WithTraceContext(ctx)
 	ctxLogger.Debugf("[ValidateWithOptions] Validate tx %s", tx.TxID())
 
-	// Configurable retry for TX_LOCKED errors with exponential backoff.
-	// TX_LOCKED occurs when a parent and child tx arrive nearly simultaneously and the
-	// parent hasn't finished its 2-phase commit (unlock). This is a short-lived race
-	// condition that resolves once the parent's lock clears. Set maxRetries to 0 to
-	// disable and return TX_LOCKED immediately to the caller.
+	// Configurable retry for TX_LOCKED and TX_CREATING errors with exponential backoff.
+	// Both occur when a parent and child tx arrive nearly simultaneously and the
+	// parent hasn't finished its own two-phase commit yet: TX_LOCKED is the normal
+	// path, TX_CREATING is what a large, multi-record parent returns while it is
+	// still being written. Either way the child is spending an output of a parent
+	// that is still committing, and the condition clears on its own (or once the
+	// parent is mined) rather than needing distinct handling. The retry budget is
+	// shared and left as the existing validator_txlocked_maxRetries setting rather
+	// than a new one, since both cases need the same short tolerance for the same
+	// underlying race. Set maxRetries to 0 to disable and return the error immediately
+	// to the caller.
 	maxRetries := v.settings.Validator.TxLockedMaxRetries
 	if maxRetries < 0 {
 		ctxLogger.Errorf("[ValidateWithOptions] invalid TxLockedMaxRetries (%d); clamping to 0", maxRetries)
@@ -492,20 +498,40 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions)
 
-		// If no error or not a TX_LOCKED error, break immediately (don't retry)
-		if err == nil || !errors.Is(err, errors.ErrTxLocked) {
+		// If no error, or the error is neither TX_LOCKED nor TX_CREATING, break immediately (don't retry)
+		locked := errors.Is(err, errors.ErrTxLocked)
+		creating := errors.Is(err, errors.ErrTxCreating)
+		if err == nil || (!locked && !creating) {
 			break
 		}
 
-		// TX_LOCKED error on the last attempt — give up
+		condition := "TX_LOCKED"
+		if creating {
+			condition = "TX_CREATING"
+		}
+
+		// TX_LOCKED/TX_CREATING error on the last attempt — give up. This is the
+		// alertable signal that the budget is too short for this node's load: BSV has no
+		// mempool, so on the client-facing paths the transaction is simply gone — the
+		// propagation surfaces hand the submitter a 409 and keep nothing, and the Kafka
+		// intake runs WithLogErrorAndMoveOn. The one path that survives it is legacy p2p
+		// relay, which parks the tx in netsync's orphan pool and revalidates it once when
+		// that entry is evicted.
 		if attempt >= maxRetries {
-			ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d retries, giving up: %v", tx.TxID(), attempt, err)
+			prometheusValidatorParentCommitExhausted.WithLabelValues(condition).Inc()
+			ctxLogger.Warnf("[ValidateWithOptions] %s for tx %s after %d retries, giving up: %v", condition, tx.TxID(), attempt, err)
+
 			break
 		}
 
 		// Exponential backoff: 10ms, 20ms, 40ms, ...
+		// Counted rather than logged at Info: the give-up path above warns, but without the
+		// succeeded-after-retrying side there is no denominator, and at Teranode's
+		// transaction rates a log line per retry would be a flood.
+		prometheusValidatorParentCommitRetries.WithLabelValues(condition).Inc()
+
 		backoff := time.Duration(1<<uint(attempt)) * baseBackoff
-		ctxLogger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (retry %d/%d): %v", tx.TxID(), backoff, attempt+1, maxRetries, err)
+		ctxLogger.Debugf("[ValidateWithOptions] %s for tx %s, retrying in %v (retry %d/%d): %v", condition, tx.TxID(), backoff, attempt+1, maxRetries, err)
 
 		select {
 		case <-ctx.Done():
