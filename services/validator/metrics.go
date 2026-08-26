@@ -59,20 +59,20 @@ var (
 	// holding it, so the increment marks a transaction the node lost.
 	prometheusValidatorParentCommitExhausted *prometheus.CounterVec
 
-	// prometheusValidatorSizeTieredFeeRejections counts transactions rejected by the
-	// minminingtxfeebysize policy (checkSizeTieredFee). Always zero when the setting is
-	// empty. A rising rate means submitters are underpaying for large transactions
-	// relative to this node's tier schedule; if that is unexpected, compare the schedule
+	// prometheusValidatorScriptTieredFeeRejections counts transactions rejected by the
+	// per-script fee-tier policies (checkScriptTieredFees). Always zero when the settings are
+	// empty. A rising rate means submitters are underpaying for large or op-dense scripts
+	// relative to this node's tier schedules; if that is unexpected, compare the schedule
 	// with what wallets are being quoted, since the ARC-format policy endpoint only
 	// advertises the minminingtxfee floor.
-	prometheusValidatorSizeTieredFeeRejections prometheus.Counter
+	prometheusValidatorScriptTieredFeeRejections prometheus.Counter
 
-	// prometheusValidatorSizeTieredFeeConsolidationExemptions counts transactions that
-	// were under the size-tiered fee requirement but accepted because they qualify as
+	// prometheusValidatorScriptTieredFeeConsolidationExemptions counts transactions that
+	// were under the tiered fee requirement but accepted because they qualify as
 	// free consolidations (isFreeConsolidationTxn), mirroring BDK's exemption from the
 	// fee floor. A sudden surge relative to rejections is worth a look: consolidation
 	// shape is the one way to legitimately pay below the tier schedule.
-	prometheusValidatorSizeTieredFeeConsolidationExemptions prometheus.Counter
+	prometheusValidatorScriptTieredFeeConsolidationExemptions prometheus.Counter
 
 	// prometheusTransactionValidateTotal measures the complete end-to-end validation time for transactions.
 	// This histogram tracks the total time spent validating a transaction from initial receipt through
@@ -306,22 +306,22 @@ func _initPrometheusMetrics() {
 		[]string{"condition"},
 	)
 
-	// Size-tiered fee policy counters
-	prometheusValidatorSizeTieredFeeRejections = promauto.NewCounter(
+	// Per-script fee-tier policy counters
+	prometheusValidatorScriptTieredFeeRejections = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "validator",
-			Name:      "size_tiered_fee_rejections",
-			Help:      "Transactions rejected by the minminingtxfeebysize policy",
+			Name:      "script_tiered_fee_rejections",
+			Help:      "Transactions rejected by the per-script fee-tier policies",
 		},
 	)
 
-	prometheusValidatorSizeTieredFeeConsolidationExemptions = promauto.NewCounter(
+	prometheusValidatorScriptTieredFeeConsolidationExemptions = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "validator",
-			Name:      "size_tiered_fee_consolidation_exemptions",
-			Help:      "Underpaying transactions accepted by the minminingtxfeebysize policy because they qualify as free consolidations",
+			Name:      "script_tiered_fee_consolidation_exemptions",
+			Help:      "Underpaying transactions accepted by the per-script fee-tier policies because they qualify as free consolidations",
 		},
 	)
 

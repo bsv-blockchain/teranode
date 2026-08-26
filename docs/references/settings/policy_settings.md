@@ -65,10 +65,11 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 | Setting | Type | Default | Environment Variable | Usage |
 | --------- | ------ | --------- | --------------------- | ------- |
 | MinMiningTxFee | float64 | 0.00000500 | minminingtxfee | Minimum transaction fee for mining |
-| MinMiningTxFeeBySize | []FeeSizeTier | (empty) | minminingtxfeebysize | Optional marginal fee-rate tiers by transaction size |
+| MinMiningTxFeeByScriptSize | []FeeTier | (empty) | minminingtxfeebyscriptsize | Optional marginal fee tiers for large executed scripts |
+| MinMiningTxFeeByScriptOps | []FeeTier | (empty) | minminingtxfeebyscriptops | Optional marginal fee tiers for op-dense executed scripts |
 | AcceptNonStdOutputs | bool | true | acceptnonstdoutputs | **CRITICAL** - Accept non-standard output scripts |
 
-`minminingtxfeebysize` is a pipe-separated list of `<sizeBytes>:<satoshisPerKB>` pairs (for example `1000000:10`). Tiers apply marginally, like tax brackets: bytes below the first threshold pay the `minminingtxfee` floor and bytes beyond each threshold must pay at least that tier's rate, expressed in integer satoshis per 1000 bytes. Free consolidation transactions are exempt, mirroring the BDK exemption from the fee floor. Every tier rate must be at least the `minminingtxfee` floor in sat/kB or the validator fails at startup. Empty (the default) disables size tiers, leaving fee policy exactly as before.
+The two fee-tier settings price the metrics their policy caps gate: `minminingtxfeebyscriptsize` pairs with `maxscriptsizepolicy` (script bytes) and `minminingtxfeebyscriptops` pairs with `maxopsperscriptpolicy` (counted ops: every opcode above OP_16, pushes free). Each is a pipe-separated list of `<threshold>:<satoshisPerK>` pairs (for example `500000:10`), applied marginally per executed script, like tax brackets: units below the first threshold cost nothing extra, units beyond each threshold must pay at least that tier's rate per 1000 units. Executed scripts are each input's unlocking script, the locking script it spends, and a legacy P2SH redeem script; a transaction's own output scripts are priced when they are later spent. The surcharges add on top of the `minminingtxfee` floor, which BDK keeps enforcing unchanged. Free consolidation transactions are exempt, mirroring the BDK exemption from the fee floor. Empty (the default) disables a setting, leaving fee policy exactly as before.
 
 ### Consolidation Transaction Settings
 
@@ -147,7 +148,8 @@ The settings allow operators to configure policy rules while maintaining consens
 | MaxStackMemoryUsagePolicy | Policy enforcement | Script execution limits |
 | MaxStackMemoryUsageConsensus | Consensus enforcement | Block validation limits |
 | MinMiningTxFee | Minimum fee threshold | Mining inclusion criteria |
-| MinMiningTxFeeBySize | Tier rates must be >= the MinMiningTxFee floor in sat/kB | Marginal fee requirement for large transactions |
+| MinMiningTxFeeByScriptSize | Sorted, unique thresholds; non-decreasing rates | Marginal fee requirement for large scripts |
+| MinMiningTxFeeByScriptOps | Sorted, unique thresholds; non-decreasing rates | Marginal fee requirement for op-dense scripts |
 
 ## Configuration Examples
 

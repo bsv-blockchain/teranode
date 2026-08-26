@@ -109,11 +109,7 @@ type TxValidator struct {
 func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) *TxValidator {
 	options := NewTxValidatorOptions(opts...)
 
-	// The size-tiered fee schedule is enforced Go-side (checkSizeTieredFee),
-	// so its config is validated here, where BDK's fee floor is also fixed.
-	validateFeeSizeTiers(tSettings.Policy)
-
-	// checkSizeTieredFee counts rejections and exemptions; make sure the
+	// checkScriptTieredFees counts rejections and exemptions; make sure the
 	// counters exist even when the TxValidator is constructed without a
 	// surrounding Validator or Server (initialization is once-only).
 	initPrometheusMetrics()
@@ -230,14 +226,15 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		return nil
 	}
 
-	// The size-tiered minimum fee (minminingtxfeebysize) is a Teranode-owned
-	// policy layered above BDK's MinMiningTxFee floor: BDK has no per-size fee
-	// API, so the marginal tier schedule is enforced here, before script
-	// validation, and only in policy mode. The free-consolidation exemption
-	// BDK applies to its own floor is honoured (isFreeConsolidationTxn), and
-	// an empty schedule (the default) makes this a no-op.
+	// The per-script fee tiers (minminingtxfeebyscriptsize and
+	// minminingtxfeebyscriptops) are Teranode-owned policies layered above
+	// BDK's MinMiningTxFee floor: BDK has no per-script fee API, so the
+	// marginal tier schedules are enforced here, before script validation,
+	// and only in policy mode. The free-consolidation exemption BDK applies
+	// to its own floor is honoured (isFreeConsolidationTxn), and empty
+	// schedules (the default) make this a no-op.
 	if !validationOptions.SkipPolicyChecks {
-		if err := tv.checkSizeTieredFee(tx, blockHeight, utxoHeights); err != nil {
+		if err := tv.checkScriptTieredFees(tx, blockHeight, utxoHeights); err != nil {
 			return err
 		}
 	}

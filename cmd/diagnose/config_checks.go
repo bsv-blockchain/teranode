@@ -2,7 +2,6 @@ package diagnose
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"strings"
 
@@ -651,36 +650,39 @@ func checkPolicy(s *settings.Settings) []ConfigResult {
 		Value:    fmt.Sprintf("%.8f", s.Policy.MinMiningTxFee),
 	})
 
-	// Size-tiered mining fee (optional; empty means disabled)
-	if len(s.Policy.MinMiningTxFeeBySize) > 0 {
-		floorSatoshisPerKB := int64(math.Round(s.Policy.MinMiningTxFee * 1e8))
-
-		tiers := make([]string, 0, len(s.Policy.MinMiningTxFeeBySize))
-		belowFloor := false
-
-		for _, tier := range s.Policy.MinMiningTxFeeBySize {
-			tiers = append(tiers, fmt.Sprintf("%d:%d", tier.SizeBytes, tier.SatoshisPerKB))
-
-			if tier.SatoshisPerKB < floorSatoshisPerKB {
-				belowFloor = true
-			}
+	// Per-script fee tiers (optional; empty means disabled). Each pairs with
+	// the cap on the same metric: a cap at or below the first tier threshold
+	// rejects scripts before they ever reach a fee tier.
+	checkFeeTiers := func(check string, tiers []settings.FeeTier, unit string, capName string, capValue int64) {
+		if len(tiers) == 0 {
+			return
 		}
 
-		if belowFloor {
+		formatted := make([]string, 0, len(tiers))
+		for _, tier := range tiers {
+			formatted = append(formatted, fmt.Sprintf("%d:%d", tier.Threshold, tier.SatoshisPerK))
+		}
+
+		if capValue > 0 && uint64(capValue) <= tiers[0].Threshold {
 			results = append(results, ConfigResult{
 				Severity:    SeverityWARN,
-				Check:       "Size-tiered mining fee",
-				Value:       strings.Join(tiers, "|"),
-				Recommended: fmt.Sprintf("Every tier rate must be at least the minminingtxfee floor (%d sat/kB); the validator fails at startup otherwise", floorSatoshisPerKB),
+				Check:       check,
+				Value:       strings.Join(formatted, "|"),
+				Recommended: fmt.Sprintf("%s (%d) rejects scripts before they reach the first fee tier (%d); raise the cap or lower the tier", capName, capValue, tiers[0].Threshold),
 			})
 		} else {
 			results = append(results, ConfigResult{
 				Severity: SeverityINFO,
-				Check:    "Size-tiered mining fee",
-				Value:    strings.Join(tiers, "|") + " (sizeBytes:satoshisPerKB, marginal)",
+				Check:    check,
+				Value:    strings.Join(formatted, "|") + " (" + unit + ", marginal)",
 			})
 		}
 	}
+
+	checkFeeTiers("Script-size fee tiers", s.Policy.MinMiningTxFeeByScriptSize,
+		"scriptSizeBytes:satoshisPerKB", "maxscriptsizepolicy", int64(s.Policy.MaxScriptSizePolicy))
+	checkFeeTiers("Script-ops fee tiers", s.Policy.MinMiningTxFeeByScriptOps,
+		"opsThreshold:satoshisPerKOps", "maxopsperscriptpolicy", s.Policy.MaxOpsPerScriptPolicy)
 
 	return results
 }

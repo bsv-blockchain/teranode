@@ -202,10 +202,10 @@ type TxValidatorI interface {
 
 ### TxValidator Methods
 
-- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, and the size-tiered fee policy (`minminingtxfeebysize`, with its free-consolidation exemption), then calls BDK `ValidateTransaction`, which enforces the `minminingtxfee` floor.
+- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, and the per-script fee tiers (`minminingtxfeebyscriptsize`, `minminingtxfeebyscriptops`, with their free-consolidation exemption), then calls BDK `ValidateTransaction`, which enforces the `minminingtxfee` floor.
 - `ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error`: Verifies BIP68 relative lock-time constraints for block validation.
 - `checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Validates Teranode-owned input constraints, including the stricter all-zero previous-txid guard and `MaxCoinsViewCacheSize`.
-- `checkSizeTieredFee(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error`: Enforces the optional marginal size-tiered minimum fee (`minminingtxfeebysize`), exempting free consolidation transactions; a no-op when the setting is empty. The `minminingtxfee` floor itself is enforced by BDK.
+- `checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error`: Enforces the optional marginal per-script fee tiers for script size (`minminingtxfeebyscriptsize`) and counted ops (`minminingtxfeebyscriptops`), exempting free consolidation transactions; a no-op when both settings are empty. The `minminingtxfee` floor itself is enforced by BDK.
 - `pushDataCheck(tx *bt.Tx) error`: Ensures that unlocking scripts only push data onto the stack, enforcing Bitcoin's signature script policy.
 
 ### Validator Methods
