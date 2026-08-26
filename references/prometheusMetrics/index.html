@@ -8641,6 +8641,16 @@
 <td>Histogram</td>
 <td>Histogram of validator set tx meta</td>
 </tr>
+<tr>
+<td><code>teranode_validator_parent_commit_retries</code></td>
+<td>Counter</td>
+<td>Retries spent waiting for a parent transaction to finish committing, by <code>condition</code> (<code>TX_LOCKED</code>, <code>TX_CREATING</code>)</td>
+</tr>
+<tr>
+<td><code>teranode_validator_parent_commit_exhausted</code></td>
+<td>Counter</td>
+<td>Transactions rejected because the parent-commit retry budget ran out, by <code>condition</code> (<code>TX_LOCKED</code>, <code>TX_CREATING</code>)</td>
+</tr>
 </tbody>
 </table>
 <h2 id="txmetacache-service-metrics">TxMetaCache Service Metrics<a class="headerlink" href="#txmetacache-service-metrics" title="Permanent link">&para;</a></h2>
