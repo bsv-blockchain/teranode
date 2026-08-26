@@ -4525,11 +4525,19 @@ entries:
       - "all four disconnectnode assertions: Teranode does not implement the disconnectnode RPC. Deliberately not added for the sake of a port; see the submitblock-rpc gap for the same reasoning applied to a larger cluster."
   - name: dustrelayfee.py
     bucket: A
-    status: todo
-    needs: [wirepeer, funding-shim]
-    ported_to: ""
-    upstream_assertions: []
-    waived_assertions: []
+    status: ported-partial
+    needs: [wirepeer]
+    ported_to: "TestBSVDustRelayFee"
+    upstream_assertions:
+      - "with standardness policy in force, a transaction carrying an output below the dust threshold is refused"
+      - "the refusal carries RPC error -26 with the reason \"64: dust\""
+      - "the refused transaction does not appear in the mempool"
+      - "raising the same output to the dust threshold makes the transaction acceptable"
+      - "the accepted transaction appears in the mempool"
+      - "the wallet refuses to send a dust amount in the first place"
+    waived_assertions:
+      - "the refusal carries RPC error -26 with the reason \"64: dust\": Teranode refuses it with TX_POLICY (39) \"GoBDK fail to ValidateTransaction by policy settings\", which names neither dust nor the offending output. The refusal itself is reproduced and asserted; only the reason is lost, and it is lost the same way every transaction rejection loses its reason - see gap opaque-tx-reject-reason, raised as issue 4790. Retire this waiver when that is fixed."
+      - "the wallet refuses to send a dust amount in the first place: Teranode has no wallet, and declines every wallet RPC by routing it to handleAskWallet because key custody lives outside the node. Upstream's wallet-side and node-side checks collapse into one assertion here - the node refuses the transaction - which the port makes."
   - name: example_test.py
     bucket: A
     status: blocked

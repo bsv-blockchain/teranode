@@ -30,6 +30,13 @@ import (
 // against a real P2PKH output. So a port needs this pool, and does not need a
 // wallet.
 //
+// NOT USABLE UNDER STANDARD-ONLY POLICY, established while porting
+// dustrelayfee.py. OP_TRUE is itself a non-standard output script, so with
+// RequireStandard=true and AcceptNonStdOutputs=false the pool's own funding
+// transaction is refused with TX_POLICY (39) before any port assertion runs. A
+// port that needs upstream's -acceptnonstdtxn=0 has to fund with P2PKH instead -
+// see TestBSVDustRelayFee for that shape.
+//
 // The outputs are anyone-can-spend. That is deliberate: it keeps the spends
 // signature-free, which matters when a port is counting sigops or measuring
 // message sizes and does not want a signature's bytes in the arithmetic. A port
