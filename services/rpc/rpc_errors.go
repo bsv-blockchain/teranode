@@ -73,7 +73,7 @@ const (
 // "mandatory-script-verify-flag-failed", the block-level "bad-blk-txns-*".
 // For these, and only these, the wire message is taken from the BOTTOM of the
 // chain, because that is where such a string lives.
-var rejectionClasses = []error{
+var rejectionClasses = []*errors.Error{
 	errors.ErrTxInvalid,
 	errors.ErrTxPolicy,
 	errors.ErrTxConflicting,
@@ -88,7 +88,8 @@ var rejectionClasses = []error{
 }
 
 // isRejection reports whether err is a refusal of what the caller submitted,
-// as opposed to a fault in the node.
+// as opposed to a fault in the node. Chain-wide: a verdict wrapped in a service
+// breadcrumb is still a verdict.
 func isRejection(err error) bool {
 	for _, class := range rejectionClasses {
 		if errors.Is(err, class) {
@@ -99,19 +100,83 @@ func isRejection(err error) bool {
 	return false
 }
 
-// deepestMessage walks to the innermost link carrying text of its own.
+// linkIsRejection reports whether THIS link is itself a verdict, testing its own
+// code rather than the chain beneath it.
 //
-// mapBDKValidationError puts the constant "GoBDK fail to ValidateTransaction"
-// on top of the real BDK error at every one of its returns, and
-// validateInternal wraps that again with its own breadcrumb, so on the
-// validator path the reason is two or three links down and every link above
-// it is a fixed string.
-func deepestMessage(e *errors.Error) string {
-	best := ""
+// The distinction matters and cost a round to find: (*errors.Error).Is matches by
+// code anywhere in the chain, so isRejection answers true for the service
+// breadcrumb wrapping a verdict as readily as for the verdict itself. Using it to
+// pick where the reason starts therefore started at the outermost link every time
+// and put "error validating transaction" on the wire.
+func linkIsRejection(e *errors.Error) bool {
+	if e == nil {
+		return false
+	}
+
+	for _, class := range rejectionClasses {
+		if e.Code() == class.Code() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// maxRejectionReasonParts bounds how many links of a rejection chain are joined
+// into the wire message, so a deep chain cannot turn into an unbounded string.
+const maxRejectionReasonParts = 3
+
+// rejectionReason builds the wire message for a rejection class by joining the
+// meaningful messages from the outermost rejection-class link downward.
+//
+// Neither end of the chain is reliably "the reason", which an earlier version of
+// this file got wrong in one direction by always taking the deepest.
+//
+//   - On the GoBDK path the outer links are fixed strings and the reason is at
+//     the bottom: mapBDKValidationError puts the constant "GoBDK fail to
+//     ValidateTransaction" on top of the real BDK error at every one of its
+//     returns, and validateInternal wraps that again with its own breadcrumb.
+//   - On the finality path it is the other way round. Validator.go builds
+//     NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err),
+//     so the CATEGORY that callers match on is the outer message and the DETAIL
+//     ("lock time (133) ... is not less than block height (12)") is beneath it.
+//     Taking the deepest here dropped "transaction is not final" and broke a
+//     smoke test that asserts on it.
+//
+// So take both and let the caller read them. The walk starts at the outermost
+// link that is itself a rejection class, which skips the service breadcrumbs
+// above it without needing to recognise them by shape.
+func rejectionReason(e *errors.Error) string {
+	parts := make([]string, 0, maxRejectionReasonParts)
+	seen := make(map[string]struct{}, maxRejectionReasonParts)
+
+	add := func(msg string) bool {
+		msg = stripBreadcrumb(msg)
+		if msg == "" {
+			return true
+		}
+
+		if _, dup := seen[msg]; dup {
+			return true
+		}
+
+		seen[msg] = struct{}{}
+		parts = append(parts, msg)
+
+		return len(parts) < maxRejectionReasonParts
+	}
+
+	started := false
 
 	for cur, depth := e, 0; cur != nil && depth < maxMessageChainDepth; depth++ {
-		if msg := cur.Message(); msg != "" {
-			best = msg
+		// Skip the breadcrumb links above the verdict. Once inside, every
+		// remaining link is part of the reason.
+		if !started && linkIsRejection(cur) {
+			started = true
+		}
+
+		if started && !add(cur.Message()) {
+			break
 		}
 
 		wrapped := cur.WrappedErr()
@@ -121,11 +186,10 @@ func deepestMessage(e *errors.Error) string {
 
 		next, ok := wrapped.(*errors.Error)
 		if !ok {
-			// The tail of a rejection chain is the foreign error the
-			// validator was handed - a bdkscript error, whose text is the
-			// closed-vocabulary reason itself. Take it and stop.
-			if text := wrapped.Error(); text != "" {
-				best = text
+			// The tail of a rejection chain is a foreign error the validator was
+			// handed, whose text is the closed-vocabulary reason itself.
+			if started {
+				add(wrapped.Error())
 			}
 
 			break
@@ -134,7 +198,7 @@ func deepestMessage(e *errors.Error) string {
 		cur = next
 	}
 
-	return best
+	return strings.Join(parts, ": ")
 }
 
 // stripBreadcrumb removes the leading "[Service][arg]" markers Teranode
@@ -185,7 +249,7 @@ func publicErrorMessage(err error) string {
 
 	switch {
 	case isRejection(tErr):
-		return sanitised(deepestMessage(tErr))
+		return sanitised(rejectionReason(tErr))
 
 	case errors.Is(tErr, errors.ErrInvalidArgument):
 		// The caller's own input was wrong. The topmost message says how, and

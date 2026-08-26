@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -425,7 +426,22 @@ func TestHandleGetRawTransactionEdgeCases(t *testing.T) {
 
 		_, err := handleGetRawTransaction(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "404")
+
+		// Assert on what a caller actually receives, not on the handler's bare
+		// error. The previous version checked err.Error() for "404" and passed
+		// while the reply on the wire was -32603 "internal error", because the
+		// handler is called directly here and never reaches createMarshalledReply,
+		// which is where the trimming happens.
+		reply, mErr := s.createMarshalledReply(1, nil, err)
+		require.NoError(t, mErr)
+
+		var parsed bsvjson.Response
+		require.NoError(t, json.Unmarshal(reply, &parsed))
+		require.NotNil(t, parsed.Error)
+
+		require.Equal(t, bsvjson.ErrRPCInvalidAddressOrKey, parsed.Error.Code,
+			"an unknown txid is -5, matching bitcoind, not an internal error")
+		require.Equal(t, txNotFoundMessage, parsed.Error.Message)
 	})
 }
 

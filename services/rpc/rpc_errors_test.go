@@ -141,10 +141,59 @@ func TestPublicErrorMessage_KeepsTheReasonNotTheBreadcrumb(t *testing.T) {
 
 	msg := publicErrorMessage(err)
 
-	require.Equal(t, "bad-txns-inputs-duplicate", msg,
+	require.Contains(t, msg, "bad-txns-inputs-duplicate",
 		"the closed-vocabulary reason is what callers and upstream's functional tests match on")
-	require.NotContains(t, msg, "[Validate]", "internal method names must not cross the API boundary")
-	require.NotContains(t, msg, "GoBDK", "internal component names must not cross the API boundary")
+	require.NotContains(t, msg, "[Validate]", "the service breadcrumb must not cross the API boundary")
+	require.NotContains(t, msg, "error validating transaction",
+		"nor the breadcrumb's own text, which is what naming the outermost link would have emitted")
+}
+
+// nonFinalChain is what Validator.go:753 builds when a transaction fails the
+// finality check: the CATEGORY is the outer message and the DETAIL is beneath
+// it, which is the opposite way round from the GoBDK path.
+func nonFinalChain() error {
+	return errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", "abcd1234",
+		errors.NewTxLockTimeError("lock time (133) as block height is not less than block height (12)"))
+}
+
+// TestPublicErrorMessage_KeepsBothEndsOfARejectionChain is the regression test
+// for the smoke-test break. Taking only the deepest message emitted
+// "lock time (133) ... is not less than block height (12)" and dropped
+// "transaction is not final", which test/e2e/daemon/ready/smoke_test.go asserts
+// on. Neither end of a rejection chain is reliably the reason, so both are kept.
+func TestPublicErrorMessage_KeepsBothEndsOfARejectionChain(t *testing.T) {
+	err := nonFinalChain()
+
+	// Preconditions: the chain really is shaped with the category on top.
+	var tErr *errors.Error
+	require.ErrorAs(t, err, &tErr)
+	require.Contains(t, tErr.Message(), "transaction is not final", "the category is the outer message")
+	require.Contains(t, err.Error(), "lock time (133)", "the detail is below it")
+
+	msg := publicErrorMessage(err)
+
+	require.Contains(t, msg, "transaction is not final",
+		"the category is what callers and the e2e smoke test match on")
+	require.Contains(t, msg, "lock time (133)",
+		"the detail is what tells the submitter why")
+	require.NotContains(t, msg, "[Validate]", "the breadcrumb still must not cross")
+}
+
+// TestRejectionReason_StartsAtTheVerdictNotTheBreadcrumb pins why the walk uses
+// each link's OWN code. (*errors.Error).Is matches by code anywhere in the
+// chain, so testing the chain would start at the outermost link every time and
+// put the service breadcrumb's text on the wire.
+func TestRejectionReason_StartsAtTheVerdictNotTheBreadcrumb(t *testing.T) {
+	breadcrumb := errors.NewProcessingError("[Validate][%s] error validating transaction", "abcd1234",
+		errors.NewTxInvalidError("GoBDK fail to ValidateTransaction", fmt.Errorf("bad-txns-inputs-duplicate")))
+
+	require.True(t, isRejection(breadcrumb), "the chain-wide test matches the breadcrumb link too")
+
+	var tErr *errors.Error
+	require.ErrorAs(t, breadcrumb, &tErr)
+	require.False(t, linkIsRejection(tErr), "the per-link test must not")
+
+	require.NotContains(t, publicErrorMessage(breadcrumb), "error validating transaction")
 }
 
 func TestPublicErrorMessage_StripsBreadcrumbsFusedIntoTheReason(t *testing.T) {
@@ -247,8 +296,8 @@ func TestRPCError_DoesNotDiscloseTheStorageLayer(t *testing.T) {
 func TestRPCError_TrimsTheRealValidatorChain(t *testing.T) {
 	rpcErr := buildRPCError(validatorRejectionChain(), bsvjson.ErrRPCVerify, txRejectedPrefix, scopeSubmit)
 
-	require.Equal(t, "TX rejected: bad-txns-inputs-duplicate", rpcErr.Message,
-		"the caller keeps the reason and the prefix, and loses the internals")
+	require.Equal(t, "TX rejected: GoBDK fail to ValidateTransaction: bad-txns-inputs-duplicate", rpcErr.Message,
+		"the caller keeps the prefix and every link of the verdict, and loses the service breadcrumb")
 	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
 }
 
@@ -468,8 +517,8 @@ func TestHandleSendRawTransaction_RejectionKeepsItsReason(t *testing.T) {
 	rpcErr, ok := err.(*bsvjson.RPCError)
 	require.True(t, ok)
 	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
-	require.Equal(t, "TX rejected: bad-txns-inputs-duplicate", rpcErr.Message,
-		"the submitter needs the reject reason, which is at the bottom of the chain")
+	require.Contains(t, rpcErr.Message, "bad-txns-inputs-duplicate",
+		"the submitter needs the reject reason")
 	require.NotContains(t, rpcErr.Message, "[Validate]")
 }
 

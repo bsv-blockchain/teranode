@@ -584,9 +584,22 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	}
 	defer resp.Body.Close()
 
-	// Check the response status code
+	// A 404 is the asset service saying it does not hold this transaction, which
+	// is the same verdict reconsiderblock's missing block is and deserves the same
+	// answer: bitcoind reports an unknown txid as -5 with this text, not as an
+	// internal error. Collapsing every non-200 into a SERVICE_ERROR lost that
+	// distinction, so a wallet polling for a transaction that is not mined yet
+	// could not tell it apart from the asset service being down.
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, s.rpcLookupError(
+			errors.NewTxNotFoundError("tx %s not found in asset service", c.Txid),
+			bsvjson.ErrRPCInvalidAddressOrKey, "")
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.NewServiceError(fmt.Sprintf("Error: Unexpected status code %d", resp.StatusCode))
+		return nil, s.rpcError(
+			errors.NewServiceError("unexpected status code %d from asset service", resp.StatusCode),
+			bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	body, err := io.ReadAll(resp.Body)
