@@ -87,14 +87,50 @@ var rejectionClasses = []*errors.Error{
 	errors.ErrBlockInvalid,
 }
 
-// isRejection reports whether err is a refusal of what the caller submitted,
-// as opposed to a fault in the node. Chain-wide: a verdict wrapped in a service
-// breadcrumb is still a verdict.
-func isRejection(err error) bool {
+// rejectionCodes is rejectionClasses indexed by code, so both the chain-wide and
+// per-link tests are a map lookup rather than a scan.
+var rejectionCodes = func() map[errors.ERR]struct{} {
+	m := make(map[errors.ERR]struct{}, len(rejectionClasses))
 	for _, class := range rejectionClasses {
-		if errors.Is(err, class) {
+		m[class.Code()] = struct{}{}
+	}
+
+	return m
+}()
+
+// isRejection reports whether err is a refusal of what the caller submitted, as
+// opposed to a fault in the node. Chain-wide: a verdict wrapped in a service
+// breadcrumb is still a verdict.
+//
+// One walk, not one per class. The obvious spelling is errors.Is once per entry
+// in rejectionClasses, but each of those walks the whole chain, so an eleven-entry
+// list costs eleven traversals - and this is called twice per error, from
+// publicErrorMessage and from isCallerFault. Walking once and testing each link
+// against a code set is the same answer for a fraction of the work.
+func isRejection(err error) bool {
+	var tErr *errors.Error
+	if !errors.As(err, &tErr) {
+		return false
+	}
+
+	for cur, depth := tErr, 0; cur != nil && depth < maxMessageChainDepth; depth++ {
+		if linkIsRejection(cur) {
 			return true
 		}
+
+		wrapped := cur.WrappedErr()
+		if wrapped == nil {
+			return false
+		}
+
+		next, ok := wrapped.(*errors.Error)
+		if !ok {
+			if !errors.As(wrapped, &next) {
+				return false
+			}
+		}
+
+		cur = next
 	}
 
 	return false
@@ -113,13 +149,9 @@ func linkIsRejection(e *errors.Error) bool {
 		return false
 	}
 
-	for _, class := range rejectionClasses {
-		if e.Code() == class.Code() {
-			return true
-		}
-	}
+	_, ok := rejectionCodes[e.Code()]
 
-	return false
+	return ok
 }
 
 // maxRejectionReasonParts bounds how many links of a rejection chain are joined
@@ -186,8 +218,11 @@ func rejectionReason(e *errors.Error) string {
 
 		next, ok := wrapped.(*errors.Error)
 		if !ok {
-			// The tail of a rejection chain is a foreign error the validator was
-			// handed, whose text is the closed-vocabulary reason itself.
+			// A foreign tail, taken for its text. This is NOT the ordinary BDK
+			// path, which an earlier version of this comment claimed: bdkCause
+			// re-wraps the CGO string as an *errors.Error carrying ERR_TX_INVALID
+			// or ERR_TX_POLICY, so those links are handled by the loop above. What
+			// reaches here is a plain Go error wrapped directly under a verdict.
 			if started {
 				add(wrapped.Error())
 			}
@@ -206,13 +241,25 @@ func rejectionReason(e *errors.Error) string {
 // whole rendered block (NewBlockInvalidError formats block.String() into one),
 // and they are never part of the reason.
 func stripBreadcrumb(msg string) string {
-	for strings.HasPrefix(msg, "[") {
+	// Bounded, and never strips to empty. Teranode emits at most a service and an
+	// argument marker, but the text on the other side of this is not all ours:
+	// closed-vocabulary reject reasons cross a CGO boundary from BDK, so a reason
+	// that legitimately opens with a bracket must survive rather than be eaten a
+	// token at a time.
+	const maxBreadcrumbs = 2
+
+	for i := 0; i < maxBreadcrumbs && strings.HasPrefix(msg, "["); i++ {
 		end := strings.IndexByte(msg, ']')
 		if end < 0 {
 			break
 		}
 
-		msg = strings.TrimLeft(msg[end+1:], " ")
+		stripped := strings.TrimLeft(msg[end+1:], " ")
+		if stripped == "" {
+			break
+		}
+
+		msg = stripped
 	}
 
 	return msg
@@ -325,6 +372,16 @@ func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, 
 // sendrawtransaction rejections are routine enough that logging them louder
 // would be a noise problem of its own.
 func isCallerFault(err error, scope rpcRequestScope) bool {
+	// A block failing revalidation is rare, admin-invoked and operationally
+	// significant, so it is not a caller fault for logging purposes even though it
+	// is a rejection for message purposes. reconsiderblock is absent from
+	// rpcLimited, so it cannot be a noise source - and without this the only
+	// record of the failure is a Debugf, which is off at default levels, leaving
+	// the trimmed response as the whole story.
+	if errors.Is(err, errors.ErrBlockInvalid) {
+		return false
+	}
+
 	if isRejection(err) || errors.Is(err, errors.ErrInvalidArgument) {
 		return true
 	}

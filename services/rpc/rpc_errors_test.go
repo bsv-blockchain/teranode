@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -49,9 +50,12 @@ func blockNotFoundChain() error {
 // again (services/validator/Validator.go). The reason is therefore at the
 // bottom and every link above it is a constant.
 func validatorRejectionChain() error {
+	// The tail is an *errors.Error, not a plain Go error: bdkCause re-wraps the
+	// CGO string as errors.New(ERR_TX_INVALID, "%s", cause). An earlier fixture
+	// used fmt.Errorf here and so exercised a shape production no longer builds.
 	return errors.NewProcessingError("[Validate][%s] error validating transaction", "abcd1234",
 		errors.NewTxInvalidError("GoBDK fail to ValidateTransaction",
-			fmt.Errorf("bad-txns-inputs-duplicate")))
+			errors.New(errors.ERR_TX_INVALID, "bad-txns-inputs-duplicate")))
 }
 
 // missingParentChain is what reaches handleSendRawTransaction when a submitted
@@ -253,7 +257,7 @@ func TestPublicErrorMessage_NeverReturnsEmptyForANonNilError(t *testing.T) {
 		"a message that is nothing but breadcrumbs leaves no reason to show")
 }
 
-func TestDeepestMessage_TerminatesOnAPathologicalChain(t *testing.T) {
+func TestRejectionReason_TerminatesOnAPathologicalChain(t *testing.T) {
 	// A mass spend failure can build a chain tens of thousands of links deep.
 	// An unbounded walk over one on the RPC path would be a DoS vector.
 	err := errors.NewTxInvalidError("innermost reason")
@@ -267,9 +271,38 @@ func TestDeepestMessage_TerminatesOnAPathologicalChain(t *testing.T) {
 	select {
 	case msg := <-done:
 		require.NotEmpty(t, msg)
-	case <-context.Background().Done():
-		t.Fatal("unreachable")
+	case <-time.After(5 * time.Second):
+		// A real deadline. The previous version selected on
+		// context.Background().Done(), which is a nil channel and never fires, so
+		// the select was a plain blocking receive and the test could only ever
+		// hang rather than fail.
+		t.Fatal("publicErrorMessage did not terminate on a pathological chain")
 	}
+}
+
+// TestRejectionDepthCapsAgree pins that the walk that decides IF an error is a
+// rejection and the walk that builds its message stop at the same depth.
+//
+// They did not. isRejection delegated to errors.Is, capped at 1<<20, while the
+// message walk capped at 32, so a chain with its verdict beyond 32 was routed
+// down the rejection branch and then handed back a shallow wrapper's text as
+// though it were the reason. Sharing one constant makes that disagreement
+// unrepresentable; this fails if the two are ever given separate bounds again.
+func TestRejectionDepthCapsAgree(t *testing.T) {
+	// Bury the verdict beyond the cap under links that are not verdicts.
+	var err error = errors.NewTxInvalidError("bad-txns-inputs-duplicate")
+	for i := 0; i < maxMessageChainDepth*2; i++ {
+		err = errors.NewProcessingError("wrapper", err)
+	}
+
+	require.False(t, isRejection(err),
+		"a verdict past the depth cap is not reachable, and must not be claimed as one")
+
+	msg := publicErrorMessage(err)
+
+	require.Equal(t, genericErrorMessage, msg,
+		"an unreachable verdict yields the generic text, never a wrapper's own words")
+	require.NotContains(t, msg, "wrapper")
 }
 
 // ---------------------------------------------------------------------------
@@ -557,4 +590,38 @@ func TestCreateMarshalledReply_DoesNotReclassify(t *testing.T) {
 	require.NotEqual(t, bsvjson.ErrRPCInvalidAddressOrKey, parsed.Error.Code)
 	require.NotContains(t, parsed.Error.Message, "sql: no rows in result set")
 	require.NotContains(t, parsed.Error.Message, "RevalidateBlock")
+}
+
+// TestLogAndBuild_BlockRevalidationFailureIsLoggedAtErrorLevel pins ChiR12: a
+// block that exists and fails validation is rare, admin-invoked and worth an
+// operator's attention. Classifying it as a routine caller fault left the only
+// record of the failure at debug, which is off at default levels - so the
+// trimmed response became the whole story on exactly the path this file trims.
+func TestLogAndBuild_BlockRevalidationFailureIsLoggedAtErrorLevel(t *testing.T) {
+	logger := newCapturingLogger()
+	s := &RPCServer{logger: logger}
+
+	rpcErr := s.rpcLookupError(blockInvalidChain(), bsvjson.ErrRPCVerify, "Block failed revalidation: ")
+
+	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+	require.NotEmpty(t, logger.errorf, "a failed revalidation must leave an error-level trace")
+	require.Contains(t, logger.all(), "bad-blk-txns-inputs-missingorspent")
+}
+
+// TestStripBreadcrumb_DoesNotEatABracketedReason pins ChiR13. The reject reasons
+// this file exists to preserve cross a CGO boundary from BDK, so their shape is
+// not Teranode's to assume. An unbounded loop would peel a reason that
+// legitimately opens with a bracket one token at a time, and one that is wholly
+// bracketed down to nothing.
+func TestStripBreadcrumb_DoesNotEatABracketedReason(t *testing.T) {
+	require.Equal(t, "reason", stripBreadcrumb("[Service][arg] reason"),
+		"the breadcrumbs Teranode does emit are still removed")
+
+	require.Equal(t, "[16] is not a valid stack size",
+		stripBreadcrumb("[Validate][abcd] [16] is not a valid stack size"),
+		"a reason opening with a bracket survives once the two real breadcrumbs are off")
+
+	require.Equal(t, "[mandatory-script-verify-flag-failed]",
+		stripBreadcrumb("[mandatory-script-verify-flag-failed]"),
+		"a wholly bracketed reason is kept rather than stripped to nothing")
 }
