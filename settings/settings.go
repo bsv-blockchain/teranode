@@ -99,10 +99,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ExcessiveBlockSize: getInt("excessiveblocksize", 4294967296, alternativeContext...), // 4GB
 			// TODO: change BlockMaxSize to uint64
 			//nolint:gosec // G115: integer overflow conversion uint64 -> int (gosec)
-			BlockMaxSize:    int(blockMaxSize),
-			MaxTxSizePolicy: getInt("maxtxsizepolicy", 10485760, alternativeContext...), // 10MB
-			MinMiningTxFee:  getFloat64("minminingtxfee", 0.00000500, alternativeContext...),
-			MaxRawTxFee:     getUint64("maxrawtxfee", 10_000_000, alternativeContext...), // 0.1 BSV, matches bitcoin-sv DEFAULT_TRANSACTION_MAXFEE (COIN/10)
+			BlockMaxSize:         int(blockMaxSize),
+			MaxTxSizePolicy:      getInt("maxtxsizepolicy", 10485760, alternativeContext...), // 10MB
+			MinMiningTxFee:       getFloat64("minminingtxfee", 0.00000500, alternativeContext...),
+			MinMiningTxFeeBySize: parseFeeSizeTiers(getMultiString("minminingtxfeebysize", "|", nil, alternativeContext...)),
+			MaxRawTxFee:          getUint64("maxrawtxfee", 10_000_000, alternativeContext...), // 0.1 BSV, matches bitcoin-sv DEFAULT_TRANSACTION_MAXFEE (COIN/10)
 			// MaxOrphanTxSize:                 getInt("maxorphantxsize", 1000000, alternativeContext...),
 			DataCarrierSize:              int64(getInt("datacarriersize", 1000000, alternativeContext...)),
 			MaxScriptSizePolicy:          getInt("maxscriptsizepolicy", 100000000, alternativeContext...), // 100MB

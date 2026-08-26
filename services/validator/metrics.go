@@ -59,6 +59,21 @@ var (
 	// holding it, so the increment marks a transaction the node lost.
 	prometheusValidatorParentCommitExhausted *prometheus.CounterVec
 
+	// prometheusValidatorSizeTieredFeeRejections counts transactions rejected by the
+	// minminingtxfeebysize policy (checkSizeTieredFee). Always zero when the setting is
+	// empty. A rising rate means submitters are underpaying for large transactions
+	// relative to this node's tier schedule; if that is unexpected, compare the schedule
+	// with what wallets are being quoted, since the ARC-format policy endpoint only
+	// advertises the minminingtxfee floor.
+	prometheusValidatorSizeTieredFeeRejections prometheus.Counter
+
+	// prometheusValidatorSizeTieredFeeConsolidationExemptions counts transactions that
+	// were under the size-tiered fee requirement but accepted because they qualify as
+	// free consolidations (isFreeConsolidationTxn), mirroring BDK's exemption from the
+	// fee floor. A sudden surge relative to rejections is worth a look: consolidation
+	// shape is the one way to legitimately pay below the tier schedule.
+	prometheusValidatorSizeTieredFeeConsolidationExemptions prometheus.Counter
+
 	// prometheusTransactionValidateTotal measures the complete end-to-end validation time for transactions.
 	// This histogram tracks the total time spent validating a transaction from initial receipt through
 	// final validation completion, including all validation steps and database operations. Units: seconds.
@@ -289,6 +304,25 @@ func _initPrometheusMetrics() {
 			Help:      "Transactions rejected because the parent-commit retry budget ran out, by condition",
 		},
 		[]string{"condition"},
+	)
+
+	// Size-tiered fee policy counters
+	prometheusValidatorSizeTieredFeeRejections = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "size_tiered_fee_rejections",
+			Help:      "Transactions rejected by the minminingtxfeebysize policy",
+		},
+	)
+
+	prometheusValidatorSizeTieredFeeConsolidationExemptions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "size_tiered_fee_consolidation_exemptions",
+			Help:      "Underpaying transactions accepted by the minminingtxfeebysize policy because they qualify as free consolidations",
+		},
 	)
 
 	// Block assembly operations histogram

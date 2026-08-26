@@ -202,10 +202,10 @@ type TxValidatorI interface {
 
 ### TxValidator Methods
 
-- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, minimum-fee policy, and consolidation-fee exemption, then calls BDK `ValidateTransaction`.
+- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, and the size-tiered fee policy (`minminingtxfeebysize`, with its free-consolidation exemption), then calls BDK `ValidateTransaction`, which enforces the `minminingtxfee` floor.
 - `ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error`: Verifies BIP68 relative lock-time constraints for block validation.
 - `checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Validates Teranode-owned input constraints, including the stricter all-zero previous-txid guard and `MaxCoinsViewCacheSize`.
-- `checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error`: Verifies if the transaction fee is sufficient according to the fee policy.
+- `checkSizeTieredFee(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error`: Enforces the optional marginal size-tiered minimum fee (`minminingtxfeebysize`), exempting free consolidation transactions; a no-op when the setting is empty. The `minminingtxfee` floor itself is enforced by BDK.
 - `pushDataCheck(tx *bt.Tx) error`: Ensures that unlocking scripts only push data onto the stack, enforcing Bitcoin's signature script policy.
 
 ### Validator Methods

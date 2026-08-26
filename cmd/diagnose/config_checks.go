@@ -2,6 +2,7 @@ package diagnose
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -649,6 +650,37 @@ func checkPolicy(s *settings.Settings) []ConfigResult {
 		Check:    "Min mining tx fee",
 		Value:    fmt.Sprintf("%.8f", s.Policy.MinMiningTxFee),
 	})
+
+	// Size-tiered mining fee (optional; empty means disabled)
+	if len(s.Policy.MinMiningTxFeeBySize) > 0 {
+		floorSatoshisPerKB := int64(math.Round(s.Policy.MinMiningTxFee * 1e8))
+
+		tiers := make([]string, 0, len(s.Policy.MinMiningTxFeeBySize))
+		belowFloor := false
+
+		for _, tier := range s.Policy.MinMiningTxFeeBySize {
+			tiers = append(tiers, fmt.Sprintf("%d:%d", tier.SizeBytes, tier.SatoshisPerKB))
+
+			if tier.SatoshisPerKB < floorSatoshisPerKB {
+				belowFloor = true
+			}
+		}
+
+		if belowFloor {
+			results = append(results, ConfigResult{
+				Severity:    SeverityWARN,
+				Check:       "Size-tiered mining fee",
+				Value:       strings.Join(tiers, "|"),
+				Recommended: fmt.Sprintf("Every tier rate must be at least the minminingtxfee floor (%d sat/kB); the validator fails at startup otherwise", floorSatoshisPerKB),
+			})
+		} else {
+			results = append(results, ConfigResult{
+				Severity: SeverityINFO,
+				Check:    "Size-tiered mining fee",
+				Value:    strings.Join(tiers, "|") + " (sizeBytes:satoshisPerKB, marginal)",
+			})
+		}
+	}
 
 	return results
 }

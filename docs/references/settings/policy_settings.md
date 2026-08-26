@@ -65,7 +65,10 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 | Setting | Type | Default | Environment Variable | Usage |
 | --------- | ------ | --------- | --------------------- | ------- |
 | MinMiningTxFee | float64 | 0.00000500 | minminingtxfee | Minimum transaction fee for mining |
+| MinMiningTxFeeBySize | []FeeSizeTier | (empty) | minminingtxfeebysize | Optional marginal fee-rate tiers by transaction size |
 | AcceptNonStdOutputs | bool | true | acceptnonstdoutputs | **CRITICAL** - Accept non-standard output scripts |
+
+`minminingtxfeebysize` is a pipe-separated list of `<sizeBytes>:<satoshisPerKB>` pairs (for example `1000000:10`). Tiers apply marginally, like tax brackets: bytes below the first threshold pay the `minminingtxfee` floor and bytes beyond each threshold must pay at least that tier's rate, expressed in integer satoshis per 1000 bytes. Free consolidation transactions are exempt, mirroring the BDK exemption from the fee floor. Every tier rate must be at least the `minminingtxfee` floor in sat/kB or the validator fails at startup. Empty (the default) disables size tiers, leaving fee policy exactly as before.
 
 ### Consolidation Transaction Settings
 
@@ -144,6 +147,7 @@ The settings allow operators to configure policy rules while maintaining consens
 | MaxStackMemoryUsagePolicy | Policy enforcement | Script execution limits |
 | MaxStackMemoryUsageConsensus | Consensus enforcement | Block validation limits |
 | MinMiningTxFee | Minimum fee threshold | Mining inclusion criteria |
+| MinMiningTxFeeBySize | Tier rates must be >= the MinMiningTxFee floor in sat/kB | Marginal fee requirement for large transactions |
 
 ## Configuration Examples
 
