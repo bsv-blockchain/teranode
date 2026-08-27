@@ -1247,11 +1247,43 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 
 	// Wait for both operations to complete
 	err := errorGroup.Wait()
+
+	// Release any wait barrier still blocked on a job no worker will ever receive
+	// (bitcoin-sv/teranode#4692). A job is only ever Done()'d by a worker that actually receives it,
+	// so when the pool tears down on a cancelled context — an external shutdown, or any
+	// subtreeWriteWorker's own Serialize/Set failure cancelling gCtx for the whole group — the jobs
+	// left in the buffer are never counted down. tryQuickValidation's select on ctx.Done() stops the
+	// CALLER hanging; it does not release the helper goroutine it spawned, which stays blocked in
+	// wg.Wait() for the life of the process holding the WaitGroup and the closure. Draining here
+	// counts every stranded job down exactly once, which is what lets that goroutine finish.
+	//
+	// This terminates: close(writeJobsChan) is deferred inside the goroutine the errgroup waits on
+	// above, so the channel is always already closed by the time Wait returns.
+	drainWriteJobs(writeJobsChan)
+
 	if err != nil {
 		catchupCtx.catchupError = err
 	}
 
 	return err
+}
+
+// drainWriteJobs receives every subtree write job left in ch and counts it down, so a caller blocked
+// in wg.Wait() for a job no worker will ever receive is released (bitcoin-sv/teranode#4692).
+//
+// Only safe to call once the producing errgroup has settled, because it relies on the channel being
+// closed to terminate. Nil-safe on both axes: ch is nil when quick validation is disabled (no worker
+// pool, no channel), and job.Done is nil for a job constructed without a barrier.
+func drainWriteJobs(ch <-chan *SubtreeWriteJob) {
+	if ch == nil {
+		return
+	}
+
+	for job := range ch {
+		if job != nil && job.Done != nil {
+			job.Done.Done()
+		}
+	}
 }
 
 // cleanup cleans up resources after catchup.

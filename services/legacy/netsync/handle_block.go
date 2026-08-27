@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
@@ -269,20 +270,20 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	// Derive the serving peer identity for the block-validation corrupt cap. The two caps'
-	// keys intentionally differ only by the "legacy:" namespace prefix below: netsync's own
+	// keys intentionally differ only by the LegacyPeerIDPrefix namespace below: netsync's own
 	// cap (recordCorruptBlockAttempt) keys on the bare peer.Addr(), while this value threaded
 	// into blockValidation.ProcessBlock carries the prefix — both are still derived from the
 	// identical peer.Addr() call, so they still bound the same serving connection. The
 	// divergence exists solely so nothing downstream of blockvalidation can mistake this value
 	// for a libp2p peer ID: isLegacyPeerID (services/blockvalidation/peer_metrics_helpers.go)
-	// makes isPeerMalicious and penalizeCorruptBlockPeer treat any "legacy:"-prefixed value the
-	// same as an empty peerID, so it never reaches p2pClient.AddBanScore/IsPeerMalicious and
+	// makes isPeerMalicious and penalizeCorruptBlockPeer treat any LegacyPeerIDPrefix-prefixed value
+	// the same as an empty peerID, so it never reaches p2pClient.AddBanScore/IsPeerMalicious and
 	// therefore never reaches the centralized peer registry at all (bitcoin-sv/teranode#4692).
 	// Peer.Addr() dereferences the peer with no nil-receiver guard, so guard here: a nil peer
 	// degrades to the empty-peerID no-cap defence rather than panicking.
 	peerID := ""
 	if peer != nil {
-		peerID = "legacy:" + peer.Addr()
+		peerID = blockvalidation.LegacyPeerIDPrefix + peer.Addr()
 	}
 
 	// call the process block wrapper, which will add tracing and logging

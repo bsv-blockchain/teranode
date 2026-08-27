@@ -1635,6 +1635,40 @@ func (sm *SyncManager) requestMissingBlocks(peer *peerpkg.Peer, blockHash chainh
 	}
 }
 
+// requestBlockDirect re-requests a single block by hash with a getdata sent straight to the peer,
+// bypassing inv handling entirely (bitcoin-sv/teranode#4692).
+//
+// requestMissingBlocks cannot recover a block during headers-first sync: it sends a getblocks, the
+// peer answers with an inv, and processInvMsg returns while headersFirstMode is set — before the
+// hash reaches state.requestQueue, which is the only queue the getdata loop in handleInvMsg drains.
+// The header-block pipeline does not cover it either: fetchHeaderBlocks walks forward from
+// sm.startHeader, and a dropped block's header node has already been removed from headerList with
+// startHeader ahead of the front, so that walk can never reach it.
+//
+// Both request maps are re-armed before the message goes out. handleBlockMsg disconnects a peer
+// that delivers a block it has no record of requesting, and BlockRequested gates the prefetch
+// ingestion on the same per-peer map; the corrupt branch has already deleted this hash from both.
+// The inv route repopulates them as a side effect of its own getdata loop — a direct getdata has to
+// do it itself. Both maps are expiring, so an entry for a block that never arrives self-evicts.
+//
+// Setting sm.requestedBlocks also de-duplicates against the inv route: that loop skips a hash
+// already present there, so a getblocks issued alongside this call cannot request the same block a
+// second time.
+func (sm *SyncManager) requestBlockDirect(peer *peerpkg.Peer, state *peerSyncState, blockHash chainhash.Hash) {
+	getDataMessage := wire.NewMsgGetDataSizeHint(1)
+	if err := getDataMessage.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash)); err != nil {
+		sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
+		return
+	}
+
+	sm.requestedBlocks.Set(blockHash, struct{}{})
+	state.requestedBlocks.Set(blockHash, struct{}{})
+
+	sm.logger.Debugf("[requestBlockDirect][%s] re-requesting dropped block from %s", blockHash, peer)
+
+	peer.QueueMessage(getDataMessage, nil)
+}
+
 func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	sm.logger.Debugf("[handleBlockMsg][%s] received block height %d from %s", bmsg.blockHash, bmsg.blockHeight, bmsg.peer)
 	peer := bmsg.peer
@@ -1918,6 +1952,24 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				// Unlike the orphan-continuation branch above, this is a headers-first pull sync with
 				// no other mechanism to recover a dropped block: actively re-request the same hash
 				// instead of only waiting for a spontaneous re-announcement (bitcoin-sv/teranode#4692).
+				//
+				// The re-request is a DIRECT getdata, not a getblocks. A getblocks is answered with an
+				// inv, and processInvMsg discards invs while headersFirstMode is set, so it would never
+				// become a getdata and the dropped block would be lost for the rest of the session —
+				// descendants failing their parent lookup until the stall detector rotates the sync
+				// peer. requestBlockDirect also puts the hash back into both request maps, which this
+				// branch cleared above and which handleBlockMsg's unrequested-block guard reads.
+				//
+				// Issued in both modes: outside headers-first it is redundant with the getblocks below
+				// but harmless, because the inv route's getdata loop skips a hash already present in
+				// sm.requestedBlocks, which this has just set. Re-requesting from the SAME peer is
+				// deliberate — a body can be corrupted in transit by an honest relay — and is bounded
+				// by the per-(hash, peerID) corrupt cap above, after which that peer's deliveries are
+				// dropped for the cooldown window and recovery falls back to sync-peer rotation.
+				sm.requestBlockDirect(peer, state, bmsg.blockHash)
+
+				// Keep the getblocks as well: in the legacy sync protocol it doubles as the
+				// batch-continuation signal (see requestMissingBlocks), which a getdata does not carry.
 				sm.requestMissingBlocks(peer, bmsg.blockHash)
 
 				return err

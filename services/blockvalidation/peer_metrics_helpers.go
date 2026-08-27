@@ -19,13 +19,18 @@ const (
 	// keep re-picking the same peer (bitcoin-sv/teranode#4692).
 	catchupFailureKindCorruptBlockBody = "corrupt_block_body"
 
-	// legacyPeerIDPrefix marks a peerID as originating from the legacy netsync path
-	// (services/legacy/netsync/handle_block.go), rather than a libp2p peer ID. The prefix
-	// guarantees the value can never collide with or be mistaken for a real libp2p peer ID
-	// anywhere downstream (logs, caches, metrics) — defence in depth alongside the
-	// isLegacyPeerID gates below, which are what actually stop it reaching the centralized
-	// peer registry (bitcoin-sv/teranode#4692).
-	legacyPeerIDPrefix = "legacy:"
+	// LegacyPeerIDPrefix marks a peerID as originating from the legacy netsync path, rather than a
+	// libp2p peer ID. The prefix guarantees the value can never collide with or be mistaken for a
+	// real libp2p peer ID anywhere downstream (logs, caches, metrics) — defence in depth alongside
+	// the isLegacyPeerID gates below, which are what actually stop it reaching the centralized peer
+	// registry (bitcoin-sv/teranode#4692).
+	//
+	// Exported deliberately: the value that has to match it is BUILT in another package
+	// (services/legacy/netsync/handle_block.go), so a second literal there could drift from this one
+	// silently and put legacy TCP addresses straight back into the centralized registry. The
+	// producer imports this const, so the two sides cannot be separated. services/legacy/netsync
+	// already imports this package; nothing here imports services/legacy, so there is no cycle.
+	LegacyPeerIDPrefix = "legacy:"
 )
 
 // isLegacyPeerID reports whether peerID was namespaced by the legacy netsync path rather than
@@ -35,7 +40,7 @@ const (
 // peer registry as well would add an extra gRPC round-trip, create a phantom registry entry no
 // p2p code path can see or clear on disconnect, and double-charge the peer for one corrupt body.
 func isLegacyPeerID(peerID string) bool {
-	return strings.HasPrefix(peerID, legacyPeerIDPrefix)
+	return strings.HasPrefix(peerID, LegacyPeerIDPrefix)
 }
 
 // reportCatchupAttempt reports a catchup attempt to the P2P service.
