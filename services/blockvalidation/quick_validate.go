@@ -257,6 +257,17 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
 	}
 
+	// Bind a no-subtrees body to the header before anything else touches it
+	// (bitcoin-sv/teranode#4692). This route never calls block.Valid, so without this the
+	// coinbase-only binding that model applies at its own binding block never runs here at all, and
+	// a peer-chosen body for an honest header hash — subtree list emptied, any coinbase it likes —
+	// reaches commitBlock and is recorded with subtrees_set and mined_set, with nothing to revisit
+	// it. A no-op when the body carries subtrees: those are bound by validateSubtrees' CheckMerkleRoot
+	// further down. Placed ahead of AssignBlockID so a corrupt body never even takes a block ID.
+	if err := block.CheckCoinbaseOnlyBodyBound(); err != nil {
+		return err
+	}
+
 	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it through
 	// the pipeline (rather than re-deriving it at each seam) so every phase agrees.
 	outpointOnly := u.quickValidateOutpointOnly(block)
@@ -349,6 +360,17 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		return emptyWG, nil, errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
 	}
 
+	// Bind a no-subtrees body to the header before anything else touches it
+	// (bitcoin-sv/teranode#4692). This route never calls block.Valid, so without this the
+	// coinbase-only binding that model applies at its own binding block never runs here at all, and
+	// a peer-chosen body for an honest header hash — subtree list emptied, any coinbase it likes —
+	// reaches commitBlock and is recorded with subtrees_set and mined_set, with nothing to revisit
+	// it. A no-op when the body carries subtrees: those are bound by validateSubtrees' CheckMerkleRoot
+	// further down. Placed ahead of AssignBlockID so a corrupt body never even takes a block ID.
+	if err := block.CheckCoinbaseOnlyBodyBound(); err != nil {
+		return emptyWG, nil, err
+	}
+
 	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it through
 	// the pipeline (rather than re-deriving it at each seam) so every phase agrees.
 	outpointOnly := u.quickValidateOutpointOnly(block)
@@ -402,27 +424,25 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 }
 
 // checkQuickValidationCoinbaseLength enforces model.CoinbaseScriptSigLengthInBounds on the
-// quick-validation path, which never calls block.Valid and so would otherwise never run its step
-// 4b at all (bitcoin-sv/teranode#4692). Called once, after subtree processing (if any) has already
-// returned successfully, so the binding state below is settled rather than guessed:
+// quick-validation path, which never calls block.Valid and so would otherwise never run its step 4b
+// at all (bitcoin-sv/teranode#4692). Called once, after subtree processing (if any) has already
+// returned successfully, at which point the body is merkle-bound on BOTH shapes:
 //   - block.Subtrees non-empty: processBlockSubtrees / processBlockSubtreesPipelineAsync's common
-//     tail (validateSubtrees) already ran CheckMerkleRoot successfully — the body IS merkle-bound,
-//     so a bad length here is genuine consensus invalidity, condemnable once.
-//   - block.Subtrees empty: nothing on this route asserts model's coinbase-only binding rule
-//     (header merkle root == coinbase txid) for a no-subtrees body, so it is UNBOUND here — a bad
-//     length stays corrupt (re-download), never poisoned, mirroring model's rule rather than
-//     inventing a new one.
+//     tail (validateSubtrees) already ran CheckMerkleRoot successfully.
+//   - block.Subtrees empty: model.Block.CheckCoinbaseOnlyBodyBound ran at this route's entry, and
+//     for a single-transaction block the header merkle root IS the coinbase txid — the same binding
+//     model applies at its own binding block.
 //
-// This is defence-in-depth, not a commonly-reachable path: quick validation only runs for blocks
-// at or below the highest hash-verified checkpoint for this catchup run (catchup.go,
+// So a bad coinbase length here is genuine consensus invalidity on either shape, condemnable once,
+// exactly as model's step 4b classifies it through bindErr. There is no unbound shape left on this
+// route for a corrupt verdict to apply to.
+//
+// This is defence-in-depth, not a commonly-reachable path: quick validation only runs for blocks at
+// or below the highest hash-verified checkpoint for this catchup run (catchup.go,
 // tryQuickValidation).
 func (u *BlockValidation) checkQuickValidationCoinbaseLength(block *model.Block, caller string) error {
 	if !model.CoinbaseScriptSigLengthInBounds(block.CoinbaseTx, u.settings.ChainCfgParams) {
-		if len(block.Subtrees) > 0 {
-			return errors.NewBlockInvalidError("[%s][%s] bad coinbase length", caller, block.Hash().String())
-		}
-
-		return errors.NewBlockCorruptError("[%s][%s] bad coinbase length", caller, block.Hash().String())
+		return errors.NewBlockInvalidError("[%s][%s] bad coinbase length", caller, block.Hash().String())
 	}
 
 	return nil
@@ -960,6 +980,18 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	}
 	if err != nil {
 		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+	}
+
+	// A zero-node subtree cannot be honest, and this route has no other check for it
+	// (bitcoin-sv/teranode#4692). CheckBlockSubtrees never runs on the quick path, so neither
+	// validateSubtreeLeafCount (the fetch route) nor loadSubtreeBatch's own zero-length guard (the
+	// local-read route) — both in services/subtreevalidation/check_block_subtrees.go — covers this
+	// third local read. The downstream constructor does reject a zero leaf count today, but only
+	// incidentally, as a consequence of how it derives a tree height; stating the rule here keeps
+	// the guarantee local and stable if that constructor ever changes. Placed before the
+	// subtree-data read so a junk blob costs one deserialisation, not two.
+	if subtree.Length() == 0 {
+		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] subtree %s has zero nodes", block.Hash().String(), subtreeHash.String())}
 	}
 
 	// get the subtree data from disk
