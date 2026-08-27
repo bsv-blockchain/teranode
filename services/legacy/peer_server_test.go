@@ -1440,6 +1440,30 @@ func TestShouldDisconnectOnBlockErr(t *testing.T) {
 
 	// A genuine block validation failure rotates the peer.
 	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
+
+	// An external UTXO record whose blob is missing on both representations is our
+	// storage contradicting itself, and it reaches here through netsync: the
+	// decorate fails, extendPerTxFallback's DAH'd-parent recovery also fails, and
+	// handle_block.go wraps the result in a ProcessingError. The chain must keep
+	// ErrStorageError so that does not read as the peer's fault — otherwise a peer
+	// that merely sent a block spending such a parent is disconnected for our
+	// missing blob, and so is every replacement peer.
+	// See stores/utxo/aerospike/get.go getExternalTransactionOrOutputs.
+	externalRecordNoBlob := errors.NewStorageError("external record has neither tx nor outputs stored",
+		errors.NewTxNotFoundError("neither tx nor outputs are stored externally", errors.ErrNotFound))
+	require.False(t, shouldDisconnectOnBlockErr(externalRecordNoBlob))
+	require.False(t, shouldDisconnectOnBlockErr(
+		errors.NewProcessingError("failed to decorate previous outputs for tx abc", externalRecordNoBlob)))
+
+	// The classification is dual on purpose: callers that branch on not-found (the
+	// DAH'd-parent recovery, subtreevalidation continuing the level) must still see
+	// it, so assert the two do not exclude each other.
+	require.True(t, errors.Is(externalRecordNoBlob, errors.ErrTxNotFound))
+	require.True(t, errors.Is(externalRecordNoBlob, errors.ErrStorageError))
+
+	// A bare TxNotFound, by contrast, stays a peer-facing condition: the peer sent a
+	// block spending a parent nobody has, which is its problem, not ours.
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewTxNotFoundError("no such parent")))
 }
 
 // TestCheckBannedBounded verifies the bounded ban-check round-trip extracted from

@@ -28,13 +28,13 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -56,6 +56,24 @@ import (
 //
 // The implementation handles proper file formatting with headers and provides efficient
 // streaming operations for large blobs.
+//
+// Two deployment preconditions, neither enforced in code, both silent when unmet:
+//
+//   - The IAM principal needs s3:ListBucket on the bucket, not only s3:GetObject.
+//     Without it S3 answers a GET for a key that does not exist with 403
+//     AccessDenied instead of 404 NoSuchKey, to avoid disclosing existence. That is
+//     indistinguishable from a genuine permission fault, so isMissingObject
+//     deliberately reports it as a failure rather than a miss — which is correct in
+//     isolation but means callers that branch on not-found never see it. A node
+//     whose externalStore points here and relies on that branch (stores/utxo/aerospike
+//     falls back to the .outputs blob on a miss) loses the fallback for every object
+//     under such a policy.
+//   - The bucket itself is never verified. S3 answers a HEAD against a missing or
+//     misconfigured bucket with a bodyless 404, indistinguishable from a missing key
+//     once the SDK has derived the error code (see isMissingObject), so Exists
+//     reports "not stored" for every key rather than failing loudly. A one-time
+//     HeadBucket at construction would turn that into a startup error; it is not
+//     done here.
 type S3 struct {
 	// client is the S3 client interface for interacting with the S3 service
 	client S3Client
@@ -246,7 +264,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
 		}); err == nil {
-			return errors.NewBlobAlreadyExistsError("[S3][SetFromReader] [%s] already exists in store", objectKey)
+			return errors.NewBlobAlreadyExistsError("[S3][SetFromReader] [%s] already exists in store", aws.ToString(objectKey))
 		}
 	}
 
@@ -274,7 +292,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 	// DAH are stored on local file-based blob stores where the pruner manages their lifecycle.
 
 	if err := g.client.Upload(ctx, uploadInput); err != nil {
-		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
+		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, aws.ToString(objectKey), err)
 	}
 
 	return nil
@@ -294,7 +312,7 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
 		}); err == nil {
-			return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", objectKey)
+			return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", aws.ToString(objectKey))
 		}
 	}
 
@@ -304,7 +322,7 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
 		}); err == nil {
-			return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", objectKey)
+			return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", aws.ToString(objectKey))
 		}
 	}
 
@@ -326,7 +344,7 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	// DAH is intentionally not implemented for S3. See package doc and SetFromReader for rationale.
 
 	if err := g.client.Upload(ctx, uploadInput); err != nil {
-		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
+		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, aws.ToString(objectKey), err)
 	}
 
 	cache.Set(*objectKey, value) // We store the value without header
@@ -363,11 +381,11 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.Fi
 		Key:    objectKey,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "NoSuchKey") {
+		if isMissingObject(err) {
 			return nil, errors.ErrNotFound
 		}
 
-		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] failed to get s3 data", g.bucket, objectKey, err)
+		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] failed to get s3 data", g.bucket, aws.ToString(objectKey), err)
 	}
 
 	// Consume the fileformat.Header before returning the rest of the stream.
@@ -380,12 +398,12 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.Fi
 	header := &fileformat.Header{}
 	if err := header.Read(result.Body); err != nil {
 		_ = result.Body.Close()
-		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] missing or invalid header: %v", g.bucket, objectKey, err)
+		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] missing or invalid header", g.bucket, aws.ToString(objectKey), err)
 	}
 	// Optionally, verify the header matches the expected fileType
 	if header.FileType() != fileType {
 		_ = result.Body.Close()
-		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] header filetype mismatch: got %s, want %s", g.bucket, objectKey, header.FileType(), fileType)
+		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] header filetype mismatch: got %s, want %s", g.bucket, aws.ToString(objectKey), header.FileType(), fileType)
 	}
 
 	return result.Body, nil
@@ -414,12 +432,12 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 		Key:    objectKey,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "NoSuchKey") {
+		if isMissingObject(err) {
 			span.RecordError(errors.ErrNotFound)
 			return nil, errors.ErrNotFound
 		}
 
-		err = errors.NewStorageError("[S3] [%s/%s] failed to get data", g.bucket, objectKey, err)
+		err = errors.NewStorageError("[S3] [%s/%s] failed to get data", g.bucket, aws.ToString(objectKey), err)
 		span.RecordError(err)
 
 		return nil, err
@@ -428,7 +446,7 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	// Skip the header bytes
 	header, err := fileformat.ReadHeaderFromBytes(content)
 	if err != nil {
-		err = errors.NewStorageError("[S3] [%s/%s] failed to read header", g.bucket, objectKey, err)
+		err = errors.NewStorageError("[S3] [%s/%s] failed to read header", g.bucket, aws.ToString(objectKey), err)
 		span.RecordError(err)
 
 		return nil, err
@@ -439,6 +457,57 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	cache.Set(*objectKey, content)
 
 	return content, err
+}
+
+// isMissingObject reports whether err means "this object is not in the bucket",
+// as opposed to a store failure.
+//
+// S3 surfaces a missing object three ways: a typed *types.NoSuchKey, a typed
+// *types.NotFound, and — in the configurations affected by
+// aws/aws-sdk-go-v2#2084 — a generic API error whose code is NotFound and whose
+// message never mentions NoSuchKey. All three must map to ErrNotFound, because
+// callers use that distinction to decide control flow: stores/utxo/aerospike
+// falls back to the UTXO-set .outputs blob only on a genuine miss, so an
+// unrecognised miss reads as a store failure and aborts an operation that should
+// have succeeded. Equally, a real failure must not be reported as a miss, or
+// that same fallback silently masks an outage.
+func isMissingObject(err error) bool {
+	var (
+		noSuchKey *types.NoSuchKey
+		notFound  *types.NotFound
+	)
+
+	if errors.As(err, &noSuchKey) || errors.As(err, &notFound) {
+		return true
+	}
+
+	// The SDK bug above returns neither typed error, so fall back to the error
+	// code the SDK parsed — not a scan of the message, which would mistake an
+	// unrelated error that merely mentions NotFound in its body for a miss.
+	//
+	// Matching on the code covers the bodyless-404 case too, so no status-code
+	// check is needed: the S3 deserializers pass UseStatusCode, so s3shared
+	// derives the code "NotFound" from the status text when the response carries
+	// no error body. Widening to "any 404" would gain nothing and lose the one
+	// distinction there is to keep on a GET: NoSuchBucket is also a 404, arrives
+	// with a body naming it, and must stay a failure rather than read as a miss.
+	//
+	// That distinction does NOT survive on a HEAD. A HEAD response carries no body
+	// at all, so a wrong or missing bucket reaches us as the same derived
+	// "NotFound" as a missing key, and Exists reports (false, nil) for every key in
+	// a misconfigured bucket. Pre-existing — the previous strings.Contains match had
+	// it too — and not something this helper can resolve, since by then the
+	// distinguishing information is gone. Catching it needs a bucket-level check at
+	// construction; see the note on the S3 type.
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NotFound":
+			return true
+		}
+	}
+
+	return false
 }
 
 func (g *S3) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
@@ -460,18 +529,11 @@ func (g *S3) Exists(ctx context.Context, key []byte, fileType fileformat.FileTyp
 		Key:    objectKey,
 	})
 	if err != nil {
-		// there was a bug in the s3 library
-		// https://github.com/aws/aws-sdk-go-v2-v2/issues/2084
-		if strings.Contains(err.Error(), "NotFound") {
+		if isMissingObject(err) {
 			return false, nil
 		}
 
-		var noSuchKey *types.NoSuchKey
-		if errors.As(err, &noSuchKey) {
-			return false, nil
-		}
-
-		err = errors.NewStorageError("[S3] [%s/%s] failed to check whether object exists", g.bucket, objectKey, err)
+		err = errors.NewStorageError("[S3] [%s/%s] failed to check whether object exists", g.bucket, aws.ToString(objectKey), err)
 		span.RecordError(err)
 
 		return false, err
@@ -495,7 +557,7 @@ func (g *S3) Del(ctx context.Context, key []byte, fileType fileformat.FileType, 
 		Key:    objectKey,
 	})
 	if err != nil {
-		err = errors.NewStorageError("[S3] [%s/%s] unable to del data", g.bucket, objectKey, err)
+		err = errors.NewStorageError("[S3] [%s/%s] unable to del data", g.bucket, aws.ToString(objectKey), err)
 		span.RecordError(err)
 
 		return err

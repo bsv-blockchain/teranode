@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -140,4 +141,78 @@ func TestFileWithLongtermStorageOption(t *testing.T) {
 
 	// Verify that longtermClient is not nil
 	assert.NotNil(t, store.longtermClient)
+}
+
+// fixedErrLongtermStore is a longtermStore whose reads always fail with a given
+// error, so a test can pin how that error is translated.
+type fixedErrLongtermStore struct {
+	err error
+}
+
+func (m *fixedErrLongtermStore) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) ([]byte, error) {
+	return nil, m.err
+}
+
+func (m *fixedErrLongtermStore) GetIoReader(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (io.ReadCloser, error) {
+	return nil, m.err
+}
+
+func (m *fixedErrLongtermStore) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (bool, error) {
+	return false, m.err
+}
+
+// TestFileLongtermMissMapsToErrNotFound pins the miss translation of the longterm
+// tier. Every blob backend reports a miss as the errors.ErrNotFound sentinel, not
+// as os.ErrNotExist, so mapping only os.ErrNotExist turned an S3/HTTP longterm miss
+// into a storage error. Callers key control flow off that distinction — the
+// aerospike external store falls back to the .outputs blob only on a genuine miss —
+// so a miss reported as a failure aborts an operation that should have succeeded.
+func TestFileLongtermMissMapsToErrNotFound(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{name: "os.ErrNotExist", err: os.ErrNotExist},
+		{name: "errors.ErrNotFound", err: errors.ErrNotFound},
+		{name: "errors.ErrBlobNotFound", err: errors.ErrBlobNotFound},
+		{name: "wrapped ErrNotFound", err: errors.NewStorageError("[S3] [b/k] failed", errors.ErrNotFound)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newLongtermBackedStore(t, tt.err)
+
+			_, err := store.GetIoReader(context.Background(), []byte("absent"), fileformat.FileTypeTesting)
+
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrNotFound),
+				"a longterm miss must map to ErrNotFound, got %v", err)
+		})
+	}
+}
+
+// TestFileLongtermFailureIsNotAMiss is the other half: a longterm tier that failed
+// to look must not be reported as "not stored".
+func TestFileLongtermFailureIsNotAMiss(t *testing.T) {
+	store := newLongtermBackedStore(t, errors.NewServiceUnavailableError("read permits exhausted"))
+
+	_, err := store.GetIoReader(context.Background(), []byte("absent"), fileformat.FileTypeTesting)
+
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrNotFound),
+		"a longterm store failure must not be reported as a miss, got %v", err)
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable),
+		"the original failure must be preserved, got %v", err)
+}
+
+func newLongtermBackedStore(t *testing.T, longtermErr error) *File {
+	t.Helper()
+
+	u, err := url.Parse("file://" + t.TempDir())
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	store.longtermClient = &fixedErrLongtermStore{err: longtermErr}
+
+	return store
 }
