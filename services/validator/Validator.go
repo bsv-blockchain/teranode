@@ -1250,9 +1250,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// clean missing-parent answer instead of TX_LOCKED.
 				//
 				// The outcome is logged and metered inside unwindShed; the error the
-				// caller receives stays the shed either way, because an unwind failure
-				// degrades to today's behaviour (record left Locked, recovered by the
-				// unmined reload) rather than changing the answer.
+				// caller receives stays the shed either way, because no unwind failure
+				// changes the answer. What it changes is what is left behind, and the
+				// master-first cascade gives two shapes: a delete that failed with the
+				// master still present leaves the pre-existing behaviour (record Locked,
+				// recovered by the unmined reload), while one that failed after the
+				// master was already gone leaves nothing to reload — the inputs are
+				// then unspent unless that unspend itself fails, and only unreachable
+				// residue can survive, counted by shed_unwind_residue_total.
 				_ = v.unwindShed(decoupledCtx, tx, txID, spentUtxos, !validationOptions.SkipUtxoCreation)
 
 				// On the ingest path the submitter was already told the transaction was
@@ -2135,11 +2140,16 @@ func (v *Validator) handoffFloor() time.Duration {
 //   - createdRecord is false on the spend-only shape (SkipUtxoCreation), where
 //     there is no record to delete; Unspend of an empty spend set is a no-op.
 //
-// Failure is best-effort and never fatal: every arm logs the txid AND the outpoints,
-// meters, and falls back to leaving the transaction Locked. The error returned to the
-// validation caller stays the shed in every case, so the 503 mapping is unchanged. The
-// returned error is for callers that want to observe the unwind outcome; the shed path
-// deliberately ignores it.
+// Failure is best-effort and never fatal: every arm logs the txid AND the outpoints
+// and meters. What it falls back to depends on where the delete failed: while the
+// master record is still present the transaction is left Locked for the unmined reload,
+// but once the master is gone there is nothing left to leave Locked — the inputs are
+// then unspent unless that unspend itself fails, and only unreachable residue (orphan
+// pagination children, an external blob) can survive, counted by
+// shed_unwind_residue_total. The error returned to the validation caller stays the
+// shed in every case, so the 503 mapping is unchanged. The returned error is for
+// callers that want to observe the unwind outcome; the shed path deliberately
+// ignores it.
 //
 // The context is bounded by shedUnwindTimeout (validator_shedUnwindTimeout), because
 // the one it inherits is detached from the caller and a wedged store would otherwise
@@ -2174,7 +2184,7 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 		switch {
 		case gone && deleteErr != nil:
 			prometheusValidatorShedUnwindResidue.Inc()
-			v.logger.Errorf("[unwindShed][%s] complete delete failed after the master record was already gone, so nothing mineable survives and the inputs are being unspent; orphan pagination children and/or the external blob may remain until a create of the same transaction adopts them, outpoints %s: %v", txID, unwindOutpoints(spentUtxos), deleteErr)
+			v.logger.Errorf("[unwindShed][%s] complete delete failed after the master record was already gone, so nothing mineable survives and the inputs are being unspent; orphan pagination children may remain until a create of the same transaction adopts them, and an external blob may remain and simply be kept by that create, outpoints %s: %v", txID, unwindOutpoints(spentUtxos), deleteErr)
 
 			pendingErr = deleteErr
 		case gone:

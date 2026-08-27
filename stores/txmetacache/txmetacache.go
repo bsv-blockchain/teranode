@@ -795,10 +795,24 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 // DeleteComplete removes the transaction from the durable store completely
 // (master record, pagination children and external blob(s)) via the wrapped
 // store, then drops the cache entry. Unlike Delete — which is cache-only — this
-// reaches the underlying store, so a caller (the validator's shed unwind) that
-// needs the whole record gone gets it. The durable delete runs first: if it
-// fails the cache entry is left in place and the error is returned, so the cache
-// never advertises a record as absent while it still exists in the store.
+// reaches the underlying store, so a caller that needs the whole record gone
+// gets it.
+//
+// The durable delete runs first and a failure returns early, leaving the cache
+// entry in place. That is safe only for a caller that reads this cache for
+// presence and nothing more, because the backing cascade deletes the MASTER
+// record first: a failure after that point means the record is already gone from
+// the store while the early return keeps its cache entry alive.
+//
+// CONSTRAINT: this decorator must not wrap the store the validator's shed unwind
+// holds. That unwind reads the record back after the delete to decide whether it
+// may unspend the inputs, and a stale cache entry would answer "still present"
+// for a transaction whose master is gone — sending it down the
+// record-still-present arm, which leaves the inputs spent. That is the outcome
+// the master-first cascade exists to remove. NewTxMetaCache has one production
+// call site (services/subtreevalidation/Server.go), which does not reach that
+// path; keep it that way, or make this method evict on a master-gone failure
+// before wrapping the validator's store.
 func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	if err := t.utxoStore.DeleteComplete(ctx, hash); err != nil {
 		return err
