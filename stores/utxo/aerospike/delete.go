@@ -226,13 +226,15 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	// 2. Delete pagination children (records 1..childCount).
 	if childCount > 0 {
 		if err := s.deleteChildRecordsWithRetry(ctx, hash, childCount); err != nil {
-			return errors.NewStorageError("complete delete removed the master record for %s but %d pagination child record(s) could not be deleted; they survive as locked, unspendable orphans until a create of the same transaction adopts them", hash.String(), childCount, err)
+			return errors.NewStorageError("complete delete removed the master record for %s but the pagination child pass did not complete; some of the %d child record(s) it covers may survive as locked, unspendable orphans until a create of the same transaction adopts them, so a manual repair must walk records 1..%d", hash.String(), childCount, childCount, err)
 		}
 	}
 
 	// 3. Delete external blob(s). Del treats a missing blob as success, so this is
-	// idempotent. One attempt only — an orphan blob carries no UTXO semantics and is
-	// overwritten by a later create of the same transaction.
+	// idempotent. One attempt only — an orphan blob carries no UTXO semantics, and a
+	// later create of the same transaction tolerates it rather than rewriting it: the
+	// external Set in create.go moves on when it gets ErrBlobAlreadyExists, so the
+	// surviving blob is kept. Same txid means same bytes, so keeping it is harmless.
 	if s.externalStore != nil {
 		if err := s.externalStore.Del(ctx, hash[:], fileformat.FileTypeTx); err != nil {
 			return errors.NewStorageError("error deleting external tx blob for complete delete", err)
