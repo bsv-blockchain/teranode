@@ -1887,9 +1887,23 @@ func mergeFreshlyWritten(sets ...map[chainhash.Hash]map[fileformat.FileType]stru
 // freshlyWritten restricts deletion to the (hash, fileType) pairs this attempt is known to have
 // freshly written; a hash absent from the map, or present with only some of its types marked
 // fresh, is handled correctly by this per-type check with no special-casing needed. A doctored
-// body naming an already-persisted hash this attempt never fetched therefore can never trigger
-// deletion of any of that hash's promoted blobs, even when a sibling type for the same hash
-// happens to be freshly written for an unrelated reason.
+// body naming a hash that was ALREADY on disk when this attempt started therefore can never
+// trigger deletion of any of that hash's promoted blobs, even when a sibling type for the same
+// hash happens to be freshly written for an unrelated reason: both producers mark a pair fresh
+// only after their own Set succeeds, on the branch that ran because the blob was not present.
+//
+// KNOWN LIMITATION, deliberately not closed here: freshness is scoped to ONE attempt, and the
+// catch-up fetch pool runs blockvalidation_fetch_num_workers blocks concurrently. Two in-flight
+// blocks naming the same subtree hash can both pass the not-present check before either writes,
+// so both record it as freshly written; if the later one turns out corrupt, this helper deletes a
+// hash the earlier, already-committed block depends on. Closing it needs a RUN-scoped set of
+// no-longer-deletable pairs on CatchupContext, which in turn needs quick validation's own
+// freshness map threaded out of tryQuickValidation to the commit site (today it is consumed
+// inside) and the set made reachable from fetchSubtreeDataForBlock's per-block tracker. Tracked as
+// follow-up in the pull request rather than bundled here. Do not "fix" it by widening or narrowing
+// the type list instead: narrowing to SubtreeToCheck alone would leave quick validation's own
+// FileTypeSubtree — built from the corrupt body — on disk for findLocalSubtreeFile to reuse on
+// retry, which is the on-disk poison this tracker exists to remove safely.
 //
 // FileTypeSubtreeMeta is deliberately excluded from the type list entirely — this is a behaviour
 // change from the wide, unconditional delete this helper used to perform. No producer in this

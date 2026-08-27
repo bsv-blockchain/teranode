@@ -791,24 +791,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	merkleRootChecked := false
 
 	if len(b.Subtrees) == 0 {
-		// A body with no subtrees claims the block holds only the coinbase. That claim is
-		// checkable against the header with no subtree store at all: for a single-transaction
-		// block the merkle root IS the coinbase txid (svnode BlockMerkleRoot over a one-element
-		// vector). So this is a real merkle binding, and it is what closes the truncated-subtree-list
-		// hole (bitcoin-sv/teranode#4692): an honest multi-transaction hash
-		// served with an emptied subtree list fails here as CORRUPT and is re-downloaded, instead of
-		// reaching the fee arithmetic (which would poison the honest hash) or passing it (which would
-		// accept a body with no transactions at all).
-		if !b.Header.HashMerkleRoot.IsEqual(b.CoinbaseTx.TxIDChainHash()) {
-			return false, errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but the header merkle root is not the coinbase txid", b.String())
-		}
-
-		// Defence in depth: a self-contradictory body (no subtrees but a transaction count above
-		// one). This is NOT the bound — TransactionCount is the same untrusted wire varint the
-		// emptied subtree list came from, so an attacker can simply set it to 1 — but it is a free
-		// consistency check on a shape that can never be honest.
-		if b.TransactionCount > 1 {
-			return false, errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
+		// The coinbase-only binding. Factored into CheckCoinbaseOnlyBodyBound so the
+		// quick-validation path, which never reaches this function, enforces the identical rule at
+		// its own entry points instead of carrying a copy (bitcoin-sv/teranode#4692).
+		if err = b.CheckCoinbaseOnlyBodyBound(); err != nil {
+			return false, err
 		}
 
 		merkleRootChecked = true
@@ -1077,6 +1064,44 @@ func CoinbaseScriptSigLengthInBounds(coinbaseTx *bt.Tx, params *chaincfg.Params)
 	}
 
 	return scriptSigLen >= 2 && scriptSigLen <= int(params.MaxCoinbaseScriptSigSize)
+}
+
+// CheckCoinbaseOnlyBodyBound binds a body that carries NO subtrees to its header. It is a no-op for
+// a body that carries subtrees — those are bound by CheckMerkleRoot instead.
+//
+// A body with no subtrees claims the block holds only the coinbase. That claim is checkable against
+// the header with no subtree store at all: for a single-transaction block the merkle root IS the
+// coinbase txid (svnode BlockMerkleRoot over a one-element vector). So this is a real merkle
+// binding, and it is what closes the truncated-subtree-list hole (bitcoin-sv/teranode#4692): an
+// honest multi-transaction hash served with an emptied subtree list fails here as CORRUPT and is
+// re-downloaded, instead of reaching the fee arithmetic (which would poison the honest hash) or
+// passing it (which would accept a body with no transactions at all).
+//
+// This is the single definition of the rule, factored out for the same reason as
+// CoinbaseScriptSigLengthInBounds above: Valid calls it at its binding block, and the
+// quick-validation path (services/blockvalidation/quick_validate.go), which never calls Valid, calls
+// it at both of its entry points — so the three routes cannot drift.
+//
+// The caller must guarantee a non-nil CoinbaseTx: Valid's step 4 and quick validation's own
+// nil/empty coinbase precheck both do.
+func (b *Block) CheckCoinbaseOnlyBodyBound() error {
+	if len(b.Subtrees) != 0 {
+		return nil
+	}
+
+	if !b.Header.HashMerkleRoot.IsEqual(b.CoinbaseTx.TxIDChainHash()) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but the header merkle root is not the coinbase txid", b.String())
+	}
+
+	// Defence in depth: a self-contradictory body (no subtrees but a transaction count above one).
+	// This is NOT the bound — TransactionCount is the same untrusted wire varint the emptied subtree
+	// list came from, so an attacker can simply set it to 1 — but it is a free consistency check on
+	// a shape that can never be honest.
+	if b.TransactionCount > 1 {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
+	}
+
+	return nil
 }
 
 // releaseTxMap returns b.txMap to the pool (in-memory variant) or closes the

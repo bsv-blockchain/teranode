@@ -18,11 +18,12 @@ import (
 // quick-validation path never calls block.Valid, so it never ran the bad-coinbase-length check
 // (model's step 4b) at all — a merkle-bound block with a one-byte or oversized coinbase scriptSig
 // could be silently committed. checkQuickValidationCoinbaseLength closes that gap by running
-// model.CoinbaseScriptSigLengthInBounds once binding is settled, classifying bind-aware exactly like
-// model's own rule: bound (subtrees present, merkle root already verified by validateSubtrees) ->
-// invalid; unbound (no subtrees, and nothing on this route asserts model's coinbase-only binding
-// rule) -> corrupt. This is defence-in-depth: quick validation only runs for blocks at or below
-// the highest hash-verified checkpoint (catchup.go, tryQuickValidation).
+// model.CoinbaseScriptSigLengthInBounds once subtree processing has returned successfully. Both
+// shapes are merkle-bound by the time it runs — subtrees present, by validateSubtrees'
+// CheckMerkleRoot; no subtrees, by model.Block.CheckCoinbaseOnlyBodyBound at this route's entry —
+// so a bad length is genuine consensus invalidity on either, condemnable once, exactly as model's
+// step 4b classifies it. This is defence-in-depth: quick validation only runs for blocks at or
+// below the highest hash-verified checkpoint (catchup.go, tryQuickValidation).
 func TestQuickValidateBlock_CoinbaseLengthBinding(t *testing.T) {
 	t.Run("subtrees present: merkle-bound bad length is condemned invalid, never committed", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
@@ -74,7 +75,7 @@ func TestQuickValidateBlock_CoinbaseLengthBinding(t *testing.T) {
 		suite.MockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
-	t.Run("no subtrees: route asserts no binding, so a bad length stays corrupt, never committed", func(t *testing.T) {
+	t.Run("no subtrees: the coinbase-only binding is asserted, so a bad length condemns invalid", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
@@ -83,16 +84,16 @@ func TestQuickValidateBlock_CoinbaseLengthBinding(t *testing.T) {
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01})
-		// Re-derive the header's merkle root from the tampered coinbase, so the body would
-		// actually satisfy model's coinbase-only binding rule (header merkle root == coinbase
-		// txid) if it were checked here. It never is on this route — proving the corrupt
-		// classification comes from that gap, not from an incidental merkle mismatch.
 		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
 
+		// The header's merkle root is re-derived from the tampered coinbase, so the body satisfies
+		// model's coinbase-only binding rule — which this route now asserts at its entry point. The
+		// body is therefore bound, and a bad coinbase length on a bound body is genuine consensus
+		// invalidity, condemnable once, exactly as model's step 4b classifies it.
 		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
 		require.Error(t, err)
-		require.True(t, errors.IsBlockCorrupt(err), "an unasserted-binding body must stay corrupt, got: %v", err)
-		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "must NOT be condemned invalid")
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a bound bad coinbase length must condemn invalid, got: %v", err)
+		require.False(t, errors.IsBlockCorrupt(err), "must NOT be corrupt")
 
 		suite.MockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
