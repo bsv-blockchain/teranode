@@ -1247,7 +1247,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// this call's store work so a resubmit is an ordinary first
 				// submission rather than an already-exists success for a transaction
 				// that is in no subtree and no template, and so descendants get a
-				// clean missing-parent answer instead of TX_LOCKED.
+				// clean missing-parent answer instead of TX_LOCKED when the cascade
+				// completes.
 				//
 				// The outcome is logged and metered inside unwindShed; the error the
 				// caller receives stays the shed either way, because no unwind failure

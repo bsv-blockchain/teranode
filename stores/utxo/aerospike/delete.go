@@ -173,14 +173,32 @@ const (
 // transaction intact (present, Locked, inputs spent), which the shed unwind then
 // treats exactly as it always did: fail closed, unmined reload as the backstop.
 //
-// A failure AFTER the master is gone leaves orphan pagination children (and
-// possibly a blob). They are locked, therefore unspendable, and they are no
-// longer enumerable, because the child count lived on the master — which is why
-// the child pass is retried here (deleteCompleteChildAttempts) rather than left
-// to a later DeleteComplete, whose master read would return nil immediately. A
-// later create of the same txid adopts them: it writes every record CREATE_ONLY,
-// so the master is recreated, the surviving children report KEY_EXISTS, and the
-// unmined reload's SetLocked then clears their stale locked bin.
+// A failure AFTER the master is gone leaves orphan pagination children, and
+// possibly an external blob. The CHILDREN are locked, therefore unspendable, and
+// they are no longer enumerable, because the child count lived on the master —
+// which is why the child pass is retried here (deleteCompleteChildAttempts)
+// rather than left to a later DeleteComplete, whose master read would return nil
+// immediately. A surviving BLOB is neither: it has no lock bin and carries no
+// UTXO semantics, so it is inert residue either way (see step 3 below for what a
+// later create does with it).
+//
+// That unspendability has a price, and it falls on the descendant rather than on
+// this node's consensus view. A spend of an output that lived on an orphan
+// addresses that orphan directly (CalculateKeySource over the vout and
+// utxostore_utxoBatchSize) and is answered TX_LOCKED, which the validator
+// classifies as retryable, so the descendant burns the whole
+// validator_txlocked_maxRetries ladder — four validation attempts and 70ms of
+// backoff at the default of 3 — before giving up. A spend of an output that lived
+// on the master, which really is gone, gets the missing-parent answer at once. So
+// after a failed cascade the same parent gives two different rejection reasons
+// depending on which output is spent, until the orphans are adopted. That is the
+// cost side of "unreachable residue over wrongly reachable residue", and it is
+// bounded: both answers map to the same gRPC status, and the ladder is capped.
+//
+// A later create of the same txid adopts the CHILDREN: it writes every record
+// CREATE_ONLY, so the master is recreated, the surviving children report
+// KEY_EXISTS, and the unmined reload's SetLocked then clears their stale locked
+// bin.
 //
 // The order children-first was rejected: every failure it can take leaves a
 // master whose outputs live on records that no longer exist — a transaction this

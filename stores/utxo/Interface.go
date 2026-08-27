@@ -412,12 +412,16 @@ type Store interface {
 
 	// DeleteComplete removes a transaction and every record it owns: the master
 	// record, all pagination (child) records, and any external blob(s). Unlike
-	// Delete — which on paginated backends removes only the master record — this
-	// leaves nothing behind, so a descendant spending any output gets a clean
-	// missing-parent answer rather than TX_LOCKED against a surviving locked
-	// pagination record. It is idempotent: an absent record, absent children and
-	// absent blobs are all treated as success. On a backend whose Delete is
-	// already complete (e.g. SQL) this is equivalent to Delete.
+	// Delete — which on paginated backends removes only the master record — a
+	// SUCCESSFUL DeleteComplete leaves nothing behind, so a descendant spending any
+	// output gets a clean missing-parent answer rather than TX_LOCKED against a
+	// surviving locked pagination record. A cascade that FAILS after the master is
+	// gone can leave locked orphan pagination records, and a descendant of an output
+	// that lived on one gets TX_LOCKED instead; see the backend implementation for
+	// the ordering rationale and what that costs the descendant. It is idempotent:
+	// an absent record, absent children and absent blobs are all treated as success.
+	// On a backend whose Delete is already complete (e.g. SQL) this is equivalent to
+	// Delete.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
 
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
