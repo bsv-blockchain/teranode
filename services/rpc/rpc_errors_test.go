@@ -347,7 +347,7 @@ func TestRPCError_TrimsTheRealValidatorChain(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLookupError_NotFoundMatchesBitcoind(t *testing.T) {
-	rpcErr := buildRPCError(blockNotFoundChain(), bsvjson.ErrRPCVerify, "", scopeLookup)
+	rpcErr := buildRPCError(blockNotFoundChain(), bsvjson.ErrRPCVerify, "", scopeBlockLookup)
 
 	require.Equal(t, bsvjson.ErrRPCInvalidAddressOrKey, rpcErr.Code,
 		"an unknown block is -5 (RPC_INVALID_ADDRESS_OR_KEY), matching bitcoind, not -25 (RPC_VERIFY_ERROR)")
@@ -356,7 +356,7 @@ func TestLookupError_NotFoundMatchesBitcoind(t *testing.T) {
 }
 
 func TestLookupError_TxNotFoundMatchesBitcoind(t *testing.T) {
-	rpcErr := buildRPCError(errors.NewTxNotFoundError("no tx"), bsvjson.ErrRPCVerify, "", scopeLookup)
+	rpcErr := buildRPCError(errors.NewTxNotFoundError("no tx"), bsvjson.ErrRPCVerify, "", scopeTxLookup)
 
 	require.Equal(t, bsvjson.ErrRPCInvalidAddressOrKey, rpcErr.Code)
 	require.Equal(t, txNotFoundMessage, rpcErr.Message)
@@ -627,7 +627,16 @@ func TestStripBreadcrumb_DoesNotEatABracketedReason(t *testing.T) {
 
 	require.Equal(t, "[mandatory-script-verify-flag-failed]",
 		stripBreadcrumb("[mandatory-script-verify-flag-failed]"),
-		"a lone bracketed reason is kept rather than stripped to nothing")
+		"stripBreadcrumb never returns empty, so it hands the message back untouched")
+
+	// But end to end it is suppressed, because a message that is nothing but
+	// bracketed groups carries no reason to show. That is what sanitised's doc
+	// always claimed and what it did not previously do. No producer of an
+	// allowlisted class is known to emit one; suppressing is the safe direction
+	// for a boundary whose job is disclosure control.
+	require.Equal(t, genericErrorMessage, sanitised("[mandatory-script-verify-flag-failed]"))
+	require.Equal(t, genericErrorMessage, sanitised("[Validate][abcd]"))
+	require.Equal(t, "bad-txns", sanitised("[Validate][abcd] bad-txns"))
 
 	// ChiR18: BlockValidation emits three groups, the third a rendered block
 	// carrying the store's internal id. A fixed bound of two left it on the wire.
@@ -644,15 +653,47 @@ func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
 		// errors.go excludes ERR_TX_COINBASE_IMMATURE because this producer embeds
 		// the node's height and the store's process-lifetime spend-batch counter,
 		// which two submissions diffed turn into a throughput oracle.
-		err := errors.NewProcessingError("[Validate][%s] error spending utxos", "abcd",
-			errors.NewTxCoinbaseImmatureError("[SPEND_BATCH_LUA][%s] coinbase is locked, blockHeight %d: %d - %s",
-				"cafe", 812345, 907231, "coinbase not yet spendable"))
+		//
+		// The shape matters and an earlier version of this subtest got it wrong: it
+		// put the immature link under a bare PROCESSING wrapper, where there is no
+		// allowlisted link at all, so it passed without exercising the join. The
+		// reachable shape has an allowlisted verdict AHEAD of the excluded one -
+		// aerospike collects per-input errors in input order and errors.Join chains
+		// them linearly (spend.go, JoinCapped), so a frozen input followed by an
+		// immature-coinbase input produces exactly this.
+		err := errors.NewUtxoError("error in aerospike spend (batched mode) - errors",
+			errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d - %s", "cafe", 12, "FROZEN",
+				errors.NewTxCoinbaseImmatureError("[SPEND_BATCH_LUA][%s] coinbase is locked, blockHeight %d: %d - %s",
+					"cafe", 12, 4711, "COINBASE_IMMATURE")))
 
 		msg := publicErrorMessage(err)
 
-		require.Equal(t, genericErrorMessage, msg)
-		require.NotContains(t, msg, "907231", "the internal batch id must not cross the boundary")
-		require.NotContains(t, msg, "812345", "nor the node's block height")
+		require.Contains(t, msg, "transaction is frozen", "the allowlisted verdict is still surfaced")
+		require.NotContains(t, msg, "4711", "the internal batch id must not cross the boundary")
+		require.NotContains(t, msg, "COINBASE_IMMATURE",
+			"a code the shared allowlist excludes must not ride along below one it allows")
+	})
+
+	t.Run("a verdict does not launder the node fault beneath it", func(t *testing.T) {
+		// The general form of the above. Being inside a verdict is not a licence to
+		// surface whatever the verdict wraps: a class check on the first link only
+		// let a StorageError's bucket name and a NetworkError's host:port through.
+		for name, tc := range map[string]struct {
+			err  error
+			leak string
+		}{
+			"storage": {errors.NewTxInvalidError("bad-txns",
+				errors.NewStorageError("s3 403 AccessDenied bucket=teranode-prod-subtrees")), "teranode-prod-subtrees"},
+			"network": {errors.NewTxInvalidError("could not read tx from stream",
+				errors.NewNetworkError("read tcp 10.0.1.5:34512->10.0.2.9:9000: connection reset by peer")), "10.0.2.9:9000"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				msg := publicErrorMessage(tc.err)
+
+				require.NotContains(t, msg, tc.leak, "internal state must not cross the boundary under a verdict")
+				require.NotEmpty(t, msg, "the verdict's own reason still survives")
+			})
+		}
 	})
 
 	t.Run("a still-creating parent keeps the signal to retry", func(t *testing.T) {
@@ -690,4 +731,76 @@ func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
 		require.True(t, linkIsRejection(errors.NewBlockInvalidError("x")))
 		require.Len(t, localRejectionClasses, 1, "a second local addition needs its own justification")
 	})
+}
+
+// TestBoundaryConstantsArePinned exists because the tests that use these
+// constants build their fixtures FROM them, so they scale with any change and
+// can never notice one. An adversarial pass found three mutations that left the
+// whole suite green: halving the part cap (silently truncating real reasons),
+// quadrupling it (widening what a chain can surface), and cutting the depth cap
+// to 3 (collapsing ordinary production chains to "internal error").
+//
+// Pinning the values makes a change deliberate rather than silent.
+func TestBoundaryConstantsArePinned(t *testing.T) {
+	require.Equal(t, 32, maxMessageChainDepth,
+		"bounds both walks; raising it raises the cost of the string-building one")
+	require.Equal(t, 4, maxRejectionReasonParts,
+		"one more than the deepest real verdict chain, so the reason cannot be crowded out")
+}
+
+// TestRejectionReasonBoundIsIndependentlyPinned covers the direction
+// TestRejectionDepthCapsAgree cannot: that test builds its chain FROM the
+// constant, so it scales with any change and only fails when isRejection's bound
+// moves. Widening rejectionReason's own walk survived it, and that is the
+// expensive, string-building walk the DoS rationale is actually about.
+//
+// The shape matters. Filling the chain with verdicts does not work, because the
+// part cap fills after four links and the walk stops for that reason instead -
+// so the depth bound is masked and the mutation survives anyway, which is what a
+// first attempt at this test did. Non-verdict links add nothing, so the walk has
+// to traverse all of them to reach the reason, and only the depth bound can stop
+// it.
+func TestRejectionReasonBoundIsIndependentlyPinned(t *testing.T) {
+	// Literal lengths, deliberately not derived from the constant.
+	const (
+		breadcrumbs = 100
+		reason      = "innermost reason"
+	)
+
+	var err error = errors.NewTxInvalidError(reason)
+	for i := 0; i < breadcrumbs; i++ {
+		err = errors.NewProcessingError("wrapper %d", i, err)
+	}
+
+	var tErr *errors.Error
+	require.ErrorAs(t, err, &tErr)
+
+	require.NotContains(t, rejectionReason(tErr), reason,
+		"a verdict 100 links down must not be reached by a walk bounded at 32")
+}
+
+// TestBlockLookupDoesNotAnswerAboutTransactions pins the scope split. One shared
+// lookup scope mapped both not-found classes, so reconsiderblock - which names a
+// block and nothing else - answered "No such mempool or blockchain transaction"
+// whenever a revalidation failure carried an ErrTxNotFound underneath it, and
+// discarded its own prefix doing so. That is reachable: BlockValidation raises a
+// transient incomplete-block error wrapping a missing transaction.
+func TestBlockLookupDoesNotAnswerAboutTransactions(t *testing.T) {
+	logger := newCapturingLogger()
+	s := &RPCServer{logger: logger}
+
+	err := errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation", "0abc",
+		errors.NewBlockIncompleteTransientError("missing subtree data",
+			errors.NewTxNotFoundError("tx cafe not found")))
+
+	rpcErr := s.rpcLookupError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
+
+	require.NotEqual(t, bsvjson.ErrRPCInvalidAddressOrKey, rpcErr.Code,
+		"a request that named a block must not be answered as a missing transaction")
+	require.NotContains(t, rpcErr.Message, txNotFoundMessage)
+	require.True(t, strings.HasPrefix(rpcErr.Message, "Block failed revalidation: "),
+		"and the site's prefix must survive, since the mapped branch is not taken")
+
+	require.NotEmpty(t, logger.errorf,
+		"an admin-invoked reconsiderblock failure that is not a missing block leaves an error-level trace")
 }

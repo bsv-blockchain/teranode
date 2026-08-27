@@ -217,16 +217,18 @@ func rejectionReason(e *errors.Error) string {
 		return len(parts) < maxRejectionReasonParts
 	}
 
-	started := false
-
 	for cur, depth := e, 0; cur != nil && depth < maxMessageChainDepth; depth++ {
-		// Skip the breadcrumb links above the verdict. Once inside, every
-		// remaining link is part of the reason.
-		if !started && linkIsRejection(cur) {
-			started = true
-		}
-
-		if started && !add(cur.Message()) {
+		// EVERY link is class-checked, not just the first one found.
+		//
+		// An earlier version latched a "started" flag at the first allowlisted link
+		// and then took every message below it, assuming that once inside a verdict
+		// the rest of the chain is the reason. That is false, and it made
+		// errors.IsPublicCause govern only the ENTRY to the join: aerospike joins
+		// per-input verdicts linearly, so a frozen input ahead of an
+		// immature-coinbase one surfaced the coinbase message and with it the
+		// store's internal batch id, and a verdict wrapping a StorageError or a
+		// NetworkError put an S3 bucket name or an internal host:port on the wire.
+		if linkIsRejection(cur) && !add(cur.Message()) {
 			break
 		}
 
@@ -237,17 +239,12 @@ func rejectionReason(e *errors.Error) string {
 
 		next, ok := wrapped.(*errors.Error)
 		if !ok {
-			// Defensive, and not currently reached. Two earlier comments here
-			// claimed live paths that do not exist: the BDK arms go through
-			// bdkCause, which returns an *errors.Error, and New() re-wraps a
-			// trailing plain error as one too, so a foreign link needs a direct
-			// SetWrappedErr under a verdict and no production caller does that.
-			// Kept because the cost is one branch and the alternative is a silent
-			// empty message if one ever appears.
-			if started {
-				add(wrapped.Error())
-			}
-
+			// A foreign link carries no code, so it cannot be class-checked and is
+			// therefore not surfaced. Rendering it put the whole remaining subtree
+			// on the wire, internal code names included, which is the widest thing
+			// this branch could have done. Not currently reachable - New() re-wraps
+			// a trailing plain error, and every producer traced builds a Teranode
+			// error - but stopping is the safe answer if one ever appears.
 			break
 		}
 
@@ -282,10 +279,6 @@ func stripBreadcrumb(msg string) string {
 			break
 		}
 
-		if strings.HasPrefix(stripped, "[") && !strings.ContainsAny(stripped, " ") {
-			break
-		}
-
 		msg = stripped
 	}
 
@@ -296,11 +289,38 @@ func stripBreadcrumb(msg string) string {
 // show. A message that is nothing but breadcrumbs carries no reason, so it is
 // replaced rather than emitted empty.
 func sanitised(msg string) string {
-	if stripped := stripBreadcrumb(msg); stripped != "" {
-		return stripped
+	stripped := stripBreadcrumb(msg)
+	if stripped == "" || !carriesReason(stripped) {
+		return genericErrorMessage
 	}
 
-	return genericErrorMessage
+	return stripped
+}
+
+// carriesReason reports whether msg has any text outside bracketed groups.
+//
+// A message that is nothing but markers carries no reason, whatever
+// stripBreadcrumb managed to remove from the front of it. Without this,
+// sanitised's own doc was false: stripBreadcrumb never returns empty, so a
+// wholly bracketed message came back verbatim and the generic substitution the
+// comment describes never happened.
+func carriesReason(msg string) bool {
+	depth := 0
+
+	for _, r := range msg {
+		switch {
+		case r == '[':
+			depth++
+		case r == ']':
+			if depth > 0 {
+				depth--
+			}
+		case depth == 0 && r != ' ':
+			return true
+		}
+	}
+
+	return false
 }
 
 // publicErrorMessage returns the part of err that is both safe and useful to
@@ -354,8 +374,17 @@ const (
 	// safe.
 	scopeOpaque rpcRequestScope = iota
 
-	// scopeLookup is a request that names an object to fetch or act on.
-	scopeLookup
+	// scopeBlockLookup is a request that names a BLOCK to fetch or act on.
+	scopeBlockLookup
+
+	// scopeTxLookup is a request that names a TRANSACTION.
+	//
+	// Split from the block case rather than sharing one lookup scope. A single
+	// scope mapped both not-found classes, so reconsiderblock - which names a
+	// block and nothing else - answered "No such mempool or blockchain
+	// transaction" whenever a revalidation failure happened to carry an
+	// ErrTxNotFound underneath it, and discarded its own prefix doing so.
+	scopeTxLookup
 
 	// scopeSubmit is a request that submits a transaction for acceptance.
 	scopeSubmit
@@ -364,7 +393,7 @@ const (
 // buildRPCError is the pure half of the boundary: no logging, no server.
 func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, scope rpcRequestScope) *bsvjson.RPCError {
 	switch scope {
-	case scopeLookup:
+	case scopeBlockLookup:
 		// The request named an object, so a not-found is about that object.
 		// bitcoind's code and text are returned verbatim and WITHOUT the
 		// site's prefix, so a caller porting from bitcoind matches the
@@ -378,6 +407,7 @@ func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, 
 			return &bsvjson.RPCError{Code: bsvjson.ErrRPCInvalidAddressOrKey, Message: blockNotFoundMessage}
 		}
 
+	case scopeTxLookup:
 		if errors.Is(err, errors.ErrTxNotFound) {
 			return &bsvjson.RPCError{Code: bsvjson.ErrRPCInvalidAddressOrKey, Message: txNotFoundMessage}
 		}
@@ -420,8 +450,15 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 	}
 
 	switch scope {
-	case scopeLookup:
-		return errors.Is(err, errors.ErrBlockNotFound) || errors.Is(err, errors.ErrTxNotFound)
+	case scopeBlockLookup:
+		// Only a genuine missing block. Anything else failing an admin-invoked
+		// reconsiderblock or invalidateblock is worth an operator's attention, and
+		// treating the whole scope as a caller fault left two of the four realistic
+		// revalidation failures with no error-level trace at all.
+		return errors.Is(err, errors.ErrBlockNotFound)
+
+	case scopeTxLookup:
+		return errors.Is(err, errors.ErrTxNotFound)
 	case scopeSubmit:
 		return errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrTxMissingParent)
 	case scopeOpaque:
@@ -460,7 +497,7 @@ func (s *RPCServer) rpcError(err error, fallbackCode bsvjson.RPCErrorCode, prefi
 	return s.logAndBuild(err, fallbackCode, prefix, scopeOpaque)
 }
 
-// rpcLookupError is rpcError for a request that names an object to look up. A
+// rpcLookupError is rpcError for a request that names a BLOCK to look up. A
 // not-found anywhere in the chain is reported with bitcoind's code and text.
 //
 // Use it only where the request genuinely names the object. "The block you
@@ -474,7 +511,12 @@ func (s *RPCServer) rpcError(err error, fallbackCode bsvjson.RPCErrorCode, prefi
 // in order to tell the two branches apart - if the site has one, it is not a
 // lookup site.
 func (s *RPCServer) rpcLookupError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
-	return s.logAndBuild(err, fallbackCode, prefix, scopeLookup)
+	return s.logAndBuild(err, fallbackCode, prefix, scopeBlockLookup)
+}
+
+// rpcTxLookupError is rpcLookupError for a request that names a TRANSACTION.
+func (s *RPCServer) rpcTxLookupError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
+	return s.logAndBuild(err, fallbackCode, prefix, scopeTxLookup)
 }
 
 // rpcSubmitError is rpcError for a request that submits a transaction. A

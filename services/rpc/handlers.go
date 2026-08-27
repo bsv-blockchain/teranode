@@ -603,7 +603,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 			s.logger.Warnf("[handleGetRawTransaction] asset service reported 404 for %s at %s", c.Txid, fullURL.String())
 		}
 
-		return nil, s.rpcLookupError(
+		return nil, s.rpcTxLookupError(
 			errors.NewTxNotFoundError("tx %s not found in asset service", c.Txid),
 			bsvjson.ErrRPCInvalidAddressOrKey, "")
 	}

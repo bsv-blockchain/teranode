@@ -837,19 +837,6 @@ func isPublicCause(code ERR) bool {
 // cause is a global boundary behaviour, not scoped to a single service. It is safe
 // by construction: only codes on publicCauseCodes are ever surfaced, and any other
 // cause collapses to the outermost code.
-// IsPublicCause reports whether code is on the shared public-cause allowlist.
-//
-// Exported so a surface that needs per-link membership rather than
-// DeepestPublicCause's whole-chain answer still asks publicCauseCodes instead of
-// keeping its own copy. A second list is how the closed-membership test in
-// public_cause_allowlist_test.go gets bypassed: the widening happens somewhere
-// the test does not look.
-func IsPublicCause(code ERR) bool {
-	_, ok := publicCauseCodes[code]
-
-	return ok
-}
-
 func DeepestPublicCause(err error) *Error {
 	if err == nil {
 		return nil
@@ -884,6 +871,19 @@ func DeepestPublicCause(err error) *Error {
 	}
 
 	return deepest
+}
+
+// IsPublicCause reports whether code is on the shared public-cause allowlist.
+//
+// Exported so a surface that needs per-link membership rather than
+// DeepestPublicCause's whole-chain answer still asks publicCauseCodes instead of
+// keeping its own copy. A second list is how the closed-membership test in
+// public_cause_allowlist_test.go gets bypassed: the widening happens somewhere
+// the test does not look.
+func IsPublicCause(code ERR) bool {
+	_, ok := publicCauseCodes[code]
+
+	return ok
 }
 
 // UserMessage returns a concise, user-facing error message without wrapped error chains or data.
