@@ -110,7 +110,7 @@ func TestPenalizeCorruptBlockPeer_LegacyPeerIDNoop(t *testing.T) {
 
 	fake := &corruptStrikeP2PClient{}
 	bv := &BlockValidation{logger: ulogger.TestLogger{}, p2pClient: fake}
-	bv.penalizeCorruptBlockPeer(context.Background(), "legacy:1.2.3.4:8333", block, "x")
+	bv.penalizeCorruptBlockPeer(context.Background(), LegacyPeerIDPrefix+"1.2.3.4:8333", block, "x")
 	require.Empty(t, fake.recorded(), "a legacy-namespaced peerID must never reach AddBanScore")
 }
 

@@ -59,7 +59,7 @@ func TestIsPeerMalicious_GatesEmptyAndLegacyPeerIDs(t *testing.T) {
 		rec := &isPeerMaliciousCallRecorder{}
 		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
 
-		require.False(t, u.isPeerMalicious(context.Background(), "legacy:1.2.3.4:8333"))
+		require.False(t, u.isPeerMalicious(context.Background(), LegacyPeerIDPrefix+"1.2.3.4:8333"))
 		require.False(t, rec.called, "a legacy-prefixed peerID must never reach the p2p client")
 	})
 
