@@ -47,7 +47,8 @@ import (
 // - the string the caller needs, and the one upstream's functional tests
 // match on.
 
-// maxMessageChainDepth bounds the walk in deepestMessage. A mass spend failure
+// maxMessageChainDepth bounds both chain walks in this file, isRejection and
+// rejectionReason. They must share it: see TestRejectionDepthCapsAgree. A mass spend failure
 // on a high-input-count transaction can produce a chain tens of thousands of
 // links deep (see the note on (*errors.Error).Is), and an unbounded walk over
 // one on the RPC path would be a denial-of-service vector.
@@ -67,31 +68,22 @@ const (
 	genericErrorMessage = "internal error"
 )
 
-// rejectionClasses are the classes where the failure is the caller's own
-// submission being refused, and the reason is a closed-vocabulary string the
-// caller is expected to read and match on: GoBDK's "bad-txns-*" and
-// "mandatory-script-verify-flag-failed", the block-level "bad-blk-txns-*".
-// For these, and only these, the wire message is taken from the BOTTOM of the
-// chain, because that is where such a string lives.
-var rejectionClasses = []*errors.Error{
-	errors.ErrTxInvalid,
-	errors.ErrTxPolicy,
-	errors.ErrTxConflicting,
-	errors.ErrTxInvalidDoubleSpend,
-	errors.ErrTxLocked,
-	errors.ErrTxCoinbaseImmature,
-	errors.ErrTxLockTime,
-	errors.ErrFrozen,
-	errors.ErrSpent,
-	errors.ErrNonFinal,
+// localRejectionClasses are the codes this surface treats as verdicts that the
+// shared public-cause allowlist does not carry.
+//
+// Exactly one, and it needs recording rather than merely allowing: the shared
+// list is scoped to transaction verdicts, and reconsiderblock needs the
+// block-level reject reason. It is admin-only - absent from rpcLimited, enforced
+// at Server.go's authorisation check - so widening the surface here does not
+// widen it for an unprivileged caller.
+var localRejectionClasses = []*errors.Error{
 	errors.ErrBlockInvalid,
 }
 
-// rejectionCodes is rejectionClasses indexed by code, so both the chain-wide and
-// per-link tests are a map lookup rather than a scan.
-var rejectionCodes = func() map[errors.ERR]struct{} {
-	m := make(map[errors.ERR]struct{}, len(rejectionClasses))
-	for _, class := range rejectionClasses {
+// localRejectionCodes is localRejectionClasses indexed by code.
+var localRejectionCodes = func() map[errors.ERR]struct{} {
+	m := make(map[errors.ERR]struct{}, len(localRejectionClasses))
+	for _, class := range localRejectionClasses {
 		m[class.Code()] = struct{}{}
 	}
 
@@ -149,14 +141,20 @@ func linkIsRejection(e *errors.Error) bool {
 		return false
 	}
 
-	_, ok := rejectionCodes[e.Code()]
+	// The shared allowlist is the authority; see localRejectionClasses for the one
+	// code this surface adds and why.
+	if errors.IsPublicCause(e.Code()) {
+		return true
+	}
+
+	_, ok := localRejectionCodes[e.Code()]
 
 	return ok
 }
 
 // maxRejectionReasonParts bounds how many links of a rejection chain are joined
 // into the wire message, so a deep chain cannot turn into an unbounded string.
-const maxRejectionReasonParts = 3
+const maxRejectionReasonParts = 4
 
 // rejectionReason builds the wire message for a rejection class by joining the
 // meaningful messages from the outermost rejection-class link downward.
@@ -178,6 +176,23 @@ const maxRejectionReasonParts = 3
 // So take both and let the caller read them. The walk starts at the outermost
 // link that is itself a rejection class, which skips the service breadcrumbs
 // above it without needing to recognise them by shape.
+// uninformativeVerdictText are wrapper strings that carry no verdict of their own.
+//
+// mapBDKValidationError returns errMsgInvalidTx over errMsgPolicy over the real
+// reason on every policy rejection, so joining blindly produced
+// "GoBDK fail to ValidateTransaction: GoBDK fail to ValidateTransaction by policy
+// settings: <reason>" - two of three parts naming an internal library and neither
+// saying anything about the transaction. The code already carries what they say.
+//
+// Dropping them also restores headroom: with the part cap at the exact depth of
+// the BDK policy chain, one more wrap anywhere above the verdict would have
+// pushed the reason off the end silently, which is the failure ChiR6 described
+// relocated from the depth cap to the part cap.
+var uninformativeVerdictText = map[string]struct{}{
+	"GoBDK fail to ValidateTransaction":                    {},
+	"GoBDK fail to ValidateTransaction by policy settings": {},
+}
+
 func rejectionReason(e *errors.Error) string {
 	parts := make([]string, 0, maxRejectionReasonParts)
 	seen := make(map[string]struct{}, maxRejectionReasonParts)
@@ -185,6 +200,10 @@ func rejectionReason(e *errors.Error) string {
 	add := func(msg string) bool {
 		msg = stripBreadcrumb(msg)
 		if msg == "" {
+			return true
+		}
+
+		if _, noise := uninformativeVerdictText[msg]; noise {
 			return true
 		}
 
@@ -218,11 +237,13 @@ func rejectionReason(e *errors.Error) string {
 
 		next, ok := wrapped.(*errors.Error)
 		if !ok {
-			// A foreign tail, taken for its text. This is NOT the ordinary BDK
-			// path, which an earlier version of this comment claimed: bdkCause
-			// re-wraps the CGO string as an *errors.Error carrying ERR_TX_INVALID
-			// or ERR_TX_POLICY, so those links are handled by the loop above. What
-			// reaches here is a plain Go error wrapped directly under a verdict.
+			// Defensive, and not currently reached. Two earlier comments here
+			// claimed live paths that do not exist: the BDK arms go through
+			// bdkCause, which returns an *errors.Error, and New() re-wraps a
+			// trailing plain error as one too, so a foreign link needs a direct
+			// SetWrappedErr under a verdict and no production caller does that.
+			// Kept because the cost is one branch and the alternative is a silent
+			// empty message if one ever appears.
 			if started {
 				add(wrapped.Error())
 			}
@@ -241,14 +262,16 @@ func rejectionReason(e *errors.Error) string {
 // whole rendered block (NewBlockInvalidError formats block.String() into one),
 // and they are never part of the reason.
 func stripBreadcrumb(msg string) string {
-	// Bounded, and never strips to empty. Teranode emits at most a service and an
-	// argument marker, but the text on the other side of this is not all ours:
-	// closed-vocabulary reject reasons cross a CGO boundary from BDK, so a reason
-	// that legitimately opens with a bracket must survive rather than be eaten a
-	// token at a time.
-	const maxBreadcrumbs = 2
-
-	for i := 0; i < maxBreadcrumbs && strings.HasPrefix(msg, "["); i++ {
+	// Bounded by the message shrinking, not by a count. An earlier version stopped
+	// after two groups on the grounds that Teranode emits at most a service and an
+	// argument marker; BlockValidation emits three
+	// ("[Block Validation][checkOldBlockIDs][<rendered block>]"), so the third
+	// survived and carried the store's internal block id onto the wire.
+	//
+	// Never strips to empty, and never strips a lone bracketed token: reject
+	// reasons cross a CGO boundary from BDK, so a reason that legitimately opens
+	// with a bracket must survive rather than be peeled away.
+	for strings.HasPrefix(msg, "[") {
 		end := strings.IndexByte(msg, ']')
 		if end < 0 {
 			break
@@ -256,6 +279,10 @@ func stripBreadcrumb(msg string) string {
 
 		stripped := strings.TrimLeft(msg[end+1:], " ")
 		if stripped == "" {
+			break
+		}
+
+		if strings.HasPrefix(stripped, "[") && !strings.ContainsAny(stripped, " ") {
 			break
 		}
 
@@ -299,8 +326,14 @@ func publicErrorMessage(err error) string {
 		return sanitised(rejectionReason(tErr))
 
 	case errors.Is(tErr, errors.ErrInvalidArgument):
-		// The caller's own input was wrong. The topmost message says how, and
-		// there is no deeper cause to look for.
+		// The caller's own input was wrong, and the topmost message says how.
+		//
+		// This pairs a chain-wide match with a topmost-message read, which is the
+		// pairing linkIsRejection exists to avoid, and it is only sound while this
+		// class is never nested. Every NewInvalidArgumentError in blockchain,
+		// blockassembly and blockvalidation is the outermost link today. If a
+		// producer ever nests one, this must move to a per-link test or it will
+		// read a wrapper's text instead.
 		return sanitised(tErr.Message())
 	}
 

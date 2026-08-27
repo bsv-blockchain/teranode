@@ -591,6 +591,18 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	// distinction, so a wallet polling for a transaction that is not mined yet
 	// could not tell it apart from the asset service being down.
 	if resp.StatusCode == http.StatusNotFound {
+		// Log the URL that produced it. -5 is the strongest answer this API has,
+		// and it is derived from one remote status code with no corroboration: the
+		// path is built with an absolute reference, so it replaces any path on
+		// assetHTTPURL rather than appending, and a misrouted endpoint 404s every
+		// request. Without this line the node denies every transaction while
+		// looking healthy, because the caller-fault classification logs at debug.
+		// Nil-guarded like logAndBuild's: this package's tests build an RPCServer
+		// without one, and a diagnostic line must not be the thing that panics.
+		if s.logger != nil {
+			s.logger.Warnf("[handleGetRawTransaction] asset service reported 404 for %s at %s", c.Txid, fullURL.String())
+		}
+
 		return nil, s.rpcLookupError(
 			errors.NewTxNotFoundError("tx %s not found in asset service", c.Txid),
 			bsvjson.ErrRPCInvalidAddressOrKey, "")

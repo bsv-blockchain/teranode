@@ -740,14 +740,14 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
 	resp, err := td.CallRPC(td.Ctx, "sendrawtransaction", []any{txBytes})
-	// "code: -8, message: TX rejected:
-	// PROCESSING (4): error sending transaction 1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631 to 100.00% of the propagation servers: [SERVICE_ERROR (59): address localhost:8084
-	//  -> UNKNOWN (0): SERVICE_ERROR (59): [ProcessTransaction][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] failed to validate transaction
-	//  -> UTXO_NON_FINAL (61): [Validate][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] transaction is not final
-	//  -> TX_LOCK_TIME (35): lock time (699) as block height is greater than block height (578)]"
+	// The RPC boundary strips internal codes and breadcrumbs, so the reply is the
+	// category and the detail and nothing else:
+	//   -25 "TX rejected: transaction is not final: lock time (699) as block
+	//        height is not less than block height (578)"
 	require.Error(t, err, "Failed to send new tx with rpc")
-	require.Contains(t, err.Error(), "transaction is not final")
-	require.Contains(t, err.Error(), "TX_LOCK_TIME")
+	require.Contains(t, err.Error(), "transaction is not final", "the category a caller matches on")
+	require.Contains(t, err.Error(), "lock time", "the detail that says why")
+	require.NotContains(t, err.Error(), "TX_LOCK_TIME", "internal error codes must not cross the API boundary")
 
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 }

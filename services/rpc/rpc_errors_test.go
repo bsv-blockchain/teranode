@@ -260,9 +260,12 @@ func TestPublicErrorMessage_NeverReturnsEmptyForANonNilError(t *testing.T) {
 func TestRejectionReason_TerminatesOnAPathologicalChain(t *testing.T) {
 	// A mass spend failure can build a chain tens of thousands of links deep.
 	// An unbounded walk over one on the RPC path would be a DoS vector.
+	// Distinct wrapper text per link. With all 128 identical, add's dedup collapsed
+	// them to one part and the assertion could not see whether anything was
+	// discarded - the test documented termination and nothing else.
 	err := errors.NewTxInvalidError("innermost reason")
 	for i := 0; i < maxMessageChainDepth*4; i++ {
-		err = errors.NewTxInvalidError("wrapper", err)
+		err = errors.NewTxInvalidError(fmt.Sprintf("wrapper %d", i), err)
 	}
 
 	done := make(chan string, 1)
@@ -271,6 +274,11 @@ func TestRejectionReason_TerminatesOnAPathologicalChain(t *testing.T) {
 	select {
 	case msg := <-done:
 		require.NotEmpty(t, msg)
+		// The outermost wrappers are what a bounded walk can reach; the point is
+		// that it says so rather than presenting a mid-chain wrapper as the reason
+		// with no signal, and that it never returns empty.
+		require.Contains(t, msg, "wrapper",
+			"a bounded walk reports what it reached")
 	case <-time.After(5 * time.Second):
 		// A real deadline. The previous version selected on
 		// context.Background().Done(), which is a nil channel and never fires, so
@@ -329,8 +337,8 @@ func TestRPCError_DoesNotDiscloseTheStorageLayer(t *testing.T) {
 func TestRPCError_TrimsTheRealValidatorChain(t *testing.T) {
 	rpcErr := buildRPCError(validatorRejectionChain(), bsvjson.ErrRPCVerify, txRejectedPrefix, scopeSubmit)
 
-	require.Equal(t, "TX rejected: GoBDK fail to ValidateTransaction: bad-txns-inputs-duplicate", rpcErr.Message,
-		"the caller keeps the prefix and every link of the verdict, and loses the service breadcrumb")
+	require.Equal(t, "TX rejected: bad-txns-inputs-duplicate", rpcErr.Message,
+		"the reason, without the service breadcrumb or the BDK adapter's own constant")
 	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
 }
 
@@ -617,11 +625,69 @@ func TestStripBreadcrumb_DoesNotEatABracketedReason(t *testing.T) {
 	require.Equal(t, "reason", stripBreadcrumb("[Service][arg] reason"),
 		"the breadcrumbs Teranode does emit are still removed")
 
-	require.Equal(t, "[16] is not a valid stack size",
-		stripBreadcrumb("[Validate][abcd] [16] is not a valid stack size"),
-		"a reason opening with a bracket survives once the two real breadcrumbs are off")
-
 	require.Equal(t, "[mandatory-script-verify-flag-failed]",
 		stripBreadcrumb("[mandatory-script-verify-flag-failed]"),
-		"a wholly bracketed reason is kept rather than stripped to nothing")
+		"a lone bracketed reason is kept rather than stripped to nothing")
+
+	// ChiR18: BlockValidation emits three groups, the third a rendered block
+	// carrying the store's internal id. A fixed bound of two left it on the wire.
+	require.Equal(t, "block is not valid",
+		stripBreadcrumb("[Block Validation][checkOldBlockIDs][Block 0abc (height: 812345, id: 40912)] block is not valid"),
+		"every leading marker is removed, however many a producer emits")
+}
+
+// TestRejectionMembershipFollowsTheSharedAllowlist pins ChiR14. This file used to
+// keep its own eleven-entry list of what may be surfaced, and it had drifted from
+// errors.publicCauseCodes in both directions at once.
+func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
+	t.Run("an immature coinbase does not surface the aerospike batch id", func(t *testing.T) {
+		// errors.go excludes ERR_TX_COINBASE_IMMATURE because this producer embeds
+		// the node's height and the store's process-lifetime spend-batch counter,
+		// which two submissions diffed turn into a throughput oracle.
+		err := errors.NewProcessingError("[Validate][%s] error spending utxos", "abcd",
+			errors.NewTxCoinbaseImmatureError("[SPEND_BATCH_LUA][%s] coinbase is locked, blockHeight %d: %d - %s",
+				"cafe", 812345, 907231, "coinbase not yet spendable"))
+
+		msg := publicErrorMessage(err)
+
+		require.Equal(t, genericErrorMessage, msg)
+		require.NotContains(t, msg, "907231", "the internal batch id must not cross the boundary")
+		require.NotContains(t, msg, "812345", "nor the node's block height")
+	})
+
+	t.Run("a still-creating parent keeps the signal to retry", func(t *testing.T) {
+		// errors.go includes ERR_TX_CREATING on the grounds that collapsing this
+		// family made an ordering artifact look like a permanent rejection, so
+		// clients broadcasting a chain terminalized their own children.
+		err := errors.NewProcessingError("[Validate][%s] error spending utxos", "abcd",
+			errors.NewTxCreatingError("[SPEND_BATCH_LUA][%s] transaction is creating, blockHeight %d - %s",
+				"cafe", 812345, "TX is being created and cannot be spent yet"))
+
+		require.Contains(t, publicErrorMessage(err), "creating",
+			"a submitter told 'internal error' here has no reason to retry")
+	})
+
+	t.Run("membership tracks errors.IsPublicCause", func(t *testing.T) {
+		// The point of deriving rather than copying: a code removed from the
+		// shared allowlist stops being surfaced here without anyone editing this
+		// package. Asserting the agreement directly is what stops a copy creeping
+		// back in.
+		for _, code := range []errors.ERR{
+			errors.ERR_TX_INVALID, errors.ERR_TX_POLICY, errors.ERR_TX_CREATING,
+			errors.ERR_TX_LOCKED, errors.ERR_UTXO_NON_FINAL, errors.ERR_TX_COINBASE_IMMATURE,
+			errors.ERR_PROCESSING, errors.ERR_SERVICE_ERROR,
+		} {
+			require.Equal(t, errors.IsPublicCause(code), linkIsRejection(errors.New(code, "x")),
+				"code %v must be surfaced here exactly when the shared allowlist says so", code)
+		}
+	})
+
+	t.Run("the one local addition is block invalid", func(t *testing.T) {
+		// reconsiderblock needs the block-level reject reason and the shared list
+		// is scoped to transaction verdicts. It is admin-only, so this does not
+		// widen the unprivileged surface.
+		require.False(t, errors.IsPublicCause(errors.ERR_BLOCK_INVALID))
+		require.True(t, linkIsRejection(errors.NewBlockInvalidError("x")))
+		require.Len(t, localRejectionClasses, 1, "a second local addition needs its own justification")
+	})
 }
