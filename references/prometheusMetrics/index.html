@@ -8063,6 +8063,18 @@
 <td><code>topic</code>, <code>fsm_state</code>, <code>stage</code></td>
 <td>Outbound P2P messages suppressed by the per-FSM-state allow-list; <code>stage="precheck"</code> is an expected skip, <code>stage="chokepoint"</code> is a publish that leaked past the pre-checks</td>
 </tr>
+<tr>
+<td><code>teranode_p2p_websocket_notifications_dropped_total</code></td>
+<td>Counter</td>
+<td><code>type</code></td>
+<td>WebSocket notifications dropped because the shared notification channel was full, by notification type (<code>block</code>, <code>subtree</code>, <code>node_status</code>)</td>
+</tr>
+<tr>
+<td><code>teranode_p2p_websocket_clients_evicted_total</code></td>
+<td>Counter</td>
+<td></td>
+<td>WebSocket clients evicted from the broadcast fan-out because their send buffer was full when a broadcast reached them</td>
+</tr>
 </tbody>
 </table>
 <h2 id="legacy-peer-server-metrics">Legacy Peer Server Metrics<a class="headerlink" href="#legacy-peer-server-metrics" title="Permanent link">&para;</a></h2>

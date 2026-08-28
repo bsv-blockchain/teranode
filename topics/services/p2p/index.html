@@ -7905,7 +7905,7 @@
 <ul>
 <li>The server tracks all active client channels (<code>clientChannels</code>).</li>
 <li>When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.</li>
-<li>A client that fails to drain its channel within the broadcast timeout is evicted from <code>clientChannels</code> and its connection is closed, releasing its connection slot.</li>
+<li>The fan-out never waits on a client: sends are non-blocking, and a client whose channel buffer is full when a notification is broadcast is evicted from <code>clientChannels</code> and its connection is closed, releasing its connection slot. Evictions are counted in <code>teranode_p2p_websocket_clients_evicted_total</code>, and notifications dropped because the shared notification channel is full are counted in <code>teranode_p2p_websocket_notifications_dropped_total</code>.</li>
 </ul>
 </li>
 </ul>
