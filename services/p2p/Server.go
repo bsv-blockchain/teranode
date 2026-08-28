@@ -225,6 +225,15 @@ type Server struct {
 	// localHeightCache is a short-lived cache of the local best height used by
 	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
 	localHeightCache atomic.Pointer[localHeightCacheEntry]
+	// catchupMaliciousLastCharge throttles the ban-score charge applied by
+	// RecordCatchupMalicious to one per peer per catchupMaliciousChargeWindow.
+	// A single misbehaving block is reported through several catchup paths in
+	// the same cycle; without the throttle one offense would accumulate points
+	// from each path and cross the ban threshold on its own. Guarded by
+	// catchupMaliciousChargeMu; lazily initialized so tests that construct
+	// Server directly work.
+	catchupMaliciousChargeMu   sync.Mutex
+	catchupMaliciousLastCharge map[string]time.Time
 }
 
 // privateIPColocationWhitelist returns local-network ranges for exemption from the
@@ -1220,8 +1229,14 @@ func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 // the admin API key for these. Read-only queries and internal data-plane
 // reporting RPCs (catchup metrics, valid block/subtree reports, bytes
 // downloaded) stay unauthenticated because other services call them without
-// admin credentials. Any new mutating admin RPC must be added here; the
-// classification is enforced by TestAdminProtectedMethodsCoverAllRPCs.
+// admin credentials. Note the deliberate boundary crossing: unauthenticated
+// RecordCatchupMalicious escalates to a ban-score charge (rate-limited to one
+// per peer per catchupMaliciousChargeWindow) — anyone who can reach this gRPC
+// port can therefore drive a peer toward a ban, same as they could already
+// poison its reputation via the other reporting RPCs. The port is an internal
+// service boundary and must not be exposed publicly. Any new mutating admin
+// RPC must be added here; the classification is enforced by
+// TestAdminProtectedMethodsCoverAllRPCs.
 func adminProtectedMethods() map[string]bool {
 	return map[string]bool{
 		"/p2p_api.PeerService/BanPeer":         true,

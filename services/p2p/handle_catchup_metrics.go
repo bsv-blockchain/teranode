@@ -179,17 +179,54 @@ func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.Record
 	// re-admitted indefinitely. Raise the ban score as well so repeated
 	// malicious reports cross the ban threshold. Best-effort: the malicious
 	// record above already landed and is what the catchup gates consume.
-	score, banned, err := s.peerRegistry.AddBanScore(ctx, req.PeerId, ReasonCatchupMalicious, 0)
-	if err != nil {
-		s.logger.Warnf("[RecordCatchupMalicious] AddBanScore %s/%s failed: %v", req.PeerId, ReasonCatchupMalicious, err)
-	} else {
-		s.logger.Infof("[RecordCatchupMalicious] Added ban score to peer %s for reason %s. New score: %d, Banned: %t", req.PeerId, ReasonCatchupMalicious, score, banned)
-		if banned {
-			s.onPeerBanned(req.PeerId, ReasonCatchupMalicious)
+	if s.shouldChargeCatchupMalicious(req.PeerId) {
+		score, banned, err := s.peerRegistry.AddBanScore(ctx, req.PeerId, ReasonCatchupMalicious, 0)
+		if err != nil {
+			s.logger.Warnf("[RecordCatchupMalicious] AddBanScore %s/%s failed: %v", req.PeerId, ReasonCatchupMalicious, err)
+		} else {
+			s.logger.Infof("[RecordCatchupMalicious] Added ban score to peer %s for reason %s. New score: %d, Banned: %t", req.PeerId, ReasonCatchupMalicious, score, banned)
+			if banned {
+				s.onPeerBanned(req.PeerId, ReasonCatchupMalicious)
+			}
 		}
 	}
 
 	return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
+}
+
+// catchupMaliciousChargeWindow is the minimum spacing between ban-score
+// charges for the same peer from RecordCatchupMalicious. One misbehaving
+// block is reported through several blockvalidation catchup paths in the same
+// cycle (the direct report, the deferred catchup-lock release, and the
+// unvalidatable-peer error handler); the window collapses those into a single
+// charge so one offense scores once and only genuinely repeated offenses ban.
+const catchupMaliciousChargeWindow = 10 * time.Minute
+
+// shouldChargeCatchupMalicious reports whether a malicious report for peerID
+// should add ban score now, recording the charge time when it does. The
+// malicious counter itself is bumped on every report regardless.
+func (s *Server) shouldChargeCatchupMalicious(peerID string) bool {
+	s.catchupMaliciousChargeMu.Lock()
+	defer s.catchupMaliciousChargeMu.Unlock()
+
+	now := time.Now()
+	if last, ok := s.catchupMaliciousLastCharge[peerID]; ok && now.Sub(last) < catchupMaliciousChargeWindow {
+		return false
+	}
+
+	if s.catchupMaliciousLastCharge == nil {
+		s.catchupMaliciousLastCharge = make(map[string]time.Time)
+	}
+	// Drop expired entries so the map stays bounded by the number of peers
+	// reported within the current window, not by node lifetime.
+	for id, t := range s.catchupMaliciousLastCharge {
+		if now.Sub(t) >= catchupMaliciousChargeWindow {
+			delete(s.catchupMaliciousLastCharge, id)
+		}
+	}
+	s.catchupMaliciousLastCharge[peerID] = now
+
+	return true
 }
 
 // UpdateCatchupReputation is preserved for API compatibility but no longer
@@ -477,7 +514,9 @@ func (s *Server) ReportValidBlockHeaders(ctx context.Context, req *p2p_api.Repor
 // banned in the centralized registry, or carrying a malicious record written
 // by RecordCatchupMalicious. The second check is what lets catchup abort on a
 // peer flagged mid-operation before its ban score crosses the ban threshold;
-// the record is cleared again by ReconsiderBadPeers after its cooldown.
+// the record is cleared again when the sync coordinator's reputation-recovery
+// sweep runs ReconsiderBadPeers (only while the FSM is in a syncing-capable
+// state), or by an operator ResetReputation.
 func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMaliciousRequest) (*p2p_api.IsPeerMaliciousResponse, error) {
 	if req.PeerId == "" {
 		return &p2p_api.IsPeerMaliciousResponse{

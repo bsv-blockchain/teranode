@@ -336,15 +336,13 @@ Blocks are NOT marked invalid for:
 - Network timeouts or temporary storage failures
 - Processing errors that may succeed on retry
 
-**Peer Banning (Logged, Not Implemented):**
+**Peer Banning:**
 
-When malicious behavior is detected, the system logs:
+When malicious behavior is detected, the system logs it and reports the peer to the P2P service, which records a malicious flag (making the peer immediately ineligible for catchup) and raises its ban score toward an automatic ban:
 
 ```text
-SECURITY: Peer <peerID> attempted secret mining - should be banned (banning not yet implemented)
+SECURITY: Peer <peerID> attempted secret mining - reported as malicious for ban scoring
 ```
-
-This provides an audit trail for operators and prepares for future automatic banning.
 
 ##### Concurrent Fetch + Sequential Validation
 
@@ -807,15 +805,15 @@ When a peer's quality score falls below threshold:
 4. **Circuit Half-Open**: After delay, allows limited test requests
 5. **Circuit Closes**: If peer recovers, full access restored
 
-##### Peer Banning (Future Feature)
+##### Peer Banning
 
-The system logs when peers should be banned but doesn't yet implement automatic banning:
+When catchup detects malicious behavior it reports the peer to the P2P service. The report records a malicious flag in the centralized peer registry (which makes the peer immediately ineligible for catchup via `IsPeerMalicious`) and raises the peer's ban score, so repeated offenses cross the ban threshold and trigger an automatic ban:
 
 ```text
-SECURITY: Peer <ID> attempted secret mining - should be banned (banning not yet implemented)
+SECURITY: Peer <ID> attempted secret mining - reported as malicious for ban scoring
 ```
 
-This provides an audit trail for operators to manually ban malicious peers and prepares for future automatic banning implementation.
+The log lines remain an audit trail for operators, who can also ban peers manually.
 
 For implementation details, see `malicious_peer_handling_test.go` and peer tracking code in `catchup.go`.
 

@@ -328,7 +328,7 @@ Records a failed catchup attempt with a peer. This increments failure counters a
 func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.RecordCatchupMaliciousRequest) (*p2p_api.RecordCatchupMaliciousResponse, error)
 ```
 
-Marks a peer as malicious after detecting invalid data during catchup. This severely penalizes the peer's reputation.
+Marks a peer as malicious after detecting invalid data during catchup. This pins the peer's reputation to a near-zero score, makes `IsPeerMalicious` report the peer as malicious (excluding it from catchup), and raises the peer's ban score (rate-limited to one charge per peer per window), so repeated offenses lead to an automatic ban.
 
 **Parameters**:
 

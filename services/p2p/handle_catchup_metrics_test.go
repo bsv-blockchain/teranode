@@ -262,14 +262,39 @@ func TestRecordCatchupMalicious_AddsBanScore(t *testing.T) {
 	require.False(t, got.IsBanned)
 }
 
-func TestRecordCatchupMalicious_RepeatedReportsBanPeer(t *testing.T) {
+func TestRecordCatchupMalicious_SameWindowReportsChargeOnce(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
 
-	for range 2 {
+	// One offense is reported through several catchup paths in quick
+	// succession; only the first report within the window may add ban score.
+	for range 3 {
 		_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
 		require.NoError(t, err)
 	}
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int64(3), got.MaliciousCount)
+	require.Equal(t, int32(50), got.BanScore)
+	require.False(t, got.IsBanned)
+}
+
+func TestRecordCatchupMalicious_RepeatedOffensesBanPeer(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	// Age the recorded charge past the throttle window to simulate a second,
+	// distinct offense.
+	s.catchupMaliciousChargeMu.Lock()
+	s.catchupMaliciousLastCharge[pid.String()] = time.Now().Add(-catchupMaliciousChargeWindow)
+	s.catchupMaliciousChargeMu.Unlock()
+
+	_, err = s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
 
 	banned, err := s.peerRegistry.IsPeerBanned(context.Background(), pid.String())
 	require.NoError(t, err)
