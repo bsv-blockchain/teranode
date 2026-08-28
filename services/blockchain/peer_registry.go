@@ -159,6 +159,7 @@ func DefaultBanConfig() BanConfig {
 			"spam":               50,
 			"invalid_block":      10,
 			"catchup_failure":    30,
+			"catchup_malicious":  50,
 		},
 	}
 }

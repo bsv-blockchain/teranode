@@ -174,6 +174,21 @@ func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.Record
 		return &p2p_api.RecordCatchupMaliciousResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("update peer metrics", err))
 	}
 
+	// The malicious counter alone never escalates to a ban, and
+	// ReconsiderBadPeers eventually resets it, so a repeat offender would be
+	// re-admitted indefinitely. Raise the ban score as well so repeated
+	// malicious reports cross the ban threshold. Best-effort: the malicious
+	// record above already landed and is what the catchup gates consume.
+	score, banned, err := s.peerRegistry.AddBanScore(ctx, req.PeerId, ReasonCatchupMalicious, 0)
+	if err != nil {
+		s.logger.Warnf("[RecordCatchupMalicious] AddBanScore %s/%s failed: %v", req.PeerId, ReasonCatchupMalicious, err)
+	} else {
+		s.logger.Infof("[RecordCatchupMalicious] Added ban score to peer %s for reason %s. New score: %d, Banned: %t", req.PeerId, ReasonCatchupMalicious, score, banned)
+		if banned {
+			s.onPeerBanned(req.PeerId, ReasonCatchupMalicious)
+		}
+	}
+
 	return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
 }
 
@@ -458,8 +473,11 @@ func (s *Server) ReportValidBlockHeaders(ctx context.Context, req *p2p_api.Repor
 	}, nil
 }
 
-// IsPeerMalicious returns whether a peer is currently considered malicious
-// (banned in the centralized registry).
+// IsPeerMalicious returns whether a peer is currently considered malicious:
+// banned in the centralized registry, or carrying a malicious record written
+// by RecordCatchupMalicious. The second check is what lets catchup abort on a
+// peer flagged mid-operation before its ban score crosses the ban threshold;
+// the record is cleared again by ReconsiderBadPeers after its cooldown.
 func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMaliciousRequest) (*p2p_api.IsPeerMaliciousResponse, error) {
 	if req.PeerId == "" {
 		return &p2p_api.IsPeerMaliciousResponse{
@@ -468,20 +486,28 @@ func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMalicio
 		}, nil
 	}
 
-	banned := false
 	if s.peerRegistry != nil {
-		var err error
-		banned, err = s.peerRegistry.IsPeerBanned(ctx, req.PeerId)
+		banned, err := s.peerRegistry.IsPeerBanned(ctx, req.PeerId)
 		if err != nil {
 			return nil, errors.WrapGRPC(errors.NewServiceError("is peer banned", err))
 		}
-	}
+		if banned {
+			return &p2p_api.IsPeerMaliciousResponse{
+				IsMalicious: true,
+				Reason:      "peer is banned",
+			}, nil
+		}
 
-	if banned {
-		return &p2p_api.IsPeerMaliciousResponse{
-			IsMalicious: true,
-			Reason:      "peer is banned",
-		}, nil
+		info, found, err := s.peerRegistry.GetPeer(ctx, req.PeerId)
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewServiceError("get peer", err))
+		}
+		if found && info.MaliciousCount > 0 {
+			return &p2p_api.IsPeerMaliciousResponse{
+				IsMalicious: true,
+				Reason:      fmt.Sprintf("malicious behavior recorded %d time(s)", info.MaliciousCount),
+			}, nil
+		}
 	}
 
 	return &p2p_api.IsPeerMaliciousResponse{

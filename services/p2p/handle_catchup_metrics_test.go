@@ -249,6 +249,38 @@ func TestRecordCatchupMalicious_PinsReputationLow(t *testing.T) {
 	require.Equal(t, 5.0, got.ReputationScore)
 }
 
+func TestRecordCatchupMalicious_AddsBanScore(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int32(50), got.BanScore)
+	require.False(t, got.IsBanned)
+}
+
+func TestRecordCatchupMalicious_RepeatedReportsBanPeer(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	for range 2 {
+		_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+		require.NoError(t, err)
+	}
+
+	banned, err := s.peerRegistry.IsPeerBanned(context.Background(), pid.String())
+	require.NoError(t, err)
+	require.True(t, banned)
+
+	resp, err := s.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.IsMalicious)
+	require.Equal(t, "peer is banned", resp.Reason)
+}
+
 func TestUpdateCatchupReputation_NoOp(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
@@ -435,6 +467,40 @@ func TestIsPeerMalicious_BannedPeerIsMalicious(t *testing.T) {
 	resp, err := s.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 	require.True(t, resp.IsMalicious)
+}
+
+func TestIsPeerMalicious_RecordedMaliciousPeer(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	// One report does not ban yet, but the malicious record must be visible.
+	banned, err := s.peerRegistry.IsPeerBanned(context.Background(), pid.String())
+	require.NoError(t, err)
+	require.False(t, banned)
+
+	resp, err := s.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.IsMalicious)
+	require.Equal(t, "malicious behavior recorded 1 time(s)", resp.Reason)
+}
+
+func TestIsPeerMalicious_ReconsideredPeerRecovers(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	// ReconsiderBadPeers with a zero cooldown clears the malicious record; the
+	// peer must stop reporting as malicious (it is not banned after one report).
+	require.Equal(t, 1, reg.ReconsiderBadPeers(0))
+
+	resp, err := s.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.False(t, resp.IsMalicious)
 }
 
 func TestIsPeerMalicious_CleanPeer(t *testing.T) {

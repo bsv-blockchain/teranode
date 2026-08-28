@@ -2566,7 +2566,7 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
 	reason := req.Reason
 	switch reason {
-	case "invalid_subtree", "protocol_violation", "spam", "invalid_block":
+	case "invalid_subtree", "protocol_violation", "spam", "invalid_block", "catchup_malicious":
 		// known reason; pass through to the registry which has matching weights
 	default:
 		if reason == "" {

@@ -9,5 +9,6 @@ const (
 	ReasonInvalidSubtree    = "invalid_subtree"
 	ReasonInvalidBlock      = "invalid_block"
 	ReasonSpam              = "spam"
+	ReasonCatchupMalicious  = "catchup_malicious"
 	ReasonUnknown           = "unknown"
 )
