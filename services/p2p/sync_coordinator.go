@@ -58,6 +58,21 @@ type SyncCoordinator struct {
 	lastLocalHeight            uint32    // Track last known local height
 	lastBlockHash              string    // Track last known block hash
 
+	// FSM completion-edge latch. Guarded by decisionMu: only touched by
+	// handleFSMTransition and HandleCatchupSuccess, which both run under
+	// decisionMu. lastObservedFSMState latches the FSM state seen by the
+	// previous checkFSMState tick so the completed/failed sync evaluation runs
+	// only on a real CATCHINGBLOCKS -> RUNNING completion edge instead of on
+	// every RUNNING tick. pendingCompletionPeer names the slot holder a
+	// completion edge was observed for while the evaluation is deferred
+	// (validated chainwork not yet available); fsmCatchingSince records when the
+	// current CATCHINGBLOCKS excursion was first observed, so a slot claimed
+	// after the in-flight catchup began is not judged by that catchup's outcome.
+	lastObservedFSMState    blockchain_api.FSMStateType
+	lastObservedFSMStateSet bool
+	pendingCompletionPeer   string
+	fsmCatchingSince        time.Time
+
 	// Backoff management
 	allPeersAttempted            bool      // Flag when all eligible peers have been tried
 	lastAllPeersAttemptTime      time.Time // When we last exhausted all peers
@@ -406,6 +421,11 @@ func (sc *SyncCoordinator) resetProbeBudgetIfLocalChainWorkAdvanced(chainWork []
 	if chainWorkGreater(chainWork, sc.lastLocalChainWork) {
 		sc.lastLocalChainWork = append([]byte(nil), chainWork...)
 		sc.unprovenProbeBudgetRemaining = maxUnprovenProbeBudget(sc.settings)
+		// Validated local chainwork advancing is real forward progress:
+		// de-escalate the exhaustion backoff so a past churn episode cannot
+		// leave future backoff windows and the reputation-recovery cooldown
+		// permanently maximal.
+		sc.backoffMultiplier = 1
 	}
 	// The no-progress stall deadline (lastSyncProgressTime) is intentionally NOT
 	// refreshed here. Local best-tip chainwork advances from ordinary block gossip
@@ -826,59 +846,161 @@ func (sc *SyncCoordinator) checkFSMState() {
 
 // handleFSMTransition checks for FSM state transitions and handles them.
 // It requires decisionMu to be held by the caller.
+//
+// Per-tick housekeeping (registry existence, block-progress recording and the
+// no-progress deadline) runs on every RUNNING tick, but the completed/failed
+// sync evaluation is latched to an actual CATCHINGBLOCKS -> RUNNING completion
+// edge. Without the latch it fired on every 2s RUNNING tick: block validation
+// runs the whole header phase of a catchup in RUNNING (the FSM only moves to
+// CATCHINGBLOCKS once block bodies start), and a peer credited with validated
+// header work by a previous run would be declared failed (or completed) ~2s
+// after activation, recycling the slot, burning every peer's sync-attempt
+// cooldown within seconds and resetting the no-progress clock on each re-claim.
 func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMStateType) bool {
-	if *currentState == blockchain_api.FSMStateType_RUNNING {
-		// Get current sync peer and check if we should consider this a failure
-		sc.mu.RLock()
-		currentPeer := sc.currentSyncPeer
-		sc.mu.RUnlock()
-
-		if currentPeer != "" {
-			_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
-			if localWorkOK {
-				sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
-			}
-			peerInfo, exists, err := sc.registryGetPeer(currentPeer)
-			if err != nil {
-				sc.warnfUnlessStopping("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
-				return false
-			}
-
-			if !exists {
-				// Peer no longer exists in registry (likely disconnected)
-				sc.logger.Infof("[SyncCoordinator] Sync peer %s no longer in registry, clearing", currentPeer)
-				sc.clearSyncPeerIfCurrent("")
-				_ = sc.triggerSyncLocked()
-				return true // Transition handled
-			}
-
-			now := time.Now()
-			sc.recordSyncPeerBlockProgress(currentPeer, peerInfo.BlocksReceived, now)
-			if stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now); timedOut && stalledPeer == currentPeer {
-				return sc.clearNoProgressSyncPeer(currentPeer, progressAge)
-			}
-
-			if !localWorkOK || !peerHasValidatedWork(peerInfo) {
-				sc.logger.Debugf("[SyncCoordinator] Deferring sync-peer transition for %s until validated chainwork is available", currentPeer)
-				return false
-			}
-
-			if peerAheadByValidatedWork(peerInfo, localChainWork) {
-				sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed; peer still has higher validated work",
-					currentPeer)
-				sc.clearSyncPeerIfCurrent("")
-				_ = sc.triggerSyncLocked()
-				return true // Transition handled
-			}
-			// We've caught up or surpassed the peer, this is success not failure
-			sc.logger.Infof("[SyncCoordinator] Sync completed successfully with peer %s by validated work", currentPeer)
-			sc.resetBackoff()
-			sc.clearSyncPeerIfCurrent("")
-			_ = sc.triggerSyncLocked()
-			return true // Transition handled
-		}
+	completionEdge := sc.lastObservedFSMStateSet &&
+		sc.lastObservedFSMState == blockchain_api.FSMStateType_CATCHINGBLOCKS &&
+		*currentState == blockchain_api.FSMStateType_RUNNING
+	if *currentState == blockchain_api.FSMStateType_CATCHINGBLOCKS &&
+		(!sc.lastObservedFSMStateSet || sc.lastObservedFSMState != blockchain_api.FSMStateType_CATCHINGBLOCKS) {
+		sc.fsmCatchingSince = time.Now()
 	}
-	return false // No transition to handle
+	sc.lastObservedFSMState = *currentState
+	sc.lastObservedFSMStateSet = true
+
+	if *currentState != blockchain_api.FSMStateType_RUNNING {
+		// Any excursion out of RUNNING supersedes a completion evaluation that
+		// was still deferred waiting for validated chainwork.
+		sc.pendingCompletionPeer = ""
+		return false
+	}
+
+	sc.mu.RLock()
+	currentPeer := sc.currentSyncPeer
+	syncStart := sc.syncStartTime
+	sc.mu.RUnlock()
+
+	if currentPeer == "" {
+		sc.pendingCompletionPeer = ""
+		return false
+	}
+
+	if completionEdge {
+		sc.pendingCompletionPeer = currentPeer
+	} else if sc.pendingCompletionPeer != "" && sc.pendingCompletionPeer != currentPeer {
+		// The slot moved to a different peer while an evaluation was deferred;
+		// the completed catchup's outcome says nothing about the new holder.
+		sc.pendingCompletionPeer = ""
+	}
+
+	_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
+	if localWorkOK {
+		sc.resetProbeBudgetIfLocalChainWorkAdvanced(localChainWork)
+	}
+	peerInfo, exists, err := sc.registryGetPeer(currentPeer)
+	if err != nil {
+		sc.warnfUnlessStopping("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
+		return false
+	}
+
+	if !exists {
+		// Peer no longer exists in registry (likely disconnected)
+		sc.logger.Infof("[SyncCoordinator] Sync peer %s no longer in registry, clearing", currentPeer)
+		sc.pendingCompletionPeer = ""
+		sc.clearSyncPeerIfCurrent("")
+		_ = sc.triggerSyncLocked()
+		return true // Transition handled
+	}
+
+	now := time.Now()
+	sc.recordSyncPeerBlockProgress(currentPeer, peerInfo.BlocksReceived, now)
+	if stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now); timedOut && stalledPeer == currentPeer {
+		sc.pendingCompletionPeer = ""
+		return sc.clearNoProgressSyncPeer(currentPeer, progressAge)
+	}
+
+	if sc.pendingCompletionPeer != currentPeer {
+		return false // Steady RUNNING: no completed catchup to judge this peer by
+	}
+
+	if syncStart.After(sc.fsmCatchingSince) {
+		// The slot was claimed after the just-completed catchup entered its
+		// block phase, so that catchup was running for an earlier trigger and
+		// its outcome is not this peer's. Consume the edge without a verdict
+		// and leave the slot alone; the no-progress deadline and the periodic
+		// evaluation still police the holder.
+		sc.logger.Debugf("[SyncCoordinator] Ignoring catchup completion edge for %s; slot was claimed after that catchup started", currentPeer)
+		sc.pendingCompletionPeer = ""
+		return false
+	}
+
+	if !localWorkOK || !peerHasValidatedWork(peerInfo) {
+		// Keep the pending completion so the evaluation retries next tick.
+		sc.logger.Debugf("[SyncCoordinator] Deferring sync-peer transition for %s until validated chainwork is available", currentPeer)
+		return false
+	}
+
+	sc.pendingCompletionPeer = ""
+	return sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork)
+}
+
+// settleSyncCompletion applies the completed/failed verdict for a sync whose
+// catchup has finished: still ahead by validated work means the sync fell short
+// (clear and re-select), level or behind means success (reset backoff, clear and
+// re-select). It requires decisionMu to be held by the caller.
+func (sc *SyncCoordinator) settleSyncCompletion(currentPeer string, peerInfo *blockchain.PeerInfo, localChainWork []byte) bool {
+	if peerAheadByValidatedWork(peerInfo, localChainWork) {
+		sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed; peer still has higher validated work",
+			currentPeer)
+		sc.clearSyncPeerIfCurrent("")
+		_ = sc.triggerSyncLocked()
+		return true
+	}
+	// We've caught up or surpassed the peer, this is success not failure
+	sc.logger.Infof("[SyncCoordinator] Sync completed successfully with peer %s by validated work", currentPeer)
+	sc.resetBackoff()
+	sc.clearSyncPeerIfCurrent("")
+	_ = sc.triggerSyncLocked()
+	return true
+}
+
+// HandleCatchupSuccess handles block validation reporting a completed catchup
+// for peerID (canonical libp2p ID string). It runs the same completed/failed
+// evaluation as the FSM completion edge, keyed on the authoritative success
+// signal, which also covers catchups that never left RUNNING (for example an
+// already-synced short-circuit) and which the FSM edge cannot observe.
+func (sc *SyncCoordinator) HandleCatchupSuccess(peerID string) {
+	sc.decisionMu.Lock()
+	defer sc.decisionMu.Unlock()
+
+	sc.mu.RLock()
+	currentPeer := sc.currentSyncPeer
+	sc.mu.RUnlock()
+	if currentPeer == "" || currentPeer != peerID {
+		return
+	}
+	// The authoritative signal settles (or forgoes) this completion; make sure a
+	// deferred FSM-edge evaluation cannot settle it a second time.
+	sc.pendingCompletionPeer = ""
+
+	_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
+	peerInfo, exists, err := sc.registryGetPeer(currentPeer)
+	if err != nil {
+		sc.warnfUnlessStopping("[SyncCoordinator] GetPeer %s failed: %v", currentPeer, err)
+		return
+	}
+	if !exists {
+		sc.logger.Infof("[SyncCoordinator] Sync peer %s no longer in registry, clearing", currentPeer)
+		sc.clearSyncPeerIfCurrent("")
+		_ = sc.triggerSyncLocked()
+		return
+	}
+	if !localWorkOK || !peerHasValidatedWork(peerInfo) {
+		// Without validated chainwork there is no verdict to apply; the periodic
+		// evaluation and the no-progress deadline still police the slot.
+		sc.logger.Debugf("[SyncCoordinator] Deferring catchup-success evaluation for %s until validated chainwork is available", currentPeer)
+		return
+	}
+	sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork)
 }
 
 // handleRunningState handles the FSM RUNNING state logic.
@@ -1324,17 +1446,22 @@ func (sc *SyncCoordinator) checkAndClearExpiredBackoff() bool {
 	return false
 }
 
-// resetBackoff resets the backoff state when sync succeeds
+// resetBackoff resets the backoff state when sync succeeds. The reset is
+// unconditional: success arrives with allPeersAttempted == false, because
+// checkAndClearExpiredBackoff clears the flag (and doubles the multiplier) when
+// the window expires, before any selection can run. Gating the multiplier reset
+// on the flag made it unreachable in production, so the multiplier could only
+// ever ratchet up to the cap.
 func (sc *SyncCoordinator) resetBackoff() {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
-	if sc.allPeersAttempted {
-		sc.logger.Infof("[SyncCoordinator] Resetting backoff state after successful sync")
-		sc.allPeersAttempted = false
-		sc.backoffMultiplier = 1
-		sc.lastAllPeersAttemptTime = time.Time{}
+	if sc.allPeersAttempted || sc.backoffMultiplier > 1 {
+		sc.logger.Infof("[SyncCoordinator] Resetting backoff state after successful sync (multiplier was %dx)", sc.backoffMultiplier)
 	}
+	sc.allPeersAttempted = false
+	sc.backoffMultiplier = 1
+	sc.lastAllPeersAttemptTime = time.Time{}
 	sc.unprovenProbeBudgetRemaining = maxUnprovenProbeBudget(sc.settings)
 }
 

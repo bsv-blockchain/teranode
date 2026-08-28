@@ -289,7 +289,7 @@ func TestSyncCoordinator_ConsiderReputationRecovery_ConcurrentWithBackoffWriters
 			sc.lastAllPeersAttemptTime = time.Now().Add(-time.Hour) // force backoff expiry
 			sc.mu.Unlock()
 			sc.checkAndClearExpiredBackoff() // doubles backoffMultiplier
-			sc.enterBackoffMode()            // re-enter so resetBackoff writes backoffMultiplier
+			sc.enterBackoffMode()
 			sc.resetBackoff()
 		}
 	}()
@@ -1763,4 +1763,233 @@ func TestSyncCoordinator_WarnfUnlessStopping_DowngradesToDebugAfterStop(t *testi
 	warns, debugs = logger.counts()
 	require.Equal(t, 1, warns, "after Stop no new warn-level messages may be emitted")
 	require.Equal(t, 1, debugs, "after Stop the message must downgrade to debug level")
+}
+
+// registerSyncTestPeer registers a viable sync candidate for the FSM-latch tests.
+func registerSyncTestPeer(t *testing.T, reg *blockchain.CentralizedPeerRegistry, id string, height uint32, validatedWork []byte) {
+	t.Helper()
+
+	info := &blockchain.PeerInfo{
+		ID:         id,
+		DataHubURL: "http://" + id,
+		Height:     height,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	}
+	if len(validatedWork) > 0 {
+		info.ValidatedBlockHash = syncCoordinatorTestHash(t)
+		info.ValidatedChainWork = validatedWork
+	}
+	reg.Register(info)
+}
+
+// claimSyncTestPeer installs peerID as the current sync peer as claimSelectedSyncPeer
+// would, with the claim placed claimAge in the past.
+func claimSyncTestPeer(sc *SyncCoordinator, peerID string, claimAge time.Duration, localWork []byte) {
+	claimedAt := time.Now().Add(-claimAge)
+	sc.mu.Lock()
+	sc.currentSyncPeer = peerID
+	sc.syncStartTime = claimedAt
+	sc.lastSyncProgressTime = claimedAt
+	sc.lastLocalChainWork = localWork
+	sc.mu.Unlock()
+}
+
+// Regression for the missing FSM-state latch: a steady RUNNING tick (no
+// CATCHINGBLOCKS -> RUNNING completion edge) must not judge the in-flight sync,
+// even when the slot holder is credited with higher validated work from a
+// previous run. The old code declared it failed and recycled the slot every 2s.
+func TestSyncCoordinator_HandleFSMTransition_SteadyRunningTickDoesNotRecycleSlot(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 0, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	for i := range 3 {
+		require.False(t, sc.handleFSMTransition(&running), "steady RUNNING tick %d must not settle the sync", i)
+		require.Equal(t, "current", sc.GetCurrentSyncPeer(), "slot must not be recycled on tick %d", i)
+	}
+}
+
+// A real CATCHINGBLOCKS -> RUNNING completion edge with the peer still ahead by
+// validated work settles the sync as failed and clears the slot.
+func TestSyncCoordinator_HandleFSMTransition_CompletionEdgeStillAheadClearsSlot(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	// Bench the peer so the post-settle retrigger cannot immediately re-claim it.
+	reg.RecordSyncAttempt("current")
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	running := blockchain_api.FSMStateType_RUNNING
+	require.True(t, sc.handleFSMTransition(&running), "completion edge must settle the sync")
+	require.Empty(t, sc.GetCurrentSyncPeer(), "still-ahead peer must be cleared on the completion edge")
+}
+
+// A completion edge with the peer level by validated work settles as success and
+// resets the backoff multiplier — the only production path that de-escalates it.
+func TestSyncCoordinator_HandleFSMTransition_CompletionEdgeLevelPeerResetsBackoff(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+	sc.mu.Lock()
+	sc.backoffMultiplier = 8
+	sc.mu.Unlock()
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	running := blockchain_api.FSMStateType_RUNNING
+	require.True(t, sc.handleFSMTransition(&running))
+
+	require.Empty(t, sc.GetCurrentSyncPeer(), "level peer must be cleared as a successful sync")
+	sc.mu.RLock()
+	require.Equal(t, 1, sc.backoffMultiplier, "successful sync must reset the ratcheted multiplier")
+	sc.mu.RUnlock()
+}
+
+// A slot claimed after the in-flight catchup entered its block phase is not the
+// peer that catchup ran for; the completion edge must not judge (or evict) it.
+func TestSyncCoordinator_HandleFSMTransition_SlotClaimedDuringCatchupNotJudgedByItsCompletion(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "fresh", 200, []byte{0x03})
+
+	// Observe CATCHINGBLOCKS with the slot empty (the running catchup belongs to
+	// an earlier, since-cleared peer), then claim a fresh peer mid-catchup.
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	claimSyncTestPeer(sc, "fresh", 0, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	for i := range 2 {
+		require.False(t, sc.handleFSMTransition(&running), "tick %d must not judge the freshly claimed slot", i)
+		require.Equal(t, "fresh", sc.GetCurrentSyncPeer(), "tick %d must keep the freshly claimed slot", i)
+	}
+}
+
+// A completion edge observed before the peer has validated chainwork defers the
+// evaluation and settles it on a later tick once the work data arrives.
+func TestSyncCoordinator_HandleFSMTransition_DeferredCompletionSettlesWhenValidatedWorkArrives(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 1_000, nil)
+	reg.RecordSyncAttempt("current")
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "evaluation must defer while validated chainwork is unavailable")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	require.NoError(t, reg.RecordValidatedPeerProgress("current", 1_000, syncCoordinatorTestHash(t), []byte{0x04}))
+	require.True(t, sc.handleFSMTransition(&running), "deferred completion must settle once validated chainwork arrives")
+	require.Empty(t, sc.GetCurrentSyncPeer())
+}
+
+// HandleCatchupSuccess settles a completed sync from the authoritative block
+// validation signal, covering catchups that never leave RUNNING and are therefore
+// invisible to the FSM completion edge.
+func TestSyncCoordinator_HandleCatchupSuccess_LevelPeerSettlesWithoutFSMEdge(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+	sc.mu.Lock()
+	sc.backoffMultiplier = 8
+	sc.mu.Unlock()
+
+	sc.HandleCatchupSuccess("current")
+
+	require.Empty(t, sc.GetCurrentSyncPeer(), "reported catchup success for a level peer must settle the sync")
+	sc.mu.RLock()
+	require.Equal(t, 1, sc.backoffMultiplier)
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_HandleCatchupSuccess_IgnoresNonSyncPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "other", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	sc.HandleCatchupSuccess("other")
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "success for a different peer must not touch the slot")
+}
+
+// If HandleCatchupSuccess settles a completion and the retrigger claims a new
+// peer, the FSM completion edge observed afterwards must not evict that peer.
+func TestSyncCoordinator_HandleCatchupSuccess_ConsumesEdgeSoFreshSlotSurvives(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "done", 200, []byte{0x04})
+	registerSyncTestPeer(t, reg, "next", 200, []byte{0x03})
+	reg.RecordSyncAttempt("done")
+	claimSyncTestPeer(sc, "done", 2*time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+
+	// The success report arrives first: "done" is still ahead, so it is cleared
+	// and the retrigger claims "next" (the only unbenched candidate).
+	sc.HandleCatchupSuccess("done")
+	require.Equal(t, "next", sc.GetCurrentSyncPeer())
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "the already-settled completion edge must not judge the fresh slot")
+	require.Equal(t, "next", sc.GetCurrentSyncPeer(), "fresh slot must survive the trailing FSM edge")
+}
+
+// Regression for the backoff ratchet: expiry cycles double the multiplier and
+// clear allPeersAttempted, so the old flag-gated reset never fired in production
+// ordering. resetBackoff must reset the multiplier unconditionally.
+func TestSyncCoordinator_ResetBackoff_ResetsRatchetedMultiplierAfterExpiredWindows(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	for range 3 {
+		sc.enterBackoffMode()
+		sc.mu.Lock()
+		sc.lastAllPeersAttemptTime = time.Now().Add(-time.Hour) // force window expiry
+		sc.mu.Unlock()
+		require.False(t, sc.checkAndClearExpiredBackoff())
+	}
+	sc.mu.RLock()
+	require.Equal(t, 8, sc.backoffMultiplier)
+	require.False(t, sc.allPeersAttempted, "expiry leaves the flag cleared — the production state at reset time")
+	sc.mu.RUnlock()
+
+	sc.resetBackoff()
+
+	sc.mu.RLock()
+	require.Equal(t, 1, sc.backoffMultiplier, "resetBackoff must de-escalate a ratcheted multiplier")
+	sc.mu.RUnlock()
+}
+
+// Validated local chainwork advancing is real forward progress and de-escalates
+// the backoff multiplier; a non-advance leaves it alone.
+func TestSyncCoordinator_LocalChainWorkAdvanceResetsBackoffMultiplier(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	sc.mu.Lock()
+	sc.backoffMultiplier = 32
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	sc.resetProbeBudgetIfLocalChainWorkAdvanced([]byte{0x03})
+	sc.mu.RLock()
+	require.Equal(t, 1, sc.backoffMultiplier, "chainwork advance must reset the multiplier")
+	sc.mu.RUnlock()
+
+	sc.mu.Lock()
+	sc.backoffMultiplier = 4
+	sc.mu.Unlock()
+	sc.resetProbeBudgetIfLocalChainWorkAdvanced([]byte{0x03})
+	sc.mu.RLock()
+	require.Equal(t, 4, sc.backoffMultiplier, "no advance, no reset")
+	sc.mu.RUnlock()
 }
