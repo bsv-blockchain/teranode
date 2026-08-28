@@ -216,8 +216,8 @@ func TestSeenHashCache_PublishFailed(t *testing.T) {
 	t.Run("returned grant does not extend the budget for repeats", func(t *testing.T) {
 		var c seenHashCache
 
-		c.Check("hash-a", "peer-1", now) // grant 1 sticks
-		c.Check("hash-a", "peer-2", now) // grant 2 sticks
+		c.Check("hash-a", "peer-1", now)    // grant 1 sticks
+		c.Check("hash-a", "peer-2", now)    // grant 2 sticks
 		c.PublishFailed("hash-a", "peer-1") // one grant returned, published back to 1
 
 		publish, _ := c.Check("hash-a", "peer-1", now)
