@@ -1830,7 +1830,7 @@ func TestSyncCoordinator_HandleFSMTransition_CompletionEdgeStillAheadClearsSlot(
 }
 
 // A completion edge with the peer level by validated work settles as success and
-// resets the backoff multiplier — the only production path that de-escalates it.
+// resets the backoff multiplier.
 func TestSyncCoordinator_HandleFSMTransition_CompletionEdgeLevelPeerResetsBackoff(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
@@ -1903,7 +1903,7 @@ func TestSyncCoordinator_HandleCatchupSuccess_LevelPeerSettlesWithoutFSMEdge(t *
 	sc.backoffMultiplier = 8
 	sc.mu.Unlock()
 
-	sc.HandleCatchupSuccess("current")
+	sc.HandleCatchupSuccess("current", time.Minute)
 
 	require.Empty(t, sc.GetCurrentSyncPeer(), "reported catchup success for a level peer must settle the sync")
 	sc.mu.RLock()
@@ -1918,7 +1918,7 @@ func TestSyncCoordinator_HandleCatchupSuccess_IgnoresNonSyncPeer(t *testing.T) {
 	registerSyncTestPeer(t, reg, "other", 200, []byte{0x03})
 	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
 
-	sc.HandleCatchupSuccess("other")
+	sc.HandleCatchupSuccess("other", time.Minute)
 
 	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "success for a different peer must not touch the slot")
 }
@@ -1938,7 +1938,7 @@ func TestSyncCoordinator_HandleCatchupSuccess_ConsumesEdgeSoFreshSlotSurvives(t 
 
 	// The success report arrives first: "done" is still ahead, so it is cleared
 	// and the retrigger claims "next" (the only unbenched candidate).
-	sc.HandleCatchupSuccess("done")
+	sc.HandleCatchupSuccess("done", time.Minute)
 	require.Equal(t, "next", sc.GetCurrentSyncPeer())
 
 	running := blockchain_api.FSMStateType_RUNNING
@@ -1971,25 +1971,103 @@ func TestSyncCoordinator_ResetBackoff_ResetsRatchetedMultiplierAfterExpiredWindo
 	sc.mu.RUnlock()
 }
 
-// Validated local chainwork advancing is real forward progress and de-escalates
-// the backoff multiplier; a non-advance leaves it alone.
-func TestSyncCoordinator_LocalChainWorkAdvanceResetsBackoffMultiplier(t *testing.T) {
+// A local chainwork advance refreshes the probe budget but deliberately does NOT
+// de-escalate the backoff multiplier: gossip-driven advances are not attributable
+// to the sync slot, and resetting on every advance would let each ~2s
+// selection-failure cycle re-enter backoff (whose entry clears all sync-attempt
+// cooldowns) during IBD.
+func TestSyncCoordinator_LocalChainWorkAdvanceDoesNotResetBackoffMultiplier(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
 	sc.mu.Lock()
 	sc.backoffMultiplier = 32
 	sc.lastLocalChainWork = []byte{0x02}
+	sc.unprovenProbeBudgetRemaining = 0
 	sc.mu.Unlock()
 
 	sc.resetProbeBudgetIfLocalChainWorkAdvanced([]byte{0x03})
-	sc.mu.RLock()
-	require.Equal(t, 1, sc.backoffMultiplier, "chainwork advance must reset the multiplier")
-	sc.mu.RUnlock()
 
-	sc.mu.Lock()
-	sc.backoffMultiplier = 4
-	sc.mu.Unlock()
-	sc.resetProbeBudgetIfLocalChainWorkAdvanced([]byte{0x03})
 	sc.mu.RLock()
-	require.Equal(t, 4, sc.backoffMultiplier, "no advance, no reset")
+	require.Equal(t, 32, sc.backoffMultiplier, "gossip-driven chainwork advance must not de-escalate the multiplier")
+	require.Positive(t, sc.unprovenProbeBudgetRemaining, "chainwork advance must still refresh the probe budget")
 	sc.mu.RUnlock()
+}
+
+// A level slot holder in steady RUNNING (no completion edge, no success signal —
+// e.g. its trigger was rejected by block validation's single-flight guard)
+// settles as success via the fallback once it has held the slot past the grace,
+// instead of pinning the slot until the no-progress deadline.
+func TestSyncCoordinator_HandleFSMTransition_LevelPeerFallbackSettlesAfterGrace(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+
+	running := blockchain_api.FSMStateType_RUNNING
+
+	// Inside the grace (default 5m no-progress -> 2.5m guard): no settle.
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+	require.False(t, sc.handleFSMTransition(&running), "level peer inside the grace must not be settled")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	// Past the grace but short of the 5m no-progress deadline: fallback settles.
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x03})
+	require.True(t, sc.handleFSMTransition(&running), "level peer past the grace must settle as success")
+	require.Empty(t, sc.GetCurrentSyncPeer())
+}
+
+// The fallback never settles a slot holder that is still ahead by validated
+// work — that would reintroduce the churn the latch removes.
+func TestSyncCoordinator_HandleFSMTransition_FallbackDoesNotSettleAheadPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running))
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "ahead peer must be left to the completion edge or the no-progress deadline")
+}
+
+// A success report whose catchup started before the current claim (the peer was
+// evicted and re-claimed while its old catchup kept running) must not judge the
+// fresh claim.
+func TestSyncCoordinator_HandleCatchupSuccess_StaleReportDoesNotJudgeFreshClaim(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 0, []byte{0x02})
+
+	// The reported catchup ran 10 minutes, so it started well before the claim.
+	sc.HandleCatchupSuccess("current", 10*time.Minute)
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "stale success must not touch the fresh claim")
+}
+
+// The latch fields are documented as decisionMu-guarded; exercise the FSM path
+// and the success signal concurrently so -race can observe a violation.
+func TestSyncCoordinator_LatchFields_ConcurrentFSMAndSuccessSignal(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+		running := blockchain_api.FSMStateType_RUNNING
+		for range 100 {
+			sc.decisionMu.Lock()
+			sc.handleFSMTransition(&catching)
+			sc.handleFSMTransition(&running)
+			sc.decisionMu.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			sc.HandleCatchupSuccess("current", time.Minute)
+		}
+	}()
+	wg.Wait()
 }

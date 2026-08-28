@@ -368,6 +368,11 @@ func (c *Client) RecordCatchupSuccess(ctx context.Context, peerID string, durati
 	req := &p2p_api.RecordCatchupSuccessRequest{
 		PeerId:     peerID,
 		DurationMs: durationMs,
+		// Every current caller reports a whole completed catchup operation
+		// (header batches moved to ReportValidBlockHeaders), so the receiver may
+		// settle the sync slot. Older senders leave this false, and their
+		// header-batch credits must not settle the sync.
+		CatchupCompleted: true,
 	}
 
 	resp, err := c.client.RecordCatchupSuccess(ctx, req)
