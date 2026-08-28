@@ -1,10 +1,12 @@
 package rpc
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
+	"github.com/bsv-blockchain/teranode/services/validator"
 )
 
 // This file is the boundary between Teranode's internal error chains and the
@@ -156,6 +158,23 @@ func linkIsRejection(e *errors.Error) bool {
 // into the wire message, so a deep chain cannot turn into an unbounded string.
 const maxRejectionReasonParts = 4
 
+// uninformativeVerdictText are wrapper strings that carry no verdict of their own.
+//
+// mapBDKValidationError returns errMsgInvalidTx over errMsgPolicy over the real
+// reason on every policy rejection, so joining blindly produced
+// "GoBDK fail to ValidateTransaction: GoBDK fail to ValidateTransaction by policy
+// settings: <reason>" - two of three parts naming an internal library and neither
+// saying anything about the transaction. The code already carries what they say.
+//
+// Dropping them also restores headroom: with the part cap at the exact depth of
+// the BDK policy chain, one more wrap anywhere above the verdict would have
+// pushed the reason off the end silently, which is the failure ChiR6 described
+// relocated from the depth cap to the part cap.
+var uninformativeVerdictText = map[string]struct{}{
+	validator.ErrMsgInvalidTx: {},
+	validator.ErrMsgPolicy:    {},
+}
+
 // rejectionReason builds the wire message for a rejection class by joining the
 // meaningful messages from the outermost rejection-class link downward.
 //
@@ -176,29 +195,12 @@ const maxRejectionReasonParts = 4
 // So take both and let the caller read them. The walk starts at the outermost
 // link that is itself a rejection class, which skips the service breadcrumbs
 // above it without needing to recognise them by shape.
-// uninformativeVerdictText are wrapper strings that carry no verdict of their own.
-//
-// mapBDKValidationError returns errMsgInvalidTx over errMsgPolicy over the real
-// reason on every policy rejection, so joining blindly produced
-// "GoBDK fail to ValidateTransaction: GoBDK fail to ValidateTransaction by policy
-// settings: <reason>" - two of three parts naming an internal library and neither
-// saying anything about the transaction. The code already carries what they say.
-//
-// Dropping them also restores headroom: with the part cap at the exact depth of
-// the BDK policy chain, one more wrap anywhere above the verdict would have
-// pushed the reason off the end silently, which is the failure ChiR6 described
-// relocated from the depth cap to the part cap.
-var uninformativeVerdictText = map[string]struct{}{
-	"GoBDK fail to ValidateTransaction":                    {},
-	"GoBDK fail to ValidateTransaction by policy settings": {},
-}
-
 func rejectionReason(e *errors.Error) string {
 	parts := make([]string, 0, maxRejectionReasonParts)
 	seen := make(map[string]struct{}, maxRejectionReasonParts)
 
 	add := func(msg string) bool {
-		msg = stripBreadcrumb(msg)
+		msg = stripCodeRender(stripBreadcrumb(msg))
 		if msg == "" {
 			return true
 		}
@@ -285,11 +287,28 @@ func stripBreadcrumb(msg string) string {
 	return msg
 }
 
+// codeRenderPrefix matches a message that opens with the errors package's own
+// "NAME (code): " rendering.
+//
+// The join reads Message() precisely because that never contains a code - which
+// is what lets the boundary promise no internal enum reaches the wire. One
+// producer falsified that by formatting errCodeMsgFmt into its own message, so
+// an ordinary double-spend answered "TX rejected: UTXO_SPENT (70): ...". That is
+// fixed at the producer, in errors/error_data_utxo_spent.go; this is the guard
+// that stops the next one, because a promise the boundary cannot enforce is not
+// a promise.
+var codeRenderPrefix = regexp.MustCompile(`^[A-Z][A-Z0-9_]* \(\d+\): `)
+
+// stripCodeRender removes a leading code rendering from a producer's message.
+func stripCodeRender(msg string) string {
+	return codeRenderPrefix.ReplaceAllString(msg, "")
+}
+
 // sanitised trims the breadcrumbs off a message that has been judged safe to
 // show. A message that is nothing but breadcrumbs carries no reason, so it is
 // replaced rather than emitted empty.
 func sanitised(msg string) string {
-	stripped := stripBreadcrumb(msg)
+	stripped := stripCodeRender(stripBreadcrumb(msg))
 	if stripped == "" || !carriesReason(stripped) {
 		return genericErrorMessage
 	}

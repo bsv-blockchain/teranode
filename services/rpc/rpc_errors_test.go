@@ -723,6 +723,37 @@ func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
 		}
 	})
 
+	t.Run("a double spend does not surface the internal error code", func(t *testing.T) {
+		// The most ordinary rejection there is, and the one shape the earlier
+		// fixtures skipped. NewUtxoSpentError formatted errCodeMsgFmt into its own
+		// message, so the code was INSIDE Message() rather than around it - which
+		// defeats the join's whole safety argument, since it reads Message()
+		// precisely because that never renders a code.
+		txID := chainhash.Hash{}
+		utxoHash := chainhash.Hash{}
+
+		err := errors.NewProcessingError("[Validate][%s] error spending utxos", "abcd",
+			errors.NewUtxoError("error in aerospike spend (batched mode) - errors",
+				errors.NewUtxoSpentError(txID, 0, utxoHash, nil)))
+
+		msg := publicErrorMessage(err)
+
+		require.Contains(t, msg, "utxo already spent", "the caller still learns why")
+		require.NotContains(t, msg, "UTXO_SPENT", "internal error codes must not cross the boundary")
+		require.NotContains(t, msg, "(70)")
+	})
+
+	t.Run("a producer that renders its own code is defanged at the boundary", func(t *testing.T) {
+		// The producer above is fixed, so this pins the guard rather than the bug:
+		// the boundary must not depend on every producer getting it right.
+		err := errors.NewTxInvalidError("TX_INVALID (31): bad-txns-inputs-duplicate")
+
+		msg := publicErrorMessage(err)
+
+		require.Equal(t, "bad-txns-inputs-duplicate", msg)
+		require.NotContains(t, msg, "TX_INVALID")
+	})
+
 	t.Run("the one local addition is block invalid", func(t *testing.T) {
 		// reconsiderblock needs the block-level reject reason and the shared list
 		// is scoped to transaction verdicts. It is admin-only, so this does not

@@ -21,8 +21,17 @@ import (
 )
 
 const (
-	errMsgInvalidTx = "GoBDK fail to ValidateTransaction"
-	errMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
+	// Exported because services/rpc suppresses these exact strings at the
+	// JSON-RPC boundary: they name the adapter and say nothing about the
+	// transaction, and the error code already carries what they carry. Exported
+	// rather than copied so a reword there is a compile error rather than a
+	// silently-stopped suppression - see uninformativeVerdictText in
+	// services/rpc/rpc_errors.go.
+	ErrMsgInvalidTx = "GoBDK fail to ValidateTransaction"
+	ErrMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
+
+	errMsgInvalidTx = ErrMsgInvalidTx
+	errMsgPolicy    = ErrMsgPolicy
 
 	// mempoolHeight is the BDK / svnode sentinel for "this UTXO is not yet
 	// confirmed" — sourced from bitcoin-sv/src/protocol_era.h:14

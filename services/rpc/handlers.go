@@ -600,7 +600,11 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 		// Nil-guarded like logAndBuild's: this package's tests build an RPCServer
 		// without one, and a diagnostic line must not be the thing that panics.
 		if s.logger != nil {
-			s.logger.Warnf("[handleGetRawTransaction] asset service reported 404 for %s at %s", c.Txid, fullURL.String())
+			// The txid is not logged raw: it is caller-supplied and unvalidated on
+			// this path, so a newline in it would break the single-line log rule
+			// and let a caller write the following lines. fullURL percent-encodes
+			// control characters, so it carries the same txid safely.
+			s.logger.Warnf("[handleGetRawTransaction] asset service reported 404 at %s", fullURL.String())
 		}
 
 		return nil, s.rpcTxLookupError(
