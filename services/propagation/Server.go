@@ -768,7 +768,8 @@ func httpStatusForTxError(err error) int {
 	case errors.Is(err, errors.ErrTxInvalidDoubleSpend),
 		errors.Is(err, errors.ErrTxConflicting),
 		errors.Is(err, errors.ErrSpent),
-		errors.Is(err, errors.ErrTxLocked):
+		errors.Is(err, errors.ErrTxLocked),
+		errors.Is(err, errors.ErrTxCreating):
 		return http.StatusConflict
 	case errors.Is(err, errors.ErrTxMissingParent):
 		return http.StatusUnprocessableEntity

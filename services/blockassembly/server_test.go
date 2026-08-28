@@ -802,26 +802,36 @@ func TestGenerateBlocks_ErrorMessages(t *testing.T) {
 		utxoStore := testutil.NewSQLiteMemoryUTXOStore(common.Ctx, common.Logger, common.Settings, t)
 		_ = utxoStore.SetBlockHeight(0)
 
-		// Create server without mining service - this will cause GenerateBlocks to fail
-		// but will still exercise the error message formatting code
+		// The mining service is nil, but that is not what fails here: the
+		// assembler below is Init'd and never Started, so it stays in Starting
+		// and the readiness wait runs to its bound first. Same diagnosis as
+		// TestGenerateBlock_ErrorPaths further down. What this exercises is the
+		// per-block error formatting, which is what the assertions pin.
 		server := New(common.Logger, common.Settings, nil, utxoStore, subtreeStore, blockchainClient)
 		server.SetSkipWaitForPendingBlocks(true)
 		require.NoError(t, server.Init(common.Ctx))
+
+		// Never Started, so the readiness wait in generateBlock runs to its
+		// bound; shorten it so the test does not pay the production default.
+		server.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout = 100 * time.Millisecond
 
 		req := &blockassembly_api.GenerateBlocksRequest{
 			Count: 3,
 		}
 
-		// This will fail due to missing mining service, but the error message
-		// will include "error generating block 1 of 3" which demonstrates
-		// the enhanced error formatting is working
+		// Fails in the readiness wait, and the error message carries
+		// "error generating block 1 of 3", which is the formatting under test.
 		_, err := server.GenerateBlocks(context.Background(), req)
 
-		// Verify we get an error (expected due to missing mining service)
-		assert.Error(t, err)
-		// The error message should contain the block number format
-		assert.Contains(t, err.Error(), "error generating block")
-		assert.Contains(t, err.Error(), "of 3")
+		require.Error(t, err)
+		// The cause cannot be pinned here the way TestGenerateBlock_ErrorPaths
+		// pins it: that test calls generateBlock directly, while GenerateBlocks
+		// returns through errors.WrapGRPC, which renders as
+		// "rpc error: code = Internal desc = error generating block 1 of 3" and
+		// drops the wrapped chain. So this asserts the formatting it is named
+		// for, and the comment above carries the cause instead.
+		require.Contains(t, err.Error(), "error generating block")
+		require.Contains(t, err.Error(), "of 3")
 	})
 }
 
@@ -850,7 +860,7 @@ func TestGenerateBlocks_ZeroBlocks(t *testing.T) {
 
 // TestGenerateBlock_ErrorPaths tests error handling in generateBlock method
 func TestGenerateBlock_ErrorPaths(t *testing.T) {
-	t.Run("should handle mining error in generateBlock", func(t *testing.T) {
+	t.Run("should fail generate when the assembler never becomes ready", func(t *testing.T) {
 		common := testutil.NewCommonTestSetup(t)
 		subtreeStore := testutil.NewMemoryBlobStore()
 		blockchainClient := testutil.NewMemorySQLiteBlockchainClient(common.Logger, common.Settings, t)
@@ -862,10 +872,19 @@ func TestGenerateBlock_ErrorPaths(t *testing.T) {
 		server.SetSkipWaitForPendingBlocks(true)
 		require.NoError(t, server.Init(common.Ctx))
 
-		// Try to generate a block - this will fail in generateBlock method
+		// The assembler has been Init'd but never Started, so it never leaves
+		// Starting and generateBlock's readiness wait runs to its bound. Shorten
+		// the bound so the test does not pay the production default.
+		server.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout = 100 * time.Millisecond
+
+		// This assertion used to be Contains(err, "error"), which passed on the
+		// incidental wording of whatever came back. Worth being explicit that
+		// the mining path is NOT what fails here: with the assembler level and
+		// Running, this same setup generates a block successfully — the error
+		// was always the readiness race this PR fixes.
 		err := server.generateBlock(context.Background(), nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "error")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "did not reach the chain tip")
 	})
 }
 

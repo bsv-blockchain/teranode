@@ -377,14 +377,17 @@ func (ba *BlockAssembly) sampleBlockAssemblerMetrics(stallState dequeueStallStat
 // reportDequeueStall logs the opening or a repeat of a dequeue stall.
 //
 // Which of the three consumer lifecycle states explains the incident decides
-// the message, and whether the queue has held work at any point during the
-// incident decides the level. Those are separate questions and conflating them
-// is what makes an operator stop reading the line: a consumer that has not
-// reached its dequeue branch for the threshold is always worth a record, but
-// only work stacking up behind it means anything is at risk. A large
-// moveForwardBlock on a quiet node trips the threshold legitimately and reports
-// at info; the same staleness with transactions queued is issue #1429 and
-// warns.
+// the message. The two lifecycle faults also fix their own level, because
+// there the answer does not depend on depth: a consumer that has not started
+// yet is routine startup and reports at info however much is queued behind it,
+// and one that has exited is a dead service and reports at error even on an
+// empty queue. Only for a consumer that exists and is merely not dequeuing
+// does the level follow whether the queue has held work at any point during
+// the incident - and there it must, because a consumer that has not reached
+// its dequeue branch for the threshold is always worth a record, but only work
+// stacking up behind it means anything is at risk. A large moveForwardBlock on
+// a quiet node trips the threshold legitimately and reports at info; the same
+// staleness with transactions queued is issue #1429 and warns.
 //
 // The level comes from the incident-wide latch, not from this tick's depth.
 // Depth is a single sample of a number the blocking handler is itself draining,
@@ -2480,6 +2483,13 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 // Returns:
 //   - error: Any error encountered during block generation
 func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) error {
+	// Block assembly learns about a new tip from an asynchronous notification, so
+	// wait for its view to catch up — and for the transition that moved it to
+	// finish — before building a candidate (issue 764).
+	if err := ba.waitForAssemblerTip(ctx); err != nil {
+		return err
+	}
+
 	// get a mining candidate
 	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
 	if err != nil {
@@ -2531,6 +2541,161 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	// Wait for the best block header to be updated after successful submission
 	// This prevents the "already mining on top of the same block" error when generating multiple blocks
 	return ba.waitForBestBlockHeaderUpdate(ctx, previousBestHash)
+}
+
+// tipWaitReconcileGrace is how long the wait tolerates a mismatch before asking
+// the assembler to reconcile. A transition already in flight resolves on its own
+// in milliseconds, and nudging then would add work to the very path being waited
+// on; a mismatch still present after this long is the shape that never converges.
+const tipWaitReconcileGrace = time.Second
+
+// Tip-poll interval bounds. The wait starts fine and backs off - see the comment
+// in waitForAssemblerTip for why each end is where it is.
+const (
+	minTipPollInterval = 5 * time.Millisecond
+	maxTipPollInterval = 250 * time.Millisecond
+)
+
+// waitForAssemblerTip waits, bounded, for block assembly to become level with the
+// chain tip AND return to its Running state.
+//
+// Two conditions, not one. Level-with-the-tip alone is satisfied too early on the
+// very path this exists for: reset() publishes the new tip optimistically before
+// SubtreeProcessor.Reset runs (see the "Update the internal best block reference
+// before SubtreeProcessor.Reset" comment in BlockAssembler.reset), so a wait keyed
+// on the tip alone returns while the subtree processor is still being torn down and
+// the unmined set reloaded. The running state is the reliable done signal:
+// processNewBlockAnnouncement only transitions back to Running in its deferred exit,
+// after handleReorg and reset have returned. Requiring it also means a call cannot
+// start while the assembler is in MovingUp; that is a consequence of waiting for
+// Running, not a guarantee this wait offers - nothing here stops the assembler
+// entering MovingUp again once the wait has returned.
+//
+// No state is treated as unwaitable. Starting looks like one — an assembler that
+// was never started never leaves it — but Start sets Running from a goroutine, so
+// a generate arriving just after startup is legitimately in Starting and would be
+// failed spuriously by a fail-fast rule. The state alone cannot separate the two,
+// so the bound is what distinguishes them.
+//
+// The chain tip is re-read each pass so a chain that advances while waiting is not
+// waited out in full. A failed read is logged and retried rather than abandoning the
+// guard: the wait is cheap and already bounded, so a transient blockchain-service
+// blip should cost one poll, not the whole protection.
+//
+// Exceeding the bound is an error rather than a silent proceed, and costs nothing:
+// while the assembler is still inside reset() its CurrentBlock is the invalidated
+// pre-reorg tip, so a call that proceeded would build on that parent and be rejected
+// as stale anyway. The error changes the text, not the outcome — but "did not reach
+// the chain tip, state resetting" tells an operator what to retry, where "candidate
+// is stale" does not.
+//
+// The bound cannot cover the whole awaited path and does not claim to.
+// subtreeProcessor.WaitForPendingBlocks runs ahead of the tip publish under
+// retry.WithInfiniteRetry, so it ends when the pending set drains or the assembler's
+// own context dies — never on this deadline. What the default is sized against is the
+// bounded component, waitForBlockMinedSet: 45 retries at 20ms base, factor 2, capped
+// at 2s, is ~78s worst case per invalid moveBack block.
+func (ba *BlockAssembly) waitForAssemblerTip(ctx context.Context) error {
+	timeout := ba.settings.BlockAssembly.GenerateTipWaitTimeout
+	if timeout <= 0 {
+		timeout = settings.DefaultGenerateTipWaitTimeout
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Start fine because of what runs immediately before this on a multi-block
+	// generate: waitForBestBlockHeaderUpdate returns as soon as the assembler's
+	// tip changes, which happens at setBestBlockHeader, before the deferred
+	// return to StateRunning. So the next block's readiness check can arrive a
+	// few instructions early and pay a tick for it.
+	//
+	// Then back off, because that window closes within tens of milliseconds and
+	// past it the fine tick buys nothing. Each pass costs a GetBestBlockHeader
+	// round trip aimed at the blockchain service - the same dependency whose
+	// latency is the reason for waiting, and which is concurrently serving the
+	// GetBlockIsMined polls waitForBlockMinedSet is issuing for the very work
+	// being awaited. Holding 200 reads/second for the rest of the bound would aim
+	// load at exactly the wrong place; backing off also means tick and bound no
+	// longer have to be weighed against each other whenever either moves.
+	interval := minTipPollInterval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// The assembler learns of a new tip from an asynchronous notification, and
+	// the blockchain client drops notifications to a subscriber it cannot feed
+	// fast enough. If that has happened, nothing in this loop converges on its
+	// own and "retry once it has caught up" would advise an action that fails
+	// identically every time - on regtest especially, where generate is the only
+	// source of new blocks and no later arrival re-triggers anything. Asking for
+	// a reconcile is a non-blocking send that coalesces by construction, so the
+	// cost of being wrong is nil.
+	start := time.Now()
+	nudged := false
+
+	for {
+		bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(waitCtx)
+
+		switch {
+		case err != nil:
+			// Do not misreport an expired deadline as a read failure: the ticker
+			// and waitCtx.Done() can become ready in the same instant and select
+			// may take the tick, leaving this call to fail on the dead context.
+			if waitCtx.Err() == nil {
+				ba.logger.Warnf("[generateBlock] could not read the chain tip to sync against, retrying: %v", err)
+			}
+		case ba.assemblerReady(bestHeader):
+			return nil
+		case !nudged && time.Since(start) > tipWaitReconcileGrace:
+			nudged = true
+
+			ba.logger.Warnf("[generateBlock] block assembly still behind the chain tip after %s, asking it to reconcile", tipWaitReconcileGrace)
+			ba.blockAssembler.triggerReconcile()
+		}
+
+		select {
+		case <-waitCtx.Done():
+			return ba.tipWaitExpiredError(ctx, timeout)
+		case <-ticker.C:
+			if interval < maxTipPollInterval {
+				interval *= 2
+				ticker.Reset(interval)
+			}
+		}
+	}
+}
+
+// tipWaitExpiredError distinguishes the two ways the bounded wait ends, because
+// they call for opposite actions and the effective bound is the smaller of the
+// two. On the generate RPC the caller's deadline is rpc_timeout, which defaults
+// to 30s and so sits below the configured bound: on that path the caller giving
+// up first is the ordinary expiry, not the rare one, and reporting it as "block
+// assembly did not catch up in 90s" would name a budget that was never spent.
+func (ba *BlockAssembly) tipWaitExpiredError(ctx context.Context, timeout time.Duration) error {
+	state := StateStrings[ba.blockAssembler.GetCurrentRunningState()]
+
+	if ctx.Err() != nil {
+		return errors.NewProcessingError(
+			"[generateBlock] caller gave up before block assembly reached the chain tip (state %s) - the effective bound is the smaller of blockassembly_generateTipWaitTimeout (%s) and the caller's own deadline, which on the generate RPC is rpc_timeout; raise both together",
+			state, timeout)
+	}
+
+	return errors.NewProcessingError(
+		"[generateBlock] block assembly did not reach the chain tip within %s (state %s) - retry once it has caught up",
+		timeout, state)
+}
+
+// assemblerReady reports whether block assembly is level with bestHeader and has
+// finished whatever transition brought it there. A nil current header means the
+// assembler has not loaded its best block yet, which is a wait condition rather
+// than a failure.
+func (ba *BlockAssembly) assemblerReady(bestHeader *model.BlockHeader) bool {
+	currentHeader, _ := ba.blockAssembler.CurrentBlock()
+	if currentHeader == nil || !currentHeader.Hash().IsEqual(bestHeader.Hash()) {
+		return false
+	}
+
+	return ba.blockAssembler.GetCurrentRunningState() == StateRunning
 }
 
 // waitForBestBlockHeaderUpdate waits for the best block header to be updated after block submission

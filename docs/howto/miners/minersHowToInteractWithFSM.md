@@ -1,6 +1,6 @@
 # How to Manage Teranode States
 
-This guide explains how to change and monitor Teranode's state. Note that Teranode instances start in IDLE state and require manual state transitions.
+This guide explains how to change and monitor Teranode's state. Note that a fresh Teranode instance starts in CATCHINGBLOCKS state and begins catching up on its own; it reaches RUNNING once catch-up completes above the network's highest checkpoint. A restarted instance resumes whatever state it last persisted.
 
 ## Prerequisites
 
@@ -91,6 +91,29 @@ The following states are valid for all environments:
 - RUNNING
 - CATCHINGBLOCKS
 
+### When a transition is refused
+
+Two rules constrain which transitions are accepted, and both surface as errors
+rather than silent no-ops:
+
+- **Only RUN may leave CATCHINGBLOCKS.** A node that is catching up cannot be
+  moved to IDLE; it must finish catching up first.
+- **RUN is refused while the chain tip is below the network's highest hard-coded
+  checkpoint.** Mainnet and testnet both have checkpoints; regtest has none. A
+  node that is still doing its initial sync will therefore reject
+  `setfsmstate running`, and the error names both your tip height and the
+  checkpoint it must reach. This is expected — the node is already catching up
+  on its own and will move to RUNNING once it has caught up.
+
+> **Behaviour change:** a fresh node now boots into CATCHINGBLOCKS rather than
+> IDLE, and the checkpoint rule above exempts only IDLE. A brand-new mainnet or
+> testnet node could previously be forced straight to RUNNING with
+> `setfsmstate running`; it now returns the checkpoint error instead, until its
+> tip reaches the checkpoint. Nothing in this repository relied on that
+> shortcut, but out-of-tree boot tooling that forces RUNNING on a fresh node
+> will now get an error where it previously succeeded. Regtest has no
+> checkpoints and is unaffected.
+
 ## Validation
 
 After each state change, verify the new state:
@@ -143,11 +166,12 @@ kubectl port-forward -n teranode-operator service/blockchain 18087:18087
 grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.GetFSMCurrentState
 ```
 
-Expected output:
+Expected output (a fresh node reports `CATCHINGBLOCKS`; a restarted node reports
+whatever state it last persisted):
 
 ```json
 {
-  "state": "Idle"
+  "state": "CATCHINGBLOCKS"
 }
 ```
 

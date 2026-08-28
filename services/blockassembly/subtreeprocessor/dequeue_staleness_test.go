@@ -168,6 +168,10 @@ func TestLastDequeueTime_StopsAdvancingWhileConsumerParked(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond,
 		"LastDequeueTime must advance every loop iteration, even with an empty queue")
 
+	// Closed once the consumer has taken the request, which is what makes the
+	// park observable without timing it. See the wait below.
+	parked := make(chan struct{})
+
 	go func() {
 		// The ctx.Done() arm keeps this goroutine from outliving the test. The
 		// respCh drain in the cleanup above only rescues the consumer, which by
@@ -176,19 +180,25 @@ func TestLastDequeueTime_StopsAdvancingWhileConsumerParked(t *testing.T) {
 		// this send has nothing to unblock it.
 		select {
 		case stp.lengthCh <- respCh:
+			close(parked)
 		case <-ctx.Done():
 		}
 	}()
 
-	// Wait for the park to actually take hold, rather than guessing at how long
-	// it takes. The consumer stamps once per loop iteration and idles for
-	// IdleSleepDuration (10ms), so a gap this wide means it is no longer
-	// reaching that branch - which is precisely the state the rest of the test
-	// depends on.
-	require.Eventually(t, func() bool {
-		return time.Since(stp.LastDequeueTime()) > 150*time.Millisecond
-	}, 2*time.Second, 5*time.Millisecond,
-		"the consumer must be parked outside the dequeue branch before the queue is filled")
+	// Wait for the park to actually take hold. This is a handshake, not a
+	// timing guess: lengthCh is unbuffered, so the send above returns only once
+	// the consumer has executed `case lengthCh := <-stp.lengthCh`, at which
+	// point it is committed to the unbuffered respCh send two lines later with
+	// nothing in between that can stamp the timestamp. Waiting on a staleness
+	// gap instead would be satisfied by roughly fifteen missed iterations of
+	// the 10ms idle sleep, which CPU starvation under a loaded race run can
+	// produce without the park having happened at all - and then the test fails
+	// spuriously below, because a still-live consumer stamps during the sleep.
+	select {
+	case <-parked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the consumer must reach its lengthCh receive, and so be parked outside the dequeue branch, before the queue is filled")
+	}
 
 	// Enqueue directly into the queue (bypassing the gRPC ingest path,
 	// which is out of scope here) so the queue is genuinely non-empty for

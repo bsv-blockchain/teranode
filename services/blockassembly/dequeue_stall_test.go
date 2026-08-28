@@ -210,6 +210,24 @@ func TestObserveDequeueStall_Transitions(t *testing.T) {
 			// worth of running time would otherwise be counted as stalled.
 			wantFor: time.Minute - dequeueStallThreshold,
 		},
+		{
+			name: "backwardsClockDoesNotReportANegativeDuration",
+			// Reachable only from this table, and kept deliberately. The
+			// running service hands in time.Now(), whose monotonic reading
+			// survives Add and is the only thing Sub consults, so no NTP step
+			// can invert the subtraction there. stallBase is a time.Date value
+			// with no monotonic reading, which puts the wall clock back in
+			// charge: the incident opens at stallBase and the closing tick is
+			// five minutes earlier, so the raw subtraction is about -5m. A
+			// caller handed "was stalled for -5m0s" learns nothing, so the
+			// pure function floors it rather than relying on who calls it.
+			state:       stalledState(0, 0),
+			now:         stallBase.Add(-5 * time.Minute),
+			staleness:   time.Second,
+			wantEvent:   dequeueStallEnded,
+			wantStalled: false,
+			wantFor:     0,
+		},
 	}
 
 	for _, tt := range tests {

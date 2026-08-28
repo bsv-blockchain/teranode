@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -35,111 +37,84 @@ import (
 
 const (
 	baseURL           = "http://test.com"
-	shortTimeout      = 50 * time.Millisecond
 	errClientNotAdded = "Client channel not added to clientChannels"
 )
 
 func TestBroadcastMessage(t *testing.T) {
 	tests := []struct {
-		name           string
-		clientCount    int
-		blockingCount  int
-		expectedErrors int
+		name            string
+		clientCount     int
+		backedUpCount   int
+		expectedEvicted int
 	}{
 		{
-			name:           "No clients",
-			clientCount:    0,
-			blockingCount:  0,
-			expectedErrors: 0,
+			name:            "No clients",
+			clientCount:     0,
+			backedUpCount:   0,
+			expectedEvicted: 0,
 		},
 		{
-			name:           "Single responsive client",
-			clientCount:    1,
-			blockingCount:  0,
-			expectedErrors: 0,
+			name:            "Single responsive client",
+			clientCount:     1,
+			backedUpCount:   0,
+			expectedEvicted: 0,
 		},
 		{
-			name:           "Multiple responsive clients",
-			clientCount:    3,
-			blockingCount:  0,
-			expectedErrors: 0,
+			name:            "Multiple responsive clients",
+			clientCount:     3,
+			backedUpCount:   0,
+			expectedEvicted: 0,
 		},
 		{
-			name:           "Some blocking clients",
-			clientCount:    3,
-			blockingCount:  2,
-			expectedErrors: 2,
+			name:            "Some backed-up clients",
+			clientCount:     3,
+			backedUpCount:   2,
+			expectedEvicted: 2,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// We'll manually track the timeouts in our test function
-			timeoutChan := make(chan struct{}, tt.blockingCount) // Buffer to collect all timeouts
+			cm := newClientChannelMap()
 
-			// Create unbuffered channels that will block
-			blockingChannels := make([]chan []byte, tt.blockingCount)
-			for i := 0; i < tt.blockingCount; i++ {
-				blockingChannels[i] = make(chan []byte) // Unbuffered channel with no reader
+			// Backed-up clients: unbuffered channels with no reader, so the
+			// non-blocking send finds the buffer full and must evict, calling
+			// the registered cancel func to close the connection.
+			var cancelled atomic.Int64
+
+			backedUpChannels := make([]chan []byte, tt.backedUpCount)
+			for i := 0; i < tt.backedUpCount; i++ {
+				backedUpChannels[i] = make(chan []byte)
+				cm.add(backedUpChannels[i], func() { cancelled.Add(1) })
 			}
 
-			// Create buffered channels that won't block
-			nonBlockingChannels := make([]chan []byte, tt.clientCount-tt.blockingCount)
-			for i := 0; i < tt.clientCount-tt.blockingCount; i++ {
-				nonBlockingChannels[i] = make(chan []byte, 1) // Buffered channel
+			// Responsive clients: buffered channels with free capacity.
+			responsiveChannels := make([]chan []byte, tt.clientCount-tt.backedUpCount)
+			for i := range responsiveChannels {
+				responsiveChannels[i] = make(chan []byte, 1)
+				cm.add(responsiveChannels[i], nil)
 			}
 
-			// Combine channels into the map expected by broadcastMessage
-			clientChannels := make(map[chan []byte]struct{})
-			for _, ch := range blockingChannels {
-				clientChannels[ch] = struct{}{}
-			}
-
-			for _, ch := range nonBlockingChannels {
-				clientChannels[ch] = struct{}{}
-			}
-
-			// Set up readers for non-blocking channels
-			var wg sync.WaitGroup
-			for _, ch := range nonBlockingChannels {
-				wg.Add(1)
-
-				go func(ch chan []byte) {
-					defer wg.Done()
-					<-ch // Read the message
-				}(ch)
-			}
-
-			// Create a test message
 			testData := []byte("test message")
+			cm.broadcast(testData, &ulogger.TestLogger{})
 
-			// Our test version of broadcastMessage that tracks timeouts
-			broadcastTest := func() {
-				for ch := range clientChannels {
-					select {
-					case ch <- testData:
-						// Message sent successfully
-					case <-time.After(shortTimeout):
-						// Timed out - record this timeout
-						timeoutChan <- struct{}{}
-					}
+			for _, ch := range responsiveChannels {
+				select {
+				case got := <-ch:
+					require.Equal(t, testData, got)
+				default:
+					t.Fatal("Responsive client did not receive the broadcast")
 				}
+
+				require.True(t, cm.contains(ch), "Responsive client must stay registered")
 			}
 
-			// Run the broadcast
-			broadcastTest()
+			for _, ch := range backedUpChannels {
+				require.False(t, cm.contains(ch), "Backed-up client must be evicted")
+			}
 
-			// Wait for all readers to finish
-			wg.Wait()
-
-			// Count how many timeouts occurred
-			timeoutCount := len(timeoutChan)
-			close(timeoutChan)
-
-			// Verify we got the expected number of timeouts
-			assert.Equal(t, tt.expectedErrors, timeoutCount,
-				"Expected %d timeouts but got %d in test '%s'",
-				tt.expectedErrors, timeoutCount, tt.name)
+			require.Equal(t, int64(tt.expectedEvicted), cancelled.Load(),
+				"Eviction must cancel each backed-up client's connection")
 		})
 	}
 }
@@ -327,23 +302,23 @@ func TestStartNotificationProcessor(t *testing.T) {
 		clientChannels.remove(clientCh)
 	})
 
-	t.Run("Broadcast timeout handling", func(t *testing.T) {
+	t.Run("Backed-up client evicted", func(t *testing.T) {
 		slowCh := make(chan []byte) // Unbuffered channel that will block
 		clientChannels.add(slowCh, nil)
 		require.True(t, clientChannels.contains(slowCh), errClientNotAdded)
 		initialCount := clientChannels.count()
 
-		// Send a notification - this should timeout for the slow client
+		// Send a notification - the full buffer must evict the slow client
 		testNotification := &notificationMsg{
 			Type:    "test",
 			BaseURL: baseURL,
 		}
 		notificationCh <- testNotification
 
-		// Wait for timeout and automatic removal
-		time.Sleep(1500 * time.Millisecond) // Wait longer than the timeout
-		assert.False(t, clientChannels.contains(slowCh), "Slow client channel not removed after timeout")
-		assert.Equal(t, initialCount-1, clientChannels.count(), "Client count not decremented after timeout")
+		require.Eventually(t, func() bool {
+			return !clientChannels.contains(slowCh)
+		}, time.Second, 10*time.Millisecond, "Backed-up client channel not evicted")
+		assert.Equal(t, initialCount-1, clientChannels.count(), "Client count not decremented after eviction")
 	})
 
 	// Cancel context to stop the processor
@@ -511,9 +486,9 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	// Number of malicious clients (channels that won't be read)
 	numMaliciousClients := 5
 
-	// Create malicious clients - unbuffered channels that will block
-	// This simulates clients that stop reading: when broadcast tries to send,
-	// it will block for 1 second per client before timing out
+	// Create malicious clients - unbuffered channels that will block.
+	// This simulates clients that stop reading: the non-blocking broadcast
+	// must evict each of them immediately instead of waiting on them.
 	maliciousChannels := make([]chan []byte, numMaliciousClients)
 	for i := 0; i < numMaliciousClients; i++ {
 		// Create unbuffered channel that will block when trying to send
@@ -539,9 +514,9 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 		}
 	}()
 
-	// Send a notification and measure the time it takes for broadcast to complete
-	// With parallel processing, broadcast should complete in ~1 second (all timeouts happen concurrently)
-	// instead of N seconds (sequential timeouts)
+	// Send a notification and measure the time it takes for broadcast to
+	// complete: with non-blocking sends it must finish near-instantly instead
+	// of N seconds (sequential timeouts)
 	testNotification := &notificationMsg{
 		Type:    "test_dos",
 		BaseURL: baseURL,
@@ -558,9 +533,8 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 		t.Fatal("Timeout waiting for legitimate client to receive message")
 	}
 
-	// Now wait for ALL malicious clients to be processed and removed
-	// With parallel processing, this should take ~1 second (all timeouts happen concurrently)
-	// instead of N seconds (sequential timeouts)
+	// Now wait for ALL malicious clients to be evicted; the non-blocking
+	// broadcast removes each backed-up client on the first send attempt
 	timeout := time.After(time.Duration(numMaliciousClients+2) * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -589,21 +563,21 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	}
 
 broadcastComplete:
-	// Verify the broadcast completed quickly due to parallel processing
-	// With parallel processing, all timeouts happen concurrently, so total time should be ~1 second
-	// instead of N seconds (sequential timeouts)
+	// Verify the broadcast completed quickly: non-blocking sends evict every
+	// backed-up client immediately, so total time is bounded by scheduling
+	// overhead, not by N sequential (or even one parallel) 1s timeouts
 	expectedMaxDelay := 2 * time.Second // Allow some overhead for goroutine scheduling
 
 	if broadcastCompleteTime > expectedMaxDelay {
-		t.Errorf("Broadcast took too long (%v). Expected at most %v with parallel processing. Sequential processing would take ~%d seconds",
+		t.Errorf("Broadcast took too long (%v). Expected at most %v with non-blocking sends. Sequential timeout processing would take ~%d seconds",
 			broadcastCompleteTime, expectedMaxDelay, numMaliciousClients)
 	} else {
-		t.Logf("Broadcast completed in %v (parallel processing working correctly)", broadcastCompleteTime)
+		t.Logf("Broadcast completed in %v (non-blocking fan-out working correctly)", broadcastCompleteTime)
 	}
 
 	// Verify all malicious clients were removed
 	assert.Equal(t, numMaliciousClients, removedCount,
-		"All malicious client channels should be removed after timeout")
+		"All malicious client channels should be evicted")
 
 	// Verify the notification processor can process new notifications after broadcast completes
 	// Drain any remaining messages from legitimate client first
@@ -708,80 +682,49 @@ func TestHandleWebSocket_PerConnectionContext(t *testing.T) {
 	require.Equal(t, baseURL, received.BaseURL)
 }
 
-// TestBroadcast_BoundedPool verifies the broadcast goroutine pool caps in-flight goroutines.
-// It overrides maxConcurrentBroadcasts to a small value, then submits 4x that many unresponsive
-// (unbuffered, unread) channels. Every channel hits the 1s send-timeout. With the cap, total
-// wall-clock time is ceil(channels/poolSize) * 1s; without it, all timeouts run concurrently
-// and total wall-clock is ~1s. The lower bound asserts the semaphore actually serialises work.
-func TestBroadcast_BoundedPool(t *testing.T) {
-	originalPoolSize := maxConcurrentBroadcasts
-	defer func() { maxConcurrentBroadcasts = originalPoolSize }()
-	maxConcurrentBroadcasts = 2
-
+// TestBroadcast_NonBlockingFanout verifies broadcast never waits on a slow
+// consumer: it runs inline on the single notification processor goroutine, so
+// with the old 1s send-timeout a pool of clients keeping their buffers full
+// stalled every notification. Backed-up channels must be evicted immediately
+// (cancel invoked) and the whole fan-out must complete far below the old
+// one-second-per-broadcast floor, while responsive clients still receive.
+func TestBroadcast_NonBlockingFanout(t *testing.T) {
 	cm := newClientChannelMap()
 
-	const numChannels = 8
-	channels := make([]chan []byte, numChannels)
+	const numBackedUp = 64
 
-	for i := 0; i < numChannels; i++ {
-		channels[i] = make(chan []byte)
-		cm.add(channels[i], nil)
+	var cancelled atomic.Int64
+
+	for i := 0; i < numBackedUp; i++ {
+		cm.add(make(chan []byte), func() { cancelled.Add(1) }) // unbuffered: always full
 	}
 
-	require.Equal(t, numChannels, cm.count(), "All channels should be registered")
+	responsiveCh := make(chan []byte, 1)
+	cm.add(responsiveCh, nil)
 
-	logger := &ulogger.TestLogger{}
+	initPrometheusMetrics()
+	evictedBefore := testutil.ToFloat64(prometheusP2PWebsocketClientsEvicted)
 
 	startTime := time.Now()
-	cm.broadcast([]byte("test"), logger)
+	cm.broadcast([]byte("test"), &ulogger.TestLogger{})
 	elapsed := time.Since(startTime)
 
-	expectedMin := time.Duration(numChannels/maxConcurrentBroadcasts) * time.Second
-	expectedMax := expectedMin + 2*time.Second
+	// The old implementation parked at least one full second on the timeout
+	// timers; a non-blocking fan-out over in-memory channels is microseconds.
+	// 500ms leaves generous headroom for a loaded CI machine.
+	require.Less(t, elapsed, 500*time.Millisecond,
+		"Broadcast must not wait on backed-up clients (took %v)", elapsed)
 
-	require.GreaterOrEqual(t, elapsed, expectedMin,
-		"Broadcast finished too quickly (%v); pool of %d should have serialised %d unresponsive channels into batches taking ~%v",
-		elapsed, maxConcurrentBroadcasts, numChannels, expectedMin)
-	require.LessOrEqual(t, elapsed, expectedMax,
-		"Broadcast took too long (%v); expected at most %v", elapsed, expectedMax)
-
-	require.Equal(t, 0, cm.count(), "All timed-out channels should be removed")
-
-	t.Logf("Broadcast of %d unresponsive channels with pool=%d completed in %v (expected %v..%v)",
-		numChannels, maxConcurrentBroadcasts, elapsed, expectedMin, expectedMax)
-}
-
-// TestBroadcast_NonPositivePoolSizeDoesNotDeadlock verifies that a misconfigured
-// (zero or negative) maxConcurrentBroadcasts is clamped to a usable value rather
-// than deadlocking the broadcast loop. With cap=0, sem <- struct{}{} on an
-// unbuffered channel would block forever because the receiver runs only after
-// the send returns.
-func TestBroadcast_NonPositivePoolSizeDoesNotDeadlock(t *testing.T) {
-	originalPoolSize := maxConcurrentBroadcasts
-	defer func() { maxConcurrentBroadcasts = originalPoolSize }()
-	maxConcurrentBroadcasts = 0
-
-	cm := newClientChannelMap()
-
-	const numChannels = 3
-	for i := 0; i < numChannels; i++ {
-		cm.add(make(chan []byte, 1), nil) // buffered so sends succeed immediately
-	}
-
-	done := make(chan struct{})
-
-	go func() {
-		cm.broadcast([]byte("test"), &ulogger.TestLogger{})
-		close(done)
-	}()
+	require.Equal(t, 1, cm.count(), "Only the responsive client should remain registered")
+	require.Equal(t, int64(numBackedUp), cancelled.Load(), "Every backed-up client's connection must be cancelled")
+	require.Equal(t, float64(numBackedUp), testutil.ToFloat64(prometheusP2PWebsocketClientsEvicted)-evictedBefore,
+		"Every eviction must be counted in the metric")
 
 	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("broadcast deadlocked with maxConcurrentBroadcasts <= 0")
+	case <-responsiveCh:
+	default:
+		t.Fatal("Responsive client did not receive the broadcast")
 	}
-
-	require.Equal(t, numChannels, cm.count(), "responsive channels should still be registered")
 }
 
 func TestOriginAllowed(t *testing.T) {
@@ -1344,8 +1287,8 @@ func TestHandleWebSocket_BroadcastEvictionClosesConnection(t *testing.T) {
 	defer ws.Close()
 
 	// Flood large notifications the client never drains: the writer blocks on
-	// the full socket, the 100-slot channel overflows, and the broadcast's 1s
-	// send-timeout must evict AND close the connection.
+	// the full socket, the 100-slot channel overflows, and the broadcast's
+	// non-blocking send must evict AND close the connection.
 	payload := strings.Repeat("x", 256*1024)
 
 	go func() {

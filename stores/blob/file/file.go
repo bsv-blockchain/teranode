@@ -1111,7 +1111,14 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 
 		fileReader, err := s.longtermClient.GetIoReader(ctx, key, fileType, opts...)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			// Absence must stay distinguishable from a failed read. The longterm
+			// backend reports a miss as ErrNotFound (see the s3 store), not as
+			// os.ErrNotExist, so testing only for the latter relabelled every
+			// tiered-storage miss as a storage fault. Callers that branch on
+			// absence — getExternalTransaction's outputs-only fallback in the
+			// aerospike UTXO store, for one — would then treat a routine miss as
+			// this node's disk being broken.
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errors.ErrNotFound) {
 				return nil, errors.ErrNotFound
 			}
 

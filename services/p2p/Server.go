@@ -1492,6 +1492,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		Storage:             nodeStatusMessage.Storage,
 	}:
 	default:
+		notificationDropped("node_status")
 		s.logger.Warnf("[handleNodeStatusTopic] notification channel full, dropped node_status notification for %s", nodeStatusMessage.PeerID)
 	}
 
@@ -2032,6 +2033,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	select {
 	case s.notificationCh <- msg:
 	default:
+		notificationDropped("node_status")
 		s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
 	}
 
