@@ -190,11 +190,27 @@ func TestSeenHashCache_PublishFailed(t *testing.T) {
 		publish, _ := c.Check("hash-a", "peer-1", now)
 		require.True(t, publish)
 
-		c.PublishFailed("hash-a")
+		c.PublishFailed("hash-a", "peer-1")
 
 		publish, repeats := c.Check("hash-a", "peer-1", now)
 		require.True(t, publish, "with no grant stuck, even a repeat may retry the publish")
 		require.Equal(t, 1, repeats, "the failed publish must not reset spam accounting")
+	})
+
+	t.Run("returned grant does not make the peer last window's grantee", func(t *testing.T) {
+		var c seenHashCache
+
+		// Sparse topology: one announcer, and its only publish is dropped.
+		publish, _ := c.Check("hash-a", "peer-1", now)
+		require.True(t, publish)
+		c.PublishFailed("hash-a", "peer-1")
+
+		// Its re-announcement in the very next window must be granted: a grant
+		// that never reached Kafka must not count as holding last window.
+		w1 := now.Add(seenHashPublishWindow)
+		publish, repeats := c.Check("hash-a", "peer-1", w1)
+		require.True(t, publish, "a peer whose only grant was returned may retry in the next window")
+		require.Equal(t, 1, repeats, "the repeat accounting is unaffected")
 	})
 
 	t.Run("returned grant does not extend the budget for repeats", func(t *testing.T) {
@@ -202,7 +218,7 @@ func TestSeenHashCache_PublishFailed(t *testing.T) {
 
 		c.Check("hash-a", "peer-1", now) // grant 1 sticks
 		c.Check("hash-a", "peer-2", now) // grant 2 sticks
-		c.PublishFailed("hash-a")        // one grant returned, published back to 1
+		c.PublishFailed("hash-a", "peer-1") // one grant returned, published back to 1
 
 		publish, _ := c.Check("hash-a", "peer-1", now)
 		require.False(t, publish, "a repeat must not publish while another grant is stuck")
@@ -214,11 +230,11 @@ func TestSeenHashCache_PublishFailed(t *testing.T) {
 	t.Run("no-ops on unknown hash and at zero", func(t *testing.T) {
 		var c seenHashCache
 
-		require.NotPanics(t, func() { c.PublishFailed("never-stored") })
+		require.NotPanics(t, func() { c.PublishFailed("never-stored", "peer-1") })
 
 		c.Check("hash-a", "peer-1", now)
-		c.PublishFailed("hash-a")
-		require.NotPanics(t, func() { c.PublishFailed("hash-a") })
+		c.PublishFailed("hash-a", "peer-1")
+		require.NotPanics(t, func() { c.PublishFailed("hash-a", "peer-1") })
 
 		publish, _ := c.Check("hash-a", "peer-1", now)
 		require.True(t, publish)

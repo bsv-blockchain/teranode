@@ -173,7 +173,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
-			s.blockSeenHashes.PublishFailed(hash.String())
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleBlockTopic] error marshaling KafkaBlockTopicMessage: %v", err)
 			return
 		}
@@ -185,13 +185,13 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 			Key:   []byte(hash.String()),
 			Value: value,
 		}) {
-			s.blockSeenHashes.PublishFailed(hash.String())
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Warnf("[handleBlockTopic] kafka blocks producer backlogged, dropped announcement of block %s from peer %s", hash.String(), fromID)
 		}
 	} else {
 		// No producer configured: nothing was published, so return the grant
 		// to keep the accounting honest.
-		s.blockSeenHashes.PublishFailed(hash.String())
+		s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
@@ -310,7 +310,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
-			s.subtreeSeenHashes.PublishFailed(hash.String())
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleSubtreeTopic] error marshaling KafkaSubtreeTopicMessage: %v", err)
 			return
 		}
@@ -321,13 +321,13 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 			Key:   []byte(hash.String()),
 			Value: value,
 		}) {
-			s.subtreeSeenHashes.PublishFailed(hash.String())
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Warnf("[handleSubtreeTopic] kafka subtrees producer backlogged, dropped announcement of subtree %s from peer %s", hash.String(), fromID)
 		}
 	} else {
 		// No producer configured (tests): return the grant to keep the
 		// accounting honest.
-		s.subtreeSeenHashes.PublishFailed(hash.String())
+		s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 

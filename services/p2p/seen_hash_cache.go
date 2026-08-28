@@ -46,8 +46,12 @@ const (
 	// consecutive windows and an honest late announcer gets it within a window
 	// or two. A fleet alternating two or more identities can still rotate the
 	// retry grant between them; that residual needs identity-cost rate
-	// limiting (issue 2870), not more state here, and each such identity is
-	// surfaced by the repeat warn threshold below.
+	// limiting (issue 2870), not more state here — and it is currently
+	// UNOBSERVED: holding the grant costs one announcement per window (~8 per
+	// accounting TTL, and the count resets with the entry), far under
+	// seenHashRepeatWarnThreshold, while the peer being suppressed is
+	// untracked so its peerRepeats stays 0 and its suppression logs only at
+	// debug level. Do not expect warn lines from this case.
 	seenHashPublishWindow = 15 * time.Second
 
 	// seenHashRepeatWarnThreshold is how many repeat announcements of the same
@@ -255,16 +259,22 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 
 // PublishFailed returns a publish grant for hash that did not result in an
 // actual publish (producer backpressure, marshal failure, no producer), so a
-// later announcement can retry. The announcer counts are deliberately kept: a
-// backlogged broker must not reset the repeat accounting.
-func (c *seenHashCache) PublishFailed(hash string) {
+// later announcement can retry. The grantee record is withdrawn along with
+// the budget: a grant that never reached Kafka must not make peerID "last
+// window's grantee" and cost it the rollover retry grant this method exists
+// to re-enable. The announcer counts are deliberately kept: a backlogged
+// broker must not reset the repeat accounting.
+func (c *seenHashCache) PublishFailed(hash, peerID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if element, ok := c.entries[hash]; ok {
-		if node := element.Value.(*seenHashNode); node.published > 0 {
+		node := element.Value.(*seenHashNode)
+		if node.published > 0 {
 			node.published--
 		}
+
+		delete(node.grantees, peerID)
 	}
 }
 
