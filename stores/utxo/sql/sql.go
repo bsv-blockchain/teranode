@@ -2243,8 +2243,12 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			validationErrors[i] = errors.NewTxLockedError("[Spend] utxo is not spendable for %s:%d", spend.TxID, spend.Vout)
 			continue
 		}
+		// spendableIn is the alert system's height-gated hold, not the parent tx's
+		// own in-flight commit (that's r.locked, above); it belongs on
+		// NewUtxoFrozenError, not NewTxLockedError, otherwise the validator retries
+		// a freeze that will not clear for many blocks.
 		if r.spendableIn != nil && *r.spendableIn > 0 && item.blockHeight < *r.spendableIn {
-			validationErrors[i] = errors.NewTxLockedError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *r.spendableIn)
+			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *r.spendableIn)
 			continue
 		}
 
@@ -2745,8 +2749,12 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
+		// spendableIn is the alert system's height-gated hold, not the parent tx's
+		// own in-flight commit (that's locked, above); it belongs on
+		// NewUtxoFrozenError, not NewTxLockedError, otherwise the validator retries
+		// a freeze that will not clear for many blocks.
 		if spendableIn != nil && *spendableIn > 0 && item.blockHeight < *spendableIn {
-			validationErrors[i] = errors.NewTxLockedError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *spendableIn)
+			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *spendableIn)
 			continue
 		}
 

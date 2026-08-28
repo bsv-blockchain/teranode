@@ -372,6 +372,17 @@ func (cm *ConnManager) AutomaticOutboundCount() int {
 	return established
 }
 
+// TargetOutbound returns the automatic outbound target the manager is aiming
+// for, after the zero-value substitution New applies.
+//
+// Callers must not recompute this from their own configuration. New replaces a
+// configured zero with defaultTargetOutbound before it copies the config, so a
+// caller that had left the target unset would compute zero and conclude the
+// node was already at target with no outbound peers at all.
+func (cm *ConnManager) TargetOutbound() uint32 {
+	return cm.cfg.TargetOutbound
+}
+
 // handleFailedConn handles a connection failed due to a disconnect or any
 // other failure. If permanent, it retries the connection after the configured
 // retry duration. Otherwise, if required, it makes a new connection request.

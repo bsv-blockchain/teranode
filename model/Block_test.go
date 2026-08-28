@@ -1498,7 +1498,10 @@ func TestGetAndValidateSubtrees(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
-	subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
+	// The mock store serves one canned subtree file whatever key it is asked for,
+	// so the key here has to be that file's own root or GetAndValidateSubtrees
+	// rejects it for not matching its key.
+	subtreeHash, _ := chainhash.NewHashFromStr("dba198cc711d2b7d90d0be80db04c37f9d1bd537bcfeaf813b57877d0cbb8ba9")
 
 	b, err := NewBlock(blockHeader,
 		coinbase,

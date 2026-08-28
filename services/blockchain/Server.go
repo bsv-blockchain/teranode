@@ -413,13 +413,22 @@ func (b *Blockchain) Init(ctx context.Context) error {
 		b.logger.Errorf("[Blockchain][Init] Error getting FSM state: %v", err)
 	}
 
-	if stateStr == "" { // if no state is stored, set the default state
-		b.logger.Infof("[Blockchain][Init] Blockchain db doesn't have previous FSM state, storing FSM's default state: %v", b.finiteStateMachine.Current())
+	if stateStr == "" { // no persisted state: this is a fresh node
+		// A fresh node has no chain (height 0) and is therefore behind the
+		// network. Boot it directly into CATCHINGBLOCKS (catch-up mode) rather
+		// than IDLE, so downstream services that block on FSM != IDLE start
+		// immediately and the node proactively catches up. We deliberately do
+		// NOT boot into RUNNING: RUNNING switches on live subtree validation /
+		// block-assembly tx feeding before the node is caught up. Promotion to
+		// RUNNING happens only when a catchup completes above the highest
+		// checkpoint (catchup.restoreFSMState + guardRunBelowHighestCheckpoint).
+		// This restores the boot-into-sync behaviour the removed
+		// IDLE->LEGACYSYNCING edge used to provide.
+		b.finiteStateMachine.SetState(blockchain_api.FSMStateType_CATCHINGBLOCKS.String())
+		b.logger.Infof("[Blockchain][Init] fresh node, booting FSM into %v (catch-up mode)", b.finiteStateMachine.Current())
 
-		err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
-		if err != nil {
-			// TODO: just logging now, consider adding retry
-			b.logger.Errorf("[Blockchain][Init] Error setting FSM state in blockchain store if the state is empty: %v", err)
+		if err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current()); err != nil {
+			b.logger.Errorf("[Blockchain][Init] Error persisting initial CATCHINGBLOCKS state: %v", err)
 		}
 	} else { // if there is a state stored, set the FSM to that state
 		// Migration: the LEGACYSYNCING state was removed. A node persisted in it
@@ -2843,11 +2852,12 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	// service relay tx invs that post-Genesis peers ban on sight
 	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
 	//
-	// The gate only applies when the prior state already implies a "caught
-	// up" claim (CATCHINGBLOCKS → RUNNING). IDLE → RUNNING
-	// is the boot path: a fresh node has no tip yet, must reach RUNNING for
-	// downstream services (legacy, p2p) to start syncing, and tx relay is
-	// suppressed while FSM != RUNNING so allowing the transition is safe.
+	// The gate only applies when the prior state already implies a "caught up"
+	// claim (CATCHINGBLOCKS -> RUNNING). IDLE -> RUNNING is an operator override
+	// (e.g. teranodecli setfsmstate running) and stays exempt: a fresh node has
+	// no tip yet and tx relay is suppressed while FSM != RUNNING. Automatic boot
+	// no longer uses IDLE -> RUNNING; fresh nodes boot into CATCHINGBLOCKS (see
+	// Init) and only reach RUNNING by completing catchup above the checkpoint.
 	if eventReq.Event == blockchain_api.FSMEventType_RUN &&
 		priorState != blockchain_api.FSMStateType_IDLE.String() {
 		if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {

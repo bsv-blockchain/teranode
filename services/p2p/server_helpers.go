@@ -946,6 +946,21 @@ func (s *Server) cleanupPeerMaps() {
 		s.ipBanCache.Delete(key)
 	}
 
+	// Evict expired liveConnCache entries: the liveness checks insert one
+	// entry per unique peer ID gossip is seen from.
+	var liveConnKeysToDelete []string
+	s.liveConnCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(liveConnCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				liveConnKeysToDelete = append(liveConnKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range liveConnKeysToDelete {
+		s.liveConnCache.Delete(key)
+	}
+
 	// Evict expired banStatusCache entries: shouldSkipBannedPeer inserts one
 	// entry per unique peer ID gossip is seen from.
 	var banStatusKeysToDelete []string
@@ -1070,10 +1085,12 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 	}
 
 	banned := false
+	live := false
 	for _, p := range s.P2PClient.GetPeers() {
 		if p.ID != peerID {
 			continue
 		}
+		live = len(p.Addrs) > 0
 		for _, addr := range p.Addrs {
 			if ip := extractIPFromMultiaddr(addr); ip != "" && s.banList.IsBanned(ip) {
 				banned = true
@@ -1084,6 +1101,10 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 	}
 
 	s.ipBanCache.Store(peerID, ipBanCacheEntry{banned: banned, expiresAt: now.Add(reputationCacheTTL)})
+	// This walk just observed the peer's connectedness; record it so the
+	// hasLiveConnection check that follows on the same gossip path does not
+	// have to repeat the walk.
+	s.cacheLiveConn(peerID, live, now)
 
 	return banned
 }
@@ -1192,11 +1213,168 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 				return
 			case <-s.peerMapCleanupTicker.C:
 				s.cleanupPeerMaps()
+				// Reconcile on its own goroutine so a slow registry can never
+				// delay the cache sweep above (the only expirer of the
+				// reputation/ban caches); skip the tick if the previous pass
+				// is still running.
+				if s.reconcileInFlight.CompareAndSwap(false, true) {
+					go func() {
+						defer s.reconcileInFlight.Store(false)
+						s.reconcileConnectionStates(ctx)
+					}()
+				}
 			}
 		}
 	}()
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
+}
+
+// reconcileTimeout bounds one reconcileConnectionStates pass so a wedged or
+// flooded registry cannot pin the reconcile goroutine (and its RPCs) forever.
+const reconcileTimeout = 30 * time.Second
+
+// snapshotLiveConnIDs returns the set of peer IDs that currently have an
+// open libp2p connection. Liveness comes from P2PClient.GetPeers(): verified
+// against go-p2p-message-bus v0.1.17 (client.go GetPeers), Addrs is built
+// from host.Network().ConnsToPeer — open connections only, not the peerstore
+// — while the peer list itself is every peer that ever authored a message on
+// a subscribed topic (gossip-only publishers included, never pruned). So the
+// Addrs filter is what separates live neighbours from gossip-only authors;
+// it is not redundant with the listing. This differs from the p2p service's
+// own GetPeers RPC, which is filtered to IsConnected registry entries.
+func (s *Server) snapshotLiveConnIDs() map[string]struct{} {
+	live := make(map[string]struct{})
+	if s.P2PClient != nil {
+		for _, p := range s.P2PClient.GetPeers() {
+			if len(p.Addrs) > 0 {
+				live[p.ID] = struct{}{}
+			}
+		}
+	}
+	return live
+}
+
+type liveConnCacheEntry struct {
+	live      bool
+	expiresAt time.Time
+}
+
+// cacheLiveConn records whether the peer had an open connection when a
+// GetPeers walk last saw it, valid for reputationCacheTTL.
+func (s *Server) cacheLiveConn(peerID string, live bool, now time.Time) {
+	s.liveConnCache.Store(peerID, liveConnCacheEntry{live: live, expiresAt: now.Add(reputationCacheTTL)})
+}
+
+// hasLiveConnection reports whether the peer has an open libp2p connection,
+// answered from liveConnCache (populated by isPeerIPBanned's walk, which the
+// gossip handlers run for the same peer immediately before this) or, on a
+// miss, by a targeted GetPeers walk cached for reputationCacheTTL. A freshly
+// connected neighbour is therefore visible on its first message, while a
+// gossip-relayed publisher walks once per TTL and stays unflagged. The answer
+// can be up to reputationCacheTTL stale after a disconnect; the reconcile
+// sweep corrects that within one cleanup interval.
+func (s *Server) hasLiveConnection(peerID string) bool {
+	now := time.Now()
+	if v, ok := s.liveConnCache.Load(peerID); ok {
+		entry := v.(liveConnCacheEntry)
+		if now.Before(entry.expiresAt) {
+			return entry.live
+		}
+	}
+
+	if s.P2PClient == nil {
+		return false
+	}
+
+	live := false
+	for _, p := range s.P2PClient.GetPeers() {
+		if p.ID != peerID {
+			continue
+		}
+		live = len(p.Addrs) > 0
+		break
+	}
+
+	s.cacheLiveConn(peerID, live, now)
+
+	return live
+}
+
+// reconcileConnectionStates synchronizes the registry's IsConnected flags with
+// actual libp2p connectedness, in both directions: it clears the flag on
+// entries with no live connection and sets it on live peers the hot path
+// missed (their messages arrived before the liveness snapshot included them).
+// Nothing else ever clears the flag: go-p2p-message-bus exposes no disconnect
+// callback (see networkDisconnector) and the only other clearing site is the
+// ban path (removePeer), so without this sweep every flagged peer would stay
+// cleanup-exempt in the registry for the life of the process.
+func (s *Server) reconcileConnectionStates(ctx context.Context) {
+	if s.P2PClient == nil || s.peerRegistry == nil {
+		return
+	}
+
+	live := s.snapshotLiveConnIDs()
+
+	// Seed the per-peer liveness cache from the snapshot just built: nearly
+	// free (bounded by open connections), and it tightens the hot path right
+	// after this pass — a peer this pass is about to clear must not be
+	// re-flagged off a stale cached "live" for the next few seconds.
+	now := time.Now()
+	for id := range live {
+		s.cacheLiveConn(id, true, now)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
+
+	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	if err != nil {
+		s.logger.Warnf("[reconcileConnectionStates] ListPeers failed: %v", err)
+		return
+	}
+
+	cleared, flagged := 0, 0
+	for _, info := range peers {
+		if ctx.Err() != nil {
+			s.logger.Warnf("[reconcileConnectionStates] pass cut short (%v) after clearing %d and flagging %d peers", ctx.Err(), cleared, flagged)
+			return
+		}
+
+		_, isLive := live[info.ID]
+		switch {
+		case info.IsConnected && !isLive:
+			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, false); err != nil {
+				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s false failed: %v", info.ID, err)
+				continue
+			}
+			// Overwrite any stale cached "live" so the hot path cannot
+			// re-flag this peer off a pre-disconnect cache entry, and drop
+			// the batcher's reassert memory so a peer that reconnects gets
+			// re-marked connected on its next message instead of being
+			// skipped as recently asserted.
+			s.cacheLiveConn(info.ID, false, time.Now())
+			if s.registryBatcher != nil {
+				s.registryBatcher.forgetAssertState(info.ID)
+			}
+			cleared++
+		case !info.IsConnected && isLive:
+			// Deliberately no batcher poke here, unlike the clear branch: the
+			// batcher's assert memory is either absent (next message asserts
+			// anyway) or stale past the reassert TTL, and at worst the peer's
+			// next message re-sends one redundant, idempotent
+			// UpdateConnectionState(true). Not worth coupling for.
+			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, true); err != nil {
+				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s true failed: %v", info.ID, err)
+				continue
+			}
+			flagged++
+		}
+	}
+
+	if cleared > 0 || flagged > 0 {
+		s.logger.Infof("[reconcileConnectionStates] reconciled connection flags: %d cleared, %d flagged live", cleared, flagged)
+	}
 }
 
 // startPeerRegistryCleanup and startPeerRegistryCacheSave have been removed.

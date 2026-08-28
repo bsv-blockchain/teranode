@@ -205,6 +205,64 @@ func (u *Server) reportValidatedChainProgress(ctx context.Context, peerID string
 	}
 }
 
+// shouldReportConsensusMalicious decides whether a failed block validation is
+// solid enough evidence against the serving peer to charge their reputation.
+//
+// A consensus code alone is not enough. errors.Is walks the whole wrap chain, so
+// an error can carry both ErrBlockInvalid/ErrTxInvalid and ErrStorageError, and a
+// storage fault is always this node's disk rather than anything the peer sent
+// (issue 1439). Charging that combination would blame an honest peer for our own
+// corruption, which is the failure this branch exists to remove.
+//
+// The exemption is defence in depth rather than a path known to be live:
+// ValidateBlockWithOptions screens ErrStorageError out at its block.Valid failure
+// site before wrapping in BlockInvalid, and validateBlockSubtrees wraps only on
+// ErrTxInvalid. It is written down anyway because releaseCatchupLock already
+// scores exactly that chain local_storage_fault, and two classifiers in one file
+// reaching opposite verdicts on one error is the bug shape, not the safeguard.
+//
+// That argument is why the exemption delegates to isLocalCatchupFault rather than
+// naming ErrStorageError alone. Screening one code while the sibling classifiers
+// screen four plus context errors reproduces the disagreement one code over: a
+// consensus code wrapping ErrServiceUnavailable or a context error would be scored
+// local by releaseCatchupLock, exonerated by processCatchupChItem, and still
+// reported malicious here. Since this is a reputation call, that is the exact
+// failure the branch exists to remove.
+func shouldReportConsensusMalicious(err error) bool {
+	if isLocalCatchupFault(err) {
+		return false
+	}
+
+	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
+}
+
+// isLocalCatchupFault reports whether a catchup failure is this node's own doing
+// rather than anything the serving peer did, so no reputation charge is warranted.
+//
+// The predicate is the union of two errors-package helpers because neither covers
+// this on its own, and they are disjoint on exactly the cases that matter here.
+// IsLocalError - what recordCatchupPeerFailure uses - is context errors plus
+// ErrStorageError, and misses the *Unavailable codes. IsTransientLocalError is
+// {ServiceError, StorageError, ServiceUnavailable, StorageUnavailable}, and misses
+// context errors entirely. Either one alone leaves a class of purely local failure
+// charged to an honest primary: a shutdown or catchup-context deadline in the first
+// case, an aerospike batch timeout (ErrServiceUnavailable) in the second.
+//
+// The explicit ErrContextCanceled test is not redundant with IsContextError. That
+// helper resolves the chain with errors.As, which stops at the OUTERMOST *Error,
+// so it reads the code of the wrapper rather than of the cause; a consensus code
+// wrapping a context cancellation therefore misses the code test and falls through
+// to a substring match on the rendered message, which matches only the exact
+// wording "context canceled". errors.Is walks the chain by code, so it catches the
+// wrapped case whatever the wrapper says. That chain is the one this predicate
+// exists for, since shouldReportConsensusMalicious is only ever asked about errors
+// that already carry a consensus code on the outside.
+func isLocalCatchupFault(err error) bool {
+	return errors.IsTransientLocalError(err) ||
+		errors.IsContextError(err) ||
+		errors.Is(err, errors.ErrContextCanceled)
+}
+
 // reportCatchupMalicious reports malicious behavior to the P2P service.
 // Falls back to local metrics if P2P client is unavailable.
 //

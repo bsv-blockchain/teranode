@@ -171,6 +171,17 @@ type Server struct {
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
+	// liveConnCache caches, per peer ID, whether the peer had an open libp2p
+	// connection when last checked (liveConnCacheEntry, expires after
+	// reputationCacheTTL). Written by isPeerIPBanned's existing GetPeers walk
+	// and by hasLiveConnection on a miss; updatePeerLastMessageTime consults
+	// it so gossip-relayed publishers are never marked IsConnected while a
+	// freshly connected neighbour is flagged on its first message.
+	// reconcileInFlight keeps ticker-driven reconcile passes from piling up
+	// when the registry is slow.
+	liveConnCache     sync.Map
+	reconcileInFlight atomic.Bool
+
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
 
 	wsTimeouts *wsTimeouts // Test-only override of the /p2p-ws keepalive parameters (nil = defaults)
@@ -1318,8 +1329,6 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 		return
 	}
 
-	// Mark sender as connected and update last message time
-	// The sender is the peer we're directly connected to
 	// Note: We don't have the sender's client name here, only the originator's
 	senderID, err := peer.Decode(from)
 	if err != nil {
@@ -1327,7 +1336,16 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 		return
 	}
 
-	s.addConnectedPeer(senderID, "", 0, nil, "")
+	// Only mark the sender connected when it has a live libp2p connection.
+	// FromID is the pubsub author, not the immediate hop, so gossip-relayed
+	// messages arrive "from" peers we never dialled; flagging those connected
+	// would exempt them from registry cleanup and let a flood of self-signed
+	// messages under fresh peer IDs grow the registry without bound.
+	if s.hasLiveConnection(from) {
+		s.addConnectedPeer(senderID, "", 0, nil, "")
+	} else {
+		s.addPeer(senderID, "", 0, nil, "")
+	}
 	s.touchLastMessageTime(senderID)
 
 	// Also update for the originator if different (gossiped message)
@@ -1891,6 +1909,12 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 	// Get connected peers count from the registry. The registry also holds
 	// gossiped/disconnected peers, so count only directly connected ones.
+	// Precisely: peers with an open libp2p connection that have authored at
+	// least one gossip message since process start — liveness derives from
+	// the message bus's topic-peer set, so a connected-but-silent peer is
+	// invisible until its first message. A flag can lag reality by up to
+	// reputationCacheTTL after a connect and by up to one cleanup interval
+	// after a disconnect.
 	connectedPeersCount := 0
 	if s.peerRegistry != nil {
 		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
@@ -2384,6 +2408,18 @@ func (s *Server) Stop(ctx context.Context) error {
 		coordCancel()
 	}
 
+	// Stop the peer map cleanup ticker before closing the P2P client: a
+	// reconcile tick against a closed client sees zero live connections and
+	// would clear IsConnected on every registry peer during shutdown. This is
+	// best-effort — Stop() only prevents future ticks, it does not cancel a
+	// pass the last tick already launched, and nothing waits on
+	// reconcileInFlight. A shutdown mass-clear is harmless regardless: Load
+	// resets IsConnected on restore, so it has no persistent consequence.
+	if s.peerMapCleanupTicker != nil {
+		s.peerMapCleanupTicker.Stop()
+		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
+	}
+
 	// Stop the underlying P2P node
 	if s.P2PClient != nil {
 		collect("stop P2P node", s.P2PClient.Close())
@@ -2413,12 +2449,6 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	if s.e != nil {
 		collect("shutdown Echo server", s.e.Shutdown(ctx))
-	}
-
-	// Stop the peer map cleanup ticker
-	if s.peerMapCleanupTicker != nil {
-		s.peerMapCleanupTicker.Stop()
-		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
 	}
 
 	// Stop the registry batcher (performs a final flush of pending updates,

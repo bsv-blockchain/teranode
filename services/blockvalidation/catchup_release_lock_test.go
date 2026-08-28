@@ -173,6 +173,92 @@ func TestReleaseCatchupLock_LocalErrorSkipsReputationRPC(t *testing.T) {
 	require.False(t, blocker.errorCalled, "local error must not report peer error")
 }
 
+// TestReleaseCatchupLock_StorageErrorIsLocalNotPeer covers the peer-attribution
+// hole left open by issue 1439's reclassification: a torn, stale or mis-keyed
+// external transaction blob is now correctly an ErrStorageError, but the switch
+// in releaseCatchupLock had no case for it, so it reached the unknown_error
+// default with isPeerError left true and charged the primary for this node's own
+// disk fault.
+//
+// The truncated-blob variant was worse than a bare default. Its wrap chain
+// contains "unexpected EOF", and errors.IsNetworkError falls back to substring
+// matching that includes "eof", so it was actively labelled a network error
+// against the peer — which is why the new case has to sit above IsNetworkError.
+func TestReleaseCatchupLock_StorageErrorIsLocalNotPeer(t *testing.T) {
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "mis-keyed blob",
+			err:  errors.NewStorageError("[GetTxFromExternalStore][abc] external tx does not hash to the key it was stored under (got def) — stale, rotted or mis-keyed blob"),
+		},
+		{
+			// Must not be classified network_error by the IsNetworkError substring
+			// fallback, which matches "eof".
+			name: "truncated blob surfacing as unexpected EOF",
+			err:  errors.NewStorageError("[GetTxFromExternalStore][abc] could not read tx from stream", errors.NewProcessingError("unexpected EOF")),
+		},
+		{
+			// The laundering shape: a storage fault wrapped in a consensus code, which
+			// is what the aerospike store produced for its own bins' read failures.
+			// errors.Is walks the whole chain, so both codes match — and the switch
+			// used to test the consensus case first, scoring this a validation_failure
+			// and flagging an honest peer for our own disk. Pins the case ordering.
+			name: "storage fault wrapped in a consensus code",
+			err:  errors.NewTxInvalidError("could not process utxos", errors.NewStorageError("failed to get extra record")),
+		},
+		{
+			// Same shape from the other direction: the block-level consensus code.
+			name: "storage fault wrapped in a block-invalid code",
+			err:  errors.NewBlockInvalidError("block failed validation", errors.NewStorageError("failed to get block ID")),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _, _, cleanup := setupTestCatchupServer(t)
+			defer cleanup()
+
+			recorder := newPeerFailureRecordingP2PClient()
+			server.p2pClient = recorder
+
+			ctx := &CatchupContext{
+				blockUpTo: &model.Block{Header: header, Height: 1000},
+				baseURL:   "http://honest-primary:8000",
+				peerID:    "honest-primary",
+				startTime: time.Now(),
+			}
+			require.NoError(t, server.acquireCatchupLock(ctx))
+
+			relErr := tc.err
+			server.releaseCatchupLock(ctx, &relErr)
+
+			recorder.mu.Lock()
+			defer recorder.mu.Unlock()
+
+			// The malicious report is the assertion that actually distinguishes the
+			// fix from its absence. Revert the storage case and the two
+			// wrapped-consensus rows below fall through to the consensus case,
+			// which sets reportMalicious and flags an honest peer for our own
+			// disk. failuresByPeer, by contrast, only moves when ctx.failedPeers is
+			// non-empty, which it is not here, so on its own it cannot fail —
+			// review caught that; it is kept as a second, weaker guard.
+			require.Zero(t, recorder.maliciousByPeer["honest-primary"],
+				"an honest peer must never be flagged malicious for a local storage fault")
+			require.Equal(t, 0, recorder.failuresByPeer["honest-primary"],
+				"a local storage fault must never be charged to the serving peer")
+			require.Empty(t, recorder.errorMsgsByPeer["honest-primary"])
+
+			require.NotNil(t, server.previousCatchupAttempt)
+			require.Equal(t, "local_storage_fault", server.previousCatchupAttempt.ErrorType,
+				"must be classified as a local fault, not network_error or unknown_error")
+		})
+	}
+}
+
 // incompleteBlockP2PClient records whether the peer-attributable incomplete-block penalty
 // path (RecordCatchupFailureWithKind) fires. Only that method is overridden; any other call
 // hits the nil embedded interface and panics, which would flag an unexpected penalty path.
@@ -261,6 +347,7 @@ type peerFailureRecordingP2PClient struct {
 	failuresByPeer  map[string]int
 	kindsByPeer     map[string][]string // every failureKind recorded per peer, in call order
 	errorMsgsByPeer map[string]string
+	maliciousByPeer map[string]int
 }
 
 func newPeerFailureRecordingP2PClient() *peerFailureRecordingP2PClient {
@@ -268,6 +355,7 @@ func newPeerFailureRecordingP2PClient() *peerFailureRecordingP2PClient {
 		failuresByPeer:  make(map[string]int),
 		kindsByPeer:     make(map[string][]string),
 		errorMsgsByPeer: make(map[string]string),
+		maliciousByPeer: make(map[string]int),
 	}
 }
 
@@ -284,6 +372,18 @@ func (r *peerFailureRecordingP2PClient) UpdateCatchupError(_ context.Context, pe
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.errorMsgsByPeer[peerID] = errorMsg
+
+	return nil
+}
+
+// RecordCatchupMalicious must be implemented rather than left to the embedded nil
+// P2PClientI: the storage-fault cases below assert that no malicious report is
+// made, and a nil-interface panic would "fail" those tests for the wrong reason
+// while telling a reader nothing about which peer was flagged.
+func (r *peerFailureRecordingP2PClient) RecordCatchupMalicious(_ context.Context, peerID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.maliciousByPeer[peerID]++
 
 	return nil
 }
@@ -391,12 +491,26 @@ func TestReleaseCatchupLock_DrainChargesPrimaryEvenOnMixedCycle(t *testing.T) {
 // genuinely LOCAL failure (get_blocks.go's "Local error fetching subtree ...
 // not retrying with other peers", re-wrapped by fetchSubtreeDataForBlock).
 // releaseCatchupLock's switch has no specific case for generic ErrServiceError
-// (only the narrower ErrServiceUnavailable), so this falls to the
-// unknown_error default with isPeerError left true — and Server.go's
-// ErrServiceError branch returns early WITHOUT ever calling
-// reportCatchupFailureForError. The drain loop is therefore the ONLY place
-// this cycle's genuine primary failure can be recorded; it must not be
-// skipped down to zero.
+// (only the narrower ErrServiceUnavailable). IsLocalError admits two shapes —
+// a context error and an ErrStorageError — and this fixture uses the storage
+// one, which is what most of get_blocks.go's own subtree store reads and writes
+// are coded as (fetchAndStoreSubtreeData's Exists check is the exception, still
+// ErrProcessing). Since issue 1439 that lands the terminal error in the
+// local_storage_fault case rather than the unknown_error default, and leaves
+// isPeerError false rather than true.
+//
+// Either way nothing outside the drain CHARGES the primary. Post-1439
+// reportPeerErr is not set at all; pre-1439 it was, but its only effect is
+// reportCatchupError, which stores the error text for the dashboard and does
+// not touch the failure counters. And Server.go's local-infra branch returns
+// early WITHOUT ever calling reportCatchupFailureForError (it now matches this
+// fixture on ErrStorageError as well as ErrServiceError). The drain loop is
+// therefore the ONLY place this cycle's genuine primary failure can be
+// recorded; it must not be skipped down to zero.
+//
+// (The unknown_error + isPeerError=true combination this test originally
+// exercised is still covered by DrainChargesPrimaryEvenOnMixedCycle above,
+// whose terminal error carries no storage link.)
 func TestReleaseCatchupLock_LocalTerminalErrorStillChargesFailedPrimary(t *testing.T) {
 	server, _, _, cleanup := setupTestCatchupServer(t)
 	defer cleanup()
@@ -595,6 +709,282 @@ func TestReleaseCatchupLock_HeaderContextErrorIsNotChargedToPeer(t *testing.T) {
 			defer blocker.mu.Unlock()
 			require.False(t, blocker.maliciousCalled, "a local header-context failure must not report malicious")
 			require.False(t, blocker.errorCalled, "a local header-context failure must not charge the peer")
+		})
+	}
+}
+
+// TestReleaseCatchupLock_ContextErrorIsNotChargedToPeer pins that a shutdown or
+// a catchup-context deadline is never the serving peer's fault.
+//
+// There was no case for a context error in the classification switch at all, so
+// it fell past every branch to "unknown_error" with isPeerError left true, and
+// the honest primary was charged for our own shutdown. recordCatchupPeerFailure
+// has always exempted it (via IsLocalError); this makes the terminal path agree.
+func TestReleaseCatchupLock_ContextErrorIsNotChargedToPeer(t *testing.T) {
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "cancelled", err: errors.NewContextCanceledError("catchup context cancelled")},
+		{
+			// Deadline text contains no network token, but must be exempt on class
+			// rather than by luck.
+			name: "deadline exceeded",
+			err:  errors.NewContextCanceledError("context deadline exceeded while catching up"),
+		},
+		{
+			// No context code anywhere in the chain, only the stdlib sentinel and
+			// its rendered text. This is what the text-matched case below ErrExternal
+			// exists to catch; the code-matched case at the top of the switch cannot.
+			name: "uncoded stdlib deadline",
+			err:  errors.NewProcessingError("catchup stalled", context.DeadlineExceeded),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _, _, cleanup := setupTestCatchupServer(t)
+			defer cleanup()
+
+			recorder := newPeerFailureRecordingP2PClient()
+			server.p2pClient = recorder
+
+			ctx := &CatchupContext{
+				blockUpTo: &model.Block{Header: header, Height: 1000},
+				baseURL:   "http://honest-primary:8000",
+				peerID:    "honest-primary",
+				startTime: time.Now(),
+			}
+			require.NoError(t, server.acquireCatchupLock(ctx))
+
+			relErr := tc.err
+			server.releaseCatchupLock(ctx, &relErr)
+
+			recorder.mu.Lock()
+			defer recorder.mu.Unlock()
+
+			require.Equal(t, 0, recorder.failuresByPeer["honest-primary"],
+				"our own context cancellation must never be charged to the serving peer")
+
+			require.NotNil(t, server.previousCatchupAttempt)
+			require.Equal(t, "local_context_cancelled", server.previousCatchupAttempt.ErrorType,
+				"must not fall through to unknown_error, which leaves isPeerError true")
+		})
+	}
+}
+
+// TestReleaseCatchupLock_PeerFetchDeadlineKeepsPeerLabel pins the ordering fix for
+// the context case: it must not take a label that a code-matched case below it owns.
+//
+// errors.IsContextError falls back to a substring match over the rendered chain, so
+// while it sat at the top of the switch it swallowed anything whose text merely
+// CONTAINED "context deadline exceeded". fetchSubtreeFromPeer wraps a failed peer
+// fetch as a ServiceError naming the peer URL, and the all-peers-failed roll-up
+// wraps those in ErrExternal, so a stalled peer was reported as this node's own
+// shutdown and issue 1368's peer_data_unavailable label went missing from the
+// dashboard exactly when it was needed.
+//
+// The impact is telemetry, not reputation: both cases set isPeerError false. The
+// labels are the product.
+func TestReleaseCatchupLock_PeerFetchDeadlineKeepsPeerLabel(t *testing.T) {
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+
+	server, _, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	recorder := newPeerFailureRecordingP2PClient()
+	server.p2pClient = recorder
+
+	ctx := &CatchupContext{
+		blockUpTo: &model.Block{Header: header, Height: 1000},
+		baseURL:   "http://honest-primary:8000",
+		peerID:    "honest-primary",
+		startTime: time.Now(),
+	}
+	require.NoError(t, server.acquireCatchupLock(ctx))
+
+	// The shape fetchSubtreeFromPeer produces, rolled up the way the all-peers-failed
+	// path rolls it up. The context text is real and unavoidable: it is what an HTTP
+	// client returns when the request deadline fires against a slow peer.
+	relErr := error(errors.NewExternalError("all peers failed to supply subtree",
+		errors.NewServiceError("failed to fetch subtree from http://slow-peer:8000",
+			context.DeadlineExceeded)))
+	server.releaseCatchupLock(ctx, &relErr)
+
+	require.NotNil(t, server.previousCatchupAttempt)
+	require.Equal(t, "peer_data_unavailable", server.previousCatchupAttempt.ErrorType,
+		"a peer's fetch deadline must keep the peer label, not be relabelled as our own cancellation")
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	require.Equal(t, 0, recorder.failuresByPeer["honest-primary"],
+		"peer_data_unavailable must still not charge the catchup primary for another peer's failure")
+}
+
+// TestShouldReportConsensusMalicious pins the predicate that validateBlocksOnChannel
+// uses to decide whether a failed block validation is chargeable to the serving
+// peer. The cases that matter are the both-codes chains: errors.Is walks the whole
+// wrap chain, so a consensus code sitting outside a storage fault must not be read
+// as proof about the peer. releaseCatchupLock scores those same chains
+// local_storage_fault, and the two must not disagree.
+func TestShouldReportConsensusMalicious(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "bare block-invalid is the peer's fault",
+			err:  errors.NewBlockInvalidError("block does not meet target difficulty"),
+			want: true,
+		},
+		{
+			name: "bare tx-invalid is the peer's fault",
+			err:  errors.NewTxInvalidError("previous tx has no output at index 3"),
+			want: true,
+		},
+		{
+			name: "block-invalid wrapping a storage fault is ours, not the peer's",
+			err: errors.NewBlockInvalidError("block is not valid",
+				errors.NewStorageError("external blob does not hash to its key")),
+			want: false,
+		},
+		{
+			name: "tx-invalid wrapping a storage fault is ours, not the peer's",
+			err: errors.NewTxInvalidError("invalid tx",
+				errors.NewStorageError("could not read input")),
+			want: false,
+		},
+		{
+			name: "storage fault nested two deep is still ours",
+			err: errors.NewBlockInvalidError("block contains invalid transactions",
+				errors.NewTxInvalidError("invalid tx",
+					errors.NewStorageError("invalid version"))),
+			want: false,
+		},
+		{
+			name: "bare storage fault carries no consensus code at all",
+			err:  errors.NewStorageError("external blob does not hash to its key"),
+			want: false,
+		},
+		{
+			name: "an incomplete block is handled elsewhere and is not chargeable here",
+			err:  errors.NewBlockIncompleteError("no coinbase from seeded peer"),
+			want: false,
+		},
+		{
+			// The codes below are why this delegates to isLocalCatchupFault rather
+			// than naming ErrStorageError. Both sibling classifiers exempt them, so
+			// screening only storage here would leave one code on which this file
+			// still reaches two opposite verdicts, on the reputation call.
+			name: "block-invalid wrapping a service-unavailable is ours, not the peer's",
+			err: errors.NewBlockInvalidError("block is not valid",
+				errors.NewServiceUnavailableError("aerospike batch timed out")),
+			want: false,
+		},
+		{
+			name: "tx-invalid wrapping a storage-unavailable is ours, not the peer's",
+			err: errors.NewTxInvalidError("invalid tx",
+				errors.NewStorageUnavailableError("blob store is unhealthy")),
+			want: false,
+		},
+		{
+			name: "block-invalid wrapping our own context cancellation is ours",
+			err: errors.NewBlockInvalidError("block is not valid",
+				errors.NewContextCanceledError("catchup context cancelled on shutdown")),
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, shouldReportConsensusMalicious(tc.err))
+		})
+	}
+}
+
+// TestIsLocalCatchupFault pins the union predicate processCatchupChItem uses to
+// decide that a terminal catchup error is this node's own fault. The union is the
+// point: errors.IsLocalError misses the *Unavailable codes and
+// errors.IsTransientLocalError misses context errors, so either helper alone leaves
+// a class of purely local failure charged to an honest primary.
+func TestIsLocalCatchupFault(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "storage fault - the mis-keyed external blob this branch reclassified",
+			err:  errors.NewStorageError("external tx does not hash to the key it was stored under"),
+			want: true,
+		},
+		{
+			name: "service error - the pre-existing 1057 case",
+			err:  errors.NewServiceError("blockchain service unavailable"),
+			want: true,
+		},
+		{
+			name: "service unavailable - aerospike batch timeout, missed by IsLocalError",
+			err:  errors.NewServiceUnavailableError("aerospike batch read timed out"),
+			want: true,
+		},
+		{
+			name: "storage unavailable - missed by IsLocalError",
+			err:  errors.NewStorageUnavailableError("blob store health check failed"),
+			want: true,
+		},
+		{
+			name: "context cancelled - shutdown, missed by IsTransientLocalError",
+			err:  errors.NewContextCanceledError("shutting down"),
+			want: true,
+		},
+		{
+			name: "wrapped context deadline - catchup context timing out",
+			err:  errors.NewProcessingError("catchup failed", context.DeadlineExceeded),
+			want: true,
+		},
+		{
+			name: "storage fault nested under a consensus code is still ours",
+			err: errors.NewBlockInvalidError("block is not valid",
+				errors.NewStorageError("could not read tx from stream")),
+			want: true,
+		},
+		{
+			name: "bare block-invalid is the peer's, not ours",
+			err:  errors.NewBlockInvalidError("block does not meet target difficulty"),
+			want: false,
+		},
+		{
+			name: "bare tx-invalid is the peer's, not ours",
+			err:  errors.NewTxInvalidError("previous tx has no output at index 3"),
+			want: false,
+		},
+		{
+			name: "an incomplete block is a peer-supplied shortfall, handled elsewhere",
+			err:  errors.NewBlockIncompleteError("no coinbase from seeded peer"),
+			want: false,
+		},
+		{
+			// IsContextError alone fails this one. It resolves the chain with
+			// errors.As, which stops at the outermost *Error and so reads
+			// ERR_BLOCK_INVALID, then falls back to matching the rendered text
+			// against the exact string "context canceled". This message says
+			// "cancelled", so only the code walk catches it. The wording is the
+			// point of the fixture: a predicate that depends on how a caller spelt
+			// its message is not a predicate.
+			name: "consensus code wrapping our own cancellation, message spelt otherwise",
+			err: errors.NewBlockInvalidError("block is not valid",
+				errors.NewContextCanceledError("catchup context cancelled on shutdown")),
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isLocalCatchupFault(tc.err))
 		})
 	}
 }

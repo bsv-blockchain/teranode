@@ -292,6 +292,28 @@ func TestHandleSingleTx(t *testing.T) {
 			mockValidationError: errors.NewTxConflictingError("test conflicting"),
 		},
 		{
+			// Parent still finishing its own two-phase commit (normal path,
+			// ~70ms tolerance in the validator's retry loop). Pinned here so
+			// the whole TX_LOCKED/TX_CREATING/frozen classification is
+			// covered in one table, not just the newly-added part.
+			name:                "TX_LOCKED (parent still committing)",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusConflict,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxLockedError("test tx locked"),
+		},
+		{
+			// Large, multi-record parent still being written (Aerospike
+			// LuaErrorCodeCreating). Before the fix this fell through to the
+			// default case and returned 500; it must be 409 like TX_LOCKED,
+			// since both are the parent's own commit still in flight.
+			name:                "TX_CREATING (large parent still being written)",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusConflict,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxCreatingError("test tx creating"),
+		},
+		{
 			name:                "Frozen utxo",
 			requestBody:         txBytes,
 			expectedStatusCode:  http.StatusForbidden,

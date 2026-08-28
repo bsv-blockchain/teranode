@@ -1924,12 +1924,23 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 
 		// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue.
 		// Must run after the ErrExternal check above (see the ordering note there).
-		if errors.Is(err, errors.ErrServiceError) {
+		//
+		// ErrStorageError belongs here for the same reason: a failed read of our own
+		// blob store — a torn, stale or mis-keyed external transaction (issue 1439) —
+		// is this node's disk being wrong, and no peer can fix it. Without this case
+		// the error fell through to reportCatchupFailureForError and ReportPeerFailure
+		// against an honest primary, and then charged every cached alternative in
+		// turn. recordCatchupPeerFailure already exempts storage errors for exactly
+		// this reason; this closes the matching hole on the terminal-error path.
+		//
+		// isLocalCatchupFault is the union of two errors-package helpers, neither of
+		// which covers this on its own; its doc comment carries the reasoning.
+		if isLocalCatchupFault(err) {
 			// #1057: count this cycle toward the per-block cap (unless it made
-			// progress) so a persistent local service error cannot drive unbounded
-			// re-entry.
+			// progress) so a persistent local service or storage error cannot drive
+			// unbounded re-entry.
 			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
-			u.logger.Warnf("[catchup] Local service error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
+			u.logger.Warnf("[catchup] Local service/storage error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
 			u.processBlockNotify.Delete(*c.block.Hash())
 			u.catchupAlternatives.Delete(*c.block.Hash())
 			return

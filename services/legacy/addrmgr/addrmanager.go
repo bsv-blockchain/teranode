@@ -972,40 +972,107 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 
 			factor *= 1.2
 		}
-	} else {
-		// new node.
-		// XXX use a closure/function to avoid repeating this.
-		large := 1 << 30
-		factor := 1.0
+	}
 
-		for {
-			// Pick a random bucket.
-			bucket := a.rand.IntN(len(a.addrNew))
-			if len(a.addrNew[bucket]) == 0 {
-				continue
-			}
+	return a.selectNew()
+}
 
-			// Then, a random entry in it.
-			var ka *KnownAddress
+// UnverifiedAddress is what one new-table entry looks like from outside the
+// address manager: the fields that decide whether an address is worth dialling,
+// copied out under a.mtx.
+//
+// It exists because *KnownAddress cannot safely leave the manager. None of its
+// accessors takes a lock (knownaddress.go), while Attempt and Good write the
+// same fields under a.mtx from peer goroutines, so a caller that held the entry
+// and read it afterwards would race them. Handing back values read inside the
+// lock removes the hazard rather than documenting it.
+//
+// NetAddress is still a pointer, and holding it is safe: the manager never
+// mutates a published wire.NetAddress in place. Every update copies the struct,
+// changes the copy and swaps ka.na, in updateAddress, Connected and SetServices
+// alike, two of which say so in a comment. The struct this points at therefore
+// cannot change under the caller.
+type UnverifiedAddress struct {
+	// NetAddress is the address itself, and is what the caller passes back to
+	// Attempt or Good.
+	NetAddress *wire.NetAddress
 
-			nth := a.rand.IntN(len(a.addrNew[bucket]))
-			for _, value := range a.addrNew[bucket] {
-				if nth == 0 {
-					ka = value
-				}
+	// LastAttempt is when a connection to it was last attempted, zero if never.
+	// It is the field the feeler's freshness filter judges.
+	LastAttempt time.Time
 
-				nth--
-			}
+	// Attempts is how many failures have been counted against the address.
+	Attempts int
+}
 
-			randval := a.rand.IntN(large)
-			if float64(randval) < (factor * ka.chance() * float64(large)) {
-				a.logger.Debugf("Selected %v from new bucket",
-					NetAddressKey(ka.na))
-				return ka
-			}
+// UnverifiedAddress returns a routable address drawn only from the new table:
+// addresses the node has been told about but has never itself confirmed.
+//
+// This is svnode's Select(newOnly=true) (addrman.cpp:337), and it exists for
+// the feeler probe. GetAddress tosses a coin between the tried and new tables,
+// which is the wrong draw for a probe: the whole purpose of probing is to move
+// addresses INTO tried, and re-verifying one that is already there accomplishes
+// nothing.
+//
+// The whole answer is assembled before the mutex is released, which is the
+// point: see the type's own comment. An earlier version returned the
+// *KnownAddress and left the caller to read it, and the feeler's selection pass
+// then raced Attempt and Good on ka.lastattempt.
+//
+// Returns nil when the new table is empty. That guard is load-bearing rather
+// than defensive: selectNew's bucket loop has no termination condition of its
+// own and would spin forever if every new bucket were empty.
+func (a *AddrManager) UnverifiedAddress() *UnverifiedAddress {
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
 
-			factor *= 1.2
+	if a.nNew == 0 {
+		return nil
+	}
+
+	ka := a.selectNew()
+
+	return &UnverifiedAddress{
+		NetAddress:  ka.na,
+		LastAttempt: ka.lastattempt,
+		Attempts:    ka.attempts,
+	}
+}
+
+// selectNew picks a random address from the new table, weighted by chance().
+// The caller must hold a.mtx and must have established that the new table is
+// not empty, because the loop below only ends when it finds an address.
+func (a *AddrManager) selectNew() *KnownAddress {
+	large := 1 << 30
+	factor := 1.0
+
+	for {
+		// Pick a random bucket.
+		bucket := a.rand.IntN(len(a.addrNew))
+		if len(a.addrNew[bucket]) == 0 {
+			continue
 		}
+
+		// Then, a random entry in it.
+		var ka *KnownAddress
+
+		nth := a.rand.IntN(len(a.addrNew[bucket]))
+		for _, value := range a.addrNew[bucket] {
+			if nth == 0 {
+				ka = value
+			}
+
+			nth--
+		}
+
+		randval := a.rand.IntN(large)
+		if float64(randval) < (factor * ka.chance() * float64(large)) {
+			a.logger.Debugf("Selected %v from new bucket",
+				NetAddressKey(ka.na))
+			return ka
+		}
+
+		factor *= 1.2
 	}
 }
 

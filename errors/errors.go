@@ -779,6 +779,20 @@ var publicCauseCodes = map[ERR]struct{}{
 	ERR_TX_CONFLICTING:          {},
 	ERR_UTXO_SPENT:              {},
 	ERR_TX_LOCKED:               {},
+	// ERR_TX_CREATING is the same kind of verdict as ERR_TX_LOCKED: the parent
+	// tx this one spends from is still completing its own commit. It carries no
+	// node-internal state and is actionable by the submitter (resubmit shortly),
+	// so it belongs on the same allowlist for the same reason ERR_TX_LOCKED does.
+	ERR_TX_CREATING: {},
+	// ERR_UTXO_FROZEN is a verdict about the submitted tx — an output it spends is
+	// held, either outright or until a given height. Its producers do not all
+	// format the same fields, so the claim here is only that none of them carries
+	// node-internal state: the transaction id always, the output index in every
+	// producer except the aerospike record-group formatter (createGeneralError,
+	// which reports the group rather than one output and substitutes the current
+	// block height), and the height the hold expires at only where the store knows
+	// it. All of that is either supplied by the submitter or already public.
+	ERR_UTXO_FROZEN: {},
 	// ERR_TX_MISSING_PARENT meets every bar above: its messages name transactions
 	// and nothing else, and "a parent this transaction spends is not in my utxo
 	// set" is the most actionable thing a submitter can be told — resubmit the
@@ -798,9 +812,6 @@ var publicCauseCodes = map[ERR]struct{}{
 // Deliberately NOT on the allowlist, recorded so the decision is not re-made by
 // accident:
 //
-//   - ERR_UTXO_FROZEN: freezing is administrative state set by the alert
-//     system, and whether to disclose it to an arbitrary submitter is a policy
-//     question rather than an error-plumbing one.
 //   - ERR_TX_COINBASE_IMMATURE: the message is built by the utxo store and
 //     embeds the node's block height and an internal batch id. It would qualify
 //     once it carries only the outpoint and the maturity height.
@@ -1072,7 +1083,17 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	// so an allowlisted code that falls through to codes.Internal returns the right
 	// message inside a transport status that says "this node broke", which is
 	// exactly the ambiguity the allowlist exists to remove.
-	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED, ERR_TX_MISSING_PARENT:
+	//
+	// Most codes in this family clear on their own, but ERR_UTXO_FROZEN does not —
+	// an outright freeze never clears, and a height-gated hold clears only many
+	// blocks later — so the family name should not be read as a promise that it
+	// will. It still belongs here rather than codes.PermissionDenied, which gRPC
+	// reserves for the caller lacking authorisation: a frozen output rejects every
+	// submitter equally, so it is a statement about the chain state, not about who
+	// asked. The HTTP layer answers 403 for the same error and the two maps are
+	// independent by design; see httpStatusForTxError in services/propagation.
+	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED, ERR_TX_CREATING,
+		ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT:
 		return codes.FailedPrecondition
 	default:
 		return codes.Internal
