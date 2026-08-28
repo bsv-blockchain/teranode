@@ -28,6 +28,11 @@ regex = '''(?i)[a-z0-9_]*private_keys?(?:\.[a-z0-9_.-]+)*\s*=\s*"?[0-9a-f]{64,}'
 description = "Localhost/docker dev-default DB credentials and env placeholders"
 regexTarget = "line"
 regexes = [
+  # Go settings struct tags (`key:"p2p_ban_threshold" desc:"..."`): the tag's
+  # key NAME can clear generic-api-key's entropy bar and get flagged as the
+  # secret whenever a PR touches the line. The tag never holds a secret value —
+  # defaults live in settings.conf, which is still scanned.
+  '''key:"[a-z0-9_]+" desc:"''',
   # Postgres connection strings pointing at local/docker service hosts.
   '''postgres://[^@\s"'`]+@(localhost|postgres|postgrest|toxiproxy|127\.0\.0\.1)([:/]|$)''',
   # ${ENV_VAR} placeholders resolved at runtime (not literal secrets).
