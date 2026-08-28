@@ -46,7 +46,7 @@ type Server struct {
     lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
-    peerSelector                      *PeerSelector      // Stateless peer selection logic
+    peerSelector                      *PeerSelector      // Peer selection logic (+ SSRF-safe client for availability probes)
     syncCoordinator                   *SyncCoordinator   // Orchestrates sync operations
     syncConnectionTimes               sync.Map           // Map to track when we first connected to each sync peer (peerID -> timestamp)
 

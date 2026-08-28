@@ -283,12 +283,44 @@ func (b *BlockAssembler) TxCount() uint64 {
 	return b.subtreeProcessor.TxCount()
 }
 
-// QueueLength returns the current length of the transaction queue.
+// QueueLength returns the number of transactions currently queued in the
+// subtree processor's intake queue, not the number of batches.
 //
 // Returns:
-//   - int64: Current queue length
+//   - int64: Current queue length, in transactions
 func (b *BlockAssembler) QueueLength() int64 {
 	return b.subtreeProcessor.QueueLength()
+}
+
+// LastDequeueTime returns the wall-clock time the subtree processor's
+// consumer goroutine last passed through its dequeue branch. See
+// subtreeprocessor.Interface.LastDequeueTime for why this, not QueueLength
+// alone, is what detects a stalled consumer.
+//
+// Returns:
+//   - time.Time: last time the dequeue branch ran
+func (b *BlockAssembler) LastDequeueTime() time.Time {
+	return b.subtreeProcessor.LastDequeueTime()
+}
+
+// ConsumerStarted reports whether the subtree processor's consumer goroutine
+// has been started. See subtreeprocessor.Interface.ConsumerStarted for why the
+// stall signal needs this to avoid reporting every restart as an incident.
+//
+// Returns:
+//   - bool: true once the consumer goroutine has been started
+func (b *BlockAssembler) ConsumerStarted() bool {
+	return b.subtreeProcessor.ConsumerStarted()
+}
+
+// ConsumerExited reports whether the subtree processor's consumer goroutine
+// has exited. See subtreeprocessor.Interface.ConsumerExited for why a stalled
+// consumer and a departed one need telling apart.
+//
+// Returns:
+//   - bool: true once the consumer goroutine has exited
+func (b *BlockAssembler) ConsumerExited() bool {
+	return b.subtreeProcessor.ConsumerExited()
 }
 
 // SubtreeCount returns the total number of subtrees.

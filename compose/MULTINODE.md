@@ -116,7 +116,7 @@ The `isolate`/`heal`/`slow`/`unslow` commands inject `iptables` and `tc` rules i
 
 By default each node is a single container running every teranode microservice in one process (`-allinone=1`). For chaos testing you usually want finer-grained failure injection. Pass `-allinone=0` and each node is generated as nine sibling containers, one per microservice:
 
-`teranodeN-blockchain`, `teranodeN-blockassembly`, `teranodeN-blockvalidation`, `teranodeN-subtreevalidation`, `teranodeN-validator`, `teranodeN-propagation`, `teranodeN-p2p`, `teranodeN-asset`, and `teranodeN-core` (the catch-all sidecar that bundles rpc, alert, blockpersister, utxopersister, pruner, and legacy so RPC stays reachable).
+`teranodeN-blockchain`, `teranodeN-blockassembly`, `teranodeN-blockvalidation`, `teranodeN-subtreevalidation`, `teranodeN-validator`, `teranodeN-propagation`, `teranodeN-p2p`, `teranodeN-asset`, and `teranodeN-core` (the catch-all sidecar that bundles rpc, blockpersister, utxopersister, pruner, and legacy so RPC stays reachable).
 
 Each sibling has its own gRPC listener on the docker network; addresses are wired through the generated `settings_multinode.conf`. Sibling services `depends_on` `teranodeN-blockchain` with `service_healthy`, so blockchain comes up first and dependents only start once its listener accepts connections.
 

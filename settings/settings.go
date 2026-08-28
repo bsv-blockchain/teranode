@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -83,7 +84,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		GRPCRetryBackoff:           getDuration("grpc_retry_backoff", 250*time.Millisecond, alternativeContext...),
 		SecurityLevelGRPC:          getInt("security_level_grpc", 0, alternativeContext...),
 		UsePrometheusGRPCMetrics:   getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
-		GRPCAdminAPIKey:            getString("grpc_admin_api_key", "", alternativeContext...),
+		GRPCAdminAPIKey:            strings.TrimSpace(getString("grpc_admin_api_key", "", alternativeContext...)),
 		GlobalBlockHeightRetention: globalBlockHeightRetention,
 		BatcherDrainMode:           getBool("batcher_drainMode", false, alternativeContext...),
 		BatcherBackground:          getBool("batcher_background", true, alternativeContext...),
@@ -364,7 +365,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CheckSubtreeFromBlockRetries:              getInt("blockvalidation_check_subtree_from_block_retries", 5, alternativeContext...),
 			CheckSubtreeFromBlockRetryBackoffDuration: getDuration("blockvalidation_check_subtree_from_block_retry_backoff_duration", 30*time.Second),
 			SecretMiningThreshold:                     getUint32("blockvalidation_secret_mining_threshold", uint32(params.CoinbaseMaturity-1), alternativeContext...), // golint:nolint
-			PreviousBlockHeaderCount:                  getUint64("blockvalidation_previous_block_header_count", 100, alternativeContext...),
+			PreviousBlockHeaderCount:                  getUint64AtLeast("blockvalidation_previous_block_header_count", 100, MedianTimeSpan, alternativeContext...),
 			MaxBlocksBehindBlockAssembly:              getInt("blockvalidation_maxBlocksBehindBlockAssembly", 20, alternativeContext...),
 			PeriodicProcessingInterval:                getDuration("blockvalidation_periodic_processing_interval", 1*time.Minute, alternativeContext...),
 			RecentBlockIDsLimit:                       getUint64("blockvalidation_recentBlockIDsLimit", 50000, alternativeContext...),
@@ -548,6 +549,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EnableNAT:       getBool("p2p_enable_nat", false, alternativeContext...),        // Default false - UPnP scans gateway
 			EnableMDNS:      getBool("p2p_enable_mdns", false, alternativeContext...),       // Default false to prevent LAN scanning
 			AllowPrivateIPs: getBool("p2p_allow_private_ips", false, alternativeContext...), // Default false for production safety
+			// GossipSub mesh protection: scoring on by default (Sybil defence), PX requires scoring
+			EnablePeerScoring:              getBool("p2p_enable_peer_scoring", true, alternativeContext...),
+			EnablePeerExchange:             getBool("p2p_enable_peer_exchange", true, alternativeContext...),
+			PeerScoreIPColocationThreshold: getInt("p2p_peer_score_ip_colocation_threshold", 10, alternativeContext...),
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback:                   getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
 			SyncCoordinatorPeriodicEvaluationInterval: getDuration("p2p_sync_coordinator_periodic_evaluation_interval", 30*time.Second, alternativeContext...),
@@ -556,6 +561,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Gossip handler load management
 			PeerRegistryBatchInterval: getDuration("p2p_peer_registry_batch_interval", time.Second, alternativeContext...),
 			GossipHandlerConcurrency:  getInt("p2p_gossip_handler_concurrency", 4, alternativeContext...),
+
+			WebSocketMaxConnections:          getInt("p2p_websocket_max_connections", 1000, alternativeContext...),
+			WebSocketMaxConnectionsPerSource: getInt("p2p_websocket_max_connections_per_source", 0, alternativeContext...),
+			WebSocketAllowedOrigins:          getMultiString("p2p_websocket_allowed_origins", "|", []string{}, alternativeContext...),
+			WebSocketTrustedSourceCIDRs:      getMultiString("p2p_websocket_trusted_source_cidrs", "|", []string{"127.0.0.1/32", "::1/128"}, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),

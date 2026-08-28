@@ -649,15 +649,23 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	s.logger.Infof("[Legacy Server] Started peer statistics logging")
 
 	apiKey := s.settings.GRPCAdminAPIKey
+	if util.ValidateAdminAPIKey(s.logger, "Legacy", apiKey, s.settings.Legacy.GRPCListenAddress, s.settings.SecurityLevelGRPC) {
+		// Configured key is a well-known placeholder; ignore it and fall back to
+		// the random-key path below rather than trusting a world-readable value.
+		apiKey = ""
+	}
+
 	if apiKey == "" {
 		// Generate a random API key if not provided
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
-			return errors.WrapGRPC(errors.NewServiceNotStartedError("[P2P] failed to generate API key", err))
+			return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] failed to generate API key", err))
 		}
 
 		apiKey = hex.EncodeToString(key)
-		s.logger.Infof("[Legacy] Generated admin API key: %s", apiKey)
+		// Never log the key itself; a random key means admin RPCs are
+		// intentionally unreachable until an operator configures one.
+		s.logger.Warnf("[Legacy] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban) are unreachable until a key is configured")
 	}
 
 	// Define protected methods - use the full gRPC method path
