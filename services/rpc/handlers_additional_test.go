@@ -443,6 +443,39 @@ func TestHandleGetRawTransactionEdgeCases(t *testing.T) {
 			"an unknown txid is -5, matching bitcoind, not an internal error")
 		require.Equal(t, txNotFoundMessage, parsed.Error.Message)
 	})
+
+	t.Run("a txid containing a newline cannot forge a log line", func(t *testing.T) {
+		// c.Txid is unvalidated on this path. The 404 branch logs, and the error it
+		// builds is rendered into a log line too - so escaping only the Warnf left
+		// the same value reaching the log four lines later by another route.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		assetURL, _ := url.Parse(server.URL)
+		logger := newCapturingLogger()
+		s := &RPCServer{logger: logger, assetHTTPURL: assetURL}
+
+		verboseLevel := 0
+		cmd := &bsvjson.GetRawTransactionCmd{
+			Txid:    "deadbeef\nFORGED ERROR LINE",
+			Verbose: &verboseLevel,
+		}
+
+		_, err := handleGetRawTransaction(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+
+		// Every line the handler logs, both the Warnf and the Debugf logAndBuild
+		// emits for the error it returns.
+		for _, line := range append(append([]string{}, logger.errorf...), append(logger.warnf, logger.debugf...)...) {
+			require.NotContains(t, line, "\n",
+				"a caller-supplied newline must not split a log entry: %q", line)
+		}
+
+		require.Contains(t, logger.all(), `\n`,
+			"the newline is escaped rather than dropped, so the txid stays diagnosable")
+	})
 }
 
 // TestHandleSendRawTransactionValidation tests input validation for sendrawtransaction

@@ -170,6 +170,10 @@ const maxRejectionReasonParts = 4
 // the BDK policy chain, one more wrap anywhere above the verdict would have
 // pushed the reason off the end silently, which is the failure ChiR6 described
 // relocated from the depth cap to the part cap.
+// Referencing the constants rather than copying their text means a RENAME is a
+// compile error. A REWORD is not - this map keys on the value - so the reword
+// case is covered by TestRPCError_TrimsTheRealValidatorChain, which builds its
+// input from the same constants and fails if the suppression stops matching.
 var uninformativeVerdictText = map[string]struct{}{
 	validator.ErrMsgInvalidTx: {},
 	validator.ErrMsgPolicy:    {},
@@ -200,7 +204,7 @@ func rejectionReason(e *errors.Error) string {
 	seen := make(map[string]struct{}, maxRejectionReasonParts)
 
 	add := func(msg string) bool {
-		msg = stripCodeRender(stripBreadcrumb(msg))
+		msg = stripInternalPrefixes(msg)
 		if msg == "" {
 			return true
 		}
@@ -304,11 +308,32 @@ func stripCodeRender(msg string) string {
 	return codeRenderPrefix.ReplaceAllString(msg, "")
 }
 
+// stripInternalPrefixes removes leading breadcrumbs and code renderings until
+// neither is left.
+//
+// A loop, not one pass of each, because either can hide the other and the order
+// that fixes one exposes the other. Stripping breadcrumbs first leaves
+// "TX_POLICY (39): [Spend][deadbeef:0] utxo is frozen" with its breadcrumb no
+// longer leading, so it survives and only the code is removed - putting the
+// internal marker on the wire. Stripping codes first has the mirror problem.
+// Iterating to a fixed point has neither, and terminates because every
+// iteration that changes anything makes the string shorter.
+func stripInternalPrefixes(msg string) string {
+	for {
+		stripped := stripCodeRender(stripBreadcrumb(msg))
+		if stripped == msg {
+			return msg
+		}
+
+		msg = stripped
+	}
+}
+
 // sanitised trims the breadcrumbs off a message that has been judged safe to
 // show. A message that is nothing but breadcrumbs carries no reason, so it is
 // replaced rather than emitted empty.
 func sanitised(msg string) string {
-	stripped := stripCodeRender(stripBreadcrumb(msg))
+	stripped := stripInternalPrefixes(msg)
 	if stripped == "" || !carriesReason(stripped) {
 		return genericErrorMessage
 	}

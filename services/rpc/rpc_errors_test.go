@@ -54,7 +54,7 @@ func validatorRejectionChain() error {
 	// CGO string as errors.New(ERR_TX_INVALID, "%s", cause). An earlier fixture
 	// used fmt.Errorf here and so exercised a shape production no longer builds.
 	return errors.NewProcessingError("[Validate][%s] error validating transaction", "abcd1234",
-		errors.NewTxInvalidError("GoBDK fail to ValidateTransaction",
+		errors.NewTxInvalidError(validator.ErrMsgInvalidTx,
 			errors.New(errors.ERR_TX_INVALID, "bad-txns-inputs-duplicate")))
 }
 
@@ -101,6 +101,7 @@ type capturingLogger struct {
 
 	mu     sync.Mutex
 	errorf []string
+	warnf  []string
 	debugf []string
 }
 
@@ -114,6 +115,12 @@ func (l *capturingLogger) Errorf(format string, args ...interface{}) {
 	l.errorf = append(l.errorf, fmt.Sprintf(format, args...))
 }
 
+func (l *capturingLogger) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warnf = append(l.warnf, fmt.Sprintf(format, args...))
+}
+
 func (l *capturingLogger) Debugf(format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -124,7 +131,7 @@ func (l *capturingLogger) all() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return strings.Join(append(append([]string{}, l.errorf...), l.debugf...), "\n")
+	return strings.Join(append(append(append([]string{}, l.errorf...), l.warnf...), l.debugf...), "\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +196,7 @@ func TestPublicErrorMessage_KeepsBothEndsOfARejectionChain(t *testing.T) {
 // put the service breadcrumb's text on the wire.
 func TestRejectionReason_StartsAtTheVerdictNotTheBreadcrumb(t *testing.T) {
 	breadcrumb := errors.NewProcessingError("[Validate][%s] error validating transaction", "abcd1234",
-		errors.NewTxInvalidError("GoBDK fail to ValidateTransaction", fmt.Errorf("bad-txns-inputs-duplicate")))
+		errors.NewTxInvalidError(validator.ErrMsgInvalidTx, fmt.Errorf("bad-txns-inputs-duplicate")))
 
 	require.True(t, isRejection(breadcrumb), "the chain-wide test matches the breadcrumb link too")
 
@@ -741,6 +748,37 @@ func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
 		require.Contains(t, msg, "utxo already spent", "the caller still learns why")
 		require.NotContains(t, msg, "UTXO_SPENT", "internal error codes must not cross the boundary")
 		require.NotContains(t, msg, "(70)")
+	})
+
+	t.Run("a code render at a nested join position is stripped too", func(t *testing.T) {
+		// Pins the strip inside add(), which the leading-position case cannot: the
+		// sanitised() call is anchored at the front of the JOINED string, so it
+		// never sees a code render that arrives at the second part. That is the
+		// position NewUtxoSpentError actually occupies - it is a leaf, always
+		// joined under a validator wrapper - so this is the half that matters.
+		err := errors.NewTxInvalidError("bad-txns-in-belowout",
+			errors.NewTxPolicyError("UTXO_SPENT (70): abcd:0 utxo already spent by tx ef"))
+
+		msg := publicErrorMessage(err)
+
+		require.Equal(t, "bad-txns-in-belowout: abcd:0 utxo already spent by tx ef", msg)
+		require.NotContains(t, msg, "UTXO_SPENT")
+	})
+
+	t.Run("a code render in front of a breadcrumb does not smuggle the breadcrumb through", func(t *testing.T) {
+		// The two strips are order-dependent and each can hide the other. Stripping
+		// breadcrumbs first leaves this message's marker no longer leading, so it
+		// survives and only the code is removed - putting [Spend][...] on the wire.
+		// stripInternalPrefixes iterates to a fixed point, which has neither
+		// ordering's blind spot.
+		err := errors.NewTxInvalidError("bad-txns-in-belowout",
+			errors.NewTxPolicyError("TX_POLICY (39): [Spend][deadbeef:0] utxo is frozen"))
+
+		msg := publicErrorMessage(err)
+
+		require.Equal(t, "bad-txns-in-belowout: utxo is frozen", msg)
+		require.NotContains(t, msg, "[Spend]", "internal markers must not survive a code render in front of them")
+		require.NotContains(t, msg, "TX_POLICY")
 	})
 
 	t.Run("a producer that renders its own code is defanged at the boundary", func(t *testing.T) {

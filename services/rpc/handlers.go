@@ -607,8 +607,13 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 			s.logger.Warnf("[handleGetRawTransaction] asset service reported 404 at %s", fullURL.String())
 		}
 
+		// %q, not %s: the caller-facing reply is the fixed txNotFoundMessage, but
+		// this message is rendered into a log line by logAndBuild, and c.Txid is
+		// unvalidated on this path. Escaping it here is what actually closes the
+		// injection the Warnf above was changed for - fixing only that line left
+		// the same value reaching the log by another route four lines later.
 		return nil, s.rpcTxLookupError(
-			errors.NewTxNotFoundError("tx %s not found in asset service", c.Txid),
+			errors.NewTxNotFoundError("tx %q not found in asset service", c.Txid),
 			bsvjson.ErrRPCInvalidAddressOrKey, "")
 	}
 

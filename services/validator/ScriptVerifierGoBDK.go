@@ -23,10 +23,12 @@ import (
 const (
 	// Exported because services/rpc suppresses these exact strings at the
 	// JSON-RPC boundary: they name the adapter and say nothing about the
-	// transaction, and the error code already carries what they carry. Exported
-	// rather than copied so a reword there is a compile error rather than a
-	// silently-stopped suppression - see uninformativeVerdictText in
-	// services/rpc/rpc_errors.go.
+	// transaction, and the error code already carries what they carry. See
+	// uninformativeVerdictText in services/rpc/rpc_errors.go.
+	//
+	// Exporting makes a RENAME a compile error there. It does not make a REWORD
+	// one, since that map keys on the value - so if you change the text, expect
+	// TestRPCError_TrimsTheRealValidatorChain to fail, and that is deliberate.
 	ErrMsgInvalidTx = "GoBDK fail to ValidateTransaction"
 	ErrMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
 
