@@ -4047,6 +4047,19 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 		deferFn()
 	}()
 
+	// Read and validate the block's subtrees BEFORE anything is mutated. This is a
+	// pure blob-store read that depends on nothing in the assembly, and every way
+	// it can fail — a missing file, a subtree that does not match its key, a torn
+	// meta — is a rejection of the whole move-back. Doing it after
+	// removeCoinbaseUtxos meant those rejections landed with the coinbase UTXO and
+	// its child spends already deleted, leaving handleReorg to fall back to a full
+	// assembly reset on top of a half-mutated store, and to do it again on every
+	// retry because nothing repairs the file.
+	subtreesNodes, subtreeMetaTxInpoints, conflictingHashes, err := stp.moveBackBlockGetSubtrees(ctx, block)
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("[moveBackBlock][%s] error getting subtrees", block.String(), err)
+	}
+
 	// process coinbase utxos. This may remove this block's coinbase child-spends from
 	// the assembly, which rebuilds and Closes the chained/current subtrees via
 	// reChainSubtrees. Capture the previous subtree state AFTER this call so the bulk
@@ -4063,7 +4076,8 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	chainedSubtrees := stp.chainedSubtrees
 
 	// Bulk build: get block subtrees, collect all nodes, then build subtrees in parallel
-	if subtreesNodes, conflictingHashes, err = stp.moveBackBlockBulkBuild(ctx, block, createProperlySizedSubtrees, chainedSubtrees, lastIncompleteSubtree); err != nil {
+	if subtreesNodes, conflictingHashes, err = stp.moveBackBlockBulkBuild(ctx, block, createProperlySizedSubtrees, chainedSubtrees, lastIncompleteSubtree,
+		subtreesNodes, subtreeMetaTxInpoints, conflictingHashes); err != nil {
 		return nil, nil, err
 	}
 
@@ -4092,18 +4106,18 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *model.Block,
 	createProperlySizedSubtrees bool,
 	previousChainedSubtrees []*subtreepkg.Subtree,
-	previousCurrentSubtree *subtreepkg.Subtree) ([][]subtreepkg.Node, []chainhash.Hash, error) {
+	previousCurrentSubtree *subtreepkg.Subtree,
+	subtreesNodes [][]subtreepkg.Node,
+	subtreeMetaTxInpoints [][]subtreepkg.TxInpoints,
+	conflictingHashes []chainhash.Hash) ([][]subtreepkg.Node, []chainhash.Hash, error) {
 
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveBackBlockBulkBuild",
 		tracing.WithLogMessage(stp.logger, "[moveBackBlock:BulkBuild][%s] with %d subtrees", block.String(), len(block.Subtrees)),
 	)
 	defer deferFn()
 
-	// Step 1: Get block subtrees from blob store (parallel)
-	subtreesNodes, subtreeMetaTxInpoints, conflictingHashes, err := stp.moveBackBlockGetSubtrees(ctx, block)
-	if err != nil {
-		return nil, nil, errors.NewProcessingError("[moveBackBlock:BulkBuild][%s] error getting subtrees", block.String(), err)
-	}
+	// Step 1 (reading and validating the block's subtrees) has already run in
+	// moveBackBlock, before the UTXO store was touched.
 
 	// Step 2: Estimate total node count for pre-allocation
 	totalBlockNodes := 0
@@ -4305,6 +4319,19 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 				return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error deserializing subtree", block.String(), err)
 			}
 
+			// Bind the file to the key it was fetched under before its nodes are
+			// used, the same check Block.GetAndValidateSubtrees makes on the
+			// validation path. Without it a foreign subtree stored under this key has
+			// its nodes inserted into currentTxMap carrying the committed subtree's
+			// positional inpoints, and handleReorg only falls back to a reset on
+			// error — so it poisons assembly state rather than failing. It has to sit
+			// here rather than only in the meta reader below, because
+			// StoreTxInpointsForSubtreeMeta is optional and the else branch reads no
+			// meta at all.
+			if err := model.ValidateSubtreeMatchesKey(subtree, subtreeHash); err != nil {
+				return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s]", block.String(), err)
+			}
+
 			subtreesNodes[idx] = subtree.Nodes
 
 			if subtreeHash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
@@ -4324,7 +4351,12 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 					_ = subtreeMetaReader.Close()
 				}()
 
-				subtreeMeta, err := subtreepkg.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+				// Validate the meta header against the subtree before deserializing
+				// (issue 1425): an over-long torn file panics inside the raw
+				// deserializer, and this call runs in an errgroup goroutine where a
+				// panic kills the process — recurring on every restart, since the
+				// file is on disk.
+				subtreeMeta, err := model.NewSubtreeMetaFromValidatedReader(*subtreeHash, subtree, subtreeMetaReader)
 				if err != nil {
 					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error deserializing subtree meta", block.String(), err)
 				}

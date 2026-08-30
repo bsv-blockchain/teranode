@@ -149,10 +149,28 @@ func observeDequeueStall(state dequeueStallState, now time.Time, queueLength int
 		// Recovery is only visible once staleness has fallen back to the
 		// threshold, so by now the consumer has been running again for
 		// staleness, which is up to dequeueStallThreshold plus a tick. Timing
-		// to now would add that to every reported duration. The result cannot
-		// go negative: staleness here is at most the threshold, and the
-		// staleness that opened the incident exceeded it.
-		return dequeueStallState{}, dequeueStallEnded, now.Add(-staleness).Sub(state.stalledSince)
+		// to now would add that to every reported duration.
+		//
+		// Both ends of that subtraction are a clock reading minus the
+		// staleness at that reading, so each is the moment of a dequeue, and
+		// the later dequeue follows the earlier one. In the running service
+		// the difference cannot go negative, and not because the wall clock
+		// behaves: now comes from time.Now(), Add carries its monotonic
+		// reading through, and Sub between two readings that both carry one
+		// ignores the wall clock entirely - so an NTP step cannot invert it.
+		//
+		// Floored anyway, because the clock here is only a parameter. This
+		// function is pure precisely so the table test can drive it with
+		// time.Date values, which carry no monotonic reading and so restore
+		// every wall-clock hazard the service itself is immune to. Returning
+		// "was stalled for -5m0s" for an input a caller can construct is not
+		// worth the two lines saved.
+		stalledFor := now.Add(-staleness).Sub(state.stalledSince)
+		if stalledFor < 0 {
+			stalledFor = 0
+		}
+
+		return dequeueStallState{}, dequeueStallEnded, stalledFor
 	}
 
 	// Still stalled, and the consumer has started since the incident opened.

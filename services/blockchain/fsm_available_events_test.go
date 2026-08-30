@@ -18,6 +18,7 @@ func TestAvailableEventsForState(t *testing.T) {
 			state: blockchain_api.FSMStateType_IDLE.String(),
 			expect: []string{
 				blockchain_api.FSMEventType_RUN.String(),
+				blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
 			},
 		},
 		{

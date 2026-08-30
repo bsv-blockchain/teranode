@@ -1015,17 +1015,26 @@ func (s *Store) handleErrorSpends(res *LuaMapResponse, batchByKey []aerospike.Ma
 	}
 }
 
-// createGeneralError creates a general error based on error code
+// createGeneralError creates a general error based on error code.
+//
+// The four verdict codes below (FROZEN, CONFLICTING, LOCKED, CREATING) are on
+// errors.publicCauseCodes, so DeepestPublicCause surfaces their message verbatim
+// to external HTTP/gRPC clients. They must therefore carry only data the
+// submitter already knows — txid, block height and the fixed Lua message — and
+// not batchID, which is this Store's process-lifetime spend-batch counter and
+// would leak node uptime and throughput to anyone who submits two transactions.
+// batchID is still carried on the arms below that produce non-allowlisted codes,
+// where the public boundary collapses the message anyway.
 func (s *Store) createGeneralError(errorCode LuaErrorCode, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64, message string) error {
 	switch errorCode {
 	case LuaErrorCodeFrozen:
-		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
+		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
 	case LuaErrorCodeConflicting:
-		return errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
+		return errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
 	case LuaErrorCodeLocked:
-		return errors.NewTxLockedError("[SPEND_BATCH_LUA][%s] transaction is locked, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
+		return errors.NewTxLockedError("[SPEND_BATCH_LUA][%s] transaction is locked, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
 	case LuaErrorCodeCreating:
-		return errors.NewTxCreatingError("[SPEND_BATCH_LUA][%s] transaction is creating, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
+		return errors.NewTxCreatingError("[SPEND_BATCH_LUA][%s] transaction is creating, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
 	case LuaErrorCodeCoinbaseImmature:
 		return errors.NewTxCoinbaseImmatureError("[SPEND_BATCH_LUA][%s] coinbase is locked, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
 	case LuaErrorCodeTxNotFound:

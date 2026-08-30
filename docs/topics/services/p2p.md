@@ -320,7 +320,7 @@ All notifications collected from the Block and Validator listeners are sent over
 
     - The server tracks all active client channels (`clientChannels`).
     - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
-    - A client that fails to drain its channel within the broadcast timeout is evicted from `clientChannels` and its connection is closed, releasing its connection slot.
+    - The fan-out never waits on a client: sends are non-blocking, and a client whose channel buffer is full when a notification is broadcast is evicted from `clientChannels` and its connection is closed, releasing its connection slot. Evictions are counted in `teranode_p2p_websocket_clients_evicted_total`, and notifications dropped because the shared notification channel is full are counted in `teranode_p2p_websocket_notifications_dropped_total`.
 
 As a sequence:
 

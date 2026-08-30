@@ -65,6 +65,7 @@ var (
 	ErrTxNotFound                 = New(ERR_TX_NOT_FOUND, "tx not found")
 	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
 	ErrTxLocked                   = New(ERR_TX_LOCKED, "tx locked")
+	ErrTxCreating                 = New(ERR_TX_CREATING, "tx creating")
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
 	ErrNetworkError               = New(ERR_NETWORK_ERROR, "network error")
 	ErrNetworkTimeout             = New(ERR_NETWORK_TIMEOUT, "network timeout")

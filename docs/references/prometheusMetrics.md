@@ -202,6 +202,8 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 | Metric Name                          | Type    | Labels                        | Description                                                                                                                              |
 |--------------------------------------|---------|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
 | `teranode_p2p_publish_blocked_total` | Counter | `topic`, `fsm_state`, `stage` | Outbound P2P messages suppressed by the per-FSM-state allow-list; `stage="precheck"` is an expected skip, `stage="chokepoint"` is a publish that leaked past the pre-checks |
+| `teranode_p2p_websocket_notifications_dropped_total` | Counter | `type` | WebSocket notifications dropped because the shared notification channel was full, by notification type (`block`, `subtree`, `node_status`) |
+| `teranode_p2p_websocket_clients_evicted_total` | Counter | | WebSocket clients evicted from the broadcast fan-out because their send buffer was full when a broadcast reached them |
 
 ## Legacy Peer Server Metrics
 
@@ -335,6 +337,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_validator_send_to_blockvalidation_kafka` | Histogram | Histogram of sending transactions to block validation kafka   |
 | `teranode_validator_send_to_p2p_kafka`             | Histogram | Histogram of sending rejected transactions to p2p kafka       |
 | `teranode_validator_set_tx_meta`                   | Histogram | Histogram of validator set tx meta                            |
+| `teranode_validator_parent_commit_retries`         | Counter   | Retries spent waiting for a parent transaction to finish committing, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
+| `teranode_validator_parent_commit_exhausted`       | Counter   | Transactions rejected because the parent-commit retry budget ran out, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
 
 ## TxMetaCache Service Metrics
 
