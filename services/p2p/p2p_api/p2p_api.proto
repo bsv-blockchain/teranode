@@ -318,6 +318,11 @@ message AddBanScoreRequest {
     rpc RecordCatchupSuccess(RecordCatchupSuccessRequest) returns (RecordCatchupSuccessResponse) {}
     rpc RecordCatchupFailure(RecordCatchupFailureRequest) returns (RecordCatchupFailureResponse) {}
     rpc RecordCatchupMalicious(RecordCatchupMaliciousRequest) returns (RecordCatchupMaliciousResponse) {}
+    // UpdateCatchupReputation was removed: it had become a no-op, and reputation
+    // is computed by the registry from interaction outcomes. protobuf has no
+    // "reserved" for RPC names, so this note stands in for one - do not reuse the
+    // name for anything with different semantics, or a mixed-version client would
+    // silently bind to it.
     rpc UpdateCatchupError(UpdateCatchupErrorRequest) returns (UpdateCatchupErrorResponse) {}
     rpc ResetReputation(ResetReputationRequest) returns (ResetReputationResponse) {}
     rpc GetPeersForCatchup(GetPeersForCatchupRequest) returns (GetPeersForCatchupResponse) {}

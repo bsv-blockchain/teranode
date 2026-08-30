@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -109,6 +110,13 @@ var readOnlyMethodsByField = map[string]map[string]bool{
 	// a peer-state write that feeds peer selection. No public handler touches it
 	// today; listing it keeps a future one from shipping unauthenticated.
 	"blockchainClient": {},
+	// P2PClient reaches libp2p directly. ConnectPeer/DisconnectPeer are exempted
+	// from the mutation check for exactly this reason, so the field has to be
+	// guarded here or a public RPC could dial, drop or gossip unauthenticated.
+	"P2PClient": {
+		"GetID":    true,
+		"GetPeers": true,
+	},
 	"registryBatcher":  {},
 	"syncCoordinator":  {},
 	"peerSelector":     {},
@@ -546,6 +554,58 @@ func (l *warnRecorder) Warnf(format string, args ...interface{}) {
 
 func (l *warnRecorder) Errorf(format string, args ...interface{}) {
 	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+
+// TestRejectWeakAdminAPIKey covers the gap the merge to the shared helper left:
+// util.ValidateAdminAPIKey only warns about a short key, but a short key is
+// accepted as genuine, so on a listener reachable beyond loopback it can be
+// brute-forced into exactly the capability this authentication exists to deny.
+func TestRejectWeakAdminAPIKey(t *testing.T) {
+	newServer := func(networkName string) *Server {
+		tSettings := settings.NewSettings()
+
+		switch networkName {
+		case chaincfg.RegressionNetParams.Name:
+			tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
+		case chaincfg.TestNetParams.Name:
+			tSettings.ChainCfgParams = &chaincfg.TestNetParams
+		default:
+			tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		}
+
+		return &Server{logger: &warnRecorder{}, settings: tSettings}
+	}
+
+	t.Run("short key on a wide bind is fatal on public networks", func(t *testing.T) {
+		for _, network := range []string{chaincfg.MainNetParams.Name, chaincfg.TestNetParams.Name} {
+			err := newServer(network).rejectWeakAdminAPIKey(":9904", "abc")
+			require.Error(t, err, "%s must refuse to start", network)
+			require.Contains(t, err.Error(), network)
+			require.NotContains(t, err.Error(), "abc", "the error must not echo the key")
+		}
+	})
+
+	t.Run("short key on a loopback bind is allowed", func(t *testing.T) {
+		require.NoError(t, newServer(chaincfg.MainNetParams.Name).rejectWeakAdminAPIKey("localhost:9904", "abc"),
+			"loopback keeps the port unreachable, so a short key is not brute-forceable from outside")
+	})
+
+	t.Run("short key on regtest only warns", func(t *testing.T) {
+		s := newServer(chaincfg.RegressionNetParams.Name)
+		require.NoError(t, s.rejectWeakAdminAPIKey(":9904", "abc"))
+		require.Len(t, s.logger.(*warnRecorder).warnings, 1)
+	})
+
+	t.Run("strong key is allowed everywhere", func(t *testing.T) {
+		require.NoError(t, newServer(chaincfg.MainNetParams.Name).rejectWeakAdminAPIKey(":9904", "not-a-real-key-just-long-enough"))
+	})
+
+	t.Run("placeholder and empty keys are left to the shared helper", func(t *testing.T) {
+		// Both fail closed elsewhere (ignored / random key), so this guard must
+		// not turn them into a startup failure.
+		require.NoError(t, newServer(chaincfg.MainNetParams.Name).rejectWeakAdminAPIKey(":9904", "testkey"))
+		require.NoError(t, newServer(chaincfg.MainNetParams.Name).rejectWeakAdminAPIKey(":9904", ""))
+	})
 }
 
 // TestWarnIfUnreachableBind covers the mirror-image misconfiguration the loopback

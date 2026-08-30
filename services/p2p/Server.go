@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -1198,15 +1199,28 @@ func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 }
 
 // grpcAuthOptions builds the auth configuration for the PeerService listener.
-// Placeholder and weak-key handling lives in util.ValidateAdminAPIKey, which is
-// shared with the legacy and RPC services; a placeholder is ignored so the
-// random-key path below applies instead. When no usable key is configured that
-// leaves every protected RPC unreachable rather than open - the safe direction,
-// since these RPCs steer sync-peer selection.
+// Placeholder handling lives in util.ValidateAdminAPIKey, shared with the legacy
+// service: a placeholder is ignored so the random-key path below applies.
+//
+// Two policies are layered on top of that shared behaviour, because on this
+// service the key does more than guard admin RPCs - it also gates the ten
+// data-plane reporters that block and subtree validation call, and those set the
+// validated-work and delivery signals sync-peer selection runs on:
+//
+//   - A weak-but-real key is fatal on a network-reachable listener. The shared
+//     helper only warns, but a short key is accepted as genuine, so guessing it
+//     yields exactly the capability this authentication exists to deny.
+//   - No usable key at all is logged at Error, not Warn. It is fail-closed and
+//     therefore safe, but it silently strands sync-peer selection, so it must not
+//     look like routine startup noise.
 func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
 	listenAddress := s.settings.P2P.GRPCListenAddress
 
 	apiKey := s.settings.GRPCAdminAPIKey
+	if err := s.rejectWeakAdminAPIKey(listenAddress, apiKey); err != nil {
+		return nil, err
+	}
+
 	if util.ValidateAdminAPIKey(s.logger, "P2P", apiKey, listenAddress, s.settings.SecurityLevelGRPC) {
 		// Configured key is a well-known placeholder; ignore it and fall back to
 		// the random-key path below rather than trusting a world-readable value.
@@ -1223,13 +1237,38 @@ func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
 			return nil, errors.NewServiceError("error generating random API key", err)
 		}
 
-		s.logger.Warnf("[P2P] grpc_admin_api_key is not set or is a placeholder; a random key was generated, so every state-mutating PeerService RPC (bans, reputation, connect/disconnect, and the catchup/validation reporters called by block and subtree validation) will reject callers until a strong key is configured")
+		s.logger.Errorf("[P2P] grpc_admin_api_key is not set or is a placeholder, so a random key was generated and every state-mutating PeerService RPC will reject callers: block and subtree validation cannot report validated chain progress or block delivery, so no peer ever becomes a proven sync candidate and catchup stays in the budget-gated probe tier - set a strong key (%d+ chars) on every service in this deployment", util.MinAdminAPIKeyLength())
 	}
 
 	return &util.AuthOptions{
 		APIKey:           apiKey,
 		ProtectedMethods: authProtectedMethods(),
 	}, nil
+}
+
+// rejectWeakAdminAPIKey refuses to start when a real but short key guards a
+// listener something other than this host can reach without verified transport
+// security. A placeholder is handled elsewhere (ignored, so it fails closed); a
+// short key is worse, because it is accepted as the real key, so brute-forcing it
+// grants the ability to forge validated chain progress for a Sybil peer and flag
+// honest peers malicious.
+//
+// regtest is exempt so local, CI and docker development stacks keep working.
+func (s *Server) rejectWeakAdminAPIKey(listenAddress, apiKey string) error {
+	if !util.IsWeakAdminAPIKey(apiKey) || addressIsLoopbackOnly(listenAddress) {
+		return nil
+	}
+
+	// Verified TLS keeps the key off the wire, and only then is a short key
+	// merely a guessing problem rather than a harvesting one - but it is still
+	// guessable, so this only exempts development networks.
+	if s.settings.ChainCfgParams == nil || s.settings.ChainCfgParams.Name == chaincfg.RegressionNetParams.Name {
+		s.logger.Warnf("[P2P] grpc_admin_api_key is shorter than %d characters on a non-loopback listener (%s); this is tolerated on regtest only", util.MinAdminAPIKeyLength(), listenAddress)
+
+		return nil
+	}
+
+	return errors.NewConfigurationError("[P2P] refusing to start on %s: grpc_admin_api_key is shorter than %d characters while the gRPC listener (%s) is reachable beyond loopback, so it can be brute-forced to forge peer reputation and validated chain progress - use a strong random secret (32+ chars), or bind p2p_grpcListenAddress to loopback", s.settings.ChainCfgParams.Name, util.MinAdminAPIKeyLength(), listenAddress)
 }
 
 // warnIfUnreachableBind flags the mirror-image misconfiguration: other services

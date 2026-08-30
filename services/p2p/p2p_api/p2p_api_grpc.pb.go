@@ -67,6 +67,11 @@ type PeerServiceClient interface {
 	RecordCatchupSuccess(ctx context.Context, in *RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*RecordCatchupSuccessResponse, error)
 	RecordCatchupFailure(ctx context.Context, in *RecordCatchupFailureRequest, opts ...grpc.CallOption) (*RecordCatchupFailureResponse, error)
 	RecordCatchupMalicious(ctx context.Context, in *RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*RecordCatchupMaliciousResponse, error)
+	// UpdateCatchupReputation was removed: it had become a no-op, and reputation
+	// is computed by the registry from interaction outcomes. protobuf has no
+	// "reserved" for RPC names, so this note stands in for one - do not reuse the
+	// name for anything with different semantics, or a mixed-version client would
+	// silently bind to it.
 	UpdateCatchupError(ctx context.Context, in *UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*UpdateCatchupErrorResponse, error)
 	ResetReputation(ctx context.Context, in *ResetReputationRequest, opts ...grpc.CallOption) (*ResetReputationResponse, error)
 	GetPeersForCatchup(ctx context.Context, in *GetPeersForCatchupRequest, opts ...grpc.CallOption) (*GetPeersForCatchupResponse, error)
@@ -364,6 +369,11 @@ type PeerServiceServer interface {
 	RecordCatchupSuccess(context.Context, *RecordCatchupSuccessRequest) (*RecordCatchupSuccessResponse, error)
 	RecordCatchupFailure(context.Context, *RecordCatchupFailureRequest) (*RecordCatchupFailureResponse, error)
 	RecordCatchupMalicious(context.Context, *RecordCatchupMaliciousRequest) (*RecordCatchupMaliciousResponse, error)
+	// UpdateCatchupReputation was removed: it had become a no-op, and reputation
+	// is computed by the registry from interaction outcomes. protobuf has no
+	// "reserved" for RPC names, so this note stands in for one - do not reuse the
+	// name for anything with different semantics, or a mixed-version client would
+	// silently bind to it.
 	UpdateCatchupError(context.Context, *UpdateCatchupErrorRequest) (*UpdateCatchupErrorResponse, error)
 	ResetReputation(context.Context, *ResetReputationRequest) (*ResetReputationResponse, error)
 	GetPeersForCatchup(context.Context, *GetPeersForCatchupRequest) (*GetPeersForCatchupResponse, error)
