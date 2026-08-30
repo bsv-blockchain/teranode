@@ -26,6 +26,7 @@ coverage, recorded because porting found it.
 | Gap | Kind | Status | Holds up |
 |-----|------|--------|----------|
 | [`submitblock-rpc`](#submitblock-rpc) | product-decision | deferred | 30 upstream scripts |
+| [`frozen-txo-operator-surface-absent`](#frozen-txo-operator-surface-absent) | product-decision | open | 5 upstream scripts |
 | [`headers-announcement-disconnects`](#headers-announcement-disconnects) | defect | open | 4 upstream scripts |
 | [`legacy-block-announcement`](#legacy-block-announcement) | unknown | open | 3 upstream scripts |
 | [`net-rpcs-unimplemented`](#net-rpcs-unimplemented) | product-decision | open | 3 upstream scripts |
@@ -66,7 +67,7 @@ coverage, recorded because porting found it.
 | [`porttest-suite-intermittent-failure`](#porttest-suite-intermittent-failure) | test-config | resolved | no tests - found while porting `bsv-peer-flood.py` |
 | [`opaque-tx-reject-reason`](#opaque-tx-reject-reason) | defect | open | no tests - found while porting `invalidtxrequest.py` |
 
-40 open gaps: 27 `defect`, 8 `product-decision`, 3 `test-config`, 2 `unknown`.
+41 open gaps: 27 `defect`, 9 `product-decision`, 3 `test-config`, 2 `unknown`.
 
 ## submitblock-rpc
 
@@ -84,6 +85,24 @@ The single largest cluster in bucket B. Both RPCs are largely adapters over the 
 ### Plan
 
 Deliberately NOT bundled into the porting exercise. Implementing them widens Teranode's public RPC surface — submitblock in particular accepts a fully-formed block from an untrusted caller, a different trust posture from the mining-candidate flow — so it belongs in its own proposal with its own review. Porting tests must not become a vehicle for expanding the node's API. Revisit after bucket A is exhausted.
+
+## frozen-txo-operator-surface-absent
+
+**UTXO freezing works and is driven by signed alerts, but nothing exposes it to an operator and the frozen set cannot be read back at all**
+
+- **Kind:** `product-decision` - not ours to make; needs a deliberate decision elsewhere
+- **Status:** `open`
+- **Holds up:** 5 upstream scripts
+- **Blocks:** `bsv-frozentxo-freezefunds.py`, `bsv-frozentxo-unfreezefunds.py`, `bsv-frozentxo-whitelisttx.py`, `bsv-frozentxo-soft-consensus-freeze-startup.py`, `bsv-frozentxo-soft-consensus-freeze-unlimited.py`
+- **Found while porting:** `bsv-frozentxo-freezefunds.py`
+
+### Impact
+
+Found while working through the frozen-txo prerequisite. The headline is a distinction that is easy to get wrong, and the first version of this gap did get it wrong: the capability is NOT missing, and neither is its inbound path. What is missing is an operator-facing surface and any means of reading the frozen set. THE FEATURE WORKS. td.UtxoStore is exposed on TestDaemon, so FreezeUTXOs and UnFreezeUTXOs are reachable from a test today with no new harness. MEASURED, in one daemon: freezing a funded UTXO returns cleanly; a transaction spending it is refused; unfreezing returns cleanly; and the SAME spend is then accepted. Consensus-level freezing is implemented and enforced end to end. TWO OF THE OPERATIONS EXIST, and this is where the naming misleads. alert.Node.AddToConsensusBlacklist (services/alert/node.go:274) and AddToConfiscationTransactionWhitelist (:397) are real, documented in docs/references/services/alert_reference.md, and they do the work: look up the transaction, compute the UTXO hash, call the store, return a BlacklistResponse. But they are handlers for SIGNED ALERTS arriving over the alert P2P network - docs/topics/services/alert.md says "The P2P Alert library initiates the process by calling AddToConsensusBlacklist" and the response goes back to the P2P network. In bitcoin-sv the same name is a JSON-RPC method an operator calls on their own node. Same name, different thing: one is an inbound gossip handler, the other an operator API. FOUR DO NOT EXIST IN ANY FORM. addToPolicyBlacklist, removeFromPolicyBlacklist, queryBlacklist and clearBlacklists return zero hits across the whole tree - Go, Markdown, JSON and config alike. Teranode has consensus-level freezing only, with no policy level, so the policy-versus-consensus distinction those scripts asserts has no counterpart rather than merely no plumbing. NOTHING CAN READ THE FROZEN SET. The alert service's own gRPC API (services/alert/alert_api) exposes exactly one method, HealthGRPC. The node's RPC server has no blacklist method. So there is no way, by any interface, to ask a running Teranode what is currently frozen. For a compliance capability that is arguably a larger problem than the tests not porting. WHY THE FIVE SCRIPTS CANNOT BE PORTED, including via the store. Two are pure bookkeeping tests by their own description - freezefunds.py describes itself as checking the RPC functions used to freeze TXOs, unfreezefunds.py the ones used to unfreeze. VERIFIED: freezefunds.py never spends anything at all. No sendrawtransaction, no mempool assertion, no generate(). It adds entries and reads them back. There is no substance assertion in it to reproduce against td.UtxoStore, so porting it that way would be inventing a test rather than porting one. Softconsensusfreezeduration is a third absence, and a feature rather than plumbing: the only occurrence of SoftConsensusFrozen in the tree is a JSON field in a test helper (test/utils/rpc_response.go:106), with no setting and no implementation behind it. That blocks the two soft-consensus scripts independently of anything above. NOT ESTABLISHED: whether the confiscation whitelist behaves as upstream expects. AddToConfiscationTransactionWhitelist exists but was not exercised, because driving it needs a signed alert this harness cannot produce.
+
+### Plan
+
+UNLOGGED - awaiting review, and the question is narrower than "build blacklist RPCs". Two of the operations already exist and work; the review is about whether they should be reachable other than by a signed alert, and whether the frozen set should be auditable. Three separable decisions. Whether an operator should be able to freeze and unfreeze directly - bitcoin-sv says yes and exposes RPCs, Teranode currently says only-by-alert, and that may well be the deliberate and better posture for a consensus-level control. Whether the frozen set should be readable by any interface at all; this one is hard to argue against, because a compliance control nobody can audit is a compliance problem, and it is also what most of the two bookkeeping scripts assert. And whether a policy level and soft consensus freeze are wanted, both of which are features rather than surfaces. If the answer to the first two is yes, the five bucket-A scripts become ordinary ports rather than blocked ones, and the work is exposure rather than implementation, since the alert service already performs the operations. Meanwhile the capability is worth keeping under test and can be TODAY without any of the above: freeze a UTXO through td.UtxoStore, attempt the spend, then unfreeze and repeat it. Using the unfreeze as the control is what makes that sound, because the frozen reason is NOT recoverable from the error - errors.Is(err, errors.ErrFrozen) is false and the message is the generic failed-to-validate-transaction, the same flattening recorded in opaque-tx-reject-reason (issue 4790) reached by a different path. Since the only thing changing between the refusal and the acceptance is the freeze, the pair establishes causation where the error string cannot. Such a test maps to no upstream script, so it would sit outside the registry rather than claiming one of these five.
 
 ## headers-announcement-disconnects
 
