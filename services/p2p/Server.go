@@ -2610,11 +2610,12 @@ func (s *Server) applyBanScore(peerID, reason string) {
 	if s.peerRegistry == nil {
 		return
 	}
-	_, banned, err := s.peerRegistry.AddBanScore(s.gCtx, peerID, reason, 0)
+	score, banned, err := s.peerRegistry.AddBanScore(s.gCtx, peerID, reason, 0)
 	if err != nil {
 		s.logger.Warnf("[applyBanScore] AddBanScore %s/%s failed: %v", peerID, reason, err)
 		return
 	}
+	s.logger.Infof("[applyBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t", peerID, reason, score, banned)
 	if banned {
 		s.onPeerBanned(peerID, reason)
 	}

@@ -288,7 +288,11 @@ func TestRecordCatchupMalicious_RepeatedOffensesBanPeer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Age the recorded charge past the throttle window to simulate a second,
-	// distinct offense.
+	// distinct offense. Note this skips the score decay the registry applies
+	// between real charges: with 1 pt/min decay and the 10-minute throttle,
+	// production runs 50, 90, then 130 (ban on the third charge). Here the
+	// decay clock is not aged, so the ban lands on the second charge; the
+	// test asserts escalation to a ban, not the strike count.
 	s.catchupMaliciousChargeMu.Lock()
 	s.catchupMaliciousLastCharge[pid.String()] = time.Now().Add(-catchupMaliciousChargeWindow)
 	s.catchupMaliciousChargeMu.Unlock()

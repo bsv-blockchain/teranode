@@ -177,18 +177,11 @@ func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.Record
 	// The malicious counter alone never escalates to a ban, and
 	// ReconsiderBadPeers eventually resets it, so a repeat offender would be
 	// re-admitted indefinitely. Raise the ban score as well so repeated
-	// malicious reports cross the ban threshold. Best-effort: the malicious
-	// record above already landed and is what the catchup gates consume.
+	// malicious reports cross the ban threshold. Best-effort via the shared
+	// fire-and-forget helper: the malicious record above already landed and is
+	// what the catchup gates consume, so a score failure must not fail the RPC.
 	if s.shouldChargeCatchupMalicious(req.PeerId) {
-		score, banned, err := s.peerRegistry.AddBanScore(ctx, req.PeerId, ReasonCatchupMalicious, 0)
-		if err != nil {
-			s.logger.Warnf("[RecordCatchupMalicious] AddBanScore %s/%s failed: %v", req.PeerId, ReasonCatchupMalicious, err)
-		} else {
-			s.logger.Infof("[RecordCatchupMalicious] Added ban score to peer %s for reason %s. New score: %d, Banned: %t", req.PeerId, ReasonCatchupMalicious, score, banned)
-			if banned {
-				s.onPeerBanned(req.PeerId, ReasonCatchupMalicious)
-			}
-		}
+		s.applyBanScore(req.PeerId, ReasonCatchupMalicious)
 	}
 
 	return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
@@ -525,6 +518,10 @@ func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMalicio
 		}, nil
 	}
 
+	// Two registry round-trips by design: the ban table deliberately outlives
+	// peer removal (a banned peer that disconnects or is removed stays banned),
+	// so IsPeerBanned can be true while GetPeer reports found=false. Collapsing
+	// both checks into the single GetPeer call would miss exactly those peers.
 	if s.peerRegistry != nil {
 		banned, err := s.peerRegistry.IsPeerBanned(ctx, req.PeerId)
 		if err != nil {
