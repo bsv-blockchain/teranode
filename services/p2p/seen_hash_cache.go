@@ -25,7 +25,10 @@ const (
 	// one, because the first announcer's DataHub URL is peer-controlled and may
 	// be dead or hostile: block validation collects the later announcements as
 	// alternative fetch sources (catchupAlternatives), a failover that a budget
-	// of one would starve.
+	// of one would starve. That failover is only reached when
+	// blockvalidation_useCatchupWhenBehind is enabled (default off); with it
+	// off the extra announcements still buy URL redundancy against a dead
+	// first source, since each carries its announcer's own DataHub URL.
 	seenHashMaxPublishersPerHash = 3
 
 	// seenHashPublishWindow is how long a spent publisher budget stays spent.

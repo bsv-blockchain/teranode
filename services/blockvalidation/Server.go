@@ -202,6 +202,11 @@ type Server struct {
 	// in tests that don't wire it get uncached lookups.
 	peerMaliciousCache *ttlcache.Cache[string, bool]
 
+	// peerMaliciousCacheStarted records that Init started the cache's eviction
+	// loop, so Stop only calls ttlcache.Stop - a blocking send to that loop -
+	// when there is a receiver for it.
+	peerMaliciousCacheStarted atomic.Bool
+
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
 
@@ -686,6 +691,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCacheStarted.Store(true)
 		go u.peerMaliciousCache.Start()
 	}
 
@@ -1156,7 +1162,11 @@ func (u *Server) Stop(ctx context.Context) error {
 		u.blockCatchupAttempts.Stop()
 	}
 
-	if u.peerMaliciousCache != nil {
+	// Stop only if Init actually started the eviction loop: ttlcache.Stop is
+	// an unbuffered send whose only receiver lives inside Start, so stopping a
+	// never-started cache (a Server from NewServer whose Init never ran) hangs
+	// forever.
+	if u.peerMaliciousCache != nil && u.peerMaliciousCacheStarted.Load() {
 		u.peerMaliciousCache.Stop()
 	}
 
