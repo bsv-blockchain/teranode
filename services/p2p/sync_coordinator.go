@@ -69,6 +69,10 @@ type SyncCoordinator struct {
 	pendingCompletionPeer   string
 	pendingCompletionSince  time.Time
 	fsmCatchingSince        time.Time
+	// lastReputationRecovery throttles considerReputationRecovery on the
+	// monitor tick (see considerReputationRecoveryThrottled). Guarded by
+	// decisionMu like the latch fields above.
+	lastReputationRecovery time.Time
 
 	// Current sync state. currentSyncPeer holds the canonical libp2p ID string.
 	mu                         sync.RWMutex
@@ -152,6 +156,11 @@ const (
 	// surfaces as a logged error instead of wedging
 	// monitorFSM/periodicEvaluation forever.
 	defaultRPCTimeout = 5 * time.Second
+
+	// reputationRecoveryMinInterval rate-limits ReconsiderBadPeers RPCs issued
+	// from the 2s monitor tick; recovery cooldowns are minutes, so a 30s
+	// sampling interval loses nothing.
+	reputationRecoveryMinInterval = 30 * time.Second
 
 	// pendingCompletionExpiry bounds how long a completion edge observed without
 	// validated chainwork may stay armed awaiting the data. Registry/tip reads
@@ -854,7 +863,7 @@ func (sc *SyncCoordinator) checkFSMState() {
 	// blockvalidation catchup completion / legacy, both checkpoint-gated.
 	if *currentState == blockchain_api.FSMStateType_RUNNING ||
 		*currentState == blockchain_api.FSMStateType_CATCHINGBLOCKS {
-		sc.considerReputationRecovery()
+		sc.considerReputationRecoveryThrottled()
 
 		sc.handleRunningState()
 	}
@@ -930,27 +939,36 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 
 	now := time.Now()
 	sc.recordSyncPeerBlockProgress(currentPeer, peerInfo.BlocksReceived, now)
-	if stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now); timedOut && stalledPeer == currentPeer {
+	stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(now)
+	if timedOut && stalledPeer == currentPeer {
 		sc.pendingCompletionPeer = ""
 		return sc.clearNoProgressSyncPeer(currentPeer, progressAge)
 	}
 
 	if sc.pendingCompletionPeer != currentPeer {
 		// Steady RUNNING: no completion edge to judge this peer by. Fallback
-		// settle: some completions emit no signal at all — a trigger rejected by
-		// block validation's single-flight guard, or an already-synced
+		// release: some completions emit no signal at all — a trigger rejected
+		// by block validation's single-flight guard, or an already-synced
 		// short-circuit on an older blockvalidation — which would otherwise pin
 		// a finished sync (and the fast monitor tick) until the no-progress
-		// deadline. Once the holder is level or behind by validated work the
-		// sync has achieved its goal, so settle it as success after a grace
-		// period. The grace (the preemption guard, half the no-progress timeout)
-		// covers an in-flight header phase that has not yet re-credited a peer
-		// whose stale validated work sits at or below local, so an active sync
-		// is not settled prematurely.
+		// deadline. A holder that is level or behind by validated work AND has
+		// gone the preemption guard (half the no-progress timeout) without
+		// delivering a validated block is quietly released: no completion
+		// verdict is fabricated (this is an inferred completion, so no
+		// resetBackoff / probe-budget refill — de-escalation is reserved for
+		// the observed signals) and no sync attempt is recorded against the
+		// peer (unlike the no-progress eviction, it did nothing wrong). Keying
+		// on progress age rather than claim age keeps a level peer that is
+		// actively delivering blocks in the slot, matching evaluateSyncPeer's
+		// keep-while-caught-up policy for active peers.
 		if localWorkOK && peerHasValidatedWork(peerInfo) &&
 			!peerAheadByValidatedWork(peerInfo, localChainWork) &&
-			now.Sub(syncStart) > sc.preemptionProgressGuard() {
-			return sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork)
+			progressAge > sc.preemptionProgressGuard() {
+			sc.logger.Infof("[SyncCoordinator] Releasing sync slot held by %s; level by validated work with no delivery for %v",
+				currentPeer, progressAge.Round(time.Second))
+			sc.clearSyncPeerIfCurrent("")
+			_ = sc.triggerSyncLocked()
+			return true
 		}
 		return false
 	}
@@ -1586,6 +1604,23 @@ func (sc *SyncCoordinator) checkAllPeersAttempted() {
 			eligibleCount)
 		sc.enterBackoffMode()
 	}
+}
+
+// considerReputationRecoveryThrottled rate-limits considerReputationRecovery to
+// reputationRecoveryMinInterval. Before the FSM completion-edge latch,
+// handleFSMTransition short-circuited checkFSMState on most slot-held RUNNING
+// ticks, so recovery ran sporadically; with the latch those ticks fall through,
+// and an unthrottled call would issue a ReconsiderBadPeers RPC every 2s.
+// Recovery cooldowns are minutes, so sampling every 30s loses nothing. It
+// requires decisionMu to be held by the caller (checkFSMState is the only
+// caller; lastReputationRecovery is guarded by decisionMu).
+func (sc *SyncCoordinator) considerReputationRecoveryThrottled() {
+	now := time.Now()
+	if !sc.lastReputationRecovery.IsZero() && now.Sub(sc.lastReputationRecovery) < reputationRecoveryMinInterval {
+		return
+	}
+	sc.lastReputationRecovery = now
+	sc.considerReputationRecovery()
 }
 
 // considerReputationRecovery checks if any bad peers should have their reputation reset

@@ -1993,25 +1993,59 @@ func TestSyncCoordinator_LocalChainWorkAdvanceDoesNotResetBackoffMultiplier(t *t
 }
 
 // A level slot holder in steady RUNNING (no completion edge, no success signal —
-// e.g. its trigger was rejected by block validation's single-flight guard)
-// settles as success via the fallback once it has held the slot past the grace,
-// instead of pinning the slot until the no-progress deadline.
-func TestSyncCoordinator_HandleFSMTransition_LevelPeerFallbackSettlesAfterGrace(t *testing.T) {
+// e.g. its trigger was rejected by block validation's single-flight guard) is
+// quietly released by the fallback once it has gone the grace period without
+// delivering a validated block, instead of pinning the slot until the
+// no-progress deadline. The release is an inferred completion: it must not
+// fabricate a success verdict, so backoff and the probe budget stay untouched
+// and no sync attempt is recorded against the peer.
+func TestSyncCoordinator_HandleFSMTransition_LevelQuietPeerFallbackReleasesAfterGrace(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	sc.mu.Lock()
+	sc.backoffMultiplier = 16
+	sc.unprovenProbeBudgetRemaining = 0
+	sc.mu.Unlock()
+
+	running := blockchain_api.FSMStateType_RUNNING
+
+	// Inside the grace (default 5m no-progress -> 2.5m guard): no release.
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+	require.False(t, sc.handleFSMTransition(&running), "level peer inside the grace must not be released")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	// Past the grace but short of the 5m no-progress deadline: released quietly.
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x03})
+	require.True(t, sc.handleFSMTransition(&running), "quiet level peer past the grace must be released")
+	require.Empty(t, sc.GetCurrentSyncPeer())
+
+	sc.mu.RLock()
+	require.Equal(t, 16, sc.backoffMultiplier, "an inferred completion must not reset backoff")
+	require.Zero(t, sc.unprovenProbeBudgetRemaining, "an inferred completion must not refill the probe budget")
+	sc.mu.RUnlock()
+	got, ok := reg.Get("current")
+	require.True(t, ok)
+	require.True(t, got.LastSyncAttempt.IsZero(), "release must not record a sync attempt against the peer")
+}
+
+// The fallback keys on progress age, not claim age: a level peer that is
+// actively delivering validated blocks keeps the slot no matter how long it has
+// held it, matching evaluateSyncPeer's keep-while-caught-up policy.
+func TestSyncCoordinator_HandleFSMTransition_FallbackKeepsActivelyDeliveringLevelPeer(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
 	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
 
+	// Claimed 5 minutes ago, but validated progress is as fresh as it can be.
+	claimSyncTestPeer(sc, "current", 5*time.Minute, []byte{0x03})
+	sc.mu.Lock()
+	sc.lastSyncProgressTime = time.Now()
+	sc.mu.Unlock()
+
 	running := blockchain_api.FSMStateType_RUNNING
-
-	// Inside the grace (default 5m no-progress -> 2.5m guard): no settle.
-	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
-	require.False(t, sc.handleFSMTransition(&running), "level peer inside the grace must not be settled")
+	require.False(t, sc.handleFSMTransition(&running), "actively delivering level peer must not be released")
 	require.Equal(t, "current", sc.GetCurrentSyncPeer())
-
-	// Past the grace but short of the 5m no-progress deadline: fallback settles.
-	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x03})
-	require.True(t, sc.handleFSMTransition(&running), "level peer past the grace must settle as success")
-	require.Empty(t, sc.GetCurrentSyncPeer())
 }
 
 // The fallback never settles a slot holder that is still ahead by validated
@@ -2070,4 +2104,26 @@ func TestSyncCoordinator_LatchFields_ConcurrentFSMAndSuccessSignal(t *testing.T)
 		}
 	}()
 	wg.Wait()
+}
+
+// The monitor tick calls reputation recovery through a 30s throttle so the
+// FSM latch (which stopped short-circuiting steady RUNNING ticks) does not
+// turn it into a per-2s ReconsiderBadPeers RPC.
+func TestSyncCoordinator_ConsiderReputationRecoveryThrottled_SamplesAtInterval(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	sc.decisionMu.Lock()
+	defer sc.decisionMu.Unlock()
+
+	sc.considerReputationRecoveryThrottled()
+	first := sc.lastReputationRecovery
+	require.False(t, first.IsZero())
+
+	sc.considerReputationRecoveryThrottled()
+	require.Equal(t, first, sc.lastReputationRecovery, "second call inside the interval must be skipped")
+
+	sc.lastReputationRecovery = time.Now().Add(-reputationRecoveryMinInterval - time.Second)
+	stale := sc.lastReputationRecovery
+	sc.considerReputationRecoveryThrottled()
+	require.NotEqual(t, stale, sc.lastReputationRecovery, "call past the interval must run")
 }

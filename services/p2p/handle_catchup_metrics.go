@@ -62,7 +62,10 @@ func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCa
 		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
-	if err := s.peerRegistry.RecordCatchupSuccess(ctx, decodedPeer.String(), req.DurationMs); err != nil {
+	// The registry call keeps the raw req.PeerId, matching the sibling handlers
+	// in this file; the coordinator call below needs the canonical form because
+	// currentSyncPeer is stored canonically.
+	if err := s.peerRegistry.RecordCatchupSuccess(ctx, req.PeerId, req.DurationMs); err != nil {
 		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup success", err))
 	}
 
