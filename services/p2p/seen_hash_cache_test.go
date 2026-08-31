@@ -68,6 +68,17 @@ func TestSeenHashCache_Check(t *testing.T) {
 		require.Equal(t, 1, repeats, "repeat accounting must survive the publish-window rollover")
 	})
 
+	t.Run("configured publisher budget overrides the default", func(t *testing.T) {
+		var c seenHashCache
+		c.setLimits(0, 1, 0) // budget 1, size and TTL on defaults
+
+		publish, _ := c.Check("hash-a", "peer-1", now)
+		require.True(t, publish)
+
+		publish, _ = c.Check("hash-a", "peer-2", now)
+		require.False(t, publish, "a configured budget of 1 must stop the second distinct announcer")
+	})
+
 	t.Run("expired window is treated as fresh", func(t *testing.T) {
 		var c seenHashCache
 

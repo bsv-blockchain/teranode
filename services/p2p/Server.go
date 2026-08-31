@@ -747,6 +747,12 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 
 	s.blockPeerMap.setMaxSize(maxSize)
 	s.subtreePeerMap.setMaxSize(maxSize)
+
+	// The seen-hash dedup caches take their limits from the same call: their
+	// zero values fall back to the package defaults, so this too costs only
+	// configurability when skipped.
+	s.blockSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
+	s.subtreeSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
 }
 
 // announcePeerMapLimits logs the two ways a configured value differs from what
@@ -1598,7 +1604,13 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - publish error", err)
 	}
 
-	s.lastAnnouncedBlockHash.Store(hash)
+	// Record the tip only when the publish had someone to reach: a GossipSub
+	// publish into an empty mesh succeeds silently, and recording it would
+	// suppress the re-announcement a later-connecting peer needs. The
+	// connected-peer set is a proxy for the topic mesh.
+	if len(s.P2PClient.GetPeers()) > 0 {
+		s.lastAnnouncedBlockHash.Store(hash)
+	}
 
 	// Also send a node_status update when best block changes
 	if err = s.handleNodeStatusNotification(ctx); err != nil {
@@ -2184,7 +2196,11 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage - publish error", err)
 	}
 
-	s.lastAnnouncedSubtreeHash.Store(hash)
+	// Same empty-mesh gate as handleBlockNotification: a publish nobody heard
+	// must not suppress the re-announcement.
+	if len(s.P2PClient.GetPeers()) > 0 {
+		s.lastAnnouncedSubtreeHash.Store(hash)
+	}
 
 	return nil
 }

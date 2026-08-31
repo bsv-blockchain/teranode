@@ -266,7 +266,7 @@ func TestHandleBlockNotification_SuppressesConsecutiveDuplicateTip(t *testing.T)
 
 	s, p2pClient := newGateTestServer(t, mockBlockchain)
 	p2pClient.peerID = mustNewPeerID(t)
-	p2pClient.peers = []p2pMessageBus.PeerInfo{}
+	p2pClient.peers = []p2pMessageBus.PeerInfo{{ID: "connected-peer"}}
 	s.notificationCh = make(chan *notificationMsg, 64)
 	s.AssetHTTPAddressURL = "http://asset.example"
 
@@ -292,6 +292,50 @@ func TestHandleBlockNotification_SuppressesConsecutiveDuplicateTip(t *testing.T)
 	require.Equal(t, 3, countBlockPublishes(), "a reorg back to a recent hash must still announce")
 }
 
+// A GossipSub publish into an empty mesh succeeds silently; recording the tip
+// then would suppress the re-announcement a later-connecting peer needs, so
+// the guard must not engage until the publish had someone to reach.
+func TestHandleBlockNotification_EmptyMeshDoesNotArmSuppression(t *testing.T) {
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).
+		Return([]byte(nil), errors.NewNotFoundError("not set")).Maybe()
+
+	s, p2pClient := newGateTestServer(t, mockBlockchain)
+	p2pClient.peerID = mustNewPeerID(t)
+	p2pClient.peers = []p2pMessageBus.PeerInfo{}
+	s.notificationCh = make(chan *notificationMsg, 64)
+	s.AssetHTTPAddressURL = "http://asset.example"
+
+	countBlockPublishes := func() int {
+		n := 0
+		for _, call := range p2pClient.Calls {
+			if call.Method == "Publish" && call.Arguments.String(1) == s.blockTopicName {
+				n++
+			}
+		}
+		return n
+	}
+
+	tip := chainhash.HashH([]byte("startup tip"))
+
+	// Nobody connected: the publish reaches no one and must not arm the guard.
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
+	require.Equal(t, 2, countBlockPublishes(), "a publish nobody heard must not suppress the re-announcement")
+
+	// A peer connects: the next announcement is recorded, later replays suppressed.
+	p2pClient.peers = []p2pMessageBus.PeerInfo{{ID: "connected-peer"}}
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
+	require.Equal(t, 3, countBlockPublishes(), "suppression engages once the mesh is non-empty")
+}
+
 // The subtree announce path carries the same consecutive-duplicate guard as
 // the block path: a replayed notification must not re-gossip, while distinct
 // subtrees stream through unaffected.
@@ -302,6 +346,7 @@ func TestHandleSubtreeNotification_SuppressesConsecutiveDuplicate(t *testing.T) 
 
 	s, p2pClient := newGateTestServer(t, mockBlockchain)
 	p2pClient.peerID = mustNewPeerID(t)
+	p2pClient.peers = []p2pMessageBus.PeerInfo{{ID: "connected-peer"}}
 	s.AssetHTTPAddressURL = "http://asset.example"
 
 	countSubtreePublishes := func() int {

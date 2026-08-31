@@ -41,6 +41,9 @@
 | PeerMapMaxSize | int | 10000 | p2p_peer_map_max_size | Maximum entries in peer maps |
 | PeerMapTTL | time.Duration | 10m | p2p_peer_map_ttl | Peer map entry time-to-live |
 | PeerMapCleanupInterval | time.Duration | 1m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
+| SeenHashMaxSize | int | 10000 | p2p_seen_hash_max_size | Maximum entries in each per-topic seen-hash announcement dedup cache |
+| SeenHashTTL | time.Duration | 2m | p2p_seen_hash_ttl | Accounting window for the seen-hash announcement dedup |
+| SeenHashMaxPublishers | int | 3 | p2p_seen_hash_max_publishers | Distinct announcers of one hash forwarded to Kafka per publish window |
 | PeerRegistryBatchInterval | time.Duration | 1s | p2p_peer_registry_batch_interval | Flush interval for batched peer-registry updates from gossip handlers |
 | GossipHandlerConcurrency | int | 4 | p2p_gossip_handler_concurrency | Concurrent gossip handler workers per pubsub topic |
 | WebSocketMaxConnections | int | 1000 | p2p_websocket_max_connections | Maximum concurrent /p2p-ws websocket connections (0 disables the cap) |

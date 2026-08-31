@@ -28,7 +28,11 @@ const (
 	// of one would starve. That failover is only reached when
 	// blockvalidation_useCatchupWhenBehind is enabled (default off); with it
 	// off the extra announcements still buy URL redundancy against a dead
-	// first source, since each carries its announcer's own DataHub URL.
+	// first source, since each carries its announcer's own DataHub URL. The
+	// budget is partially Sybil-consumable — colluding identities can take the
+	// grants honest announcers do not win by racing, degrading the redundancy
+	// without eliminating it — so it is configurable via
+	// p2p_seen_hash_max_publishers (this constant is the default).
 	seenHashMaxPublishersPerHash = 3
 
 	// seenHashPublishWindow is how long a spent publisher budget stays spent.
@@ -105,11 +109,25 @@ const (
 // Like cappedPeerMap there is no unbounded mode: an unconfigured zero value
 // falls back to the defaults above.
 type seenHashCache struct {
-	mu      sync.Mutex
-	entries map[string]*list.Element
-	order   *list.List // front = oldest, back = newest; values are *seenHashNode
-	maxSize int
-	ttl     time.Duration
+	mu            sync.Mutex
+	entries       map[string]*list.Element
+	order         *list.List // front = oldest, back = newest; values are *seenHashNode
+	maxSize       int
+	maxPublishers int
+	ttl           time.Duration
+}
+
+// setLimits configures the size cap, per-window publisher budget and
+// accounting TTL. Non-positive values select the package defaults — like
+// cappedPeerMap, there is no unbounded mode, so a construction path that
+// forgets this call costs configurability, not the bounds.
+func (c *seenHashCache) setLimits(maxSize, maxPublishers int, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.maxSize = maxSize
+	c.maxPublishers = maxPublishers
+	c.ttl = ttl
 }
 
 // seenHashNode is the list payload: the key, when the hash was first announced
@@ -159,6 +177,16 @@ func (c *seenHashCache) ttlLocked() time.Duration {
 	}
 
 	return c.ttl
+}
+
+// publishersLocked returns the per-window publisher budget in force. Callers
+// must hold the mutex.
+func (c *seenHashCache) publishersLocked() int {
+	if c.maxPublishers <= 0 {
+		return seenHashMaxPublishersPerHash
+	}
+
+	return c.maxPublishers
 }
 
 // initLocked prepares the internal structures. Callers must hold the mutex.
@@ -213,7 +241,7 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 
 			_, heldLastWindow := node.prevGrantees[peerID]
 
-			publish = (tracked && prev == 0 && node.published < seenHashMaxPublishersPerHash) ||
+			publish = (tracked && prev == 0 && node.published < c.publishersLocked()) ||
 				(node.published == 0 && !heldLastWindow)
 			if publish {
 				node.published++
