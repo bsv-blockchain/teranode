@@ -79,6 +79,21 @@ func TestSeenHashCache_Check(t *testing.T) {
 		require.False(t, publish, "a configured budget of 1 must stop the second distinct announcer")
 	})
 
+	t.Run("a budget above the tracking floor raises the tracking with it", func(t *testing.T) {
+		var c seenHashCache
+
+		budget := seenHashMaxAnnouncersPerHash + 2
+		c.setLimits(0, budget, 0)
+
+		for i := 0; i < budget; i++ {
+			publish, _ := c.Check("hash-a", fmt.Sprintf("peer-%d", i), now)
+			require.True(t, publish, "announcer %d is within the configured budget and must be tracked, not capped at the floor", i)
+		}
+
+		publish, _ := c.Check("hash-a", "peer-late", now)
+		require.False(t, publish, "the configured budget must still be spent")
+	})
+
 	t.Run("expired window is treated as fresh", func(t *testing.T) {
 		var c seenHashCache
 

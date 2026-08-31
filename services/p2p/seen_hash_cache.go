@@ -78,9 +78,13 @@ const (
 
 	// seenHashMaxAnnouncersPerHash bounds the per-hash announcer tracking so a
 	// Sybil fleet announcing one hash cannot grow a single entry without
-	// limit. It is kept low because the worst-case footprint is the PRODUCT of
-	// this and the size cap — up to defaultSeenHashCacheSize x this many
-	// stored peer-ID strings per topic — not the size cap alone. An announcer
+	// limit. It is a FLOOR: distinct-announcer grants require the peer to be
+	// tracked, so the bound in force rises to the configured publisher budget
+	// when p2p_seen_hash_max_publishers exceeds it (announcersLocked) —
+	// otherwise a raised budget would be silently capped here. It is kept low
+	// because the worst-case footprint is the PRODUCT of the bound in force
+	// and the size cap — up to defaultSeenHashCacheSize x that many stored
+	// peer-ID strings per topic — not the size cap alone. An announcer
 	// the bound excluded is treated as a repeat by Check (never handed the
 	// distinct-announcer budget, never repeat-counted); the retry grant
 	// (published == 0) remains reachable to it, worth at most one publish per
@@ -147,16 +151,16 @@ type seenHashNode struct {
 
 // recordGranteeLocked notes that peerID took a publish grant in the current
 // window, so the next window's rollover retry grant can be refused to it. The
-// set is bounded: under repeated PublishFailed cycles many peers can be
-// granted in one window, and past the bound the newest grantees simply go
-// unrecorded — the denial then errs toward allowing a retry, never toward
-// suppressing one.
-func (n *seenHashNode) recordGranteeLocked(peerID string) {
+// set is bounded (same bound as the announcer tracking): under repeated
+// PublishFailed cycles many peers can be granted in one window, and past the
+// bound the newest grantees simply go unrecorded — the denial then errs toward
+// allowing a retry, never toward suppressing one.
+func (n *seenHashNode) recordGranteeLocked(peerID string, bound int) {
 	if n.grantees == nil {
 		n.grantees = make(map[string]struct{}, seenHashMaxPublishersPerHash)
 	}
 
-	if len(n.grantees) < seenHashMaxAnnouncersPerHash {
+	if len(n.grantees) < bound {
 		n.grantees[peerID] = struct{}{}
 	}
 }
@@ -187,6 +191,22 @@ func (c *seenHashCache) publishersLocked() int {
 	}
 
 	return c.maxPublishers
+}
+
+// announcersLocked returns the per-hash announcer tracking bound in force: the
+// default, raised to the configured publisher budget when that is larger.
+// Distinct-announcer grants require the peer to be TRACKED, so without this a
+// p2p_seen_hash_max_publishers above the tracking bound would be silently
+// capped at it — the 9th+ distinct announcer could never take a distinct
+// grant. Raising the budget therefore also raises the per-entry footprint
+// (the worst case is size cap x this bound peer-ID strings). Callers must
+// hold the mutex.
+func (c *seenHashCache) announcersLocked() int {
+	if n := c.publishersLocked(); n > seenHashMaxAnnouncersPerHash {
+		return n
+	}
+
+	return seenHashMaxAnnouncersPerHash
 }
 
 // initLocked prepares the internal structures. Callers must hold the mutex.
@@ -234,7 +254,7 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 			}
 
 			prev, tracked := node.announcers[peerID]
-			if tracked || len(node.announcers) < seenHashMaxAnnouncersPerHash {
+			if tracked || len(node.announcers) < c.announcersLocked() {
 				node.announcers[peerID] = prev + 1
 				tracked = true
 			}
@@ -245,7 +265,7 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 				(node.published == 0 && !heldLastWindow)
 			if publish {
 				node.published++
-				node.recordGranteeLocked(peerID)
+				node.recordGranteeLocked(peerID, c.announcersLocked())
 			}
 
 			return publish, prev
