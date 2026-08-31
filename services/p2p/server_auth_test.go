@@ -600,6 +600,19 @@ func TestRejectWeakAdminAPIKey(t *testing.T) {
 		require.NoError(t, newServer(chaincfg.MainNetParams.Name).rejectWeakAdminAPIKey(":9904", "not-a-real-key-just-long-enough"))
 	})
 
+	t.Run("unknown network is not exempt", func(t *testing.T) {
+		// A security guard that reads "network unknown" as "probably development"
+		// fails open, so an unset ChainCfgParams must reject like any public net.
+		tSettings := settings.NewSettings()
+		tSettings.ChainCfgParams = nil
+
+		s := &Server{logger: &warnRecorder{}, settings: tSettings}
+
+		err := s.rejectWeakAdminAPIKey(":9904", "abc")
+		require.Error(t, err, "an unidentified network must not inherit the regtest exemption")
+		require.Contains(t, err.Error(), "unknown network")
+	})
+
 	t.Run("placeholder and empty keys are left to the shared helper", func(t *testing.T) {
 		// Both fail closed elsewhere (ignored / random key), so this guard must
 		// not turn them into a startup failure.

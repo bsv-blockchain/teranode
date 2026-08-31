@@ -1259,16 +1259,23 @@ func (s *Server) rejectWeakAdminAPIKey(listenAddress, apiKey string) error {
 		return nil
 	}
 
-	// Verified TLS keeps the key off the wire, and only then is a short key
-	// merely a guessing problem rather than a harvesting one - but it is still
-	// guessable, so this only exempts development networks.
-	if s.settings.ChainCfgParams == nil || s.settings.ChainCfgParams.Name == chaincfg.RegressionNetParams.Name {
-		s.logger.Warnf("[P2P] grpc_admin_api_key is shorter than %d characters on a non-loopback listener (%s); this is tolerated on regtest only", util.MinAdminAPIKeyLength(), listenAddress)
+	// Only regtest is exempt, and only when the network is positively identified:
+	// an unset ChainCfgParams is an unknown network, and a security guard that
+	// treats "unknown" as "development" fails open. Verified TLS would keep the
+	// key off the wire, but it would still be guessable, so it earns no exemption
+	// either.
+	network := "unknown network (chain parameters unset)"
+	if s.settings.ChainCfgParams != nil {
+		if s.settings.ChainCfgParams.Name == chaincfg.RegressionNetParams.Name {
+			s.logger.Warnf("[P2P] grpc_admin_api_key is shorter than %d characters on a non-loopback listener (%s); this is tolerated on regtest only", util.MinAdminAPIKeyLength(), listenAddress)
 
-		return nil
+			return nil
+		}
+
+		network = s.settings.ChainCfgParams.Name
 	}
 
-	return errors.NewConfigurationError("[P2P] refusing to start on %s: grpc_admin_api_key is shorter than %d characters while the gRPC listener (%s) is reachable beyond loopback, so it can be brute-forced to forge peer reputation and validated chain progress - use a strong random secret (32+ chars), or bind p2p_grpcListenAddress to loopback", s.settings.ChainCfgParams.Name, util.MinAdminAPIKeyLength(), listenAddress)
+	return errors.NewConfigurationError("[P2P] refusing to start on %s: grpc_admin_api_key is shorter than %d characters while the gRPC listener (%s) is reachable beyond loopback, so it can be brute-forced to forge peer reputation and validated chain progress - use a strong random secret (32+ chars), or bind p2p_grpcListenAddress to loopback", network, util.MinAdminAPIKeyLength(), listenAddress)
 }
 
 // warnIfUnreachableBind flags the mirror-image misconfiguration: other services
