@@ -1035,6 +1035,18 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SetBlockHeightZero(t, db)
 	})
 
+	t.Run("set block state contract", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetBlockStateContract(t, db)
+	})
+
+	t.Run("set block state snapshot under concurrency", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetBlockStateSnapshotUnderConcurrency(t, db)
+	})
+
 	t.Run("set locked behavior", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
@@ -1202,13 +1214,13 @@ func TestSetTTL(t *testing.T) {
 
 	// Verify the exact DAH value: blockHeight + 1 + retention (mirrors aerospike set_mined.go:162)
 	retention := store.settings.GetUtxoStoreBlockHeightRetention()
-	expectedDAH := int64(store.blockHeight.Load() + 1 + retention)
+	expectedDAH := int64(store.GetBlockHeight() + 1 + retention)
 	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be blockHeight + 1 + retention")
 
 	// Verify DAH bump: advance block height, re-run setDAH — DAH should increase
 	oldDAH := *tombstoneMillis
-	store.blockHeight.Store(store.blockHeight.Load() + 100) // advance 100 blocks
-	expectedBumpedDAH := int64(store.blockHeight.Load() + 1 + retention)
+	require.NoError(t, store.SetBlockHeight(store.GetBlockHeight()+100)) // advance 100 blocks
+	expectedBumpedDAH := int64(store.GetBlockHeight() + 1 + retention)
 
 	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
@@ -1272,7 +1284,7 @@ func TestSetTTL(t *testing.T) {
 
 	// Verify conflicting COALESCE: DAH is already set, calling setDAH again should NOT overwrite it
 	existingConflictingDAH := *tombstoneMillis
-	store.blockHeight.Store(store.blockHeight.Load() + 50) // advance more
+	require.NoError(t, store.SetBlockHeight(store.GetBlockHeight()+50)) // advance more
 
 	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
@@ -3624,4 +3636,95 @@ func TestMinimalCreate_CoinbaseMaturity_OutpointOnlySpend(t *testing.T) {
 	_, err = store.Spend(ctx, spender, createHeight+maturity,
 		utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
 	require.NoError(t, err, "spending at maturity height must succeed")
+}
+
+// TestGetBlockPlacementFieldsIndependently pins a field-selection bug that was silent.
+//
+// BlockIDs, BlockHeights and SubtreeIdxs are index-aligned placement fields served by
+// one query against the block_ids table, and that query used to run only when the
+// caller asked for BlockIDs. Asking for either of the other two on its own returned an
+// empty slice and no error — indistinguishable from a transaction never mined.
+//
+// It matters because BlockHeights feeds the input script block height used for BIP68
+// relative locktime, so a caller that dropped the apparently-unused BlockIDs from its
+// field list would have changed consensus-relevant behaviour with no failure to see.
+//
+// Each read path is checked against each of the two previously-broken fields. The two
+// paths reach the query through separate checks, and each check ORs the two fields
+// separately, so any one of the four could be removed without the others noticing.
+func TestGetBlockPlacementFieldsIndependently(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, tx := setup(ctx, t)
+
+	_, err := utxoStore.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		BlockID:        7,
+		BlockHeight:    99,
+		SubtreeIdx:     3,
+		OnLongestChain: true,
+	})
+	require.NoError(t, err)
+
+	placementFields := []struct {
+		name  string
+		field fields.FieldName
+		check func(*testing.T, *meta.Data)
+	}{
+		{"BlockHeights", fields.BlockHeights, func(t *testing.T, d *meta.Data) {
+			require.Equal(t, []uint32{99}, d.BlockHeights)
+		}},
+		{"SubtreeIdxs", fields.SubtreeIdxs, func(t *testing.T, d *meta.Data) {
+			require.Equal(t, []int{3}, d.SubtreeIdxs)
+		}},
+	}
+
+	// getUnbatched is called directly. Routing it to via the public Get would depend on
+	// configuration: settings.conf sets utxostore_getBatcherSize = 4096, so a plain Get
+	// travels the batched path instead, and a developer running with the struct-tag
+	// default of 1 would silently move these cases onto the other path.
+	for _, tc := range placementFields {
+		t.Run("unbatched read with only "+tc.name, func(t *testing.T) {
+			data, err := utxoStore.getUnbatched(ctx, tx.TxIDChainHash(), []fields.FieldName{tc.field})
+			require.NoError(t, err)
+			tc.check(t, data)
+		})
+	}
+
+	// BatchDecorate is likewise called directly, so this pins the batched path whatever
+	// the batcher is configured to do. It is the path the validator's parent prefetch
+	// uses, via Get when a batcher exists.
+	for _, tc := range placementFields {
+		t.Run("batched read with only "+tc.name, func(t *testing.T) {
+			items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash(), Idx: 0}}
+
+			require.NoError(t, utxoStore.BatchDecorate(ctx, items, tc.field))
+			require.NoError(t, items[0].Err)
+			require.NotNil(t, items[0].Data)
+			tc.check(t, items[0].Data)
+		})
+	}
+
+	// The two direct-call groups above cover the field selection on both paths. This
+	// case additionally confirms the public Get reaches one of them, since Get routes on
+	// both the batcher's presence and the field list.
+	t.Run("public Get with only BlockHeights", func(t *testing.T) {
+		data, err := utxoStore.Get(ctx, tx.TxIDChainHash(), fields.BlockHeights)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{99}, data.BlockHeights,
+			"asking for BlockHeights alone must return them, not an empty slice")
+	})
+
+	// The existing behaviour must be untouched: BlockIDs alone still returns all three,
+	// which is what every caller in the tree relies on today.
+	t.Run("BlockIDs alone still returns all three", func(t *testing.T) {
+		data, err := utxoStore.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{7}, data.BlockIDs)
+		require.Equal(t, []uint32{99}, data.BlockHeights)
+		require.Equal(t, []int{3}, data.SubtreeIdxs)
+	})
 }

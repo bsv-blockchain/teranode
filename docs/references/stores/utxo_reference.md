@@ -8,7 +8,7 @@ The UTXO (Unspent Transaction Output) Store provides an interface for managing a
 
 ### BlockState
 
-An atomic snapshot of both block height and median block time, preventing race conditions when reading these values separately.
+The pair of chain-tip values validation reads together: the block height and the median block time. `GetBlockState` returns it in a single atomic load, so the two fields can never be torn mid-read the way separate reads of two atomics could be; how consistent the pair is with one chain tip is down to the writer (see `SetBlockState`).
 
 ```go
 type BlockState struct {
@@ -38,9 +38,6 @@ type Spend struct {
 
     // ConflictingTxID is the transaction ID that conflicts with this UTXO
     ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
-
-    // BlockIDs is the list of blocks the transaction has been mined into
-    BlockIDs []uint32 `json:"blockIDs,omitempty"`
 
     // error is the error that occurred during the spend operation
     Err error `json:"err,omitempty"`
@@ -259,6 +256,11 @@ type Store interface {
     MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error
 
     // SetBlockHeight updates the current block height in the store.
+    //
+    // height must be non-zero: implementations return an ErrInvalidArgument
+    // error for zero rather than publishing a height that cannot be told
+    // apart from a store that was never written. SetBlockState states the
+    // same precondition and the shared suite pins it for every store.
     SetBlockHeight(height uint32) error
 
     // GetBlockHeight returns the current block height from the store.
@@ -270,9 +272,26 @@ type Store interface {
     // GetMedianBlockTime returns the current median block time from the store.
     GetMedianBlockTime() uint32
 
-    // GetBlockState returns an atomic snapshot of both block height and median block time.
-    // This prevents race conditions that could occur when reading these values separately,
-    // ensuring consistency during validation operations.
+    // SetBlockState publishes the block height and median block time of one
+    // chain tip as a single atomic snapshot. This is the write side of
+    // GetBlockState's consistency guarantee: callers that have both values
+    // for the same tip (the blockchain notification listener) must use this
+    // rather than the two individual setters, whose back-to-back calls leave
+    // a window where a reader pairs a new height with a stale median time
+    // (issue 1443).
+    //
+    // height must be non-zero, matching SetBlockHeight: implementations
+    // return an ErrInvalidArgument error for zero rather than publishing a
+    // snapshot that cannot be distinguished from a store that was never
+    // written. medianTime has no such restriction — zero is the legitimate
+    // "not yet known" value.
+    SetBlockState(height, medianTime uint32) error
+
+    // GetBlockState returns the block height and median block time as one
+    // snapshot: both fields come from a single atomic load, so a reader can
+    // never observe a pair torn mid-read. The pair is only as consistent as
+    // its writer — SetBlockState publishes both fields from one tip
+    // atomically, while the individual setters update one field at a time.
     GetBlockState() BlockState
 
     // GetUnminedTxIterator returns an iterator for unmined transactions in the store.
@@ -326,7 +345,8 @@ type Store interface {
 - `ReAssignUTXO`: Reassigns a UTXO to a new transaction output with safety measures.
 - `GetCounterConflicting`/`GetConflictingChildren`: Manages conflict relationships between transactions.
 - `SetBlockHeight`/`GetBlockHeight`/`SetMedianBlockTime`/`GetMedianBlockTime`: Manages blockchain state.
-- `GetBlockState`: Returns an atomic snapshot of block height and median block time.
+- `SetBlockState`: Publishes block height and median block time for one chain tip as a single atomic snapshot; the write side of the `GetBlockState` guarantee.
+- `GetBlockState`: Returns block height and median block time from a single atomic load, so the pair is never torn mid-read.
 - `GetPrunableUnminedTxIterator`: Lightweight iterator optimized for pruner, reduces bandwidth by 90-99%+.
 - `GetUnminedTxIterator`: Returns an iterator for efficiently accessing all unmined transactions.
 - `QueryOldUnminedTransactions`: Identifies unmined transactions older than a specified block height for cleanup.

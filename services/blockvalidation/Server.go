@@ -376,7 +376,14 @@ func New(
 		// when catchup completes or fails, but a missed Delete on any error/early-return
 		// branch would otherwise leak the entry permanently. Mirrors catchupAlternatives,
 		// the sibling cache for the same in-flight block.
-		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](ttlcache.WithTTL[chainhash.Hash, bool](10 * time.Minute)),
+		processBlockNotify: ttlcache.New[chainhash.Hash, bool](
+			ttlcache.WithTTL[chainhash.Hash, bool](10*time.Minute),
+			// Do not extend the window on reads, for the same reason as
+			// blockCatchupAttempts below: the enqueue gate reads this entry on every
+			// duplicate announcement, so touch-on-hit would let a stream of duplicates
+			// hold the suppression open past the safety-net TTL.
+			ttlcache.WithDisableTouchOnHit[chainhash.Hash, bool](),
+		),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),
@@ -1376,7 +1383,12 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		return nil, errors.WrapGRPC(err)
 	}
 
-	blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.PreviousBlockHeaderCount)
+	// parentHeaderRun rather than a bare GetBlockHeaders: GetBlockHeaders memoizes its answer per
+	// (startHash, count) for chainWalkCacheTTL, so a run that cannot carry the median-time-past
+	// window stays unusable for the whole TTL and every retry replays it. This entry point has no
+	// re-queue behind it — cmd/checkblock and RPC callers get one attempt — so the hash-walk
+	// rebuild is the only repair available here. See issue #1467.
+	blockHeaders, blockHeadersMeta, err := u.blockValidation.parentHeaderRun(ctx, block, u.settings.BlockValidation.PreviousBlockHeaderCount)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err))
 	}
@@ -1397,6 +1409,20 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		if errors.Is(err, errors.ErrBlockIncomplete) {
 			return nil, errors.WrapGRPC(errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err))
 		}
+
+		// Infrastructure failures are not verdicts on the block: a storage/service outage, or a
+		// parent-header run from our own store that was unanchored or unlinked (issue #1467),
+		// says nothing about consensus validity. Relabelling them "block is not valid" tells an
+		// operator running cmd/checkblock that a perfectly good block is consensus-invalid.
+		//
+		// Deliberately NOT a blanket ErrProcessing pass-through: block.Valid reports genuine
+		// consensus failures as processing errors too (model/Block.go's target-difficulty check,
+		// for one), so passing all of them through would mislabel real invalid blocks as
+		// infrastructure trouble — the mirror image of the bug being fixed here.
+		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrBlockHeaderContext) {
+			return nil, errors.WrapGRPC(err)
+		}
+
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
@@ -1408,6 +1434,25 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		Ok:      true,
 		Message: fmt.Sprintf("Block %s is valid", block.String()),
 	}, nil
+}
+
+// deriveBlockHeight settles a peer-supplied block height against the on-chain parent.
+//
+// block.Height is a varint in the block body (model.NewBlockFromBytes) and is not covered
+// by the header hash, so on the peer-fetched path it cannot be trusted. An honest peer sends
+// either the correct height or 0 (the field "can be left empty"); any other value is a lie
+// and the block is rejected. The returned height (parentHeight + 1) is authoritative and must
+// be written back onto the block before anything downstream reads block.Height — the
+// checkpoint guard, the difficulty skip, block-assembly gating and the coinbase subsidy all
+// key off it. Catchup (get_blocks.go) and the operator revalidation endpoint already carry
+// authoritative heights, so this settlement is only needed on the peer-fetched route.
+func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
+	derived := parentHeight + 1
+	if claimed != 0 && claimed != derived {
+		return 0, errors.NewBlockInvalidError("claimed height %d does not match parent height %d + 1", claimed, parentHeight)
+	}
+
+	return derived, nil
 }
 
 // processBlockFound processes a newly discovered block by validating it and managing
@@ -1482,6 +1527,29 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 
 		return nil
 	}
+
+	// Settle the peer-supplied height against the on-chain parent before anything reads
+	// block.Height (block-assembly gating and the unified-route decision below, and downstream
+	// the checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
+	// See deriveBlockHeight.
+	_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+	if err != nil {
+		return errors.NewServiceError("[processBlockFound][%s] failed to get parent header %s", hash.String(), block.Header.HashPrevBlock.String(), err)
+	}
+
+	// No implementation returns a nil meta with a nil error, but the settled height is
+	// security-relevant, so fail closed rather than derive it from a nil dereference.
+	// Mirrors the guard on the sibling GetBlockHeader call in ProcessBlock.
+	if parentMeta == nil {
+		return errors.NewServiceError("[processBlockFound][%s] nil metadata for parent header %s", hash.String(), block.Header.HashPrevBlock.String())
+	}
+
+	settledHeight, err := deriveBlockHeight(block.Height, parentMeta.Height)
+	if err != nil {
+		return errors.NewBlockInvalidError("[processBlockFound][%s] rejecting block with peer-inconsistent height", hash.String(), err)
+	}
+
+	block.Height = settledHeight
 
 	// Wait for block assembly to be ready before processing the block
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
@@ -1856,12 +1924,23 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 
 		// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue.
 		// Must run after the ErrExternal check above (see the ordering note there).
-		if errors.Is(err, errors.ErrServiceError) {
+		//
+		// ErrStorageError belongs here for the same reason: a failed read of our own
+		// blob store — a torn, stale or mis-keyed external transaction (issue 1439) —
+		// is this node's disk being wrong, and no peer can fix it. Without this case
+		// the error fell through to reportCatchupFailureForError and ReportPeerFailure
+		// against an honest primary, and then charged every cached alternative in
+		// turn. recordCatchupPeerFailure already exempts storage errors for exactly
+		// this reason; this closes the matching hole on the terminal-error path.
+		//
+		// isLocalCatchupFault is the union of two errors-package helpers, neither of
+		// which covers this on its own; its doc comment carries the reasoning.
+		if isLocalCatchupFault(err) {
 			// #1057: count this cycle toward the per-block cap (unless it made
-			// progress) so a persistent local service error cannot drive unbounded
-			// re-entry.
+			// progress) so a persistent local service or storage error cannot drive
+			// unbounded re-entry.
 			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
-			u.logger.Warnf("[catchup] Local service error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
+			u.logger.Warnf("[catchup] Local service/storage error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
 			u.processBlockNotify.Delete(*c.block.Hash())
 			u.catchupAlternatives.Delete(*c.block.Hash())
 			return

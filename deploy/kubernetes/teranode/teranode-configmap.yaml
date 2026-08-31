@@ -17,6 +17,12 @@ data:
   # which is referenced from the Cluster CR (spec.envFrom[].secretRef).
   # This Secret is intentionally not committed to the repo — create it yourself.
   # See docs/howto/miners/kubernetes/minersHowToInstallation.md ("Create the Teranode Secret").
+  #
+  # grpc_admin_api_key is also a shared secret and is NOT stored here: put it in the
+  # "teranode-operator-secrets" Secret alongside blockchain_store/utxostore. It gates
+  # the protected gRPC admin RPCs (setban/clearbanned, connect/disconnect peer,
+  # alert-driven bans, reset reputation), which cross service boundaries. Without it
+  # those admin RPCs fail Unauthenticated; use a strong random value (32+ chars).
   # recommended settings to tweak based on your deployment
   # KAFKA_PARTITIONS_HIGH: "512"
   # txMetaCacheMaxMB: "32768"

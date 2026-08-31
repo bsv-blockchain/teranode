@@ -1165,6 +1165,54 @@ func TestSyncCoordinator_CheckAndClearExpiredBackoff_StillInWindow(t *testing.T)
 		"freshly entered backoff must still be in its window")
 }
 
+func newTestSyncCoordinatorWithFSM(t *testing.T, state blockchain_api.FSMStateType) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry, *blockchain.Mock) {
+	t.Helper()
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	client := blockchain.NewLocalPeerRegistryClient(reg)
+	tSettings := &settings.Settings{P2P: settings.P2PSettings{
+		AllowPrunedNodeFallback:                   true,
+		SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+		HealthCheckEnabled:                        false, // test DataHubURL is unreachable; skip HTTP health check
+		// Production defaults for the unproven-peer probe hardening (upstream
+		// #1201); a zero probe budget would make unproven peers unselectable.
+		MaxUnvalidatedAdvertisedHeightLead:    10_000,
+		MaxUnprovenSyncProbesPerBackoffWindow: 3,
+		FullDeliveryFreshnessWindow:           24 * time.Hour,
+	}}
+	bcMock := &blockchain.Mock{}
+	st := state
+	bcMock.On("GetFSMCurrentState", mock.Anything).Return(&st, nil)
+	// checkFSMState refreshes the unproven-probe budget from the local tip
+	// (upstream #1201), which reads the best block header from the client.
+	bcMock.On("GetBestBlockHeader", mock.Anything).Return(
+		&model.BlockHeader{},
+		&model.BlockHeaderMeta{Height: 0, ChainWork: []byte{0x01}},
+		nil,
+	)
+
+	sc := NewSyncCoordinator(context.Background(), ulogger.TestLogger{}, tSettings, client,
+		NewPeerSelector(ulogger.TestLogger{}, tSettings), bcMock, nil)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	return sc, reg, bcMock
+}
+
+func TestSyncCoordinator_ProactiveInCatchingBlocks(t *testing.T) {
+	sc, reg, _ := newTestSyncCoordinatorWithFSM(t, blockchain_api.FSMStateType_CATCHINGBLOCKS)
+
+	// Register a viable peer well ahead of local height 0 (mirror the idiom
+	// from TestSyncCoordinator_IsCaughtUp_AheadPeerMakesUsBehind):
+	reg.Register(&blockchain.PeerInfo{ID: "ahead", DataHubURL: "http://ahead", Height: 100,
+		BlockHash: syncCoordinatorTestHash(t)})
+	for i := 0; i < 5; i++ {
+		reg.UpdateMetrics("ahead", 0, 0, 0, true, false, false, 100)
+	}
+
+	sc.checkFSMState()
+
+	require.Equal(t, "ahead", sc.GetCurrentSyncPeer(),
+		"coordinator should proactively select a sync peer while in CATCHINGBLOCKS")
+}
+
 // A stalled, still-ahead PROVEN incumbent must be preempted by an unproven candidate with
 // strictly higher validated work. This is the profile the shipped preemption tests miss (they
 // all use an unproven incumbent): before the atomic-swap fix, clear-then-reselect re-pinned the
@@ -1659,4 +1707,60 @@ func TestSyncCoordinator_LocalHeightCallbackIsTimeBounded(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	require.True(t, hadDeadline, "local-height callback context must carry a deadline")
+}
+
+// levelCapturingLogger counts Warnf/Debugf calls so tests can assert the level
+// a message was logged at; everything else falls through to TestLogger.
+type levelCapturingLogger struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	warns  int
+	debugs int
+}
+
+func (l *levelCapturingLogger) Warnf(string, ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns++
+}
+
+func (l *levelCapturingLogger) Debugf(string, ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.debugs++
+}
+
+func (l *levelCapturingLogger) counts() (warns, debugs int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.warns, l.debugs
+}
+
+func TestSyncCoordinator_WarnfUnlessStopping_DowngradesToDebugAfterStop(t *testing.T) {
+	logger := &levelCapturingLogger{}
+	tSettings := &settings.Settings{}
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	sc := NewSyncCoordinator(
+		context.Background(),
+		logger,
+		tSettings,
+		blockchain.NewLocalPeerRegistryClient(reg),
+		NewPeerSelector(ulogger.TestLogger{}, tSettings),
+		nil,
+		nil,
+	)
+
+	sc.warnfUnlessStopping("running")
+	warns, debugs := logger.counts()
+	require.Equal(t, 1, warns, "before Stop the message must log at warn level")
+	require.Zero(t, debugs)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sc.Stop(stopCtx)
+
+	sc.warnfUnlessStopping("stopping")
+	warns, debugs = logger.counts()
+	require.Equal(t, 1, warns, "after Stop no new warn-level messages may be emitted")
+	require.Equal(t, 1, debugs, "after Stop the message must downgrade to debug level")
 }

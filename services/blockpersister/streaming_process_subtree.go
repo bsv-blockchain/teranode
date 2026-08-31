@@ -189,6 +189,19 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 						return errors.NewProcessingError("[CreateSubtreeDataFileStreaming] transaction is nil for hash %s at index %d", data.Hash, j)
 					}
 
+					// A transaction stored from a UTXO-set snapshot comes back as its
+					// live outputs only. Bytes() below panics on a nil output hole —
+					// and there is no recover on this path, so it takes the process
+					// down — or serializes cleanly into a short, 0-input transaction
+					// that does not hash to the node's own hash, which would land in
+					// the data file as if it were the real one. Same gate as the asset
+					// boundary (services/asset/repository.isRequestedTransaction); the
+					// predicate must come first, because TxIDChainHash() dereferences
+					// the same nil *bt.Output.
+					if !data.Data.TxIsSerializable() || !data.Data.Tx.TxIDChainHash().IsEqual(&data.Hash) {
+						return errors.NewProcessingError("[CreateSubtreeDataFileStreaming] transaction is not retained in full for hash %s at index %d", data.Hash, j)
+					}
+
 					txData = data.Data.Tx.Bytes()
 				}
 

@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -75,7 +76,7 @@ func TestPeerSelector_SelectSyncPeer_PrefersFullNode(t *testing.T) {
 		newPeer("b", 100, "full", 60, 0),
 	}
 
-	got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
 	require.Equal(t, "b", got, "full storage must beat pruned regardless of reputation")
 }
 
@@ -88,7 +89,7 @@ func TestPeerSelector_SelectSyncPeer_FallbackToPrunedUsesValidatedTieBreakers(t 
 	}
 	peers[1].ValidatedHeight = 10
 
-	got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
 	require.Equal(t, "low", got)
 }
 
@@ -100,7 +101,7 @@ func TestPeerSelector_SelectSyncPeer_ForcedPeerSticky(t *testing.T) {
 		newPeer("better-id", 100, "full", 99, 0),
 	}
 
-	got := ps.SelectSyncPeer(peers, SelectionCriteria{
+	got := ps.SelectSyncPeer(context.Background(), peers, SelectionCriteria{
 		LocalHeight:  0,
 		ForcedPeerID: "forced-id",
 	})
@@ -114,7 +115,7 @@ func TestPeerSelector_SelectSyncPeer_ForcedPeerNotConnected(t *testing.T) {
 		newPeer("a", 100, "full", 90, 0),
 	}
 
-	got := ps.SelectSyncPeer(peers, SelectionCriteria{
+	got := ps.SelectSyncPeer(context.Background(), peers, SelectionCriteria{
 		LocalHeight:  0,
 		ForcedPeerID: "missing",
 	})
@@ -131,7 +132,7 @@ func TestPeerSelector_SelectSyncPeer_PreviousPeerSecondChoiceWhenTopMatches(t *t
 
 	criteria := advertisedProbeCriteria(50)
 	criteria.PreviousPeer = "a"
-	got := ps.SelectSyncPeer(peers, criteria)
+	got := ps.SelectSyncPeer(context.Background(), peers, criteria)
 	require.Equal(t, "b", got, "rotate off the previous peer if it would be top again")
 }
 
@@ -143,7 +144,7 @@ func TestPeerSelector_SelectSyncPeer_SkipsLowReputation(t *testing.T) {
 		newPeer("ok", 100, "full", 50, 0),
 	}
 
-	got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
 	require.Equal(t, "ok", got)
 }
 
@@ -154,7 +155,7 @@ func TestPeerSelector_SelectSyncPeer_RejectsZeroHeight(t *testing.T) {
 		newPeer("zero", 0, "full", 90, 0),
 	}
 
-	got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(0))
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(0))
 	require.Empty(t, got, "peer with zero height is never eligible")
 }
 
@@ -176,7 +177,7 @@ func TestPeerSelector_SelectSyncPeer_SyncCooldownExcludesRecentlyAttempted(t *te
 
 	criteria := advertisedProbeCriteria(50)
 	criteria.SyncAttemptCooldown = time.Minute
-	got := ps.SelectSyncPeer(peers, criteria)
+	got := ps.SelectSyncPeer(context.Background(), peers, criteria)
 	require.Equal(t, "fresh", got, "peer within cooldown must be skipped")
 }
 
@@ -189,7 +190,7 @@ func TestPeerSelector_SelectSyncPeer_PrunedFallbackDisabled(t *testing.T) {
 
 	peers := []*blockchain.PeerInfo{newPeer("p", 100, "pruned", 80, 0)}
 
-	got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
 	require.Empty(t, got, "no fallback, no full node, no peer")
 }
 
@@ -207,7 +208,7 @@ func TestPeerSelector_SelectSyncPeer_TieBreakOnAvgResponseTime(t *testing.T) {
 		},
 	}
 
-	got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
+	got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
 	require.Equal(t, "fast", got)
 }
 
@@ -217,7 +218,7 @@ func TestPeerSelector_SelectSyncPeer_PrefersRecentFullBlockDeliveryOverHeaderOnl
 	proven := withRecentFullBlockDelivery(withValidatedWork(newPeer("proven", 100, "full", 80, 0), 100, []byte{0x03}))
 	headerOnly := withValidatedWork(newPeer("header-only", 1_000, "full", 90, 0), 1_000, []byte{0x05})
 
-	got := ps.SelectSyncPeer([]*blockchain.PeerInfo{headerOnly, proven}, validatedWorkCriteria([]byte{0x01}))
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{headerOnly, proven}, validatedWorkCriteria([]byte{0x01}))
 	require.Equal(t, "proven", got)
 }
 
@@ -227,7 +228,7 @@ func TestPeerSelector_SelectSyncPeer_PrefersHigherValidatedWorkWithinDeliveryTie
 	lowerWork := withRecentFullBlockDelivery(withValidatedWork(newPeer("lower", 200, "full", 80, 0), 200, []byte{0x03}))
 	higherWork := withRecentFullBlockDelivery(withValidatedWork(newPeer("higher", 100, "full", 80, 0), 100, []byte{0x05}))
 
-	got := ps.SelectSyncPeer([]*blockchain.PeerInfo{lowerWork, higherWork}, validatedWorkCriteria([]byte{0x01}))
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{lowerWork, higherWork}, validatedWorkCriteria([]byte{0x01}))
 	require.Equal(t, "higher", got)
 }
 
@@ -236,7 +237,7 @@ func TestPeerSelector_SelectSyncPeer_RejectsNoValidatedWorkWhenProbeDisabled(t *
 
 	peers := []*blockchain.PeerInfo{newPeer("advertised", 100, "full", 80, 0)}
 
-	got := ps.SelectSyncPeer(peers, SelectionCriteria{
+	got := ps.SelectSyncPeer(context.Background(), peers, SelectionCriteria{
 		LocalHeight:                 50,
 		LocalChainWork:              []byte{0x01},
 		FullDeliveryFreshnessWindow: 24 * time.Hour,
@@ -250,7 +251,7 @@ func TestPeerSelector_SelectSyncPeer_UsesValidatedHeightOnlyAsTieBreaker(t *test
 	lowerValidatedHeight := withValidatedWork(newPeer("low-validated", 1_000, "full", 80, 0), 100, []byte{0x03})
 	higherValidatedHeight := withValidatedWork(newPeer("high-validated", 100, "full", 80, 0), 200, []byte{0x03})
 
-	got := ps.SelectSyncPeer([]*blockchain.PeerInfo{lowerValidatedHeight, higherValidatedHeight}, validatedWorkCriteria([]byte{0x01}))
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{lowerValidatedHeight, higherValidatedHeight}, validatedWorkCriteria([]byte{0x01}))
 	require.Equal(t, "high-validated", got)
 }
 
@@ -261,7 +262,7 @@ func TestPeerSelector_SelectSyncPeer_StoragePenaltyDemotesFullClaim(t *testing.T
 	penalizedFull.FullStoragePenaltyUntil = time.Now().Add(time.Hour)
 	full := withValidatedWork(newPeer("full", 100, "full", 80, 0), 100, []byte{0x03})
 
-	got := ps.SelectSyncPeer([]*blockchain.PeerInfo{penalizedFull, full}, validatedWorkCriteria([]byte{0x01}))
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{penalizedFull, full}, validatedWorkCriteria([]byte{0x01}))
 	require.Equal(t, "full", got)
 }
 
@@ -286,7 +287,7 @@ func TestPeerSelector_SelectFromCandidates_RandomTiebreakCoversWholeTopBand(t *t
 			return want
 		}
 
-		got := ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))
+		got := ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))
 		require.Contains(t, tied, got)
 		require.NotEqual(t, "worse", got)
 		seen[got] = true
@@ -312,7 +313,7 @@ func TestPeerSelector_SelectSyncPeer_GrindableIDCannotCaptureSelection(t *testin
 			newPeer(ids[2], 100, "full", 80, 0),
 			newPeer(ids[3], 100, "full", 80, 0),
 		}
-		wins[ps.SelectSyncPeer(peers, advertisedProbeCriteria(50))]++
+		wins[ps.SelectSyncPeer(context.Background(), peers, advertisedProbeCriteria(50))]++
 	}
 	for _, id := range ids {
 		require.Positive(t, wins[id], "every tied peer must win at least once, got %v", wins)
@@ -333,7 +334,7 @@ func TestPeerSelector_SelectSyncPeer_PreviousPeerExcludedFromTiedTopBand(t *test
 		}
 		criteria := advertisedProbeCriteria(50)
 		criteria.PreviousPeer = "prev"
-		got := ps.SelectSyncPeer(peers, criteria)
+		got := ps.SelectSyncPeer(context.Background(), peers, criteria)
 		require.Contains(t, []string{"other-a", "other-b"}, got)
 	}
 }
@@ -375,7 +376,7 @@ func TestPeerSelector_SelectSyncPeer_PreviousPeerKeptWhenOnlyCandidate(t *testin
 	peers := []*blockchain.PeerInfo{newPeer("prev", 100, "full", 80, 0)}
 	criteria := advertisedProbeCriteria(50)
 	criteria.PreviousPeer = "prev"
-	require.Equal(t, "prev", ps.SelectSyncPeer(peers, criteria), "sole candidate is selected even if it was the previous peer")
+	require.Equal(t, "prev", ps.SelectSyncPeer(context.Background(), peers, criteria), "sole candidate is selected even if it was the previous peer")
 }
 
 func TestPeerSelector_SelectSyncPeer_UnprovenProbeBudgetBoundsHeaderOnlyPeers(t *testing.T) {
@@ -387,11 +388,11 @@ func TestPeerSelector_SelectSyncPeer_UnprovenProbeBudgetBoundsHeaderOnlyPeers(t 
 
 	noBudget := advertisedProbeCriteria(50)
 	noBudget.UnprovenProbeBudgetRemaining = 0
-	require.Empty(t, ps.SelectSyncPeer(peers, noBudget))
+	require.Empty(t, ps.SelectSyncPeer(context.Background(), peers, noBudget))
 
 	boundedBudget := advertisedProbeCriteria(50)
 	boundedBudget.UnprovenProbeBudgetRemaining = 3
-	require.NotEmpty(t, ps.SelectSyncPeer(peers, boundedBudget))
+	require.NotEmpty(t, ps.SelectSyncPeer(context.Background(), peers, boundedBudget))
 }
 
 // TestPeerSelector_SelectSyncPeer_SkipsBlacklistedDataHubURL: the operator
@@ -412,9 +413,9 @@ func TestPeerSelector_SelectSyncPeer_SkipsBlacklistedDataHubURL(t *testing.T) {
 	bad := newPeer("bad", 200, "full", 90, 0)
 	bad.DataHubURL = "http://evil.example:8080/api" // same host as blacklist entry
 
-	got := ps.SelectSyncPeer([]*blockchain.PeerInfo{bad, good}, advertisedProbeCriteria(50))
+	got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{bad, good}, advertisedProbeCriteria(50))
 	require.Equal(t, "good", got, "peer with blacklisted DataHub URL must not win selection")
 
-	got = ps.SelectSyncPeer([]*blockchain.PeerInfo{bad}, advertisedProbeCriteria(50))
+	got = ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{bad}, advertisedProbeCriteria(50))
 	require.Empty(t, got, "a blacklisted peer must not be selected even as the only candidate")
 }

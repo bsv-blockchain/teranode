@@ -15,6 +15,7 @@ var (
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
+	ErrBlockHeaderContext         = New(ERR_BLOCK_HEADER_CONTEXT, "block header context invalid")
 	ErrBlockIncomplete            = New(ERR_BLOCK_INCOMPLETE, "block incomplete")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
 	ErrBlockInvalidFormat         = New(ERR_BLOCK_INVALID_FORMAT, "block format is invalid")
@@ -40,6 +41,7 @@ var (
 	ErrUtxoHashMismatch           = New(ERR_UTXO_MISMATCH, "utxo hash mismatch")
 	ErrUtxoInvalidSize            = New(ERR_UTXO_INVALID_SIZE, "utxo invalid size")
 	ErrUtxoUnspent                = New(ERR_UTXO_UNSPENT, "utxo is unspent")
+	ErrUtxoWalkLimitExceeded      = New(ERR_UTXO_WALK_LIMIT_EXCEEDED, "utxo walk limit exceeded")
 	ErrUtxoError                  = New(ERR_UTXO_ERROR, "utxo error")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -63,6 +65,7 @@ var (
 	ErrTxNotFound                 = New(ERR_TX_NOT_FOUND, "tx not found")
 	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
 	ErrTxLocked                   = New(ERR_TX_LOCKED, "tx locked")
+	ErrTxCreating                 = New(ERR_TX_CREATING, "tx creating")
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
 	ErrNetworkError               = New(ERR_NETWORK_ERROR, "network error")
 	ErrNetworkTimeout             = New(ERR_NETWORK_TIMEOUT, "network timeout")
@@ -98,6 +101,44 @@ func NewNotFoundError(message string, params ...interface{}) *Error {
 // NewProcessingError creates a new error with the processing error code.
 func NewProcessingError(message string, params ...interface{}) *Error {
 	return New(ERR_PROCESSING, message, params...)
+}
+
+// NewBlockHeaderContextError creates a new error for a block whose header could not be evaluated
+// because the CHAIN CONTEXT supplied alongside it was wrong — the parent-header run was not
+// anchored at the block's parent, was not a linked chain, or was too short to hold the
+// median-time-past window. It says nothing about the block itself, so it must never be turned
+// into a block-invalid verdict or charged to the peer that served the block.
+//
+// It wraps ErrProcessing so the existing transient/infrastructure handling (which matches on
+// ErrProcessing) keeps treating it as retryable, while callers that need to distinguish a local
+// context failure from a generic processing error can match this code specifically.
+func NewBlockHeaderContextError(message string, params ...interface{}) *Error {
+	// New() takes the LAST param as the wrapped cause, so the ErrProcessing tail cannot be
+	// appended to params — that would displace a caller-supplied cause into a format argument
+	// and render it as %!(EXTRA ...). Build the error first so the caller's cause is wrapped
+	// normally, then attach the tail. The tail is a fresh instance, never the ErrProcessing
+	// singleton: SetWrappedErr and Join walk to the tail and assign, so sharing the global
+	// would let a later Join mutate process-wide state.
+	e := New(ERR_BLOCK_HEADER_CONTEXT, message, params...)
+	tail := New(ERR_PROCESSING, "error processing")
+
+	// Attaching the tail with SetWrappedErr is only safe when nothing is wrapped yet, because it
+	// assigns to the LAST *Error in the chain — which, when the caller supplied a cause, is the
+	// caller's own object. Every Err* here is a process-wide singleton, so
+	// NewBlockHeaderContextError("...", ErrServiceError) would write this tail into the global
+	// ErrServiceError permanently, making Is(ErrServiceError, ErrProcessing) true for every
+	// caller in the process. Splice the tail in above the caller's cause instead: the cause stays
+	// reachable, both predicates still hold, and no object we do not own is touched.
+	if e.wrappedErr == nil {
+		e.SetWrappedErr(tail)
+
+		return e
+	}
+
+	tail.wrappedErr = e.wrappedErr
+	e.wrappedErr = tail
+
+	return e
 }
 
 // NewConfigurationError creates a new error with the configuration error code.
@@ -325,6 +366,16 @@ func NewUtxoInvalidSize(message string, params ...interface{}) *Error {
 // success by retry-safe callers like validator.reverseSpends.
 func NewUtxoUnspentError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_UNSPENT, message, params...)
+}
+
+// NewUtxoWalkLimitExceededError creates a new error indicating a UTXO
+// descendant-graph walk exceeded its node budget. Fail-closed guard on the
+// conflicting-children BFS (issue 1391): the walk is aborted deterministically
+// instead of stalling for the lifetime of the request context. Deliberately
+// distinct from ERR_THRESHOLD_EXCEEDED (missing-tx retry semantics) and never
+// matched by ErrTxInvalid/ErrTxNotFound classification.
+func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_WALK_LIMIT_EXCEEDED, message, params...)
 }
 
 // NewUtxoError creates a new generic utxo error.

@@ -263,29 +263,125 @@ func handleSubtreeMeta(br *bufio.Reader, logger ulogger.Logger, settings *settin
 		return errors.NewProcessingError(msgErrorReadingSubtree, err)
 	}
 
-	var subtreeMeta *subtree.Meta
-
-	subtreeMeta, err = subtree.NewSubtreeMetaFromReader(st, br)
-	if err != nil {
-		return errors.NewProcessingError("error reading subtree meta", err)
-	}
-
+	// Print what the subtree file says before touching the meta, so an operator
+	// triaging a rejected meta still gets both sides of the comparison.
 	fmt.Printf("Subtree root hash: %s\n", st.RootHash())
 
 	fmt.Printf(numTransactionsFormat, st.Length())
 
-	if verbose {
-		for i, txInpoint := range subtreeMeta.TxInpoints {
-			switch {
-			case txInpoint.ParentTxHashes == nil:
-				fmt.Printf("%10d: <nil>\n", i)
-			default:
-				fmt.Printf(nodeFormat, i, txInpoint.ParentTxHashes)
-			}
-		}
+	// RootHash() is nil for a subtree claiming zero leaves, and it is dereferenced
+	// below. Printing it above is safe because fmt recovers a Stringer panic; the
+	// deref is not. Report it rather than dying on the malformed file this tool
+	// exists to inspect.
+	stRootHash := st.RootHash()
+	if stRootHash == nil {
+		return errors.NewProcessingError("subtree file has no root hash: it claims zero transactions, so its meta cannot be checked against it")
 	}
 
+	// Stream the happy path. A mainnet meta for a million-leaf subtree runs to
+	// tens or hundreds of megabytes, so buffering it up front — and holding it
+	// alive across a second parse — costs that on every healthy file to serve the
+	// rejected one. The best-effort dump below re-opens instead.
+	//
+	// Route through the validated reader rather than the raw one: on an over-long
+	// claimed count the raw deserializer writes past its slice and the CLI dies
+	// with an index out of range instead of naming the defect (issue 1425). The
+	// validated reader names the mismatched root or count, which is the diagnosis
+	// the operator came for.
+	//
+	// Unlike block validation this compares against the .subtree file's own
+	// claimed root, because the CLI is pointed at a pair of files and has no block
+	// to supply a committed hash. So a torn .subtree header is reported here as a
+	// meta root hash mismatch, naming the other file of the two — worth knowing
+	// when reading the output.
+	subtreeMeta, err := blockmodel.NewSubtreeMetaFromValidatedReader(*stRootHash, st, br)
+	if err != nil {
+		fmt.Printf("Subtree meta REJECTED: %v\n", err)
+
+		// Dump whatever the body yields before returning, so the operator gets the
+		// per-index picture as well as the verdict — but still return the error, so
+		// the process exits non-zero. Printing the defect and exiting 0 would make
+		// `filereader x.subtreeMeta || alert` report success on exactly the corrupt
+		// file the tool exists to find.
+		if best := parseSubtreeMetaBestEffort(st, logger, settings, dir, filename); best != nil {
+			fmt.Printf("Dumping the body anyway; entries below come from a file that failed validation.\n")
+			dumpTxInpoints(best)
+		}
+
+		return errors.NewProcessingError("error reading subtree meta", err)
+	}
+
+	dumpTxInpoints(subtreeMeta)
+
 	return nil
+}
+
+// dumpTxInpoints prints the per-index inpoints when -verbose is set. Shared by
+// the accepted and rejected paths: which entries are missing is the diagnosis an
+// operator opens a suspect file for, so a rejection must not silence it.
+func dumpTxInpoints(meta *subtree.Meta) {
+	if !verbose {
+		return
+	}
+
+	for i, txInpoint := range meta.TxInpoints {
+		switch {
+		case txInpoint.ParentTxHashes == nil:
+			fmt.Printf("%10d: <nil>\n", i)
+		default:
+			fmt.Printf(nodeFormat, i, txInpoint.ParentTxHashes)
+		}
+	}
+}
+
+// parseSubtreeMetaBestEffort re-parses a meta the validated reader rejected, so
+// the CLI can still show its contents. Returns nil when the body cannot be
+// parsed at all — including the over-long-count shape, where go-subtree's
+// deserializer indexes past its destination slice and panics. Recovering is
+// right here and wrong in the node: this is a diagnostic tool being pointed at a
+// file already known to be malformed, and the alternative is showing nothing.
+func parseSubtreeMetaBestEffort(st *subtree.Subtree, logger ulogger.Logger, settings *settings.Settings, dir, filename string) (meta *subtree.Meta) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("Body could not be parsed: %v\n", r)
+
+			meta = nil
+		}
+	}()
+
+	// Re-open rather than hold the whole file in memory across both parses. This
+	// runs only for a file already known to be malformed, so the extra read costs
+	// nothing on the healthy path.
+	metaPath := filepath.Join(dir, fmt.Sprintf("%s.%s", filename, fileformat.FileTypeSubtreeMeta))
+
+	_, _, _, reader, err := getReader(metaPath, logger, settings)
+	if err != nil {
+		fmt.Printf("Body could not be re-read: %v\n", err)
+
+		return nil
+	}
+
+	defer func() {
+		if c, ok := reader.(io.Closer); ok {
+			_ = c.Close()
+		}
+	}()
+
+	br := bufio.NewReaderSize(reader, 1024*128)
+	if _, err := fileformat.ReadHeader(br); err != nil {
+		fmt.Printf("Body could not be re-read: %v\n", err)
+
+		return nil
+	}
+
+	parsed, err := subtree.NewSubtreeMetaFromReader(st, br)
+	if err != nil {
+		fmt.Printf("Body could not be parsed: %v\n", err)
+
+		return nil
+	}
+
+	return parsed
 }
 
 // handleBlockHeader processes the unnamed block header case.

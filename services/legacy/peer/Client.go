@@ -38,7 +38,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string) (ClientI, error) {
 	// Include the admin API key in the connection options
 	apiKey := tSettings.GRPCAdminAPIKey
-	if apiKey != "" {
+	if apiKey == "" || util.IsPlaceholderAdminAPIKey(apiKey) {
+		// A placeholder is ignored by the server (which uses a random key), so a
+		// client that sent it would still be rejected; warn instead of logging a
+		// reassuring "using API key" line that contradicts the server.
+		logger.Warnf("[Legacy Client] grpc_admin_api_key is unset or a well-known placeholder; admin RPCs (ban, unban) will fail with Unauthenticated because the server ignores placeholders and uses a random key")
+	} else {
 		logger.Infof("[Legacy Client] Using API key for authentication")
 	}
 

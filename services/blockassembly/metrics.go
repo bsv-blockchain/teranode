@@ -37,6 +37,7 @@ var (
 
 	// Additional metrics for block assembler operations
 	prometheusBlockAssemblerGetMiningCandidate          prometheus.Counter
+	prometheusBlockAssemblerCandidateTimeClockSkew      prometheus.Counter
 	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
 	prometheusBlockAssemblerTransactions                prometheus.Gauge
 	prometheusBlockAssemblerQueuedTransactions          prometheus.Gauge
@@ -51,6 +52,7 @@ var (
 	prometheusBlockAssemblyCurrentBlockHeight           prometheus.Gauge
 	prometheusBlockAssemblyTipLagBlocks                 prometheus.Gauge
 	prometheusBlockAssemblyProcessingStuck              *prometheus.CounterVec
+	prometheusBlockAssemblyCoinbaseDivergence           *prometheus.CounterVec
 	prometheusBlockAssemblerCurrentState                prometheus.Gauge
 	prometheusBlockAssemblerStateTransitions            *prometheus.CounterVec
 	prometheusBlockAssemblerStateDuration               *prometheus.HistogramVec
@@ -72,6 +74,7 @@ var (
 	prometheusBlockAssemblerSubtreeStoredHist           prometheus.Histogram
 	prometheusBlockAssemblerConflictIntentsPending      prometheus.Gauge
 	prometheusBlockAssemblerConflictIntentReplay        *prometheus.CounterVec
+	prometheusBlockAssemblerDequeueStalenessSeconds     prometheus.Gauge
 )
 
 var (
@@ -164,6 +167,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockAssemblerCandidateTimeClockSkew = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "block_assembler_candidate_time_clock_skew",
+			Help:      "Mining-candidate polls refused because the parent's median-time-past floor is above the two-hour future bound, so no valid block timestamp exists; a non-zero rate means the local clock is far behind the network and block production has stopped",
+		},
+	)
+
 	prometheusBlockAssemblerSubtreeStoredHist = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -217,6 +229,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "subtrees",
 			Help:      "Number of subtrees currently in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerDequeueStalenessSeconds = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "dequeue_staleness_seconds",
+			Help:      "Seconds since the subtree processor's consumer goroutine last passed through its dequeue branch. A value growing alongside a non-zero queued_transactions means intake is queuing unboundedly because the consumer is stuck elsewhere (reorg/move-forward-block/reset/etc), not that ingest has merely slowed (issue #1429).",
 		},
 	)
 
@@ -313,6 +334,16 @@ func _initPrometheusMetrics() {
 			Help:      "Count of block assembly catch-up/reorg/move-forward failures that left the assembler behind the tip, labelled by reason (issue #980).",
 		},
 		[]string{"reason"},
+	)
+
+	prometheusBlockAssemblyCoinbaseDivergence = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "coinbase_divergence_total",
+			Help:      "Coinbase-divergence events by outcome. Every detection records exactly one follow-up outcome, so detected == repaired + no_gap + escalated + aborted.",
+		},
+		[]string{"outcome"},
 	)
 
 	prometheusBlockAssemblerCurrentState = promauto.NewGauge(

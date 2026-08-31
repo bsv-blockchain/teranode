@@ -22,7 +22,7 @@ import (
 // using the per-call spend block height (correct). But for a paginated tx the
 // final "all spent" transition is detected while accounting the extra records
 // (incrementSpentExtraRecs), and that path stamped the master DAH from the store's
-// cached chain tip (s.blockHeight) instead of the spend's block height. During
+// cached chain tip (GetBlockHeight) instead of the spend's block height. During
 // catchup/sync the cached tip lags behind the block being validated, so the DAH
 // was stamped too low and the pruner deleted large/paginated txs before the
 // retention window elapsed.

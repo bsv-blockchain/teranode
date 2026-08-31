@@ -58,9 +58,9 @@ const (
 	// messages.
 	pingInterval = 2 * time.Minute
 
-	// negotiateTimeout is the duration of inactivity before we timeout a
-	// peer that hasn't completed the initial version negotiation.
-	negotiateTimeout = 30 * time.Second
+	// NegotiateTimeout is how long a peer waits for the version handshake
+	// before hanging up.
+	NegotiateTimeout = 30 * time.Second
 
 	// stallTickInterval is the interval of time between each check for
 	// stalled peers.
@@ -2358,13 +2358,27 @@ out:
 
 			err := p.writeMessage(msg.msg, msg.encoding)
 			if err != nil {
+				// Evaluate shouldLogWriteError before disconnecting: it reads
+				// p.disconnect, which the disconnect below sets. An ordinary
+				// remote close (broken pipe, connection reset, EOF) is not
+				// worth an extra warning about the underlying error, but the
+				// disconnect event itself is always logged at Info so a peer
+				// whose socket died silently still shows up at the default
+				// log level.
 				if p.shouldLogWriteError(err) {
-					p.logger.Errorf("Failed to send message to "+
-						"%s: %v", p, err)
+					p.logger.Warnf("Peer %s write error: %v", p, err)
 				}
+
+				// Disconnect before anything else, as upstream btcd does, so a
+				// caller that queued a message and stopped receiving on its
+				// done channel cannot wedge this handler before the peer is
+				// torn down.
+				p.DisconnectWithLogFunc(fmt.Sprintf("write error: %v", err), p.logger.Infof)
+
 				if msg.doneChan != nil {
 					msg.doneChan <- struct{}{}
 				}
+
 				continue
 			}
 
@@ -2528,11 +2542,28 @@ func (p *Peer) DisconnectWithLogFunc(reason string, logFunc func(format string, 
 	// n := runtime.Stack(buf, false)
 	// stackTrace := string(buf[:n])
 	// p.logger.Debugf("Disconnecting (%s) reason: %s\nStack trace:\n%s", p, reason, stackTrace)
-	logFunc("Disconnecting (%s) reason: %s", p, reason)
-
+	// Only the call that actually disconnects the peer runs the teardown and logs
+	// at the caller's requested level. Later calls - one per message still queued
+	// on a dead connection, for example - lost the race, but their reason (e.g. a
+	// ban or protocol-violation reason) is still worth keeping, so log it at
+	// Debug rather than dropping it silently.
+	//
+	// A peer is commonly torn down from two directions at once - something decides
+	// to drop it, and its own read loop then hits the closed socket - and logging
+	// both reports one disconnect twice. That matters beyond tidiness: this line is
+	// the anchor the disconnect-rate measurements count, so a double entry inflates
+	// the very number those measurements exist to drive down.
+	//
+	// It also means a deliberate quiet teardown stays quiet. A feeler probe hangs
+	// up on purpose and logs at debug; without this guard its peer's read loop
+	// would still log the same disconnect at warn, and a probe working exactly as
+	// intended would look like a lost peer.
 	if atomic.AddInt32(&p.disconnect, 1) != 1 {
+		p.logger.Debugf("Disconnecting (%s) reason: %s (already disconnecting)", p, reason)
 		return
 	}
+
+	logFunc("Disconnecting (%s) reason: %s", p, reason)
 
 	if atomic.LoadInt32(&p.connected) != 0 {
 		p.conn.Close()
@@ -2809,7 +2840,7 @@ func (p *Peer) start() error {
 		}
 	}()
 
-	// Negotiate the protocol within the specified negotiateTimeout.
+	// Negotiate the protocol within the specified NegotiateTimeout.
 	select {
 	case err := <-negotiateErr:
 		if err != nil {
@@ -2818,7 +2849,7 @@ func (p *Peer) start() error {
 
 			return err
 		}
-	case <-time.After(negotiateTimeout):
+	case <-time.After(NegotiateTimeout):
 		reason := "protocol negotiation timeout"
 		p.DisconnectWithWarning(reason)
 

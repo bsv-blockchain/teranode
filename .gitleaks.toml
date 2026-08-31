@@ -15,6 +15,15 @@ title = "Teranode gitleaks config"
 [extend]
 useDefault = true
 
+# The default ruleset does NOT flag `<name>_private_key = <hex>` settings lines
+# (verified against the key this repo actually leaked), so match them
+# explicitly. The value-based allowlist below exempts the known public test
+# fixtures; anything else is reported.
+[[rules]]
+id = "teranode-settings-private-key"
+description = "Hex private key assigned to a *private_key settings entry"
+regex = '''(?i)[a-z0-9_]*private_keys?(?:\.[a-z0-9_.-]+)*\s*=\s*"?[0-9a-f]{64,}'''
+
 [allowlist]
 description = "Localhost/docker dev-default DB credentials and env placeholders"
 regexTarget = "line"
@@ -23,10 +32,22 @@ regexes = [
   '''postgres://[^@\s"'`]+@(localhost|postgres|postgrest|toxiproxy|127\.0\.0\.1)([:/]|$)''',
   # ${ENV_VAR} placeholders resolved at runtime (not literal secrets).
   '''\$\{[A-Za-z0-9_]+\}''',
-  # Committed dev/test P2P key defaults (overridden per-deployment via
-  # settings_local.conf / env). Scoped to the specific config keys, so a real
-  # secret added to settings.conf under a different name is still caught.
-  '''(alert_genesis_keys|alert_p2p_private_key|coinbase_p2p_private_key|p2p_shared_key|tx_blaster_p2p_private_key)\b''',
+  # Alert genesis keys are public keys, and the p2p shared key is a dev-default
+  # network PSK; neither is a node identity secret.
+  '''(alert_genesis_keys|p2p_shared_key)\b''',
+  # Known public P2P test fixtures, allowlisted by VALUE, not key name, so a
+  # real key committed under any *_private_key setting is still caught by the
+  # rule above. Per-value provenance is documented on the allowedFixtures map
+  # in settings/committed_private_keys_test.go (the complementary full-file
+  # guard; this scan only sees PR diffs). Never add a value here without
+  # recording where it is published.
+  '''e76c77795b43d2aacd564648bffebde74a4c31540357dad4a3694a561b4c4f1f''',
+  '''c8a1b91ae120878d91a04c904e0d565aa44b2575c1bb30a729bd3e36e2a1d5e6''',
+  '''44a5a189fbad1d7bc0c59b33fbd5e485f2f4d3d8bf293838c56ce72e53b55717''',
+  '''89a2d8acf5b2e60fd969914c326c63cde50675a47897c0eaacc02eb6ff866558''',
+  '''d77a7cac7833f2c0263ed7b9aaeb8dda1effaf8af948d570ed8f7a93bd3c418d''',
+  '''860616e0492a3050aa760440469acfe4f57cf5387a765f5227603c4f6aeac985''',
+  '''1d6a9c8963fdbb86eabc4d10cb1efdf418197cfc3f9779e3c8229663411ae5c8''',
   # Dev test wallet key for the docker blaster stacks (overridden per-deploy).
   '''COINBASE_WALLET_PRIVATE_KEY''',
 ]

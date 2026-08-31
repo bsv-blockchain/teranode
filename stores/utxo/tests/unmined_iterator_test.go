@@ -30,7 +30,7 @@ func TestUnminedTxIteratorSQLite(t *testing.T) {
 
 func TestUnminedTxIteratorPostgres(t *testing.T) {
 	utxoStore, teardown, err := postgres.SetupTestPostgresContainer()
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	defer func() {
 		_ = teardown()
@@ -41,7 +41,7 @@ func TestUnminedTxIteratorPostgres(t *testing.T) {
 
 func TestUnminedTxIteratorAerospike(t *testing.T) {
 	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		_ = teardown()

@@ -149,6 +149,80 @@ func TestDoHTTPRequestNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+// TestBuildHTTPErrorBodyIsBounded pins the cap on the non-2xx error body.
+//
+// The body of a failed response is peer-supplied and is read on every failure path,
+// including the ones reached from DoHTTPRequestBounded. An unbounded read there lets
+// a hostile peer defeat that function's cap outright: answer with an error status,
+// then stream indefinitely. The bytes never reach the caller, but they are still
+// allocated, and they are interpolated into the error string.
+func TestBuildHTTPErrorBodyIsBounded(t *testing.T) {
+	// Markers at both ends: the head must survive, the tail must be cut. Asserting on
+	// both is what distinguishes a real truncation from a body that merely happened to
+	// be short.
+	const headMarker = "ERRBODYHEAD"
+	const tailMarker = "ERRBODYTAIL"
+
+	oversizedBody := headMarker + strings.Repeat("A", 4*maxHTTPErrorBodyBytes) + tailMarker
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, err := w.Write([]byte(oversizedBody))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+
+	t.Run("unbounded caller", func(t *testing.T) {
+		_, err := DoHTTPRequest(ctx, server.URL)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), headMarker, "the start of the body should still be diagnosable")
+		require.NotContains(t, err.Error(), tailMarker, "the body must be truncated, not read to completion")
+		require.Less(t, len(err.Error()), len(oversizedBody), "error must not retain the whole body")
+	})
+
+	t.Run("bounded caller keeps its cap on an error status", func(t *testing.T) {
+		// The response never reaches the body-cap logic in DoHTTPRequestBounded, because
+		// a non-2xx status short-circuits into buildHTTPError. Without the bound there,
+		// the maxBytes argument below would be meaningless.
+		_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), tailMarker, "an error status must not bypass the allocation cap")
+		require.Less(t, len(err.Error()), len(oversizedBody))
+	})
+}
+
+// TestBuildHTTPErrorBodyIsEscaped pins the companion property to the size bound: the
+// snippet is peer-controlled, and this error string is logged verbatim and forwarded
+// to the peer registry. Bounding the length without escaping the content still lets a
+// peer embed newlines to forge log lines, or terminal escapes, and breaks the
+// project's single-line log convention.
+func TestBuildHTTPErrorBodyIsEscaped(t *testing.T) {
+	// A forged log line, an ANSI escape, and a NUL, in a body well under the cap so
+	// this test can only fail on escaping, never on truncation.
+	hostileBody := "real\nERROR forged log line\x1b[31m\x00tail"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, err := w.Write([]byte(hostileBody))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	_, err := DoHTTPRequest(context.Background(), server.URL)
+	require.Error(t, err)
+
+	msg := err.Error()
+	require.NotContains(t, msg, "\n", "a peer must not be able to split the message across log lines")
+	require.NotContains(t, msg, "\x1b", "terminal escapes must not survive into operator logs")
+	require.NotContains(t, msg, "\x00", "control bytes must not survive into operator logs")
+
+	// The content is still present, just escaped, so the message stays diagnosable.
+	require.Contains(t, msg, `\n`, "the newline should appear in escaped form")
+	require.Contains(t, msg, "forged log line")
+}
+
 func TestDoHTTPRequestServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -177,8 +251,8 @@ func TestDoHTTPRequestServerErrorNoBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
-	// When body is empty, it still shows "with body []"
-	assert.Contains(t, err.Error(), "with body []")
+	// An empty body is %q-escaped to an empty quoted string.
+	assert.Contains(t, err.Error(), `with body ""`)
 }
 
 func TestDoHTTPRequestHTMLResponse(t *testing.T) {
@@ -471,8 +545,8 @@ func TestDoHTTPRequestServerErrorWithNilBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
-	// Should not contain "with body" since body is effectively nil
-	assert.Contains(t, err.Error(), "with body []")
+	// An effectively-nil body is %q-escaped to an empty quoted string.
+	assert.Contains(t, err.Error(), `with body ""`)
 }
 
 func TestDoHTTPRequestLargeResponse(t *testing.T) {
@@ -781,8 +855,8 @@ func TestDoHTTPRequest_ErrorResponseNilBody(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
-	// Empty body still creates "with body []" message
-	assert.Contains(t, err.Error(), "with body []")
+	// An empty body is %q-escaped to an empty quoted string.
+	assert.Contains(t, err.Error(), `with body ""`)
 }
 
 func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
@@ -925,8 +999,8 @@ func TestValidateURL_RejectsUserinfo(t *testing.T) {
 	}
 }
 
-func TestIsBlockedDialIP(t *testing.T) {
-	// isBlockedDialIP is a pure function; no SSRF toggle needed.
+func TestDefaultSSRFDialPolicy(t *testing.T) {
+	// The policy is a pure function; no SSRF toggle needed.
 	// Only link-local (incl. the metadata endpoint), loopback and unspecified are blocked.
 	blocked := []string{
 		"127.0.0.1",
@@ -941,7 +1015,7 @@ func TestIsBlockedDialIP(t *testing.T) {
 		t.Run("blocked_"+ipStr, func(t *testing.T) {
 			ip := net.ParseIP(ipStr)
 			require.NotNil(t, ip)
-			assert.True(t, isBlockedDialIP(ip), "expected %s to be blocked", ipStr)
+			assert.NotEmpty(t, DefaultSSRFDialPolicy(ip), "expected %s to be blocked", ipStr)
 		})
 	}
 
@@ -964,7 +1038,7 @@ func TestIsBlockedDialIP(t *testing.T) {
 		t.Run("allowed_"+ipStr, func(t *testing.T) {
 			ip := net.ParseIP(ipStr)
 			require.NotNil(t, ip)
-			assert.False(t, isBlockedDialIP(ip), "expected %s to be allowed", ipStr)
+			assert.Empty(t, DefaultSSRFDialPolicy(ip), "expected %s to be allowed", ipStr)
 		})
 	}
 }
@@ -977,7 +1051,7 @@ func TestSSRFDialContext_RejectsPrivateHostname(t *testing.T) {
 	ctx := context.Background()
 	_, err := ssrfDialContext(ctx, "tcp", "localhost:80")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "blocked IP")
+	assert.Contains(t, err.Error(), "loopback address")
 }
 
 func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
@@ -991,7 +1065,7 @@ func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
 	_, err := ssrfDialContext(ctx, "tcp", "127.0.0.1:1")
 	// Any error here is a real network error (connection refused), NOT our SSRF guard.
 	if err != nil {
-		assert.NotContains(t, err.Error(), "blocked IP")
+		assert.NotContains(t, err.Error(), "SSRF dial check")
 	}
 }
 
@@ -1014,7 +1088,7 @@ func TestSSRFDialContext_RejectsDNSRebinding(t *testing.T) {
 
 	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "blocked IP")
+	assert.Contains(t, err.Error(), "loopback address")
 }
 
 // TestSSRFDialContext_RejectsMixedPublicBlocked ensures a resolver answer mixing a public
@@ -1032,7 +1106,183 @@ func TestSSRFDialContext_RejectsMixedPublicBlocked(t *testing.T) {
 
 	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "blocked IP")
+	assert.Contains(t, err.Error(), "link-local address")
+}
+
+// TestNewSSRFSafeDialContext_CustomPolicy proves a caller-supplied policy is enforced at
+// resolution time, so a service can add ranges this package deliberately allows.
+func TestNewSSRFSafeDialContext_CustomPolicy(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	// A public-looking, peer-supplied name that resolves to an internal RFC1918 host.
+	ssrfLookupHost = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"10.0.0.5"}, nil
+	}
+
+	strict := NewSSRFSafeDialContext(func(ip net.IP) string {
+		if ip.IsPrivate() {
+			return "private address"
+		}
+		return DefaultSSRFDialPolicy(ip)
+	})
+
+	_, err := strict(context.Background(), "tcp", "metadata.attacker.example:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "private address")
+
+	// The package default policy allows private ranges, so it dials instead. Bound the
+	// attempt: a dropped (rather than refused) RFC1918 packet would otherwise sit here for
+	// the dialer's full 30s.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, err := ssrfDialContext(ctx, "tcp", "metadata.attacker.example:1")
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err != nil {
+		assert.NotContains(t, err.Error(), "SSRF dial check")
+	}
+}
+
+// TestNewSSRFSafeDialContext_RespectsGlobalToggle keeps SetSSRFProtection(false) - used by
+// test daemons talking to localhost nodes - effective for caller-supplied policies too.
+func TestNewSSRFSafeDialContext_RespectsGlobalToggle(t *testing.T) {
+	SetSSRFProtection(false)
+	defer SetSSRFProtection(false)
+
+	var policyCalls atomic.Int64
+
+	dial := NewSSRFSafeDialContext(func(net.IP) string {
+		policyCalls.Add(1)
+		return "always blocked"
+	})
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, err := dial(ctx, "tcp", listener.Addr().String())
+	require.NoError(t, err, "with protection disabled the dial must go through")
+	require.NotNil(t, conn)
+	_ = conn.Close()
+	require.Zero(t, policyCalls.Load(), "the policy must not even be consulted")
+}
+
+// TestNewSSRFSafeDialContext_PerAttemptBudget checks a blackholed first address cannot eat
+// the caller's whole deadline: the reachable second address must still be tried. Dialing
+// by validated IP loses net.Dialer's dual-stack fast fallback, so the budget split is what
+// preserves multi-address failover under a short timeout (e.g. the 2s p2p health probe).
+func TestNewSSRFSafeDialContext_PerAttemptBudget(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	// 203.0.113.1 is TEST-NET-3: routable-looking but unreachable, so the first attempt
+	// hangs until its slice of the budget expires.
+	ssrfLookupHost = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"203.0.113.1", "127.0.0.1"}, nil
+	}
+
+	dial := NewSSRFSafeDialContext(func(net.IP) string { return "" })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	conn, err := dial(ctx, "tcp", "peer.example:"+port)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	_ = conn.Close()
+}
+
+// TestNewSSRFSafeHTTPClient_RedirectGuard covers the second hop: a peer-controlled server
+// answering with a redirect must not be able to steer the request at an internal address or
+// off http/https. Redirects to hostnames are caught by the dialer instead; this asserts the
+// policy CheckRedirect applies, which stops the connection being attempted at all.
+func TestNewSSRFSafeHTTPClient_RedirectGuard(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	client := NewSSRFSafeHTTPClient(2*time.Second, DefaultSSRFDialPolicy)
+
+	redirectTo := func(t *testing.T, rawURL string, hops int) error {
+		t.Helper()
+
+		target, err := url.Parse(rawURL)
+		require.NoError(t, err)
+
+		via := make([]*http.Request, hops)
+		for i := range via {
+			via[i] = &http.Request{}
+		}
+
+		return client.CheckRedirect(&http.Request{URL: target}, via)
+	}
+
+	err := redirectTo(t, "http://169.254.169.254/latest/meta-data/", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "link-local address")
+
+	err = redirectTo(t, "http://127.0.0.1:8090/admin", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loopback address")
+
+	err = redirectTo(t, "file:///etc/passwd", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid scheme")
+
+	err = redirectTo(t, "http://peer.example/api/v1", maxSSRFRedirects)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redirects")
+
+	require.NoError(t, redirectTo(t, "https://peer.example/api/v1", 1))
+}
+
+// TestNewSSRFSafeHTTPClient_RejectsInternalTargetEndToEnd drives a real request through the
+// client to prove the transport is wired to the guard, not just that the guard exists.
+func TestNewSSRFSafeHTTPClient_RejectsInternalTargetEndToEnd(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	var hits atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	_, port, err := net.SplitHostPort(parsed.Host)
+	require.NoError(t, err)
+
+	client := NewSSRFSafeHTTPClient(2*time.Second, DefaultSSRFDialPolicy)
+
+	// A hostname whose resolved address is internal: refused after resolution.
+	resp, err := client.Get("http://localhost:" + port + "/data")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loopback address")
+	require.Zero(t, hits.Load(), "the request must not reach the internal target")
 }
 
 func TestHTTPClient_RejectsRedirectToLinkLocal(t *testing.T) {
@@ -1230,6 +1480,103 @@ func TestParseRetryAfter(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
 			assert.Equal(t, c.want, parseRetryAfter(c.in))
+		})
+	}
+}
+
+// TestDialAttemptContext_BudgetFloor pins the per-attempt budget arithmetic. An even split
+// alone starves a well-behaved multi-address peer: with four addresses under the 2s probe
+// timeout the first (usually working) one would get 500ms. The floor keeps failover bounded
+// without penalising an address whose RTT is merely unremarkable.
+func TestDialAttemptContext_BudgetFloor(t *testing.T) {
+	t.Run("no deadline leaves the context unbounded", func(t *testing.T) {
+		ctx, cancel := dialAttemptContext(context.Background(), 4)
+		defer cancel()
+
+		_, ok := ctx.Deadline()
+		require.False(t, ok)
+	})
+
+	t.Run("single candidate gets the whole remaining budget", func(t *testing.T) {
+		parent, cancelParent := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelParent()
+
+		ctx, cancel := dialAttemptContext(parent, 1)
+		defer cancel()
+
+		parentDeadline, _ := parent.Deadline()
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.WithinDuration(t, parentDeadline, deadline, 10*time.Millisecond)
+	})
+
+	t.Run("even share is floored, not honoured blindly", func(t *testing.T) {
+		// 2s over 4 candidates would be 500ms; the floor is 500ms, so the share stands here.
+		parent, cancelParent := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelParent()
+
+		ctx, cancel := dialAttemptContext(parent, 4)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.InDelta(t, float64(500*time.Millisecond), float64(time.Until(deadline)), float64(50*time.Millisecond))
+	})
+
+	t.Run("a share below the floor is raised to it", func(t *testing.T) {
+		// 1s over 8 candidates would be 125ms - too little for a working address.
+		parent, cancelParent := context.WithTimeout(context.Background(), time.Second)
+		defer cancelParent()
+
+		ctx, cancel := dialAttemptContext(parent, 8)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.Greater(t, time.Until(deadline), 400*time.Millisecond, "the floor must apply")
+	})
+
+	t.Run("the floor never exceeds what remains", func(t *testing.T) {
+		// 200ms left, floor is 500ms: the attempt must not outlive the caller's deadline.
+		parent, cancelParent := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancelParent()
+
+		ctx, cancel := dialAttemptContext(parent, 4)
+		defer cancel()
+
+		parentDeadline, _ := parent.Deadline()
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.False(t, deadline.After(parentDeadline), "attempt deadline must not exceed the parent's")
+	})
+}
+
+// TestSharedAndSafeClientsShareRedirectRule pins that the shared httpClient and the clients
+// from NewSSRFSafeHTTPClient enforce the same redirect rule, so one threat has one check
+// rather than two that can drift.
+func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	safe := NewSSRFSafeHTTPClient(2*time.Second, DefaultSSRFDialPolicy)
+
+	for _, target := range []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://127.0.0.1:8090/admin",
+		"file:///etc/passwd",
+		"http://user:pass@peer.example/api/v1",
+	} {
+		t.Run(target, func(t *testing.T) {
+			u, err := url.Parse(target)
+			require.NoError(t, err)
+
+			req := &http.Request{URL: u}
+			sharedErr := httpClient.CheckRedirect(req, []*http.Request{{}})
+			safeErr := safe.CheckRedirect(req, []*http.Request{{}})
+
+			require.Error(t, sharedErr, "shared client must refuse %s", target)
+			require.Error(t, safeErr, "SSRF-safe client must refuse %s", target)
+			require.Equal(t, sharedErr.Error(), safeErr.Error(), "both clients must give the same reason")
 		})
 	}
 }

@@ -47,6 +47,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/debugflags"
+	"github.com/bsv-blockchain/teranode/util/fdlimit"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/semaphore"
 )
@@ -298,28 +299,39 @@ func init() {
 //
 // VALIDATION:
 // The function validates limits and returns an error if they're out of acceptable bounds.
-// Valid range: 1 to 10,000 for both read and write limits.
+// Valid range: MinSemaphoreLimit to MaxSemaphoreLimit for both read and write limits.
+//
+// OPEN-FILE LIMIT:
+// A semaphore cannot bound what the operating system allows, so when useSystemLimits
+// is set the concurrency is scaled down proportionally to fit the descriptors
+// fdlimit.Budget reports as spare. The returned Limits are the values actually in
+// force. Platforms with no RLIMIT_NOFILE are left alone. See util/fdlimit.
 //
 // Parameters:
-//   - readLimit: Maximum concurrent read operations (must be 1-10000)
-//   - writeLimit: Maximum concurrent write operations (must be 1-10000)
+//   - readLimit: Maximum concurrent read operations (MinSemaphoreLimit..MaxSemaphoreLimit)
+//   - writeLimit: Maximum concurrent write operations (MinSemaphoreLimit..MaxSemaphoreLimit)
+//   - useSystemLimits: Reduce the concurrency to fit the open-file limit when it does not
+//     fit. False keeps the configured values regardless, accepting the risk of EMFILE.
 //
 // Returns:
+//   - Limits: the concurrency actually in force, and whether it was clamped
 //   - error: Configuration error if limits are invalid, nil otherwise
 //
 // Example usage in main():
 //
 //	func main() {
 //	    settings := settings.NewSettings()
-//	    if err := file.InitSemaphores(
+//	    applied, err := file.InitSemaphores(
 //	        settings.Block.FileStoreReadConcurrency,
 //	        settings.Block.FileStoreWriteConcurrency,
-//	    ); err != nil {
+//	        settings.Block.FileStoreUseSystemLimits,
+//	    )
+//	    if err != nil {
 //	        panic(fmt.Sprintf("Failed to initialize file store semaphores: %v", err))
 //	    }
 //	    // ... continue with service initialization
 //	}
-func InitSemaphores(readLimit, writeLimit int) error {
+func InitSemaphores(readLimit, writeLimit int, useSystemLimits bool) (Limits, error) {
 	var initErr error
 
 	semaphoreInitOnce.Do(func() {
@@ -337,12 +349,27 @@ func InitSemaphores(readLimit, writeLimit int) error {
 			return
 		}
 
-		// Create new semaphores with validated limits
-		readSemaphore = semaphore.NewWeighted(int64(readLimit))
-		writeSemaphore = semaphore.NewWeighted(int64(writeLimit))
+		// The semaphores bound how many file operations run at once, but they
+		// cannot bound what the OS allows, so fit them under the descriptors it
+		// actually leaves us rather than refusing to start (issue 1431).
+		//
+		// Clamping, not refusing, is the important choice. The semaphores are a
+		// ceiling on concurrent operations, not a reservation — a descriptor is
+		// held only for one operation — so a node whose ceiling exceeds the
+		// limit still runs fine at any realistic load. Refusing to start it
+		// would convert a bounded, already-handled condition (an operation
+		// waits, then returns ServiceUnavailable) into total unavailability
+		// from boot, on hosts that ran indefinitely before.
+		budget, limitErr := fdlimit.Budget()
+
+		applied = resolveConcurrency(readLimit, writeLimit, useSystemLimits, budget, limitErr)
+
+		// Create new semaphores with the limits actually in force
+		readSemaphore = semaphore.NewWeighted(int64(applied.Read))
+		writeSemaphore = semaphore.NewWeighted(int64(applied.Write))
 	})
 
-	return initErr
+	return applied, initErr
 }
 
 // acquireReadPermit acquires a single read permit with a timeout.
@@ -1084,7 +1111,14 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 
 		fileReader, err := s.longtermClient.GetIoReader(ctx, key, fileType, opts...)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			// Absence must stay distinguishable from a failed read. The longterm
+			// backend reports a miss as ErrNotFound (see the s3 store), not as
+			// os.ErrNotExist, so testing only for the latter relabelled every
+			// tiered-storage miss as a storage fault. Callers that branch on
+			// absence — getExternalTransaction's outputs-only fallback in the
+			// aerospike UTXO store, for one — would then treat a routine miss as
+			// this node's disk being broken.
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errors.ErrNotFound) {
 				return nil, errors.ErrNotFound
 			}
 
@@ -1527,4 +1561,58 @@ func (s *File) writeFileAtomically(filename string, data []byte, perm os.FileMod
 	cleanupTmpFile = false
 
 	return nil
+}
+
+// Limits reports the file-operation concurrency actually in force, and whether
+// it was clamped below the configured values to fit the operating system's
+// open-file limit (issue 1431).
+type Limits struct {
+	Read    int
+	Write   int
+	Clamped bool
+}
+
+// applied is what InitSemaphores settled on, kept so a repeat call reports the
+// same answer as the first. It starts at the package defaults because those are
+// what the semaphores created in init() enforce until InitSemaphores runs — and
+// it may never run, in tests and in binaries other than the daemon.
+var applied = Limits{Read: defaultReadLimit, Write: defaultWriteLimit}
+
+// resolveConcurrency decides the concurrency actually to use, scaling both
+// limits down proportionally when the descriptor budget is short of what they
+// ask for, and keeping at least one of each so the store stays usable however
+// small the budget. It is separate from InitSemaphores only so the decision can
+// be tested: InitSemaphores is guarded by a sync.Once and runs once per process.
+//
+// Whether to reduce the configured concurrency is the operator's call, via
+// useSystemLimits. Left on (the default) it means "adjust concurrency to respect
+// system limits", which is exactly this clamp. Turned off it means "use the
+// explicit values regardless of system limits", so the configured numbers stand
+// and the risk of EMFILE is accepted — both halves of what that setting
+// documents. A non-nil limitErr means the platform exposes no limit to read
+// (Windows), so there is nothing to fit under.
+//
+// The floor wins over the budget in exactly one case: a budget of one still
+// yields one read and one write, borrowing a descriptor from the reserve
+// fdlimit holds back. Every other budget is met exactly, with the truncation
+// remainder going to writes.
+func resolveConcurrency(readLimit, writeLimit int, useSystemLimits bool, budget uint64, limitErr error) Limits {
+	total := readLimit + writeLimit
+
+	//nolint:gosec // both limits are validated into [1, MaxSemaphoreLimit] before this call
+	if !useSystemLimits || limitErr != nil || budget >= uint64(total) {
+		return Limits{Read: readLimit, Write: writeLimit}
+	}
+
+	available := int(budget) //nolint:gosec // budget < total on this path, and total is an int
+
+	// The product is formed in int64 because int is 32 bits on a 32-bit target,
+	// where MaxSemaphoreLimit against a budget of a few tens of thousands would
+	// overflow it and hand back a negative — a WIDER concurrency than the
+	// budget, the exact failure this exists to prevent. The quotient is at most
+	// available, so narrowing back is safe.
+	read := max(int(int64(readLimit)*int64(available)/int64(total)), MinSemaphoreLimit)
+	write := max(available-read, MinSemaphoreLimit)
+
+	return Limits{Read: read, Write: write, Clamped: true}
 }

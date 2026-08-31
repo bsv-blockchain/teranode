@@ -48,6 +48,7 @@ import (
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -451,7 +452,10 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	require.NoError(t, err)
 
 	coinbase.Outputs = nil
-	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
+	// Pay just the block subsidy (no fees claimed). At height 100 the coinbase-reward check runs
+	// (it is skipped for height 0), and under-claiming is always valid, so this stays robust
+	// regardless of the exact fees the subtree txs carry.
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
@@ -484,13 +488,17 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		blockHeader.Nonce++
 	}
 
+	// Height 100 is below mainnet's lowest checkpoint (11111), so difficulty is legitimately
+	// skipped by model.BelowCheckpoint (the block cannot meet real mainnet genesis difficulty).
+	// The previous height 0 relied on the raw 0 <= highestCheckpoint skip that BelowCheckpoint's
+	// height > 0 guard removes. Subsidy is unchanged (50 BTC below the first halving).
 	block, err := model.NewBlock(
 		blockHeader,
 		coinbase,
 		subtreeHashes,            // should be the subtree with placeholder
 		uint64(subtree.Length()), // nolint:gosec
 		123123,
-		0, 0)
+		100, 0)
 	require.NoError(t, err)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
@@ -1310,8 +1318,11 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 		fees += tx.TotalInputSatoshis() - tx.TotalOutputSatoshis()
 	}
 
-	// Create block header
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	// Create block header. Use the regtest expected nBits (207fffff) so the difficulty-
+	// correctness check passes: block.Height here is 0, which no longer skips difficulty
+	// now that the skip uses model.BelowCheckpoint (height > 0 guard) rather than a raw
+	// height <= highestCheckpoint(0) comparison.
+	nBits, _ := model.NewNBitFromString("207fffff")
 	hashPrevBlock := chaincfg.RegressionNetParams.GenesisBlock.BlockHash()
 
 	// Calculate merkle root using coinbase and subtree
@@ -3498,11 +3509,17 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		100, 0,
 	)
 
-	// Update the GetBlockHeaders mock to return the actual block header
-	// This ensures the bloom filter hash matches between storage and retrieval
+	// Update the GetBlockHeaders mock to return the block's actual parent chain — the
+	// regtest genesis header, since the block is anchored on the regtest genesis hash.
+	// CheckHeaderContextual verifies the chain is anchored at the block's parent (issue
+	// 1467), so returning the block's own header no longer passes. The meta ID is kept
+	// so the bloom filter hash still matches between storage and retrieval.
+	genesisHeader := regtestGenesisHeader(t)
+	require.True(t, genesisHeader.Hash().IsEqual(blockHeader.HashPrevBlock), "fixture block must be anchored on the regtest genesis")
+
 	for _, call := range mockBlockchain.ExpectedCalls {
 		if call.Method == "GetBlockHeaders" {
-			call.ReturnArguments = mock.Arguments{[]*model.BlockHeader{blockHeader}, []*model.BlockHeaderMeta{{ID: 100}}, nil}
+			call.ReturnArguments = mock.Arguments{[]*model.BlockHeader{genesisHeader}, []*model.BlockHeaderMeta{{ID: 100}}, nil}
 			break
 		}
 	}
@@ -3874,6 +3891,234 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 	// The optimistic background goroutine (which alone calls GetBlockHeaderIDs) must never start,
 	// confirming the rejection happened before the optimistic AddBlock.
 	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch verifies checkpoint
+// enforcement on the direct (non-catchup) ValidateBlock path (gap-analysis #4697):
+// a block whose height matches a hardcoded checkpoint but whose hash differs must be
+// rejected synchronously, before subtree validation and the optimistic AddBlock —
+// otherwise the difficulty-skip for sub-checkpoint heights would let a fabricated
+// block at a checkpoint height through with no checkpoint assertion.
+func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = true
+
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	const checkpointHeight = 100
+	block, _ := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()),  //nolint:gosec
+		uint64(coinbaseTx.Size()), //nolint:gosec
+		checkpointHeight, 0,
+	)
+
+	// Configure a checkpoint at the block's height whose hash differs from the block.
+	// (The block hash is deterministic from the mined header; any other hash mismatches.)
+	otherHash, err := chainhash.NewHashFromStr("00000000000000000000000000000000000000000000000000000000deadbeef")
+	require.NoError(t, err)
+	require.False(t, block.Hash().IsEqual(otherHash))
+	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight, Hash: otherHash}}
+
+	// Matches only the storeInvalidBlock write (AddBlock with WithInvalid(true)), so it cannot
+	// be satisfied by an accept-path write. The mock hands the variadic options to testify as a
+	// single []StoreBlockOption arg, which ProcessStoreBlockOptions resolves.
+	invalidStore := mock.MatchedBy(func(opts []blockchainoptions.StoreBlockOption) bool {
+		return blockchainoptions.ProcessStoreBlockOptions(opts...).Invalid
+	})
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, invalidStore).Return(nil).Once()
+	// GetBlockHeaderIDs is only reached inside the optimistic background goroutine, which must
+	// not start when the header is rejected synchronously.
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil).Maybe()
+	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	// Not reached: the guard now runs before GetBlockHeaders, but registered defensively.
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+
+	// The block must be rejected synchronously with the checkpoint-conflict reason.
+	err = bv.ValidateBlock(ctx, block, "test", false)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	require.Contains(t, err.Error(), "conflicts with hardcoded checkpoint")
+
+	// The block was persisted invalid (storeInvalidBlock -> AddBlock with WithInvalid(true)),
+	// proven by the invalidStore matcher; the accept path never ran (GetBlockHeaderIDs unused).
+	mockBlockchain.AssertCalled(t, "AddBlock", mock.Anything, block, mock.Anything, invalidStore)
+	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestBlockValidation_DirectPath_AcceptsMatchingCheckpoint is the positive control for the
+// guard above: a block sitting AT a configured checkpoint height whose hash IS the checkpoint
+// hash must pass the gate untouched. This is what backs the "can never reject a legitimate
+// block" claim — the mismatch test alone would still pass if the guard rejected everything at
+// a checkpoint height.
+//
+// Reaching GetBlockHeaders is the proof: it is the first blockchain call after the gate, and
+// the mismatch test asserts the converse (the gate returns before it).
+func TestBlockValidation_DirectPath_AcceptsMatchingCheckpoint(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	const checkpointHeight = 100
+	block, _ := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()),  //nolint:gosec
+		uint64(coinbaseTx.Size()), //nolint:gosec
+		checkpointHeight, 0,
+	)
+
+	// The checkpoint at this height IS this block — the legitimate case.
+	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight, Hash: block.Hash()}}
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+	mockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil).Maybe()
+	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+
+	// The block fails later on in this harness (no real parent chain or subtree data), which is
+	// fine — what matters is that it was NOT stopped by the checkpoint gate.
+	err := bv.ValidateBlock(ctx, block, "test", false)
+	if err != nil {
+		require.NotContains(t, err.Error(), "conflicts with hardcoded checkpoint")
+	}
+
+	mockBlockchain.AssertCalled(t, "GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDeriveBlockHeight covers the height-corroboration that closes the poisoning vector.
+// block.Height is a peer-supplied varint NOT covered by the header hash, so on the
+// peer-fetched route processBlockFound settles it against the on-chain parent before any
+// consumer (checkpoint guard, difficulty skip, block-assembly gating, coinbase subsidy)
+// reads it. An honest peer sends the correct height or 0; a lying non-zero height that would
+// relabel the honest tip with a checkpoint height is rejected here, before validation, so it
+// can never reach storeInvalidBlock and poison the real block.
+func TestDeriveBlockHeight(t *testing.T) {
+	const cp = 100 // a checkpoint height, for the poisoning case
+
+	tests := []struct {
+		name       string
+		claimed    uint32
+		parent     uint32
+		want       uint32
+		wantReject bool
+	}{
+		{name: "honest height passes", claimed: 501, parent: 500, want: 501},
+		{name: "genesis child derived", claimed: 1, parent: 0, want: 1},
+		{name: "wire height zeroed is derived", claimed: 0, parent: cp - 1, want: cp},
+		{name: "honest height at a checkpoint", claimed: cp, parent: cp - 1, want: cp},
+		// The poisoning attempt: relabel the honest tip (real height 501) as checkpoint height 100.
+		{name: "spoofed checkpoint height rejected", claimed: cp, parent: 500, wantReject: true},
+		{name: "wire height one past rejected", claimed: cp + 1, parent: cp - 1, wantReject: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := deriveBlockHeight(tc.claimed, tc.parent)
+			if tc.wantReject {
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 // TestBlockValidation_SetMined_UpdatesTxMeta ensures that after block validation, calling setTxMined marks all block transactions as mined in the txMetaStore.

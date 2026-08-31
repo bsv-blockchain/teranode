@@ -5,7 +5,7 @@
 # isolate, slow) without bringing down the whole node.
 #
 # Services per node ({{ len .SplitServices }}): {{ range $i, $s := .SplitServices }}{{ if $i }}, {{ end }}{{ $s.Name }}{{ end }}.
-# The 'core' sidecar bundles rpc/alert/blockpersister/utxopersister/pruner/legacy
+# The 'core' sidecar bundles rpc/blockpersister/utxopersister/pruner/legacy
 # so RPC stays reachable and ancillary services aren't stranded.
 #
 # Regenerate with: compose/multinode.sh up {{ .NodeCount }} -allinone=0

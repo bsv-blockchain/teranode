@@ -123,27 +123,21 @@ func NodeAllocFromPool(numLeaves int) []subtreepkg.Node {
 	return GetNodeSlice(numLeaves)
 }
 
-// releaseBlockNodes walks a block's SubtreeSlices and returns each pooled
-// Nodes backing slice to the pool. Subtrees with no Nodes (already released or
-// mmap-backed) are skipped. Safe to call multiple times — ReleaseNodes is
-// idempotent. Intended to be invoked from cache eviction and validation
-// failure paths.
+// releaseBlockNodes returns a block's pooled []Node backing slices to the
+// per-class pool and drops the released subtrees from the block. See
+// model.Block.ReleaseSubtreeNodes for what release does and why. Safe to call
+// multiple times. Intended for cache eviction and validation failure paths.
+//
+// Its Close error is deliberately dropped here: the only way Close fails is a
+// munmap error, and every caller of this wrapper is a cache-eviction or
+// validation-failure path with no logger in scope and nothing it could do
+// differently. The two release sites that can act on the error — the reload in
+// model.GetAndValidateSubtrees and setTxMinedStatus — call ReleaseSubtreeNodes
+// directly and log.
 func releaseBlockNodes(b *model.Block) {
 	if b == nil {
 		return
 	}
 
-	for _, st := range b.SubtreeSlices {
-		if st == nil {
-			continue
-		}
-
-		// mmap-backed subtrees never produce a heap-pooled slice; ReleaseNodes
-		// hands back the slice exactly as allocated, and PutNodeSlice's
-		// cap-match check discards anything not produced by GetNodeSlice.
-		nodes := st.ReleaseNodes()
-		if nodes != nil {
-			PutNodeSlice(nodes)
-		}
-	}
+	_ = b.ReleaseSubtreeNodes(PutNodeSlice)
 }

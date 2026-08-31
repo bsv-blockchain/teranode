@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -45,7 +45,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -146,6 +146,14 @@ func (s *Store) SetStoreBatcher(b batcherIfc[BatchStoreItem]) {
 
 func (s *Store) SetExternalTxCache(c *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]) {
 	s.externalTxCache = c
+}
+
+// SetExternalOutpointsCache sets the cache for the outpoint-resolution
+// reconstruction. It is deliberately separate from the full-transaction cache —
+// see the field comments on Store — so tests that exercise both readers must wire
+// both.
+func (s *Store) SetExternalOutpointsCache(c *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]) {
+	s.externalOutpointsCache = c
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////

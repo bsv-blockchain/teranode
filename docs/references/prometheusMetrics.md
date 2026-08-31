@@ -57,10 +57,12 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockassembly_submit_mining_solution`               | Histogram | Histogram of SubmitMiningSolution in the blockassembly service                   |
 | `teranode_blockassembly_update_subtrees_dah`                  | Histogram | Histogram of updating subtrees DAH in the blockassembly service                  |
 | `teranode_blockassembly_block_assembler_get_mining_candidate` | Counter   | Number of calls to GetMiningCandidate in the block assembler                     |
+| `teranode_blockassembly_block_assembler_candidate_time_clock_skew` | Counter | Mining-candidate polls refused because the parent's median-time-past floor is above the two-hour future bound, so no valid block timestamp exists; a non-zero rate means the local clock is far behind the network and block production has stopped |
 | `teranode_blockassembly_subtree_stored`                       | Histogram | Histogram of subtree stored duration in block assembler                          |
 | `teranode_blockassembly_transactions`                         | Gauge     | Number of transactions currently in the block assembler subtree processor        |
 | `teranode_blockassembly_queued_transactions`                  | Gauge     | Number of transactions currently queued in the block assembler subtree processor |
 | `teranode_blockassembly_subtrees`                             | Gauge     | Number of subtrees currently in the block assembler subtree processor            |
+| `teranode_blockassembly_dequeue_staleness_seconds`            | Gauge     | Seconds since the subtree processor's consumer goroutine last passed through its dequeue branch; growing alongside a non-zero `queued_transactions` means intake is queuing unboundedly because the consumer is stuck elsewhere |
 | `teranode_blockassembly_tx_meta_get`                          | Histogram | Histogram of reading tx meta data from txmeta store in block assembler           |
 | `teranode_blockassembly_reorg`                                | Counter   | Number of reorgs in block assembler                                              |
 | `teranode_blockassembly_reorg_duration`                       | Histogram | Histogram of reorg in block assembler                                            |
@@ -195,6 +197,14 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 | `teranode_blockvalidation_queue_skip_count`                  | Histogram    | Number of times blocks were skipped before processing            |
 | `teranode_blockvalidation_queue_wait_seconds`                | Histogram    | Time blocks spend in queue before processing                     |
 
+## P2P Service Metrics
+
+| Metric Name                          | Type    | Labels                        | Description                                                                                                                              |
+|--------------------------------------|---------|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `teranode_p2p_publish_blocked_total` | Counter | `topic`, `fsm_state`, `stage` | Outbound P2P messages suppressed by the per-FSM-state allow-list; `stage="precheck"` is an expected skip, `stage="chokepoint"` is a publish that leaked past the pre-checks |
+| `teranode_p2p_websocket_notifications_dropped_total` | Counter | `type` | WebSocket notifications dropped because the shared notification channel was full, by notification type (`block`, `subtree`, `node_status`) |
+| `teranode_p2p_websocket_clients_evicted_total` | Counter | | WebSocket clients evicted from the broadcast fan-out because their send buffer was full when a broadcast reached them |
+
 ## Legacy Peer Server Metrics
 
 Each metric measures "The time taken to handle a specific legacy action handler".
@@ -327,6 +337,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_validator_send_to_blockvalidation_kafka` | Histogram | Histogram of sending transactions to block validation kafka   |
 | `teranode_validator_send_to_p2p_kafka`             | Histogram | Histogram of sending rejected transactions to p2p kafka       |
 | `teranode_validator_set_tx_meta`                   | Histogram | Histogram of validator set tx meta                            |
+| `teranode_validator_parent_commit_retries`         | Counter   | Retries spent waiting for a parent transaction to finish committing, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
+| `teranode_validator_parent_commit_exhausted`       | Counter   | Transactions rejected because the parent-commit retry budget ran out, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
 
 ## TxMetaCache Service Metrics
 

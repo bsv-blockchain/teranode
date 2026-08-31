@@ -29,6 +29,9 @@
 | BlockFailureBackoffMaxDuration | time.Duration | 150s | legacy_blockFailureBackoffMaxDuration | Cap on the per-block backoff window and the failure-tracking map TTL, kept below the 180s sync-peer stall window (0 disables) |
 | BlockPrefetchBufferBytes | int64 | 268435456 | legacy_blockPrefetchBufferBytes | Byte budget for blocks downloaded ahead of processing during sync (0 disables prefetch) |
 | Upnp | bool | false | legacy_upnp | Enable UPnP for automatic port mapping |
+| MaxFeelerPeers | int | 1 | legacy_maxFeelerPeers | Peer slots reserved for short-lived feeler probes (0 disables feelers and the reservation together) |
+| FeelerInterval | time.Duration | 120s | legacy_feelerInterval | Mean of the randomised gap between feeler probes (not a disable lever; a non-positive value falls back to the default) |
+| FeelerHandshakeTimeout | time.Duration | 25s | legacy_feelerHandshakeTimeout | How long a feeler waits for a version message; must stay under the 30s peer negotiate timeout |
 
 ## Configuration Dependencies
 
@@ -40,11 +43,40 @@
 - `ConnectPeers` disables DNS seeding
 - `SavePeers` controls peer information persistence to disk
 
+### Feeler Probes
+
+- A feeler is a short-lived probe that connects to an address the node is **not**
+  otherwise using, waits for the version exchange to prove somebody is home, marks
+  the address as verified, and hangs up. Its purpose is to keep the pool of
+  known-reachable addresses from decaying, so a lost peer can be replaced quickly.
+- `MaxFeelerPeers` is both the number of probes allowed at once and the number of
+  peer slots held back for them. The reservation comes out of the peer-admission
+  ceiling (`legacy_config_MaxPeers`, 20 by default), never out of the automatic
+  outbound target, so probing can never cost the node a peer it chose to dial.
+- Probes start only once the automatic outbound tier is already at its target.
+- Selection resolves the address it picks and skips any it cannot resolve, so an
+  address this layer has no way of dialling costs one draw rather than the whole
+  probe interval. OnionCat addresses are the case that always takes this path:
+  the address book accepts them but there is no onion dial path here.
+- Feelers switch themselves off, reservation included, in three cases:
+  `MaxFeelerPeers` at zero or below; connect-only mode (`ConnectPeers` set); and a
+  peer cap too tight to reserve a slot without pushing the admission ceiling below
+  the outbound target. Each logs its reason at startup.
+- `FeelerHandshakeTimeout` must stay below the peer package's 30-second negotiate
+  timeout. If it does not, the peer package hangs up first and a silent host is
+  logged at warning as a lost peer rather than being hung up on quietly by the
+  probe; values at or above the peer timeout are reduced to 29s with a warning.
+  A non-positive value falls back to 25s, also with a warning. Both warnings are
+  emitted once, at startup, and the deadline the feeler settled on is on the
+  `[Feeler] Starting` line.
+
 ### Batch Processing Performance
+
 - Batch sizes and concurrency settings work together for memory and performance control
 - `StoreBatcherSize` * `StoreBatcherConcurrency` limits concurrent requests
 
 ### Peer Timeout Management
+
 - `PeerIdleTimeout` set to 125s to accommodate 2-minute ping/pong intervals
 - `PeerProcessingTimeout` set to 3m for block processing (largest operations)
 

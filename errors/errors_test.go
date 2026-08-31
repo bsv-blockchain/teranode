@@ -180,6 +180,28 @@ func TestErrorWrapWithAdditionalContext(t *testing.T) {
 	}
 }
 
+// TestErrTxCreatingSentinelAndWrapChain pins two things introduced together:
+// the ErrTxCreating sentinel exists as a comparable value (before this,
+// errors.Is(err, errors.ErrTxCreating) did not even compile — only the
+// NewTxCreatingError constructor existed), and it survives being wrapped
+// exactly the way the validator wraps it: spendAndCreateInUtxoStore wraps the
+// store's error once with NewProcessingError, and validateInternal wraps it
+// again, before the retry loop's errors.Is check ever sees it.
+func TestErrTxCreatingSentinelAndWrapChain(t *testing.T) {
+	original := NewTxCreatingError("[SPEND_BATCH_LUA] transaction is creating")
+
+	require.True(t, Is(original, ErrTxCreating), "the constructor's error must match the ErrTxCreating sentinel directly")
+
+	onceWrapped := NewProcessingError("validator: UTXO Store spend and create failed for %s", "txid", original)
+	require.True(t, Is(onceWrapped, ErrTxCreating), "ErrTxCreating must still match after one layer of wrapping")
+
+	twiceWrapped := NewProcessingError("[Validate][%s] error spending utxos", "txid", onceWrapped)
+	require.True(t, Is(twiceWrapped, ErrTxCreating), "ErrTxCreating must still match after two layers of wrapping, matching the real validator call chain")
+
+	// A sibling sentinel must not spuriously match.
+	require.False(t, Is(twiceWrapped, ErrTxLocked), "ErrTxCreating must not be conflated with the distinct ErrTxLocked sentinel")
+}
+
 // TestErrorEquality tests the equality of custom errors.
 func TestErrorEquality(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "resource not found")
@@ -1466,9 +1488,33 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 			expected: codes.FailedPrecondition,
 		},
 		{
+			// ERR_TX_CREATING (a large, multi-record parent still being
+			// written) is the same kind of transient chain-state conflict as
+			// ERR_TX_LOCKED, not an internal server fault, and must land in
+			// the same gRPC code family.
+			name:     "maps ERR_TX_CREATING to codes.FailedPrecondition",
+			errCode:  ERR_TX_CREATING,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			// ERR_UTXO_FROZEN moved into the same family in this change. It is
+			// the one member that does not clear by itself, but it is still a
+			// verdict about the chain state rather than a fault in this node, and
+			// every code on publicCauseCodes needs a row here or WrapGRPCPublic
+			// returns its message inside a codes.Internal status.
+			name:     "maps ERR_UTXO_FROZEN to codes.FailedPrecondition",
+			errCode:  ERR_UTXO_FROZEN,
+			expected: codes.FailedPrecondition,
+		},
+		{
 			name:     "unmapped code BLOCK_NOT_FOUND defaults to codes.Internal",
 			errCode:  ERR_BLOCK_NOT_FOUND,
 			expected: codes.Internal,
+		},
+		{
+			name:     "maps ERR_TX_MISSING_PARENT to codes.FailedPrecondition",
+			errCode:  ERR_TX_MISSING_PARENT,
+			expected: codes.FailedPrecondition,
 		},
 		{
 			name:     "unmapped code STORAGE_ERROR defaults to codes.Internal",
@@ -1515,6 +1561,60 @@ func TestWrapGRPCTxVerdictStatus(t *testing.T) {
 			require.Equal(t, tc.expected, st.Code())
 		})
 	}
+}
+
+// TestPublicCauseCodesHaveGRPCStatus is the guard that stops the next allowlist
+// addition repeating the ERR_TX_MISSING_PARENT slip. WrapGRPCPublic derives its
+// status from the public cause, so a code that is client-safe enough to surface
+// its message but has no row in ErrorCodeToGRPCCode ships that message inside a
+// codes.Internal status — the client is told the reason and simultaneously told
+// the node broke, and one that gates on st.Code() alone cannot classify it.
+func TestPublicCauseCodesHaveGRPCStatus(t *testing.T) {
+	for code := range publicCauseCodes {
+		require.NotEqual(t, codes.Internal, ErrorCodeToGRPCCode(code),
+			"%s is on publicCauseCodes but falls through to codes.Internal in ErrorCodeToGRPCCode; "+
+				"add a row for it, or drop it from the allowlist", code)
+	}
+}
+
+// TestWrapGRPCPublicMissingParent pins the gRPC half of the missing-parent
+// contract, the half TestPublicCauseAllowlist_MissingParent (in
+// services/propagation) does not reach: it covers UserMessage only.
+//
+// An out-of-order child is an ordering artifact — the same bytes are accepted
+// once the parent lands — so a caller must be able to retry it. That verdict has
+// to survive both halves of the wire: the status a client gating on st.Code()
+// reads, and the ERR code a client decoding the TError detail reconstructs.
+func TestWrapGRPCPublicMissingParent(t *testing.T) {
+	const (
+		childTxID  = "1111111111111111111111111111111111111111111111111111111111111111"
+		parentTxID = "2222222222222222222222222222222222222222222222222222222222222222"
+	)
+
+	// The chain propagation actually produces: the validator's missing-parent
+	// verdict, buried under two PROCESSING wrappers.
+	chain := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", childTxID,
+		NewProcessingError("[Validate][%s] error getting transaction input block heights", childTxID,
+			NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", childTxID, parentTxID)))
+
+	wrapped := WrapGRPCPublic(chain)
+
+	st, ok := status.FromError(wrapped)
+	require.True(t, ok)
+	require.Equal(t, codes.FailedPrecondition, st.Code(),
+		"a client gating on the transport status must not read an ordering artifact as a node fault")
+	require.Contains(t, st.Message(), parentTxID, "the missing parent must be named: %s", st.Message())
+
+	// And the detail must still reconstruct the application code, for clients
+	// that decode it rather than gating on the status.
+	reconstructed := UnwrapGRPC(wrapped)
+	require.NotNil(t, reconstructed)
+	require.Equal(t, ERR_TX_MISSING_PARENT, reconstructed.Code())
+	require.Contains(t, reconstructed.Message(), parentTxID)
+
+	// Nothing from outside the public cause may ride along.
+	require.NotContains(t, st.Message(), "failed to validate transaction")
+	require.NotContains(t, st.Message(), "input block heights")
 }
 
 // TestJoin tests the Join function to ensure it correctly combines multiple errors into a single error message.

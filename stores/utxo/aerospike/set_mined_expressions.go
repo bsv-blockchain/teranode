@@ -251,7 +251,7 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 		return nil, nil
 	}
 
-	thisBlockHeight := s.blockHeight.Load() + 1
+	thisBlockHeight := s.GetBlockHeight() + 1
 
 	// Build filter expression: only proceed if blockID doesn't exist in blockIDs list
 	blockIDNotExists := aerospike.ExpEq(

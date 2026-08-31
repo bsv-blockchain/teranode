@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -44,7 +44,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -207,8 +207,6 @@ type Store struct {
 	client              *uaerospike.Client
 	namespace           string
 	setName             string
-	blockHeight         atomic.Uint32
-	medianBlockTime     atomic.Uint32
 	logger              ulogger.Logger
 	settings            *settings.Settings
 	batchID             atomic.Uint64
@@ -222,11 +220,22 @@ type Store struct {
 	lockedBatcher       batcherIfc[batchLocked]
 	externalStore       blob.Store
 	utxoBatchSize       int
-	externalTxCache     *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	externalStoreSem    chan struct{} // Semaphore to limit concurrent external storage operations
-	indexMutex          sync.Mutex    // Mutex for index creation operations
-	indexOnce           sync.Once     // Ensures index creation/wait is only done once per process
-	spendLuaPackages    []string      // Pre-initialized array of Lua package names for spend operations
+
+	// externalTxCache caches the full externally-stored transaction, as returned
+	// by GetTxFromExternalStore.
+	externalTxCache *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+
+	// externalOutpointsCache caches the outpoint-resolution reconstruction, as
+	// returned by GetOutpointsFromExternalStore. It MUST stay separate from
+	// externalTxCache: that reconstruction has its inputs stripped and its
+	// era-unspendable outputs nil'd, so sharing one cache under the txid key lets
+	// whichever reader arrives first hand the other the wrong shape.
+	externalOutpointsCache *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+
+	externalStoreSem chan struct{} // Semaphore to limit concurrent external storage operations
+	indexMutex       sync.Mutex    // Mutex for index creation operations
+	indexOnce        sync.Once     // Ensures index creation/wait is only done once per process
+	spendLuaPackages []string      // Pre-initialized array of Lua package names for spend operations
 
 	// useNativeTeranodeOps caches whether the store should issue mod-teranode
 	// invocations through the native operate-path (TeranodeModifyOp, wire op
@@ -236,6 +245,12 @@ type Store struct {
 	// runtime PARAMETER_ERROR demotes it back to false while batch goroutines
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
+
+	// utxo.BlockStateFields supplies the chain-tip height and median block time
+	// as one atomic snapshot, and with them the Store interface's six
+	// block-state methods. SetBlockHeight and SetBlockState are declared below
+	// so this store can also mirror the height into its external blob store.
+	utxo.BlockStateFields
 
 	// nativeOpBatchWritePolicy is the shared BatchWritePolicy used by every
 	// NewBatchWrite the native-op path constructs in teranodeBatchRecord.
@@ -336,9 +351,20 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// the external tx cache is used to cache externally stored transactions for a short time after being read from
 	// the store. Transactions with lots of outputs, being spent at the same time, benefit greatly from this cache,
 	// since external cache takes care of concurrent reads to the same transaction.
-	var externalTxCache *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	//
+	// Two separate instances, keyed the same way but never shared: the full
+	// transaction and the outpoint-resolution reconstruction are different shapes
+	// for the same txid, and one cache would let either reader receive the other's
+	// value. See the field comments on Store.
+	var externalTxCache, externalOutpointsCache *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+
+	// Bounded: these hold whole transactions, external storage is the path taken by
+	// the largest ones, and the two instances hold separate copies of the same
+	// output vector. An eviction costs a refetch, not correctness.
 	if tSettings.UtxoStore.UseExternalTxCache {
-		externalTxCache = util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](10 * time.Second)
+		maxItems := tSettings.UtxoStore.ExternalTxCacheMaxItems
+		externalTxCache = util.NewExpiringConcurrentCacheWithMaxSize[chainhash.Hash, *bt.Tx](10*time.Second, maxItems)
+		externalOutpointsCache = util.NewExpiringConcurrentCacheWithMaxSize[chainhash.Hash, *bt.Tx](10*time.Second, maxItems)
 	}
 
 	// Initialize external store semaphore if concurrency limit is set
@@ -355,12 +381,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		setName:   setName,
 		logger:    logger,
 
-		settings:         tSettings,
-		externalStore:    externalStore,
-		utxoBatchSize:    utxoBatchSize,
-		externalTxCache:  externalTxCache,
-		externalStoreSem: externalStoreSem,
-		batcherWait:      batcherWaitTimeout(tSettings),
+		settings:               tSettings,
+		externalStore:          externalStore,
+		utxoBatchSize:          utxoBatchSize,
+		externalTxCache:        externalTxCache,
+		externalOutpointsCache: externalOutpointsCache,
+		externalStoreSem:       externalStoreSem,
+		batcherWait:            batcherWaitTimeout(tSettings),
 	}
 
 	// Initialize spendLuaPackages array with configurable count
@@ -620,20 +647,18 @@ func (s *Store) GetSet() string {
 	return s.setName
 }
 
+// SetBlockHeight also mirrors the height into the external blob store, whose
+// own retention bookkeeping needs it; the snapshot itself is the embedded
+// utxo.BlockStateFields' business.
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
-	if blockHeight == 0 {
-		return errors.NewInvalidArgumentError("block height cannot be zero")
+	if err := s.BlockStateFields.SetBlockHeight(blockHeight); err != nil {
+		return err
 	}
 
 	s.logger.Debugf("setting block height to %d", blockHeight)
-	s.blockHeight.Store(blockHeight)
 	s.externalStore.SetCurrentBlockHeight(blockHeight)
 
 	return nil
-}
-
-func (s *Store) GetBlockHeight() uint32 {
-	return s.blockHeight.Load()
 }
 
 // effectiveBlockHeight resolves the block height to use for DAH computation,
@@ -643,7 +668,7 @@ func (s *Store) GetBlockHeight() uint32 {
 // the current block height, preserving the historical behaviour.
 func (s *Store) effectiveBlockHeight(blockHeight uint32) uint32 {
 	if blockHeight == 0 {
-		return s.blockHeight.Load()
+		return s.GetBlockHeight()
 	}
 
 	return blockHeight
@@ -671,20 +696,21 @@ func (s *Store) deleteAtHeightFor(blockHeight uint32) (uint32, bool) {
 
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
-	s.medianBlockTime.Store(medianTime)
+
+	return s.BlockStateFields.SetMedianBlockTime(medianTime)
+}
+
+// SetBlockState mirrors the height into the external blob store as
+// SetBlockHeight does; see utxo.Store for why the pair is published together.
+func (s *Store) SetBlockState(blockHeight, medianTime uint32) error {
+	if err := s.BlockStateFields.SetBlockState(blockHeight, medianTime); err != nil {
+		return err
+	}
+
+	s.logger.Debugf("setting block state to height %d, median time %d", blockHeight, medianTime)
+	s.externalStore.SetCurrentBlockHeight(blockHeight)
 
 	return nil
-}
-
-func (s *Store) GetMedianBlockTime() uint32 {
-	return s.medianBlockTime.Load()
-}
-
-func (s *Store) GetBlockState() utxo.BlockState {
-	return utxo.BlockState{
-		Height:     s.blockHeight.Load(),
-		MedianTime: s.medianBlockTime.Load(),
-	}
 }
 
 // Close drains all batched-write workers and releases the Aerospike client.

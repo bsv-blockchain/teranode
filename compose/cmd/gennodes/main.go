@@ -171,7 +171,7 @@ type splitService struct {
 //	propagation         - txStore only (no utxo, no blockchain blob)
 //	p2p                 - no blob stores (blockchain client + kafka only)
 //	asset               - utxoStore + txStore + subtreeStore (serves them over HTTP)
-//	core                - rpc/alert/bp/utxop/pruner/legacy → needs blockstore
+//	core                - rpc/bp/utxop/pruner/legacy → needs blockstore
 //	                       (blockpersister + utxopersister), subtreestore
 //	                       (blockpersister + legacy), txstore (rpc), and
 //	                       external (everything calling utxoStore)
@@ -260,7 +260,7 @@ func buildSplitServices() []splitService {
 		{
 			Name: "core",
 			EntrypointFlags: []string{
-				"-rpc=1", "-alert=1", "-blockpersister=1",
+				"-rpc=1", "-blockpersister=1",
 				"-utxopersister=1", "-pruner=1", "-legacy=1",
 			},
 			HostPorts:           []int{8000, 8083, 8093, 8099, 9091, 9292},

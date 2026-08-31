@@ -381,6 +381,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/block/:hash/forks", h.GetBlockForks)
 	apiGroup.GET("/block/:hash/nearestforks", h.GetNearestForkHeights)
 
+	apiGroup.GET("/block/height/:height", h.GetBlockByHeight(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/block/height/:height/hex", h.GetBlockByHeight(HEX), heavyMW()...)
+	apiGroup.GET("/block/height/:height/json", h.GetBlockByHeight(JSON), heavyMW()...)
+
 	apiGroup.GET("/block/:hash/subtrees/json", h.GetBlockSubtrees(JSON))
 
 	apiGroup.GET("/search", h.Search)

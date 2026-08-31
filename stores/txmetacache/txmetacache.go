@@ -1152,6 +1152,12 @@ func (t *TxMetaCache) GetMedianBlockTime() uint32 {
 	return t.utxoStore.GetMedianBlockTime()
 }
 
+// SetBlockState publishes block height and median block time to the
+// underlying store as one atomic snapshot; see utxo.Store.
+func (t *TxMetaCache) SetBlockState(height, medianTime uint32) error {
+	return t.utxoStore.SetBlockState(height, medianTime)
+}
+
 func (t *TxMetaCache) GetBlockState() utxo.BlockState {
 	return t.utxoStore.GetBlockState()
 }

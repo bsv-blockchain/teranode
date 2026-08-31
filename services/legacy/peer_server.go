@@ -230,8 +230,6 @@ type peerState struct {
 	outboundPeers   *txmap.SyncedMap[int32, *serverPeer]
 	persistentPeers *txmap.SyncedMap[int32, *serverPeer]
 	banned          *txmap.SyncedMap[string, time.Time]
-	outboundGroups  *txmap.SyncedMap[string, int]
-	connectionCount *txmap.SyncedMap[string, int]
 }
 
 // Count returns the count of all known peers.
@@ -239,12 +237,172 @@ func (ps *peerState) Count() int {
 	return ps.inboundPeers.Length() + ps.outboundPeers.Length() + ps.persistentPeers.Length()
 }
 
-// CountIP returns the count of all peers matching the IP.
-func (ps *peerState) CountIP(host string) int {
-	count, found := ps.connectionCount.Get(host)
-	if !found {
-		return 0
+// countFailedDial reports whether a failed dial should count against the
+// address that failed.
+//
+// It should only count when the node has evidence that its own connectivity is
+// fine, or a spell of broken networking would walk the whole address book,
+// blame every address for the node's own fault, and leave it with nowhere to
+// dial on recovery. svnode makes the same judgement the same way, at
+// net.cpp:1943, requiring at least min(nMaxConnections-1, 2) distinct outbound
+// netgroups before it will hold an address responsible.
+//
+// svnode counts netgroups where this counts automatic outbound peers, and in
+// Teranode those are the same number: newAddressFunc refuses any candidate
+// whose group is already represented, so every automatic outbound peer holds a
+// distinct group by construction.
+func (s *server) countFailedDial() bool {
+	if s.connManager == nil {
+		return false
 	}
+
+	required := cfg.MaxPeers - 1
+	if required > 2 {
+		required = 2
+	}
+
+	return s.connManager.AutomaticOutboundCount() >= required
+}
+
+// recordFailedDial tells the address manager that a dial to this address did
+// not produce a connection.
+func (s *server) recordFailedDial(addr net.Addr) {
+	host, portStr, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return
+	}
+
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return
+	}
+
+	portUint16, err := safeconversion.Uint64ToUint16(port)
+	if err != nil {
+		return
+	}
+
+	s.addrManager.Attempt(wire.NewNetAddressIPPort(ip, portUint16, 0), s.countFailedDial())
+}
+
+// outboundGroups derives the set of netgroups currently occupied by automatic
+// outbound peers.
+//
+// Derived, not maintained. This used to be a tally incremented when a peer was
+// added and decremented when it left, across four separate mutation sites, and
+// two of them were wrong: named peers claimed a group they never occupied, and
+// a peer that dropped before its handshake claimed one it never released,
+// barring that segment for the life of the process. Both were symptoms of the
+// same thing — a derived quantity kept by hand.
+//
+// Reading it from the peer list instead makes those bugs unrepresentable. There
+// is no claim to forget and no release to skip; membership of outboundPeers is
+// the whole rule, and that list is already the authority on which peers hold an
+// automatic slot. Inbound and named peers are excluded for free, because they
+// are kept in different lists. svnode does exactly this, rebuilding its
+// setConnected from vNodes on every pass of ThreadOpenConnections rather than
+// carrying a counter.
+//
+// The cost is a walk of the automatic tier per address selection — at most a
+// handful of peers, and only when the node is about to dial.
+func (ps *peerState) outboundGroups() map[string]struct{} {
+	groups := make(map[string]struct{}, ps.outboundPeers.Length())
+
+	ps.outboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		if na := sp.NA(); na != nil {
+			groups[addrmgr.GroupKey(na)] = struct{}{}
+		}
+
+		return true
+	})
+
+	return groups
+}
+
+// connectedHosts returns the host of every peer the node currently holds, in
+// any tier.
+//
+// Coarser than the netgroup set and deliberately so: it is what the feeler
+// probe uses to avoid opening a second connection to a host the node is already
+// talking to. The netgroup set cannot answer that question, because it is
+// derived from the automatic outbound list alone and so cannot see inbound or
+// named peers at all.
+//
+// Host rather than host:port, because MaxPeersPerIP is the rule a remote is
+// likely to be applying to us, and a second connection to a host we are
+// mid-download from is a good way to lose the first one.
+func (ps *peerState) connectedHosts() map[string]struct{} {
+	hosts := make(map[string]struct{}, ps.Count())
+
+	note := func(sp *serverPeer) {
+		if host, _, err := net.SplitHostPort(sp.Addr()); err == nil {
+			hosts[host] = struct{}{}
+		}
+	}
+
+	for _, list := range []*txmap.SyncedMap[int32, *serverPeer]{
+		ps.inboundPeers, ps.outboundPeers, ps.persistentPeers,
+	} {
+		list.Iterate(func(_ int32, sp *serverPeer) bool {
+			note(sp)
+
+			return true
+		})
+	}
+
+	return hosts
+}
+
+// CountExcludingPermanent returns the peers that draw on MaxPeers: the inbound
+// and automatic outbound tiers. Permanent (addnode) peers have their own budget
+// and are additive to this figure, so they are deliberately left out.
+func (ps *peerState) CountExcludingPermanent() int {
+	return ps.inboundPeers.Length() + ps.outboundPeers.Length()
+}
+
+// CountIP returns how many peers the node holds from the given host.
+//
+// Derived, not maintained, for the same reason the netgroup set is. The tally
+// this replaces was incremented when a peer was added and decremented when it
+// left, and the two did not always pair up: handleAddPeerMsg's
+// already-connected dedup deletes the displaced peer from its list directly, so
+// when that peer's disconnect arrived, handleDonePeerMsg no longer found it and
+// took the fall-through branch that decrements nothing. The count ratcheted up
+// and never came back down, and after MaxPeersPerIP such events the node
+// refused every peer from that host for the life of the process.
+//
+// Counting the peers themselves cannot drift: there is nothing to decrement.
+// svnode does the same, deriving nConnectionsFromAddr by walking vNodes at
+// accept time (net.cpp:1273) rather than carrying a counter.
+//
+// Persistent peers are excluded, matching what the old tally counted: they are
+// named by the operator, so holding several from one host is a deliberate
+// choice rather than a stranger crowding the node out.
+func (ps *peerState) CountIP(host string) int {
+	count := 0
+
+	tally := func(sp *serverPeer) {
+		if peerHost, _, err := net.SplitHostPort(sp.Addr()); err == nil && peerHost == host {
+			count++
+		}
+	}
+
+	ps.inboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		tally(sp)
+
+		return true
+	})
+
+	ps.outboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		tally(sp)
+
+		return true
+	})
 
 	return count
 }
@@ -351,6 +509,32 @@ type server struct {
 	assetHTTPAddress  string
 	banList           *p2p.BanList
 	banChan           chan p2p.BanEvent
+
+	// feelerAttempted and feelerVerified count probes launched and probes that
+	// completed a BSV version exchange. Reported on the per-probe log line so
+	// the feature's slow, statistical benefit can be checked from the logs
+	// rather than inferred. Never reset.
+	feelerAttempted atomic.Uint64
+	feelerVerified  atomic.Uint64
+
+	// feelerTokens hands out the reserved probe slots: one token per slot,
+	// taken for the whole life of a probe and returned when it ends. Created by
+	// startFeeler, nil when feelers are disabled.
+	feelerTokens chan struct{}
+
+	// feelerHandshake is how long a probe waits for a version message, settled
+	// from legacy_feelerHandshakeTimeout by startFeeler. Resolved once because
+	// the setting is fixed at startup and its two guards warn: doing it per
+	// probe reported a startup mistake as permanent runtime noise. Written
+	// before the feeler goroutine exists and never again, which is what makes it
+	// safe to read from a probe without synchronisation.
+	feelerHandshake time.Duration
+
+	// feelerSlots is how many peer slots are held back for feeler probes. It
+	// is deducted from the peer-admission ceiling and never from the automatic
+	// outbound target, mirroring svnode's nMaxInbound arithmetic
+	// (net.cpp:1261). Zero disables feelers entirely, reservation included.
+	feelerSlots int
 
 	// multistream association tracking
 	associationMgr *peer.AssociationManager
@@ -538,9 +722,9 @@ func (sp *serverPeer) pushAddrMsg(addresses []*wire.NetAddress) {
 // disconnected.
 func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 	// No warning is logged and no score is calculated if banning is disabled.
-	// if cfg.DisableBanning {
-	//	return
-	// }
+	if cfg.DisableBanning {
+		return
+	}
 	if sp.isWhitelisted {
 		sp.server.logger.Debugf("Misbehaving whitelisted peer %s: %s", sp, reason)
 		return
@@ -576,6 +760,17 @@ func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 // all of the provided desired service flags set.
 func hasServices(advertised, desired wire.ServiceFlag) bool {
 	return advertised&desired == desired
+}
+
+// isBSVUserAgent reports whether a peer's user agent identifies a BSV node.
+//
+// Extracted so the feeler probe applies the same test as the ordinary peer
+// path. A probe that promoted a BTC or BCH node into the tried table would not
+// merely waste itself: promotion can evict an existing tried entry, so it would
+// push out a genuine BSV peer and degrade the very pool the probe exists to
+// improve.
+func isBSVUserAgent(userAgent string) bool {
+	return strings.Contains(userAgent, "Bitcoin SV") || strings.Contains(userAgent, "BSV")
 }
 
 // OnVersion is invoked when a peer receives a version bitcoin message
@@ -614,11 +809,15 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// Only allow connections from peers running BSV Blockchain nodes
 	// This prevents connections from BCH/BTC/BTG and other incompatible forks
 	userAgent := msg.UserAgent
-	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
-		sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
-
-		// Ban the peer to prevent repeated connection attempts from incompatible clients
-		sp.server.BanPeer(sp)
+	if !isBSVUserAgent(userAgent) {
+		// Ban the peer to prevent repeated connection attempts from incompatible
+		// clients, unless banning is disabled. The peer is rejected either way.
+		if cfg.DisableBanning {
+			sp.server.logger.Warnf("Rejecting peer %s with non-BSV user agent (banning disabled): %s", sp.Peer, userAgent)
+		} else {
+			sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
+			sp.server.BanPeer(sp)
+		}
 
 		reason := "Only BSV Blockchain clients are supported"
 
@@ -2005,6 +2204,27 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 		return err
 	}
 
+	// A node bootstrapped from a UTXO-set snapshot stores transactions as their
+	// live outputs only, and the UTXO store hands that shape straight back for a
+	// reader that asked for fields.Tx. Bytes() below either panics on a nil output
+	// hole — swallowed by the deferred recover above, leaving the peer with silence
+	// — or serializes cleanly into a short, 0-input transaction that does not hash
+	// to what the peer asked for, which would then go on the wire as if it did.
+	// Same gate as the asset boundary (services/asset/repository.isRequestedTransaction):
+	// the predicate must come first, because TxIDChainHash() dereferences the same
+	// nil *bt.Output.
+	if !txMeta.TxIsSerializable() || !txMeta.Tx.TxIDChainHash().IsEqual(hash) {
+		err = fmt.Errorf("[pushTxMsg] tx %v is not retained in full by this node", hash)
+
+		sp.server.logger.Warnf("%s", err.Error())
+
+		if doneChan != nil {
+			doneChan <- struct{}{}
+		}
+
+		return err
+	}
+
 	tx, err := bsvutil.NewTxFromBytes(txMeta.Tx.Bytes())
 	if err != nil {
 		sp.server.logger.Warnf("[pushTxMsg] Unable to deserialize tx %v: %v", hash, err)
@@ -2296,8 +2516,16 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	}
 
 	// Limit max number of total peers.
-	if state.Count() >= cfg.MaxPeers {
-		reason := fmt.Sprintf("Max peers reached [%d] - disconnecting peer", cfg.MaxPeers)
+	//
+	// Permanent (addnode) peers are excluded because they are budgeted
+	// separately by MaxAddnodePeers, following svnode: its inbound capacity is
+	// nMaxConnections minus the OUTBOUND and feeler budgets only, and its
+	// addnode semaphore is independent of nMaxConnections entirely. Counting
+	// them here would make named peers cost the node inbound capacity, which is
+	// the additive budget undone at the door.
+	ceiling := peerAdmissionCeiling(cfg.MaxPeers, s.feelerSlots)
+	if state.CountExcludingPermanent() >= ceiling {
+		reason := fmt.Sprintf("Max peers reached [%d] - disconnecting peer", ceiling)
 		sp.DisconnectWithInfo(reason)
 		// TODO: how to handle permanent peers here?
 		// they should be rescheduled.
@@ -2309,20 +2537,11 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 
 	if sp.Inbound() {
 		state.inboundPeers.Set(sp.ID(), sp)
-
-		count, _ := state.connectionCount.Get(host)
-		state.connectionCount.Set(host, count+1)
 	} else {
-		count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-		state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count+1)
-
 		if sp.persistent {
 			state.persistentPeers.Set(sp.ID(), sp)
 		} else {
 			state.outboundPeers.Set(sp.ID(), sp)
-
-			count, _ = state.connectionCount.Get(host)
-			state.connectionCount.Set(host, count+1)
 		}
 	}
 
@@ -2379,22 +2598,11 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 	}
 
 	if _, ok := list.Get(sp.ID()); ok {
-		if !sp.Inbound() && sp.VersionKnown() {
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		}
-
 		if !sp.Inbound() && sp.connReq != nil {
 			s.connManager.Disconnect(sp.connReq.ID())
 		}
 
 		list.Delete(sp.ID())
-
-		host, _, err := net.SplitHostPort(sp.Addr())
-		if err == nil && !sp.persistent {
-			count, _ := state.connectionCount.Get(host)
-			state.connectionCount.Set(host, count-1)
-		}
 
 		sp.server.logger.Debugf("Removed peer %s", sp)
 
@@ -2502,6 +2710,13 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			return
 		}
 
+		// Peers that have not negotiated sendheaders still need the block
+		// announced via a plain inventory message.
+		if msg.invVect.Type == wire.InvTypeBlock {
+			s.handleRelayBlockInvMsg(sp, msg)
+			return
+		}
+
 		if msg.invVect.Type == wire.InvTypeTx {
 			// Don't relay the transaction to the peer when it has
 			// transaction relaying disabled.
@@ -2584,6 +2799,13 @@ func (s *server) handleRelayBlockMsg(sp *serverPeer, msg relayMsg) {
 	sp.QueueMessage(msgHeaders, nil)
 }
 
+// handleRelayBlockInvMsg queues a plain inventory vector for a block to a peer
+// that has not negotiated sendheaders. Peers that did negotiate sendheaders are
+// announced via a headers message instead, in handleRelayBlockMsg.
+func (s *server) handleRelayBlockInvMsg(sp serverPeerQueueInventory, msg relayMsg) {
+	sp.QueueInventory(msg.invVect)
+}
+
 // handleBroadcastMsg deals with broadcasting messages to peers.  It is invoked
 // from the peerHandler goroutine.
 func (s *server) handleBroadcastMsg(state *peerState, bmsg *broadcastMsg) {
@@ -2610,9 +2832,24 @@ type getPeersMsg struct {
 	reply chan []*serverPeer
 }
 
-type getOutboundGroup struct {
-	key   string
-	reply chan int
+type getOutboundGroups struct {
+	reply chan map[string]struct{}
+}
+
+// feelerSnapshot is everything the feeler probe needs to know about the current
+// peer set, read in one pass so that a whole selection is judged against a
+// single consistent view.
+type feelerSnapshot struct {
+	// outboundGroups are the netgroups held by automatic outbound peers. A
+	// probe must not claim one, so it must not pick an address in one.
+	outboundGroups map[string]struct{}
+
+	// hosts is the host of every peer in any tier.
+	hosts map[string]struct{}
+}
+
+type getFeelerSnapshotMsg struct {
+	reply chan feelerSnapshot
 }
 
 type getAddedNodesMsg struct {
@@ -2680,9 +2917,27 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		// })
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
-		// Limit max number of total peers.
-		if state.Count() >= cfg.MaxPeers {
-			msg.reply <- errors.NewProcessingError("max peers reached")
+		// Each tier is checked against its own budget, the same way the startup
+		// list and the peer-admission door are. Before this, the runtime path
+		// compared every peer against MaxPeers, which disagreed with both: a
+		// node holding its full automatic quota plus a few named peers could
+		// never gain another named peer however small MaxAddnodePeers was, and
+		// nothing enforced MaxAddnodePeers here at all, so the startup budget
+		// could be walked straight past at runtime.
+		//
+		// The ceiling here is MaxPeers less the feeler reservation, the same
+		// figure the door in handleAddPeerMsg applies. A one-shot addnode
+		// becomes an ordinary automatic peer, so if the two disagreed the node
+		// would admit a peer through one path that the other had just refused.
+		ceiling := peerAdmissionCeiling(cfg.MaxPeers, s.feelerSlots)
+		if !connectNodeAdmitted(msg.permanent, state.persistentPeers.Length(),
+			state.CountExcludingPermanent(), s.settings.Legacy.MaxAddnodePeers, ceiling) {
+			if msg.permanent {
+				msg.reply <- errors.NewProcessingError("max addnode peers reached [%d]", s.settings.Legacy.MaxAddnodePeers)
+			} else {
+				msg.reply <- errors.NewProcessingError("max peers reached [%d]", ceiling)
+			}
+
 			return
 		}
 
@@ -2714,24 +2969,21 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 
 		msg.reply <- nil
 	case removeNodeMsg:
-		found := disconnectPeer(state.persistentPeers, msg.cmp, func(sp *serverPeer) {
-			// Keep group counts ok since we remove from
-			// the list now.
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		})
+		// No group release here: this removes a permanent peer, and permanent
+		// peers no longer claim a netgroup when they are added.
+		found := disconnectPeer(state.persistentPeers, msg.cmp, nil)
 
 		if found {
 			msg.reply <- nil
 		} else {
 			msg.reply <- errors.NewProcessingError("peer not found")
 		}
-	case getOutboundGroup:
-		count, ok := state.outboundGroups.Get(msg.key)
-		if ok {
-			msg.reply <- count
-		} else {
-			msg.reply <- 0
+	case getOutboundGroups:
+		msg.reply <- state.outboundGroups()
+	case getFeelerSnapshotMsg:
+		msg.reply <- feelerSnapshot{
+			outboundGroups: state.outboundGroups(),
+			hosts:          state.connectedHosts(),
 		}
 	// Request a list of the persistent (added) peers.
 	case getAddedNodesMsg:
@@ -2751,21 +3003,13 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		}
 
 		// Check outbound peers.
-		found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
-			// Keep group counts ok since we remove from
-			// the list now.
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		})
+		found = disconnectPeer(state.outboundPeers, msg.cmp, nil)
 		if found {
 			// If there are multiple outbound connections to the same
 			// ip:port, continue disconnecting them all until no such
 			// peers are found.
 			for found {
-				found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
-					count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-					state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-				})
+				found = disconnectPeer(state.outboundPeers, msg.cmp, nil)
 			}
 			msg.reply <- nil
 
@@ -2800,6 +3044,87 @@ func disconnectPeer(peerList *txmap.SyncedMap[int32, *serverPeer], compareFunc f
 	}
 
 	return false
+}
+
+// automaticOutboundTarget returns how many automatic outbound peers the
+// connection manager should aim for, given the configured target and the
+// overall peer cap.
+//
+// Permanent (addnode) peers are NOT deducted here. They are budgeted
+// separately by MaxAddnodePeers, the way svnode gives them their own semaphore
+// (semAddnode) rather than a share of maxconnections: asking for named peers
+// buys them in addition to the node's ordinary capacity, and never at the cost
+// of an automatic slot. MaxPeers therefore bounds the automatic and inbound
+// tiers, which is exactly what svnode's nMaxInbound arithmetic does.
+func automaticOutboundTarget(configured uint32, maxPeers int) uint32 {
+	if maxPeers < 0 {
+		return 0
+	}
+
+	if maxPeers < int(configured) {
+		return uint32(maxPeers)
+	}
+
+	return configured
+}
+
+// addnodePeers caps the configured named peers at their own budget, returning
+// the peers to dial and how many were dropped.
+//
+// svnode enforces this with a semaphore of MaxAddnodePeers permits, so a long
+// -addnode list simply waits rather than growing the node without limit. The
+// list here is fixed at startup, so the equivalent is to take the first
+// budget-many and say plainly what was left out.
+func addnodePeers(configured []string, budget int) (dial []string, dropped int) {
+	if budget < 0 {
+		budget = 0
+	}
+
+	if len(configured) <= budget {
+		return configured, 0
+	}
+
+	return configured[:budget], len(configured) - budget
+}
+
+// permanentPeerList resolves the named peers to dial at startup, and applies
+// the addnode budget to the addnode list only.
+//
+// The two lists are not the same kind of thing. connectPeers is connect-only
+// mode: it is the node's ENTIRE connectivity, there is no address source at
+// all, and MaxPeers is set to the length of that very list — so capping it
+// would strand whatever an operator listed past the budget with nothing to
+// fall back on, and the node would run permanently below the capacity it just
+// sized itself for. addPeers is additive to a node that is already dialling
+// the network for itself, so a cap there costs it nothing it cannot replace.
+//
+// svnode draws the line in the same place: semAddnode gates
+// ThreadOpenAddedConnections (net.cpp:2021), while the -connect loop in
+// ThreadOpenConnections (net.cpp:1772) dials every entry with no semaphore at
+// all.
+func permanentPeerList(connectPeers, addPeers []string, budget int) (dial []string, dropped int) {
+	if len(connectPeers) > 0 {
+		return connectPeers, 0
+	}
+
+	return addnodePeers(addPeers, budget)
+}
+
+// connectNodeAdmitted reports whether a runtime addnode request has room in the
+// tier it will join.
+//
+// A permanent request joins the named tier and is bounded by MaxAddnodePeers; a
+// one-shot becomes an ordinary automatic outbound peer and is bounded by
+// MaxPeers alongside the inbound peers. Checking each against its own budget is
+// what keeps this path agreeing with the startup list and with the admission
+// check in handleAddPeerMsg — the budgets are only additive if every path that
+// spends them says so.
+func connectNodeAdmitted(permanent bool, persistentCount, automaticCount, maxAddnode, maxPeers int) bool {
+	if permanent {
+		return persistentCount < maxAddnode
+	}
+
+	return automaticCount < maxPeers
 }
 
 // newPeerConfig returns the configuration for the given serverPeer.
@@ -2897,6 +3222,13 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	if err != nil {
 		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.GetAddr(), err)
 		s.connManager.Disconnect(c.ID())
+
+		// Without this the nil peer was assigned to sp.Peer and then used:
+		// AssociateConnection is a method on the embedded *peer.Peer, so the
+		// very next steps dereferenced it and brought the node down. Disconnect
+		// closes the connection for us, since the connection manager recorded
+		// it before invoking this callback.
+		return
 	}
 
 	sp.Peer = p
@@ -2910,7 +3242,7 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	sp.AssociateConnection(conn)
 
 	go s.peerDoneHandler(sp)
-	s.addrManager.Attempt(sp.NA())
+	s.addrManager.Attempt(sp.NA(), s.countFailedDial())
 }
 
 // peerDoneHandler handles peer disconnects by notifiying the server that it's
@@ -2955,8 +3287,6 @@ func (s *server) peerHandler() {
 		outboundPeers:   txmap.NewSyncedMap[int32, *serverPeer](),
 		persistentPeers: txmap.NewSyncedMap[int32, *serverPeer](),
 		banned:          txmap.NewSyncedMap[string, time.Time](),
-		outboundGroups:  txmap.NewSyncedMap[string, int](),
-		connectionCount: txmap.NewSyncedMap[string, int](),
 	}
 
 	if !cfg.DisableDNSSeed {
@@ -2973,6 +3303,13 @@ func (s *server) peerHandler() {
 	}
 
 	go s.connManager.Start()
+
+	// Started here, alongside the connection manager, because the two are two
+	// halves of the same job: the connection manager spends the outbound
+	// budget, and the feeler keeps the pool of addresses worth spending it on
+	// healthy. It also has to be here rather than in newServer, because it
+	// depends on s.query being served, which is this loop.
+	s.startFeeler()
 
 out:
 	for {
@@ -3113,13 +3450,69 @@ func (s *server) ConnectedCount() int32 {
 	return <-replyChan
 }
 
-// OutboundGroupCount returns the number of peers connected to the given
-// outbound group key.
-func (s *server) OutboundGroupCount(key string) int {
-	replyChan := make(chan int)
-	s.query <- getOutboundGroup{key: key, reply: replyChan}
+// OutboundGroups returns the set of netgroups currently occupied by automatic
+// outbound peers, read from the peer list at the moment of the call.
+//
+// Returned as a set rather than queried one key at a time so a caller sifting
+// candidate addresses reads a single consistent snapshot, instead of asking
+// once per candidate and seeing the peer set shift underneath it. svnode builds
+// the same set once per pass of ThreadOpenConnections for the same reason.
+// Both halves of the exchange give up on shutdown. This runs on a dial
+// goroutine, and the peer handler stops serving queries the moment s.quit
+// closes — it then drains s.query without answering, so an unguarded send
+// would be accepted and the reply would never come, parking the dial goroutine
+// for the life of the process. An empty set is the safe answer at that point:
+// the connection manager is being stopped in the very next statement of the
+// peer handler, so at worst the caller picks one more address that is never
+// dialled.
+func (s *server) OutboundGroups() map[string]struct{} {
+	// Buffered so that abandoning the reply cannot wedge the peer handler:
+	// handleQuery sends the answer unguarded, and on an unbuffered channel a
+	// caller that had already given up would block it there for good.
+	replyChan := make(chan map[string]struct{}, 1)
 
-	return <-replyChan
+	select {
+	case s.query <- getOutboundGroups{reply: replyChan}:
+	case <-s.quit:
+		return nil
+	}
+
+	select {
+	case groups := <-replyChan:
+		return groups
+	case <-s.quit:
+		return nil
+	}
+}
+
+// feelerPeerSnapshot reads the peer set the feeler probe sifts candidates
+// against, in a single query.
+//
+// One query per selection pass, not one per candidate. The peer handler is a
+// single goroutine serving every peer-state question in the service, so a
+// hundred round trips to sift a hundred addresses would put the probe in its
+// way for no benefit, and would let the peer set shift under the sift.
+//
+// Both halves of the exchange give up on shutdown, for the reason spelled out
+// on OutboundGroups: the peer handler drains s.query without answering once
+// s.quit closes, so an unguarded send would be accepted and never replied to.
+// An empty snapshot is the safe answer, because the probe that reads it is
+// about to check s.quit itself.
+func (s *server) feelerPeerSnapshot() feelerSnapshot {
+	replyChan := make(chan feelerSnapshot, 1)
+
+	select {
+	case s.query <- getFeelerSnapshotMsg{reply: replyChan}:
+	case <-s.quit:
+		return feelerSnapshot{}
+	}
+
+	select {
+	case snap := <-replyChan:
+		return snap
+	case <-s.quit:
+		return feelerSnapshot{}
+	}
 }
 
 // AddBytesSent adds the passed number of bytes to the total bytes sent counter
@@ -3487,7 +3880,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	blockAssembly *blockassembly.Client,
 	listenAddrs []string, assetHTTPAddress string) (*server, error) {
 	// init config
-	c, _, err := loadConfig(logger)
+	c, _, err := loadConfig(logger, tSettings.Policy.ExcessiveBlockSize)
 	if err != nil {
 		return nil, err
 	}
@@ -3692,6 +4085,12 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	var newAddressFunc func() (net.Addr, error)
 	if len(cfg.ConnectPeers) == 0 {
 		newAddressFunc = func() (net.Addr, error) {
+			// One snapshot for the whole selection, so every candidate is
+			// judged against the same peer set. Asking per candidate would let
+			// the set shift mid-sift, and would pay for a peer walk on each of
+			// the hundred tries below rather than once.
+			occupiedGroups := s.OutboundGroups()
+
 			for tries := 0; tries < 100; tries++ {
 				addr := s.addrManager.GetAddress()
 				if addr == nil {
@@ -3704,8 +4103,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 				// in the same group so that we are not connecting
 				// to the same network segment at the expense of
 				// others.
-				key := addrmgr.GroupKey(addr.NetAddress())
-				if s.OutboundGroupCount(key) != 0 {
+				if _, occupied := occupiedGroups[addrmgr.GroupKey(addr.NetAddress())]; occupied {
 					continue
 				}
 
@@ -3731,19 +4129,45 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	}
 
 	// Create a connection manager.
-	targetOutbound := cfg.TargetOutboundPeers
-	if cfg.MaxPeers < int(targetOutbound) {
-		targetOutbound = uint32(cfg.MaxPeers)
+	//
+	// permanentPeers is resolved before the target is computed because the two
+	// are related: the replenishment pass counts only the automatic tier, so
+	// the node's outbound total is the target PLUS its addnode peers. MaxPeers
+	// has to bound that total rather than the automatic half alone.
+	permanentPeers, droppedPeers := permanentPeerList(cfg.ConnectPeers, cfg.AddPeers, tSettings.Legacy.MaxAddnodePeers)
+	if droppedPeers > 0 {
+		logger.Warnf("More addnode peers configured than legacy_maxAddnodePeers allows [%d]: dialing the first %d, ignoring %d", tSettings.Legacy.MaxAddnodePeers, len(permanentPeers), droppedPeers)
 	}
+
+	targetOutbound := automaticOutboundTarget(cfg.TargetOutboundPeers, cfg.MaxPeers)
 
 	cmgr, err := connmgr.New(logger, &connmgr.Config{
 		Listeners:      listeners,
 		OnAccept:       s.inboundPeerConnected,
 		RetryDuration:  connectionRetryInterval,
 		TargetOutbound: targetOutbound,
-		Dial:           bsvdDial,
-		OnConnection:   s.outboundPeerConnected,
-		GetNewAddress:  newAddressFunc,
+		Dial: func(addr net.Addr) (net.Conn, error) {
+			conn, err := bsvdDial(addr)
+			if err != nil {
+				// A dial that never produced a connection is the only evidence
+				// the address book ever gets that an address is dead. Without
+				// this it only ever learns that addresses are good, so an
+				// address that stopped answering keeps full selection weight
+				// for ever and the node spends dials on it indefinitely.
+				// svnode records the same thing in the failure arm of
+				// ConnectNode (net.cpp:425).
+				s.recordFailedDial(addr)
+			}
+
+			return conn, err
+		},
+		OnConnection:  s.outboundPeerConnected,
+		GetNewAddress: newAddressFunc,
+		// A minute between replenishment passes meant a peer lost early in an
+		// interval left the node running below target for the rest of it — during
+		// IBD that is a minute of lost download bandwidth per disconnect. Zero
+		// restores the historical one-minute cadence.
+		ReplenishInterval: tSettings.Legacy.ReplenishInterval,
 	})
 	if err != nil {
 		return nil, err
@@ -3751,13 +4175,15 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	s.connManager = cmgr
 
+	// Set after the manager exists, because the reservation has to be judged
+	// against the target the manager will really chase rather than the one
+	// computed above — connmgr.New substitutes its own default for a configured
+	// zero. Note that the target itself is NOT reduced: the reservation comes
+	// out of the joint inbound/automatic ceiling, exactly as svnode takes its
+	// feeler budget out of nMaxInbound.
+	s.setFeelerBudget(logger, tSettings.Legacy.MaxFeelerPeers, len(cfg.ConnectPeers) > 0, cfg.MaxPeers)
+
 	// Start up persistent peers.
-	permanentPeers := cfg.ConnectPeers
-
-	if len(permanentPeers) == 0 {
-		permanentPeers = cfg.AddPeers
-	}
-
 	for _, addr := range permanentPeers {
 		netAddr, err := addrStringToNetAddr(addr)
 		if err != nil {

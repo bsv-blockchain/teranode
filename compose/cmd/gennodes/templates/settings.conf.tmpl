@@ -17,6 +17,10 @@ aerospike_port.docker.teranode{{ .Index }}                     = {{ .AerospikeSe
 utxostore.docker.teranode{{ .Index }}.test                     = aerospike://aerospike-{{ .Index }}:{{ .AerospikeServicePort }}/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&externalStore=file://${DATADIR}/external
 p2p_peer_id.docker.teranode{{ .Index }}                        = {{ .PeerID }}
 p2p_private_key.docker.teranode{{ .Index }}                    = {{ .PrivateKey }}
+# Alert is non-functional in this rig (its port is unexposed, it has no local
+# bootstrap peers, and the regtest topic has no matching genesis keys), so keep
+# it off - same as compose/settings_test.conf does for the other docker rigs.
+startAlert.docker.teranode{{ .Index }}                         = false
 p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeers }}
 p2p_bootstrap_peers.docker.teranode{{ .Index }}.test           =
 {{- if not $.AllInOne }}

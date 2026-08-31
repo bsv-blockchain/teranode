@@ -14,6 +14,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -291,12 +292,41 @@ type Interface interface {
 	//   - uint64: Total transaction count
 	TxCount() uint64
 
-	// QueueLength returns the current length of the processing queue.
-	// This indicates the processor's current workload.
+	// QueueLength returns the number of transactions currently queued, not
+	// the number of batches. This indicates the processor's current workload.
 	//
 	// Returns:
-	//   - int64: Current queue length
+	//   - int64: Current queue length, in transactions
 	QueueLength() int64
+
+	// LastDequeueTime returns the wall-clock time the consumer goroutine last
+	// passed through the queue's dequeue branch. Combined with QueueLength,
+	// this reveals a stalled consumer sitting on a non-empty queue, which a
+	// depth reading alone cannot distinguish from a queue that is merely
+	// growing under normal load.
+	//
+	// Returns:
+	//   - time.Time: last time the dequeue branch ran
+	LastDequeueTime() time.Time
+
+	// ConsumerStarted reports whether the consumer goroutine has been started.
+	// A stale LastDequeueTime means a wedged consumer only once this is true;
+	// before then it simply means Start has not reached the consumer yet, which
+	// is the ordinary state while BlockAssembler.Start loads unmined
+	// transactions with ingest already running.
+	//
+	// Returns:
+	//   - bool: true once the consumer goroutine has been started
+	ConsumerStarted() bool
+
+	// ConsumerExited reports whether the consumer goroutine has exited. A
+	// stale LastDequeueTime means a wedged consumer only while one still
+	// exists; once this is true the queue will never drain again, which is a
+	// different fault with a different remedy.
+	//
+	// Returns:
+	//   - bool: true once the consumer goroutine has exited
+	ConsumerExited() bool
 
 	// SubtreeCount returns the total number of subtrees managed by the processor.
 	// This metric provides visibility into the processor's organizational state.
@@ -337,6 +367,21 @@ type Interface interface {
 	// Parameters:
 	//   - ctx: Context for the stop operation
 	Stop(ctx context.Context)
+
+	// ReconcileCoinbases creates the canonical coinbase UTXOs for the given gap
+	// blocks (ascending height). It is coinbase-only and idempotent, and never
+	// touches any other in-memory processor state (no reset, no unmined-tx
+	// reload), which keeps its cost O(len(gapBlocks)) rather than O(mempool
+	// size). Used by the coinbase-divergence recovery orchestration to repair
+	// a scoped gap of missing coinbases.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation of the underlying UTXO store calls
+	//   - gapBlocks: Canonical gap blocks, ascending height, needing coinbase UTXOs
+	//
+	// Returns:
+	//   - error: The first error encountered creating a gap block's coinbase, if any
+	ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error
 }
 
 // TxInpointsMap defines the interface for transaction inpoints storage with hash keys.

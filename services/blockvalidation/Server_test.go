@@ -375,36 +375,80 @@ func TestBlockHeadersN(t *testing.T) {
 	*/
 }
 
-func Test_Server_processBlockFound(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// processBlockFoundBlockHex is a mainnet-shaped block at height 309 whose coinbase pays
+// exactly the subsidy. Its parent is placed on-chain by newProcessBlockFoundHarness.
+const processBlockFoundBlockHex = "010000000edfb8ccf30a17b7deae9c1f1a3dbbaeb1741ff5906192b921cbe7ece5ab380081caee50ec9ca9b5686bb6f71693a1c4284a269ab5f90d8662343a18e1a7200f52a83b66ffff00202601000001fdb1010001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17033501002f6d322d75732fc1eaad86485d9cc712818b47ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a9141e7ee30c5c564b78533a44aae23bec1be188281d88ac00000000fd3501"
+
+// newProcessBlockFoundHarness builds a Server whose only on-chain entry is the parent of
+// the returned block, sitting at the honest position (block height - 1). The store is
+// returned so callers can assert what was, or was not, persisted.
+func newProcessBlockFoundHarness(ctx context.Context, t *testing.T) (*Server, *blockchain_store.MockStore, *model.Block) {
+	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
 	// regtest SubsidyReductionInterval is 150
 	// so use mainnet params
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
-	blockHex := "010000000edfb8ccf30a17b7deae9c1f1a3dbbaeb1741ff5906192b921cbe7ece5ab380081caee50ec9ca9b5686bb6f71693a1c4284a269ab5f90d8662343a18e1a7200f52a83b66ffff00202601000001fdb1010001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17033501002f6d322d75732fc1eaad86485d9cc712818b47ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a9141e7ee30c5c564b78533a44aae23bec1be188281d88ac00000000fd3501"
-	blockBytes, err := hex.DecodeString(blockHex)
+	blockBytes, err := hex.DecodeString(processBlockFoundBlockHex)
 	require.NoError(t, err)
 
-	block, err := model.NewBlockFromBytes(blockBytes)
+	parsedBlock, err := model.NewBlockFromBytes(blockBytes)
+	require.NoError(t, err)
+
+	// CheckHeaderContextual verifies the parent chain returned by GetBlockHeaders is
+	// anchored at the block's parent by hash (issue 1467), so the parent stored on-chain
+	// must genuinely hash to the block's HashPrevBlock. The fixture hex's parent hash has
+	// no known preimage, so craft a real parent header first and re-anchor the fixture
+	// block on it, re-grinding the (easy-target) nonce.
+	parentHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      parsedBlock.Header.Timestamp - 600,
+		Bits:           parsedBlock.Header.Bits,
+		Nonce:          0,
+	}
+
+	blockHeader := &model.BlockHeader{
+		Version:        parsedBlock.Header.Version,
+		HashPrevBlock:  parentHeader.Hash(),
+		HashMerkleRoot: parsedBlock.Header.HashMerkleRoot,
+		Timestamp:      parsedBlock.Header.Timestamp,
+		Bits:           parsedBlock.Header.Bits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		require.Less(t, blockHeader.Nonce, uint32(10_000_000), "could not grind a nonce meeting the easy target")
+		blockHeader.Nonce++
+	}
+
+	block, err := model.NewBlock(blockHeader, parsedBlock.CoinbaseTx, parsedBlock.Subtrees, parsedBlock.TransactionCount, parsedBlock.SizeInBytes, parsedBlock.Height, 0)
 	require.NoError(t, err)
 
 	blockchainStore := blockchain_store.NewMockStore()
 	blockchainStore.BlockExists[*block.Header.HashPrevBlock] = true
+	// processBlockFound settles block.Height against the parent header, so the parent must
+	// be resolvable at parent height = block.Height - 1 (deriveBlockHeight). The MockStore's
+	// GetBlockHeaders walk chases HashPrevBlock until a hash is absent from the Blocks map,
+	// so it terminates at the parent (its own parent, the zero hash, is absent).
+	blockchainStore.Blocks[*block.Header.HashPrevBlock] = &model.Block{
+		Header: parentHeader,
+		Height: block.Height - 1,
+	}
 
 	logger := ulogger.NewErrorTestLogger(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(t, err)
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(t, err)
 
 	txStore := memory.New()
 
@@ -419,8 +463,66 @@ func Test_Server_processBlockFound(t *testing.T) {
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient, nil, nil)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, nil)
 
-	err = s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+	return s, blockchainStore, block
+}
+
+func Test_Server_processBlockFound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, _, block := newProcessBlockFoundHarness(ctx, t)
+
+	err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
 	require.NoError(t, err)
+}
+
+// Test_Server_processBlockFound_SettlesPeerSuppliedHeight pins the height settlement at the
+// funnel itself, not just the deriveBlockHeight helper in isolation. block.Height is a varint
+// in the block body and is not covered by the header hash, so on the peer-fetched route it is
+// whatever the peer wrote. processBlockFound must overwrite it from the on-chain parent before
+// any consumer reads it — the checkpoint guard, the difficulty skip, block-assembly gating and
+// the coinbase subsidy all key off that field.
+//
+// Without these cases, dropping the `block.Height = settledHeight` write-back leaves every
+// other test in the package passing.
+func Test_Server_processBlockFound_SettlesPeerSuppliedHeight(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	t.Run("zeroed wire height is settled from the parent", func(t *testing.T) {
+		s, _, block := newProcessBlockFoundHarness(ctx, t)
+		honestHeight := block.Height
+
+		// An honest peer may leave the field empty; the block must still arrive downstream
+		// carrying the derived height, otherwise the checkpoint guard reads 0 and no
+		// checkpoint ever matches.
+		block.Height = 0
+
+		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+		require.NoError(t, err)
+		require.Equal(t, honestHeight, block.Height, "settled height must be written back onto the block")
+	})
+
+	t.Run("spoofed checkpoint height is rejected without being persisted", func(t *testing.T) {
+		s, blockchainStore, block := newProcessBlockFoundHarness(ctx, t)
+
+		// The attack the guard exists for: declare the height of a real mainnet checkpoint
+		// while the parent sits at 308, so the block would reach the checkpoint guard and the
+		// difficulty skip claiming a height it does not hold.
+		block.Height = 11111
+
+		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.Contains(t, err.Error(), "peer-inconsistent height")
+
+		// Rejected at the funnel, ahead of storeInvalidBlock. This is the converse hazard: a
+		// peer must not be able to get a block persisted invalid by lying about its height,
+		// because checkParentInvalid would then cascade that verdict to every descendant.
+		persisted, err := blockchainStore.GetBlockExists(ctx, block.Hash())
+		require.NoError(t, err)
+		require.False(t, persisted, "a height-spoofed block must not be persisted at all")
+	})
 }
 
 // TestServer_processBlockNotifyHasTTL guards against regressing to a TTL-less
@@ -439,6 +541,30 @@ func TestServer_processBlockNotifyHasTTL(t *testing.T) {
 
 	require.False(t, item.ExpiresAt().IsZero(), "processBlockNotify entry must have an expiry so missed Delete paths cannot leak it")
 	require.True(t, item.ExpiresAt().After(time.Now()), "processBlockNotify entry expiry must be in the future")
+}
+
+// TestServer_processBlockNotifyDoesNotTouchOnHit pins the companion property to the
+// TTL above: the safety-net expiry only helps if reads cannot keep pushing it out.
+// The enqueue gate in addBlockToPriorityQueue reads this entry on every duplicate
+// announcement of an in-flight block, so with touch-on-hit a peer that keeps
+// announcing would hold the suppression open indefinitely and the TTL would never
+// fire. blockCatchupAttempts already disables touch-on-hit for the same reason.
+func TestServer_processBlockNotifyDoesNotTouchOnHit(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	s := New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	var hash chainhash.Hash
+	originalExpiry := s.processBlockNotify.Set(hash, true, ttlcache.DefaultTTL).ExpiresAt()
+
+	// Any non-zero gap is enough: touch-on-hit recomputes the expiry from "now", so a
+	// read after the clock has moved would push it out measurably.
+	time.Sleep(10 * time.Millisecond)
+
+	item := s.processBlockNotify.Get(hash)
+	require.NotNil(t, item, "entry must still be present")
+	require.Equal(t, originalExpiry, item.ExpiresAt(), "reads must not extend the suppression window")
 }
 
 func TestServer_processBlockFoundChannel(t *testing.T) {
@@ -1609,10 +1735,18 @@ func Test_ValidateBlock(t *testing.T) {
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found"))
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
 
-		// Mock GetBlockHeaders
+		// Mock GetBlockHeaders. This run is the block's own header, so it is not anchored on the
+		// block's parent and cannot carry the median-time-past window — which is what sends
+		// ValidateBlock's parentHeaderRun down its hash-walk repair path.
 		blockHeaders := []*model.BlockHeader{block.Header}
 		blockMetas := []*model.BlockHeaderMeta{{Height: 99}}
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockMetas, nil)
+
+		// The parent is absent from this fixture's store, so the hash walk cannot repair the run
+		// either and parentHeaderRun keeps the batched one — leaving the subtest exercising the
+		// generic validation-failure path it was written for.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return(nil, nil, errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found"))
 
 		req := &blockvalidation_api.ValidateBlockRequest{
 			Block:  blockBytes,

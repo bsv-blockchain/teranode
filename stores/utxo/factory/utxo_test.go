@@ -44,6 +44,11 @@ func (m *MockUTXOStore) SetMedianBlockTime(time uint32) error {
 	return args.Error(0)
 }
 
+func (m *MockUTXOStore) SetBlockState(height, medianTime uint32) error {
+	args := m.Called(height, medianTime)
+	return args.Error(0)
+}
+
 func (m *MockUTXOStore) GetBlockHeight() uint32 {
 	args := m.Called()
 	return args.Get(0).(uint32)
@@ -345,10 +350,10 @@ func TestNewStore_BlockchainClientError(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	// Register mock database initializer
+	// Register mock database initializer. No SetBlockState expectation: this
+	// test makes blockchain-client creation fail, so NewStore returns before it
+	// subscribes and the listener never runs.
 	mockStore := &MockUTXOStore{}
-	mockStore.On("SetBlockHeight", mock.Anything).Return(nil).Maybe()
-	mockStore.On("SetMedianBlockTime", mock.Anything).Return(nil).Maybe()
 
 	availableDatabases["memory"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
 		return mockStore, nil
