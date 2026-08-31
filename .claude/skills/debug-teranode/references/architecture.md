@@ -48,10 +48,10 @@ pipeline; "overlay" services are auxiliary (`docs/topics/architecture/teranode-m
 | **Block Assembly** | Groups validated txs into subtrees; builds mining candidates; handles reorgs | Validated txs (gRPC from Validator); block/subtree notifications (Blockchain) | Subtrees → Subtree store + announce; mining candidates → miners; assembled block → Blockchain | gRPC (in/out); subscribes to Blockchain notifications |
 | **Subtree Validation** | Validates subtrees received from peers; decorates with metadata (TxInpoints); persists | Subtree notifications (Kafka `subtrees`); tx-meta (Kafka `txmeta`); requests from Block Validation | Validated+decorated subtree → Subtree store | In: Kafka `subtrees`, Kafka `txmeta`, gRPC. Calls Validator for missing txs |
 | **Block Validation** | Validates full blocks (PoW, merkle root, subtree contents, tx ordering); adds to chain; marks txs mined | Block announcements (Kafka `blocks`); blocks from Legacy | `AddBlock` → Blockchain; coinbase → UTXO+Tx store; `SetMinedMulti` → UTXO | In: Kafka `blocks`, gRPC. Calls Subtree Validation (`CheckBlockSubtrees`); calls Blockchain |
-| **Blockchain** | Owns chain state, headers, FSM, chainwork/longest-chain; persists blocks; fans out notifications | `AddBlock`/`InvalidateBlock` (gRPC from Block Assembly + Block Validation) | Block/Subtree/MiningOn notifications; finalized block → Block Persister (Kafka `blocksFinal`) | gRPC server; pub/sub; Kafka producer |
+| **Blockchain** | Owns chain state, headers, FSM, chainwork/longest-chain; persists blocks; fans out notifications | `AddBlock`/`InvalidateBlock` (gRPC from Block Assembly + Block Validation) | Block/Subtree/MiningOn notifications; finalized block → Kafka `blocksFinal` (consumed by Legacy P2P only, NOT Block Persister) | gRPC server; pub/sub; Kafka producer |
 | **Asset Server** | Read facade over all stores; serves blockchain data to peers + clients; WebSocket feed | UTXO store, Blob store, Blockchain store | HTTP/REST; WebSocket (Centrifuge) push | HTTP/HTTPS, WebSocket. Also exposes FSM endpoints |
 | **Alert** | Alert system: freeze/unfreeze/reassign UTXOs, invalidate blocks, ban peers (court-order recourse) | Alert messages (private P2P alert network) | UTXO freeze/reassign; Blockchain `InvalidateBlock`; peer bans | libp2p (alert net), gRPC |
-| **Block Persister** *(overlay)* | Post-processes confirmed blocks: writes `.block`/`.subtree`/`.utxo-additions`/`.utxo-deletions` files | Polls Blockchain for unpersisted blocks; reads Subtree + UTXO stores | Files → block-store; `BlockPersisted` notification | Polls Blockchain; writes blob store. **[AMBIGUITY]** also described as consuming Kafka `blocksFinal` — see §10 |
+| **Block Persister** *(overlay)* | Post-processes confirmed blocks: writes `.block`/`.subtree`/`.utxo-additions`/`.utxo-deletions` files | Polls Blockchain for unpersisted blocks (`GetBlocksNotPersisted` every `blockpersister_persistSleep`, default 10s) — has no Kafka consumer; reads Subtree + UTXO stores | Files → block-store; `BlockPersisted` notification | gRPC (polling client); writes blob store |
 | **UTXO Persister** *(overlay)* | Builds a full on-disk UTXO **set** file per block (seedable into new nodes) | `.utxo-additions`/`.utxo-deletions`/`.block`; headers from Blockchain | `.utxo-set` file per block; `lastProcessed.dat` | Reads/writes blob store. Lags tip ≥100 blocks (finality) |
 | **Pruner** *(overlay)* | Event-driven UTXO pruning (Delete-At-Height); preserves parents of old unmined txs | `BlockPersisted` (primary), `Block` (fallback) | Deletes UTXO records + external `.tx`/`.outputs` blobs | gRPC; subscribes to Blockchain; checks Block Assembly state |
 | **P2P** *(overlay)* | libp2p transport: peer discovery, gossips blocks/subtrees/rejected-txs, ban list, reputation | Blockchain notifications; Validator rejected-tx; network gossip | To net: GossipSub publish. To node: block→Block Validation (Kafka `blocks`), subtree→Subtree Validation (Kafka `subtrees`) | libp2p/GossipSub/Kademlia DHT; gRPC; HTTP/WS |
@@ -67,8 +67,8 @@ pipeline; "overlay" services are auxiliary (`docs/topics/architecture/teranode-m
 - Block Assembly → **new subtree announcement** → P2P **via the Blockchain service**.
 - P2P → **peer blocks** → Block Validation via Kafka `blocks`; **peer subtrees** → Subtree Validation via Kafka `subtrees`.
 - Block Validation / Block Assembly → **AddBlock** → Blockchain via gRPC.
-- Blockchain → **finalized block** → Block Persister via Kafka `blocksFinal`.
-- Block Persister → **BlockPersisted** → Pruner and UTXO Persister.
+- Blockchain → **finalized block** → Kafka `blocksFinal`, consumed by Legacy P2P (NOT Block Persister — it has no Kafka consumer).
+- Block Persister → polls Blockchain (`GetBlocksNotPersisted`, gRPC) every `blockpersister_persistSleep` (default 10s) → **BlockPersisted** → Pruner and UTXO Persister.
 
 ---
 
@@ -119,7 +119,7 @@ In parallel, the tx's subtree is validated network-wide (§4) so block validatio
 
 **State management — Blockchain service** owns the canonical chain, selects the longest chain by **cumulative chainwork** (not height) with **no depth cap on tip selection**, persists headers/blocks to the blockchain (SQL) store. Deep-reorg / secret-mining protection lives in the Block Validation catchup path (coinbase-maturity fork depth + `blockvalidation_secret_mining_threshold`, default coinbase maturity − 1), not a `maxReorgDepth` setting. *Building on the strongest chain* is **Block Assembly's** job, not Block Validation's.
 
-**Persistence:** Blockchain → Kafka `blocksFinal` → Block Persister writes `.block` + per-subtree `.subtree` + `.utxo-additions` + `.utxo-deletions`, sets `persisted_at`, fires `BlockPersisted`. UTXO Persister folds additions/deletions into a rolling `.utxo-set` file (≥100 blocks behind tip). Pruner deletes DAH-expired UTXO records up to the safely-persisted height.
+**Persistence:** Block Persister polls Blockchain over gRPC (`GetBlocksNotPersisted`, every `blockpersister_persistSleep`, default 10s — it does NOT consume Kafka `blocksFinal`) and writes `.block` + per-subtree `.subtree` + `.utxo-additions` + `.utxo-deletions`, sets `persisted_at`, fires `BlockPersisted`. UTXO Persister folds additions/deletions into a rolling `.utxo-set` file (≥100 blocks behind tip). Pruner deletes DAH-expired UTXO records up to the safely-persisted height.
 
 ---
 
@@ -243,12 +243,12 @@ seeding from an exported UTXO set.
 | `kafka_txmetaConfig` | Validator → Subtree Validation | UTXO tx-meta (+ "delete" reversals) | auto-commit |
 | `kafka_rejectedTxConfig` | Validator → P2P | rejected tx {id, reason} | auto-commit |
 | `kafka_blocksConfig` | P2P (and Legacy) → Block Validation | block announcements | **manual** |
-| `kafka_subtreesConfig` | P2P → Subtree Validation | subtree notifications | manual |
-| `kafka_blocksFinalConfig` | Blockchain → Block Persister | finalized blocks | **manual** |
+| `kafka_subtreesConfig` | P2P → Subtree Validation | subtree notifications | auto-commit |
+| `kafka_blocksFinalConfig` | Blockchain → Legacy P2P (NOT Block Persister — it has no Kafka consumer, it polls Blockchain over gRPC) | finalized blocks | auto-commit |
 | `kafka_invalid_blocks` | Block Validation → subscribers | `{block_hash, reason}` | varies |
 | `kafka_legacy_inv` | Legacy P2P | legacy inv messages | auto |
 
-- Consumer concurrency = `partitions / consumer_ratio` (NOT the `kafkaWorkers` setting directly).
+- Consumer concurrency = partition count. One consumer group member per service instance; Kafka gives each partition to exactly one member, and each member fans out a goroutine per assigned partition. Neither `consumer_ratio` (does not exist in the code) nor the `*_kafkaWorkers` settings (loaded but never read) affect it.
 - Teranode **pauses** processing when Kafka is unhealthy and auto-resumes (safe-state design).
 
 ---
@@ -308,7 +308,7 @@ seeding from an exported UTXO set.
 
 **Flagged ambiguities (docs unclear/contradictory — verify against code before relying):**
 
-1. **Block Persister trigger.** Described as both a **polling** service (`persisted_at IS NULL`) and Kafka `blocksFinal`-driven. Likely both (notify + poll fallback) but not reconciled in docs.
+1. **Block Persister trigger.** *Resolved:* Block Persister has no Kafka consumer at all — it exclusively polls the Blockchain service over gRPC (`GetBlocksNotPersisted`, `services/blockpersister/Server.go`) on a `blockpersister_persistSleep` interval (default 10s). Kafka `blocksFinal` is consumed only by Legacy P2P. Earlier wording describing a Block Persister gRPC subscription or Kafka consumption was incorrect and has been corrected throughout this file.
 2. **Optimistic mining default.** *Resolved:* `blockvalidation_optimistic_mining` defaults to **`true`** (`settings/settings.go`, `settings/blockvalidation_settings.go`) — add-before-validate is ON by default. Earlier "experimental / disabled by default" wording in `blockValidation.md` was incorrect and has been corrected.
 3. **Five- vs four-phase commit.** `understandingDoubleSpends.md` §1.3 lists 4 steps; §3 details 5. The 5-phase version is authoritative.
 4. **UTXO store backends.** `technologyStack.md` frames Aerospike as *the* UTXO store; the store docs make clear it is **pluggable** (Aerospike / SQL / Memory / Null) and the **blockchain store is separate** SQL. Don't conflate.

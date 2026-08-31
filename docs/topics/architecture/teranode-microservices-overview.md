@@ -536,7 +536,7 @@ Kafka serves as the messaging middleware for inter-service communication in Tera
 - `kafka_rejectedTxConfig`: Used for notifying P2P about rejected transactions
 - `kafka_blocksConfig`: Used for propagating new blocks from P2P to Block Validation
 - `kafka_subtreesConfig`: Used for sending new subtrees from P2P to Subtree Validation
-- `kafka_blocksFinalConfig`: Used for sending finalized blocks from Blockchain to Block Persister
+- `kafka_blocksFinalConfig`: Used for sending finalized blocks from Blockchain to the Legacy P2P service (`netsync.SyncManager`). The Block Persister does **not** consume this topic — it polls the Blockchain service over gRPC (`GetBlocksNotPersisted`) instead
 
 **Key Features:**
 
@@ -571,7 +571,7 @@ The Teranode microservices communicate through a combination of synchronous gRPC
 - P2P Service receives new blocks and subtrees from peer nodes and propagates them via Kafka to the Block Validation and Subtree Validation services
 - Block Validation Service coordinates with the Subtree Validation Service to verify all subtrees within a block, ensuring data integrity before acceptance
 - Blockchain Service maintains the blockchain state machine, managing block additions, chain reorganizations, and finality determinations
-- When a block is finalized, Blockchain Service publishes it via Kafka to the Block Persister Service for long-term storage
+- When a block is finalized, Blockchain Service publishes it via Kafka (`blocks-final`) to the Legacy P2P service, which uses it to announce new blocks to legacy (pre-libp2p) peers. The Block Persister does not consume this topic; it polls the Blockchain service over gRPC (`GetBlocksNotPersisted`) for blocks awaiting long-term storage
 
 **Data Access Patterns:**
 

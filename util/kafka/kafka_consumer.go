@@ -135,9 +135,9 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 	// Per-topic semantics matter for correctness and at-least-once vs best-effort delivery:
 	//   - txMetaCache: true, we CAN miss (best-effort populating cache).
 	//   - rejected txs: true, we CAN miss.
-	//   - subtree validation: false (at-least-once).
-	//   - block persister: false.
+	//   - subtree validation (subtrees topic): true — a redelivered subtree announcement is a benign no-op.
 	//   - block validation: false.
+	//   - block persister: has no Kafka consumer; it polls the Blockchain service over gRPC instead.
 
 	// Extract timeout configuration from URL query parameters (in milliseconds).
 	// Defaults match common Kafka client defaults; can be overridden per-topic for slow processing (e.g. subtree validation).
