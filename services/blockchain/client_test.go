@@ -5487,3 +5487,75 @@ func TestClientAssignBlockID(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// mockMedianTimePastClient is a minimal gRPC client stub for
+// GetMedianTimePastByHeights. It records the heights requested on each call so
+// tests can assert on chunk boundaries, and returns the requested heights
+// themselves as the "MTP" values so the caller can verify ordering after
+// reassembly.
+type mockMedianTimePastClient struct {
+	blockchain_api.BlockchainAPIClient
+	maxHeightsPerRequest int
+	calls                [][]uint32
+}
+
+func (m *mockMedianTimePastClient) GetMedianTimePastByHeights(_ context.Context, in *blockchain_api.GetMedianTimePastByHeightsRequest, _ ...grpc.CallOption) (*blockchain_api.GetMedianTimePastByHeightsResponse, error) {
+	m.calls = append(m.calls, in.Heights)
+
+	if m.maxHeightsPerRequest > 0 && len(in.Heights) > m.maxHeightsPerRequest {
+		return nil, errors.NewInvalidArgumentError("%d heights requested, maximum is %d", len(in.Heights), m.maxHeightsPerRequest)
+	}
+
+	mtps := make([]uint32, len(in.Heights))
+	for i, h := range in.Heights {
+		mtps[i] = h
+	}
+
+	return &blockchain_api.GetMedianTimePastByHeightsResponse{MedianTimePast: mtps}, nil
+}
+
+// TestClientGetMedianTimePastRange_ChunksAboveServerCap covers the fix for the
+// validator's MTP pre-load: EnsureMTPLoaded asks GetMedianTimePastRange for the
+// whole chain in one logical call on its first invocation, and the server
+// rejects any single GetMedianTimePastByHeights request above
+// BlockChain.MaxMedianTimePastHeights. Without client-side chunking, that
+// first-party caller fails validation on any chain taller than the cap.
+func TestClientGetMedianTimePastRange_ChunksAboveServerCap(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockChain.MaxMedianTimePastHeights = 100
+
+	fake := &mockMedianTimePastClient{maxHeightsPerRequest: 100}
+	c := &Client{client: fake, settings: tSettings}
+
+	const toHeight = 250 // spans three chunks of at most 100 heights each
+
+	result, err := c.GetMedianTimePastRange(context.Background(), 0, toHeight)
+	require.NoError(t, err, "a range above the server cap must not be rejected end-to-end")
+	require.Len(t, result, toHeight+1)
+
+	for i, mtp := range result {
+		require.Equal(t, uint32(i), mtp, "result[%d] is out of order after chunk reassembly", i)
+	}
+
+	require.Greater(t, len(fake.calls), 1, "a range above the cap must be split into more than one request")
+
+	for _, call := range fake.calls {
+		require.LessOrEqual(t, len(call), 100, "no single chunk may exceed the server-side cap")
+	}
+}
+
+// TestClientGetMedianTimePastRange_SingleChunkWhenSmall covers the common case:
+// a range at or below the cap must still be answered in exactly one request,
+// so the fix does not add round-trips for every ordinary caller.
+func TestClientGetMedianTimePastRange_SingleChunkWhenSmall(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockChain.MaxMedianTimePastHeights = 100
+
+	fake := &mockMedianTimePastClient{maxHeightsPerRequest: 100}
+	c := &Client{client: fake, settings: tSettings}
+
+	result, err := c.GetMedianTimePastRange(context.Background(), 10, 20)
+	require.NoError(t, err)
+	require.Len(t, result, 11)
+	require.Len(t, fake.calls, 1)
+}

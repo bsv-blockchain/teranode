@@ -367,6 +367,52 @@ func TestMedianTimePastEdgeCases(t *testing.T) {
 	})
 }
 
+// TestGetMedianTimePastForHeights_WidthIndependent verifies that the MTP computed for
+// the top (not-yet-persisted) height in a request does not depend on how many other
+// heights were requested alongside it. Previously, GetMedianTimePastForHeights only
+// read block headers over [minHeight, maxHeight] of the request it was handed, so a
+// narrow request (e.g. just the top two heights) could see fewer than the required
+// eleven predecessors and silently return 0, while a wide request covering the same
+// top height computed the correct non-zero value.
+func TestGetMedianTimePastForHeights_WidthIndependent(t *testing.T) {
+	ctx := setup(t)
+
+	// Override CSVHeight to 0 so MTP is calculated for all blocks in tests
+	// (MainNet has CSVHeight=419328, but our test blocks start at height 1)
+	ctx.server.settings.ChainCfgParams.CSVHeight = 0
+
+	// Persist heights 1..29; height 30 stands in for the block currently being
+	// validated (not yet persisted).
+	for i := 1; i < 30; i++ {
+		ts := uint32(1000000 + i*600)
+		block := createTestBlockAtHeight(ctx, t, uint32(i), ts)
+		_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "")
+		require.NoError(t, err)
+	}
+
+	// Wide request: heights 18..30 (13 heights), which contains all eleven
+	// predecessors [19, 29] of height 30.
+	wideHeights := make([]uint32, 0, 13)
+	for h := uint32(18); h <= 30; h++ {
+		wideHeights = append(wideHeights, h)
+	}
+	wideMTPs, err := ctx.server.GetMedianTimePastForHeights(context.Background(), wideHeights)
+	require.NoError(t, err)
+	require.Len(t, wideMTPs, len(wideHeights))
+	wideMTPAt30 := wideMTPs[len(wideMTPs)-1]
+	require.NotEqual(t, uint32(0), wideMTPAt30, "wide request should compute a non-zero MTP for height 30")
+
+	// Narrow request: only heights 29..30 (2 heights), which contains just one of
+	// the eleven predecessors [19, 29] of height 30.
+	narrowMTPs, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{29, 30})
+	require.NoError(t, err)
+	require.Len(t, narrowMTPs, 2)
+	narrowMTPAt30 := narrowMTPs[1]
+
+	require.Equal(t, wideMTPAt30, narrowMTPAt30,
+		"MTP for height 30 must not depend on how many other heights were requested alongside it")
+}
+
 // createTestBlockAtHeight creates a test block at a specific height with a specific timestamp.
 // Note: height must be >= 1 since genesis (height 0) is created automatically by Init()
 func createTestBlockAtHeight(ctx *testContext, t *testing.T, height uint32, timestamp uint32) *model.Block {

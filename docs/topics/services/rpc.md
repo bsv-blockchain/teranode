@@ -137,8 +137,24 @@ All RPC commands require a valid username and password for authentication. The s
 For GRPC services, certain administrative operations require additional API key authentication. The following methods require an API key:
 
 - **Ban/Unban Operations**: `BanPeer` and `UnbanPeer` methods in both P2P and Legacy services require API key authentication for security.
+- **Blockchain admin operations**: state-mutating RPCs on the Blockchain service (including `SendNotification`, `ReportPeerFailure`, `SetBlockSubtreesSet`, `AddBlock`, `InvalidateBlock`, and the peer-registry mutation RPCs) require API key authentication.
 
-The API key is configured via the `grpc_admin_api_key` setting and must be included in GRPC requests as metadata with the key `x-api-key`. Source it from an environment variable or secret store rather than committing it to configuration; a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive. Well-known placeholders such as `testkey` or `changeme` are ignored at startup (logged and treated as unset). If no API key is provided, the server generates a random key at startup; this generated key is never logged and leaves these admin operations unreachable (fail-closed) until an operator configures a shared key that both the server and its internal clients read.
+The API key is configured via the `grpc_admin_api_key` setting. If no API key is provided, admin authentication is disabled entirely and the protected RPCs above are reachable without any key; each service logs a single startup warning naming this exposure. The API key must be included in GRPC requests as metadata with the key `x-api-key`. Source it from an environment variable or secret store rather than committing it to configuration. Well-known placeholder values (e.g. `testkey`, `changeme`) are rejected at startup as a configuration error.
+
+`grpc_admin_api_key` ships empty in `settings.conf`. A value committed to the repository is public knowledge, and a non-empty key installs the auth interceptor — which would make the node report that its state-mutating RPCs are protected when the credential is readable by anyone. Set a real secret (32+ characters) per environment. Known placeholder values, `testkey` among them, are refused at startup with a configuration error rather than accepted as a credential.
+
+#### Blockchain HTTP admin endpoints
+
+The blockchain service's own HTTP listener (`blockchain_httpListenAddress`) exposes block invalidation and revalidation. These are `POST /invalidate/:hash` and `POST /revalidate/:hash`, and they require the same `x-api-key` header as the equivalent GRPC RPCs — the GRPC interceptor does not run on the HTTP path, so the routes carry their own check. Unlike the GRPC surface, these routes fail **closed**: with `grpc_admin_api_key` unset they return `403` rather than becoming open, because no Teranode service calls them and the asset service already offers an authenticated equivalent.
+
+#### Rolling upgrades
+
+Attaching the `x-api-key` header on the blockchain client is new. A service binary built before that change sends no header, so if `grpc_admin_api_key` is non-empty and the blockchain service is upgraded ahead of its callers, every mutating RPC from the older binaries fails with `Unauthenticated` — block validation stops committing blocks, notifications stop flowing and FSM state stops updating, while the failures appear only in logs.
+
+Pick one of:
+
+- **Upgrade order**: upgrade all blockchain-client services (block assembly, block validation, block persister, subtree validation, p2p, legacy, asset) first, and the blockchain service last. The reverse direction is safe: an old server ignores the extra metadata.
+- **Deferred enablement**: leave `grpc_admin_api_key` empty for the duration of the rollout — admin auth is then disabled and every binary works — and set the key once the whole fleet is on the new version.
 
 ## 2. Architecture
 

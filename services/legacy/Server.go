@@ -25,8 +25,6 @@ package legacy
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"net/http"
 	"sync"
 	"time"
@@ -625,6 +623,58 @@ func (s *Server) logPeerStats(ctx context.Context) {
 //
 // Returns an error if any component fails to start, particularly if the blockchain
 // service isn't ready or the gRPC server fails to initialize
+
+// resolveAdminAPIKey returns the configured admin API key for the legacy
+// gRPC server. An empty key is returned as-is rather than replaced with a
+// generated one: util.StartGRPCServer only installs the auth interceptor
+// when the key is non-empty, so a generated key no client could ever learn
+// would just mask the fact that BanPeer/UnbanPeer are unauthenticated. A
+// single warning is logged in that case so the exposure is visible. A known
+// placeholder key is refused outright: it would install the interceptor and
+// claim the surface is protected while the credential is public knowledge.
+func (s *Server) resolveAdminAPIKey() (string, error) {
+	apiKey := s.settings.GRPCAdminAPIKey
+	if err := util.ValidateAdminAPIKey(apiKey); err != nil {
+		return "", err
+	}
+
+	if apiKey == "" {
+		s.logger.Warnf("[Legacy] grpc_admin_api_key is not set; admin-protected RPCs (BanPeer, UnbanPeer, ClearBanned) are unauthenticated - set grpc_admin_api_key to secure them")
+	} else {
+		util.WarnIfAdminAPIKeyExposed(s.logger, "Legacy", apiKey, s.settings.Legacy.GRPCListenAddress, s.settings.SecurityLevelGRPC)
+	}
+
+	return apiKey, nil
+}
+
+// protectedMethods is the full gRPC method paths of every state-mutating RPC
+// on PeerService; the auth interceptor requires the admin API key for these.
+// Defined in the peer package (legacypeer.ProtectedMethods) so that
+// legacypeer.Client can scope its own APIKeyMethods to the same set without
+// an import cycle; aliased here under its previous name since this file is
+// where it is enforced server-side and TestProtectedMethodsCoverAllRPCs
+// asserts against it.
+var protectedMethods = legacypeer.ProtectedMethods
+
+// publicPeerServiceMethods are the PeerService RPCs deliberately reachable
+// without the admin API key. This lives here, next to protectedMethods,
+// rather than in a test file: it is a production statement of intent about
+// which RPCs an operator is choosing to leave open, and the classification
+// test asserts against it rather than owning it.
+var publicPeerServiceMethods = map[string]bool{
+	// Read-only: reports whether a single IP/subnet is banned, no different in
+	// sensitivity from ListBanned below.
+	"/peer_api.PeerService/IsBanned": true,
+	// Read-only: the full ban list is already disclosed piecemeal via IsBanned,
+	// and other services query it without admin credentials.
+	"/peer_api.PeerService/ListBanned": true,
+	// Read-only: discloses connected-peer topology, mirrored by p2p's own
+	// public GetPeers/GetPeer equivalents.
+	"/peer_api.PeerService/GetPeers": true,
+	// Read-only: a single count, no different in sensitivity than GetPeers.
+	"/peer_api.PeerService/GetPeerCount": true,
+}
+
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -648,30 +698,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	go s.logPeerStats(ctx)
 	s.logger.Infof("[Legacy Server] Started peer statistics logging")
 
-	apiKey := s.settings.GRPCAdminAPIKey
-	if util.ValidateAdminAPIKey(s.logger, "Legacy", apiKey, s.settings.Legacy.GRPCListenAddress, s.settings.SecurityLevelGRPC) {
-		// Configured key is a well-known placeholder; ignore it and fall back to
-		// the random-key path below rather than trusting a world-readable value.
-		apiKey = ""
-	}
-
-	if apiKey == "" {
-		// Generate a random API key if not provided
-		key := make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] failed to generate API key", err))
-		}
-
-		apiKey = hex.EncodeToString(key)
-		// Never log the key itself; a random key means admin RPCs are
-		// intentionally unreachable until an operator configures one.
-		s.logger.Warnf("[Legacy] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban) are unreachable until a key is configured")
-	}
-
-	// Define protected methods - use the full gRPC method path
-	protectedMethods := map[string]bool{
-		"/peer_api.PeerService/BanPeer":   true,
-		"/peer_api.PeerService/UnbanPeer": true,
+	apiKey, err := s.resolveAdminAPIKey()
+	if err != nil {
+		return err
 	}
 
 	// Create auth options

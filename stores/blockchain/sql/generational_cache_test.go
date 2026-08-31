@@ -10,7 +10,7 @@ import (
 )
 
 func TestGenerationalCache_PreventStaleWrites(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -34,7 +34,7 @@ func TestGenerationalCache_PreventStaleWrites(t *testing.T) {
 }
 
 func TestGenerationalCache_AllowFreshWrites(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -54,7 +54,7 @@ func TestGenerationalCache_AllowFreshWrites(t *testing.T) {
 }
 
 func TestGenerationalCache_MultipleInvalidations(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -79,7 +79,7 @@ func TestGenerationalCache_MultipleInvalidations(t *testing.T) {
 }
 
 func TestGenerationalCache_ConcurrentOperations(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -118,7 +118,7 @@ func TestGenerationalCache_ConcurrentOperations(t *testing.T) {
 }
 
 func TestGenerationalCache_StopMultipleTimes(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 
 	// Should not panic when called multiple times
 	require.NotPanics(t, func() {
@@ -129,7 +129,7 @@ func TestGenerationalCache_StopMultipleTimes(t *testing.T) {
 }
 
 func TestGenerationalCache_GetBeforeSet(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -141,7 +141,7 @@ func TestGenerationalCache_GetBeforeSet(t *testing.T) {
 }
 
 func TestGenerationalCache_TTLExpiration(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -166,7 +166,7 @@ func TestGenerationalCache_TTLExpiration(t *testing.T) {
 }
 
 func TestGenerationalCache_DifferentKeys(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key1 := chainhash.Hash{1}
@@ -191,7 +191,7 @@ func TestGenerationalCache_DifferentKeys(t *testing.T) {
 }
 
 func TestGenerationalCache_SetReturnValue(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}

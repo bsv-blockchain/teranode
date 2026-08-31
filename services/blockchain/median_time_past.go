@@ -93,9 +93,21 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 		}
 	}
 
-	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
+	// computeMTPForMissingHeight needs the eleven predecessors of maxHeight to compute
+	// its MTP when maxHeight is not yet persisted. Read back that far below minHeight
+	// so the result does not depend on how many other heights the caller happened to
+	// request alongside maxHeight (a narrow request must return the same value as a
+	// wide one for the same top height).
+	readFrom := minHeight
+	if readFrom >= uint32(MedianTimeBlocks) {
+		readFrom -= uint32(MedianTimeBlocks)
+	} else {
+		readFrom = 0
+	}
+
+	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, readFrom, maxHeight)
 	if err != nil {
-		return nil, errors.NewProcessingError("[Blockchain][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
+		return nil, errors.NewProcessingError("[Blockchain][GetMedianTimePastForHeights] failed to get block headers from %d to %d", readFrom, maxHeight, err)
 	}
 
 	mtpByHeight := make(map[uint32]uint32, len(metas))

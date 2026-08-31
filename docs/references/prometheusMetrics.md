@@ -416,3 +416,14 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_subtreeprocessor_reset`                        | Histogram | Duration of resetting subtree processor                           |
 | `teranode_subtreeprocessor_dynamic_subtree_size`         | Gauge     | Size of the dynamic subtree in the subtree processor              |
 | `teranode_subtreeprocessor_current_state`                | Gauge     | Current state of the subtree processor                           |
+
+## gRPC Infrastructure Metrics
+
+Cross-cutting metrics emitted by the shared gRPC client/server helpers (`util/grpc_helper.go`), not tied to a single service.
+
+| Metric Name                          | Type       | Description                                                                                                                                          |
+|---------------------------------------|------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `teranode_grpc_panics_recovered_total` | CounterVec | Total number of gRPC handler panics recovered by the panic-recovery interceptor. Labels: `grpc_service`, `grpc_method`.                                |
+| `teranode_grpc_auth_rejections_total`  | CounterVec | Total number of gRPC requests rejected by the admin API key auth interceptor (missing metadata, missing key, or a key that does not match). Labels: `grpc_method`. Watch this counter during a rolling upgrade to catch a mismatched `grpc_admin_api_key` across services - protected RPCs fail while health checks stay green. |
+
+Note: the two counters have different label sets (panics carry `grpc_service`+`grpc_method`, auth rejections only `grpc_method`), so joining them in one dashboard query requires aggregating away `grpc_service` first.

@@ -59,11 +59,14 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string, tSettings *settings.Settings) (ClientI, error) {
 	// Include the admin API key in the connection options
 	apiKey := tSettings.GRPCAdminAPIKey
-	if apiKey == "" || util.IsPlaceholderAdminAPIKey(apiKey) {
-		// A placeholder is ignored by the server (which uses a random key), so a
-		// client that sent it would still be rejected; warn instead of logging a
-		// reassuring "using API key" line that contradicts the server.
-		logger.Warnf("[P2P Client] grpc_admin_api_key is unset or a well-known placeholder; admin RPCs (ban, unban, connect/disconnect peer) will fail with Unauthenticated because the server ignores placeholders and uses a random key")
+	if apiKey == "" {
+		// The server disables admin auth entirely on an empty key (see
+		// Server.resolveAdminAPIKey), so sending no key is expected, not an error.
+		logger.Warnf("[P2P Client] grpc_admin_api_key is not set; admin RPCs (ban, unban, connect/disconnect peer) are unauthenticated")
+	} else if util.IsPlaceholderAdminAPIKey(apiKey) {
+		// The server refuses to start on a placeholder key, so a client that has
+		// one is misconfigured and will never reach a running server with it.
+		logger.Warnf("[P2P Client] grpc_admin_api_key is a well-known placeholder; the server refuses to start with this value, so this client's admin RPCs will fail")
 	} else {
 		logger.Infof("[P2P Client] Using API key for authentication")
 	}
@@ -71,8 +74,12 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
-		APIKey:       apiKey, // Add the API key to the connection options
-		CallerName:   "p2p",
+		// Attach the key only to the admin RPCs that actually require it, so
+		// the credential is not stamped onto every ordinary call over what is
+		// a plaintext transport by default.
+		APIKey:        apiKey,
+		APIKeyMethods: adminProtectedMethods(),
+		CallerName:    "p2p",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init p2p service connection ", err)

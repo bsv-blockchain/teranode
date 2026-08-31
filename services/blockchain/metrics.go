@@ -73,6 +73,11 @@ var (
 	prometheusBlockchainSubscriberPendingFull *prometheus.CounterVec
 	prometheusBlockchainSubscriberSendErrors  *prometheus.CounterVec
 	prometheusBlockchainWatchdogFires         *prometheus.CounterVec
+
+	// Notifications dropped because the notification channel was full. A drop
+	// means the RPC returned success while the event never reached any
+	// subscriber, so it needs to be alertable rather than only logged.
+	prometheusBlockchainNotificationsDropped *prometheus.CounterVec
 )
 
 var (
@@ -516,6 +521,16 @@ func _initPrometheusMetrics() {
 			Help:      "Number of times a subscriber was evicted from the broadcast loop because its pending buffer was full (issue #872 backpressure indicator).",
 		},
 		[]string{"source"},
+	)
+
+	prometheusBlockchainNotificationsDropped = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "notifications_dropped_total",
+			Help:      "Number of notifications discarded because the notification channel was full. Non-zero means subscribers missed events the RPC reported as delivered.",
+		},
+		[]string{"type"},
 	)
 
 	prometheusBlockchainSubscriberSendErrors = promauto.NewCounterVec(

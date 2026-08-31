@@ -253,9 +253,8 @@ Internal method that runs in a background goroutine to periodically log peer sta
 
 The Legacy Service implements an authentication system for its gRPC API:
 
-- Uses the `GRPCAdminAPIKey` setting for protected methods; source it from an environment variable or secret store, not committed configuration (well-known placeholders such as `testkey` are ignored at startup, logged and treated as unset). A configured key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive.
-- If none is provided, generates a random key at startup; this generated key is never logged and leaves the protected methods unreachable (fail-closed) until an operator configures a shared key that both the server and its internal clients read
-- Restricts access to sensitive methods (BanPeer, UnbanPeer) through API key authentication
+- Uses the `GRPCAdminAPIKey` setting for protected methods (BanPeer, UnbanPeer, ClearBanned); source it from an environment variable or secret store, not committed configuration. Well-known placeholder values (e.g. `testkey`, `changeme`) are refused at startup as a configuration error.
+- If none is provided, admin authentication is disabled entirely and the protected methods are reachable without any key; a single startup warning names the exposure. No key is generated - a generated key no client could ever learn would just mask the fact that these methods are unauthenticated.
 - Protected methods require the API key to be provided in the gRPC metadata
 
 ## Configuration

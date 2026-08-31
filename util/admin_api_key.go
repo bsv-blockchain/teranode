@@ -37,35 +37,27 @@ func IsPlaceholderAdminAPIKey(key string) bool {
 	return ok
 }
 
-// ValidateAdminAPIKey inspects the configured gRPC admin API key before a server
-// installs the auth interceptor, and reports whether the caller should ignore the
-// configured value and fall back to the random-key (fail-closed) path.
+// WarnIfAdminAPIKeyExposed logs a warning if a configured (non-empty) admin API
+// key is weak, or is served on a listener where it can be read in transit.
+// Placeholder rejection is handled separately by ValidateAdminAPIKey (util/grpc.go),
+// which fails startup outright rather than warning - a publicly-known
+// credential is a hard configuration error, not just a hygiene issue.
 //
-// A well-known placeholder such as "testkey" is ignored (logged at Error) rather
-// than trusted: this repository is public, so a committed placeholder protects
-// nothing. Ignoring it lands on the same fail-closed path as an empty key - a
-// random key is generated and the protected admin RPCs stay unreachable until a
-// real secret is configured - so the node keeps validating and relaying blocks
-// instead of being taken offline by a setting that only guards admin RPCs. An
-// empty key returns false (nothing to ignore), and the caller's own empty check
-// generates the random key.
+// A short key draws a length warning: it matches the cmd/diagnose weak-key
+// threshold (32+ recommended).
 //
-// When a real key is configured but served on a non-loopback listener without
-// verified gRPC transport security, the key would travel where it can be
-// harvested; this logs a warning, because internal deployments on trusted
-// networks legitimately run without TLS. securityLevel 0 sends the key in
-// cleartext and level 1 encrypts without verifying the server certificate
-// (MITM-exploitable, see loadTLSCredentials), so both warn; level 2+ (verified
-// TLS) is treated as safe.
-func ValidateAdminAPIKey(logger ulogger.Logger, serviceName, apiKey, listenAddress string, securityLevel int) (ignoreKey bool) {
+// When the key is served on a non-loopback listener without verified gRPC
+// transport security, the key would travel where it can be harvested; this
+// logs a warning, because internal deployments on trusted networks
+// legitimately run without TLS. securityLevel 0 sends the key in cleartext
+// and level 1 encrypts without verifying the server certificate
+// (MITM-exploitable, see loadTLSCredentials), so both warn; level 2+
+// (verified TLS) is treated as safe. Callers should only invoke this once the
+// key has already passed ValidateAdminAPIKey and is known non-empty.
+func WarnIfAdminAPIKeyExposed(logger ulogger.Logger, serviceName, apiKey, listenAddress string, securityLevel int) {
 	trimmed := strings.TrimSpace(apiKey)
 	if trimmed == "" {
-		return false
-	}
-
-	if IsPlaceholderAdminAPIKey(trimmed) {
-		logger.Errorf("[%s] grpc_admin_api_key is the well-known placeholder %q; this repository is public so it protects nothing. Ignoring it: a random key is used instead, so admin RPCs are unreachable until a strong secret is supplied via an environment variable or secret store", serviceName, trimmed)
-		return true
+		return
 	}
 
 	if len(trimmed) < minAdminAPIKeyLength {
@@ -75,8 +67,6 @@ func ValidateAdminAPIKey(logger ulogger.Logger, serviceName, apiKey, listenAddre
 	if securityLevel <= 1 && !isLoopbackListenAddress(listenAddress) {
 		logger.Warnf("[%s] grpc_admin_api_key is set but the gRPC listener %q is not loopback-bound and securityLevelGRPC=%d does not provide verified transport security, so the admin key can be harvested in transit; bind the listener to loopback or set securityLevelGRPC >= 2 with certificate verification", serviceName, listenAddress, securityLevel)
 	}
-
-	return false
 }
 
 // isLoopbackListenAddress reports whether a gRPC listen address is bound only to

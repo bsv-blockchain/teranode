@@ -31,11 +31,25 @@ type GenerationalCache struct {
 
 // NewGenerationalCache creates a new generational cache instance.
 // The cache is automatically started and begins cleanup of expired items.
-func NewGenerationalCache() *GenerationalCache {
+//
+// The accessors in this package build their cache keys by hashing a format string
+// that includes caller-supplied values (see GetBlockHeaders and the sibling header
+// accessors, which all follow the same pattern), so a caller varying those values
+// produces a distinct entry per value. Without a capacity limit an unauthenticated
+// caller could pin an unbounded number of entries this way; capacity caps that at
+// the LRU-evicted maximum regardless of TTL. Pass 0 (or a negative value) for no
+// capacity limit (only the per-entry TTL evicts) - used by tests that do not need
+// the bound.
+func NewGenerationalCache(capacity int) *GenerationalCache {
+	opts := []ttlcache.Option[chainhash.Hash, any]{
+		ttlcache.WithDisableTouchOnHit[chainhash.Hash, any](),
+	}
+	if capacity > 0 {
+		opts = append(opts, ttlcache.WithCapacity[chainhash.Hash, any](uint64(capacity)))
+	}
+
 	gc := &GenerationalCache{
-		ttlCache: ttlcache.New[chainhash.Hash, any](
-			ttlcache.WithDisableTouchOnHit[chainhash.Hash, any](),
-		),
+		ttlCache: ttlcache.New[chainhash.Hash, any](opts...),
 	}
 	// Auto-start the cache cleanup goroutine
 	go gc.ttlCache.Start()

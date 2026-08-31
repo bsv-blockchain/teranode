@@ -17,7 +17,6 @@ package p2p
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -1028,21 +1027,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Start node status publisher
 	go s.publishNodeStatus(ctx)
 
-	apiKey := s.settings.GRPCAdminAPIKey
-	if util.ValidateAdminAPIKey(s.logger, "P2P", apiKey, s.settings.P2P.GRPCListenAddress, s.settings.SecurityLevelGRPC) {
-		// Configured key is a well-known placeholder; ignore it and fall back to
-		// the random-key path below rather than trusting a world-readable value.
-		apiKey = ""
-	}
-
-	if apiKey == "" {
-		// Generate a random API key if not provided
-		apiKey, err = generateRandomKey()
-		if err != nil {
-			return errors.NewServiceError("error generating random API key", err)
-		}
-
-		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban, clear bans, ban score, reputation reset, connect/disconnect peer) are unreachable until a key is configured")
+	apiKey, err := s.resolveAdminAPIKey()
+	if err != nil {
+		return err
 	}
 
 	// Create auth options
@@ -1234,13 +1221,25 @@ func adminProtectedMethods() map[string]bool {
 	}
 }
 
-func generateRandomKey() (string, error) {
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return "", errors.WrapGRPC(errors.NewServiceNotStartedError("[P2P] failed to generate API key", err))
+// resolveAdminAPIKey returns the configured admin API key for the P2P gRPC
+// server. An empty key is returned as-is rather than replaced with a
+// generated one: util.StartGRPCServer only installs the auth interceptor
+// when the key is non-empty, so a generated key no client could ever learn
+// would just mask the fact that the admin RPCs are unauthenticated. A single
+// warning is logged in that case so the exposure is visible. A known
+// placeholder key is refused outright: it would install the interceptor and
+// claim the surface is protected while the credential is public knowledge.
+func (s *Server) resolveAdminAPIKey() (string, error) {
+	apiKey := s.settings.GRPCAdminAPIKey
+	if err := util.ValidateAdminAPIKey(apiKey); err != nil {
+		return "", err
 	}
 
-	apiKey := hex.EncodeToString(key)
+	if apiKey == "" {
+		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; admin RPCs (ban, unban, clear bans, ban score, reputation reset, connect/disconnect peer) are unauthenticated - set grpc_admin_api_key to secure them")
+	} else {
+		util.WarnIfAdminAPIKeyExposed(s.logger, "P2P", apiKey, s.settings.P2P.GRPCListenAddress, s.settings.SecurityLevelGRPC)
+	}
 
 	return apiKey, nil
 }

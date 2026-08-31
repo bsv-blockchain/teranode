@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -126,4 +128,63 @@ func TestAuthInterceptorProtectsAdminMethods(t *testing.T) {
 		require.NoError(t, err, "public method %s must not require a key", method)
 		require.True(t, handlerCalled, "public method %s handler must run", method)
 	}
+}
+
+// TestResolveAdminAPIKey_Configured verifies that a configured, strong admin
+// API key on a loopback listener is returned verbatim and no warning is
+// logged.
+func TestResolveAdminAPIKey_Configured(t *testing.T) {
+	logger := mocklogger.NewTestLogger()
+	s := &Server{
+		logger: logger,
+		settings: &settings.Settings{
+			GRPCAdminAPIKey: "a-strong-random-admin-secret-value",
+			P2P:             settings.P2PSettings{GRPCListenAddress: "127.0.0.1:9906"},
+		},
+	}
+
+	apiKey, err := s.resolveAdminAPIKey()
+
+	require.NoError(t, err)
+	require.Equal(t, "a-strong-random-admin-secret-value", apiKey)
+	logger.AssertNumberOfCalls(t, "Warnf", 0)
+}
+
+// TestResolveAdminAPIKey_ConfiguredWeakOrExposed verifies that a configured
+// key still warns (but is not rejected) when it is short, or when the
+// listener is not loopback-bound without verified TLS - non-posture
+// hardening carried over from the fail-closed design.
+func TestResolveAdminAPIKey_ConfiguredWeakOrExposed(t *testing.T) {
+	logger := mocklogger.NewTestLogger()
+	s := &Server{
+		logger: logger,
+		settings: &settings.Settings{
+			GRPCAdminAPIKey: "short-key",
+			P2P:             settings.P2PSettings{GRPCListenAddress: "0.0.0.0:9906"},
+		},
+	}
+
+	apiKey, err := s.resolveAdminAPIKey()
+
+	require.NoError(t, err)
+	require.Equal(t, "short-key", apiKey)
+	logger.AssertNumberOfCalls(t, "Warnf", 2) // one length warning and one cleartext-exposure warning
+}
+
+// TestResolveAdminAPIKey_Empty verifies that an unset admin API key is
+// returned as-is (no key is fabricated - a generated key no client could
+// ever learn just masked the exposure) and a single warning is logged
+// naming the exposure.
+func TestResolveAdminAPIKey_Empty(t *testing.T) {
+	logger := mocklogger.NewTestLogger()
+	s := &Server{
+		logger:   logger,
+		settings: &settings.Settings{GRPCAdminAPIKey: ""},
+	}
+
+	apiKey, err := s.resolveAdminAPIKey()
+
+	require.NoError(t, err)
+	require.Empty(t, apiKey)
+	logger.AssertNumberOfCalls(t, "Warnf", 1)
 }

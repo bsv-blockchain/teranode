@@ -107,9 +107,10 @@
 # ResetReputation cross the auth interceptor and need a key that every service reads.
 #
 # It is intentionally NOT set in the repo's settings.conf (a public repo, so any
-# committed value is world-readable). Unset = a random key is generated per service
-# and these admin RPCs return Unauthenticated. Well-known placeholders (e.g. "testkey")
-# are ignored. Use a strong random value of 32+ characters.
+# committed value is world-readable). Unset = admin auth is disabled and these
+# admin RPCs are reachable without any key; each service logs a startup warning
+# naming the exposure. Well-known placeholders (e.g. "testkey") are refused at
+# startup as a configuration error. Use a strong random value of 32+ characters.
 #
 # grpc_admin_api_key.docker.m = your_32_plus_char_random_secret
 

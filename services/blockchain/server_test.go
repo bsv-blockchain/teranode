@@ -36,6 +36,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -2822,6 +2824,48 @@ func TestLocateBlockHeaders(t *testing.T) {
 		require.NotNil(t, resp)
 		require.Len(t, resp.BlockHeaders, 1)
 		assert.NotNil(t, resp.BlockHeaders[0])
+	})
+
+	t.Run("error - short locator hash rejected instead of reaching the store", func(t *testing.T) {
+		// mockStoreLocateBlockHeaders has no expectations set, so the test fails
+		// if the handler reaches the store with an unparsed nil locator hash.
+		mockStore := &mockStoreLocateBlockHeaders{}
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		stop := chainhash.DoubleHashH([]byte("stop"))
+
+		req := &blockchain_api.LocateBlockHeadersRequest{
+			Locator:   [][]byte{{0x01, 0x02, 0x03}}, // not 32 bytes
+			HashStop:  (&stop).CloneBytes(),
+			MaxHashes: 5,
+		}
+
+		resp, err := server.LocateBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		mockStore.AssertNotCalled(t, "LocateBlockHeaders", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("error - short hash stop rejected instead of reaching the store", func(t *testing.T) {
+		mockStore := &mockStoreLocateBlockHeaders{}
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		locator := chainhash.DoubleHashH([]byte("locator"))
+
+		req := &blockchain_api.LocateBlockHeadersRequest{
+			Locator:   [][]byte{(&locator).CloneBytes()},
+			HashStop:  []byte{0x01, 0x02, 0x03}, // not 32 bytes
+			MaxHashes: 5,
+		}
+
+		resp, err := server.LocateBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		mockStore.AssertNotCalled(t, "LocateBlockHeaders", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 }
 

@@ -25,45 +25,28 @@ func (l *capturingLogger) Errorf(format string, args ...interface{}) {
 	l.errors = append(l.errors, fmt.Sprintf(format, args...))
 }
 
-func TestValidateAdminAPIKey(t *testing.T) {
+// TestWarnIfAdminAPIKeyExposed pins the non-posture hardening carried over
+// from the fail-closed design: a configured (non-empty, non-placeholder) key
+// that is short, or that travels on a non-loopback listener without verified
+// TLS, draws a warning. Placeholder rejection itself is a hard startup error
+// handled by ValidateAdminAPIKey (util/grpc.go) and is not this function's
+// job, so placeholder cases are not exercised here.
+func TestWarnIfAdminAPIKeyExposed(t *testing.T) {
 	tests := []struct {
 		name          string
 		apiKey        string
 		listenAddress string
 		securityLevel int
-		wantIgnore    bool
 		wantWarn      bool
-		wantError     bool
 	}{
 		{
-			name:   "empty key is not ignored (fail-closed random key path)",
+			name:   "empty key logs nothing",
 			apiKey: "",
 		},
 		{
 			name:          "whitespace-only key is treated as empty",
 			apiKey:        "   ",
 			listenAddress: "0.0.0.0:9904",
-		},
-		{
-			name:          "committed placeholder testkey is ignored (not hard-fail)",
-			apiKey:        "testkey",
-			listenAddress: "127.0.0.1:9904",
-			wantIgnore:    true,
-			wantError:     true,
-		},
-		{
-			name:          "placeholder ignored regardless of case",
-			apiKey:        "TestKey",
-			listenAddress: "127.0.0.1:9904",
-			wantIgnore:    true,
-			wantError:     true,
-		},
-		{
-			name:          "placeholder ignored with surrounding whitespace",
-			apiKey:        "  changeme  ",
-			listenAddress: "127.0.0.1:9904",
-			wantIgnore:    true,
-			wantError:     true,
 		},
 		{
 			name:          "real key on loopback listener is accepted without warning",
@@ -97,7 +80,7 @@ func TestValidateAdminAPIKey(t *testing.T) {
 			securityLevel: 2,
 		},
 		{
-			name:          "test key used by e2e suite is not a placeholder",
+			name:          "test key used by e2e suite warns like any non-loopback key",
 			apiKey:        "test-ban-list-api-key",
 			listenAddress: "0.0.0.0:9904",
 			wantWarn:      true,
@@ -107,19 +90,12 @@ func TestValidateAdminAPIKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := &capturingLogger{}
-			ignore := ValidateAdminAPIKey(logger, "P2P", tt.apiKey, tt.listenAddress, tt.securityLevel)
+			WarnIfAdminAPIKeyExposed(logger, "P2P", tt.apiKey, tt.listenAddress, tt.securityLevel)
 
-			require.Equal(t, tt.wantIgnore, ignore)
-
-			if tt.wantError {
-				require.NotEmpty(t, logger.errors, "expected a placeholder-ignored error log")
-				require.Contains(t, logger.errors[0], "grpc_admin_api_key")
-			} else {
-				require.Empty(t, logger.errors, "did not expect an error log, got %v", logger.errors)
-			}
+			require.Empty(t, logger.errors, "WarnIfAdminAPIKeyExposed never logs at error level")
 
 			if tt.wantWarn {
-				require.NotEmpty(t, logger.warns, "expected a cleartext-exposure warning")
+				require.NotEmpty(t, logger.warns, "expected a warning")
 				require.Contains(t, logger.warns[0], "grpc_admin_api_key")
 			} else {
 				require.Empty(t, logger.warns, "did not expect a warning, got %v", logger.warns)

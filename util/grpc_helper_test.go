@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -139,6 +140,46 @@ func TestCreateAuthInterceptor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateAuthInterceptorRejectionsCounted pins that every rejection path
+// (missing metadata, missing key, mismatched key) increments
+// grpcAuthRejectionsTotal - a key mismatch across services otherwise fails
+// every protected RPC while HealthGRPC/Health stay green, with nothing to
+// alert on.
+func TestCreateAuthInterceptorRejectionsCounted(t *testing.T) {
+	const method = "/test.service/AuthCountedMethod"
+
+	interceptor := CreateAuthInterceptor("valid-key", map[string]bool{method: true})
+	info := &grpc.UnaryServerInfo{FullMethod: method}
+	mockHandler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "success", nil
+	}
+
+	before := testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method))
+
+	// missing metadata
+	_, err := interceptor(context.Background(), "request", info, mockHandler)
+	require.Error(t, err)
+
+	// missing API key header
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.Error(t, err)
+
+	// mismatched API key
+	ctx = metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{apiKeyHeader: "wrong-key"}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.Error(t, err)
+
+	require.Equal(t, before+3, testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method)),
+		"all three rejection paths must be counted")
+
+	// a successful call must not increment the rejection counter
+	ctx = metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{apiKeyHeader: "valid-key"}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.NoError(t, err)
+	require.Equal(t, before+3, testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method)))
 }
 
 func TestCreateAuthInterceptorMissingMetadata(t *testing.T) {

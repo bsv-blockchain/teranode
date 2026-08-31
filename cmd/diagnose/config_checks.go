@@ -250,12 +250,14 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 			Value:       valueEmpty,
 			Recommended: "Set grpc_admin_api_key (32+ chars)",
 		})
-	} else if util.IsPlaceholderAdminAPIKey(s.GRPCAdminAPIKey) {
+	} else if err := util.ValidateAdminAPIKey(s.GRPCAdminAPIKey); err != nil {
+		// A known placeholder is a hard error, not a weak-key warning: the
+		// services refuse to start on it, and it is publicly known.
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       labelGRPCAdminAPIKey,
-			Value:       "well-known placeholder",
-			Recommended: "Replace the placeholder; P2P/Legacy servers ignore it and admin RPCs stay disabled until a real secret is set",
+			Value:       "known placeholder value",
+			Recommended: "Set a real secret, or leave grpc_admin_api_key empty to run with admin auth explicitly disabled",
 		})
 	} else if len(s.GRPCAdminAPIKey) < 16 {
 		results = append(results, ConfigResult{
