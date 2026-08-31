@@ -7816,6 +7816,10 @@
 <li><code>kafka_blocksConfig</code>: Used for propagating new blocks from P2P to Block Validation</li>
 <li><code>kafka_subtreesConfig</code>: Used for sending new subtrees from P2P to Subtree Validation</li>
 <li><code>kafka_blocksFinalConfig</code>: Used for sending finalized blocks from Blockchain to Block Persister</li>
+<li><code>kafka_invalidBlocksConfig</code>: Used for notifying P2P about blocks that failed validation, for peer reputation management</li>
+<li><code>kafka_invalidSubtreesConfig</code>: Used for notifying P2P about subtrees that failed validation, for peer quality tracking</li>
+<li><code>kafka_txPolicyRejectedConfig</code>: Used for sending consensus-valid but policy-rejected transactions from Validator to Subtree Validation</li>
+<li><code>kafka_legacyInvConfig</code>: Used by the Legacy Sync Manager to bridge legacy Bitcoin wire protocol inventory messages to and from Kafka</li>
 </ul>
 <p><strong>Key Features:</strong></p>
 <ul>
