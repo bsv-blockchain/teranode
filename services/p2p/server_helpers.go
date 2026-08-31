@@ -822,11 +822,31 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 
 	s.logger.Infof("[processInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
 
-	// Look up the peer ID that sent this block
-	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
-	if err != nil {
-		s.logger.Warnf("[processInvalidBlockMessage] %v", err)
-		return nil // Not an error, just no peer to ban
+	// Attribution, strongest source first. The message's peer ID is block
+	// validation's own record of who announced the block (spoof-checked at
+	// gossip time), carried end-to-end so it cannot be washed out: the peer map
+	// is bounded and eviction-prone, so a peer that floods distinct hashes
+	// between serving an invalid block and its verdict — or the offender doing
+	// the same to its own entry — used to erase the only attribution and void
+	// the ban (issue 1433).
+	peerID := invalidBlockMsg.GetPeerId()
+
+	if peerID == "" {
+		// Older producers and paths without provenance (setTxMined): the peer
+		// map entry stored at announcement time.
+		var err error
+		if peerID, err = s.getPeerFromMap(&s.blockPeerMap, blockHash, "block"); err != nil {
+			// Last resort, mirroring ReportInvalidSubtree: resolve the DataHub
+			// URL the block was fetched from back to the peer serving it.
+			if peerURL := invalidBlockMsg.GetPeerUrl(); peerURL != "" {
+				peerID = s.getPeerIDFromDataHubURL(peerURL)
+			}
+
+			if peerID == "" {
+				s.logger.Warnf("[processInvalidBlockMessage] %v", err)
+				return nil // Not an error, just no peer to ban
+			}
+		}
 	}
 
 	// Add ban score to the peer
@@ -1163,12 +1183,16 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 }
 
 // storePeerMapEntry stores a peer entry in the specified map. The map is
-// bounded inline (issue 1409): at capacity the OLDEST entry is evicted, so a
-// distinct-hash flood cannot grow memory without bound between sweeps, and
-// cannot pre-emptively suppress attribution for the announcement arriving
-// next. A flood after an honest announcement can still age it out before
-// validation reports on it (issue 1503), and a peer can age out its own
-// attribution the same way to escape the invalid-block ban path (issue 1433).
+// bounded inline (issue 1409): at capacity an insert from a peer already
+// holding its fair share evicts that peer's own oldest entry, and only a peer
+// below its share evicts the global oldest (issue 1503) — so a distinct-hash
+// flood cannot grow memory without bound between sweeps, and its eviction
+// pressure lands on the flooder's own entries rather than other peers'
+// attribution. A peer can still age out its OWN attribution by flooding
+// (issue 1433), which for blocks no longer voids the ban: the invalid-block
+// Kafka message carries the announcer's peer ID and DataHub URL end-to-end,
+// so processInvalidBlockMessage uses this map only when block validation did
+// not know the block's provenance.
 func (s *Server) storePeerMapEntry(peerMap *cappedPeerMap, hash string, from string, timestamp time.Time) {
 	peerMap.Store(hash, peerMapEntry{
 		peerID:    from,

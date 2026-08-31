@@ -2712,14 +2712,24 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 // Parameters:
 //   - ctx: Context for the operation
 //   - blockHash: Hash of the invalid block
+//   - peerURL: DataHub URL the block was fetched from, used as attribution
+//     fallback when the peer map entry has been evicted; may be empty
 //   - reason: Reason for the block being invalid
 //
 // Returns an error if the peer cannot be found or the ban score cannot be added.
-func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error {
-	// Look up the peer ID that sent this block
+func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, peerURL string, reason string) error {
+	// Look up the peer ID that sent this block. The map is bounded and its
+	// entries evictable under announcement pressure, so fall back to resolving
+	// the DataHub URL, mirroring ReportInvalidSubtree — without it a washed-out
+	// entry silently voids the ban.
 	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
 	if err != nil {
-		return err
+		if peerURL != "" {
+			peerID = s.getPeerIDFromDataHubURL(peerURL)
+		}
+		if peerID == "" {
+			return err
+		}
 	}
 
 	// Add ban score to the peer
