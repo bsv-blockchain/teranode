@@ -28,6 +28,7 @@
         - [5.1 Kafka Message Broker](#51-kafka-message-broker)
         - [5.2 Miners](#52-miners)
     - [6. Interaction Patterns](#6-interaction-patterns)
+        - [6.1 Choosing gRPC vs. Kafka for a New Communication Path](#61-choosing-grpc-vs-kafka-for-a-new-communication-path)
     - [7. Related Resources](#7-related-resources)
 
 ## 1. Introduction
@@ -531,12 +532,12 @@ Kafka serves as the messaging middleware for inter-service communication in Tera
 
 **Key Topics and Use Cases:**
 
-- `kafka_validatortxsConfig`: Used for transmitting new transaction notifications from Propagation to Validator
+- `kafka_validatortxsConfig`: Optional transport for new transaction notifications from Propagation to Validator. Empty by default in `settings.conf` and populated only in the `.operator` context; when empty, no producer and no consumer group are created and Propagation invokes the Validator directly. See [§6.1](#61-choosing-grpc-vs-kafka-for-a-new-communication-path)
 - `kafka_txmetaConfig`: Used for sending new UTXO metadata from Validator to Subtree Validation
 - `kafka_rejectedTxConfig`: Used for notifying P2P about rejected transactions
 - `kafka_blocksConfig`: Used for propagating new blocks from P2P to Block Validation
 - `kafka_subtreesConfig`: Used for sending new subtrees from P2P to Subtree Validation
-- `kafka_blocksFinalConfig`: Used for sending finalized blocks from Blockchain to Block Persister
+- `kafka_blocksFinalConfig`: Used for sending finalized blocks from Blockchain to the Legacy P2P service (`netsync.SyncManager`). The Block Persister does **not** consume this topic — it polls the Blockchain service over gRPC (`GetBlocksNotPersisted`) instead
 
 **Key Features:**
 
@@ -561,9 +562,9 @@ The Teranode microservices communicate through a combination of synchronous gRPC
 
 **Transaction Processing Flow:**
 
-- Propagation Service receives incoming transactions from the network through multiple channels (gRPC, HTTP) and publishes them to Kafka for processing
-- Validator Service consumes transaction messages from Kafka, validates them against Bitcoin consensus rules and network policies, updates the UTXO Store with transaction metadata, and publishes validated transaction IDs to Kafka
-- Block Assembly Service consumes validated transaction IDs from Kafka and organizes them into subtrees for efficient block construction and mining
+- Propagation Service receives incoming transactions from the network through multiple channels (gRPC, HTTP, UDP multicast) and hands each transaction to the Validator. That handoff runs over the `kafka_validatortxsConfig` topic only when the topic is configured; it is empty in the committed defaults, and with `useLocalValidator = true` (also the committed default) Propagation calls an in-process Validator directly
+- Validator Service validates transactions against Bitcoin consensus rules and network policies, updates the UTXO Store with transaction metadata, and publishes the resulting UTXO metadata to Kafka (`kafka_txmetaConfig`) for Subtree Validation
+- Block Assembly Service does **not** consume from Kafka: the Validator calls it directly over gRPC (`AddTx` / `AddTxBatch`, via `blockAssembler.Store()`), because the transaction must land in the current mining candidate before the caller proceeds. Block Assembly organizes the transactions it receives into subtrees for efficient block construction and mining
 - Subtree Validation Service validates newly received subtrees and coordinates with the Validator Service for any missing transaction data
 
 **Block Processing Flow:**
@@ -571,13 +572,102 @@ The Teranode microservices communicate through a combination of synchronous gRPC
 - P2P Service receives new blocks and subtrees from peer nodes and propagates them via Kafka to the Block Validation and Subtree Validation services
 - Block Validation Service coordinates with the Subtree Validation Service to verify all subtrees within a block, ensuring data integrity before acceptance
 - Blockchain Service maintains the blockchain state machine, managing block additions, chain reorganizations, and finality determinations
-- When a block is finalized, Blockchain Service publishes it via Kafka to the Block Persister Service for long-term storage
+- When a block is finalized, Blockchain Service publishes it via Kafka (`blocks-final`) to the Legacy P2P service, which uses it to announce new blocks to legacy (pre-libp2p) peers. The Block Persister does not consume this topic; it polls the Blockchain service over gRPC (`GetBlocksNotPersisted`) for blocks awaiting long-term storage
 
 **Data Access Patterns:**
 
 - Asset Server provides a unified HTTP/WebSocket interface for querying blockchain data, acting as a facade over the UTXO Store, Blob Store, and Blockchain Store
 - UTXO Store serves as a central state management component, interacting with multiple services (Validator, Block Assembly, Block Validation) for UTXO operations and double-spend prevention
 - Blob Store provides persistent storage for transactions and subtrees, accessed by Asset Server, Block Assembly, and Block Validation services
+
+### 6.1 Choosing gRPC vs. Kafka for a New Communication Path
+
+When adding a new communication path between services, pick the transport based on what
+the path actually needs, not on convenience or precedent alone. There are three options in
+Teranode, not two &mdash; gRPC request/response, the Blockchain notification stream, and Kafka:
+
+- **Use gRPC** when the call is synchronous request/response and the caller cannot make
+  progress until it gets a result (success/failure, or a value it needs right now).
+  Examples already in the codebase:
+    - Validator &rarr; Block Assembly `Store()`: the Validator calls Block Assembly directly over
+      gRPC (not Kafka) because the transaction must land in the current mining candidate
+      without delay, and the caller needs to know the call succeeded.
+    - Block Validation / Block Assembly &rarr; Blockchain `AddBlock`: the caller needs to know
+      whether the block was accepted before proceeding (e.g. to mark it mined).
+    - Block Validation &rarr; Subtree Validation `CheckBlockSubtrees`: validation cannot continue
+      until it learns whether the referenced subtrees are known/valid.
+- **Use the Blockchain notification subscription** when the event is a chain-state change
+  that several services need to hear about &mdash; block added, block invalidated, reorg, FSM
+  transition. This is a gRPC *server-streaming* RPC, `rpc Subscribe (SubscribeRequest)
+  returns (stream Notification)` (`services/blockchain/blockchain_api/blockchain_api.proto`),
+  and `SendNotification` on the Blockchain server broadcasts to all active subscribers
+  without blocking on any of them. Five services subscribe today: P2P, Block Assembly,
+  Asset (main-chain cache), UTXO Persister and Pruner. Prefer this over introducing a new
+  Kafka topic for chain-state fan-out &mdash; there is no broker or topic configuration to add,
+  and every service that needs it already holds a blockchain client.
+- **Use Kafka** when the path is asynchronous, fire-and-forget, one-to-many, or the
+  producer does not need to know whether or when a consumer processes the message.
+  Examples already in the codebase:
+    - Validator &rarr; Subtree Validation (`kafka_txmetaConfig`) and Validator &rarr; P2P
+      (`kafka_rejectedTxConfig`): notifications that the Validator emits without caring who
+      consumes them or when.
+    - P2P &rarr; Block Validation / Subtree Validation (`kafka_blocksConfig`, `kafka_subtreesConfig`):
+      network events fanned out for eventual processing, decoupling ingestion rate from
+      validation rate.
+    - Blockchain &rarr; Legacy P2P (`kafka_blocksFinalConfig`): a finalized block is announced to
+      legacy (pre-libp2p) peers by `netsync.SyncManager`; the producer does not wait for, or
+      learn about, delivery. Note this is the topic's *only* real consumer &mdash; the Block
+      Persister does **not** consume it, it polls the Blockchain service over gRPC
+      (`GetBlocksNotPersisted`), waking every `blockpersister_persistSleep` (default 10s),
+      because it needs to drive its own pace and record progress back to the Blockchain
+      service. Long-running "queue it for eventual heavy work" paths in Teranode are pull
+      loops, not topics.
+    - Propagation &rarr; Validator (`kafka_validatortxsConfig`) &mdash; *opt-in, off in the committed
+      defaults*: when the topic is configured, Propagation hands off a new transaction and
+      moves on without waiting for validation. `kafka_validatortxsConfig` is empty in
+      `settings.conf` and populated only in the `.operator` context; when it is empty no
+      producer and no consumer group are created. On top of that, `useLocalValidator = true`
+      is the committed default, so `daemon/daemon_stores.go` hands Propagation an in-process
+      `*Validator` rather than a gRPC stub &mdash; the default path is a function call, not a
+      network hop. This is the one path in the codebase where the transport is a *deployment*
+      decision rather than a design decision.
+
+**Rule of thumb:** if the calling code needs the result before it can proceed (or needs
+to know the call failed), use gRPC. If the event is a chain-state change that several
+services react to, use the Blockchain `Subscribe` stream. If the producer only needs to
+announce that something happened, and doesn't care who's listening or when they get to it,
+use Kafka. Before committing to Kafka, check these four things:
+
+- **Fan-out is per consumer group, not per consumer.** Within one group, each partition is
+  assigned to a single instance, so exactly one instance sees each message &mdash; that is how
+  a consumer scales horizontally. To have several *independent* consumers each see every
+  message, each needs its own group ID: `daemon/daemon_services.go` builds per-service
+  group IDs, while `daemon/daemon_kafka.go` deliberately appends a random per-process
+  suffix to the `txmeta` group so every Subtree Validation pod consumes the full stream.
+  Getting this backwards produces either duplicated work or a silent single-instance
+  bottleneck.
+- **Durability is bounded by the topic's retention, not by "Kafka is persistent".**
+  `kafka_blocksConfig`, `kafka_blocksFinalConfig`, `kafka_txmetaConfig` and the `.operator`
+  `kafka_validatortxsConfig` are all `retention=60000` (60 s) in `settings.conf`; only
+  `kafka_subtreesConfig` (30 min) and `kafka_rejectedTxConfig` (10 min) give a meaningful
+  window. A consumer down for longer than the retention drops messages rather than catching
+  up. If a new path must tolerate longer outages, raise retention deliberately or design an
+  explicit catch-up path (as the Block Persister does with `GetBlocksNotPersisted`).
+- **Payload size has a ceiling.** `validator_kafka_maxMessageBytes` is ~1 MB (1048576 code
+  default, 1048500 in `settings.conf`), matching the Kafka broker default, and Propagation
+  already needs an HTTP fallback for transactions above it &mdash; `validateTransactionViaHTTP`,
+  which hard-fails when no validator HTTP endpoint is configured. The Blockchain service
+  also warns when a `blocks-final` message crosses 500 KB. If a new path can carry payloads
+  near that limit, either keep the message a reference (hash + metadata, payload in a store)
+  or plan the fallback leg up front.
+- **Kafka orders messages only within a partition.** A path that needs global ordering is
+  therefore limited to one partition, which caps how far a consumer group can be scaled out
+  &mdash; partitions are the unit of parallelism within a group. Ordering is not recoverable by
+  tuning after the fact: it forces either a single partition or a redesign.
+  `settings.conf` carries the comment "tx validation order is critical so we cannot have
+  mutiple partitions" [sic] above `kafka_validatortxsConfig`, though the `.operator` URL
+  that follows it is configured with `partitions=${KAFKA_PARTITIONS_HIGH}` (8) &mdash; treat
+  ordering as something to establish for your own path rather than something inherited.
 
 ## 7. Related Resources
 

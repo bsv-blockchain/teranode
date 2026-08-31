@@ -38,15 +38,19 @@ It's important to note that Kafka is a third-party dependency in Teranode. As su
 
 **Development Mode**: Development and test contexts use in-memory Kafka by default (`KAFKA_SCHEMA.dev = memory`), requiring no external Kafka setup. For production-like testing with Docker Kafka, see [Kafka Settings Reference](../../references/settings/kafka_settings.md).
 
+**Choosing Kafka vs. gRPC for a new path**: see [§6.1 Choosing gRPC vs. Kafka for a New Communication Path](../architecture/teranode-microservices-overview.md#61-choosing-grpc-vs-kafka-for-a-new-communication-path) in the microservices overview.
+
 ## 2. Use Cases
 
 ### Propagation Service
 
-After initial sanity check tests, the propagation service endorses transactions to the validator. This is done by sending transaction notifications to the validator via the `kafka_validatortxsConfig` topic.
+After initial sanity check tests, the propagation service endorses transactions to the validator. When `kafka_validatortxsConfig` is configured, this is done by publishing a transaction notification to that topic. The topic is empty in the committed `settings.conf` defaults and populated only in the `.operator` context; when it is empty, no producer and no consumer group are created and Propagation invokes the Validator directly instead. With `useLocalValidator = true` — also the committed default — that direct invocation is an in-process call into an embedded `*Validator`, not a network hop. See [§6.1 Choosing gRPC vs. Kafka for a New Communication Path](../architecture/teranode-microservices-overview.md#61-choosing-grpc-vs-kafka-for-a-new-communication-path).
+
+The diagram below shows the Kafka form of this handoff, i.e. the `.operator` configuration:
 
 ![kafka_propagation_validator.svg](img/plantuml/kafka_propagation_validator.svg)
 
-- **kafka_validatortxsConfig**: This Kafka topic is used to transmit new transaction notifications from the Propagation component to the Validator.
+- **kafka_validatortxsConfig**: When set, this Kafka topic transmits new transaction notifications from the Propagation component to the Validator. Empty by default outside the `.operator` context.
 
 ### Validator Component
 
@@ -54,7 +58,7 @@ After initial sanity check tests, the propagation service endorses transactions 
 
 This diagram illustrates the central role of the Validator in processing new transactions, and how it uses Kafka:
 
-1. The Validator receives new transactions from the Propagation component via the `kafka_validatortxsConfig` topic.
+1. The Validator receives new transactions from the Propagation component via the `kafka_validatortxsConfig` topic, when that topic is configured. It is empty by default outside the `.operator` context, in which case Propagation invokes the Validator directly (in-process under the default `useLocalValidator = true`) and no Kafka leg exists on this hop.
 
 2. Valid transactions are forwarded to the Block Assembly component using **direct gRPC calls** (not Kafka). The Validator uses the `blockAssembler.Store()` method for synchronous transaction processing required for mining candidate generation.
 

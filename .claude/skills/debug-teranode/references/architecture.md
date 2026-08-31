@@ -250,6 +250,7 @@ seeding from an exported UTXO set.
 
 - Consumer concurrency = `partitions / consumer_ratio` (NOT the `kafkaWorkers` setting directly).
 - Teranode **pauses** processing when Kafka is unhealthy and auto-resumes (safe-state design).
+- **gRPC vs Kafka for a new path:** gRPC when the caller needs an immediate answer (e.g. Validator→Block Assembly `Store()`, `AddBlock`, `CheckBlockSubtrees`); Kafka when it's fire-and-forget/fan-out/decoupled (e.g. `validatortxs`, `txmeta`, `rejectedTx`, `blocks`, `subtrees`, `blocksFinal`). Full rule + examples: `docs/topics/architecture/teranode-microservices-overview.md` §6.1.
 
 ---
 
