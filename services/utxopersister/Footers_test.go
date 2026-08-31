@@ -86,7 +86,7 @@ func TestGetFooter_SeekError(t *testing.T) {
 
 	txCount, utxoCount, err := GetFooter(f)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "error seeking to EOF marker")
+	assert.Contains(t, err.Error(), "error seeking to footer")
 	assert.Equal(t, uint64(0), txCount)
 	assert.Equal(t, uint64(0), utxoCount)
 	assert.True(t, errors.Is(err, errors.ErrProcessing))
@@ -285,7 +285,7 @@ func TestGetFooter_EmptyFile(t *testing.T) {
 
 	txCount, utxoCount, err := GetFooter(f)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "error seeking to EOF marker")
+	assert.Contains(t, err.Error(), "error seeking to footer")
 	assert.Equal(t, uint64(0), txCount)
 	assert.Equal(t, uint64(0), utxoCount)
 }
