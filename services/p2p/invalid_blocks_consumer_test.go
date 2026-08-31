@@ -238,3 +238,33 @@ func TestReportInvalidBlock_PeerURLFallback(t *testing.T) {
 	err = s.ReportInvalidBlock(t.Context(), blockHash, "", "no attribution at all")
 	require.Error(t, err)
 }
+
+// TestProcessInvalidBlockMessage_DuplicateDeliveryScoresOnce pins the
+// idempotence the map-gated path used to provide for free: Kafka is
+// at-least-once and revalidation can republish the same block, so one invalid
+// block must add ban score once, not once per delivery.
+func TestProcessInvalidBlockMessage_DuplicateDeliveryScoresOnce(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	pid := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	msgBytes, err := proto.Marshal(&kafkamessage.KafkaInvalidBlockTopicMessage{
+		BlockHash: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b",
+		Reason:    "duplicate delivery",
+		PeerId:    pid.String(),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, s.processInvalidBlockMessage(&kafka.KafkaMessage{Value: msgBytes}))
+
+	info, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	scoreAfterFirst := info.BanScore
+	require.Positive(t, scoreAfterFirst)
+
+	require.NoError(t, s.processInvalidBlockMessage(&kafka.KafkaMessage{Value: msgBytes}))
+
+	info, ok = reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, scoreAfterFirst, info.BanScore, "a redelivered invalid-block message must not score the peer again")
+}

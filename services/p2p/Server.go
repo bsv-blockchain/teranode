@@ -161,6 +161,7 @@ type Server struct {
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
 	blockPeerMap                      cappedPeerMap                  // Which peer sent each block (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	subtreePeerMap                    cappedPeerMap                  // Which peer sent each subtree (canonical hash -> peerMapEntry); insert-capped, issue 1409
+	reportedInvalidBlocks             cappedPeerMap                  // Invalid blocks already scored (canonical hash -> scoring record); dedupes at-least-once Kafka redelivery so one invalid block is scored once per TTL, not once per delivery
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -734,6 +735,7 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 
 	s.blockPeerMap.setMaxSize(maxSize)
 	s.subtreePeerMap.setMaxSize(maxSize)
+	s.reportedInvalidBlocks.setMaxSize(maxSize)
 }
 
 // announcePeerMapLimits logs the two ways a configured value differs from what
@@ -2391,6 +2393,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	// Clear the peer maps to free memory
 	s.blockPeerMap.Clear()
 	s.subtreePeerMap.Clear()
+	s.reportedInvalidBlocks.Clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
 	if len(errs) > 0 {

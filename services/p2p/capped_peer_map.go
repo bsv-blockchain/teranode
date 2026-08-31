@@ -22,19 +22,21 @@ import (
 // is inserting (issue 1503): a peer already holding at least its fair share
 // of the map — the capacity divided by the number of peers present — evicts
 // ITS OWN oldest entry, and only a peer below that share evicts the global
-// oldest. A single flooder therefore cannibalizes its own junk instead of
-// aging out other peers' attribution, while an honest peer holding a handful
-// of entries keeps the old global-oldest behavior. The share is computed from
-// the peers actually in the map, so it needs no tuning and adapts as the mix
-// changes; what it cannot fully stop is a sybil flood, where each identity
-// stays under its ever-shrinking share — the damage per identity is bounded
-// by that share, so washing the whole map costs one identity (a live libp2p
-// connection) per share of the map rather than one identity total.
+// oldest. Past its share a flooder's pressure therefore lands on its own junk,
+// while an honest peer holding a handful of entries keeps the old
+// global-oldest behavior. The share is computed from the peers actually in
+// the map, so it needs no tuning and adapts as the mix changes.
+//
+// What this bounds — not eliminates — is cross-peer washout. While ramping up
+// to its share on an already-full map, each identity still evicts the global
+// oldest, so one flooder displaces up to one share's worth of other peers'
+// oldest entries (previously: the entire map), and a sybil flood can wash the
+// whole map at a cost of one identity (a live libp2p connection) per share.
 //
 // Self-eviction remains: a peer at its share drops its own oldest entry, so a
 // peer can still age out its own attribution by announcing enough distinct
 // hashes between serving an invalid block and its verdict (issue 1433). For
-// blocks that no longer voids the ban — the invalid-block Kafka message now
+// blocks, that no longer voids the ban: the invalid-block Kafka message now
 // carries the announcer's peer ID and DataHub URL end-to-end, so the consumer
 // does not depend on this map when block validation knows the provenance —
 // and the subtree report path has carried a URL fallback all along.
@@ -223,8 +225,11 @@ func (m *cappedPeerMap) Store(hash string, entry peerMapEntry) {
 // fairShareVictimLocked picks which entry the full map gives up for peerID's
 // new key (issue 1503). An inserter already holding at least its fair share —
 // limit divided by the number of peers present — gives up its own oldest
-// entry, so a flooder's pressure lands on the flooder's own junk; anyone below
-// that share displaces the global oldest, the pre-fair-share behavior. The
+// entry, so a flooder's pressure past its share lands on the flooder's own
+// junk; anyone below that share displaces the global oldest, the
+// pre-fair-share behavior (which is why a flooder still displaces up to one
+// share's worth of other peers' entries while ramping up — see the type
+// comment). The
 // integer division never yields zero at capacity (each present peer holds at
 // least one entry, so len(perPeer) <= len(entries)); draining an over-cap map
 // after a live cap decrease can push it to zero, which just means every

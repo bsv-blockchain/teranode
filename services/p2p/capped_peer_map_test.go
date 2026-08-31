@@ -489,10 +489,13 @@ func TestCappedPeerMapUpdateAndDelete(t *testing.T) {
 	m.Store("a", peerMapEntry{peerID: "p1", timestamp: now})
 	m.Store("b", peerMapEntry{peerID: "p1", timestamp: now})
 
-	// Update 'a': no eviction, and 'a' becomes the most recent.
+	// Update 'a': no eviction, and 'a' becomes the most recent. The peer also
+	// changes, which must move the node between per-peer lists — the fair-share
+	// accounting reads their lengths.
 	m.Store("a", peerMapEntry{peerID: "p2", timestamp: now})
 	require.Equal(t, 2, m.Len())
 	require.Equal(t, int64(0), m.EvictionsSinceLastRead().total, "updating an existing key must not evict")
+	requireMapConsistent(t, &m)
 
 	entry, ok := m.Load("a")
 	require.True(t, ok)
@@ -507,6 +510,14 @@ func TestCappedPeerMapUpdateAndDelete(t *testing.T) {
 
 	m.Delete("a")
 	require.Equal(t, 1, m.Len())
+	requireMapConsistent(t, &m)
+
+	// 'a' was p2's only entry, so its per-peer list must be gone: a lingering
+	// empty list would inflate the fair-share denominator forever.
+	m.mu.Lock()
+	_, p2Listed := m.perPeer["p2"]
+	m.mu.Unlock()
+	require.False(t, p2Listed, "a peer's list must be dropped with its last entry")
 }
 
 // TestCappedPeerMapZeroValueIsBounded pins that the control fails CLOSED. The
@@ -579,6 +590,7 @@ func requireMapConsistent(t *testing.T, m *cappedPeerMap) {
 
 	if m.order == nil {
 		require.Empty(t, m.entries, "map must be empty when the order list is unset")
+		require.Empty(t, m.perPeer, "per-peer lists must be empty when the order list is unset")
 		return
 	}
 

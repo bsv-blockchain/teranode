@@ -822,6 +822,18 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 
 	s.logger.Infof("[processInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
 
+	// Kafka is at-least-once and the revalidation path can republish the same
+	// block, so a block must be scored once, not once per delivery. The old
+	// code got that for free — the ban was gated on a peer-map entry deleted
+	// after scoring — but the message now carries its own attribution, so the
+	// dedupe has to be explicit. The record is TTL-bounded like the peer maps:
+	// a redelivery after the TTL can re-score, which matches the attribution
+	// window the map-gated path always had.
+	if prev, ok := s.reportedInvalidBlocks.Load(blockHash); ok {
+		s.logger.Debugf("[processInvalidBlockMessage] already scored peer %s for invalid block %s, skipping duplicate delivery", prev.peerID, blockHash)
+		return nil
+	}
+
 	// Attribution, strongest source first. The message's peer ID is block
 	// validation's own record of who announced the block (spoof-checked at
 	// gossip time), carried end-to-end so it cannot be washed out: the peer map
@@ -862,6 +874,10 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 		s.logger.Errorf("[processInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
 		return err
 	}
+
+	// Recorded only after a successful score, so the consumer's in-process
+	// retries of a failed AddBanScore are not deduplicated away.
+	s.reportedInvalidBlocks.Store(blockHash, peerMapEntry{peerID: peerID, timestamp: time.Now()})
 
 	// Remove the block from the map to avoid memory leaks
 	s.blockPeerMap.Delete(blockHash)
@@ -936,6 +952,7 @@ func (s *Server) cleanupPeerMaps() {
 	ttlCutoff := now.Add(-s.peerMapTTLOrDefault())
 	blockExpired := s.blockPeerMap.DeleteExpired(ttlCutoff)
 	subtreeExpired := s.subtreePeerMap.DeleteExpired(ttlCutoff)
+	s.reportedInvalidBlocks.DeleteExpired(ttlCutoff)
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
 	// inserts; without this sweep the map would grow once per unique peer ID
@@ -1006,14 +1023,16 @@ func (s *Server) cleanupPeerMaps() {
 
 	// Surface how many entries the inline cap evicted since the last sweep
 	// (issue 1409) — flood visibility without a per-insert log line. Sustained
-	// eviction means announcements are arriving faster than the cap can hold,
-	// so attribution for the oldest of them is being aged out early. The
-	// attribution matters as much as the count: pressure spread across peers
-	// is throughput and a larger cap helps, whereas one dominant contributor
-	// is a flood, where a larger cap just hands the attacker more memory and a
-	// longer sweep — ban the peer instead (issue 1503).
+	// eviction means announcements are arriving faster than the cap can hold.
+	// Under the fair-share rule (issue 1503) a dominant contributor's pressure
+	// mostly lands on its own entries once it exceeds its share, so eviction
+	// volume alone no longer implies other peers' attribution is being lost —
+	// which is why the attribution matters as much as the count: pressure
+	// spread across peers is throughput and a larger cap helps, whereas one
+	// dominant contributor is a flood, where a larger cap just hands the
+	// attacker more memory and a longer sweep — ban the peer instead.
 	if blockEvictions, subtreeEvictions := s.blockPeerMap.EvictionsSinceLastRead(), s.subtreePeerMap.EvictionsSinceLastRead(); blockEvictions.total > 0 || subtreeEvictions.total > 0 {
-		s.logger.Warnf("[cleanupPeerMaps] peer maps at capacity since the last sweep: evicted %d oldest block entries (%s) and %d oldest subtree entries (%s)",
+		s.logger.Warnf("[cleanupPeerMaps] peer maps at capacity since the last sweep: evicted %d block entries (%s) and %d subtree entries (%s)",
 			blockEvictions.total, blockEvictions, subtreeEvictions.total, subtreeEvictions)
 	}
 
@@ -1187,12 +1206,14 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 // holding its fair share evicts that peer's own oldest entry, and only a peer
 // below its share evicts the global oldest (issue 1503) — so a distinct-hash
 // flood cannot grow memory without bound between sweeps, and its eviction
-// pressure lands on the flooder's own entries rather than other peers'
-// attribution. A peer can still age out its OWN attribution by flooding
-// (issue 1433), which for blocks no longer voids the ban: the invalid-block
-// Kafka message carries the announcer's peer ID and DataHub URL end-to-end,
-// so processInvalidBlockMessage uses this map only when block validation did
-// not know the block's provenance.
+// pressure past that share lands on the flooder's own entries rather than
+// other peers' attribution (up to one share of others' oldest entries can
+// still be displaced while ramping up; see the cappedPeerMap type comment). A
+// peer can still age out its OWN attribution by flooding (issue 1433). For
+// blocks, neither residual voids the ban: the invalid-block Kafka message
+// carries the announcer's peer ID and DataHub URL end-to-end, so
+// processInvalidBlockMessage uses this map only when block validation did not
+// know the block's provenance.
 func (s *Server) storePeerMapEntry(peerMap *cappedPeerMap, hash string, from string, timestamp time.Time) {
 	peerMap.Store(hash, peerMapEntry{
 		peerID:    from,

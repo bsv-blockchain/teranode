@@ -302,10 +302,13 @@ message KafkaInvalidBlockTopicMessage {
 #### Sending Messages
 
 ```go
-// Create invalid block message
+// Create invalid block message. Include the block's provenance when known:
+// PeerId is the primary ban attribution, PeerUrl the last-resort fallback.
 invalidBlockMessage := &kafkamessage.KafkaInvalidBlockTopicMessage{
     BlockHash: blockHash.String(),
     Reason:    "Block validation failed: invalid merkle root",
+    PeerId:    announcingPeerID, // may be empty when provenance is unknown
+    PeerUrl:   dataHubURL,       // may be empty
 }
 
 // Serialize to protobuf
@@ -343,8 +346,14 @@ func handleInvalidBlockMessage(msg *kafka.Message) error {
     blockHash := invalidBlockMessage.BlockHash
     reason := invalidBlockMessage.Reason
 
+    // Resolve ban attribution, strongest source first: the peer ID carried in
+    // the message, then any locally stored announcement record, then the
+    // DataHub URL resolved via the peer registry.
+    peerID := invalidBlockMessage.GetPeerId()
+    peerURL := invalidBlockMessage.GetPeerUrl()
+
     // Process the invalid block notification...
-    log.Printf("Block %s marked as invalid: %s", blockHash, reason)
+    log.Printf("Block %s marked as invalid: %s (peer %q, url %q)", blockHash, reason, peerID, peerURL)
     return nil
 }
 ```

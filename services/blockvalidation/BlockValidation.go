@@ -2413,6 +2413,13 @@ func (u *BlockValidation) walkParentChain(ctx context.Context, startHash *chainh
 // path, where the block's origin is no longer known); the consumer then falls
 // back to its peer map.
 func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason string, peerID string, peerURL string) {
+	// "legacy" is a routing sentinel, not a fetchable URL: the p2p consumer
+	// resolves peer_url by exact match against registry DataHub URLs, so the
+	// sentinel could never match and would only pollute the field.
+	if peerURL == "legacy" {
+		peerURL = ""
+	}
+
 	if u.invalidBlockKafkaProducer != nil {
 		u.logger.Infof("[ValidateBlock][%s] publishing invalid block to Kafka in background", block.Hash().String())
 		msg := &kafkamessage.KafkaInvalidBlockTopicMessage{
