@@ -77,6 +77,12 @@ func mapErrorCode(code uint16) error {
 		return errors.NewServiceUnavailableError("teraslab replication failed")
 	case 24: // ERR_STALE_EPOCH
 		return errors.NewServiceUnavailableError("teraslab stale epoch")
+	case 31: // ERR_RATE_LIMITED
+		// Rate limiting is inherently transient and succeeds on retry, so it maps
+		// to a retryable service-unavailable error alongside the other transient
+		// cluster codes — not the hard storage faults below, where it would fail a
+		// money-path (spend/create) op that a backoff-retry would have completed.
+		return errors.NewServiceUnavailableError("teraslab rate limited")
 	case 25: // ERR_CLUSTER_NOT_READY
 		// Distinct from the transient codes above so startup gating can tell a
 		// not-yet-ready cluster apart from a mid-flight convergence stall.
@@ -114,8 +120,6 @@ func mapErrorCode(code uint16) error {
 		return errors.NewStorageError("teraslab cluster auth failed")
 	case 30: // ERR_STORAGE_IO
 		return errors.NewStorageError("teraslab storage io error")
-	case 31: // ERR_RATE_LIMITED
-		return errors.NewStorageError("teraslab rate limited")
 	case 32: // ERR_NOT_CLUSTERED
 		return errors.NewStorageError("teraslab not clustered")
 	case 35: // ERR_DELETED_CHILDREN

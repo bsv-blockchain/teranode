@@ -43,13 +43,12 @@ func spendItemContexts(batch []*batchSpendItem) []context.Context {
 }
 
 // finalizeSpendResults applies a transaction's per-input SpendBatch outcomes to
-// its spend results. blockIDs maps a tx-local input index to a successful
-// spend's block IDs; errs maps a tx-local input index to its server error. It
+// its spend results. errs maps a tx-local input index to its server error. It
 // reports whether the transaction failed (hasError) and whether its succeeded
 // inputs must be rolled back (needsRollback — true only for genuine-invalid
 // codes, never transient/internal faults). This is the pre-batcher inline Spend
 // logic, now scoped to one transaction within a shared batch.
-func finalizeSpendResults(results []*utxo.Spend, blockIDs map[int][]uint32, errs map[int]*teraslab.BatchItemError) (hasError, needsRollback bool) {
+func finalizeSpendResults(results []*utxo.Spend, errs map[int]*teraslab.BatchItemError) (hasError, needsRollback bool) {
 	for idx, be := range errs {
 		if idx < 0 || idx >= len(results) {
 			continue
@@ -65,11 +64,6 @@ func finalizeSpendResults(results []*utxo.Spend, blockIDs map[int][]uint32, errs
 			needsRollback = true
 		}
 		hasError = true
-	}
-	for idx, bids := range blockIDs {
-		if idx >= 0 && idx < len(results) {
-			results[idx].BlockIDs = bids
-		}
 	}
 	return hasError, needsRollback
 }
@@ -112,9 +106,8 @@ func (s *Store) flushSpendGroup(ctx context.Context, params teraslab.SpendBatchP
 		items = append(items, b.items...)
 	}
 
-	resp, err := s.client.SpendBatch(ctx, params, items)
+	_, err := s.client.SpendBatch(ctx, params, items)
 
-	globalBlockIDs := make(map[int][]uint32)
 	globalErrs := make(map[int]*teraslab.BatchItemError)
 	var transportErr error
 	if err != nil {
@@ -126,11 +119,6 @@ func (s *Store) flushSpendGroup(ctx context.Context, params teraslab.SpendBatchP
 			transportErr = err
 		}
 	}
-	if resp != nil {
-		for _, su := range resp.Successes {
-			globalBlockIDs[int(su.ItemIndex)] = su.BlockIDs
-		}
-	}
 
 	for i, b := range group {
 		if transportErr != nil {
@@ -139,19 +127,15 @@ func (s *Store) flushSpendGroup(ctx context.Context, params teraslab.SpendBatchP
 		}
 
 		start := offsets[i]
-		localBlockIDs := make(map[int][]uint32)
 		localErrs := make(map[int]*teraslab.BatchItemError)
 		for li := range b.items {
 			gi := start + li
-			if bids, ok := globalBlockIDs[gi]; ok {
-				localBlockIDs[li] = bids
-			}
 			if be, ok := globalErrs[gi]; ok {
 				localErrs[li] = be
 			}
 		}
 
-		hasError, needsRollback := finalizeSpendResults(b.results, localBlockIDs, localErrs)
+		hasError, needsRollback := finalizeSpendResults(b.results, localErrs)
 		if hasError {
 			if needsRollback {
 				s.rollbackPartialSpend(b)

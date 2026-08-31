@@ -49,14 +49,13 @@ func TestFinalizeSpendResults(t *testing.T) {
 		return r
 	}
 
-	t.Run("all inputs succeed → block IDs set, no error, no rollback", func(t *testing.T) {
+	t.Run("all inputs succeed → no error, no rollback", func(t *testing.T) {
 		res := mkResults(2)
-		hasErr, rollback := finalizeSpendResults(res,
-			map[int][]uint32{0: {7}, 1: {7}}, nil)
+		hasErr, rollback := finalizeSpendResults(res, nil)
 		require.False(t, hasErr)
 		require.False(t, rollback)
-		require.Equal(t, []uint32{7}, res[0].BlockIDs)
-		require.Equal(t, []uint32{7}, res[1].BlockIDs)
+		require.NoError(t, res[0].Err)
+		require.NoError(t, res[1].Err)
 	})
 
 	t.Run("double-spend on one input → ErrSpent + conflicting txid, needs rollback", func(t *testing.T) {
@@ -71,12 +70,11 @@ func TestFinalizeSpendResults(t *testing.T) {
 		errs := map[int]*teraslab.BatchItemError{
 			1: {ItemIndex: 1, Code: teraslab.ErrCodeAlreadySpent, Data: sd[:]},
 		}
-		hasErr, rollback := finalizeSpendResults(res, map[int][]uint32{0: {7}}, errs)
+		hasErr, rollback := finalizeSpendResults(res, errs)
 
 		require.True(t, hasErr)
 		require.True(t, rollback, "AlreadySpent must trigger rollback of the sibling input")
 		// sibling input 0 succeeded
-		require.Equal(t, []uint32{7}, res[0].BlockIDs)
 		require.Nil(t, res[0].Err)
 		// input 1 failed with ErrSpent + conflicting txid
 		require.Error(t, res[1].Err)
@@ -90,7 +88,7 @@ func TestFinalizeSpendResults(t *testing.T) {
 		errs := map[int]*teraslab.BatchItemError{
 			0: {ItemIndex: 0, Code: teraslab.ErrCodeInternal},
 		}
-		hasErr, rollback := finalizeSpendResults(res, nil, errs)
+		hasErr, rollback := finalizeSpendResults(res, errs)
 		require.True(t, hasErr)
 		require.False(t, rollback, "internal/transient errors must not roll back (idempotent retry)")
 	})

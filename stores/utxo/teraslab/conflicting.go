@@ -166,7 +166,10 @@ func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []ut
 // backend does. (The previous hand-rolled version returned this record's own
 // conflicting-children — the wrong category of hashes.)
 func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	return utxo.GetCounterConflictingTxHashes(ctx, s, txHash)
+	// Counter-conflict lookup is intentionally unbudgeted (maxNodes 0), matching
+	// the Aerospike/SQL backends: the conflict-demotion path always walks to
+	// completion.
+	return utxo.GetCounterConflictingTxHashes(ctx, s, txHash, 0)
 }
 
 // GetConflictingChildren returns the full set of conflicting descendant txs of
@@ -175,5 +178,7 @@ func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash
 // backend does. (The previous hand-rolled version returned only the direct
 // children of a single record.)
 func (s *Store) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	return utxo.GetConflictingChildren(ctx, s, txHash)
+	// The conflicting-children BFS is budgeted by the configured node cap
+	// (issue 1391 fail-closed guard), matching the Aerospike/SQL backends.
+	return utxo.GetConflictingChildren(ctx, s, txHash, s.settings.UtxoStore.ConflictingChildrenMaxNodes)
 }

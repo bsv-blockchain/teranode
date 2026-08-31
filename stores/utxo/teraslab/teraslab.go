@@ -250,6 +250,17 @@ func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	return nil
 }
 
+// SetBlockState publishes the current tip's block height and median block time
+// in one call (utxo.Store contract: both fields come from one tip snapshot). It
+// delegates to the existing setters, keeping the height-zero guard that the
+// Aerospike/SQL BlockStateFields helper also enforces.
+func (s *Store) SetBlockState(blockHeight, medianTime uint32) error {
+	if err := s.SetBlockHeight(blockHeight); err != nil {
+		return err
+	}
+	return s.SetMedianBlockTime(medianTime)
+}
+
 // GetMedianBlockTime returns the current median block time from the store.
 func (s *Store) GetMedianBlockTime() uint32 {
 	return s.medianBlockTime.Load()
