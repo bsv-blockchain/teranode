@@ -1126,10 +1126,10 @@ func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.Kafk
 			return err
 		}
 
-		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: hash=%s, peerUrl=%s, reason=%s", m.SubtreeHash, m.PeerUrl, m.Reason)
+		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: hash=%s, peerUrl=%s, peerId=%s, reason=%s", m.SubtreeHash, m.PeerUrl, m.PeerId, m.Reason)
 
 		// Use the existing ReportInvalidSubtree method to handle the invalid subtree
-		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.Reason)
+		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.PeerId, m.Reason)
 		if err != nil {
 			// Don't return error here, as we want to continue processing messages
 			s.logger.Errorf("[invalidSubtreeHandler] Failed to report invalid subtree from Kafka: %v", err)
@@ -2749,28 +2749,49 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 	return nil
 }
 
-// ReportInvalidSubtree handles invalid subtree reports with explicit peer URL
-func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, reason string) error {
-	var peerID string
+// ReportInvalidSubtree handles invalid subtree reports, charging the peer that
+// served the invalid bytes. Attribution order: the reporter's explicit peer ID
+// (the peer whose DataHub URL was fetched), then the registry owner of peerURL,
+// and only when neither identifies a peer the gossip announcer recorded in
+// subtreePeerMap — and then only if that announcer owns peerURL (or no URL was
+// supplied). The map holds whoever ANNOUNCED the hash, which routinely differs
+// from the host the bytes were fetched from, so it must never override the
+// URL-derived identity.
+func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, servingPeerID string, reason string) error {
+	peerID := servingPeerID
 
-	// First try to get peer ID from the subtreePeerMap (for subtrees received via P2P)
-	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, subtreeHash, "subtree")
-	if err != nil && peerURL != "" {
-		// If not found in map and we have a peer URL, look up the peer ID from the URL
+	if peerID == "" && peerURL != "" {
+		// No explicit peer ID from the reporter — resolve the owner of the URL
+		// the bytes were actually fetched from.
 		peerID = s.getPeerIDFromDataHubURL(peerURL)
-		if peerID == "" {
-			s.logger.Warnf("[ReportInvalidSubtree] could not find peer ID for URL %s, subtree %s, reason: %s",
-				peerURL, subtreeHash, reason)
-			return nil // Don't return error, just log and continue
+		if peerID != "" {
+			s.logger.Debugf("[ReportInvalidSubtree] found peer %s from URL %s for subtree %s",
+				peerID, peerURL, subtreeHash)
 		}
-		s.logger.Debugf("[ReportInvalidSubtree] found peer %s from URL %s for subtree %s",
-			peerID, peerURL, subtreeHash)
+	}
+
+	// Fall back to the gossip announcer only when the URL identifies no peer.
+	// With a URL present the announcer is charged only if it owns that URL —
+	// registry resolution already covers that case — so an unresolvable URL
+	// means no charge rather than charging a peer that merely announced the hash.
+	if peerID == "" && peerURL == "" {
+		if entry, ok := s.subtreePeerMap.Load(subtreeHash); ok {
+			peerID = entry.peerID
+		}
 	}
 
 	if peerID == "" {
-		s.logger.Warnf("[ReportInvalidSubtree] could not determine peer for subtree %s, reason: %s",
-			subtreeHash, reason)
-		return nil
+		s.logger.Warnf("[ReportInvalidSubtree] could not determine serving peer for subtree %s, url %s, reason: %s",
+			subtreeHash, peerURL, reason)
+		return nil // Don't return error, just log and continue
+	}
+
+	// The announcer and the serving peer are routinely different (subtrees are
+	// announced by the miner that built them but fetched from whichever peer's
+	// DataHub the block came from); surface the discrepancy for observability.
+	if entry, ok := s.subtreePeerMap.Load(subtreeHash); ok && entry.peerID != peerID {
+		s.logger.Infof("[ReportInvalidSubtree] subtree %s was announced by peer %s but served invalid by peer %s (url %s)",
+			subtreeHash, entry.peerID, peerID, peerURL)
 	}
 
 	s.logger.Infof("[ReportInvalidSubtree] invalid subtree report for peer %s, subtree %s: %s",

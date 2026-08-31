@@ -1005,8 +1005,10 @@ func initialiseInvalidSubtreeKafkaProducer(ctx context.Context, logger ulogger.L
 	return invalidSubtreeKafkaProducer, nil
 }
 
-// publishInvalidSubtree publishes an invalid subtree event to Kafka
-func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL, reason string) {
+// publishInvalidSubtree publishes an invalid subtree event to Kafka. peerID
+// identifies the peer whose DataHub (peerURL) served the offending bytes and
+// may be empty when the caller only knows the URL.
+func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL, peerID, reason string) {
 	ctxLogger := u.logger.WithTraceContext(ctx)
 	if u.invalidSubtreeKafkaProducer == nil {
 		return
@@ -1047,6 +1049,7 @@ func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL
 	msg := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
 		SubtreeHash: subtreeHash,
 		PeerUrl:     peerURL,
+		PeerId:      peerID,
 		Reason:      reason,
 	}
 

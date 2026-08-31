@@ -19,6 +19,7 @@ message KafkaInvalidSubtreeTopicMessage {
   string subtreeHash = 1;
   string peerUrl = 2;
   string reason = 3;
+  string peer_id = 4;  // ID of the peer whose DataHub served the invalid bytes (authoritative attribution)
 }
 
 message KafkaSubtreeTopicMessage {
