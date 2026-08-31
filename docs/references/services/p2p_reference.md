@@ -39,7 +39,7 @@ type Server struct {
     nodeStatusTopicName               string             // pubsub topic for node status messages
     topicPrefix                       string             // Chain identifier prefix for topic validation
     blockPeerMap                      cappedPeerMap      // Which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
-    subtreePeerMap                    cappedPeerMap      // Which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
+    subtreePeerMap                    cappedPeerMap      // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Peer selection logic (+ SSRF-safe client for availability probes)

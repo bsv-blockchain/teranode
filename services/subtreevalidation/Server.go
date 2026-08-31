@@ -1037,14 +1037,14 @@ func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL
 
 	// de-duplicate the subtree hash to avoid flooding Kafka with the same message
 	if _, ok := u.invalidSubtreeDeDuplicateMap.Get(subtreeHash); ok {
-		ctxLogger.Debugf("[publishInvalidSubtree] Skipping duplicate invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
+		ctxLogger.Debugf("[publishInvalidSubtree] Skipping duplicate invalid subtree %s from peer %s (url %s) to Kafka: %s", subtreeHash, peerID, peerURL, reason)
 
 		return
 	}
 
 	u.invalidSubtreeDeDuplicateMap.Set(subtreeHash, struct{}{})
 
-	ctxLogger.Infof("[publishInvalidSubtree] publishing invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
+	ctxLogger.Infof("[publishInvalidSubtree] publishing invalid subtree %s from peer %s (url %s) to Kafka: %s", subtreeHash, peerID, peerURL, reason)
 
 	msg := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
 		SubtreeHash: subtreeHash,

@@ -82,6 +82,38 @@ func TestReportInvalidSubtree_UnresolvableURLDoesNotChargeAnnouncer(t *testing.T
 	require.NoError(t, err)
 
 	requireFailures(t, reg, announcer, 0)
+
+	_, ok := s.subtreePeerMap.Load(testSubtreeHash)
+	require.False(t, ok, "the report must consume the subtreePeerMap entry even when nobody is charged")
+}
+
+func TestReportInvalidSubtree_ExplicitPeerIDWithoutURL(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	server := mustNewPeerID(t).String()
+	reg.Register(&blockchain.PeerInfo{ID: server, DataHubURL: "http://server:8090"})
+
+	err := s.ReportInvalidSubtree(t.Context(), testSubtreeHash, "", server, "malformed_transaction_data")
+	require.NoError(t, err)
+
+	requireFailures(t, reg, server, 1)
+}
+
+func TestReportInvalidSubtree_UndecodablePeerIDChargesNobody(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	announcer := mustNewPeerID(t).String()
+	reg.Register(&blockchain.PeerInfo{ID: announcer, DataHubURL: "http://honest:8090"})
+
+	s.storePeerMapEntry(&s.subtreePeerMap, testSubtreeHash, announcer, time.Now().UTC())
+
+	err := s.ReportInvalidSubtree(t.Context(), testSubtreeHash, "http://attacker:8090", "not-a-valid-peer-id", "peer_cannot_provide_subtree")
+	require.NoError(t, err)
+
+	requireFailures(t, reg, announcer, 0)
+
+	_, ok := s.subtreePeerMap.Load(testSubtreeHash)
+	require.False(t, ok, "the report must consume the subtreePeerMap entry even when the peer ID cannot be decoded")
 }
 
 func TestReportInvalidSubtree_FallsBackToAnnouncerWhenNoURL(t *testing.T) {

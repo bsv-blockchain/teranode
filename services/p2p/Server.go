@@ -160,7 +160,7 @@ type Server struct {
 	nodeStatusTopicName               string                         // pubsub topic for node status messages
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
 	blockPeerMap                      cappedPeerMap                  // Which peer sent each block (canonical hash -> peerMapEntry); insert-capped, issue 1409
-	subtreePeerMap                    cappedPeerMap                  // Which peer sent each subtree (canonical hash -> peerMapEntry); insert-capped, issue 1409
+	subtreePeerMap                    cappedPeerMap                  // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -2752,12 +2752,18 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 // ReportInvalidSubtree handles invalid subtree reports, charging the peer that
 // served the invalid bytes. Attribution order: the reporter's explicit peer ID
 // (the peer whose DataHub URL was fetched), then the registry owner of peerURL,
-// and only when neither identifies a peer the gossip announcer recorded in
-// subtreePeerMap — and then only if that announcer owns peerURL (or no URL was
-// supplied). The map holds whoever ANNOUNCED the hash, which routinely differs
-// from the host the bytes were fetched from, so it must never override the
-// URL-derived identity.
+// and the gossip announcer recorded in subtreePeerMap only when no URL was
+// supplied at all — with a URL present, an unresolvable URL means no charge.
+// The map holds whoever ANNOUNCED the hash, which routinely differs from the
+// host the bytes were fetched from, so it must never override the URL-derived
+// identity.
 func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, servingPeerID string, reason string) error {
+	// Single snapshot of the announcer entry: reused for the no-URL fallback and
+	// the discrepancy log below, then consumed regardless of outcome — a leftover
+	// entry would only misattribute a later report and count against the map cap.
+	announcer, announcerFound := s.subtreePeerMap.Load(subtreeHash)
+	s.subtreePeerMap.Delete(subtreeHash)
+
 	peerID := servingPeerID
 
 	if peerID == "" && peerURL != "" {
@@ -2768,16 +2774,20 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 			s.logger.Debugf("[ReportInvalidSubtree] found peer %s from URL %s for subtree %s",
 				peerID, peerURL, subtreeHash)
 		}
+	} else if peerID != "" && peerURL != "" {
+		// Producers pair the peer ID with the DataHub URL it owns; make that
+		// invariant self-enforcing by surfacing any drift.
+		if urlOwner := s.getPeerIDFromDataHubURL(peerURL); urlOwner != "" && urlOwner != peerID {
+			s.logger.Warnf("[ReportInvalidSubtree] reported peer %s does not own URL %s (registry owner %s) for subtree %s",
+				peerID, peerURL, urlOwner, subtreeHash)
+		}
 	}
 
-	// Fall back to the gossip announcer only when the URL identifies no peer.
-	// With a URL present the announcer is charged only if it owns that URL —
-	// registry resolution already covers that case — so an unresolvable URL
-	// means no charge rather than charging a peer that merely announced the hash.
-	if peerID == "" && peerURL == "" {
-		if entry, ok := s.subtreePeerMap.Load(subtreeHash); ok {
-			peerID = entry.peerID
-		}
+	// Fall back to the gossip announcer only when no URL was supplied at all.
+	// With a URL present, an unresolvable URL means no charge rather than
+	// charging a peer that merely announced the hash.
+	if peerID == "" && peerURL == "" && announcerFound {
+		peerID = announcer.peerID
 	}
 
 	if peerID == "" {
@@ -2789,9 +2799,9 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 	// The announcer and the serving peer are routinely different (subtrees are
 	// announced by the miner that built them but fetched from whichever peer's
 	// DataHub the block came from); surface the discrepancy for observability.
-	if entry, ok := s.subtreePeerMap.Load(subtreeHash); ok && entry.peerID != peerID {
+	if announcerFound && announcer.peerID != peerID {
 		s.logger.Infof("[ReportInvalidSubtree] subtree %s was announced by peer %s but served invalid by peer %s (url %s)",
-			subtreeHash, entry.peerID, peerID, peerURL)
+			subtreeHash, announcer.peerID, peerID, peerURL)
 	}
 
 	s.logger.Infof("[ReportInvalidSubtree] invalid subtree report for peer %s, subtree %s: %s",
@@ -2807,9 +2817,6 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 			s.logger.Warnf("[ReportInvalidSubtree] UpdatePeerMetrics %s failed: %v", peerID, err)
 		}
 	}
-
-	// Remove the subtree from the map to avoid memory leaks
-	s.subtreePeerMap.Delete(subtreeHash)
 
 	return nil
 }

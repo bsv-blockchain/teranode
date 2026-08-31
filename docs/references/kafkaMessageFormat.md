@@ -567,10 +567,11 @@ func handleInvalidSubtreeMessage(msg *kafka.Message) error {
 
     subtreeHash := invalidSubtreeMessage.SubtreeHash
     peerUrl := invalidSubtreeMessage.PeerUrl
+    peerId := invalidSubtreeMessage.PeerId
     reason := invalidSubtreeMessage.Reason
 
     // Process the invalid subtree notification...
-    log.Printf("Subtree %s from peer %s marked as invalid: %s", subtreeHash, peerUrl, reason)
+    log.Printf("Subtree %s served by peer %s (url %s) marked as invalid: %s", subtreeHash, peerId, peerUrl, reason)
     return nil
 }
 ```
@@ -581,6 +582,7 @@ func handleInvalidSubtreeMessage(msg *kafka.Message) error {
 - Empty or malformed subtreeHash: Hash is not a valid hexadecimal string representation of a subtree hash
 - Invalid peerUrl: URL is empty or not properly formatted
 - Empty reason: Reason field is empty or not provided
+- No serving identity: at least one of peer_id or peerUrl must identify the serving peer; otherwise the P2P consumer logs the report and drops it without charging anyone
 
 ---
 
