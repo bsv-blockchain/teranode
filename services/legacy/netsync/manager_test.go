@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"math"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -1832,9 +1833,11 @@ func TestHandleNewPeerMsg_SkipsDisconnectedPeer(t *testing.T) {
 // converted to satoshis/kB. MinMiningTxFee is configured in BSV/kB; before the
 // fix the raw float was truncated to int64, so every real configuration
 // advertised a filter of 0 sat/kB and peers relayed all transactions regardless
-// of this node's fee policy. The rate 0.00000250 is chosen deliberately: it is
-// stored as 0.0000024999... in IEEE-754, so this also pins the math.Round
-// (rather than truncating) conversion, matching newScriptVerifierGoBDK.
+// of this node's fee policy. The rate 0.00000003 is chosen deliberately: in
+// IEEE-754 the product 0.00000003 * 1e8 is 2.9999999999999996, so truncation
+// gives 2 and only math.Round gives 3. (An earlier revision used 0.00000250,
+// whose product sits just above 250 and truncates correctly, so it could not
+// tell the two apart; the review caught that by mutation.)
 func TestResetFeeFilterToDefault_AdvertisesSatoshisPerKB(t *testing.T) {
 	chainParams := &chaincfg.MainNetParams
 
@@ -1845,7 +1848,7 @@ func TestResetFeeFilterToDefault_AdvertisesSatoshisPerKB(t *testing.T) {
 		chainParams: chainParams,
 		peerStates:  txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
 	}
-	sm.settings.Policy.MinMiningTxFee = 0.00000250 // 250 sat/kB
+	sm.settings.Policy.MinMiningTxFee = 0.00000003 // 3 sat/kB, and 2 if truncated
 
 	var gotFee atomic.Int64
 	gotFee.Store(-1)
@@ -1878,8 +1881,167 @@ func TestResetFeeFilterToDefault_AdvertisesSatoshisPerKB(t *testing.T) {
 
 	sm.resetFeeFilterToDefault()
 
-	require.True(t, WaitUntil(func() bool { return gotFee.Load() == 250 }, 2*time.Second),
-		"peer must receive the policy minimum in satoshis/kB, not the truncated BSV/kB float")
-	require.Equal(t, uint64(250), sm.currentFeeFilter.Load(),
+	require.True(t, WaitUntil(func() bool { return gotFee.Load() == 3 }, 2*time.Second),
+		"peer must receive the policy minimum in satoshis/kB, rounded, not the truncated BSV/kB float")
+	require.Equal(t, uint64(3), sm.currentFeeFilter.Load(),
 		"internal marker must record the same satoshis/kB value the peers were sent")
+}
+
+// TestPolicyFeeFilterSatoshisPerKB pins the conversion and its guards: rounding
+// where truncation loses a satoshi, 0 for a negative or non-finite rate (a NaN
+// or Inf in settings.conf parses without error, and casting it is
+// platform-dependent), and MaxInt64 for a finite rate the message cannot hold.
+func TestPolicyFeeFilterSatoshisPerKB(t *testing.T) {
+	cases := []struct {
+		name string
+		rate float64
+		want int64
+	}{
+		{"rounds up where truncation loses a satoshi", 0.00000003, 3},
+		{"rounds a rate that truncation gets right", 0.00000250, 250},
+		{"default policy", 0.000005, 500},
+		{"zero", 0, 0},
+		{"negative advertises 0", -1, 0},
+		{"NaN advertises 0", math.NaN(), 0},
+		{"+Inf advertises 0", math.Inf(1), 0},
+		{"-Inf advertises 0", math.Inf(-1), 0},
+		{"beyond int64 clamps to MaxInt64", 1e12, math.MaxInt64},
+		{"MaxFloat64 clamps to MaxInt64", math.MaxFloat64, math.MaxInt64},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sm := &SyncManager{
+				settings: test.CreateBaseTestSettings(t),
+				logger:   ulogger.TestLogger{},
+			}
+			sm.settings.Policy.MinMiningTxFee = c.rate
+
+			require.Equal(t, c.want, sm.policyFeeFilterSatoshisPerKB())
+		})
+	}
+}
+
+// newFeeFilterProbePeer returns a peer for handleNewPeerMsg to operate on whose
+// remote end records the MinFee of every feefilter it receives in gotFee.
+func newFeeFilterProbePeer(t *testing.T, chainParams *chaincfg.Params, idx uint8, gotFee *atomic.Int64) *peer.Peer {
+	t.Helper()
+
+	remoteCfg := peer.Config{
+		Listeners: peer.MessageListeners{
+			OnFeeFilter: func(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+				gotFee.Store(msg.MinFee)
+			},
+		},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      chainParams,
+	}
+	localCfg := peer.Config{
+		Listeners:        peer.MessageListeners{},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      chainParams,
+	}
+
+	remote, smPeer, err := MakeConnectedPeers(t, remoteCfg, localCfg, idx)
+	require.NoError(t, err)
+	require.True(t, remote.Connected())
+
+	return smPeer
+}
+
+// TestHandleNewPeerMsg_SendsPolicyFilterWhenRunning verifies that a peer which
+// connects while the node is already RUNNING is told the policy fee filter.
+// resetFeeFilterToDefault only runs on the transition to RUNNING, so before
+// this only the peers present at that moment were ever told; on a node that
+// had been up for a while, most peers held no filter and relayed everything
+// (PR 1659 review). The marker is untouched, since it records what the reset
+// path last broadcast.
+func TestHandleNewPeerMsg_SendsPolicyFilterWhenRunning(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	running := blockchain2.FSMStateRUNNING
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+	sm.settings.Policy.MinMiningTxFee = 0.000005 // 500 sat/kB
+	sm.currentFeeFilter.Store(500)               // the reset path already ran
+
+	var gotFee atomic.Int64
+	gotFee.Store(-1)
+
+	p := newFeeFilterProbePeer(t, chainParams, 104, &gotFee)
+
+	sm.handleNewPeerMsg(p)
+
+	require.True(t, WaitUntil(func() bool { return gotFee.Load() == 500 }, 2*time.Second),
+		"a peer connecting while RUNNING must be told the policy fee filter")
+	require.Equal(t, uint64(500), sm.currentFeeFilter.Load(), "the marker must be left alone by a per-peer send")
+	require.True(t, sm.peerStates.Exists(p), "peer must be registered")
+}
+
+// TestResetFeeFilterToDefault_LowersARaiseStoredAfterTheReset pins the
+// compare-and-swap ordering. A peer that connects while the FSM still reads
+// CATCHINGBLOCKS is given the raised filter and the marker is set to it, even
+// if a reset has just run on another goroutine. Because the reset claims the
+// marker before broadcasting, that raise is not buried under the policy value:
+// the marker reads raised, and the next reset lowers the peer. With the old
+// store-after-broadcast ordering the marker would read 500 and the peer would
+// stay at 1 BSV/kB for good.
+func TestResetFeeFilterToDefault_LowersARaiseStoredAfterTheReset(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+	sm.settings.Policy.MinMiningTxFee = 0.000005 // 500 sat/kB
+
+	// The transition to RUNNING happened: the reset lowered everyone present.
+	var feeA atomic.Int64
+	feeA.Store(-1)
+	pA := newFeeFilterProbePeer(t, chainParams, 105, &feeA)
+	sm.peerStates.Set(pA, &peerSyncState{})
+	sm.currentFeeFilter.Store(uint64(bsvutil.SatoshiPerBitcoin))
+
+	sm.resetFeeFilterToDefault()
+
+	require.True(t, WaitUntil(func() bool { return feeA.Load() == 500 }, 2*time.Second))
+	require.Equal(t, uint64(500), sm.currentFeeFilter.Load())
+
+	// A peer connects while the FSM still reads CATCHINGBLOCKS: it is raised,
+	// and the marker records that a raise is outstanding.
+	var feeB atomic.Int64
+	feeB.Store(-1)
+	pB := newFeeFilterProbePeer(t, chainParams, 106, &feeB)
+
+	sm.handleNewPeerMsg(pB)
+
+	require.True(t, WaitUntil(func() bool { return feeB.Load() == int64(bsvutil.SatoshiPerBitcoin) }, 2*time.Second))
+	require.Equal(t, uint64(bsvutil.SatoshiPerBitcoin), sm.currentFeeFilter.Load(), "the raise must be visible to the next reset")
+
+	// The next reset (the message handler calls it again while the FSM is not
+	// RUNNING) lowers the late peer too.
+	sm.resetFeeFilterToDefault()
+
+	require.True(t, WaitUntil(func() bool { return feeB.Load() == 500 }, 2*time.Second),
+		"a peer raised after the reset must be lowered by the next one")
+	require.Equal(t, uint64(500), sm.currentFeeFilter.Load())
 }
