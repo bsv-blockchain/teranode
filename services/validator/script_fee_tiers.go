@@ -596,9 +596,17 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 
 // isPreGenesisCoin reports whether a UTXO created at coinHeight predates Genesis
 // and so still runs pre-Genesis script semantics (P2SH evaluation) when spent.
-// Height 0 means the store recorded no height; it is treated as not-pre-Genesis
-// (the anti-over-charge direction) since the P2SH redeem double-count is the
-// only caller.
+// Height 0 means the store recorded no height; it is treated as not-pre-Genesis,
+// which declines to bill a redeem script whose era cannot be established. That
+// is the anti-over-charge direction, and the P2SH redeem is the only caller.
+//
+// The cost of that choice is bounded and small: a pre-Genesis P2SH redeem script
+// arrives as a single push, and pre-Genesis pushes are capped at 520 bytes, so
+// the most work an unbillable redeem can hide is about 520 bytes and 520
+// operations. Against thresholds set anywhere near the policy caps these tiers
+// price, that is nothing. Billing it on an unknown era, by contrast, would
+// over-charge every post-Genesis P2SH-shaped coin whose height went unrecorded,
+// and over-charging is what stands a legitimate coin off the network.
 func isPreGenesisCoin(coinHeight, genesisHeight uint32) bool {
 	return coinHeight != 0 && coinHeight < genesisHeight
 }
