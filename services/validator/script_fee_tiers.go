@@ -770,18 +770,21 @@ func isP2SHScript(b []byte) bool {
 		b[22] == bscript.OpEQUAL
 }
 
-// isP2PKScript matches a single compressed (33-byte) or uncompressed (65-byte)
-// pubkey push followed by OP_CHECKSIG, with the pubkey version byte validated.
+// isPubKeyPush reports whether opcode is a direct push of a size svnode's Solver
+// accepts as a public key: 33 to 65 bytes, contents unchecked. The Solver
+// matches OP_PUBKEY and OP_PUBKEYS on the push size alone, so a template with
+// a 34-byte push in a key position is standard to it, and a spend can succeed
+// without that key ever being examined (OP_CHECKMULTISIG stops at the first
+// key that matches its signatures). Being stricter here made the Go predicate
+// refuse a consolidation BDK exempts (review round 5).
+func isPubKeyPush(opcode byte) bool {
+	return opcode >= 33 && opcode <= 65
+}
+
+// isP2PKScript matches a single pubkey push followed by OP_CHECKSIG, with the
+// push sized as svnode's Solver requires (isPubKeyPush).
 func isP2PKScript(b []byte) bool {
-	if len(b) == 35 && b[0] == bscript.OpDATA33 && b[34] == bscript.OpCHECKSIG {
-		return b[1] == 0x02 || b[1] == 0x03
-	}
-
-	if len(b) == 67 && b[0] == bscript.OpDATA65 && b[66] == bscript.OpCHECKSIG {
-		return b[1] == 0x04 || b[1] == 0x06 || b[1] == 0x07
-	}
-
-	return false
+	return len(b) >= 2 && isPubKeyPush(b[0]) && len(b) == int(b[0])+2 && b[len(b)-1] == bscript.OpCHECKSIG
 }
 
 // isDataScript matches a data carrier: a bare OP_RETURN (pre-Genesis form) or
@@ -793,10 +796,11 @@ func isDataScript(b []byte) bool {
 
 // isMultiSigScript matches a bare multisig template OP_m <pubkey>... OP_n
 // OP_CHECKMULTISIG with small-int m and n (1..16), m <= n, and n pubkey pushes
-// of 33 or 65 bytes. It is a panic-safe manual parse (go-bt's IsMultiSigOut
-// panics on crafted input; see PR review P0-1). Large post-Genesis multisigs
-// whose counts are not small ints are not classified standard here; being
-// slightly strict for that rare shape is safe (see isStandardPrevoutScript).
+// sized as svnode's Solver requires (isPubKeyPush). It is a panic-safe manual
+// parse (go-bt's IsMultiSigOut panics on crafted input; see PR review P0-1).
+// Multisigs whose counts are not small ints are not classified standard here;
+// svnode limits a standard multisig to n of 3 anyway, so that shape is never
+// standard to it either.
 func isMultiSigScript(b []byte) bool {
 	if len(b) < 3 || b[len(b)-1] != bscript.OpCHECKMULTISIG || !isSmallIntOp(b[0]) {
 		return false
@@ -819,16 +823,11 @@ func isMultiSigScript(b []byte) bool {
 			return keys == n && m >= 1 && m <= n
 		}
 
-		var size int
-
-		switch op {
-		case bscript.OpDATA33:
-			size = 33
-		case bscript.OpDATA65:
-			size = 65
-		default:
+		if !isPubKeyPush(op) {
 			return false
 		}
+
+		size := int(op)
 
 		if i+1+size > len(b)-1 {
 			return false

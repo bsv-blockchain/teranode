@@ -14,6 +14,7 @@ import (
 	shash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	sdkscript "github.com/bsv-blockchain/go-sdk/script"
 	sdktx "github.com/bsv-blockchain/go-sdk/transaction"
+	sighash "github.com/bsv-blockchain/go-sdk/transaction/sighash"
 	"github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -835,5 +836,136 @@ func TestDeadBranchOpcodesDifferentialBDK(t *testing.T) {
 		require.Equal(t, uint64(6), countOps(script))
 		requireBDKOpCount(t, params, script, 6, postChronicleCoin, tip)
 		requireBDKOpCount(t, params, script, 6, preChronicleCoin, tip)
+	})
+}
+
+// bareMultisigUnlocker signs a bare multisig input as OP_0 <sig>, the single
+// signature of a 1-of-n spend.
+type bareMultisigUnlocker struct{ priv *ec.PrivateKey }
+
+func (u bareMultisigUnlocker) Sign(tx *sdktx.Transaction, inputIndex uint32) (*sdkscript.Script, error) {
+	sh, err := tx.CalcInputSignatureHash(inputIndex, sighash.AllForkID)
+	if err != nil {
+		return nil, err
+	}
+
+	sig, err := u.priv.Sign(sh)
+	if err != nil {
+		return nil, err
+	}
+
+	s := &sdkscript.Script{}
+	if err := s.AppendOpcodes(sdkscript.OpZERO); err != nil {
+		return nil, err
+	}
+
+	if err := s.AppendPushData(append(sig.Serialize(), uint8(sighash.AllForkID))); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+func (u bareMultisigUnlocker) EstimateLength(*sdktx.Transaction, uint32) uint32 {
+	return 74
+}
+
+// TestMultisigKeyPushLengthConsolidationDifferentialBDK measures which bare
+// multisig prevouts svnode's Solver reads as standard consolidation inputs: it
+// accepts any 33 to 65-byte push as a pubkey and never looks inside, and
+// OP_CHECKMULTISIG walks keys last-pushed first and stops once its signatures
+// are matched, so a 1-of-2 whose FIRST push is a 34-byte blob is both
+// spendable and standard, and BDK exempts a consolidation of such coins. The
+// Go matcher accepted only 33 and 65-byte pushes and refused the exemption,
+// which charged the floor on a transaction BDK accepts for free (review round
+// 5, whose own byte order put the blob last; that spend fails in BDK on the
+// blob's encoding before the valid key is reached, as the third case shows).
+func TestMultisigKeyPushLengthConsolidationDifferentialBDK(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	genesisHeight := tSettings.ChainCfgParams.GenesisActivationHeight
+	blockHeight := genesisHeight + 10_000
+
+	po := tSettings.Policy
+	po.MinMiningTxFee = 0.01 // any non-exempt zero-fee tx must fail
+
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, po, tSettings.ChainCfgParams)
+
+	priv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	key := priv.PubKey().Compressed()
+	blob := make([]byte, 34)
+
+	// OP_1 <keys...> OP_n OP_CHECKMULTISIG with direct pushes.
+	multisig := func(keys ...[]byte) []byte {
+		s := []byte{bscript.OpONE}
+		for _, k := range keys {
+			s = append(s, byte(len(k)))
+			s = append(s, k...)
+		}
+
+		return append(s, byte(int(bscript.OpONE)+len(keys)-1), bscript.OpCHECKMULTISIG)
+	}
+
+	const prevTxID = "aa00000000000000000000000000000000000000000000000000000000000001"
+
+	outLock, err := sdkscript.NewFromHex(scriptTierTestP2PKHScript)
+	require.NoError(t, err)
+
+	// A signed 20-in, 1-out zero-fee consolidation of the given prevout.
+	build := func(t *testing.T, locking []byte) *bt.Tx {
+		t.Helper()
+
+		lockHex := hex.EncodeToString(locking)
+
+		stx := sdktx.NewTransaction()
+		for i := 0; i < 20; i++ {
+			require.NoError(t, stx.AddInputFrom(prevTxID, uint32(i), lockHex, 1000, bareMultisigUnlocker{priv})) //nolint:gosec // test loop index
+		}
+
+		stx.AddOutput(&sdktx.TransactionOutput{LockingScript: outLock, Satoshis: 20_000})
+		require.NoError(t, stx.Sign())
+
+		btTx := bt.NewTx()
+		for i := 0; i < 20; i++ {
+			require.NoError(t, btTx.From(prevTxID, uint32(i), lockHex, 1000)) //nolint:gosec // test loop index
+			btTx.Inputs[i].UnlockingScript = bscript.NewFromBytes(*stx.Inputs[i].UnlockingScript)
+		}
+
+		outScript, err := bscript.NewFromHexString(scriptTierTestP2PKHScript)
+		require.NoError(t, err)
+		btTx.AddOutput(&bt.Output{Satoshis: 20_000, LockingScript: outScript})
+
+		return btTx
+	}
+
+	heights := make([]uint32, 20)
+	for i := range heights {
+		heights[i] = blockHeight - 1_000
+	}
+
+	check := func(t *testing.T, name string, locking []byte, wantExempt bool) {
+		t.Helper()
+
+		t.Run(name, func(t *testing.T) {
+			tx := build(t, locking)
+
+			bdkErr := verifier.ValidateTransaction(tx, blockHeight, false, heights)
+			goExempt := isFreeConsolidationTxn(po, tx, blockHeight, heights, genesisHeight)
+
+			require.NoError(t, bdkErr, "BDK must accept and exempt this zero-fee consolidation")
+			require.Equal(t, wantExempt, goExempt, "the Go predicate must agree with BDK")
+		})
+	}
+
+	check(t, "two valid keys", multisig(key, key), true)
+	check(t, "a 34-byte blob pushed first, the valid key last", multisig(blob, key), true)
+
+	t.Run("the valid key first and the blob last is not spendable at all", func(t *testing.T) {
+		// OP_CHECKMULTISIG checks the blob's encoding before it reaches the
+		// key that matches, so this is rejected for the pubkey, not for fee.
+		err := verifier.ValidateTransaction(build(t, multisig(key, blob)), blockHeight, false, heights)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "expected a script rejection, got %v", err)
 	})
 }

@@ -384,6 +384,34 @@ func TestIsStandardPrevoutScriptTemplates(t *testing.T) {
 	msScript := bscript.Script(ms)
 	require.True(t, isStandardPrevoutScript(&msScript, false))
 
+	// svnode's Solver accepts any 33 to 65-byte push as a pubkey and never
+	// looks inside it, so a 34-byte push in a key position is still the
+	// template (review round 5 found the Go matcher stricter than that), while
+	// 32 and 66 bytes are not.
+	for _, size := range []int{33, 34, 64, 65} {
+		p2pkAny := append([]byte{byte(size)}, make([]byte, size)...)
+		p2pkAny = append(p2pkAny, bscript.OpCHECKSIG)
+		p2pkAnyScript := bscript.Script(p2pkAny)
+		require.True(t, isStandardPrevoutScript(&p2pkAnyScript, false), "P2PK with a %d-byte key push", size)
+
+		msAny := append([]byte{bscript.OpONE, byte(size)}, make([]byte, size)...)
+		msAny = append(msAny, bscript.OpONE, bscript.OpCHECKMULTISIG)
+		msAnyScript := bscript.Script(msAny)
+		require.True(t, isStandardPrevoutScript(&msAnyScript, false), "multisig with a %d-byte key push", size)
+	}
+
+	for _, size := range []int{32, 66} {
+		p2pkBad := append([]byte{byte(size)}, make([]byte, size)...)
+		p2pkBad = append(p2pkBad, bscript.OpCHECKSIG)
+		p2pkBadScript := bscript.Script(p2pkBad)
+		require.False(t, isStandardPrevoutScript(&p2pkBadScript, false), "P2PK with a %d-byte push is not the template", size)
+
+		msBad := append([]byte{bscript.OpONE, byte(size)}, make([]byte, size)...)
+		msBad = append(msBad, bscript.OpONE, bscript.OpCHECKMULTISIG)
+		msBadScript := bscript.Script(msBad)
+		require.False(t, isStandardPrevoutScript(&msBadScript, false), "multisig with a %d-byte push is not the template", size)
+	}
+
 	// Data carrier.
 	data := bscript.Script([]byte{bscript.OpFALSE, bscript.OpRETURN, 0x01, 0xaa})
 	require.True(t, isStandardPrevoutScript(&data, false))
