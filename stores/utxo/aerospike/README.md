@@ -1,4 +1,3 @@
-
 # Aerospike UTXO Store
 
 This document describes the Aerospike UTXO store implementation, including the data structures and Lua User-Defined Functions (UDFs) that provide the bridge between the Go application and Aerospike.
@@ -31,6 +30,7 @@ external - true if transaction data is in external store
 totalExtraRecs - total number of extra records for pagination
 spentExtraRecs - number of spent extra records
 utxoSpendableIn - map of UTXO-specific freeze heights
+creating - true while a transaction split across several records is being written (absent when not creating)
 ```
 
 ### Large Transaction with External Storage (< 20,000 outputs)
@@ -83,6 +83,25 @@ if recordNumber > 0 then
     key = key + "_" + recordNumber
 end
 ```
+
+## Multi-Record Creation (the `creating` bin)
+
+A transaction with many outputs is stored as a master record plus extra records. The store writes them in two phases, so a reader never sees a half-written transaction as spendable. The code is `storeExternallyWithLock` and `clearCreatingFlag` in `create.go`. A single-record create never sets the `creating` bin.
+
+1. **Write phase**: the store creates every record with `creating` set to `true`.
+2. **Clear phase**: the store deletes the `creating` bin from the extra records first, and from the master record last. A master record without the bin means the transaction is complete.
+
+While `creating` is `true`, the Lua `spend` function refuses to spend the record and returns the error code `CREATING`.
+
+### Recovery
+
+If the clear phase fails or the process stops, the records stay in the `creating` state. Three paths act on them:
+
+1. **Validator retry**: a child transaction that hits `ErrTxCreating` on a parent retries validation with exponential backoff. It gives up after `maxRetries`. See `ValidateWithOptions` in `Validator.go`.
+2. **Subtree validation**: a transaction with `Creating == true` counts as missing, so subtree validation processes it again. See `processTxMetaUsingStore.go`.
+3. **setMined**: the Lua `setMined` function deletes the `creating` bin when the transaction is mined into a block.
+
+The create path also tries once to clear the flag after a `KEY_EXISTS_ERROR`, before it reports the transaction as existing.
 
 ## Lua Bridge Interface
 
