@@ -153,8 +153,17 @@ func randomScript(rng *rand.Rand) []byte {
 		script = append(script, bscript.OpENDIF)
 	}
 
-	// Leave a true on the stack so a script without a top-level OP_RETURN
-	// finishes cleanly rather than erroring early on an empty stack.
+	// Sometimes finish with a bare multisig, which exercises the key-count path.
+	// It has to be last: OP_CHECKMULTISIG adds its key count and then fails on
+	// the missing signatures, so BDK counts nothing after it, and only a script
+	// that ends there keeps both counts comparable. It sits at depth zero, where
+	// the key count is statically certain and must therefore match exactly.
+	if rng.Intn(3) == 0 {
+		return append(script, bareMultiSig(1+rng.Intn(25))...)
+	}
+
+	// Otherwise leave a true on the stack so a script without a top-level
+	// OP_RETURN finishes cleanly rather than erroring on an empty stack.
 	return append(script, bscript.OpONE)
 }
 

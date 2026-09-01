@@ -173,11 +173,35 @@ func TestCountScriptOpsOpReturn(t *testing.T) {
 		require.Equal(t, uint64(101), ops) // stopped one past the cap
 	})
 
-	t.Run("OP_CHECKMULTISIG is a documented under-count", func(t *testing.T) {
-		// svnode charges nKeysCount (from the stack) for OP_CHECKMULTISIG; a
-		// static walk counts it as one. This asserts the divergence is exactly
-		// the one documented, not a silent surprise.
+	t.Run("OP_CHECKMULTISIG carries its key count when that is certain", func(t *testing.T) {
+		// svnode charges nKeysCount on top of the opcode, but only when the
+		// opcode executes. The key count is added when it is statically certain
+		// and omitted otherwise; the omission under-counts, which is the safe
+		// direction. Each case here is pinned against real BDK in
+		// TestCheckMultiSigKeyCountDifferentialBDK.
+
+		// No preceding push: the key count is unknown, so just the opcode.
 		require.Equal(t, uint64(1), countOps([]byte{bscript.OpCHECKMULTISIG}))
+
+		// A small-constant key count immediately before it, at depth zero.
+		require.Equal(t, uint64(4), countOps([]byte{bscript.Op3, bscript.OpCHECKMULTISIG}))
+		require.Equal(t, uint64(4), countOps([]byte{bscript.Op3, bscript.OpCHECKMULTISIGVERIFY}))
+
+		// A number push wider than a small constant (20 keys).
+		require.Equal(t, uint64(21), countOps([]byte{0x01, 20, bscript.OpCHECKMULTISIG}))
+
+		// A non-push in between makes the stack top unknown.
+		require.Equal(t, uint64(2), countOps([]byte{bscript.Op3, bscript.OpNOP, bscript.OpCHECKMULTISIG}))
+
+		// Inside a conditional the opcode may not execute, so no key count.
+		require.Equal(t, uint64(3), countOps([]byte{bscript.OpONE, bscript.OpIF, bscript.Op3, bscript.OpCHECKMULTISIG, bscript.OpENDIF}))
+
+		// After a nested OP_RETURN svnode stops executing while still counting,
+		// so a later multisig adds no key count even at depth zero.
+		require.Equal(t, uint64(4), countOps([]byte{
+			bscript.OpONE, bscript.OpIF, bscript.OpRETURN, bscript.OpENDIF,
+			bscript.Op3, bscript.OpCHECKMULTISIG,
+		}))
 	})
 }
 

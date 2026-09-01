@@ -137,50 +137,93 @@ func TestOpCountSemanticsDifferentialBDK(t *testing.T) {
 	})
 }
 
-// TestCheckMultiSigUnderCountDifferentialBDK measures the one divergence the
-// counted-ops metric documents (PR review P1-6): svnode charges
-// OP_CHECKMULTISIG its runtime key count (nOpCount += nKeysCount, popped from
-// the stack), which a static walk cannot know and so under-counts as one.
+// bareMultiSig builds OP_1 <keys pubkey pushes> <keys> OP_CHECKMULTISIG, the
+// canonical 1-of-n multisig locking script. The key count uses its minimal
+// encoding, which BDK requires: a small-constant opcode up to 16, and a
+// single-byte data push above that.
+func bareMultiSig(keys int) []byte {
+	script := []byte{bscript.OpONE}
+
+	for i := 0; i < keys; i++ {
+		script = append(script, bscript.OpDATA33, 0x02)
+		script = append(script, make([]byte, 32)...)
+	}
+
+	if keys <= 16 {
+		script = append(script, byte(int(bscript.OpONE)+keys-1))
+	} else {
+		script = append(script, 0x01, byte(keys))
+	}
+
+	return append(script, bscript.OpCHECKMULTISIG)
+}
+
+// TestCheckMultiSigKeyCountDifferentialBDK pins the multisig key count (PR review
+// P1-6). svnode charges OP_CHECKMULTISIG its key count on top of the opcode
+// (nOpCount += nKeysCount, popped from the stack). At IF-depth zero the opcode
+// always executes and the immediately preceding literal push IS the stack top it
+// consumes, so the count is statically certain there and countScriptOps adds it.
+// That is the densest shape the ops tier exists to price, and it used to be
+// charged for a single operation.
 //
-// This does not fix the divergence, which is not statically decidable; it proves
-// the divergence is real and bounded, so the documented "under-counts
-// OP_CHECKMULTISIG" claim rests on measurement rather than on reading svnode.
-func TestCheckMultiSigUnderCountDifferentialBDK(t *testing.T) {
+// Where the count is not statically certain, inside a conditional, the walk falls
+// back to one. That under-counts, which is the containment direction, and is
+// measured here rather than assumed.
+func TestCheckMultiSigKeyCountDifferentialBDK(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	params := tSettings.ChainCfgParams
 	blockHeight := params.GenesisActivationHeight + 10_000
 	coinHeight := blockHeight - 1_000
 
-	// A bare 1-of-16 multisig: OP_1 <16 pubkey pushes> OP_16 OP_CHECKMULTISIG.
-	// Only OP_CHECKMULTISIG is above OP_16, so our metric counts exactly one.
-	multisig := []byte{bscript.OpONE}
+	t.Run("a bare multisig at the top level is counted exactly", func(t *testing.T) {
+		multisig := bareMultiSig(16)
 
-	for i := 0; i < 16; i++ {
-		multisig = append(multisig, bscript.OpDATA33, 0x02)
-		multisig = append(multisig, make([]byte, 32)...)
-	}
+		// 1 for the opcode plus the 16 keys.
+		require.Equal(t, uint64(17), countOps(multisig))
 
-	multisig = append(multisig, bscript.Op16, bscript.OpCHECKMULTISIG)
+		requireBDKOpCount(t, params, multisig, 17, coinHeight, blockHeight)
+	})
 
-	require.Equal(t, uint64(1), countOps(multisig), "the static walk counts OP_CHECKMULTISIG as one")
+	t.Run("a key count pushed as a number is counted exactly", func(t *testing.T) {
+		// Above 16 the key count is a data push rather than a small-constant
+		// opcode, so this exercises the CScriptNum decode.
+		multisig := bareMultiSig(20)
 
-	// OP_0 dummy plus one (bogus) signature slot: enough to reach the opcode.
-	unlocking := []byte{bscript.OpZERO, bscript.OpZERO}
+		require.Equal(t, uint64(21), countOps(multisig), "1 opcode plus a key count of 20")
 
-	// Under a cap of 5, BDK rejects for op count: its executed count exceeds 5
-	// even though ours is 1, which can only come from the 16 keys.
-	err := bdkSpendVerdict(t, params, multisig, unlocking, 5, coinHeight, blockHeight)
-	require.Error(t, err)
-	require.True(t, isOpCountRejection(err),
-		"BDK must count the multisig key count, so a cap of 5 is exceeded; got %v", err)
+		requireBDKOpCount(t, params, multisig, 21, coinHeight, blockHeight)
+	})
 
-	// Under a generous cap the op limit is not what fails, confirming the extra
-	// count is the bounded key count and not something unbounded. The script
-	// still fails, on the bogus signature, which is expected and not an op-count
-	// verdict.
-	err = bdkSpendVerdict(t, params, multisig, unlocking, 100, coinHeight, blockHeight)
-	require.False(t, isOpCountRejection(err),
-		"the extra count must be bounded by the key count; got %v", err)
+	t.Run("a nested OP_RETURN suppresses the key count that follows it", func(t *testing.T) {
+		// Found by the differential fuzz, not derived from the source: an
+		// OP_RETURN inside a conditional does not end the script post-Genesis,
+		// it stops EXECUTION while fetching continues. So the multisig below is
+		// at depth zero yet never executes, and svnode adds no key count for it.
+		// Counting the keys here would over-charge by 16.
+		script := []byte{bscript.OpONE, bscript.OpIF, bscript.OpRETURN, bscript.OpENDIF}
+		script = append(script, bareMultiSig(16)...)
+
+		// OP_IF, OP_RETURN, OP_ENDIF, OP_CHECKMULTISIG: four opcodes, no keys.
+		require.Equal(t, uint64(4), countOps(script))
+
+		requireBDKOpCount(t, params, script, 4, coinHeight, blockHeight)
+	})
+
+	t.Run("inside a conditional the walk under-counts, never over-counts", func(t *testing.T) {
+		// OP_1 OP_IF <bare 1-of-16 multisig> OP_ENDIF. The key count is not
+		// statically certain here, so the walk charges one for the opcode.
+		script := append([]byte{bscript.OpONE, bscript.OpIF}, bareMultiSig(16)...)
+		script = append(script, bscript.OpENDIF)
+
+		// OP_IF + OP_CHECKMULTISIG + OP_ENDIF, with no key count added.
+		ours := countOps(script)
+		require.Equal(t, uint64(3), ours)
+
+		// BDK counts more than we do: a cap at our count is still exceeded.
+		err := bdkSpendVerdict(t, params, script, nil, int64(ours), coinHeight, blockHeight) //nolint:gosec // small constant
+		require.True(t, isOpCountRejection(err),
+			"BDK must count more than our fallback, proving we under-count rather than over-count; got %v", err)
+	})
 }
 
 // TestP2SHRedeemEraDifferentialBDK answers, by measurement, the question the PR

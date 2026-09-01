@@ -99,11 +99,36 @@ func scriptSizeCap(po *settings.PolicySettings) uint64 {
 	return uint64(po.MaxScriptSizePolicy)
 }
 
+// scriptNumMaxBytes is the default CScriptNum width svnode accepts for a numeric
+// stack item, and so the widest push that can carry a multisig key count.
+const scriptNumMaxBytes = 4
+
+// decodeScriptNum decodes a CScriptNum: little-endian magnitude with the sign in
+// the top bit of the final byte. Callers bound the length to scriptNumMaxBytes.
+func decodeScriptNum(b []byte) int64 {
+	if len(b) == 0 {
+		return 0
+	}
+
+	var value int64
+	for i, c := range b {
+		value |= int64(c) << (8 * i) //nolint:gosec // length bounded by scriptNumMaxBytes
+	}
+
+	if b[len(b)-1]&0x80 != 0 {
+		value &^= int64(0x80) << (8 * (len(b) - 1))
+
+		return -value
+	}
+
+	return value
+}
+
 // countScriptOps statically counts the operations BDK's EvalScript counts
 // against maxopsperscriptpolicy: every opcode above OP_16; pushes are free.
 // svnode increments its op counter for every FETCHED opcode above OP_16, before
 // deciding whether the branch executes, so opcodes inside an unexecuted OP_IF
-// branch count too; this linear walk matches that. Two svnode subtleties are
+// branch count too; this linear walk matches that. Three svnode subtleties are
 // mirrored explicitly:
 //
 //   - A top-level OP_RETURN (post-Genesis, i.e. one not nested inside an
@@ -111,10 +136,24 @@ func scriptSizeCap(po *settings.PolicySettings) uint64 {
 //     including that OP_RETURN, then stops fetching, so opcodes after it are
 //     never counted. IF-nesting depth is a static property, so this walk tracks
 //     it and stops at a depth-zero OP_RETURN, reproducing the rule exactly.
-//   - OP_CHECKMULTISIG is charged its runtime key count in svnode
-//     (nOpCount += nKeysCount, popped from the stack). A static walk cannot know
-//     a stack value, so it counts OP_CHECKMULTISIG as one: an UNDER-count, the
-//     single documented divergence from the executed count.
+//   - OP_CHECKMULTISIG and OP_CHECKMULTISIGVERIFY are charged their key count on
+//     top of the opcode itself (nOpCount += nKeysCount), where the count is
+//     popped from the stack. That addition happens only when the opcode actually
+//     EXECUTES, and the count is knowable only when the immediately preceding
+//     opcode is a literal push, which is then the stack top the opcode consumes.
+//     Both conditions are static, so the key count is added exactly in that
+//     case. This is the densest shape the ops tier exists to price (a bare
+//     n-of-m multisig lock), which would otherwise be charged one operation.
+//   - Anywhere the key count is not statically certain, the opcode counts as
+//     one. That UNDER-counts, which is the containment direction: it can only
+//     charge less than svnode, never reject a script svnode accepts cheaply.
+//
+// Execution is certain only at IF-depth zero AND before any nested OP_RETURN.
+// Post-Genesis an OP_RETURN inside a conditional does not end the script; it
+// puts svnode into a grammar-checking mode where the remaining opcodes are still
+// fetched and counted but no longer executed, so a later OP_CHECKMULTISIG adds
+// no key count even at depth zero. That was found against real BDK by
+// TestCountScriptOpsFuzzDifferentialBDK, not derived from the source.
 //
 // Counting stops as soon as the running total exceeds opCap, returning
 // capExceeded=true, so a caller can decline to price (and stop walking) a script
@@ -122,7 +161,17 @@ func scriptSizeCap(po *settings.PolicySettings) uint64 {
 // past the end of the script) stops the count: such a script fails BDK's own
 // parse, so undercounting is harmless.
 func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) {
-	var ifDepth int
+	var (
+		ifDepth int
+		// Set by an OP_RETURN inside a conditional: svnode keeps fetching and
+		// counting from there but stops executing, so no further key count is
+		// added.
+		executionSuspended bool
+		// The value of the immediately preceding literal push, when there was
+		// one: the stack top an OP_CHECKMULTISIG would pop as its key count.
+		lastPush    int64
+		lastWasPush bool
+	)
 
 	for i := 0; i < len(script); {
 		opcode := script[i]
@@ -132,11 +181,16 @@ func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) 
 		// ahead of the push cases so an op-dense script pays one comparison per
 		// byte, not five (PR review P1-10).
 		if opcode > bscript.Op16 {
-			if opcode == bscript.OpRETURN && ifDepth == 0 {
-				// Top-level OP_RETURN: counted, then execution ends.
-				ops++
+			if opcode == bscript.OpRETURN {
+				if ifDepth == 0 {
+					// Top-level OP_RETURN: counted, then execution ends.
+					ops++
 
-				return ops, ops > opCap
+					return ops, ops > opCap
+				}
+
+				// Nested OP_RETURN: counting continues, execution does not.
+				executionSuspended = true
 			}
 
 			switch opcode {
@@ -149,6 +203,16 @@ func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) 
 			}
 
 			ops++
+
+			// The multisig key count, when execution and the count are both
+			// statically certain.
+			if ifDepth == 0 && !executionSuspended && lastWasPush && lastPush > 0 &&
+				(opcode == bscript.OpCHECKMULTISIG || opcode == bscript.OpCHECKMULTISIGVERIFY) {
+				ops = satAddU64(ops, uint64(lastPush))
+			}
+
+			lastWasPush = false
+
 			if ops > opCap {
 				return ops, true
 			}
@@ -157,27 +221,59 @@ func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) 
 		}
 
 		// opcode <= OP_16: data pushes (free) and small constants (free).
+		// Every branch below either sets both of these or continues the loop.
+		var dataStart, dataLen int
+
 		switch {
 		case opcode <= 0x4b: // direct push of `opcode` bytes (OP_0 pushes none)
-			i += int(opcode)
+			dataStart, dataLen = i, int(opcode)
+			i += dataLen
 		case opcode == bscript.OpPUSHDATA1:
 			if i >= len(script) {
 				return ops, false
 			}
 
-			i += 1 + int(script[i])
+			dataLen = int(script[i])
+			i++
+			dataStart = i
+			i += dataLen
 		case opcode == bscript.OpPUSHDATA2:
 			if i+1 >= len(script) {
 				return ops, false
 			}
 
-			i += 2 + int(script[i]) + int(script[i+1])<<8
+			dataLen = int(script[i]) + int(script[i+1])<<8
+			i += 2
+			dataStart = i
+			i += dataLen
 		case opcode == bscript.OpPUSHDATA4:
 			if i+3 >= len(script) {
 				return ops, false
 			}
 
-			i += 4 + int(script[i]) + int(script[i+1])<<8 + int(script[i+2])<<16 + int(script[i+3])<<24
+			dataLen = int(script[i]) + int(script[i+1])<<8 + int(script[i+2])<<16 + int(script[i+3])<<24
+			i += 4
+			dataStart = i
+			i += dataLen
+		case opcode >= bscript.OpONE && opcode <= bscript.Op16:
+			// OP_1..OP_16 push the small integer 1..16.
+			lastPush, lastWasPush = int64(opcode)-int64(bscript.OpONE)+1, true
+
+			continue
+		default:
+			// OP_1NEGATE and OP_RESERVED: never a usable key count.
+			lastWasPush = false
+
+			continue
+		}
+
+		// A data push (including OP_0, which pushes an empty item worth zero).
+		// Only a CScriptNum-width push can carry a key count; anything wider
+		// leaves the preceding-push state unusable.
+		if dataLen <= scriptNumMaxBytes && dataStart+dataLen <= len(script) {
+			lastPush, lastWasPush = decodeScriptNum(script[dataStart:dataStart+dataLen]), true
+		} else {
+			lastWasPush = false
 		}
 	}
 
