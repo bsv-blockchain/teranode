@@ -51,8 +51,9 @@ var dustReturnScript = []byte{0x00, 0x6a, 0x04, 'd', 'u', 's', 't'}
 
 // minMiningTxFeeSatoshisPerKB converts the configured MinMiningTxFee from
 // float BSV/kB to integer satoshis/kB, using the same math.Round conversion
-// newScriptVerifierGoBDK pushes into BDK (IEEE-754 stores rates like
-// 0.00000250 as 0.0000024999..., so truncation would drop a satoshi).
+// newScriptVerifierGoBDK pushes into BDK: many decimal rates sit just below
+// their integer number of satoshis in IEEE-754 (0.00000003 BSV/kB is
+// 2.9999999999999996 satoshis/kB), so truncation would drop a satoshi.
 func minMiningTxFeeSatoshisPerKB(po *settings.PolicySettings) int64 {
 	return int64(math.Round(po.MinMiningTxFee * 1e8))
 }
