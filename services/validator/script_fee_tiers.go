@@ -165,6 +165,12 @@ func decodeScriptNum(b []byte) int64 {
 // no key count even at depth zero. That was found against real BDK by
 // TestCountScriptOpsFuzzDifferentialBDK, not derived from the source.
 //
+// That suspension is applied to any nested OP_RETURN, including one in a branch
+// that never runs, where svnode would not suspend at all because it never
+// executes the opcode. Whether a branch runs depends on runtime stack values, so
+// the conservative reading is the only static one available, and it errs by
+// under-counting a later multisig rather than over-counting it.
+//
 // Counting stops as soon as the running total exceeds opCap, returning
 // capExceeded=true, so a caller can decline to price (and stop walking) a script
 // BDK will reject with SCRIPT_ERR_OP_COUNT. A malformed push (length running
@@ -298,16 +304,47 @@ func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) 
 	return ops, false
 }
 
+// smallIntPushData holds the one-byte values OP_1..OP_16 push, and
+// negOnePushData the value OP_1NEGATE pushes. Kept as package data so lastPush
+// can return a slice of the pushed value without allocating.
+var (
+	smallIntPushData = func() [16][1]byte {
+		var values [16][1]byte
+		for i := range values {
+			values[i][0] = byte(i + 1)
+		}
+
+		return values
+	}()
+	negOnePushData = [1]byte{0x81} // CScriptNum -1
+)
+
 // lastPush returns the data of the final push in a push-parseable script, or
 // nil if the script is empty, malformed, or ends in a non-push opcode. Used to
 // extract a legacy P2SH redeem script from an unlocking script, mirroring how
 // sigop counting treats P2SH spends.
+//
+// The small-constant opcodes count as pushes here, as they do for svnode's
+// push-only test: a scriptSig such as OP_1 <redeem script> is a valid P2SH
+// spend, and treating OP_1 as a non-push would abandon the walk and leave the
+// redeem script unpriced.
 func lastPush(script []byte) []byte {
 	var last []byte
 
 	for i := 0; i < len(script); {
 		opcode := script[i]
 		i++
+
+		switch {
+		case opcode == bscript.Op1NEGATE:
+			last = negOnePushData[:]
+
+			continue
+		case opcode >= bscript.OpONE && opcode <= bscript.Op16:
+			last = smallIntPushData[opcode-bscript.OpONE][:]
+
+			continue
+		}
 
 		// Decoded as uint64 and bounded before narrowing: an OP_PUSHDATA4 length
 		// assembled in a signed int overflows negative on a 32-bit build, which

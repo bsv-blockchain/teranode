@@ -158,13 +158,139 @@ func randomScript(rng *rand.Rand) []byte {
 	// the missing signatures, so BDK counts nothing after it, and only a script
 	// that ends there keeps both counts comparable. It sits at depth zero, where
 	// the key count is statically certain and must therefore match exactly.
+	// Counts above 16 encode as a data push rather than a small constant, so the
+	// range spans both, and OP_CHECKMULTISIGVERIFY is exercised alongside
+	// OP_CHECKMULTISIG.
 	if rng.Intn(3) == 0 {
-		return append(script, bareMultiSig(1+rng.Intn(25))...)
+		multisig := bareMultiSig(1 + rng.Intn(40))
+		if rng.Intn(2) == 0 {
+			multisig[len(multisig)-1] = bscript.OpCHECKMULTISIGVERIFY
+		}
+
+		return append(script, multisig...)
 	}
 
 	// Otherwise leave a true on the stack so a script without a top-level
 	// OP_RETURN finishes cleanly rather than erroring on an empty stack.
 	return append(script, bscript.OpONE)
+}
+
+// randomBranchyScript generates the shapes randomScript structurally cannot:
+// conditions that are FALSE as well as true, OP_NOTIF, and OP_RETURN inside a
+// branch that never executes. A multisig only ever appears as the final
+// construct, for the same reason as in randomScript: it fails on the missing
+// signatures, so anything after it is never reached by BDK and the two counts
+// would stop being comparable. Exact agreement is not claimed on these. svnode
+// only suspends execution for a nested OP_RETURN it actually executes, while the
+// static walk suspends for any of them, so a later multisig key count can be
+// legitimately under-counted here. What must always hold is the safety
+// invariant: never counting MORE than svnode, since only over-counting can
+// price a legitimate script off the network.
+func randomBranchyScript(rng *rand.Rand) []byte {
+	script := make([]byte, 0, 128)
+	depth := 0
+
+	for i := 0; i < 1+rng.Intn(14); i++ {
+		switch rng.Intn(5) {
+		case 0:
+			for n := rng.Intn(4); n >= 0; n-- {
+				script = append(script, bscript.OpNOP)
+			}
+
+		case 1: // open a conditional, condition true or false, IF or NOTIF
+			if rng.Intn(2) == 0 {
+				script = append(script, bscript.OpZERO)
+			} else {
+				script = append(script, bscript.OpONE)
+			}
+
+			if rng.Intn(2) == 0 {
+				script = append(script, bscript.OpIF)
+			} else {
+				script = append(script, bscript.OpNOTIF)
+			}
+
+			depth++
+
+		case 2: // an OP_RETURN inside a branch: may or may not be executed
+			if depth > 0 {
+				script = append(script, bscript.OpRETURN)
+			}
+
+		case 3: // a longer run of counted no-ops
+			for n := rng.Intn(8); n >= 0; n-- {
+				script = append(script, bscript.OpNOP)
+			}
+
+		case 4:
+			if depth > 0 {
+				if rng.Intn(2) == 0 {
+					script = append(script, bscript.OpELSE, bscript.OpNOP)
+				}
+
+				script = append(script, bscript.OpENDIF)
+				depth--
+			}
+		}
+	}
+
+	for ; depth > 0; depth-- {
+		script = append(script, bscript.OpENDIF)
+	}
+
+	// A multisig at depth zero after the branches, where the key count is
+	// statically certain unless a nested OP_RETURN suspended execution.
+	if rng.Intn(2) == 0 {
+		return append(script, bareMultiSig(1+rng.Intn(20))...)
+	}
+
+	return append(script, bscript.OpONE)
+}
+
+// TestCountScriptOpsNeverOverCountsFuzzBDK asserts the safety invariant on the
+// branchy corpus: countScriptOps must never exceed BDK's executed count. Only
+// over-counting can charge a fee svnode would not and strand a legitimate coin;
+// under-counting costs the miner revenue and nothing else.
+//
+// Using the same oracle, BDK rejecting at a cap of ours-1 means BDK's count is
+// at least ours, which is exactly "we did not over-count".
+func TestCountScriptOpsNeverOverCountsFuzzBDK(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := tSettings.ChainCfgParams
+	blockHeight := params.GenesisActivationHeight + 10_000
+	coinHeight := blockHeight - 1_000
+
+	rng := rand.New(rand.NewSource(20260901)) //nolint:gosec // deterministic corpus, not cryptographic
+
+	scripts := 120
+	if v := os.Getenv("FEE_TIER_FUZZ_SCRIPTS"); v != "" {
+		n, err := strconv.Atoi(v)
+		require.NoError(t, err)
+		scripts = n
+	}
+
+	checked := 0
+
+	for i := 0; i < scripts; i++ {
+		script := randomBranchyScript(rng)
+
+		ours, capExceeded := countScriptOps(script, 1_000_000)
+		require.False(t, capExceeded)
+
+		if ours < 2 {
+			continue
+		}
+
+		err := bdkSpendVerdict(t, params, script, nil, int64(ours-1), coinHeight, blockHeight) //nolint:gosec // bounded by the generator
+		require.True(t, isOpCountRejection(err),
+			"countScriptOps returned %d, more than BDK counted, for script %x (verdict %v)", ours, script, err)
+
+		checked++
+	}
+
+	require.Greater(t, checked, scripts/2, "too few scripts exercised the invariant")
+
+	t.Logf("verified no over-count against BDK on %d of %d branchy scripts", checked, scripts)
 }
 
 // TestCountScriptOpsFuzzDifferentialBDK searches for op-count divergences we did

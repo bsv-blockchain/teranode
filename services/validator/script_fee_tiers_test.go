@@ -231,6 +231,18 @@ func TestLastPush(t *testing.T) {
 	t.Run("nil for empty script", func(t *testing.T) {
 		require.Nil(t, lastPush(nil))
 	})
+
+	t.Run("small constants count as pushes", func(t *testing.T) {
+		// A scriptSig such as OP_1 <redeem script> is a valid push-only P2SH
+		// spend. Treating OP_1 as a non-push abandoned the walk and left the
+		// redeem script unpriced entirely.
+		require.Equal(t, []byte{0xbb, 0xcc}, lastPush([]byte{bscript.OpONE, 0x02, 0xbb, 0xcc}))
+
+		// A trailing small constant is itself the final push.
+		require.Equal(t, []byte{0x05}, lastPush([]byte{0x02, 0xbb, 0xcc, bscript.Op5}))
+		require.Equal(t, []byte{0x81}, lastPush([]byte{bscript.Op1NEGATE}))
+		require.Equal(t, []byte{0x10}, lastPush([]byte{bscript.Op16}))
+	})
 }
 
 // TestIsStandardPrevoutScriptPanicSafety pins the PR-review P0-1 fix: the
@@ -448,6 +460,28 @@ func TestCheckScriptTieredFees(t *testing.T) {
 		// is executed and billed.
 		err := tv.ValidateTransaction(tx, scriptTierTestBlockHeight, []uint32{50}, NewDefaultOptions())
 		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
+	})
+
+	t.Run("a P2SH redeem behind a small constant is still priced", func(t *testing.T) {
+		// OP_1 <redeem> is a valid push-only P2SH scriptSig. Abandoning the
+		// walk at the OP_1 left the redeem script, and any amount of work in
+		// it, entirely unpriced.
+		tv := newTieredValidator(t)
+
+		redeem := repeatedOps(150)
+		unlocking := append([]byte{bscript.OpONE, bscript.OpPUSHDATA2, 150, 0}, redeem...)
+
+		tx := bt.NewTx()
+		require.NoError(t, tx.From(scriptTierTestPrevTxID, 0, "a914000000000000000000000000000000000000000087", 0))
+
+		unlockingScript := bscript.Script(unlocking)
+		tx.Inputs[0].UnlockingScript = &unlockingScript
+
+		require.NoError(t, tx.AddOpReturnOutput([]byte{0x01}))
+
+		err := tv.ValidateTransaction(tx, scriptTierTestBlockHeight, []uint32{50}, NewDefaultOptions())
+		require.Error(t, err, "the redeem script must be priced through a leading small constant")
 		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
 	})
 
