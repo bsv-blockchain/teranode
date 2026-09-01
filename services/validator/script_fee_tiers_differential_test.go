@@ -2,6 +2,7 @@ package validator
 
 import (
 	"encoding/hex"
+	"math"
 	"strings"
 	"testing"
 
@@ -744,4 +745,44 @@ func TestHeightZeroP2SHConsolidationDifferentialBDK(t *testing.T) {
 	check(t, "pre-Genesis coins are standard P2SH inputs", genesisHeight-50, true)
 	check(t, "height 0 is pre-Genesis, so exempt", 0, true)
 	check(t, "post-Genesis P2SH is not a standard input", blockHeight-1_000, false)
+}
+
+// TestScriptSizeCapZeroDifferentialBDK measures that maxscriptsizepolicy 0 is
+// unlimited in BDK, as scriptSizeCap assumes (opsCap's equivalent for
+// maxopsperscriptpolicy 0 was measured by the fuzz pinning work). A 600000-byte
+// post-Genesis script is accepted at 0, rejected at 500000 and accepted at
+// 700000, so 0 is not a rewrite to some default.
+func TestScriptSizeCapZeroDifferentialBDK(t *testing.T) {
+	params := &chaincfg.MainNetParams
+	tip := params.ChronicleActivationHeight + 20_000
+	coin := params.ChronicleActivationHeight + 1_000
+
+	// 60000-byte pushes, each dropped, then OP_TRUE: stack clean, few ops.
+	const size = 600_000
+
+	script := make([]byte, 0, size)
+	for len(script)+60_004 <= size-1 {
+		script = append(script, bscript.OpPUSHDATA2, 0x60, 0xea) // 60000 little-endian
+		script = append(script, make([]byte, 60_000)...)
+		script = append(script, bscript.OpDROP)
+	}
+
+	for len(script) < size-1 {
+		script = append(script, bscript.OpNOP)
+	}
+
+	script = append(script, bscript.OpTRUE)
+	require.Len(t, script, size)
+
+	withSizeCap := func(sizeCap int) func(po *settings.PolicySettings) {
+		return func(po *settings.PolicySettings) { po.MaxScriptSizePolicy = sizeCap }
+	}
+
+	err := bdkSpendVerdictWith(t, params, script, nil, coin, tip, withSizeCap(500_000))
+	require.True(t, isScriptSizeRejection(err), "control: 600000 bytes must exceed a cap of 500000, got %v", err)
+
+	require.NoError(t, bdkSpendVerdictWith(t, params, script, nil, coin, tip, withSizeCap(700_000)))
+	require.NoError(t, bdkSpendVerdictWith(t, params, script, nil, coin, tip, withSizeCap(0)), "a cap of 0 must be unlimited")
+
+	require.Equal(t, uint64(math.MaxUint64), scriptSizeCap(&settings.PolicySettings{MaxScriptSizePolicy: 0}))
 }
