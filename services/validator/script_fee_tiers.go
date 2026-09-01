@@ -8,7 +8,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/util"
 )
 
 // This file implements the per-script fee-tier policies minminingtxfeebyscriptsize
@@ -24,10 +23,22 @@ import (
 // schedules (the default) make it a no-op, leaving behaviour identical to a
 // node without the settings.
 //
-// BDK exempts free consolidation transactions from its fee floor
-// (bitcoin-sv policy.cpp IsFreeConsolidationTxn). The same exemption is
-// honoured here via isFreeConsolidationTxn so that enabling fee tiers never
-// rejects a consolidation BDK would have accepted for free.
+// The counted-ops metric matches svnode's executed op count exactly for every
+// script that reaches BDK, with ONE documented exception: OP_CHECKMULTISIG. See
+// countScriptOps. It is not, and cannot be, an exact copy of the executed count
+// in the general case, because svnode charges OP_CHECKMULTISIG a key count read
+// from the runtime stack; a static walk under-counts it. The metric is still
+// monotone in script complexity and does its economic job.
+//
+// BDK exempts free consolidation transactions from its fee FLOOR (bitcoin-sv
+// policy.cpp IsFreeConsolidationTxn). That exemption is honoured here for the
+// floor term ONLY: the per-script surcharge is always due. The exemption exists
+// to encourage cleanup of many small UTXOs, and a genuine such consolidation
+// never triggers a surcharge (its scripts are far below any tier threshold), so
+// declining to waive the surcharge costs honest consolidators nothing. The only
+// transactions that are both consolidation-shaped and surcharge-bearing are
+// adversarial by construction (a large-script output created cheaply, then
+// "consolidated" to dodge the surcharge). See checkScriptTieredFees.
 
 // dustReturnScript is the exact dust-donation script svnode recognises in
 // IsDustReturnScript: OP_FALSE OP_RETURN OP_PUSHDATA(4) 'dust'.
@@ -41,46 +52,136 @@ func minMiningTxFeeSatoshisPerKB(po *settings.PolicySettings) int64 {
 	return int64(math.Round(po.MinMiningTxFee * 1e8))
 }
 
+// satMulU64 multiplies two uint64 values, saturating at math.MaxUint64 instead
+// of wrapping. A pathological but parse-valid fee-tier config could otherwise
+// wrap the required fee down to a small value and silently weaken policy
+// (PR review, raspi-user 1); saturating up rejects such a transaction (the safe,
+// fail-closed direction) rather than under-charging it.
+func satMulU64(a, b uint64) uint64 {
+	if a == 0 || b == 0 {
+		return 0
+	}
+
+	if a > math.MaxUint64/b {
+		return math.MaxUint64
+	}
+
+	return a * b
+}
+
+// satAddU64 adds two uint64 values, saturating at math.MaxUint64. Same rationale
+// as satMulU64: a wrap here would lower the required fee.
+func satAddU64(a, b uint64) uint64 {
+	if a > math.MaxUint64-b {
+		return math.MaxUint64
+	}
+
+	return a + b
+}
+
+// opsCap returns the counted-ops ceiling BDK enforces (maxopsperscriptpolicy),
+// or math.MaxUint64 when the policy is unlimited (0).
+func opsCap(po *settings.PolicySettings) uint64 {
+	if po.MaxOpsPerScriptPolicy <= 0 {
+		return math.MaxUint64
+	}
+
+	return uint64(po.MaxOpsPerScriptPolicy)
+}
+
+// scriptSizeCap returns the script-size ceiling BDK enforces
+// (maxscriptsizepolicy), or math.MaxUint64 when the policy is unlimited (0).
+func scriptSizeCap(po *settings.PolicySettings) uint64 {
+	if po.MaxScriptSizePolicy <= 0 {
+		return math.MaxUint64
+	}
+
+	return uint64(po.MaxScriptSizePolicy)
+}
+
 // countScriptOps statically counts the operations BDK's EvalScript counts
 // against maxopsperscriptpolicy: every opcode above OP_16; pushes are free.
-// Bitcoin script has no loops, so the static count equals the executed count
-// (svnode increments nOpCount for every fetched opcode, executed branch or
-// not). A malformed push (length running past the end of the script) stops the
-// count: such a script fails BDK's own parse, so undercounting is harmless.
-func countScriptOps(script []byte) uint64 {
-	var ops uint64
+// svnode increments its op counter for every FETCHED opcode above OP_16, before
+// deciding whether the branch executes, so opcodes inside an unexecuted OP_IF
+// branch count too; this linear walk matches that. Two svnode subtleties are
+// mirrored explicitly:
+//
+//   - A top-level OP_RETURN (post-Genesis, i.e. one not nested inside an
+//     OP_IF/OP_NOTIF) ends execution successfully. svnode counts up to and
+//     including that OP_RETURN, then stops fetching, so opcodes after it are
+//     never counted. IF-nesting depth is a static property, so this walk tracks
+//     it and stops at a depth-zero OP_RETURN, reproducing the rule exactly.
+//   - OP_CHECKMULTISIG is charged its runtime key count in svnode
+//     (nOpCount += nKeysCount, popped from the stack). A static walk cannot know
+//     a stack value, so it counts OP_CHECKMULTISIG as one: an UNDER-count, the
+//     single documented divergence from the executed count.
+//
+// Counting stops as soon as the running total exceeds opCap, returning
+// capExceeded=true, so a caller can decline to price (and stop walking) a script
+// BDK will reject with SCRIPT_ERR_OP_COUNT. A malformed push (length running
+// past the end of the script) stops the count: such a script fails BDK's own
+// parse, so undercounting is harmless.
+func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) {
+	var ifDepth int
 
 	for i := 0; i < len(script); {
 		opcode := script[i]
 		i++
 
+		// Hot path first: the counted opcodes these tiers exist to price. Kept
+		// ahead of the push cases so an op-dense script pays one comparison per
+		// byte, not five (PR review P1-10).
+		if opcode > bscript.Op16 {
+			if opcode == bscript.OpRETURN && ifDepth == 0 {
+				// Top-level OP_RETURN: counted, then execution ends.
+				ops++
+
+				return ops, ops > opCap
+			}
+
+			switch opcode {
+			case bscript.OpIF, bscript.OpNOTIF:
+				ifDepth++
+			case bscript.OpENDIF:
+				if ifDepth > 0 {
+					ifDepth--
+				}
+			}
+
+			ops++
+			if ops > opCap {
+				return ops, true
+			}
+
+			continue
+		}
+
+		// opcode <= OP_16: data pushes (free) and small constants (free).
 		switch {
 		case opcode <= 0x4b: // direct push of `opcode` bytes (OP_0 pushes none)
 			i += int(opcode)
 		case opcode == bscript.OpPUSHDATA1:
 			if i >= len(script) {
-				return ops
+				return ops, false
 			}
 
 			i += 1 + int(script[i])
 		case opcode == bscript.OpPUSHDATA2:
 			if i+1 >= len(script) {
-				return ops
+				return ops, false
 			}
 
 			i += 2 + int(script[i]) + int(script[i+1])<<8
 		case opcode == bscript.OpPUSHDATA4:
 			if i+3 >= len(script) {
-				return ops
+				return ops, false
 			}
 
 			i += 4 + int(script[i]) + int(script[i+1])<<8 + int(script[i+2])<<16 + int(script[i+3])<<24
-		case opcode > bscript.Op16: // 0x60; OP_1NEGATE..OP_16 and OP_RESERVED are free
-			ops++
 		}
 	}
 
-	return ops
+	return ops, false
 }
 
 // lastPush returns the data of the final push in a push-parseable script, or
@@ -136,39 +237,36 @@ func lastPush(script []byte) []byte {
 	return last
 }
 
-// executedScripts returns the scripts a miner executes to validate tx: each
-// input's unlocking script, the locking script it spends, and, for a legacy
-// P2SH spend, the redeem script. Output locking scripts of tx itself are not
-// executed now; their cost falls on the future spender, who pays these tiers
-// then. Missing extended data contributes nothing (BDK validation needs it
-// anyway).
-func executedScripts(tx *bt.Tx) [][]byte {
-	scripts := make([][]byte, 0, 2*len(tx.Inputs))
-
-	for _, input := range tx.Inputs {
-		var unlocking []byte
-		if input.UnlockingScript != nil {
-			unlocking = *input.UnlockingScript
-		}
-
-		if len(unlocking) > 0 {
-			scripts = append(scripts, unlocking)
-		}
-
-		if input.PreviousTxScript == nil {
-			continue
-		}
-
-		scripts = append(scripts, *input.PreviousTxScript)
-
-		if input.PreviousTxScript.IsP2SH() {
-			if redeem := lastPush(unlocking); len(redeem) > 0 {
-				scripts = append(scripts, redeem)
-			}
-		}
+// priceScript returns the marginal surcharge, in satoshi-thousandths, for a
+// single executed script under both tier schedules. A script BDK will reject for
+// exceeding a hard cap (maxscriptsizepolicy or maxopsperscriptpolicy) is priced
+// at zero: pricing it would preempt BDK's specific rejection with a misleading
+// insufficient-fee error the submitter would retry forever, and would walk the
+// whole script for a value that never matters (PR review P1-9). The ops walk is
+// skipped entirely when even the whole script length is below the first ops
+// threshold, since the counted ops can never exceed the length (PR review P1-10).
+func priceScript(sizeTiers, opsTiers []settings.FeeTier, opCap, sizeCap uint64, script []byte) uint64 {
+	n := uint64(len(script))
+	if n == 0 || n > sizeCap {
+		return 0
 	}
 
-	return scripts
+	var thousandths uint64
+
+	if len(opsTiers) > 0 && n > opsTiers[0].Threshold {
+		ops, capExceeded := countScriptOps(script, opCap)
+		if capExceeded {
+			return 0
+		}
+
+		thousandths = satAddU64(thousandths, tierExcessThousandths(opsTiers, ops))
+	}
+
+	if len(sizeTiers) > 0 {
+		thousandths = satAddU64(thousandths, tierExcessThousandths(sizeTiers, n))
+	}
+
+	return thousandths
 }
 
 // tierExcessThousandths prices a script metric value against a marginal tier
@@ -176,7 +274,7 @@ func executedScripts(tx *bt.Tx) [][]byte {
 // are charged at that tier's rate, units beyond the last threshold at its
 // rate, and units below the first threshold are free (the byte-rate floor
 // covers them). tiers must be sorted ascending, which parseFeeTiers
-// guarantees.
+// guarantees. Arithmetic saturates rather than wraps (see satMulU64).
 func tierExcessThousandths(tiers []settings.FeeTier, value uint64) uint64 {
 	var thousandths uint64
 
@@ -190,19 +288,48 @@ func tierExcessThousandths(tiers []settings.FeeTier, value uint64) uint64 {
 			upper = tiers[i+1].Threshold
 		}
 
-		thousandths += (upper - tier.Threshold) * uint64(tier.SatoshisPerK)
+		thousandths = satAddU64(thousandths, satMulU64(upper-tier.Threshold, uint64(tier.SatoshisPerK)))
 	}
 
 	return thousandths
 }
 
+// txFee returns fee = sum(inputs) - sum(outputs) for an extended transaction,
+// and ok=false when input values are missing or outputs exceed inputs. It sums
+// inline rather than calling util.GetFees, which formats the double-SHA256 txid
+// into an error message this call site discards (PR review P1-14). Input and
+// output totals are bounded by the money-range checks BDK (or the Go backstop)
+// applies, so they cannot wrap before the transaction is rejected elsewhere.
+func txFee(tx *bt.Tx) (fee uint64, ok bool) {
+	var in, out uint64
+
+	for _, input := range tx.Inputs {
+		in += input.PreviousTxSatoshis
+	}
+
+	for _, output := range tx.Outputs {
+		out += output.Satoshis
+	}
+
+	if out > in {
+		return 0, false
+	}
+
+	return in - out, true
+}
+
 // checkScriptTieredFees enforces minminingtxfeebyscriptsize and
 // minminingtxfeebyscriptops for a single transaction. The required fee is the
 // minminingtxfee floor on the whole transaction plus the marginal per-script
-// surcharges, accumulated in satoshi-thousandths and divided once so the
-// result is monotone and never loses a satoshi to per-band truncation. It is a
-// no-op when both schedules are empty, and callers must gate it on policy mode
-// (it is never a consensus rule).
+// surcharges, accumulated in satoshi-thousandths and divided once so the result
+// is monotone and never loses a satoshi to per-band truncation. It is a no-op
+// when both schedules are empty, and callers must gate it on policy mode (it is
+// never a consensus rule).
+//
+// The free-consolidation exemption waives the FLOOR term only; the surcharge is
+// always due (see the file comment). Because BDK re-checks and re-exempts its
+// own floor one call later, an imperfect exemption match here can at most drop
+// the small byte-rate floor, never the surcharge.
 func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error {
 	sizeTiers := tv.settings.Policy.MinMiningTxFeeByScriptSize
 	opsTiers := tv.settings.Policy.MinMiningTxFeeByScriptOps
@@ -211,15 +338,41 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 		return nil
 	}
 
+	genesisHeight := tv.settings.ChainCfgParams.GenesisActivationHeight
+	opCap := opsCap(tv.settings.Policy)
+	sizeCap := scriptSizeCap(tv.settings.Policy)
+
+	// Inline the executed-script walk rather than building a [][]byte: the slice
+	// is consumed once and escapes to the heap as a return value, so it is pure
+	// per-transaction garbage on a concurrent hot path (PR review P1-13).
 	var surchargeThousandths uint64
 
-	for _, script := range executedScripts(tx) {
-		if len(sizeTiers) > 0 {
-			surchargeThousandths += tierExcessThousandths(sizeTiers, uint64(len(script)))
+	for idx, input := range tx.Inputs {
+		var unlocking []byte
+		if input.UnlockingScript != nil {
+			unlocking = *input.UnlockingScript
 		}
 
-		if len(opsTiers) > 0 {
-			surchargeThousandths += tierExcessThousandths(opsTiers, countScriptOps(script))
+		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, unlocking))
+
+		if input.PreviousTxScript == nil {
+			continue
+		}
+
+		prevout := *input.PreviousTxScript
+		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, prevout))
+
+		// A legacy P2SH spend also executes its redeem script; bill it as sigop
+		// counting does. Gated on the coin's era: BDK's VerifyScript runs the
+		// redeem EvalScript only when !(flags & SCRIPT_UTXO_AFTER_GENESIS), i.e.
+		// the coin was created before Genesis (coinHeight < genesisHeight). A
+		// coin created before Genesis but spent now still runs it. Post-Genesis
+		// coins never do, so billing a "redeem script" there would over-charge a
+		// script no BSV node executes (PR review P1-8).
+		if input.PreviousTxScript.IsP2SH() && idx < len(utxoHeights) && isPreGenesisCoin(utxoHeights[idx], genesisHeight) {
+			if redeem := lastPush(unlocking); len(redeem) > 0 {
+				surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, redeem))
+			}
 		}
 	}
 
@@ -227,30 +380,51 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 		return nil
 	}
 
-	fee, err := util.GetFees(tx)
-	if err != nil {
+	fee, ok := txFee(tx)
+	if !ok {
 		// Outputs exceeding inputs is rejected as bad-txns-in-belowout by the
 		// money-range checks (BDK, or the Go backstop on the skip-script
 		// path); an unpayable fee is not this check's verdict to give.
 		return nil
 	}
 
-	floorThousandths := uint64(tx.Size()) * uint64(minMiningTxFeeSatoshisPerKB(tv.settings.Policy)) //nolint:gosec // size and rate are non-negative
-	required := (floorThousandths + surchargeThousandths) / 1000
+	floorThousandths := satMulU64(uint64(tx.Size()), uint64(minMiningTxFeeSatoshisPerKB(tv.settings.Policy))) //nolint:gosec // size and rate are non-negative
 
-	if fee >= required {
-		return nil
+	exempt := isFreeConsolidationTxn(tv.settings.Policy, tx, blockHeight, utxoHeights, genesisHeight)
+	if exempt {
+		// The exemption waives the floor only; the surcharge stands.
+		floorThousandths = 0
 	}
 
-	if isFreeConsolidationTxn(tv.settings.Policy, tx, blockHeight, utxoHeights) {
-		prometheusValidatorScriptTieredFeeConsolidationExemptions.Inc()
+	required := satAddU64(floorThousandths, surchargeThousandths) / 1000
+
+	if fee >= required {
+		if exempt {
+			prometheusValidatorScriptTieredFeeConsolidationExemptions.Inc()
+		}
 
 		return nil
 	}
 
 	prometheusValidatorScriptTieredFeeRejections.Inc()
 
-	return errors.NewTxPolicyError("insufficient fee: %d satoshis paid, %d satoshis required by the per-script fee tiers (minminingtxfeebyscriptsize, minminingtxfeebyscriptops)", fee, required)
+	// Wrap as BDK's insufficient-fee rejection is wrapped (NewTxInvalidError over
+	// a NewTxPolicyError) so the rejected-tx Kafka publish gate in Validator.go
+	// (errors.Is(err, ErrTxInvalid)) matches this the same way it matches BDK's
+	// own underpayment rejection (PR review P1-11). The wrapped ErrTxPolicy code
+	// keeps this classified as a policy error too.
+	policyErr := errors.NewTxPolicyError("insufficient fee: %d satoshis paid, %d required by the per-script fee tiers (minminingtxfeebyscriptsize, minminingtxfeebyscriptops)", fee, required)
+
+	return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+}
+
+// isPreGenesisCoin reports whether a UTXO created at coinHeight predates Genesis
+// and so still runs pre-Genesis script semantics (P2SH evaluation) when spent.
+// Height 0 means the store recorded no height; it is treated as not-pre-Genesis
+// (the anti-over-charge direction) since the P2SH redeem double-count is the
+// only caller.
+func isPreGenesisCoin(coinHeight, genesisHeight uint32) bool {
+	return coinHeight != 0 && coinHeight < genesisHeight
 }
 
 // isDustReturnTxn mirrors svnode's IsDustReturnTxn: a single zero-value output
@@ -269,15 +443,136 @@ func isDustReturnTxn(tx *bt.Tx) bool {
 	return bytes.Equal(*lockingScript, dustReturnScript)
 }
 
-// isStandardPrevoutScript mirrors svnode's IsStandardOutput classification for
-// the consolidation-input standardness rule: the solvable standard templates.
-// It is intentionally slightly more permissive than svnode (no data-carrier
-// size or protocol-era checks): wrongly exempting a transaction only skips the
-// fee-tier surcharge while BDK's MinMiningTxFee floor still applies, whereas
-// wrongly refusing the exemption would reject a consolidation BDK accepts for
-// free.
-func isStandardPrevoutScript(script *bscript.Script) bool {
-	return script.IsP2PKH() || script.IsP2PK() || script.IsP2SH() || script.IsMultiSigOut() || script.IsData()
+// isStandardPrevoutScript classifies a prevout locking script against the
+// standard templates svnode's IsStandardOutput accepts for the consolidation
+// input rule, at the coin's height. It is panic-safe on arbitrary
+// attacker-supplied scripts: go-bt's IsP2PK and IsMultiSigOut index into
+// DecodeParts output without length checks and panic on crafted scripts
+// (PR review P0-1), so the templates are matched here directly on the bytes.
+//
+// Era matters (PR review P1-5): post-Genesis, svnode's Solver maps P2SH to
+// TX_NONSTANDARD, so P2SH is standard only for coins created before Genesis.
+// The classification stays intentionally no stricter than svnode/BDK: because
+// the exemption waives only the byte-rate floor (checkScriptTieredFees), an
+// over-permissive verdict costs at most that floor, which BDK re-checks anyway,
+// whereas an over-strict verdict would wrongly reject a consolidation BDK
+// accepts for free.
+func isStandardPrevoutScript(script *bscript.Script, coinHeight, genesisHeight uint32) bool {
+	if script == nil {
+		return false
+	}
+
+	b := []byte(*script)
+
+	return isP2PKHScript(b) ||
+		isP2PKScript(b) ||
+		isMultiSigScript(b) ||
+		isDataScript(b) ||
+		(isPreGenesisCoin(coinHeight, genesisHeight) && isP2SHScript(b))
+}
+
+// isP2PKHScript matches OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG.
+func isP2PKHScript(b []byte) bool {
+	return len(b) == 25 &&
+		b[0] == bscript.OpDUP &&
+		b[1] == bscript.OpHASH160 &&
+		b[2] == bscript.OpDATA20 &&
+		b[23] == bscript.OpEQUALVERIFY &&
+		b[24] == bscript.OpCHECKSIG
+}
+
+// isP2SHScript matches OP_HASH160 <20> OP_EQUAL.
+func isP2SHScript(b []byte) bool {
+	return len(b) == 23 &&
+		b[0] == bscript.OpHASH160 &&
+		b[1] == bscript.OpDATA20 &&
+		b[22] == bscript.OpEQUAL
+}
+
+// isP2PKScript matches a single compressed (33-byte) or uncompressed (65-byte)
+// pubkey push followed by OP_CHECKSIG, with the pubkey version byte validated.
+func isP2PKScript(b []byte) bool {
+	if len(b) == 35 && b[0] == bscript.OpDATA33 && b[34] == bscript.OpCHECKSIG {
+		return b[1] == 0x02 || b[1] == 0x03
+	}
+
+	if len(b) == 67 && b[0] == bscript.OpDATA65 && b[66] == bscript.OpCHECKSIG {
+		return b[1] == 0x04 || b[1] == 0x06 || b[1] == 0x07
+	}
+
+	return false
+}
+
+// isDataScript matches a data carrier: a bare OP_RETURN (pre-Genesis form) or
+// OP_FALSE OP_RETURN (post-Genesis form) prefix.
+func isDataScript(b []byte) bool {
+	return (len(b) >= 1 && b[0] == bscript.OpRETURN) ||
+		(len(b) >= 2 && b[0] == bscript.OpFALSE && b[1] == bscript.OpRETURN)
+}
+
+// isMultiSigScript matches a bare multisig template OP_m <pubkey>... OP_n
+// OP_CHECKMULTISIG with small-int m and n (1..16), m <= n, and n pubkey pushes
+// of 33 or 65 bytes. It is a panic-safe manual parse (go-bt's IsMultiSigOut
+// panics on crafted input; see PR review P0-1). Large post-Genesis multisigs
+// whose counts are not small ints are not classified standard here; being
+// slightly strict for that rare shape is safe (see isStandardPrevoutScript).
+func isMultiSigScript(b []byte) bool {
+	if len(b) < 3 || b[len(b)-1] != bscript.OpCHECKMULTISIG || !isSmallIntOp(b[0]) {
+		return false
+	}
+
+	keys := 0
+
+	for i := 1; i < len(b)-1; {
+		op := b[i]
+
+		if isSmallIntOp(op) {
+			// This must be OP_n, immediately before OP_CHECKMULTISIG.
+			if i != len(b)-2 {
+				return false
+			}
+
+			m := smallIntVal(b[0])
+			n := smallIntVal(op)
+
+			return keys == n && m >= 1 && m <= n
+		}
+
+		var size int
+
+		switch op {
+		case bscript.OpDATA33:
+			size = 33
+		case bscript.OpDATA65:
+			size = 65
+		default:
+			return false
+		}
+
+		if i+1+size > len(b)-1 {
+			return false
+		}
+
+		i += 1 + size
+		keys++
+	}
+
+	return false
+}
+
+// isSmallIntOp reports whether opcode is OP_0 or OP_1..OP_16.
+func isSmallIntOp(opcode byte) bool {
+	return opcode == bscript.OpZERO || (opcode >= bscript.OpONE && opcode <= bscript.Op16)
+}
+
+// smallIntVal returns the integer value of a small-int opcode (OP_0 -> 0,
+// OP_1..OP_16 -> 1..16); it assumes isSmallIntOp(opcode).
+func smallIntVal(opcode byte) int {
+	if opcode == bscript.OpZERO {
+		return 0
+	}
+
+	return int(opcode) - int(bscript.OpONE) + 1
 }
 
 // isFreeConsolidationTxn reports whether tx qualifies as a free consolidation
@@ -292,10 +587,16 @@ func isStandardPrevoutScript(script *bscript.Script) bool {
 // unconfirmedParentHeight as the unconfirmed sentinel. blockHeight is the
 // candidate height (tip+1) in policy mode, so an input confirmed at height h
 // has blockHeight-h confirmations, matching svnode's tipHeight+1-coinHeight.
+// genesisHeight resolves each input's era for the standardness classification.
 // Inputs whose height or previous script is unavailable are treated as
 // disqualifying: without them the rules cannot be checked, and not exempting
 // is the containment direction (BDK's own floor is unaffected either way).
-func isFreeConsolidationTxn(po *settings.PolicySettings, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) bool {
+//
+// Zero-valued MaxConsolidationInputScriptSize and MinConfConsolidationInput are
+// normalised to svnode's defaults (150 and 6): BDK's config.cpp rewrites 0 to
+// those, while ScriptVerifierGoBDK pushes the raw settings, so reading them raw
+// here would disagree with BDK (PR review P1-7).
+func isFreeConsolidationTxn(po *settings.PolicySettings, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, genesisHeight uint32) bool {
 	// Factor zero disables free consolidations entirely, as in svnode.
 	if po.MinConsolidationFactor <= 0 {
 		return false
@@ -312,7 +613,16 @@ func isFreeConsolidationTxn(po *settings.PolicySettings, tx *bt.Tx, blockHeight 
 	isDonation := isDustReturnTxn(tx)
 
 	factor := uint64(po.MinConsolidationFactor)
+
 	minConf := po.MinConfConsolidationInput
+	if minConf == 0 {
+		minConf = 6 // BDK config.cpp rewrites 0 to the svnode default.
+	}
+
+	maxInputScriptSize := po.MaxConsolidationInputScriptSize
+	if maxInputScriptSize == 0 {
+		maxInputScriptSize = 150 // BDK config.cpp rewrites 0 to the svnode default.
+	}
 
 	if isDonation {
 		factor = uint64(len(tx.Inputs))
@@ -320,11 +630,10 @@ func isFreeConsolidationTxn(po *settings.PolicySettings, tx *bt.Tx, blockHeight 
 	}
 
 	// The consolidation transaction needs to reduce the count of UTXOs.
-	if uint64(len(tx.Inputs)) < factor*uint64(len(tx.Outputs)) {
+	if uint64(len(tx.Inputs)) < satMulU64(factor, uint64(len(tx.Outputs))) {
 		return false
 	}
 
-	maxInputScriptSize := po.MaxConsolidationInputScriptSize
 	stdInputOnly := !po.AcceptNonStdConsolidationInput
 
 	sumInputLockingScriptBytes := uint64(0)
@@ -363,7 +672,7 @@ func isFreeConsolidationTxn(po *settings.PolicySettings, tx *bt.Tx, blockHeight 
 			return false
 		}
 
-		if stdInputOnly && !isStandardPrevoutScript(input.PreviousTxScript) {
+		if stdInputOnly && !isStandardPrevoutScript(input.PreviousTxScript, height, genesisHeight) {
 			return false
 		}
 
@@ -379,5 +688,5 @@ func isFreeConsolidationTxn(po *settings.PolicySettings, tx *bt.Tx, blockHeight 
 	}
 
 	// Prevent consolidations that are not advantageous enough for miners.
-	return sumInputLockingScriptBytes >= factor*sumOutputLockingScriptBytes
+	return sumInputLockingScriptBytes >= satMulU64(factor, sumOutputLockingScriptBytes)
 }

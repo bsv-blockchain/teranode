@@ -2,6 +2,7 @@ package validator
 
 import (
 	"encoding/hex"
+	"math"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -42,6 +43,12 @@ func bigPush(n int) []byte {
 		byte(n), byte(n>>8), byte(n>>16), byte(n>>24))
 
 	return append(script, make([]byte, n)...)
+}
+
+// countOps is a test helper wrapping countScriptOps with an unlimited cap.
+func countOps(script []byte) uint64 {
+	ops, _ := countScriptOps(script, math.MaxUint64)
+	return ops
 }
 
 // newScriptTierTestTx builds an extended transaction with one input carrying
@@ -99,6 +106,14 @@ func deepHeights(n int) []uint32 {
 	return heights
 }
 
+// baseTestGenesis returns the Genesis activation height carried by the base test
+// settings, so era-dependent classification stays in sync with those settings.
+func baseTestGenesis(t *testing.T) uint32 {
+	t.Helper()
+
+	return test.CreateBaseTestSettings(t).ChainCfgParams.GenesisActivationHeight
+}
+
 func TestCountScriptOps(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -120,9 +135,50 @@ func TestCountScriptOps(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.expected, countScriptOps(tt.script))
+			require.Equal(t, tt.expected, countOps(tt.script))
 		})
 	}
+}
+
+// TestCountScriptOpsOpReturn pins the OP_RETURN divergence fix (PR review P0-3):
+// svnode counts a top-level OP_RETURN and then stops (post-Genesis it ends
+// execution), so the data tail an attacker appends must not inflate the count.
+// A nested OP_RETURN inside an OP_IF does NOT end execution, so counting
+// continues there.
+func TestCountScriptOpsOpReturn(t *testing.T) {
+	t.Run("top-level OP_RETURN stops the count after itself", func(t *testing.T) {
+		// OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG OP_RETURN <tail>
+		script := append([]byte{}, mustHex(t, scriptTierTestP2PKHScript)...)
+		script = append(script, bscript.OpRETURN)
+		script = append(script, repeatedOps(100_000)...) // attacker-chosen tail
+
+		// 4 P2PKH ops + the OP_RETURN = 5; svnode counts exactly this.
+		require.Equal(t, uint64(5), countOps(script))
+	})
+
+	t.Run("bare OP_RETURN counts as one", func(t *testing.T) {
+		require.Equal(t, uint64(1), countOps(append([]byte{bscript.OpRETURN}, repeatedOps(1_000)...)))
+	})
+
+	t.Run("OP_RETURN nested in OP_IF does not stop the count", func(t *testing.T) {
+		// OP_IF OP_RETURN OP_ENDIF OP_NOP: IF(1) RETURN(1, does not terminate)
+		// ENDIF(1) NOP(1) = 4 counted ops.
+		script := []byte{bscript.OpIF, bscript.OpRETURN, bscript.OpENDIF, bscript.OpNOP}
+		require.Equal(t, uint64(4), countOps(script))
+	})
+
+	t.Run("count stops at the op cap", func(t *testing.T) {
+		ops, capExceeded := countScriptOps(repeatedOps(1_000), 100)
+		require.True(t, capExceeded)
+		require.Equal(t, uint64(101), ops) // stopped one past the cap
+	})
+
+	t.Run("OP_CHECKMULTISIG is a documented under-count", func(t *testing.T) {
+		// svnode charges nKeysCount (from the stack) for OP_CHECKMULTISIG; a
+		// static walk counts it as one. This asserts the divergence is exactly
+		// the one documented, not a silent surprise.
+		require.Equal(t, uint64(1), countOps([]byte{bscript.OpCHECKMULTISIG}))
+	})
 }
 
 func mustHex(t *testing.T, s string) []byte {
@@ -153,6 +209,76 @@ func TestLastPush(t *testing.T) {
 	})
 }
 
+// TestIsStandardPrevoutScriptPanicSafety pins the PR-review P0-1 fix: the
+// classifier must never panic on an attacker-supplied prevout script. The two
+// named scripts crash go-bt's IsP2PK / IsMultiSigOut (which this used to call);
+// the table then fuzzes a range of truncated and empty pushes.
+func TestIsStandardPrevoutScriptPanicSafety(t *testing.T) {
+	genesis := baseTestGenesis(t)
+
+	scripts := [][]byte{
+		{0x01, 0xAA, 0x4C, 0x00}, // panicked IsP2PK: DecodeParts yields an empty part
+		{0x4C, 0x00, 0xAE, 0xAE}, // panicked IsMultiSigOut: leading empty part
+		nil,
+		{},
+		{0x00},
+		{0x4c},             // OP_PUSHDATA1 with no length byte
+		{0x4d, 0x01},       // OP_PUSHDATA2 truncated
+		{0x4e, 0x01, 0x00}, // OP_PUSHDATA4 truncated
+		{0xae},             // bare OP_CHECKMULTISIG
+		{0x51, 0xae},       // OP_1 OP_CHECKMULTISIG, no keys
+		{0x6a},             // bare OP_RETURN
+		{0x00, 0x6a},       // OP_FALSE OP_RETURN
+	}
+
+	for _, s := range scripts {
+		script := bscript.Script(s)
+		require.NotPanics(t, func() {
+			// Exercise both eras; the result value is irrelevant, only that it
+			// does not panic.
+			_ = isStandardPrevoutScript(&script, 50, genesis)        // pre-Genesis coin
+			_ = isStandardPrevoutScript(&script, 1_000_000, genesis) // post-Genesis coin
+		}, "isStandardPrevoutScript panicked on %x", s)
+	}
+}
+
+// TestIsStandardPrevoutScriptTemplates checks the standard-template classifier
+// accepts the real templates and rejects junk, and that P2SH is era-gated.
+func TestIsStandardPrevoutScriptTemplates(t *testing.T) {
+	genesis := uint32(620_538)
+
+	p2pkh := bscript.Script(mustHex(t, scriptTierTestP2PKHScript))
+	require.True(t, isStandardPrevoutScript(&p2pkh, 1_000_000, genesis))
+
+	p2sh := bscript.Script(mustHex(t, "a914000000000000000000000000000000000000000087"))
+	require.True(t, isStandardPrevoutScript(&p2sh, 100, genesis), "pre-Genesis P2SH is standard")
+	require.False(t, isStandardPrevoutScript(&p2sh, 700_000, genesis), "post-Genesis P2SH is not standard")
+
+	// Compressed-pubkey P2PK.
+	p2pk := make([]byte, 0, 35)
+	p2pk = append(p2pk, bscript.OpDATA33, 0x02)
+	p2pk = append(p2pk, make([]byte, 32)...)
+	p2pk = append(p2pk, bscript.OpCHECKSIG)
+	p2pkScript := bscript.Script(p2pk)
+	require.True(t, isStandardPrevoutScript(&p2pkScript, 1_000_000, genesis))
+
+	// Bare 1-of-1 multisig: OP_1 <33-byte key> OP_1 OP_CHECKMULTISIG.
+	ms := make([]byte, 0, 37)
+	ms = append(ms, bscript.OpONE, bscript.OpDATA33, 0x02)
+	ms = append(ms, make([]byte, 32)...)
+	ms = append(ms, bscript.OpONE, bscript.OpCHECKMULTISIG)
+	msScript := bscript.Script(ms)
+	require.True(t, isStandardPrevoutScript(&msScript, 1_000_000, genesis))
+
+	// Data carrier.
+	data := bscript.Script([]byte{bscript.OpFALSE, bscript.OpRETURN, 0x01, 0xaa})
+	require.True(t, isStandardPrevoutScript(&data, 1_000_000, genesis))
+
+	// Junk.
+	junk := bscript.Script(repeatedOps(25))
+	require.False(t, isStandardPrevoutScript(&junk, 1_000_000, genesis))
+}
+
 func TestTierExcessThousandths(t *testing.T) {
 	oneTier := []settings.FeeTier{{Threshold: 1_000, SatoshisPerK: 10}}
 	twoTiers := []settings.FeeTier{
@@ -179,6 +305,21 @@ func TestTierExcessThousandths(t *testing.T) {
 			require.Equal(t, tt.expected, tierExcessThousandths(tt.tiers, tt.value))
 		})
 	}
+
+	t.Run("saturates instead of wrapping", func(t *testing.T) {
+		// A huge threshold-to-value span at the maximum rate would wrap uint64;
+		// saturating keeps the required fee high (fail-closed), never low.
+		tiers := []settings.FeeTier{{Threshold: 1, SatoshisPerK: math.MaxInt64}}
+		require.Equal(t, uint64(math.MaxUint64), tierExcessThousandths(tiers, math.MaxUint64/2))
+	})
+}
+
+func TestSatArithmetic(t *testing.T) {
+	require.Equal(t, uint64(math.MaxUint64), satMulU64(math.MaxUint64, 2))
+	require.Equal(t, uint64(6), satMulU64(2, 3))
+	require.Equal(t, uint64(0), satMulU64(0, math.MaxUint64))
+	require.Equal(t, uint64(math.MaxUint64), satAddU64(math.MaxUint64, 1))
+	require.Equal(t, uint64(5), satAddU64(2, 3))
 }
 
 func TestCheckScriptTieredFees(t *testing.T) {
@@ -260,7 +401,7 @@ func TestCheckScriptTieredFees(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
 	})
 
-	t.Run("a legacy P2SH redeem script counts as an executed script", func(t *testing.T) {
+	t.Run("a pre-Genesis P2SH redeem script counts as an executed script", func(t *testing.T) {
 		tv := newTieredValidator(t)
 
 		// P2SH prevout; the unlocking script pushes a 150-op redeem script
@@ -279,9 +420,32 @@ func TestCheckScriptTieredFees(t *testing.T) {
 
 		require.NoError(t, tx.AddOpReturnOutput([]byte{0x01}))
 
-		err := tv.ValidateTransaction(tx, scriptTierTestBlockHeight, deepHeights(1), NewDefaultOptions())
+		// Coin created before Genesis (height 50 < test genesis 100): the redeem
+		// is executed and billed.
+		err := tv.ValidateTransaction(tx, scriptTierTestBlockHeight, []uint32{50}, NewDefaultOptions())
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
+	})
+
+	t.Run("a post-Genesis P2SH redeem script is not double-counted", func(t *testing.T) {
+		tv := newTieredValidator(t)
+
+		// Same shape as above, but the coin was created post-Genesis. No BSV
+		// node runs the P2SH redeem there, so it must not be billed: the
+		// unlocking (153 bytes) and prevout (23 bytes) are both under the
+		// thresholds, so the surcharge is zero and the tx passes (PR review P1-8).
+		redeem := repeatedOps(150)
+		unlocking := append([]byte{bscript.OpPUSHDATA2, 150, 0}, redeem...)
+
+		tx := bt.NewTx()
+		require.NoError(t, tx.From(scriptTierTestPrevTxID, 0, "a914000000000000000000000000000000000000000087", 0))
+
+		unlockingScript := bscript.Script(unlocking)
+		tx.Inputs[0].UnlockingScript = &unlockingScript
+
+		require.NoError(t, tx.AddOpReturnOutput([]byte{0x01}))
+
+		require.NoError(t, tv.ValidateTransaction(tx, scriptTierTestBlockHeight, deepHeights(1), NewDefaultOptions()))
 	})
 
 	t.Run("skip policy checks bypasses the tiers", func(t *testing.T) {
@@ -323,17 +487,109 @@ func TestCheckScriptTieredFees(t *testing.T) {
 		require.NoError(t, tv.ValidateTransaction(exact, scriptTierTestBlockHeight, deepHeights(1), NewDefaultOptions()))
 	})
 
-	t.Run("free consolidation is exempt from the tiers", func(t *testing.T) {
+	t.Run("tier rejection is classified ErrTxInvalid for the rejected-tx topic", func(t *testing.T) {
+		// PR review P1-11: the rejected-tx Kafka publish gate matches
+		// errors.Is(err, ErrTxInvalid); a bare policy error would be dropped.
+		tv := newTieredValidator(t)
+		tx := newScriptTierTestTx(t, repeatedOps(600), 0)
+
+		err := tv.ValidateTransaction(tx, scriptTierTestBlockHeight, deepHeights(1), NewDefaultOptions())
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrTxInvalid), "must be ErrTxInvalid so it reaches the rejected-tx topic")
+		require.True(t, errors.Is(err, errors.ErrTxPolicy), "and still classified as a policy error")
+	})
+
+	t.Run("a script over the op cap is left to BDK, not rejected for fee", func(t *testing.T) {
+		// PR review P1-9: a script beyond maxopsperscriptpolicy must not be
+		// priced (BDK rejects it with SCRIPT_ERR_OP_COUNT); pricing it would
+		// mislabel the rejection as insufficient-fee.
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MinMiningTxFee = 0
-		// Every 107-byte unlocking script is over a 10-byte size threshold.
+		tSettings.Policy.MaxOpsPerScriptPolicy = 500
+		tSettings.Policy.MinMiningTxFeeByScriptOps = []settings.FeeTier{{Threshold: 100, SatoshisPerK: 1_000}}
+
+		tv := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		tv.bdk = noopBDKValidator{}
+
+		// 1000 ops, over the 500 cap: no surcharge, so the zero-fee tx passes
+		// the tier check (BDK, here a no-op, would otherwise reject it).
+		tx := newScriptTierTestTx(t, repeatedOps(1_000), 0)
+		require.NoError(t, tv.ValidateTransaction(tx, scriptTierTestBlockHeight, deepHeights(1), NewDefaultOptions()))
+	})
+}
+
+// TestScriptTieredFeeSurchargeAlwaysDue pins the PR-review P1-4 fix: the
+// free-consolidation exemption waives the byte-rate floor only, never the
+// per-script surcharge, so the "create a large-script output cheaply then
+// consolidate it for free" evasion no longer works.
+func TestScriptTieredFeeSurchargeAlwaysDue(t *testing.T) {
+	newValidator := func(t *testing.T, floorBSVPerKB float64) *TxValidator {
+		t.Helper()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.Policy.MinMiningTxFee = floorBSVPerKB
 		tSettings.Policy.MinMiningTxFeeByScriptSize = []settings.FeeTier{{Threshold: 10, SatoshisPerK: 1_000}}
 
 		tv := NewTxValidator(ulogger.TestLogger{}, tSettings)
 		tv.bdk = noopBDKValidator{}
 
-		tx := newConsolidationTestTx(t, 20, 1, 107, 0)
+		return tv
+	}
 
+	t.Run("dust-return donation cannot buy off the surcharge", func(t *testing.T) {
+		tv := newValidator(t, 0)
+
+		// The evasion: spend a coin whose locking script is OP_RETURN + 5000
+		// bytes (standard as a data carrier, so it passes the standard-input
+		// rule) with a single dust-return donation output, which relaxes the
+		// consolidation factor and confirmations. Old behaviour: fully exempt.
+		// New behaviour: the ~5000-byte size surcharge is still owed.
+		prevout := append([]byte{bscript.OpRETURN}, make([]byte, 5_000)...)
+
+		tx := bt.NewTx()
+		require.NoError(t, tx.From(scriptTierTestPrevTxID, 0, hex.EncodeToString(prevout), 1_000))
+
+		donation := bscript.Script(dustReturnScript)
+		tx.AddOutput(&bt.Output{Satoshis: 0, LockingScript: &donation})
+
+		require.True(t, isDustReturnTxn(tx), "test fixture must be a dust-return donation")
+
+		err := tv.ValidateTransaction(tx, scriptTierTestBlockHeight, deepHeights(1), NewDefaultOptions())
+		require.Error(t, err, "the surcharge is due despite the donation exemption")
+		require.True(t, errors.Is(err, errors.ErrTxPolicy))
+	})
+
+	t.Run("the exemption waives the floor but not the surcharge", func(t *testing.T) {
+		// A genuine 20-in consolidation whose 107-byte scripts exceed the tiny
+		// 10-byte threshold: the surcharge is owed, but the floor is waived.
+		// Paying exactly the surcharge passes; one satoshi short fails. Surcharge
+		// (size tier {10:1000}): 20 * ((107-10) + (25-10)) = 20 * 112 = 2240 sat
+		// (20 unlocking scripts of 107 bytes, 20 prevouts of 25; outputs are not
+		// priced). With a 0.001 BSV/kB floor the tx cannot also pay the floor.
+		tv := newValidator(t, 0.001)
+
+		const surcharge = uint64(2_240) // fee param IS the fee (see newConsolidationTestTx)
+
+		exact := newConsolidationTestTx(t, 20, 1, 107, surcharge)
+		require.NoError(t, tv.ValidateTransaction(exact, scriptTierTestBlockHeight, deepHeights(20), NewDefaultOptions()),
+			"a free consolidation paying the surcharge passes even though it cannot pay the floor")
+
+		short := newConsolidationTestTx(t, 20, 1, 107, surcharge-1)
+		require.Error(t, tv.ValidateTransaction(short, scriptTierTestBlockHeight, deepHeights(20), NewDefaultOptions()),
+			"one satoshi short of the surcharge still fails")
+	})
+
+	t.Run("a genuine small-script consolidation stays free", func(t *testing.T) {
+		// Scripts under the threshold produce no surcharge, so the tx returns
+		// before the floor is even considered: the honest UTXO sweep is
+		// unaffected by the tiers, even with a floor it does not pay.
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.Policy.MinMiningTxFee = 0.001
+		tSettings.Policy.MinMiningTxFeeByScriptSize = []settings.FeeTier{{Threshold: 1_000, SatoshisPerK: 1_000}}
+		tv := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		tv.bdk = noopBDKValidator{}
+
+		tx := newConsolidationTestTx(t, 20, 1, 107, 0) // zero fee, all scripts under 1000 bytes
 		require.NoError(t, tv.ValidateTransaction(tx, scriptTierTestBlockHeight, deepHeights(20), NewDefaultOptions()))
 	})
 }
@@ -347,14 +603,16 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		return test.CreateBaseTestSettings(t).Policy
 	}
 
+	genesis := baseTestGenesis(t)
+
 	t.Run("qualifying consolidation", func(t *testing.T) {
 		tx := newConsolidationTestTx(t, 20, 1, 107, 0)
-		require.True(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(20)))
+		require.True(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(20), genesis))
 	})
 
 	t.Run("too few inputs for the factor", func(t *testing.T) {
 		tx := newConsolidationTestTx(t, 19, 1, 107, 0)
-		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(19)))
+		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(19), genesis))
 	})
 
 	t.Run("factor zero disables free consolidations", func(t *testing.T) {
@@ -362,7 +620,7 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		po.MinConsolidationFactor = 0
 
 		tx := newConsolidationTestTx(t, 20, 1, 107, 0)
-		require.False(t, isFreeConsolidationTxn(po, tx, scriptTierTestBlockHeight, deepHeights(20)))
+		require.False(t, isFreeConsolidationTxn(po, tx, scriptTierTestBlockHeight, deepHeights(20), genesis))
 	})
 
 	t.Run("unconfirmed input disqualifies", func(t *testing.T) {
@@ -371,7 +629,7 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		heights := deepHeights(20)
 		heights[7] = unconfirmedParentHeight
 
-		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, heights))
+		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, heights, genesis))
 	})
 
 	t.Run("shallowly confirmed input disqualifies", func(t *testing.T) {
@@ -380,7 +638,7 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		heights := deepHeights(20)
 		heights[7] = scriptTierTestBlockHeight - 3 // 3 confirmations, need 6
 
-		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, heights))
+		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, heights, genesis))
 	})
 
 	t.Run("height zero skips the confirmation rule", func(t *testing.T) {
@@ -390,12 +648,22 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		heights := deepHeights(20)
 		heights[7] = 0
 
-		require.True(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, heights))
+		require.True(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, heights, genesis))
 	})
 
 	t.Run("oversized unlocking script disqualifies", func(t *testing.T) {
 		tx := newConsolidationTestTx(t, 20, 1, 151, 0)
-		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(20)))
+		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(20), genesis))
+	})
+
+	t.Run("zero max-input-script-size normalises to 150", func(t *testing.T) {
+		// PR review P1-7: BDK rewrites 0 to 150, so a 107-byte script must still
+		// qualify (a raw 0 limit would reject it).
+		po := basePolicy(t)
+		po.MaxConsolidationInputScriptSize = 0
+
+		tx := newConsolidationTestTx(t, 20, 1, 107, 0)
+		require.True(t, isFreeConsolidationTxn(po, tx, scriptTierTestBlockHeight, deepHeights(20), genesis))
 	})
 
 	t.Run("non-standard prevout script disqualifies unless accepted", func(t *testing.T) {
@@ -408,10 +676,10 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		nonStandard := bscript.Script(repeatedOps(25))
 		tx.Inputs[3].PreviousTxScript = &nonStandard
 
-		require.False(t, isFreeConsolidationTxn(po, tx, scriptTierTestBlockHeight, deepHeights(20)))
+		require.False(t, isFreeConsolidationTxn(po, tx, scriptTierTestBlockHeight, deepHeights(20), genesis))
 
 		po.AcceptNonStdConsolidationInput = true
-		require.True(t, isFreeConsolidationTxn(po, tx, scriptTierTestBlockHeight, deepHeights(20)))
+		require.True(t, isFreeConsolidationTxn(po, tx, scriptTierTestBlockHeight, deepHeights(20), genesis))
 	})
 
 	t.Run("insufficient locking-script shrinkage disqualifies", func(t *testing.T) {
@@ -422,7 +690,7 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		bigOutput := bscript.Script(make([]byte, 26))
 		tx.Outputs[0].LockingScript = &bigOutput
 
-		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(20)))
+		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(20), genesis))
 	})
 
 	t.Run("dust-return donation relaxes factor and confirmations", func(t *testing.T) {
@@ -435,7 +703,7 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		tx.AddOutput(&bt.Output{Satoshis: 0, LockingScript: &donation})
 
 		heights := []uint32{unconfirmedParentHeight, unconfirmedParentHeight, unconfirmedParentHeight}
-		require.True(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, heights))
+		require.True(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, heights, genesis))
 	})
 
 	t.Run("single-output zero-value tx without the dust script is not a donation", func(t *testing.T) {
@@ -448,12 +716,12 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		tx.AddOutput(&bt.Output{Satoshis: 0, LockingScript: &notDust})
 
 		// Falls through to the normal path: 3 inputs < factor 20.
-		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(3)))
+		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(3), genesis))
 	})
 
 	t.Run("mismatched utxoHeights length disqualifies", func(t *testing.T) {
 		tx := newConsolidationTestTx(t, 20, 1, 107, 0)
-		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(19)))
+		require.False(t, isFreeConsolidationTxn(basePolicy(t), tx, scriptTierTestBlockHeight, deepHeights(19), genesis))
 	})
 }
 
@@ -468,9 +736,11 @@ func TestFreeConsolidationDifferentialBDK(t *testing.T) {
 	po := tSettings.Policy
 	po.MinMiningTxFee = 0.01 // 1,000,000 sat/kB: any non-exempt zero-fee tx must fail
 
+	genesisHeight := tSettings.ChainCfgParams.GenesisActivationHeight
+
 	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, po, tSettings.ChainCfgParams)
 
-	blockHeight := tSettings.ChainCfgParams.GenesisActivationHeight + 10_000
+	blockHeight := genesisHeight + 10_000
 	prevTxID := "aa00000000000000000000000000000000000000000000000000000000000001"
 
 	priv, err := ec.NewPrivateKey()
@@ -534,7 +804,7 @@ func TestFreeConsolidationDifferentialBDK(t *testing.T) {
 
 		require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, false, heights),
 			"BDK must accept a zero-fee free consolidation despite the fee floor")
-		require.True(t, isFreeConsolidationTxn(po, tx, blockHeight, heights))
+		require.True(t, isFreeConsolidationTxn(po, tx, blockHeight, heights, genesisHeight))
 	})
 
 	t.Run("BDK charges the split transaction and the Go predicate agrees", func(t *testing.T) {
@@ -543,6 +813,119 @@ func TestFreeConsolidationDifferentialBDK(t *testing.T) {
 		err := verifier.ValidateTransaction(tx, blockHeight, false, heights)
 		require.Error(t, err, "a zero-fee non-consolidation must fail the raised fee floor")
 		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
-		require.False(t, isFreeConsolidationTxn(po, tx, blockHeight, heights))
+		require.False(t, isFreeConsolidationTxn(po, tx, blockHeight, heights, genesisHeight))
 	})
+}
+
+// benchTieredValidator builds a validator with both tier schedules enabled and
+// realistic caps, for the per-transaction-path benchmarks the PR review asks for.
+func benchTieredValidator(b *testing.B, enabled bool) *TxValidator {
+	b.Helper()
+
+	tSettings := test.CreateBaseTestSettings(b)
+	tSettings.Policy.MinMiningTxFee = 0
+	if enabled {
+		tSettings.Policy.MinMiningTxFeeByScriptSize = []settings.FeeTier{{Threshold: 500_000, SatoshisPerK: 10}}
+		tSettings.Policy.MinMiningTxFeeByScriptOps = []settings.FeeTier{{Threshold: 1_000_000, SatoshisPerK: 10}}
+	}
+
+	tv := NewTxValidator(ulogger.TestLogger{}, tSettings)
+	tv.bdk = noopBDKValidator{}
+
+	return tv
+}
+
+// benchConsolidationTx builds a numInputs-in, 1-out P2PKH consolidation without
+// a testing.T (usable from benchmarks).
+func benchConsolidationTx(b *testing.B, numInputs int) *bt.Tx {
+	b.Helper()
+
+	tx := bt.NewTx()
+	for i := 0; i < numInputs; i++ {
+		require.NoError(b, tx.From(scriptTierTestPrevTxID, uint32(i), scriptTierTestP2PKHScript, 1000)) //nolint:gosec // bench index
+		unlocking := bscript.Script(make([]byte, 107))
+		tx.Inputs[i].UnlockingScript = &unlocking
+	}
+
+	outScript, err := bscript.NewFromHexString(scriptTierTestP2PKHScript)
+	require.NoError(b, err)
+	tx.AddOutput(&bt.Output{Satoshis: 500, LockingScript: outScript})
+
+	return tx
+}
+
+func BenchmarkCheckScriptTieredFees_Disabled(b *testing.B) {
+	tv := benchTieredValidator(b, false)
+	tx := benchConsolidationTx(b, 20)
+	heights := deepHeights(20)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_ = tv.checkScriptTieredFees(tx, scriptTierTestBlockHeight, heights)
+	}
+}
+
+func BenchmarkCheckScriptTieredFees_Enabled(b *testing.B) {
+	for _, n := range []int{2, 20, 100} {
+		b.Run(sizeName(n), func(b *testing.B) {
+			tv := benchTieredValidator(b, true)
+			tx := benchConsolidationTx(b, n)
+			heights := deepHeights(n)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				_ = tv.checkScriptTieredFees(tx, scriptTierTestBlockHeight, heights)
+			}
+		})
+	}
+}
+
+func BenchmarkCountScriptOps(b *testing.B) {
+	cases := []struct {
+		name   string
+		script []byte
+	}{
+		{"p2pkh", mustHexB(b, scriptTierTestP2PKHScript)},
+		{"ops_1k", repeatedOps(1_000)},
+		{"push_1k", bigPush(1_000)},
+		{"adversarial_10mb_ops", repeatedOps(10 << 20)},
+	}
+
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			b.SetBytes(int64(len(c.script)))
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				_, _ = countScriptOps(c.script, math.MaxUint64)
+			}
+		})
+	}
+}
+
+func sizeName(n int) string {
+	switch n {
+	case 2:
+		return "2in"
+	case 20:
+		return "20in"
+	case 100:
+		return "100in"
+	default:
+		return "nin"
+	}
+}
+
+func mustHexB(b *testing.B, s string) []byte {
+	b.Helper()
+
+	out, err := hex.DecodeString(s)
+	require.NoError(b, err)
+
+	return out
 }

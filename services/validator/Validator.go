@@ -765,6 +765,21 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	// SkipScriptValidation returns before the policy fee checks in
+	// TxValidator.ValidateTransaction, so it must never be requested without
+	// SkipPolicyChecks: otherwise a caller could set skipScriptValidation=true
+	// (a request field, Server.go) to bypass the per-script fee tiers while
+	// still claiming a policy-mode submission. The only legitimate callers pair
+	// the two flags (netsync quick-validation catchup, which also sets
+	// OutpointOnlySpend); reject the mismatch here, after the OutpointOnlySpend
+	// guards so their more specific diagnostics take precedence (PR review P1-12).
+	if validationOptions.SkipScriptValidation && !validationOptions.SkipPolicyChecks {
+		err = errors.NewProcessingError("[Validate][%s] SkipScriptValidation requires SkipPolicyChecks", txID)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	comparisonTime, skipFinality, finalityErr := selectFinalityComparisonTime(validationOptions, blockHeight, uint32(v.settings.ChainCfgParams.CSVHeight), blockState)
 	if finalityErr != nil {
 		err = finalityErr
