@@ -786,3 +786,54 @@ func TestScriptSizeCapZeroDifferentialBDK(t *testing.T) {
 
 	require.Equal(t, uint64(math.MaxUint64), scriptSizeCap(&settings.PolicySettings{MaxScriptSizePolicy: 0}))
 }
+
+// TestDeadBranchOpcodesDifferentialBDK pins that svnode counts every fetched
+// opcode above OP_16 in a branch that never runs, whatever the opcode: one
+// disabled in the coin's era (OP_2MUL before Chronicle) and one undefined
+// (0xff) both count without failing the script post-Genesis, while pre-Genesis
+// the disabled one is fatal even unexecuted. A conditional reached after an
+// executed nested OP_RETURN is likewise counted while svnode only checks its
+// grammar. countScriptOps counts all of these the same way. Suggested by
+// review round 6.
+func TestDeadBranchOpcodesDifferentialBDK(t *testing.T) {
+	params := &chaincfg.MainNetParams
+	tip := params.ChronicleActivationHeight + 20_000
+	postChronicleCoin := params.ChronicleActivationHeight + 1_000
+	preChronicleCoin := params.GenesisActivationHeight + 1_000
+	preGenesisCoin := uint32(300_000)
+
+	t.Run("a disabled opcode in a dead branch is counted post-Genesis and fatal pre-Genesis", func(t *testing.T) {
+		// OP_0 OP_IF OP_2MUL OP_ENDIF OP_1: IF, 2MUL, ENDIF.
+		script := []byte{bscript.OpZERO, bscript.OpIF, bscript.Op2MUL, bscript.OpENDIF, bscript.OpONE}
+
+		require.Equal(t, uint64(3), countOps(script))
+		require.Equal(t, uint64(3), countOpsPreChronicle(script))
+		requireBDKOpCount(t, params, script, 3, preChronicleCoin, tip)
+		requireBDKOpCount(t, params, script, 3, postChronicleCoin, tip)
+
+		err := bdkSpendVerdict(t, params, script, nil, 1_000_000, preGenesisCoin, tip)
+		require.Error(t, err)
+		require.False(t, isOpCountRejection(err), "pre-Genesis a disabled opcode is fatal even unexecuted, got %v", err)
+	})
+
+	t.Run("an undefined opcode in a dead branch is counted", func(t *testing.T) {
+		// OP_0 OP_IF 0xff OP_ENDIF OP_1: IF, 0xff, ENDIF.
+		script := []byte{bscript.OpZERO, bscript.OpIF, 0xff, bscript.OpENDIF, bscript.OpONE}
+
+		require.Equal(t, uint64(3), countOps(script))
+		requireBDKOpCount(t, params, script, 3, postChronicleCoin, tip)
+		requireBDKOpCount(t, params, script, 3, preChronicleCoin, tip)
+	})
+
+	t.Run("a conditional after an executed nested OP_RETURN is counted in grammar-check mode", func(t *testing.T) {
+		// OP_1 OP_1 OP_IF OP_RETURN OP_ENDIF OP_1 OP_IF OP_NOP OP_ENDIF: after
+		// the nested OP_RETURN nothing executes, so the third OP_1 is never
+		// pushed and the second OP_IF pops nothing, yet IF, NOP and ENDIF are
+		// fetched and counted: six in all. The first OP_1 makes the script true.
+		script := []byte{bscript.OpONE, bscript.OpONE, bscript.OpIF, bscript.OpRETURN, bscript.OpENDIF, bscript.OpONE, bscript.OpIF, bscript.OpNOP, bscript.OpENDIF}
+
+		require.Equal(t, uint64(6), countOps(script))
+		requireBDKOpCount(t, params, script, 6, postChronicleCoin, tip)
+		requireBDKOpCount(t, params, script, 6, preChronicleCoin, tip)
+	})
+}
