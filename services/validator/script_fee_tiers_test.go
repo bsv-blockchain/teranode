@@ -523,6 +523,46 @@ func TestCheckScriptTieredFees(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrTxPolicy), "and still classified as a policy error")
 	})
 
+	t.Run("a short script carrying a multisig key count is still priced", func(t *testing.T) {
+		// The ops walk is skipped when a script is shorter than the first ops
+		// threshold, because counted ops cannot exceed the script length. A
+		// multisig breaks that bound: this three-byte locking script counts 18
+		// ops, one for the opcode plus a key count of 17. Skipping it would hand
+		// out the key count for free, which is the whole point of the ops tier.
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.Policy.MinMiningTxFee = 0
+		tSettings.Policy.MinMiningTxFeeByScriptOps = []settings.FeeTier{{Threshold: 10, SatoshisPerK: 1_000_000}}
+
+		tv := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		tv.bdk = noopBDKValidator{}
+
+		prevout := []byte{0x01, 17, bscript.OpCHECKMULTISIG} // <push 17> OP_CHECKMULTISIG
+		require.Len(t, prevout, 3)
+		require.Equal(t, uint64(18), countOps(prevout))
+
+		tx := bt.NewTx()
+		require.NoError(t, tx.From(scriptTierTestPrevTxID, 0, hex.EncodeToString(prevout), 0))
+		require.NoError(t, tx.AddOpReturnOutput([]byte{0x01}))
+
+		err := tv.ValidateTransaction(tx, scriptTierTestBlockHeight, deepHeights(1), NewDefaultOptions())
+		require.Error(t, err, "a multisig key count must be priced even below the length threshold")
+		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
+	})
+
+	t.Run("a malformed oversized push neither panics nor hangs", func(t *testing.T) {
+		// An OP_PUSHDATA4 length assembled in a signed int overflows negative on
+		// a 32-bit build, which would slice backwards and walk the index
+		// backwards. Lengths are decoded as uint64 and bounded first.
+		require.NotPanics(t, func() {
+			ops, capExceeded := countScriptOps([]byte{bscript.OpNOP, bscript.OpPUSHDATA4, 0xff, 0xff, 0xff, 0xff, 0xaa}, math.MaxUint64)
+			require.Equal(t, uint64(1), ops, "the OP_NOP counts, then the malformed push stops the walk")
+			require.False(t, capExceeded)
+
+			require.Nil(t, lastPush([]byte{bscript.OpPUSHDATA4, 0xff, 0xff, 0xff, 0xff, 0xaa}))
+			require.Nil(t, lastPush([]byte{bscript.OpPUSHDATA2, 0xff, 0xff, 0xaa}))
+		})
+	})
+
 	t.Run("a script over the op cap is left to BDK, not rejected for fee", func(t *testing.T) {
 		// PR review P1-9: a script beyond maxopsperscriptpolicy must not be
 		// priced (BDK rejects it with SCRIPT_ERR_OP_COUNT); pricing it would

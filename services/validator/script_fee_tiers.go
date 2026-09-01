@@ -33,12 +33,15 @@ import (
 // BDK exempts free consolidation transactions from its fee FLOOR (bitcoin-sv
 // policy.cpp IsFreeConsolidationTxn). That exemption is honoured here for the
 // floor term ONLY: the per-script surcharge is always due. The exemption exists
-// to encourage cleanup of many small UTXOs, and a genuine such consolidation
-// never triggers a surcharge (its scripts are far below any tier threshold), so
-// declining to waive the surcharge costs honest consolidators nothing. The only
-// transactions that are both consolidation-shaped and surcharge-bearing are
-// adversarial by construction (a large-script output created cheaply, then
-// "consolidated" to dodge the surcharge). See checkScriptTieredFees.
+// to encourage cleanup of many small UTXOs, and at any threshold set near the
+// policy caps these are meant to price, an ordinary consolidation's scripts sit
+// far below the first tier and owe no surcharge at all, so declining to waive
+// the surcharge costs honest consolidators nothing. (Thresholds are an operator
+// choice: set one low enough, a few tens of bytes or a handful of ops, and even
+// a plain P2PKH input is over it. That is the operator pricing ordinary spends,
+// not a property of this exemption.) What the floor-only rule prevents is the
+// shape that is adversarial by construction: a large-script output created
+// cheaply, then "consolidated" to dodge the surcharge. See checkScriptTieredFees.
 
 // dustReturnScript is the exact dust-donation script svnode recognises in
 // IsDustReturnScript: OP_FALSE OP_RETURN OP_PUSHDATA(4) 'dust'.
@@ -147,6 +150,13 @@ func decodeScriptNum(b []byte) int64 {
 //   - Anywhere the key count is not statically certain, the opcode counts as
 //     one. That UNDER-counts, which is the containment direction: it can only
 //     charge less than svnode, never reject a script svnode accepts cheaply.
+//     The widest case is a multisig whose key count arrives on the stack from
+//     the OTHER script of the pair, such as a bare OP_CHECKMULTISIG locking
+//     script spent by an unlocking script that pushes the keys and the count.
+//     Each script is counted on its own, as svnode counts them, so that count
+//     is simply not present here and the opcode is charged as one. Such a spend
+//     is under-priced; it is not mis-validated, and BDK still enforces
+//     maxopsperscriptpolicy against the true count.
 //
 // Execution is certain only at IF-depth zero AND before any nested OP_RETURN.
 // Post-Genesis an OP_RETURN inside a conditional does not end the script; it
@@ -222,39 +232,38 @@ func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) 
 
 		// opcode <= OP_16: data pushes (free) and small constants (free).
 		// Every branch below either sets both of these or continues the loop.
+		// Push lengths are decoded as uint64 and bounded against the remaining
+		// bytes BEFORE narrowing to int: assembling an OP_PUSHDATA4 length in a
+		// signed int overflows negative on a 32-bit build, which would slice
+		// backwards (a panic) and walk the index backwards (a hang).
 		var dataStart, dataLen int
+
+		var pushLen uint64
 
 		switch {
 		case opcode <= 0x4b: // direct push of `opcode` bytes (OP_0 pushes none)
-			dataStart, dataLen = i, int(opcode)
-			i += dataLen
+			pushLen = uint64(opcode)
 		case opcode == bscript.OpPUSHDATA1:
 			if i >= len(script) {
 				return ops, false
 			}
 
-			dataLen = int(script[i])
+			pushLen = uint64(script[i])
 			i++
-			dataStart = i
-			i += dataLen
 		case opcode == bscript.OpPUSHDATA2:
 			if i+1 >= len(script) {
 				return ops, false
 			}
 
-			dataLen = int(script[i]) + int(script[i+1])<<8
+			pushLen = uint64(script[i]) | uint64(script[i+1])<<8
 			i += 2
-			dataStart = i
-			i += dataLen
 		case opcode == bscript.OpPUSHDATA4:
 			if i+3 >= len(script) {
 				return ops, false
 			}
 
-			dataLen = int(script[i]) + int(script[i+1])<<8 + int(script[i+2])<<16 + int(script[i+3])<<24
+			pushLen = uint64(script[i]) | uint64(script[i+1])<<8 | uint64(script[i+2])<<16 | uint64(script[i+3])<<24
 			i += 4
-			dataStart = i
-			i += dataLen
 		case opcode >= bscript.OpONE && opcode <= bscript.Op16:
 			// OP_1..OP_16 push the small integer 1..16.
 			lastPush, lastWasPush = int64(opcode)-int64(bscript.OpONE)+1, true
@@ -267,10 +276,19 @@ func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) 
 			continue
 		}
 
+		// A push running past the end of the script is malformed: BDK fails its
+		// own parse, so stopping here can only under-count.
+		if pushLen > uint64(len(script)-i) {
+			return ops, false
+		}
+
+		dataStart, dataLen = i, int(pushLen)
+		i += dataLen
+
 		// A data push (including OP_0, which pushes an empty item worth zero).
 		// Only a CScriptNum-width push can carry a key count; anything wider
 		// leaves the preceding-push state unusable.
-		if dataLen <= scriptNumMaxBytes && dataStart+dataLen <= len(script) {
+		if dataLen <= scriptNumMaxBytes {
 			lastPush, lastWasPush = decodeScriptNum(script[dataStart:dataStart+dataLen]), true
 		} else {
 			lastWasPush = false
@@ -291,46 +309,64 @@ func lastPush(script []byte) []byte {
 		opcode := script[i]
 		i++
 
-		var size int
+		// Decoded as uint64 and bounded before narrowing: an OP_PUSHDATA4 length
+		// assembled in a signed int overflows negative on a 32-bit build, which
+		// would slice backwards and panic.
+		var pushLen uint64
 
 		switch {
 		case opcode <= 0x4b:
-			size = int(opcode)
+			pushLen = uint64(opcode)
 		case opcode == bscript.OpPUSHDATA1:
 			if i >= len(script) {
 				return nil
 			}
 
-			size = int(script[i])
+			pushLen = uint64(script[i])
 			i++
 		case opcode == bscript.OpPUSHDATA2:
 			if i+1 >= len(script) {
 				return nil
 			}
 
-			size = int(script[i]) + int(script[i+1])<<8
+			pushLen = uint64(script[i]) | uint64(script[i+1])<<8
 			i += 2
 		case opcode == bscript.OpPUSHDATA4:
 			if i+3 >= len(script) {
 				return nil
 			}
 
-			size = int(script[i]) + int(script[i+1])<<8 + int(script[i+2])<<16 + int(script[i+3])<<24
+			pushLen = uint64(script[i]) | uint64(script[i+1])<<8 | uint64(script[i+2])<<16 | uint64(script[i+3])<<24
 			i += 4
 		default:
 			// Not push-only; no unambiguous redeem script.
 			return nil
 		}
 
-		if i+size > len(script) {
+		if pushLen > uint64(len(script)-i) {
 			return nil
 		}
 
+		size := int(pushLen)
 		last = script[i : i+size]
 		i += size
 	}
 
 	return last
+}
+
+// mayCountMultiSig reports whether a script could contain an OP_CHECKMULTISIG or
+// OP_CHECKMULTISIGVERIFY, the only opcodes that add more than one to svnode's op
+// count. Counted ops otherwise never exceed the script length, since every
+// counted opcode advances the walk by one byte, and that bound is what lets
+// priceScript skip the walk entirely on short scripts. A multisig breaks the
+// bound (a one-byte OP_CHECKMULTISIG can count its whole key count), so the
+// shortcut has to be withdrawn whenever one of those bytes is present. A byte
+// that only appears inside push data is a false positive here, which costs a
+// walk and never a wrong price.
+func mayCountMultiSig(script []byte) bool {
+	return bytes.IndexByte(script, bscript.OpCHECKMULTISIG) >= 0 ||
+		bytes.IndexByte(script, bscript.OpCHECKMULTISIGVERIFY) >= 0
 }
 
 // priceScript returns the marginal surcharge, in satoshi-thousandths, for a
@@ -339,8 +375,9 @@ func lastPush(script []byte) []byte {
 // at zero: pricing it would preempt BDK's specific rejection with a misleading
 // insufficient-fee error the submitter would retry forever, and would walk the
 // whole script for a value that never matters (PR review P1-9). The ops walk is
-// skipped entirely when even the whole script length is below the first ops
-// threshold, since the counted ops can never exceed the length (PR review P1-10).
+// skipped when the whole script length is below the first ops threshold, since
+// counted ops cannot exceed the length (PR review P1-10) unless a multisig adds
+// its key count, which mayCountMultiSig checks for.
 func priceScript(sizeTiers, opsTiers []settings.FeeTier, opCap, sizeCap uint64, script []byte) uint64 {
 	n := uint64(len(script))
 	if n == 0 || n > sizeCap {
@@ -349,7 +386,7 @@ func priceScript(sizeTiers, opsTiers []settings.FeeTier, opCap, sizeCap uint64, 
 
 	var thousandths uint64
 
-	if len(opsTiers) > 0 && n > opsTiers[0].Threshold {
+	if len(opsTiers) > 0 && (n > opsTiers[0].Threshold || mayCountMultiSig(script)) {
 		ops, capExceeded := countScriptOps(script, opCap)
 		if capExceeded {
 			return 0
@@ -421,6 +458,12 @@ func txFee(tx *bt.Tx) (fee uint64, ok bool) {
 // is monotone and never loses a satoshi to per-band truncation. It is a no-op
 // when both schedules are empty, and callers must gate it on policy mode (it is
 // never a consensus rule).
+//
+// The single final division truncates, so a total surcharge below one satoshi
+// rounds to nothing. That is the rate doing what a rate does (999 bytes at
+// 1 sat/kB is less than a satoshi) and it matches how the byte-rate floor
+// behaves; an operator who wants a script priced at all sets a rate that clears
+// a satoshi at the sizes they care about.
 //
 // The free-consolidation exemption waives the FLOOR term only; the surcharge is
 // always due (see the file comment). Because BDK re-checks and re-exempts its

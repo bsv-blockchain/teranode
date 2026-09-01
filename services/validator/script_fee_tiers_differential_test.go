@@ -194,6 +194,18 @@ func TestCheckMultiSigKeyCountDifferentialBDK(t *testing.T) {
 		requireBDKOpCount(t, params, multisig, 21, coinHeight, blockHeight)
 	})
 
+	t.Run("a three-byte multisig counts far more ops than it has bytes", func(t *testing.T) {
+		// The bound that lets priceScript skip the ops walk on short scripts,
+		// counted ops cannot exceed script length, does not hold for a multisig.
+		// Pin that against BDK: three bytes, eighteen operations.
+		script := []byte{0x01, 17, bscript.OpCHECKMULTISIG} // <push 17> OP_CHECKMULTISIG
+
+		require.Len(t, script, 3)
+		require.Equal(t, uint64(18), countOps(script))
+
+		requireBDKOpCount(t, params, script, 18, coinHeight, blockHeight)
+	})
+
 	t.Run("a nested OP_RETURN suppresses the key count that follows it", func(t *testing.T) {
 		// Found by the differential fuzz, not derived from the source: an
 		// OP_RETURN inside a conditional does not end the script post-Genesis,
