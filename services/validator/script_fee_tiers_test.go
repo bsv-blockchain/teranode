@@ -266,15 +266,25 @@ func TestCountScriptOpsVerifGrammar(t *testing.T) {
 	})
 }
 
-func TestIsPostChronicleCoin(t *testing.T) {
-	const chronicle, tip = uint32(1_000), uint32(5_000)
+// TestBDKCoinEra pins the BDK-exact era predicates against the conservative
+// isPreGenesisCoin: they agree everywhere except at an unrecorded height 0,
+// which BDK reads as pre-Genesis and the redeem-billing gate reads as unknown.
+func TestBDKCoinEra(t *testing.T) {
+	const genesis, chronicle, tip = uint32(100), uint32(1_000), uint32(5_000)
 
-	require.False(t, isPostChronicleCoin(chronicle-1, tip, chronicle))
-	require.True(t, isPostChronicleCoin(chronicle, tip, chronicle), "the activation height itself is post-Chronicle")
-	require.True(t, isPostChronicleCoin(chronicle+1, tip, chronicle))
-	require.False(t, isPostChronicleCoin(0, tip, chronicle), "an unrecorded height compares as BDK compares it")
-	require.True(t, isPostChronicleCoin(unconfirmedParentHeight, tip, chronicle), "an unconfirmed parent takes the candidate height")
-	require.False(t, isPostChronicleCoin(unconfirmedParentHeight, chronicle-1, chronicle))
+	require.True(t, isBDKPreGenesisCoin(genesis-1, tip, genesis))
+	require.False(t, isBDKPreGenesisCoin(genesis, tip, genesis), "the activation height itself is post-Genesis")
+	require.True(t, isBDKPreGenesisCoin(0, tip, genesis), "an unrecorded height is pre-Genesis to BDK")
+	require.False(t, isPreGenesisCoin(0, genesis), "and unknown to the redeem-billing gate")
+	require.False(t, isBDKPreGenesisCoin(unconfirmedParentHeight, tip, genesis), "an unconfirmed parent takes the candidate height")
+	require.True(t, isBDKPreGenesisCoin(unconfirmedParentHeight, genesis-1, genesis))
+
+	require.False(t, isBDKPostChronicleCoin(chronicle-1, tip, chronicle))
+	require.True(t, isBDKPostChronicleCoin(chronicle, tip, chronicle), "the activation height itself is post-Chronicle")
+	require.True(t, isBDKPostChronicleCoin(chronicle+1, tip, chronicle))
+	require.False(t, isBDKPostChronicleCoin(0, tip, chronicle), "an unrecorded height compares as BDK compares it")
+	require.True(t, isBDKPostChronicleCoin(unconfirmedParentHeight, tip, chronicle), "an unconfirmed parent takes the candidate height")
+	require.False(t, isBDKPostChronicleCoin(unconfirmedParentHeight, chronicle-1, chronicle))
 }
 
 func mustHex(t *testing.T, s string) []byte {
@@ -322,8 +332,6 @@ func TestLastPush(t *testing.T) {
 // named scripts crash go-bt's IsP2PK / IsMultiSigOut (which this used to call);
 // the table then fuzzes a range of truncated and empty pushes.
 func TestIsStandardPrevoutScriptPanicSafety(t *testing.T) {
-	genesis := baseTestGenesis(t)
-
 	scripts := [][]byte{
 		{0x01, 0xAA, 0x4C, 0x00}, // panicked IsP2PK: DecodeParts yields an empty part
 		{0x4C, 0x00, 0xAE, 0xAE}, // panicked IsMultiSigOut: leading empty part
@@ -344,8 +352,8 @@ func TestIsStandardPrevoutScriptPanicSafety(t *testing.T) {
 		require.NotPanics(t, func() {
 			// Exercise both eras; the result value is irrelevant, only that it
 			// does not panic.
-			_ = isStandardPrevoutScript(&script, 50, genesis)        // pre-Genesis coin
-			_ = isStandardPrevoutScript(&script, 1_000_000, genesis) // post-Genesis coin
+			_ = isStandardPrevoutScript(&script, true)  // pre-Genesis coin
+			_ = isStandardPrevoutScript(&script, false) // post-Genesis coin
 		}, "isStandardPrevoutScript panicked on %x", s)
 	}
 }
@@ -353,14 +361,12 @@ func TestIsStandardPrevoutScriptPanicSafety(t *testing.T) {
 // TestIsStandardPrevoutScriptTemplates checks the standard-template classifier
 // accepts the real templates and rejects junk, and that P2SH is era-gated.
 func TestIsStandardPrevoutScriptTemplates(t *testing.T) {
-	genesis := uint32(620_538)
-
 	p2pkh := bscript.Script(mustHex(t, scriptTierTestP2PKHScript))
-	require.True(t, isStandardPrevoutScript(&p2pkh, 1_000_000, genesis))
+	require.True(t, isStandardPrevoutScript(&p2pkh, false))
 
 	p2sh := bscript.Script(mustHex(t, "a914000000000000000000000000000000000000000087"))
-	require.True(t, isStandardPrevoutScript(&p2sh, 100, genesis), "pre-Genesis P2SH is standard")
-	require.False(t, isStandardPrevoutScript(&p2sh, 700_000, genesis), "post-Genesis P2SH is not standard")
+	require.True(t, isStandardPrevoutScript(&p2sh, true), "pre-Genesis P2SH is standard")
+	require.False(t, isStandardPrevoutScript(&p2sh, false), "post-Genesis P2SH is not standard")
 
 	// Compressed-pubkey P2PK.
 	p2pk := make([]byte, 0, 35)
@@ -368,7 +374,7 @@ func TestIsStandardPrevoutScriptTemplates(t *testing.T) {
 	p2pk = append(p2pk, make([]byte, 32)...)
 	p2pk = append(p2pk, bscript.OpCHECKSIG)
 	p2pkScript := bscript.Script(p2pk)
-	require.True(t, isStandardPrevoutScript(&p2pkScript, 1_000_000, genesis))
+	require.True(t, isStandardPrevoutScript(&p2pkScript, false))
 
 	// Bare 1-of-1 multisig: OP_1 <33-byte key> OP_1 OP_CHECKMULTISIG.
 	ms := make([]byte, 0, 37)
@@ -376,15 +382,15 @@ func TestIsStandardPrevoutScriptTemplates(t *testing.T) {
 	ms = append(ms, make([]byte, 32)...)
 	ms = append(ms, bscript.OpONE, bscript.OpCHECKMULTISIG)
 	msScript := bscript.Script(ms)
-	require.True(t, isStandardPrevoutScript(&msScript, 1_000_000, genesis))
+	require.True(t, isStandardPrevoutScript(&msScript, false))
 
 	// Data carrier.
 	data := bscript.Script([]byte{bscript.OpFALSE, bscript.OpRETURN, 0x01, 0xaa})
-	require.True(t, isStandardPrevoutScript(&data, 1_000_000, genesis))
+	require.True(t, isStandardPrevoutScript(&data, false))
 
 	// Junk.
 	junk := bscript.Script(repeatedOps(25))
-	require.False(t, isStandardPrevoutScript(&junk, 1_000_000, genesis))
+	require.False(t, isStandardPrevoutScript(&junk, false))
 }
 
 func TestTierExcessThousandths(t *testing.T) {
@@ -689,6 +695,62 @@ func TestCheckScriptTieredFees(t *testing.T) {
 		require.NoError(t, tv.ValidateTransaction(build(t, 0), scriptTierTestBlockHeight, []uint32{chronicle - 1}, NewDefaultOptions()))
 	})
 
+	t.Run("a pre-Genesis coin is capped by the pre-Genesis limits, not the policy caps", func(t *testing.T) {
+		// BDK evaluates a pre-Genesis coin under svnode's fixed limits of 500
+		// ops and 10000 bytes and ignores the policy caps for it (measured in
+		// TestPreGenesisCapsDifferentialBDK). So a policy cap below those must
+		// not leave such a script unpriced, and one above them must not price
+		// a script BDK rejects anyway.
+		newValidator := func(t *testing.T, opCap int64, sizeCap int) *TxValidator {
+			t.Helper()
+
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Policy.MinMiningTxFee = 0
+			tSettings.Policy.MaxOpsPerScriptPolicy = opCap
+			tSettings.Policy.MaxScriptSizePolicy = sizeCap
+			tSettings.Policy.MinMiningTxFeeByScriptOps = []settings.FeeTier{{Threshold: 50, SatoshisPerK: 1_000}}
+			tSettings.Policy.MinMiningTxFeeByScriptSize = []settings.FeeTier{{Threshold: 50, SatoshisPerK: 1_000}}
+
+			tv := NewTxValidator(ulogger.TestLogger{}, tSettings)
+			tv.bdk = noopBDKValidator{}
+
+			return tv
+		}
+
+		build := func(t *testing.T, prevout []byte, fee uint64) *bt.Tx {
+			t.Helper()
+
+			tx := bt.NewTx()
+			require.NoError(t, tx.From(scriptTierTestPrevTxID, 0, hex.EncodeToString(prevout), fee))
+			require.NoError(t, tx.AddOpReturnOutput([]byte{0x01}))
+
+			return tx
+		}
+
+		genesis := baseTestGenesis(t)
+		preGenesisCoin, postGenesisCoin := []uint32{genesis - 1}, []uint32{genesis}
+
+		// 200 NOPs and OP_TRUE: 201 bytes and 200 ops, over policy caps of 100
+		// and under the pre-Genesis limits. 150 ops and 151 bytes beyond the
+		// thresholds at 1000 per thousand: 301 satoshis.
+		tv := newValidator(t, 100, 100)
+		script := append(repeatedOps(200), bscript.OpTRUE)
+
+		err := tv.ValidateTransaction(build(t, script, 300), scriptTierTestBlockHeight, preGenesisCoin, NewDefaultOptions())
+		require.Error(t, err, "a pre-Genesis script under the pre-Genesis limits must be priced whatever the policy caps")
+		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
+		require.NoError(t, tv.ValidateTransaction(build(t, script, 301), scriptTierTestBlockHeight, preGenesisCoin, NewDefaultOptions()))
+
+		// The same script on a post-Genesis coin is over both policy caps, so
+		// it is left unpriced for BDK to reject (PR review P1-9).
+		require.NoError(t, tv.ValidateTransaction(build(t, script, 0), scriptTierTestBlockHeight, postGenesisCoin, NewDefaultOptions()))
+
+		// A pre-Genesis script over the fixed 500-op limit is left unpriced
+		// even with the policy cap far above it.
+		tv = newValidator(t, 1_000_000, 1_000_000)
+		require.NoError(t, tv.ValidateTransaction(build(t, append(repeatedOps(600), bscript.OpTRUE), 0), scriptTierTestBlockHeight, preGenesisCoin, NewDefaultOptions()))
+	})
+
 	t.Run("a malformed oversized push neither panics nor hangs", func(t *testing.T) {
 		// An OP_PUSHDATA4 length assembled in a signed int overflows negative on
 		// a 32-bit build, which would slice backwards and walk the index
@@ -799,6 +861,8 @@ func TestScriptTieredFeeSurchargeAlwaysDue(t *testing.T) {
 }
 
 func TestIsFreeConsolidationTxn(t *testing.T) {
+	genesis := baseTestGenesis(t)
+
 	basePolicy := func(t *testing.T) *settings.PolicySettings {
 		t.Helper()
 
@@ -806,8 +870,6 @@ func TestIsFreeConsolidationTxn(t *testing.T) {
 		// 6 confirmations, 150-byte input scripts, standard inputs only.
 		return test.CreateBaseTestSettings(t).Policy
 	}
-
-	genesis := baseTestGenesis(t)
 
 	t.Run("qualifying consolidation", func(t *testing.T) {
 		tx := newConsolidationTestTx(t, 20, 1, 107, 0)

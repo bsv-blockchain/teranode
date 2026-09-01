@@ -83,9 +83,10 @@ func fuzzEra(t *testing.T, rng *rand.Rand, params *chaincfg.Params, blockHeight 
 // OP_IF/OP_ELSE/OP_ENDIF nesting including branches that do not execute (still
 // counted), and OP_RETURN both nested (does not terminate) and at the top level
 // (terminates, so the tail is never counted). On a post-Chronicle coin
-// OP_VERNOTIF opens conditionals too: with a one-byte item on the stack (not a
-// 4-byte transaction version) its condition is true, so the branch runs, which
-// this generator's exactness relies on. OP_VERIF (false on such an item) is
+// OP_VERNOTIF and OP_VERIF open conditionals too, and both are emitted with a
+// TRUE condition, which this generator's exactness relies on: OP_VERNOTIF on a
+// one-byte item (not a 4-byte transaction version), and OP_VERIF on the
+// spending transaction's version, 1, as a 4-byte item. The false forms are
 // left to randomBranchyScript, since a nested OP_RETURN in a branch that never
 // runs is a documented under-count rather than an exact match.
 //
@@ -150,9 +151,12 @@ func randomScript(rng *rand.Rand, postChronicle bool) []byte {
 			emitPush()
 
 		case 3: // open a conditional (needs a stack value to consume)
-			if postChronicle && rng.Intn(3) == 0 {
+			switch {
+			case postChronicle && rng.Intn(4) == 0:
 				script = append(script, bscript.OpONE, bscript.OpVERNOTIF)
-			} else {
+			case postChronicle && rng.Intn(4) == 0:
+				script = append(script, 0x04, 0x01, 0x00, 0x00, 0x00, bscript.OpVERIF)
+			default:
 				script = append(script, bscript.OpONE, bscript.OpIF)
 			}
 
@@ -207,8 +211,9 @@ func randomScript(rng *rand.Rand, postChronicle bool) []byte {
 
 // randomBranchyScript generates the shapes randomScript structurally cannot:
 // conditions that are FALSE as well as true, OP_NOTIF, OP_RETURN inside a
-// branch that never executes, and on a post-Chronicle coin OP_VERIF (false on a
-// non-version item) as well as OP_VERNOTIF. A multisig only ever appears as the final
+// branch that never executes, and on a post-Chronicle coin OP_VERIF and
+// OP_VERNOTIF on items that are and are not the spending transaction's 4-byte
+// version, so both arms of each are reached. A multisig only ever appears as the final
 // construct, for the same reason as in randomScript: it fails on the missing
 // signatures, so anything after it is never reached by BDK and the two counts
 // would stop being comparable. Exact agreement is not claimed on these. svnode
@@ -228,24 +233,40 @@ func randomBranchyScript(rng *rand.Rand, postChronicle bool) []byte {
 				script = append(script, bscript.OpNOP)
 			}
 
-		case 1: // open a conditional, condition true or false, IF or NOTIF
-			if rng.Intn(2) == 0 {
-				script = append(script, bscript.OpZERO)
-			} else {
-				script = append(script, bscript.OpONE)
-			}
+		case 1: // open a conditional, condition true or false
+			if postChronicle && rng.Intn(3) == 0 {
+				// OP_VERIF/OP_VERNOTIF compare a 4-byte item against the
+				// transaction version (1); any other item compares false.
+				// These skip svnode's MINIMALIF check, so a 4-byte item is
+				// only ever a condition for them.
+				switch rng.Intn(4) {
+				case 0:
+					script = append(script, bscript.OpZERO)
+				case 1:
+					script = append(script, bscript.OpONE)
+				case 2:
+					script = append(script, 0x04, 0x01, 0x00, 0x00, 0x00) // the version: true
+				default:
+					script = append(script, 0x04, 0x02, 0x00, 0x00, 0x00) // not the version: false
+				}
 
-			switch {
-			case postChronicle && rng.Intn(3) == 0:
 				if rng.Intn(2) == 0 {
 					script = append(script, bscript.OpVERIF)
 				} else {
 					script = append(script, bscript.OpVERNOTIF)
 				}
-			case rng.Intn(2) == 0:
-				script = append(script, bscript.OpIF)
-			default:
-				script = append(script, bscript.OpNOTIF)
+			} else {
+				if rng.Intn(2) == 0 {
+					script = append(script, bscript.OpZERO)
+				} else {
+					script = append(script, bscript.OpONE)
+				}
+
+				if rng.Intn(2) == 0 {
+					script = append(script, bscript.OpIF)
+				} else {
+					script = append(script, bscript.OpNOTIF)
+				}
 			}
 
 			depth++

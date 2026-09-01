@@ -75,7 +75,7 @@ The counted-ops metric matches svnode's executed op count for every script that 
 
 Where the key count is not statically certain, inside a conditional or computed at runtime, the opcode counts as one. That under-counts, which is the containment direction: the metric can only ever charge less than svnode, never reject a script svnode would accept cheaply.
 
-A script whose count exceeds `maxopsperscriptpolicy` (or whose size exceeds `maxscriptsizepolicy`) is left unpriced, so BDK's own cap rejection is reported rather than a misleading insufficient-fee error.
+A script whose count exceeds `maxopsperscriptpolicy` (or whose size exceeds `maxscriptsizepolicy`) is left unpriced, so BDK's own cap rejection is reported rather than a misleading insufficient-fee error. For a coin created before Genesis those policy caps do not apply; BDK enforces the fixed pre-Genesis limits of 500 ops and 10000 bytes instead, and the same rule uses those.
 
 The free-consolidation exemption is honoured for the `minminingtxfee` floor only; the per-script surcharge is always due. The exemption exists to encourage cleanup of many small UTXOs, and a genuine such consolidation never triggers a surcharge (its scripts are far below any threshold), so a large-script output cannot be created cheaply and then "consolidated" to escape the surcharge.
 

@@ -108,6 +108,16 @@ func scriptSizeCap(po *settings.PolicySettings) uint64 {
 // stack item, and so the widest push that can carry a multisig key count.
 const scriptNumMaxBytes = 4
 
+// A coin BDK evaluates under pre-Genesis rules is capped by svnode's fixed
+// pre-Genesis limits (MAX_OPS_PER_SCRIPT_BEFORE_GENESIS and
+// MAX_SCRIPT_SIZE_BEFORE_GENESIS), and the policy caps do not apply to it in
+// either direction: a policy cap below these leaves such a script accepted, one
+// above leaves it rejected. Measured in TestPreGenesisCapsDifferentialBDK.
+const (
+	maxOpsPerScriptBeforeGenesis = 500
+	maxScriptSizeBeforeGenesis   = 10_000
+)
+
 // decodeScriptNum decodes a CScriptNum: little-endian magnitude with the sign in
 // the top bit of the final byte. Callers bound the length to scriptNumMaxBytes.
 func decodeScriptNum(b []byte) int64 {
@@ -165,7 +175,7 @@ func decodeScriptNum(b []byte) int64 {
 //     conditionals: svnode falls through into the OP_IF handler, so they open
 //     a branch that OP_ENDIF closes and the IF-depth rules above apply to them.
 //     postChronicle selects that grammar. It must follow the coin's height
-//     exactly as BDK derives its flags (isPostChronicleCoin), because each
+//     exactly as BDK derives its flags (isBDKPostChronicleCoin), because each
 //     grammar over-counts under the other era: the post-Chronicle grammar on a
 //     pre-Chronicle coin keeps counting past an OP_RETURN that is really top
 //     level, and the pre-Chronicle grammar on a post-Chronicle coin charges a
@@ -437,10 +447,12 @@ func mayCountMultiSig(script []byte) bool {
 
 // priceScript returns the marginal surcharge, in satoshi-thousandths, for a
 // single executed script under both tier schedules. A script BDK will reject for
-// exceeding a hard cap (maxscriptsizepolicy or maxopsperscriptpolicy) is priced
-// at zero: pricing it would preempt BDK's specific rejection with a misleading
-// insufficient-fee error the submitter would retry forever, and would walk the
-// whole script for a value that never matters (PR review P1-9). The ops walk is
+// exceeding a hard cap is priced at zero: pricing it would preempt BDK's specific
+// rejection with a misleading insufficient-fee error the submitter would retry
+// forever, and would walk the whole script for a value that never matters (PR
+// review P1-9). opCap and sizeCap are the caps BDK applies to the coin's era:
+// maxopsperscriptpolicy and maxscriptsizepolicy for a post-Genesis coin, the
+// fixed pre-Genesis limits for a pre-Genesis one (checkScriptTieredFees). The ops walk is
 // skipped when the whole script length is below the first ops threshold, since
 // counted ops cannot exceed the length (PR review P1-10) unless a multisig adds
 // its key count, which mayCountMultiSig checks for. postChronicle selects the
@@ -555,25 +567,35 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 	var surchargeThousandths uint64
 
 	for idx, input := range tx.Inputs {
-		// The coin's era selects the conditional grammar countScriptOps walks
-		// with, for both scripts of the pair, since BDK evaluates both under
-		// the coin's flags. A missing height falls back to the pre-Chronicle
-		// grammar, which never over-counts in either era.
-		postChronicle := idx < len(utxoHeights) && isPostChronicleCoin(utxoHeights[idx], blockHeight, chronicleHeight)
+		// BDK evaluates both scripts of the pair under the coin's flags, so the
+		// coin's era selects the conditional grammar countScriptOps walks with
+		// and the caps a script is left unpriced beyond. A missing height falls
+		// back to the policy caps and the pre-Chronicle grammar, which never
+		// over-counts in either era.
+		var preGenesis, postChronicle bool
+		if idx < len(utxoHeights) {
+			preGenesis = isBDKPreGenesisCoin(utxoHeights[idx], blockHeight, genesisHeight)
+			postChronicle = isBDKPostChronicleCoin(utxoHeights[idx], blockHeight, chronicleHeight)
+		}
+
+		coinOpCap, coinSizeCap := opCap, sizeCap
+		if preGenesis {
+			coinOpCap, coinSizeCap = maxOpsPerScriptBeforeGenesis, maxScriptSizeBeforeGenesis
+		}
 
 		var unlocking []byte
 		if input.UnlockingScript != nil {
 			unlocking = *input.UnlockingScript
 		}
 
-		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, unlocking, postChronicle))
+		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, coinOpCap, coinSizeCap, unlocking, postChronicle))
 
 		if input.PreviousTxScript == nil {
 			continue
 		}
 
 		prevout := *input.PreviousTxScript
-		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, prevout, postChronicle))
+		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, coinOpCap, coinSizeCap, prevout, postChronicle))
 
 		// A legacy P2SH spend also executes its redeem script; bill it as sigop
 		// counting does. Gated on the coin's era: BDK's VerifyScript runs the
@@ -584,9 +606,9 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 		// script no BSV node executes (PR review P1-8).
 		if input.PreviousTxScript.IsP2SH() && idx < len(utxoHeights) && isPreGenesisCoin(utxoHeights[idx], genesisHeight) {
 			// A pre-Genesis coin is pre-Chronicle, so the redeem walks with
-			// the pre-Chronicle grammar.
+			// the pre-Chronicle grammar, under the pre-Genesis caps.
 			if redeem := lastPush(unlocking); len(redeem) > 0 {
-				surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, redeem, false))
+				surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, coinOpCap, coinSizeCap, redeem, false))
 			}
 		}
 	}
@@ -633,39 +655,55 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 	return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 }
 
-// isPreGenesisCoin reports whether a UTXO created at coinHeight predates Genesis
-// and so still runs pre-Genesis script semantics (P2SH evaluation) when spent.
-// Height 0 means the store recorded no height; it is treated as not-pre-Genesis,
-// which declines to bill a redeem script whose era cannot be established. That
-// is the anti-over-charge direction, and the P2SH redeem is the only caller.
+// isPreGenesisCoin gates the billing of a P2SH redeem script, and only that: it
+// reports whether a UTXO created at coinHeight predates Genesis and so still
+// runs its redeem when spent. Height 0 means the store recorded no height; it
+// is treated as not-pre-Genesis, which declines to bill the redeem. BDK itself
+// reads 0 as pre-Genesis and does execute the redeem there (measured in
+// TestP2SHRedeemEraDifferentialBDK), so declining is a deliberate under-count,
+// not a mismatch that could over-charge; everything else that must track BDK's
+// era uses isBDKPreGenesisCoin and isBDKPostChronicleCoin.
 //
 // The cost of that choice is bounded and small: a pre-Genesis P2SH redeem script
 // arrives as a single push, and pre-Genesis pushes are capped at 520 bytes, so
 // the most work an unbillable redeem can hide is about 520 bytes and 520
 // operations. Against thresholds set anywhere near the policy caps these tiers
-// price, that is nothing. Billing it on an unknown era, by contrast, would
-// over-charge every post-Genesis P2SH-shaped coin whose height went unrecorded,
-// and over-charging is what stands a legitimate coin off the network.
+// price, that is nothing.
 func isPreGenesisCoin(coinHeight, genesisHeight uint32) bool {
 	return coinHeight != 0 && coinHeight < genesisHeight
 }
 
-// isPostChronicleCoin reports whether a UTXO created at coinHeight is evaluated
-// under post-Chronicle script rules when spent in the block at blockHeight,
-// which is how BDK derives the coin's era: an unconfirmed parent is placed at
-// the candidate height (substituteUnconfirmedHeights), and any other height,
-// including an unrecorded 0, is compared against the activation height as it
-// is. The activation height itself is post-Chronicle (measured in
-// TestVerifConditionalDifferentialBDK). Unlike isPreGenesisCoin this does not
-// treat 0 as unknown: the grammar countScriptOps walks with has to follow the
-// flags BDK actually applies, and at height 0 BDK applies pre-Genesis rules,
-// under which the opcodes this decides about are fatal wherever they appear.
-func isPostChronicleCoin(coinHeight, blockHeight, chronicleHeight uint32) bool {
+// bdkCoinHeight is the height BDK sees for a coin spent in the block at
+// blockHeight: an unconfirmed parent is placed at the candidate height
+// (substituteUnconfirmedHeights), and every other height, including an
+// unrecorded 0, is passed through as it is.
+func bdkCoinHeight(coinHeight, blockHeight uint32) uint32 {
 	if coinHeight == unconfirmedParentHeight {
-		coinHeight = blockHeight
+		return blockHeight
 	}
 
-	return coinHeight >= chronicleHeight
+	return coinHeight
+}
+
+// isBDKPreGenesisCoin reports whether BDK evaluates the coin under pre-Genesis
+// rules, exactly as BDK derives it: the height it sees is below the activation
+// height. Unlike isPreGenesisCoin, an unrecorded 0 is pre-Genesis here, as it is
+// to BDK (measured: the fixed pre-Genesis caps apply at height 0, and P2SH is
+// standard there for the consolidation rule). This is the predicate for
+// everything that has to follow BDK's flags rather than err on the side of
+// charging less.
+func isBDKPreGenesisCoin(coinHeight, blockHeight, genesisHeight uint32) bool {
+	return bdkCoinHeight(coinHeight, blockHeight) < genesisHeight
+}
+
+// isBDKPostChronicleCoin reports whether BDK evaluates the coin under
+// post-Chronicle rules: the height it sees is at or above the activation height
+// (the activation height itself is post-Chronicle, measured in
+// TestVerifConditionalDifferentialBDK). It selects the conditional grammar
+// countScriptOps walks with, which has to follow BDK's flags in both
+// directions.
+func isBDKPostChronicleCoin(coinHeight, blockHeight, chronicleHeight uint32) bool {
+	return bdkCoinHeight(coinHeight, blockHeight) >= chronicleHeight
 }
 
 // isDustReturnTxn mirrors svnode's IsDustReturnTxn: a single zero-value output
@@ -686,7 +724,9 @@ func isDustReturnTxn(tx *bt.Tx) bool {
 
 // isStandardPrevoutScript classifies a prevout locking script against the
 // standard templates svnode's IsStandardOutput accepts for the consolidation
-// input rule, at the coin's height. It is panic-safe on arbitrary
+// input rule, in the coin's era as BDK derives it (isBDKPreGenesisCoin: an
+// unrecorded height is pre-Genesis, as it is to svnode's Solver, which was
+// measured to exempt such a P2SH consolidation). It is panic-safe on arbitrary
 // attacker-supplied scripts: go-bt's IsP2PK and IsMultiSigOut index into
 // DecodeParts output without length checks and panic on crafted scripts
 // (PR review P0-1), so the templates are matched here directly on the bytes.
@@ -698,7 +738,7 @@ func isDustReturnTxn(tx *bt.Tx) bool {
 // over-permissive verdict costs at most that floor, which BDK re-checks anyway,
 // whereas an over-strict verdict would wrongly reject a consolidation BDK
 // accepts for free.
-func isStandardPrevoutScript(script *bscript.Script, coinHeight, genesisHeight uint32) bool {
+func isStandardPrevoutScript(script *bscript.Script, preGenesis bool) bool {
 	if script == nil {
 		return false
 	}
@@ -709,7 +749,7 @@ func isStandardPrevoutScript(script *bscript.Script, coinHeight, genesisHeight u
 		isP2PKScript(b) ||
 		isMultiSigScript(b) ||
 		isDataScript(b) ||
-		(isPreGenesisCoin(coinHeight, genesisHeight) && isP2SHScript(b))
+		(preGenesis && isP2SHScript(b))
 }
 
 // isP2PKHScript matches OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG.
@@ -913,7 +953,7 @@ func isFreeConsolidationTxn(po *settings.PolicySettings, tx *bt.Tx, blockHeight 
 			return false
 		}
 
-		if stdInputOnly && !isStandardPrevoutScript(input.PreviousTxScript, height, genesisHeight) {
+		if stdInputOnly && !isStandardPrevoutScript(input.PreviousTxScript, isBDKPreGenesisCoin(height, blockHeight, genesisHeight)) {
 			return false
 		}
 

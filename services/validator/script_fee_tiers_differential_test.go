@@ -38,6 +38,25 @@ import (
 // ScriptVerifierGoBDK already relies on for its public reject reasons.
 const opCountRejectionText = "Operation limit exceeded"
 
+// scriptSizeRejectionText is svnode's ScriptErrorString entry for
+// SCRIPT_ERR_SCRIPT_SIZE, matched the same way.
+const scriptSizeRejectionText = "Script is too big"
+
+// isScriptSizeRejection reports whether err is BDK's SCRIPT_ERR_SCRIPT_SIZE
+// verdict.
+func isScriptSizeRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var scriptErr bdkscript.ScriptError
+	if errors.As(err, &scriptErr) {
+		return scriptErr.Code() == bdkscript.SCRIPT_ERR_SCRIPT_SIZE
+	}
+
+	return strings.Contains(err.Error(), scriptSizeRejectionText)
+}
+
 // isOpCountRejection reports whether err is BDK's SCRIPT_ERR_OP_COUNT verdict.
 func isOpCountRejection(err error) bool {
 	if err == nil {
@@ -58,16 +77,29 @@ func isOpCountRejection(err error) bool {
 func bdkSpendVerdict(t *testing.T, params *chaincfg.Params, lockingScript, unlockingScript []byte, opCap int64, coinHeight, blockHeight uint32) error {
 	t.Helper()
 
+	return bdkSpendVerdictWith(t, params, lockingScript, unlockingScript, coinHeight, blockHeight, func(po *settings.PolicySettings) {
+		po.MaxOpsPerScriptPolicy = opCap
+	})
+}
+
+// bdkSpendVerdictWith is bdkSpendVerdict with a hook that adjusts the policy
+// before the verifier is built. The spending transaction is version 1, which
+// the corpus relies on: post-Chronicle, OP_VERIF compares a 4-byte stack item
+// against that version.
+func bdkSpendVerdictWith(t *testing.T, params *chaincfg.Params, lockingScript, unlockingScript []byte, coinHeight, blockHeight uint32, configure func(po *settings.PolicySettings)) error {
+	t.Helper()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = params
 
 	po := tSettings.Policy
 	po.MinMiningTxFee = 0
-	po.MaxOpsPerScriptPolicy = opCap
+	configure(po)
 
 	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, po, tSettings.ChainCfgParams)
 
 	tx := bt.NewTx()
+	require.EqualValues(t, 1, tx.Version, "the corpus relies on a version-1 spending transaction")
 	require.NoError(t, tx.From("aa00000000000000000000000000000000000000000000000000000000000001", 0, hex.EncodeToString(lockingScript), 1000))
 
 	unlocking := bscript.Script(unlockingScript)
@@ -306,6 +338,22 @@ func TestP2SHRedeemEraDifferentialBDK(t *testing.T) {
 		require.NoError(t, bdkSpendVerdict(t, params, locking, unlocking, 100, postGenesisCoin, tip),
 			"a post-Genesis P2SH spend must NOT execute its redeem script")
 	})
+
+	t.Run("a coin at height 0 DOES execute the redeem script", func(t *testing.T) {
+		// BDK reads an unrecorded height as pre-Genesis. The Go check still
+		// declines to bill the redeem there (isPreGenesisCoin), which this
+		// measurement shows to be a deliberate under-count, bounded by the
+		// 520-byte pre-Genesis push limit, and not a mismatch that could
+		// over-charge.
+		require.False(t, isPreGenesisCoin(0, params.GenesisActivationHeight))
+		require.True(t, isBDKPreGenesisCoin(0, tip, params.GenesisActivationHeight))
+
+		locking, unlocking := p2shSpend(505)
+
+		err := bdkSpendVerdict(t, params, locking, unlocking, 1_000_000, 0, tip)
+		require.Error(t, err)
+		require.True(t, isOpCountRejection(err), "a height-0 P2SH spend must execute (and count) its redeem script, got %v", err)
+	})
 }
 
 // TestConsolidationConfigNormalisationDifferentialBDK proves the PR-review P1-7
@@ -446,8 +494,8 @@ func TestVerifConditionalDifferentialBDK(t *testing.T) {
 	postChronicleCoin := chronicle + 1_000
 	preChronicleCoin := params.GenesisActivationHeight + 1_000
 
-	require.True(t, isPostChronicleCoin(postChronicleCoin, tip, chronicle))
-	require.False(t, isPostChronicleCoin(preChronicleCoin, tip, chronicle))
+	require.True(t, isBDKPostChronicleCoin(postChronicleCoin, tip, chronicle))
+	require.False(t, isBDKPostChronicleCoin(preChronicleCoin, tip, chronicle))
 	require.False(t, isPreGenesisCoin(preChronicleCoin, params.GenesisActivationHeight))
 
 	// OP_0 OP_VERIF OP_16 OP_CHECKMULTISIG OP_ENDIF OP_1: post-Chronicle the
@@ -539,7 +587,161 @@ func TestVerifConditionalDifferentialBDK(t *testing.T) {
 
 	t.Run("an unconfirmed parent takes the candidate height's era", func(t *testing.T) {
 		// The sentinel is substituted with the candidate height before BDK
-		// sees it, and isPostChronicleCoin does the same.
+		// sees it, and isBDKPostChronicleCoin does the same.
 		requireBDKOpCount(t, params, deadMultisig, 3, unconfirmedParentHeight, tip)
 	})
+}
+
+// stackCleanScript builds a script of exactly n bytes that leaves a single true
+// on the stack: 500-byte pushes each dropped again (under the 520-byte
+// pre-Genesis element limit, and CLEANSTACK-safe pre-Genesis), then a few
+// small push-and-drop pairs and OP_NOPs to reach the size, then OP_TRUE.
+func stackCleanScript(n int) []byte {
+	script := make([]byte, 0, n)
+
+	for len(script)+504 <= n-1 {
+		script = append(script, bscript.OpPUSHDATA2, 0xf4, 0x01)
+		script = append(script, make([]byte, 500)...)
+		script = append(script, bscript.OpDROP)
+	}
+
+	for len(script)+3 <= n-1 {
+		script = append(script, 0x01, 0x00, bscript.OpDROP)
+	}
+
+	for len(script) < n-1 {
+		script = append(script, bscript.OpNOP)
+	}
+
+	return append(script, bscript.OpTRUE)
+}
+
+// TestPreGenesisCapsDifferentialBDK measures which caps BDK applies to a
+// pre-Genesis coin: svnode's fixed pre-Genesis limits of 500 ops and 10000
+// bytes, with maxopsperscriptpolicy and maxscriptsizepolicy ignored in both
+// directions. checkScriptTieredFees leaves a script unpriced beyond the caps
+// BDK enforces (PR review P1-9), so for a pre-Genesis coin it has to use these
+// limits: with the policy caps instead, a policy cap below 500 left every
+// pre-Genesis script between the two entirely unpriced (found by review round
+// 4). An unrecorded height 0 is pre-Genesis to BDK and behaves the same.
+func TestPreGenesisCapsDifferentialBDK(t *testing.T) {
+	params := &chaincfg.MainNetParams
+
+	const (
+		preGenesisCoin  = uint32(300_000)
+		postGenesisCoin = uint32(650_000)
+		tip             = uint32(700_000)
+	)
+
+	withCaps := func(opCap int64, sizeCap int) func(po *settings.PolicySettings) {
+		return func(po *settings.PolicySettings) {
+			po.MaxOpsPerScriptPolicy = opCap
+			po.MaxScriptSizePolicy = sizeCap
+		}
+	}
+
+	t.Run("the ops policy cap does not apply to a pre-Genesis coin", func(t *testing.T) {
+		script := append(repeatedOps(200), bscript.OpTRUE)
+
+		err := bdkSpendVerdictWith(t, params, script, nil, postGenesisCoin, tip, withCaps(100, 100_000_000))
+		require.True(t, isOpCountRejection(err), "control: 200 ops must exceed a policy cap of 100 post-Genesis, got %v", err)
+
+		require.NoError(t, bdkSpendVerdictWith(t, params, script, nil, preGenesisCoin, tip, withCaps(100, 100_000_000)),
+			"pre-Genesis the policy cap is not applied")
+		require.NoError(t, bdkSpendVerdictWith(t, params, script, nil, 0, tip, withCaps(100, 100_000_000)),
+			"height 0 is pre-Genesis to BDK")
+	})
+
+	t.Run("a pre-Genesis coin is bound by the fixed 500-op limit whatever the policy", func(t *testing.T) {
+		for _, opCap := range []int64{0, 1_000_000} {
+			require.NoError(t, bdkSpendVerdictWith(t, params, append(repeatedOps(maxOpsPerScriptBeforeGenesis), bscript.OpTRUE), nil, preGenesisCoin, tip, withCaps(opCap, 100_000_000)))
+
+			err := bdkSpendVerdictWith(t, params, append(repeatedOps(maxOpsPerScriptBeforeGenesis+1), bscript.OpTRUE), nil, preGenesisCoin, tip, withCaps(opCap, 100_000_000))
+			require.True(t, isOpCountRejection(err), "501 ops must exceed the pre-Genesis limit at a policy cap of %d, got %v", opCap, err)
+		}
+	})
+
+	t.Run("the size policy cap does not apply to a pre-Genesis coin", func(t *testing.T) {
+		script := stackCleanScript(1_510)
+		require.Len(t, script, 1_510)
+
+		err := bdkSpendVerdictWith(t, params, script, nil, postGenesisCoin, tip, withCaps(1_000_000, 100))
+		require.True(t, isScriptSizeRejection(err), "control: 1510 bytes must exceed a policy cap of 100 post-Genesis, got %v", err)
+
+		require.NoError(t, bdkSpendVerdictWith(t, params, script, nil, preGenesisCoin, tip, withCaps(1_000_000, 100)),
+			"pre-Genesis the policy cap is not applied")
+		require.NoError(t, bdkSpendVerdictWith(t, params, script, nil, 0, tip, withCaps(1_000_000, 100)),
+			"height 0 is pre-Genesis to BDK")
+	})
+
+	t.Run("a pre-Genesis coin is bound by the fixed 10000-byte limit whatever the policy", func(t *testing.T) {
+		require.NoError(t, bdkSpendVerdictWith(t, params, stackCleanScript(maxScriptSizeBeforeGenesis), nil, preGenesisCoin, tip, withCaps(1_000_000, 100_000_000)))
+
+		err := bdkSpendVerdictWith(t, params, stackCleanScript(maxScriptSizeBeforeGenesis+1), nil, preGenesisCoin, tip, withCaps(1_000_000, 100_000_000))
+		require.True(t, isScriptSizeRejection(err), "10001 bytes must exceed the pre-Genesis limit, got %v", err)
+	})
+}
+
+// TestHeightZeroP2SHConsolidationDifferentialBDK measures the era BDK assigns a
+// coin with an unrecorded height for the consolidation standardness rule: 0 is
+// pre-Genesis, where P2SH is a standard input, so such a consolidation is
+// exempt from the fee floor. The Go predicate has to agree (found by review
+// round 4: it read 0 as unknown and refused the exemption, which charged the
+// floor on a transaction BDK accepts for free). A post-Genesis coin is the
+// control in the other direction.
+func TestHeightZeroP2SHConsolidationDifferentialBDK(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	genesisHeight := tSettings.ChainCfgParams.GenesisActivationHeight
+	blockHeight := genesisHeight + 10_000
+
+	po := tSettings.Policy
+	po.MinMiningTxFee = 0.01 // any non-exempt zero-fee tx must fail
+	po.AcceptNonStdOutputs = true
+
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, po, tSettings.ChainCfgParams)
+
+	// Twenty inputs spending P2SH of the redeem script OP_1, unlocked by
+	// pushing it, into one anyone-can-spend output of the whole value: a zero
+	// fee, 20 inputs to 1 output, and 460 input script bytes against 1.
+	redeem := []byte{bscript.OpONE}
+	p2sh := append([]byte{bscript.OpHASH160, bscript.OpDATA20}, shash.Hash160(redeem)...)
+	p2sh = append(p2sh, bscript.OpEQUAL)
+
+	tx := bt.NewTx()
+	for i := 0; i < 20; i++ {
+		require.NoError(t, tx.From("aa00000000000000000000000000000000000000000000000000000000000001", uint32(i), hex.EncodeToString(p2sh), 1000)) //nolint:gosec // test loop index
+
+		unlocking := bscript.Script([]byte{0x01, bscript.OpONE})
+		tx.Inputs[i].UnlockingScript = &unlocking
+	}
+
+	out := bscript.Script([]byte{bscript.OpONE})
+	tx.AddOutput(&bt.Output{Satoshis: 20_000, LockingScript: &out})
+
+	check := func(t *testing.T, name string, coinHeight uint32, wantExempt bool) {
+		t.Helper()
+
+		t.Run(name, func(t *testing.T) {
+			heights := make([]uint32, 20)
+			for i := range heights {
+				heights[i] = coinHeight
+			}
+
+			bdkErr := verifier.ValidateTransaction(tx, blockHeight, false, heights)
+			goExempt := isFreeConsolidationTxn(po, tx, blockHeight, heights, genesisHeight)
+
+			if wantExempt {
+				require.NoError(t, bdkErr, "BDK must exempt this zero-fee P2SH consolidation")
+			} else {
+				require.Error(t, bdkErr, "BDK must charge this zero-fee P2SH consolidation")
+				require.True(t, errors.Is(bdkErr, errors.ErrTxPolicy), "expected a policy error, got %v", bdkErr)
+			}
+
+			require.Equal(t, wantExempt, goExempt, "the Go predicate must agree with BDK")
+		})
+	}
+
+	check(t, "pre-Genesis coins are standard P2SH inputs", genesisHeight-50, true)
+	check(t, "height 0 is pre-Genesis, so exempt", 0, true)
+	check(t, "post-Genesis P2SH is not a standard input", blockHeight-1_000, false)
 }
