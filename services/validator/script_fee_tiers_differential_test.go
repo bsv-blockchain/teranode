@@ -137,6 +137,52 @@ func TestOpCountSemanticsDifferentialBDK(t *testing.T) {
 	})
 }
 
+// TestCheckMultiSigUnderCountDifferentialBDK measures the one divergence the
+// counted-ops metric documents (PR review P1-6): svnode charges
+// OP_CHECKMULTISIG its runtime key count (nOpCount += nKeysCount, popped from
+// the stack), which a static walk cannot know and so under-counts as one.
+//
+// This does not fix the divergence, which is not statically decidable; it proves
+// the divergence is real and bounded, so the documented "under-counts
+// OP_CHECKMULTISIG" claim rests on measurement rather than on reading svnode.
+func TestCheckMultiSigUnderCountDifferentialBDK(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := tSettings.ChainCfgParams
+	blockHeight := params.GenesisActivationHeight + 10_000
+	coinHeight := blockHeight - 1_000
+
+	// A bare 1-of-16 multisig: OP_1 <16 pubkey pushes> OP_16 OP_CHECKMULTISIG.
+	// Only OP_CHECKMULTISIG is above OP_16, so our metric counts exactly one.
+	multisig := []byte{bscript.OpONE}
+
+	for i := 0; i < 16; i++ {
+		multisig = append(multisig, bscript.OpDATA33, 0x02)
+		multisig = append(multisig, make([]byte, 32)...)
+	}
+
+	multisig = append(multisig, bscript.Op16, bscript.OpCHECKMULTISIG)
+
+	require.Equal(t, uint64(1), countOps(multisig), "the static walk counts OP_CHECKMULTISIG as one")
+
+	// OP_0 dummy plus one (bogus) signature slot: enough to reach the opcode.
+	unlocking := []byte{bscript.OpZERO, bscript.OpZERO}
+
+	// Under a cap of 5, BDK rejects for op count: its executed count exceeds 5
+	// even though ours is 1, which can only come from the 16 keys.
+	err := bdkSpendVerdict(t, params, multisig, unlocking, 5, coinHeight, blockHeight)
+	require.Error(t, err)
+	require.True(t, isOpCountRejection(err),
+		"BDK must count the multisig key count, so a cap of 5 is exceeded; got %v", err)
+
+	// Under a generous cap the op limit is not what fails, confirming the extra
+	// count is the bounded key count and not something unbounded. The script
+	// still fails, on the bogus signature, which is expected and not an op-count
+	// verdict.
+	err = bdkSpendVerdict(t, params, multisig, unlocking, 100, coinHeight, blockHeight)
+	require.False(t, isOpCountRejection(err),
+		"the extra count must be bounded by the key count; got %v", err)
+}
+
 // TestP2SHRedeemEraDifferentialBDK answers, by measurement, the question the PR
 // review left open (P1-8): whether BDK still evaluates a P2SH redeem script, and
 // for which coins. The answer is that the COIN's height decides, not the
