@@ -45,9 +45,16 @@ func bigPush(n int) []byte {
 	return append(script, make([]byte, n)...)
 }
 
-// countOps is a test helper wrapping countScriptOps with an unlimited cap.
+// countOps is a test helper wrapping countScriptOps with an unlimited cap and
+// the post-Chronicle grammar, the one every coin created on mainnet today is
+// evaluated under. countOpsPreChronicle walks the earlier grammar.
 func countOps(script []byte) uint64 {
-	ops, _ := countScriptOps(script, math.MaxUint64)
+	ops, _ := countScriptOps(script, math.MaxUint64, true)
+	return ops
+}
+
+func countOpsPreChronicle(script []byte) uint64 {
+	ops, _ := countScriptOps(script, math.MaxUint64, false)
 	return ops
 }
 
@@ -168,7 +175,7 @@ func TestCountScriptOpsOpReturn(t *testing.T) {
 	})
 
 	t.Run("count stops at the op cap", func(t *testing.T) {
-		ops, capExceeded := countScriptOps(repeatedOps(1_000), 100)
+		ops, capExceeded := countScriptOps(repeatedOps(1_000), 100, true)
 		require.True(t, capExceeded)
 		require.Equal(t, uint64(101), ops) // stopped one past the cap
 	})
@@ -203,6 +210,71 @@ func TestCountScriptOpsOpReturn(t *testing.T) {
 			bscript.Op3, bscript.OpCHECKMULTISIG,
 		}))
 	})
+}
+
+// TestCountScriptOpsVerifGrammar pins the era-dependent handling of OP_VERIF and
+// OP_VERNOTIF in the walker itself. From the Chronicle upgrade on they are
+// conditionals; before it an executed one fails the script and an unexecuted
+// one opens nothing. Every shape here is measured against real BDK in
+// TestVerifConditionalDifferentialBDK.
+func TestCountScriptOpsVerifGrammar(t *testing.T) {
+	t.Run("a multisig in an OP_VERIF branch that never runs adds no key count", func(t *testing.T) {
+		// OP_0 OP_VERIF OP_16 OP_CHECKMULTISIG OP_ENDIF OP_1. Post-Chronicle the
+		// condition (not a 4-byte version) is false, so the multisig never
+		// executes: VERIF, CHECKMULTISIG, ENDIF, no keys.
+		script := []byte{bscript.OpZERO, bscript.OpVERIF, bscript.Op16, bscript.OpCHECKMULTISIG, bscript.OpENDIF, bscript.OpONE}
+		require.Equal(t, uint64(3), countOps(script))
+
+		// The pre-Chronicle grammar cannot know the branch exists, but it stops
+		// charging key counts after the opcode, so it does not over-count.
+		require.Equal(t, uint64(3), countOpsPreChronicle(script))
+	})
+
+	t.Run("pre-Chronicle an unexecuted OP_VERIF opens nothing", func(t *testing.T) {
+		// OP_1 OP_0 OP_IF OP_VERIF OP_ENDIF OP_RETURN <100 NOPs>: the OP_RETURN
+		// is top level and the tail is never counted. The post-Chronicle grammar
+		// would count it, which is why the coin's era selects the grammar.
+		script := append([]byte{bscript.OpONE, bscript.OpZERO, bscript.OpIF, bscript.OpVERIF, bscript.OpENDIF, bscript.OpRETURN}, repeatedOps(100)...)
+		require.Equal(t, uint64(4), countOpsPreChronicle(script))
+		require.Equal(t, uint64(104), countOps(script))
+	})
+
+	t.Run("post-Chronicle an OP_RETURN inside an OP_VERIF branch is nested", func(t *testing.T) {
+		// OP_0 OP_VERIF OP_RETURN OP_ENDIF <100 NOPs> OP_1: counting continues
+		// through the tail. The pre-Chronicle grammar stops at 2, an under-count.
+		script := append([]byte{bscript.OpZERO, bscript.OpVERIF, bscript.OpRETURN, bscript.OpENDIF}, repeatedOps(100)...)
+		script = append(script, bscript.OpONE)
+		require.Equal(t, uint64(103), countOps(script))
+		require.Equal(t, uint64(2), countOpsPreChronicle(script))
+	})
+
+	t.Run("OP_VERNOTIF opens a branch and OP_ELSE flips it", func(t *testing.T) {
+		// OP_0 OP_VERNOTIF OP_NOP OP_ELSE OP_16 OP_CHECKMULTISIG OP_ENDIF OP_1:
+		// the VERNOTIF arm runs, the ELSE arm with the multisig does not.
+		script := []byte{bscript.OpZERO, bscript.OpVERNOTIF, bscript.OpNOP, bscript.OpELSE, bscript.Op16, bscript.OpCHECKMULTISIG, bscript.OpENDIF, bscript.OpONE}
+		require.Equal(t, uint64(5), countOps(script))
+		require.Equal(t, uint64(5), countOpsPreChronicle(script))
+	})
+
+	t.Run("a multisig after the branch closes is exact only in the post-Chronicle grammar", func(t *testing.T) {
+		// OP_0 OP_VERIF OP_ENDIF OP_3 OP_CHECKMULTISIG: the multisig executes at
+		// depth zero, so its three keys are charged post-Chronicle, while the
+		// pre-Chronicle grammar, having seen an OP_VERIF, charges none.
+		script := []byte{bscript.OpZERO, bscript.OpVERIF, bscript.OpENDIF, bscript.Op3, bscript.OpCHECKMULTISIG}
+		require.Equal(t, uint64(6), countOps(script))
+		require.Equal(t, uint64(3), countOpsPreChronicle(script))
+	})
+}
+
+func TestIsPostChronicleCoin(t *testing.T) {
+	const chronicle, tip = uint32(1_000), uint32(5_000)
+
+	require.False(t, isPostChronicleCoin(chronicle-1, tip, chronicle))
+	require.True(t, isPostChronicleCoin(chronicle, tip, chronicle), "the activation height itself is post-Chronicle")
+	require.True(t, isPostChronicleCoin(chronicle+1, tip, chronicle))
+	require.False(t, isPostChronicleCoin(0, tip, chronicle), "an unrecorded height compares as BDK compares it")
+	require.True(t, isPostChronicleCoin(unconfirmedParentHeight, tip, chronicle), "an unconfirmed parent takes the candidate height")
+	require.False(t, isPostChronicleCoin(unconfirmedParentHeight, chronicle-1, chronicle))
 }
 
 func mustHex(t *testing.T, s string) []byte {
@@ -583,12 +655,46 @@ func TestCheckScriptTieredFees(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
 	})
 
+	t.Run("the coin's era selects the conditional grammar", func(t *testing.T) {
+		// OP_0 OP_VERIF OP_RETURN OP_ENDIF <300 NOPs> OP_1 as the prevout.
+		// Post-Chronicle the OP_RETURN is nested, so the 300 opcodes after it
+		// count: 303 ops, 203 beyond the threshold, 203 satoshis. With the
+		// pre-Chronicle grammar the OP_RETURN reads as top level and the tail
+		// is free. The regtest test parameters activate Chronicle at 200.
+		tv := newTieredValidator(t)
+		chronicle := tv.settings.ChainCfgParams.ChronicleActivationHeight
+
+		prevout := append([]byte{bscript.OpZERO, bscript.OpVERIF, bscript.OpRETURN, bscript.OpENDIF}, repeatedOps(300)...)
+		prevout = append(prevout, bscript.OpONE)
+
+		build := func(t *testing.T, fee uint64) *bt.Tx {
+			t.Helper()
+
+			tx := bt.NewTx()
+			require.NoError(t, tx.From(scriptTierTestPrevTxID, 0, hex.EncodeToString(prevout), fee))
+			require.NoError(t, tx.AddOpReturnOutput([]byte{0x01}))
+
+			return tx
+		}
+
+		err := tv.ValidateTransaction(build(t, 202), scriptTierTestBlockHeight, []uint32{chronicle}, NewDefaultOptions())
+		require.Error(t, err, "a post-Chronicle coin must be walked with the post-Chronicle grammar")
+		require.True(t, errors.Is(err, errors.ErrTxPolicy), "expected a policy error, got %v", err)
+
+		require.NoError(t, tv.ValidateTransaction(build(t, 203), scriptTierTestBlockHeight, []uint32{chronicle}, NewDefaultOptions()))
+
+		// One block earlier the coin is pre-Chronicle: the walk stops at the
+		// OP_RETURN and there is no surcharge. (BDK then rejects the executed
+		// OP_VERIF itself, which is not this check's verdict to give.)
+		require.NoError(t, tv.ValidateTransaction(build(t, 0), scriptTierTestBlockHeight, []uint32{chronicle - 1}, NewDefaultOptions()))
+	})
+
 	t.Run("a malformed oversized push neither panics nor hangs", func(t *testing.T) {
 		// An OP_PUSHDATA4 length assembled in a signed int overflows negative on
 		// a 32-bit build, which would slice backwards and walk the index
 		// backwards. Lengths are decoded as uint64 and bounded first.
 		require.NotPanics(t, func() {
-			ops, capExceeded := countScriptOps([]byte{bscript.OpNOP, bscript.OpPUSHDATA4, 0xff, 0xff, 0xff, 0xff, 0xaa}, math.MaxUint64)
+			ops, capExceeded := countScriptOps([]byte{bscript.OpNOP, bscript.OpPUSHDATA4, 0xff, 0xff, 0xff, 0xff, 0xaa}, math.MaxUint64, true)
 			require.Equal(t, uint64(1), ops, "the OP_NOP counts, then the malformed push stops the walk")
 			require.False(t, capExceeded)
 
@@ -1000,7 +1106,7 @@ func BenchmarkCountScriptOps(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				_, _ = countScriptOps(c.script, math.MaxUint64)
+				_, _ = countScriptOps(c.script, math.MaxUint64, true)
 			}
 		})
 	}

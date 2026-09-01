@@ -24,11 +24,13 @@ import (
 // node without the settings.
 //
 // The counted-ops metric matches svnode's executed op count exactly for every
-// script that reaches BDK, with ONE documented exception: OP_CHECKMULTISIG. See
-// countScriptOps. It is not, and cannot be, an exact copy of the executed count
-// in the general case, because svnode charges OP_CHECKMULTISIG a key count read
-// from the runtime stack; a static walk under-counts it. The metric is still
-// monotone in script complexity and does its economic job.
+// script that reaches BDK, given the coin's era (Genesis and Chronicle both
+// change the grammar svnode walks with), with ONE documented exception:
+// OP_CHECKMULTISIG. See countScriptOps. It is not, and cannot be, an exact copy
+// of the executed count in the general case, because svnode charges
+// OP_CHECKMULTISIG a key count read from the runtime stack; a static walk
+// under-counts it. The metric is still monotone in script complexity and does
+// its economic job.
 //
 // BDK exempts free consolidation transactions from its fee FLOOR (bitcoin-sv
 // policy.cpp IsFreeConsolidationTxn). That exemption is honoured here for the
@@ -157,6 +159,23 @@ func decodeScriptNum(b []byte) int64 {
 //     is simply not present here and the opcode is charged as one. Such a spend
 //     is under-priced; it is not mis-validated, and BDK still enforces
 //     maxopsperscriptpolicy against the true count.
+//   - OP_VERIF and OP_VERNOTIF depend on the coin's era. Before the Chronicle
+//     upgrade an executed one is a fatal bad opcode and an unexecuted one is
+//     skipped without opening a conditional. From Chronicle on they ARE
+//     conditionals: svnode falls through into the OP_IF handler, so they open
+//     a branch that OP_ENDIF closes and the IF-depth rules above apply to them.
+//     postChronicle selects that grammar. It must follow the coin's height
+//     exactly as BDK derives its flags (isPostChronicleCoin), because each
+//     grammar over-counts under the other era: the post-Chronicle grammar on a
+//     pre-Chronicle coin keeps counting past an OP_RETURN that is really top
+//     level, and the pre-Chronicle grammar on a post-Chronicle coin charges a
+//     key count to a multisig inside an OP_VERIF branch that never runs. Both
+//     were measured against BDK (TestVerifConditionalDifferentialBDK). The
+//     pre-Chronicle grammar additionally stops charging key counts once it has
+//     seen one of these opcodes, which makes it safe, never over-counting, on a
+//     coin of either era; the only scripts that under-counts are pre-Chronicle
+//     ones carrying the opcode in a branch that never runs and a multisig after
+//     it.
 //
 // Execution is certain only at IF-depth zero AND before any nested OP_RETURN.
 // Post-Genesis an OP_RETURN inside a conditional does not end the script; it
@@ -176,13 +195,17 @@ func decodeScriptNum(b []byte) int64 {
 // BDK will reject with SCRIPT_ERR_OP_COUNT. A malformed push (length running
 // past the end of the script) stops the count: such a script fails BDK's own
 // parse, so undercounting is harmless.
-func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) {
+func countScriptOps(script []byte, opCap uint64, postChronicle bool) (ops uint64, capExceeded bool) {
 	var (
 		ifDepth int
 		// Set by an OP_RETURN inside a conditional: svnode keeps fetching and
 		// counting from there but stops executing, so no further key count is
 		// added.
 		executionSuspended bool
+		// Set by OP_VERIF or OP_VERNOTIF under the pre-Chronicle grammar, where
+		// the walk cannot know whether svnode opened a conditional: no further
+		// key count is charged.
+		keyCountUncertain bool
 		// The value of the immediately preceding literal push, when there was
 		// one: the stack top an OP_CHECKMULTISIG would pop as its key count.
 		lastPush    int64
@@ -212,6 +235,12 @@ func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) 
 			switch opcode {
 			case bscript.OpIF, bscript.OpNOTIF:
 				ifDepth++
+			case bscript.OpVERIF, bscript.OpVERNOTIF:
+				if postChronicle {
+					ifDepth++
+				} else {
+					keyCountUncertain = true
+				}
 			case bscript.OpENDIF:
 				if ifDepth > 0 {
 					ifDepth--
@@ -222,7 +251,7 @@ func countScriptOps(script []byte, opCap uint64) (ops uint64, capExceeded bool) 
 
 			// The multisig key count, when execution and the count are both
 			// statically certain.
-			if ifDepth == 0 && !executionSuspended && lastWasPush && lastPush > 0 &&
+			if ifDepth == 0 && !executionSuspended && !keyCountUncertain && lastWasPush && lastPush > 0 &&
 				(opcode == bscript.OpCHECKMULTISIG || opcode == bscript.OpCHECKMULTISIGVERIFY) {
 				ops = satAddU64(ops, uint64(lastPush))
 			}
@@ -414,8 +443,9 @@ func mayCountMultiSig(script []byte) bool {
 // whole script for a value that never matters (PR review P1-9). The ops walk is
 // skipped when the whole script length is below the first ops threshold, since
 // counted ops cannot exceed the length (PR review P1-10) unless a multisig adds
-// its key count, which mayCountMultiSig checks for.
-func priceScript(sizeTiers, opsTiers []settings.FeeTier, opCap, sizeCap uint64, script []byte) uint64 {
+// its key count, which mayCountMultiSig checks for. postChronicle selects the
+// conditional grammar of the coin's era (see countScriptOps).
+func priceScript(sizeTiers, opsTiers []settings.FeeTier, opCap, sizeCap uint64, script []byte, postChronicle bool) uint64 {
 	n := uint64(len(script))
 	if n == 0 || n > sizeCap {
 		return 0
@@ -424,7 +454,7 @@ func priceScript(sizeTiers, opsTiers []settings.FeeTier, opCap, sizeCap uint64, 
 	var thousandths uint64
 
 	if len(opsTiers) > 0 && (n > opsTiers[0].Threshold || mayCountMultiSig(script)) {
-		ops, capExceeded := countScriptOps(script, opCap)
+		ops, capExceeded := countScriptOps(script, opCap, postChronicle)
 		if capExceeded {
 			return 0
 		}
@@ -515,6 +545,7 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 	}
 
 	genesisHeight := tv.settings.ChainCfgParams.GenesisActivationHeight
+	chronicleHeight := tv.settings.ChainCfgParams.ChronicleActivationHeight
 	opCap := opsCap(tv.settings.Policy)
 	sizeCap := scriptSizeCap(tv.settings.Policy)
 
@@ -524,19 +555,25 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 	var surchargeThousandths uint64
 
 	for idx, input := range tx.Inputs {
+		// The coin's era selects the conditional grammar countScriptOps walks
+		// with, for both scripts of the pair, since BDK evaluates both under
+		// the coin's flags. A missing height falls back to the pre-Chronicle
+		// grammar, which never over-counts in either era.
+		postChronicle := idx < len(utxoHeights) && isPostChronicleCoin(utxoHeights[idx], blockHeight, chronicleHeight)
+
 		var unlocking []byte
 		if input.UnlockingScript != nil {
 			unlocking = *input.UnlockingScript
 		}
 
-		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, unlocking))
+		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, unlocking, postChronicle))
 
 		if input.PreviousTxScript == nil {
 			continue
 		}
 
 		prevout := *input.PreviousTxScript
-		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, prevout))
+		surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, prevout, postChronicle))
 
 		// A legacy P2SH spend also executes its redeem script; bill it as sigop
 		// counting does. Gated on the coin's era: BDK's VerifyScript runs the
@@ -546,8 +583,10 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 		// coins never do, so billing a "redeem script" there would over-charge a
 		// script no BSV node executes (PR review P1-8).
 		if input.PreviousTxScript.IsP2SH() && idx < len(utxoHeights) && isPreGenesisCoin(utxoHeights[idx], genesisHeight) {
+			// A pre-Genesis coin is pre-Chronicle, so the redeem walks with
+			// the pre-Chronicle grammar.
 			if redeem := lastPush(unlocking); len(redeem) > 0 {
-				surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, redeem))
+				surchargeThousandths = satAddU64(surchargeThousandths, priceScript(sizeTiers, opsTiers, opCap, sizeCap, redeem, false))
 			}
 		}
 	}
@@ -609,6 +648,24 @@ func (tv *TxValidator) checkScriptTieredFees(tx *bt.Tx, blockHeight uint32, utxo
 // and over-charging is what stands a legitimate coin off the network.
 func isPreGenesisCoin(coinHeight, genesisHeight uint32) bool {
 	return coinHeight != 0 && coinHeight < genesisHeight
+}
+
+// isPostChronicleCoin reports whether a UTXO created at coinHeight is evaluated
+// under post-Chronicle script rules when spent in the block at blockHeight,
+// which is how BDK derives the coin's era: an unconfirmed parent is placed at
+// the candidate height (substituteUnconfirmedHeights), and any other height,
+// including an unrecorded 0, is compared against the activation height as it
+// is. The activation height itself is post-Chronicle (measured in
+// TestVerifConditionalDifferentialBDK). Unlike isPreGenesisCoin this does not
+// treat 0 as unknown: the grammar countScriptOps walks with has to follow the
+// flags BDK actually applies, and at height 0 BDK applies pre-Genesis rules,
+// under which the opcodes this decides about are fatal wherever they appear.
+func isPostChronicleCoin(coinHeight, blockHeight, chronicleHeight uint32) bool {
+	if coinHeight == unconfirmedParentHeight {
+		coinHeight = blockHeight
+	}
+
+	return coinHeight >= chronicleHeight
 }
 
 // isDustReturnTxn mirrors svnode's IsDustReturnTxn: a single zero-value output

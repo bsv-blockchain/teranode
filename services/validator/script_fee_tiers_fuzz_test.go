@@ -56,17 +56,42 @@ func requireBDKOpCount(t *testing.T, params *chaincfg.Params, lockingScript []by
 	return true
 }
 
+// fuzzEra picks the coin era for one script. Half the corpus is a
+// post-Chronicle coin and half a post-Genesis pre-Chronicle one, because the
+// conditional grammar differs between them (countScriptOps) and each has to be
+// fuzzed on a coin of its own era. The regtest parameters activate Genesis at
+// 100 and Chronicle at 200, so the pre-Chronicle coin sits between the two and
+// the post-Chronicle coin well past both.
+func fuzzEra(t *testing.T, rng *rand.Rand, params *chaincfg.Params, blockHeight uint32) (coinHeight uint32, postChronicle bool) {
+	t.Helper()
+
+	genesis, chronicle := params.GenesisActivationHeight, params.ChronicleActivationHeight
+	require.Greater(t, chronicle, genesis+1, "the test parameters must leave room for a post-Genesis pre-Chronicle coin")
+	require.Greater(t, blockHeight, chronicle+1_000)
+
+	if rng.Intn(2) == 0 {
+		return blockHeight - 1_000, true
+	}
+
+	return genesis + (chronicle-genesis)/2, false
+}
+
 // randomScript builds a script from opcodes that cannot fail at runtime, so BDK
 // evaluates it to completion and its op count is well defined. The grammar
 // deliberately covers what the metric has to get right: OP_NOP runs (counted),
 // data pushes of every width (free), small constants (free), balanced
 // OP_IF/OP_ELSE/OP_ENDIF nesting including branches that do not execute (still
 // counted), and OP_RETURN both nested (does not terminate) and at the top level
-// (terminates, so the tail is never counted).
+// (terminates, so the tail is never counted). On a post-Chronicle coin
+// OP_VERNOTIF opens conditionals too: with a one-byte item on the stack (not a
+// 4-byte transaction version) its condition is true, so the branch runs, which
+// this generator's exactness relies on. OP_VERIF (false on such an item) is
+// left to randomBranchyScript, since a nested OP_RETURN in a branch that never
+// runs is a documented under-count rather than an exact match.
 //
 // It never emits OP_CHECKMULTISIG: that divergence is known, documented, and
 // pinned by TestCheckMultiSigUnderCountDifferentialBDK.
-func randomScript(rng *rand.Rand) []byte {
+func randomScript(rng *rand.Rand, postChronicle bool) []byte {
 	script := make([]byte, 0, 256)
 	depth := 0
 
@@ -125,7 +150,12 @@ func randomScript(rng *rand.Rand) []byte {
 			emitPush()
 
 		case 3: // open a conditional (needs a stack value to consume)
-			script = append(script, bscript.OpONE, bscript.OpIF)
+			if postChronicle && rng.Intn(3) == 0 {
+				script = append(script, bscript.OpONE, bscript.OpVERNOTIF)
+			} else {
+				script = append(script, bscript.OpONE, bscript.OpIF)
+			}
+
 			depth++
 
 		case 4: // close a conditional, sometimes with an ELSE arm
@@ -176,8 +206,9 @@ func randomScript(rng *rand.Rand) []byte {
 }
 
 // randomBranchyScript generates the shapes randomScript structurally cannot:
-// conditions that are FALSE as well as true, OP_NOTIF, and OP_RETURN inside a
-// branch that never executes. A multisig only ever appears as the final
+// conditions that are FALSE as well as true, OP_NOTIF, OP_RETURN inside a
+// branch that never executes, and on a post-Chronicle coin OP_VERIF (false on a
+// non-version item) as well as OP_VERNOTIF. A multisig only ever appears as the final
 // construct, for the same reason as in randomScript: it fails on the missing
 // signatures, so anything after it is never reached by BDK and the two counts
 // would stop being comparable. Exact agreement is not claimed on these. svnode
@@ -186,7 +217,7 @@ func randomScript(rng *rand.Rand) []byte {
 // legitimately under-counted here. What must always hold is the safety
 // invariant: never counting MORE than svnode, since only over-counting can
 // price a legitimate script off the network.
-func randomBranchyScript(rng *rand.Rand) []byte {
+func randomBranchyScript(rng *rand.Rand, postChronicle bool) []byte {
 	script := make([]byte, 0, 128)
 	depth := 0
 
@@ -204,9 +235,16 @@ func randomBranchyScript(rng *rand.Rand) []byte {
 				script = append(script, bscript.OpONE)
 			}
 
-			if rng.Intn(2) == 0 {
+			switch {
+			case postChronicle && rng.Intn(3) == 0:
+				if rng.Intn(2) == 0 {
+					script = append(script, bscript.OpVERIF)
+				} else {
+					script = append(script, bscript.OpVERNOTIF)
+				}
+			case rng.Intn(2) == 0:
 				script = append(script, bscript.OpIF)
-			} else {
+			default:
 				script = append(script, bscript.OpNOTIF)
 			}
 
@@ -258,7 +296,6 @@ func TestCountScriptOpsNeverOverCountsFuzzBDK(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	params := tSettings.ChainCfgParams
 	blockHeight := params.GenesisActivationHeight + 10_000
-	coinHeight := blockHeight - 1_000
 
 	rng := rand.New(rand.NewSource(20260901)) //nolint:gosec // deterministic corpus, not cryptographic
 
@@ -269,12 +306,13 @@ func TestCountScriptOpsNeverOverCountsFuzzBDK(t *testing.T) {
 		scripts = n
 	}
 
-	checked := 0
+	checked, checkedPreChronicle := 0, 0
 
 	for i := 0; i < scripts; i++ {
-		script := randomBranchyScript(rng)
+		coinHeight, postChronicle := fuzzEra(t, rng, params, blockHeight)
+		script := randomBranchyScript(rng, postChronicle)
 
-		ours, capExceeded := countScriptOps(script, 1_000_000)
+		ours, capExceeded := countScriptOps(script, 1_000_000, postChronicle)
 		require.False(t, capExceeded)
 
 		if ours < 2 {
@@ -283,14 +321,19 @@ func TestCountScriptOpsNeverOverCountsFuzzBDK(t *testing.T) {
 
 		err := bdkSpendVerdict(t, params, script, nil, int64(ours-1), coinHeight, blockHeight) //nolint:gosec // bounded by the generator
 		require.True(t, isOpCountRejection(err),
-			"countScriptOps returned %d, more than BDK counted, for script %x (verdict %v)", ours, script, err)
+			"countScriptOps returned %d, more than BDK counted, for script %x on a coin at height %d (verdict %v)", ours, script, coinHeight, err)
 
 		checked++
+
+		if !postChronicle {
+			checkedPreChronicle++
+		}
 	}
 
 	require.Greater(t, checked, scripts/2, "too few scripts exercised the invariant")
+	require.Greater(t, checkedPreChronicle, scripts/8, "too few pre-Chronicle scripts exercised the invariant")
 
-	t.Logf("verified no over-count against BDK on %d of %d branchy scripts", checked, scripts)
+	t.Logf("verified no over-count against BDK on %d of %d branchy scripts (%d on pre-Chronicle coins)", checked, scripts, checkedPreChronicle)
 }
 
 // TestCountScriptOpsFuzzDifferentialBDK searches for op-count divergences we did
@@ -300,7 +343,6 @@ func TestCountScriptOpsFuzzDifferentialBDK(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	params := tSettings.ChainCfgParams
 	blockHeight := params.GenesisActivationHeight + 10_000
-	coinHeight := blockHeight - 1_000
 
 	// Fixed seed: a divergence must be reproducible, not a flake.
 	rng := rand.New(rand.NewSource(20260901)) //nolint:gosec // deterministic corpus, not cryptographic
@@ -316,16 +358,21 @@ func TestCountScriptOpsFuzzDifferentialBDK(t *testing.T) {
 		scripts = n
 	}
 
-	pinned := 0
+	pinned, pinnedPreChronicle := 0, 0
 
 	for i := 0; i < scripts; i++ {
-		script := randomScript(rng)
+		coinHeight, postChronicle := fuzzEra(t, rng, params, blockHeight)
+		script := randomScript(rng, postChronicle)
 
-		ours, capExceeded := countScriptOps(script, 1_000_000)
+		ours, capExceeded := countScriptOps(script, 1_000_000, postChronicle)
 		require.False(t, capExceeded, "generator produced an over-cap script")
 
 		if requireBDKOpCount(t, params, script, ours, coinHeight, blockHeight) {
 			pinned++
+
+			if !postChronicle {
+				pinnedPreChronicle++
+			}
 		}
 	}
 
@@ -333,6 +380,7 @@ func TestCountScriptOpsFuzzDifferentialBDK(t *testing.T) {
 	// passing without actually comparing anything.
 	require.Greater(t, pinned, scripts*3/4,
 		"too few scripts had an exactly pinned op count; the corpus is not exercising the counter")
+	require.Greater(t, pinnedPreChronicle, scripts/4, "too few pre-Chronicle scripts were pinned")
 
-	t.Logf("exactly pinned BDK op count against countScriptOps for %d of %d random scripts", pinned, scripts)
+	t.Logf("exactly pinned BDK op count against countScriptOps for %d of %d random scripts (%d on pre-Chronicle coins)", pinned, scripts, pinnedPreChronicle)
 }

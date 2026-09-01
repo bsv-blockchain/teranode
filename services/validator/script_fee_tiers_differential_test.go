@@ -429,3 +429,117 @@ func TestScriptTieredFeesAcceptWhatBDKAccepts(t *testing.T) {
 	require.NoError(t, tv.checkScriptTieredFees(tx, scriptTierTestBlockHeight, deepHeights(20)),
 		"ordinary scripts must incur no surcharge under realistic thresholds")
 }
+
+// TestVerifConditionalDifferentialBDK measures the era-dependent grammar of
+// OP_VERIF and OP_VERNOTIF that countScriptOps selects with postChronicle. From
+// the Chronicle upgrade on, svnode's interpreter falls through from these
+// opcodes into the OP_IF handler, so they open a conditional; before it an
+// executed one is a fatal bad opcode and an unexecuted one opens nothing. Each
+// grammar over-counts a script BDK accepts under the other era, so the walker
+// has to pick by the coin's height exactly as BDK does. Mainnet parameters give
+// real Genesis and Chronicle heights with room between them.
+func TestVerifConditionalDifferentialBDK(t *testing.T) {
+	params := &chaincfg.MainNetParams
+	chronicle := params.ChronicleActivationHeight
+
+	tip := chronicle + 20_000
+	postChronicleCoin := chronicle + 1_000
+	preChronicleCoin := params.GenesisActivationHeight + 1_000
+
+	require.True(t, isPostChronicleCoin(postChronicleCoin, tip, chronicle))
+	require.False(t, isPostChronicleCoin(preChronicleCoin, tip, chronicle))
+	require.False(t, isPreGenesisCoin(preChronicleCoin, params.GenesisActivationHeight))
+
+	// OP_0 OP_VERIF OP_16 OP_CHECKMULTISIG OP_ENDIF OP_1: post-Chronicle the
+	// OP_VERIF condition (not a 4-byte version) is false, so the multisig never
+	// runs and adds no key count.
+	deadMultisig := []byte{bscript.OpZERO, bscript.OpVERIF, bscript.Op16, bscript.OpCHECKMULTISIG, bscript.OpENDIF, bscript.OpONE}
+
+	// OP_1 OP_0 OP_IF OP_VERIF OP_ENDIF OP_RETURN <100 NOPs>: the OP_VERIF sits
+	// in a branch that never runs.
+	deadVerif := append([]byte{bscript.OpONE, bscript.OpZERO, bscript.OpIF, bscript.OpVERIF, bscript.OpENDIF, bscript.OpRETURN}, repeatedOps(100)...)
+
+	t.Run("post-Chronicle: a multisig in an OP_VERIF branch that never runs adds no key count", func(t *testing.T) {
+		// VERIF, CHECKMULTISIG, ENDIF: three, pinned. Walking this with the
+		// pre-Chronicle grammar used to charge 16 keys, an over-count on a
+		// script BDK accepts, the one defect class the tiers must never have.
+		require.Equal(t, uint64(3), countOps(deadMultisig))
+		requireBDKOpCount(t, params, deadMultisig, 3, postChronicleCoin, tip)
+
+		require.LessOrEqual(t, countOpsPreChronicle(deadMultisig), uint64(3),
+			"the pre-Chronicle grammar must not over-count a post-Chronicle coin either")
+	})
+
+	t.Run("post-Chronicle: OP_VERNOTIF opens a branch and OP_ELSE flips it", func(t *testing.T) {
+		// OP_0 OP_VERNOTIF OP_NOP OP_ELSE OP_16 OP_CHECKMULTISIG OP_ENDIF OP_1:
+		// the VERNOTIF arm runs, the ELSE arm with the multisig does not.
+		script := []byte{bscript.OpZERO, bscript.OpVERNOTIF, bscript.OpNOP, bscript.OpELSE, bscript.Op16, bscript.OpCHECKMULTISIG, bscript.OpENDIF, bscript.OpONE}
+
+		require.Equal(t, uint64(5), countOps(script))
+		requireBDKOpCount(t, params, script, 5, postChronicleCoin, tip)
+	})
+
+	t.Run("post-Chronicle: an OP_RETURN inside an OP_VERIF branch is not top level", func(t *testing.T) {
+		// OP_0 OP_VERIF OP_RETURN OP_ENDIF <100 NOPs> OP_1: the branch never
+		// runs, so the OP_RETURN neither ends the script nor suspends it, and
+		// the tail is counted. The pre-Chronicle grammar reads the OP_RETURN
+		// as top level and stops at 2: an under-count, the safe direction.
+		script := append([]byte{bscript.OpZERO, bscript.OpVERIF, bscript.OpRETURN, bscript.OpENDIF}, repeatedOps(100)...)
+		script = append(script, bscript.OpONE)
+
+		require.Equal(t, uint64(103), countOps(script))
+		requireBDKOpCount(t, params, script, 103, postChronicleCoin, tip)
+
+		require.Equal(t, uint64(2), countOpsPreChronicle(script))
+	})
+
+	t.Run("pre-Chronicle: an unexecuted OP_VERIF opens nothing, so the OP_RETURN is top level", func(t *testing.T) {
+		// IF, VERIF, ENDIF, RETURN: four, pinned, and the tail is never
+		// counted. The post-Chronicle grammar counts 104 here, which is why
+		// the grammar has to follow the coin's era rather than the tip's.
+		require.Equal(t, uint64(4), countOpsPreChronicle(deadVerif))
+		requireBDKOpCount(t, params, deadVerif, 4, preChronicleCoin, tip)
+
+		require.Equal(t, uint64(104), countOps(deadVerif))
+	})
+
+	t.Run("post-Chronicle: the same script counts its tail and then fails", func(t *testing.T) {
+		// The OP_VERIF opens a conditional the OP_ENDIF closes, leaving the
+		// OP_IF open at the end: unbalanced. On the way there BDK counts the
+		// tail (rejected for op count at a cap of 103, for the conditional at
+		// 104), so the pre-Chronicle grammar on this coin would be under, never
+		// over.
+		require.True(t, isOpCountRejection(bdkSpendVerdict(t, params, deadVerif, nil, 103, postChronicleCoin, tip)))
+
+		err := bdkSpendVerdict(t, params, deadVerif, nil, 104, postChronicleCoin, tip)
+		require.Error(t, err)
+		require.False(t, isOpCountRejection(err), "expected the unbalanced-conditional rejection, got %v", err)
+	})
+
+	t.Run("pre-Chronicle: an executed OP_VERIF is fatal", func(t *testing.T) {
+		err := bdkSpendVerdict(t, params, deadMultisig, nil, 1_000_000, preChronicleCoin, tip)
+		require.Error(t, err)
+		require.False(t, isOpCountRejection(err), "expected a bad-opcode rejection, got %v", err)
+	})
+
+	t.Run("the activation height itself is post-Chronicle", func(t *testing.T) {
+		err := bdkSpendVerdict(t, params, deadMultisig, nil, 3, chronicle-1, tip)
+		require.Error(t, err)
+		require.False(t, isOpCountRejection(err), "one block before activation the opcode must be fatal, got %v", err)
+
+		requireBDKOpCount(t, params, deadMultisig, 3, chronicle, tip)
+	})
+
+	t.Run("height 0 is pre-Genesis to BDK, where OP_VERIF is fatal even unexecuted", func(t *testing.T) {
+		// So the grammar chosen for an unrecorded height cannot matter.
+		err := bdkSpendVerdict(t, params, deadVerif, nil, 1_000_000, 0, tip)
+		require.Error(t, err)
+		require.False(t, isOpCountRejection(err), "expected a bad-opcode rejection, got %v", err)
+	})
+
+	t.Run("an unconfirmed parent takes the candidate height's era", func(t *testing.T) {
+		// The sentinel is substituted with the candidate height before BDK
+		// sees it, and isPostChronicleCoin does the same.
+		requireBDKOpCount(t, params, deadMultisig, 3, unconfirmedParentHeight, tip)
+	})
+}
