@@ -4931,6 +4931,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#peer_id_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        peer_id
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5438,7 +5449,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer_id_2" class="md-nav__link">
+  <a href="#peer_id_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         peer_id
@@ -8704,6 +8715,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#peer_id_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        peer_id
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -9211,7 +9233,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer_id_2" class="md-nav__link">
+  <a href="#peer_id_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         peer_id
@@ -10211,7 +10233,8 @@
 </span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">subtreeHash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">peerUrl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="p">}</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">peer_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">  </span><span class="c1">// ID of the peer whose DataHub served the invalid bytes (authoritative attribution)</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="field-specifications_3">Field Specifications<a class="headerlink" href="#field-specifications_3" title="Permanent link">&para;</a></h3>
 <h4 id="subtreehash">subtreeHash<a class="headerlink" href="#subtreehash" title="Permanent link">&para;</a></h4>
@@ -10237,12 +10260,20 @@
 <li>Required: Yes</li>
 <li>Example: <code>"Subtree contains invalid transaction merkle proof"</code></li>
 </ul>
+<h4 id="peer_id_2">peer_id<a class="headerlink" href="#peer_id_2" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Type: string</li>
+<li>Description: P2P peer ID of the peer whose DataHub (peerUrl) served the invalid bytes. Used by the P2P service as the authoritative identity to charge for the failure; when empty, the peer is resolved from peerUrl instead</li>
+<li>Required: No (may be empty when the reporter only knows the URL)</li>
+<li>Example: <code>"12D3KooWEyoppNCUx8Yx4gzbGGgLo1UhpGzs9udWvsFsyrzrPwLf"</code></li>
+</ul>
 <h3 id="example_3">Example<a class="headerlink" href="#example_3" title="Permanent link">&para;</a></h3>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">"subtreeHash"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"</span><span class="p">,</span>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">"peerUrl"</span><span class="p">:</span><span class="w"> </span><span class="s2">"http://peer1.example.com:8080"</span><span class="p">,</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Subtree contains invalid transaction merkle proof"</span>
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="p">}</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Subtree contains invalid transaction merkle proof"</span><span class="p">,</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span><span class="nt">"peer_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"12D3KooWEyoppNCUx8Yx4gzbGGgLo1UhpGzs9udWvsFsyrzrPwLf"</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="code-examples_3">Code Examples<a class="headerlink" href="#code-examples_3" title="Permanent link">&para;</a></h3>
 <h4 id="sending-messages_3">Sending Messages<a class="headerlink" href="#sending-messages_3" title="Permanent link">&para;</a></h4>
@@ -10250,25 +10281,26 @@
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nx">invalidSubtreeMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">kafkamessage</span><span class="p">.</span><span class="nx">KafkaInvalidSubtreeTopicMessage</span><span class="p">{</span>
 </span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">    </span><span class="nx">SubtreeHash</span><span class="p">:</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span>
 </span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">    </span><span class="nx">PeerUrl</span><span class="p">:</span><span class="w">     </span><span class="s">"http://peer1.example.com:8080"</span><span class="p">,</span>
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">    </span><span class="nx">Reason</span><span class="p">:</span><span class="w">      </span><span class="s">"Subtree validation failed: invalid merkle proof"</span><span class="p">,</span>
-</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="p">}</span>
-</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>
-</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="c1">// Serialize to protobuf</span>
-</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="nx">data</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">proto</span><span class="p">.</span><span class="nx">Marshal</span><span class="p">(</span><span class="nx">invalidSubtreeMessage</span><span class="p">)</span>
-</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"failed to marshal invalid subtree message: %w"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="p">}</span>
-</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>
-</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="c1">// Send to Kafka</span>
-</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="nx">producerMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">sarama</span><span class="p">.</span><span class="nx">ProducerMessage</span><span class="p">{</span>
-</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="w">    </span><span class="nx">Topic</span><span class="p">:</span><span class="w"> </span><span class="s">"kafka_invalidSubtree"</span><span class="p">,</span>
-</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="w">    </span><span class="nx">Value</span><span class="p">:</span><span class="w"> </span><span class="nx">sarama</span><span class="p">.</span><span class="nx">ByteEncoder</span><span class="p">(</span><span class="nx">data</span><span class="p">),</span>
-</span><span id="__span-14-18"><a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="p">}</span>
-</span><span id="__span-14-19"><a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a>
-</span><span id="__span-14-20"><a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a><span class="nx">partition</span><span class="p">,</span><span class="w"> </span><span class="nx">offset</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">producer</span><span class="p">.</span><span class="nx">SendMessage</span><span class="p">(</span><span class="nx">producerMessage</span><span class="p">)</span>
-</span><span id="__span-14-21"><a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-14-22"><a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"failed to send invalid subtree message: %w"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-14-23"><a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="p">}</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">    </span><span class="nx">PeerId</span><span class="p">:</span><span class="w">      </span><span class="s">"12D3KooWEyoppNCUx8Yx4gzbGGgLo1UhpGzs9udWvsFsyrzrPwLf"</span><span class="p">,</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">    </span><span class="nx">Reason</span><span class="p">:</span><span class="w">      </span><span class="s">"Subtree validation failed: invalid merkle proof"</span><span class="p">,</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="p">}</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="c1">// Serialize to protobuf</span>
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="nx">data</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">proto</span><span class="p">.</span><span class="nx">Marshal</span><span class="p">(</span><span class="nx">invalidSubtreeMessage</span><span class="p">)</span>
+</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"failed to marshal invalid subtree message: %w"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="p">}</span>
+</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>
+</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="c1">// Send to Kafka</span>
+</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="nx">producerMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">sarama</span><span class="p">.</span><span class="nx">ProducerMessage</span><span class="p">{</span>
+</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="w">    </span><span class="nx">Topic</span><span class="p">:</span><span class="w"> </span><span class="s">"kafka_invalidSubtree"</span><span class="p">,</span>
+</span><span id="__span-14-18"><a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="w">    </span><span class="nx">Value</span><span class="p">:</span><span class="w"> </span><span class="nx">sarama</span><span class="p">.</span><span class="nx">ByteEncoder</span><span class="p">(</span><span class="nx">data</span><span class="p">),</span>
+</span><span id="__span-14-19"><a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="p">}</span>
+</span><span id="__span-14-20"><a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a>
+</span><span id="__span-14-21"><a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a><span class="nx">partition</span><span class="p">,</span><span class="w"> </span><span class="nx">offset</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">producer</span><span class="p">.</span><span class="nx">SendMessage</span><span class="p">(</span><span class="nx">producerMessage</span><span class="p">)</span>
+</span><span id="__span-14-22"><a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-23"><a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"failed to send invalid subtree message: %w"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-14-24"><a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a><span class="p">}</span>
 </span></code></pre></div>
 <h4 id="receiving-messages_3">Receiving Messages<a class="headerlink" href="#receiving-messages_3" title="Permanent link">&para;</a></h4>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1">// Handle incoming invalid subtree message</span>
@@ -10284,12 +10316,13 @@
 </span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>
 </span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="w">    </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidSubtreeMessage</span><span class="p">.</span><span class="nx">SubtreeHash</span>
 </span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="w">    </span><span class="nx">peerUrl</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidSubtreeMessage</span><span class="p">.</span><span class="nx">PeerUrl</span>
-</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="w">    </span><span class="nx">reason</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidSubtreeMessage</span><span class="p">.</span><span class="nx">Reason</span>
-</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a>
-</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a><span class="w">    </span><span class="c1">// Process the invalid subtree notification...</span>
-</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">"Subtree %s from peer %s marked as invalid: %s"</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">,</span><span class="w"> </span><span class="nx">peerUrl</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="p">)</span>
-</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="p">}</span>
+</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="w">    </span><span class="nx">peerId</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidSubtreeMessage</span><span class="p">.</span><span class="nx">PeerId</span>
+</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="w">    </span><span class="nx">reason</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidSubtreeMessage</span><span class="p">.</span><span class="nx">Reason</span>
+</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a>
+</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a><span class="w">    </span><span class="c1">// Process the invalid subtree notification...</span>
+</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">"Subtree %s served by peer %s (url %s) marked as invalid: %s"</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">,</span><span class="w"> </span><span class="nx">peerId</span><span class="p">,</span><span class="w"> </span><span class="nx">peerUrl</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="p">)</span>
+</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="error-cases_3">Error Cases<a class="headerlink" href="#error-cases_3" title="Permanent link">&para;</a></h3>
 <ul>
@@ -10297,6 +10330,7 @@
 <li>Empty or malformed subtreeHash: Hash is not a valid hexadecimal string representation of a subtree hash</li>
 <li>Invalid peerUrl: URL is empty or not properly formatted</li>
 <li>Empty reason: Reason field is empty or not provided</li>
+<li>No serving identity: at least one of peer_id or peerUrl must identify the serving peer; otherwise the P2P consumer logs the report and drops it without charging anyone</li>
 </ul>
 <hr />
 <h2 id="transaction-validation-message-format">Transaction Validation Message Format<a class="headerlink" href="#transaction-validation-message-format" title="Permanent link">&para;</a></h2>
@@ -10597,7 +10631,7 @@ Per entry: 32-byte tx hash · 1-byte action · 4-byte LE content length · <code
 <li>Description: Human-readable description of why the transaction was rejected</li>
 <li>Required: Yes</li>
 </ul>
-<h4 id="peer_id_2">peer_id<a class="headerlink" href="#peer_id_2" title="Permanent link">&para;</a></h4>
+<h4 id="peer_id_3">peer_id<a class="headerlink" href="#peer_id_3" title="Permanent link">&para;</a></h4>
 <ul>
 <li>Type: string</li>
 <li>Description: Peer identifier indicating the source of the rejection. Empty string indicates internal rejection, non-empty indicates rejection from an external peer</li>

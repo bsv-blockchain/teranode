@@ -7094,7 +7094,7 @@
 <h2 id="starting-teranode">Starting Teranode<a class="headerlink" href="#starting-teranode" title="Permanent link">&para;</a></h2>
 <h3 id="1-deploy-teranode-configuration">1. Deploy Teranode Configuration<a class="headerlink" href="#1-deploy-teranode-configuration" title="Permanent link">&para;</a></h3>
 <blockquote>
-<p><strong>Note:</strong> The Cluster CR references the Secret <code>teranode-operator-secrets</code> (it holds <code>blockchain_store</code> and <code>utxostore</code>). A normal stop/start leaves it in place, but after a full teardown you must recreate it first — see <a href="../minersHowToInstallation/#create-the-teranode-secret">Create the Teranode Secret</a>.</p>
+<p><strong>Note:</strong> The Cluster CR references the Secret <code>teranode-operator-secrets</code> (it holds <code>blockchain_store</code>, <code>utxostore</code> and <code>grpc_admin_api_key</code>). A normal stop/start leaves it in place, but after a full teardown you must recreate it first — see <a href="../minersHowToInstallation/#create-the-teranode-secret">Create the Teranode Secret</a>.</p>
 </blockquote>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Apply the Teranode configuration and custom resources</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>kubernetes/teranode/teranode-configmap.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator

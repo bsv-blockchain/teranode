@@ -8839,7 +8839,7 @@
 </span><span id="__span-10-40"><a id="__codelineno-10-40" name="__codelineno-10-40" href="#__codelineno-10-40"></a><span class="s1">}'</span>
 </span></code></pre></div>
 <blockquote>
-<p><strong>Important:</strong> The seeder pod must have the same configmap (teranode-operator-config), the same secret (teranode-operator-secrets, which holds <code>blockchain_store</code> and <code>utxostore</code>), and the same volume mounts as the regular Teranode pods to access the correct database and storage configuration.</p>
+<p><strong>Important:</strong> The seeder pod must have the same configmap (teranode-operator-config), the same secret (teranode-operator-secrets, which holds <code>blockchain_store</code>, <code>utxostore</code> and <code>grpc_admin_api_key</code>), and the same volume mounts as the regular Teranode pods to access the correct database and storage configuration.</p>
 </blockquote>
 <h4 id="step-4-monitor-seeding-progress">Step 4: Monitor Seeding Progress<a class="headerlink" href="#step-4-monitor-seeding-progress" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Monitor seeder logs</span>

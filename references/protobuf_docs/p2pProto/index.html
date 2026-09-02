@@ -5212,28 +5212,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#updatecatchupreputationrequest" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UpdateCatchupReputationRequest
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#updatecatchupreputationresponse" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UpdateCatchupReputationResponse
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#peerservice" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7752,28 +7730,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#updatecatchupreputationrequest" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UpdateCatchupReputationRequest
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#updatecatchupreputationresponse" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UpdateCatchupReputationResponse
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#peerservice" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7956,10 +7912,8 @@
 <li><a href="#UnbanPeerRequest">UnbanPeerRequest</a></li>
 <li><a href="#UnbanPeerResponse">UnbanPeerResponse</a></li>
 <li><a href="#UpdateCatchupErrorRequest">UpdateCatchupErrorRequest</a></li>
-<li><a href="#UpdateCatchupErrorResponse">UpdateCatchupErrorResponse</a></li>
-<li><a href="#UpdateCatchupReputationRequest">UpdateCatchupReputationRequest</a></li>
 <li>
-<p><a href="#UpdateCatchupReputationResponse">UpdateCatchupReputationResponse</a></p>
+<p><a href="#UpdateCatchupErrorResponse">UpdateCatchupErrorResponse</a></p>
 </li>
 <li>
 <p><a href="#PeerService">PeerService</a></p>
@@ -9337,54 +9291,6 @@
 </tr>
 </tbody>
 </table>
-<p><a name="UpdateCatchupReputationRequest"></a></p>
-<h3 id="updatecatchupreputationrequest">UpdateCatchupReputationRequest<a class="headerlink" href="#updatecatchupreputationrequest" title="Permanent link">&para;</a></h3>
-<p>Represents a request to update the catchup reputation score for a peer.</p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th>Label</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>peer_id</td>
-<td><a href="#string">string</a></td>
-<td></td>
-<td>Peer ID to update</td>
-</tr>
-<tr>
-<td>score</td>
-<td><a href="#double">double</a></td>
-<td></td>
-<td>Reputation score between 0-100</td>
-</tr>
-</tbody>
-</table>
-<p><a name="UpdateCatchupReputationResponse"></a></p>
-<h3 id="updatecatchupreputationresponse">UpdateCatchupReputationResponse<a class="headerlink" href="#updatecatchupreputationresponse" title="Permanent link">&para;</a></h3>
-<p>Represents the response from updating catchup reputation.</p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th>Label</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>ok</td>
-<td><a href="#bool">bool</a></td>
-<td></td>
-<td>Indicates whether the operation succeeded</td>
-</tr>
-</tbody>
-</table>
 <!-- end messages -->
 
 <!-- end enums -->
@@ -9481,12 +9387,6 @@
 <td><a href="#p2p_api-RecordCatchupMaliciousRequest">RecordCatchupMaliciousRequest</a></td>
 <td><a href="#p2p_api-RecordCatchupMaliciousResponse">RecordCatchupMaliciousResponse</a></td>
 <td>Records a malicious catchup attempt by a peer. Severely damages peer reputation.</td>
-</tr>
-<tr>
-<td>UpdateCatchupReputation</td>
-<td><a href="#p2p_api-UpdateCatchupReputationRequest">UpdateCatchupReputationRequest</a></td>
-<td><a href="#p2p_api-UpdateCatchupReputationResponse">UpdateCatchupReputationResponse</a></td>
-<td>Updates the catchup reputation score for a peer (0-100).</td>
 </tr>
 <tr>
 <td>UpdateCatchupError</td>

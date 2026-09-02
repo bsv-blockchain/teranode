@@ -1140,6 +1140,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Install">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#set-the-grpc-admin-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set the gRPC admin API key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6808,6 +6825,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Install">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#set-the-grpc-admin-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set the gRPC admin API key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -7112,20 +7146,37 @@ credentials, and writes the local <code>.env</code> file.</p>
 <p>Read the quickstart network notes before choosing a network:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>less<span class="w"> </span>docs/NETWORKS.md
 </span></code></pre></div>
+<h3 id="set-the-grpc-admin-api-key">Set the gRPC admin API key<a class="headerlink" href="#set-the-grpc-admin-api-key" title="Permanent link">&para;</a></h3>
+<p>The Docker deployment runs <code>peer</code>, <code>blockvalidation</code> and <code>subtreevalidation</code> as
+separate containers, so their gRPC calls cross the auth interceptor. Set
+<code>grpc_admin_api_key</code> in <code>settings_local.conf</code> to the <strong>same</strong> strong random value
+for every service:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span>
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a># settings_local.conf
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>grpc_admin_api_key.docker.m = &lt;the generated value&gt;
+</span></code></pre></div>
+<p>This is required for a working node, not only for admin operations. Besides the
+admin RPCs (ban/unban, connect/disconnect peer, reset reputation), the key gates
+the P2P reporters that block and subtree validation use to record validated chain
+progress and block delivery. Leave it unset and those reports are rejected: no
+peer ever becomes a proven sync candidate, catchup stays in the budget-gated probe
+tier, and the node never settles on a good sync peer. The service logs this at
+<code>ERROR</code> on startup. Never commit the value.</p>
 <h2 id="start">Start<a class="headerlink" href="#start" title="Permanent link">&para;</a></h2>
 <p>Start the stack from the quickstart repository root:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>./start.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./start.sh
 </span></code></pre></div>
 <p>The script runs Docker Compose with the profiles from <code>.env</code>, waits for the
 services to become healthy, and moves the node into the expected FSM state.</p>
 <p>Check the deployment:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>./status.sh
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./rpc.sh<span class="w"> </span>getblockcount
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>./cli.sh<span class="w"> </span>getfsmstate
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>./status.sh
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>./rpc.sh<span class="w"> </span>getblockcount
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>./cli.sh<span class="w"> </span>getfsmstate
 </span></code></pre></div>
 <p>For logs:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./logs.sh
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./logs.sh<span class="w"> </span>blockchain
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>./logs.sh
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>./logs.sh<span class="w"> </span>blockchain
 </span></code></pre></div>
 <h2 id="what-runs">What Runs<a class="headerlink" href="#what-runs" title="Permanent link">&para;</a></h2>
 <p>Quickstart starts the Teranode microservices plus the local dependencies they
@@ -7214,7 +7265,7 @@ block retained grows Aerospike proportionally, and mainnet UTXO churn is high.</
 <p>If you need full historical block data — for indexers, explorers, or chain
 analysis — enable the optional <code>blockpersister</code> service by adding it to
 <code>COMPOSE_PROFILES</code> in <code>.env</code>:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">COMPOSE_PROFILES</span><span class="o">=</span>legacy,p2p,monitoring,blockpersister
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">COMPOSE_PROFILES</span><span class="o">=</span>legacy,p2p,monitoring,blockpersister
 </span></code></pre></div>
 <p>It writes raw block data to disk in parallel with the pruner; pruning behaviour
 is unchanged. Archival mode requires significant additional disk space (multiple
@@ -7223,35 +7274,35 @@ TB on mainnet) and is not needed for standard validation or mining.</p>
 <p>Initial sync is faster when you seed the UTXO set from a compatible snapshot.
 For teratestnet, quickstart can derive the canonical snapshot URL from the block
 hash:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>./seed.sh<span class="w"> </span>000000002ea94a515ad9fd40d710fd249fe8610acef7b74f459446812d565187
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>./seed.sh<span class="w"> </span>000000002ea94a515ad9fd40d710fd249fe8610acef7b74f459446812d565187
 </span></code></pre></div>
 <p>For mainnet or standard testnet, provide your own compatible snapshot directory
 or URL:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>./seed.sh<span class="w"> </span>&lt;block-hash&gt;<span class="w"> </span>/path/to/seed-dir
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>./seed.sh<span class="w"> </span>&lt;block-hash&gt;<span class="w"> </span>/path/to/seed-dir
 </span></code></pre></div>
 <p>See <a href="../minersHowToSyncTheNode/">Syncing the Blockchain</a> for sync and seeding
 options.</p>
 <h2 id="stop">Stop<a class="headerlink" href="#stop" title="Permanent link">&para;</a></h2>
 <p>Use quickstart's stop script for a graceful shutdown:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>./stop.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>./stop.sh
 </span></code></pre></div>
 <p>It moves the FSM toward an idle state before stopping the Docker Compose stack.</p>
 <h2 id="update">Update<a class="headerlink" href="#update" title="Permanent link">&para;</a></h2>
 <p>Check for an update:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>./update.sh<span class="w"> </span>--check
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>./update.sh<span class="w"> </span>--check
 </span></code></pre></div>
 <p>Apply an update:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>./update.sh
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>./start.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>./update.sh
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>./start.sh
 </span></code></pre></div>
 <p><code>update.sh</code> changes only <code>TERANODE_VERSION</code> in <code>.env</code>; <code>start.sh</code> pulls and
 recreates containers as needed. See <a href="../minersUpdatingTeranode/">Updating Teranode</a>.</p>
 <h2 id="reset-or-switch-networks">Reset or Switch Networks<a class="headerlink" href="#reset-or-switch-networks" title="Permanent link">&para;</a></h2>
 <p>Different networks cannot share data. To switch networks:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>./stop.sh
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>./clean.sh<span class="w"> </span>--data-only
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>./setup.sh
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>./start.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>./stop.sh
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>./clean.sh<span class="w"> </span>--data-only
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>./setup.sh
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>./start.sh
 </span></code></pre></div>
 <p>See <a href="../minersHowToResetTeranode/">Reset Teranode</a> for cleanup options.</p>
 <h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
