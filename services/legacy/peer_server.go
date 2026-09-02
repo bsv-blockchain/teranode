@@ -3884,8 +3884,6 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	if err != nil {
 		return nil, err
 	}
-	// c.Upnp = true // TODO set from settings
-
 	cfg = c
 
 	// This is normally only done from file in bsvd, but we need to do it here, also happens inside loadConfig
