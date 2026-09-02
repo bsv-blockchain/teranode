@@ -47,7 +47,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
-	blob_options "github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -502,7 +501,6 @@ type server struct {
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
 	tempStore         blob.Store
-	concurrentStore   *blob.ConcurrentBlob[chainhash.Hash]
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
 	blockAssembly     *blockassembly.Client
@@ -1288,6 +1286,15 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 		// synchronous backpressure) and also spares fabricated blocks the
 		// SerializeSize walk below. Blocks we actually requested take the fast path.
 		if !sm.BlockRequested(sp.Peer, blockHash) {
+			// One exception: when sync stalls on a single block we ask a second
+			// peer for the same block, and cancel the request with the losers
+			// once a copy arrives. A late copy from one of exactly those peers is
+			// an answer to our own question, so drop it and leave the peer alone.
+			if sm.BlockRacedTo(sp.Peer, blockHash) {
+				sp.server.logger.Debugf("dropping late copy of block %s from %s, another peer already delivered it", blockHash, sp)
+				return
+			}
+
 			// Unrequested block: evict the whole association (primary drives the
 			// sync-peer rotation, plus the stream sub-peer's own connection), mirroring
 			// handleBlockMsg's downstream eviction. See disconnectMisbehaving.
@@ -2028,13 +2035,19 @@ func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
 	sp.server.logger.Warnf("Received reject message from peer %s, cmd: %s, code: %s, reason: %s, hash: %s", p, msg.Cmd, msg.Code.String(), msg.Reason, msg.Hash.String())
 }
 
-// OnNotFound logs all not found messages received from the remote peer.
+// OnNotFound handles a not found message received from the remote peer.
+//
+// It used to only log. A notfound naming a block we asked this peer for has to
+// reach the sync manager: the peer has told us its copy is never coming, so its
+// obligation for that block must be discharged and the block put back into the
+// download walk, or it is stranded behind a forward-only cursor with nobody
+// owing it.
 func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnNotFound",
 		tracing.WithHistogram(peerServerMetrics["OnNotFound"]),
 	)
 
-	sp.server.logger.Warnf("Received not found message from peer %s, %d not found invs", p, len(msg.InvList))
+	sp.server.syncManager.NotFound(msg, sp.Peer)
 }
 
 // OnRead is invoked when a peer receives a message and it is used to update
@@ -3158,14 +3171,29 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 			OnCreateStream: sp.OnCreateStream,
 			OnStreamAck:    sp.OnStreamAck,
 		},
-		AddrMe:             addrMe,
-		NewestBlock:        sp.newestBlock,
-		HostToNetAddress:   sp.server.addrManager.HostToNetAddress,
-		Proxy:              cfg.Proxy,
-		UserAgentName:      userAgentName,
-		UserAgentVersion:   version.String(),
-		UserAgentComments:  cfg.UserAgentComments,
-		ChainParams:        sp.server.settings.ChainCfgParams,
+		AddrMe:            addrMe,
+		NewestBlock:       sp.newestBlock,
+		HostToNetAddress:  sp.server.addrManager.HostToNetAddress,
+		Proxy:             cfg.Proxy,
+		UserAgentName:     userAgentName,
+		UserAgentVersion:  version.String(),
+		UserAgentComments: cfg.UserAgentComments,
+		ChainParams:       sp.server.settings.ChainCfgParams,
+		CatchingUp: func() bool {
+			if sp.server == nil || sp.server.syncManager == nil {
+				return false
+			}
+			// The cached answer, never the live one: this runs on the peer's
+			// stall handler, which must not block on a blockchain round trip.
+			return !sp.server.syncManager.IsCurrentCached()
+		},
+		PeersWithBlockDownloads: func() int {
+			if sp.server == nil || sp.server.syncManager == nil {
+				return 0
+			}
+			return sp.server.syncManager.PeersWithBlockDownloads()
+		},
+
 		Services:           sp.server.services,
 		DisableRelayTx:     cfg.BlocksOnly,
 		ProtocolVersion:    peer.MaxProtocolVersion,
@@ -4028,19 +4056,13 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		utxoStore:            utxoStore,
 		subtreeStore:         subtreeStore,
 		tempStore:            tempStore,
-		concurrentStore: blob.NewConcurrentBlob[chainhash.Hash](
-			tempStore,
-			blob_options.WithDeleteAt(10),
-			blob_options.WithSubDirectory("blocks"),
-			blob_options.WithAllowOverwrite(true),
-		),
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
-		blockAssembly:     blockAssembly,
-		assetHTTPAddress:  assetHTTPAddress,
-		banList:           banList,
-		banChan:           banChan,
-		associationMgr:    peer.NewAssociationManager(),
+		subtreeValidation:    subtreeValidation,
+		blockValidation:      blockValidation,
+		blockAssembly:        blockAssembly,
+		assetHTTPAddress:     assetHTTPAddress,
+		banList:              banList,
+		banChan:              banChan,
+		associationMgr:       peer.NewAssociationManager(),
 	}
 
 	s.syncManager, err = netsync.New(
@@ -4051,6 +4073,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		validationClient,
 		utxoStore,
 		subtreeStore,
+		tempStore,
 		subtreeValidation,
 		blockValidation,
 		blockAssembly,

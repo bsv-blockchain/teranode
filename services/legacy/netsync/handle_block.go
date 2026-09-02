@@ -118,6 +118,15 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		}
 	}
 
+	// A block committed from the park after a restart has no delivering peer at
+	// all, and (*Peer).String dereferences the peer's address and asks it
+	// whether it is the sync peer — so calling it on nil panics, on the
+	// block-queue goroutine, in production.
+	peerLabel := "recovered-from-disk"
+	if peer != nil {
+		peerLabel = peer.String()
+	}
+
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "HandleBlockDirect",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -125,10 +134,10 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			block.Hash().String(),
 			blockHeight,
 			len(block.Transactions()),
-			peer.String(),
+			peerLabel,
 		),
 		tracing.WithTag("blockHash", block.Hash().String()),
-		tracing.WithTag("peer", peer.String()),
+		tracing.WithTag("peer", peerLabel),
 		tracing.WithHistogram(prometheusLegacyNetsyncHandleBlockDirect),
 	)
 	defer func() {

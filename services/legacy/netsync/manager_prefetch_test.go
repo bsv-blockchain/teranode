@@ -12,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
@@ -38,9 +37,10 @@ func TestBlockRequested(t *testing.T) {
 
 	newSM := func(params *chaincfg.Params) *SyncManager {
 		return &SyncManager{
-			logger:      ulogger.TestLogger{},
-			chainParams: params,
-			peerStates:  txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+			logger:         ulogger.TestLogger{},
+			chainParams:    params,
+			peerStates:     txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+			blockDownloads: newBlockDownloadTracker(blockRequestAssignmentTTL),
 		}
 	}
 
@@ -61,9 +61,8 @@ func TestBlockRequested(t *testing.T) {
 	t.Run("requested block is admitted", func(t *testing.T) {
 		sm := newSM(&chaincfg.MainNetParams)
 		p := &peerpkg.Peer{}
-		reqd := expiringmap.New[chainhash.Hash, struct{}](time.Minute)
-		reqd.Set(hash, struct{}{})
-		sm.peerStates.Set(p, &peerSyncState{requestedBlocks: reqd})
+		sm.peerStates.Set(p, &peerSyncState{})
+		sm.blockDownloads.Add(p, hash)
 
 		require.True(t, sm.BlockRequested(p, &hash))
 	})
@@ -71,9 +70,7 @@ func TestBlockRequested(t *testing.T) {
 	t.Run("unrequested block from a known peer is rejected", func(t *testing.T) {
 		sm := newSM(&chaincfg.MainNetParams)
 		p := &peerpkg.Peer{}
-		sm.peerStates.Set(p, &peerSyncState{
-			requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-		})
+		sm.peerStates.Set(p, &peerSyncState{})
 
 		require.False(t, sm.BlockRequested(p, &hash))
 	})
@@ -614,9 +611,7 @@ func TestHandleBlockMsg_SkipsDisconnectedPeer(t *testing.T) {
 	// standing in for a peer awaitBlockResult has just disconnected.
 	p := &peerpkg.Peer{}
 	require.False(t, p.Connected())
-	sm.peerStates.Set(p, &peerSyncState{
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-	})
+	sm.peerStates.Set(p, &peerSyncState{})
 
 	err := sm.handleBlockMsg(&blockQueueMsg{
 		blockHash: chainhash.Hash{0x01},
