@@ -5574,10 +5574,6 @@ func (m *mockP2PClient) RecordCatchupMalicious(ctx context.Context, peerID strin
 	return nil
 }
 
-func (m *mockP2PClient) UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error {
-	return nil
-}
-
 func (m *mockP2PClient) UpdateCatchupError(ctx context.Context, peerID string, errorMessage string) error {
 	return nil
 }

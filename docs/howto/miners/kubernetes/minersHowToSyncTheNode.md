@@ -338,7 +338,7 @@ kubectl run teranode-seeder \
 }'
 ```
 
-> **Important:** The seeder pod must have the same configmap (teranode-operator-config), the same secret (teranode-operator-secrets, which holds `blockchain_store` and `utxostore`), and the same volume mounts as the regular Teranode pods to access the correct database and storage configuration.
+> **Important:** The seeder pod must have the same configmap (teranode-operator-config), the same secret (teranode-operator-secrets, which holds `blockchain_store`, `utxostore` and `grpc_admin_api_key`), and the same volume mounts as the regular Teranode pods to access the correct database and storage configuration.
 
 #### Step 4: Monitor Seeding Progress
 
