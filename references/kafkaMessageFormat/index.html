@@ -4631,6 +4631,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#peer_id_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        peer_id
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer_url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        peer_url
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4771,7 +4793,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer_id_1" class="md-nav__link">
+  <a href="#peer_id_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         peer_id
@@ -4932,7 +4954,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer_id_2" class="md-nav__link">
+  <a href="#peer_id_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         peer_id
@@ -5449,7 +5471,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer_id_3" class="md-nav__link">
+  <a href="#peer_id_4" class="md-nav__link">
     <span class="md-ellipsis">
       
         peer_id
@@ -8415,6 +8437,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#peer_id_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        peer_id
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer_url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        peer_url
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -8555,7 +8599,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer_id_1" class="md-nav__link">
+  <a href="#peer_id_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         peer_id
@@ -8716,7 +8760,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer_id_2" class="md-nav__link">
+  <a href="#peer_id_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         peer_id
@@ -9233,7 +9277,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer_id_3" class="md-nav__link">
+  <a href="#peer_id_4" class="md-nav__link">
     <span class="md-ellipsis">
       
         peer_id
@@ -10051,7 +10095,9 @@
 <div class="language-protobuf highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaInvalidBlockTopicMessage</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">blockHash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">peer_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">peer_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="field-specifications_1">Field Specifications<a class="headerlink" href="#field-specifications_1" title="Permanent link">&para;</a></h3>
 <h4 id="blockhash">blockHash<a class="headerlink" href="#blockhash" title="Permanent link">&para;</a></h4>
@@ -10069,36 +10115,53 @@
 <li>Required: Yes</li>
 <li>Example: <code>"Block contains invalid transaction"</code></li>
 </ul>
+<h4 id="peer_id_1">peer_id<a class="headerlink" href="#peer_id_1" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Type: string</li>
+<li>Description: P2P identity of the peer that announced the block, when block validation knows it. This is the primary ban attribution: unlike the P2P service's bounded peer map, it cannot be evicted by announcement floods.</li>
+<li>Required: No (empty when the block's provenance is unknown, e.g. blocks invalidated during mined-status updates)</li>
+</ul>
+<h4 id="peer_url">peer_url<a class="headerlink" href="#peer_url" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Type: string</li>
+<li>Description: DataHub URL the block was fetched from, used as a last-resort attribution fallback (resolved to a peer via the peer registry).</li>
+<li>Required: No</li>
+</ul>
 <h3 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">&para;</a></h3>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">"blockHash"</span><span class="p">:</span><span class="w"> </span><span class="s2">"00000000000000000007abd8d2a16a69c1c45a1c3b0d1a6b2e0c8b4e8f9a1b2c3"</span><span class="p">,</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Block contains invalid transaction"</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Block contains invalid transaction"</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">"peer_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp"</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">"peer_url"</span><span class="p">:</span><span class="w"> </span><span class="s2">"http://198.51.100.7:8090"</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="code-examples_1">Code Examples<a class="headerlink" href="#code-examples_1" title="Permanent link">&para;</a></h3>
 <h4 id="sending-messages_1">Sending Messages<a class="headerlink" href="#sending-messages_1" title="Permanent link">&para;</a></h4>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// Create invalid block message</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nx">invalidBlockMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">kafkamessage</span><span class="p">.</span><span class="nx">KafkaInvalidBlockTopicMessage</span><span class="p">{</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nx">BlockHash</span><span class="p">:</span><span class="w"> </span><span class="nx">blockHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nx">Reason</span><span class="p">:</span><span class="w">    </span><span class="s">"Block validation failed: invalid merkle root"</span><span class="p">,</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="p">}</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1">// Serialize to protobuf</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="nx">data</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">proto</span><span class="p">.</span><span class="nx">Marshal</span><span class="p">(</span><span class="nx">invalidBlockMessage</span><span class="p">)</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"failed to marshal invalid block message: %w"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="p">}</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="c1">// Send to Kafka</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="nx">producerMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">sarama</span><span class="p">.</span><span class="nx">ProducerMessage</span><span class="p">{</span>
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">    </span><span class="nx">Topic</span><span class="p">:</span><span class="w"> </span><span class="s">"kafka_invalidBlock"</span><span class="p">,</span>
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">    </span><span class="nx">Value</span><span class="p">:</span><span class="w"> </span><span class="nx">sarama</span><span class="p">.</span><span class="nx">ByteEncoder</span><span class="p">(</span><span class="nx">data</span><span class="p">),</span>
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="p">}</span>
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="nx">partition</span><span class="p">,</span><span class="w"> </span><span class="nx">offset</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">producer</span><span class="p">.</span><span class="nx">SendMessage</span><span class="p">(</span><span class="nx">producerMessage</span><span class="p">)</span>
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"failed to send invalid block message: %w"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="p">}</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// Create invalid block message. Include the block's provenance when known:</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1">// PeerId is the primary ban attribution, PeerUrl the last-resort fallback.</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nx">invalidBlockMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">kafkamessage</span><span class="p">.</span><span class="nx">KafkaInvalidBlockTopicMessage</span><span class="p">{</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nx">BlockHash</span><span class="p">:</span><span class="w"> </span><span class="nx">blockHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nx">Reason</span><span class="p">:</span><span class="w">    </span><span class="s">"Block validation failed: invalid merkle root"</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nx">PeerId</span><span class="p">:</span><span class="w">    </span><span class="nx">announcingPeerID</span><span class="p">,</span><span class="w"> </span><span class="c1">// may be empty when provenance is unknown</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nx">PeerUrl</span><span class="p">:</span><span class="w">   </span><span class="nx">dataHubURL</span><span class="p">,</span><span class="w">       </span><span class="c1">// may be empty</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1">// Serialize to protobuf</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="nx">data</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">proto</span><span class="p">.</span><span class="nx">Marshal</span><span class="p">(</span><span class="nx">invalidBlockMessage</span><span class="p">)</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"failed to marshal invalid block message: %w"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="p">}</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="c1">// Send to Kafka</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="nx">producerMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">sarama</span><span class="p">.</span><span class="nx">ProducerMessage</span><span class="p">{</span>
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="w">    </span><span class="nx">Topic</span><span class="p">:</span><span class="w"> </span><span class="s">"kafka_invalidBlock"</span><span class="p">,</span>
+</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="w">    </span><span class="nx">Value</span><span class="p">:</span><span class="w"> </span><span class="nx">sarama</span><span class="p">.</span><span class="nx">ByteEncoder</span><span class="p">(</span><span class="nx">data</span><span class="p">),</span>
+</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a><span class="p">}</span>
+</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a>
+</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="nx">partition</span><span class="p">,</span><span class="w"> </span><span class="nx">offset</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">producer</span><span class="p">.</span><span class="nx">SendMessage</span><span class="p">(</span><span class="nx">producerMessage</span><span class="p">)</span>
+</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"failed to send invalid block message: %w"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a><span class="p">}</span>
 </span></code></pre></div>
 <h4 id="receiving-messages_1">Receiving Messages<a class="headerlink" href="#receiving-messages_1" title="Permanent link">&para;</a></h4>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1">// Handle incoming invalid block message</span>
@@ -10115,10 +10178,16 @@
 </span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="nx">blockHash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidBlockMessage</span><span class="p">.</span><span class="nx">BlockHash</span>
 </span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">    </span><span class="nx">reason</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidBlockMessage</span><span class="p">.</span><span class="nx">Reason</span>
 </span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">    </span><span class="c1">// Process the invalid block notification...</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">"Block %s marked as invalid: %s"</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHash</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="p">)</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="p">}</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">    </span><span class="c1">// Resolve ban attribution, strongest source first: the peer ID carried in</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">    </span><span class="c1">// the message, then any locally stored announcement record, then the</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">    </span><span class="c1">// DataHub URL resolved via the peer registry.</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">    </span><span class="nx">peerID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidBlockMessage</span><span class="p">.</span><span class="nx">GetPeerId</span><span class="p">()</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="w">    </span><span class="nx">peerURL</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">invalidBlockMessage</span><span class="p">.</span><span class="nx">GetPeerUrl</span><span class="p">()</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="w">    </span><span class="c1">// Process the invalid block notification...</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">"Block %s marked as invalid: %s (peer %q, url %q)"</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHash</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="p">,</span><span class="w"> </span><span class="nx">peerID</span><span class="p">,</span><span class="w"> </span><span class="nx">peerURL</span><span class="p">)</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="error-cases_1">Error Cases<a class="headerlink" href="#error-cases_1" title="Permanent link">&para;</a></h3>
 <ul>
@@ -10151,7 +10220,7 @@
 <li>Description: URL pointing to the location where the full subtree data can be retrieved</li>
 <li>Required: Yes</li>
 </ul>
-<h4 id="peer_id_1">peer_id<a class="headerlink" href="#peer_id_1" title="Permanent link">&para;</a></h4>
+<h4 id="peer_id_2">peer_id<a class="headerlink" href="#peer_id_2" title="Permanent link">&para;</a></h4>
 <ul>
 <li>Type: string</li>
 <li>Description: Originator peer identifier that created or provided this subtree</li>
@@ -10260,7 +10329,7 @@
 <li>Required: Yes</li>
 <li>Example: <code>"Subtree contains invalid transaction merkle proof"</code></li>
 </ul>
-<h4 id="peer_id_2">peer_id<a class="headerlink" href="#peer_id_2" title="Permanent link">&para;</a></h4>
+<h4 id="peer_id_3">peer_id<a class="headerlink" href="#peer_id_3" title="Permanent link">&para;</a></h4>
 <ul>
 <li>Type: string</li>
 <li>Description: P2P peer ID of the peer whose DataHub (peerUrl) served the invalid bytes. Used by the P2P service as the authoritative identity to charge for the failure; when empty, the peer is resolved from peerUrl instead</li>
@@ -10631,7 +10700,7 @@ Per entry: 32-byte tx hash · 1-byte action · 4-byte LE content length · <code
 <li>Description: Human-readable description of why the transaction was rejected</li>
 <li>Required: Yes</li>
 </ul>
-<h4 id="peer_id_3">peer_id<a class="headerlink" href="#peer_id_3" title="Permanent link">&para;</a></h4>
+<h4 id="peer_id_4">peer_id<a class="headerlink" href="#peer_id_4" title="Permanent link">&para;</a></h4>
 <ul>
 <li>Type: string</li>
 <li>Description: Peer identifier indicating the source of the rejection. Empty string indicates internal rejection, non-empty indicates rejection from an external peer</li>
