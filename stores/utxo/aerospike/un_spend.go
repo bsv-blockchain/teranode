@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -45,7 +45,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -161,16 +161,25 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 
 	offset := s.calculateOffsetForOutput(spend.Vout)
 
+	// SpendingData is mandatory after #766 — unspend uses it to verify ownership
+	// before reversing the spend. It is forwarded verbatim as arg index 2.
+	//
+	// Unspend is FENCED to the UDF/Lua path: executeTeranodeOp routes subOpUnspend
+	// through the UDF executor even when aerospike_use_native_teranode_ops is on
+	// (see useNativeForSubOp). The UDF path always enforces the #766 ownership
+	// comparison, whereas the native subOpUnspend=3 dispatcher's enforcement cannot
+	// be verified from the client (#899) — so reversing a spend never depends on an
+	// unverifiable server build. The other sub-ops keep the native operate-path.
 	if spend.SpendingData == nil {
 		return errors.NewProcessingError("[Unspend] SpendingData is required for %s:%d", spend.TxID, spend.Vout)
 	}
 
-	ret, aErr := s.client.Execute(policy, key, LuaPackage, "unspend",
-		aerospike.NewIntegerValue(int(offset)),         // vout adjusted for utxoBatchSize
-		aerospike.NewValue(spend.UTXOHash[:]),          // utxo hash
-		aerospike.NewValue(spend.SpendingData.Bytes()), // expected stored spending data (mandatory ownership check)
-		aerospike.NewIntegerValue(int(s.blockHeight.Load())),
-		aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
+	ret, aErr := s.executeTeranodeOp(policy, key, subOpUnspend, "unspend",
+		int(offset),                // vout adjusted for utxoBatchSize
+		spend.UTXOHash[:],          // utxo hash
+		spend.SpendingData.Bytes(), // expected stored spending data (mandatory ownership check; #766)
+		int(s.GetBlockHeight()),
+		s.settings.GetUtxoStoreBlockHeightRetention(),
 	)
 	if aErr != nil {
 		if e, ok := aErr.(*aerospike.AerospikeError); ok {
@@ -184,7 +193,7 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 	res, err := s.ParseLuaMapResponse(ret)
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error parsing response").Inc()
-		return errors.NewProcessingError("error parsing response", err)
+		return errors.NewProcessingError("[unspend][%s] error parsing response (value %s): %s", describeUTXOSpend(spend), describeAerospikeValue(ret), err.Error(), err)
 	}
 
 	if res.Status == LuaStatusOK {
@@ -193,7 +202,10 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 			// Decrement spentExtraRecs on the master record since this child
 			// record transitioned from ALLSPENT back to NOTALLSPENT.
 			// This mirrors the +1 increment done in handleSpendSignal for ALLSPENT.
-			if err := s.handleExtraRecords(ctx, spend.TxID, -1); err != nil {
+			// Pass 0 so the DAH height falls back to the current block height; a
+			// decrement clears the DAH (tx no longer all-spent) rather than setting
+			// it, so the height is not actually used here.
+			if err := s.handleExtraRecords(ctx, spend.TxID, -1, 0); err != nil {
 				return err
 			}
 		}

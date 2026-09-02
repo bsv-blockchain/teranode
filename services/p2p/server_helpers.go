@@ -3,13 +3,9 @@ package p2p
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/url"
-	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -31,7 +27,7 @@ type reputationCacheEntry struct {
 	expiresAt time.Time
 }
 
-func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
+func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) {
 	var (
 		blockMessage BlockMessage
 		hash         *chainhash.Hash
@@ -52,6 +48,31 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		return
 	}
 
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing (and before field validation and the
+	// spoof check, so a banned peer cannot keep triggering uncached
+	// AddBanScore RPCs). Own messages are identified by the real sender, not
+	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
+	// skip; genuine own messages return at the self check below.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect (logging
+	// — including the spoof log below — registry write, WebSocket fan-out).
+	// Display-only free text is sanitized in place; a malformed
+	// protocol-format field is a protocol violation. The self check is on
+	// fromID alone so a peer claiming our ID cannot dodge the score.
+	blockMessage.sanitizeFields()
+
+	if err = blockMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleBlockTopic] invalid block message field from peer %s: %v", fromID, err)
+		if fromID != s.P2PClient.GetID() {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+
 	// Check that fromID matches the block peer ID
 	if fromID != blockMessage.PeerID {
 		s.logger.Errorf("[handleBlockTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, blockMessage.PeerID)
@@ -59,45 +80,65 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		return
 	}
 
-	// Validate DataHubURL to prevent SSRF attacks
-	if err = s.validateDataHubURL(blockMessage.DataHubURL); err != nil {
-		s.logger.Errorf("[handleBlockTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		s.addProtocolViolation(fromID)
+	// Validate DataHubURL (SSRF + operator blacklist)
+	if !s.checkDataHubURL(blockMessage.DataHubURL, fromID, "handleBlockTopic") {
 		return
 	}
 
 	s.logger.Infof("[handleBlockTopic] received block %s fromID %s", blockMessage.Hash, blockMessage.PeerID)
 
+	// The spoof check above proved fromID == blockMessage.PeerID, so the
+	// sender comparison alone decides self.
+	isSelf := fromID == s.P2PClient.GetID()
+	advertisedHeight := blockMessage.Height
+	if isSelf {
+		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
+		if err != nil {
+			return
+		}
+	} else {
+		var ok bool
+		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
+		if !ok {
+			return
+		}
+	}
+
 	select {
 	case s.notificationCh <- &notificationMsg{
 		Timestamp:  time.Now().UTC().Format(isoFormat),
 		Type:       "block",
-		Hash:       blockMessage.Hash,
-		Height:     blockMessage.Height,
+		Hash:       hash.String(),
+		Height:     advertisedHeight,
 		BaseURL:    blockMessage.DataHubURL,
 		PeerID:     blockMessage.PeerID,
 		ClientName: blockMessage.ClientName,
 	}:
 	default:
+		notificationDropped("block")
 		s.logger.Warnf("[handleBlockTopic] notification channel full, dropped block notification for %s", blockMessage.Hash)
 	}
 
 	// Ignore our own messages
-	if s.isOwnMessage(fromID, blockMessage.PeerID) {
+	if isSelf {
 		s.logger.Debugf("[handleBlockTopic] ignoring own block message for %s", blockMessage.Hash)
 		return
 	}
 
 	now := time.Now().UTC()
 
-	// Store the peer ID that sent this block
-	s.storePeerMapEntry(&s.blockPeerMap, blockMessage.Hash, fromID, now)
+	// Store the peer ID that sent this block, keyed by the canonical hash
+	// string. Ban lookups (ReportInvalidBlock, processInvalidBlockMessage) use
+	// hash.String() from block validation, so keying by the raw message string
+	// would let a peer evade the invalid-block ban by announcing a
+	// non-canonical hex form (uppercase, truncated).
+	s.storePeerMapEntry(&s.blockPeerMap, hash.String(), fromID, now)
 
 	s.logger.Debugf("[handleBlockTopic] storing peer %s for block %s", fromID, blockMessage.Hash)
 
 	// Store using the originator's peer ID
 	if peerID, err := peer.Decode(blockMessage.PeerID); err == nil {
-		s.addPeer(peerID, blockMessage.ClientName, blockMessage.Height, hash, blockMessage.DataHubURL)
+		s.addPeer(peerID, blockMessage.ClientName, advertisedHeight, hash, blockMessage.DataHubURL)
 		s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for peer %s", blockMessage.Hash, peerID)
 	}
 
@@ -107,11 +148,6 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	// Track bytes received from this message
 	s.updateBytesReceived(fromID, blockMessage.PeerID, uint64(len(m)))
 
-	// Skip notifications from banned peers
-	if s.shouldSkipBannedPeer(blockMessage.PeerID, "handleBlockTopic") {
-		return
-	}
-
 	// Note: we intentionally do NOT filter blocks from unhealthy peers here,
 	// unlike handleSubtreeTopic. Block announcements are what *trigger* catchup,
 	// so dropping them from low-reputation peers stops a node that is behind from
@@ -119,11 +155,6 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	// Block validation handles bad blocks safely, and catchup fetches blocks and
 	// their subtrees directly over HTTP (not via the gossip subtree handler), so
 	// the reputation filter retained in handleSubtreeTopic does not affect catchup.
-
-	hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
-	if err != nil {
-		return
-	}
 
 	// Always send block to kafka - let block validation service decide what to do based on sync state
 	// send block to kafka, if configured
@@ -170,6 +201,29 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing (and before field validation and the
+	// spoof check, so a banned peer cannot keep triggering uncached
+	// AddBanScore RPCs). Own messages are identified by the real sender, not
+	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
+	// skip; genuine own messages return at the self check below.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect:
+	// display-only free text is sanitized in place, a malformed
+	// protocol-format field drops the message and scores the sender.
+	subtreeMessage.sanitizeFields()
+
+	if err = subtreeMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleSubtreeTopic] invalid subtree message field from peer %s: %v", fromID, err)
+		if fromID != s.P2PClient.GetID() {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+
 	// Check that fromID matches the subtree peer ID
 	if fromID != subtreeMessage.PeerID {
 		s.logger.Errorf("[handleSubtreeTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, subtreeMessage.PeerID)
@@ -177,17 +231,17 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	// Validate DataHubURL to prevent SSRF attacks
-	if err = s.validateDataHubURL(subtreeMessage.DataHubURL); err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		s.addProtocolViolation(fromID)
+	// Validate DataHubURL (SSRF + operator blacklist)
+	if !s.checkDataHubURL(subtreeMessage.DataHubURL, fromID, "handleSubtreeTopic") {
 		return
 	}
 
 	s.logger.Debugf("[handleSubtreeTopic] received subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
 
-	if s.isBlacklistedBaseURL(subtreeMessage.DataHubURL) {
-		s.logger.Errorf("[handleSubtreeTopic] Blocked subtree notification from blacklisted baseURL: %s", subtreeMessage.DataHubURL)
+	// Parse the hash before any use, mirroring handleBlockTopic: a malformed
+	// hash must not reach WebSocket subscribers or count as peer activity.
+	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
+	if err != nil {
 		return
 	}
 
@@ -197,17 +251,19 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	case s.notificationCh <- &notificationMsg{
 		Timestamp:  now.Format(isoFormat),
 		Type:       "subtree",
-		Hash:       subtreeMessage.Hash,
+		Hash:       hash.String(),
 		BaseURL:    subtreeMessage.DataHubURL,
 		PeerID:     subtreeMessage.PeerID,
 		ClientName: subtreeMessage.ClientName,
 	}:
 	default:
+		notificationDropped("subtree")
 		s.logger.Warnf("[handleSubtreeTopic] notification channel full, dropped subtree notification for %s", subtreeMessage.Hash)
 	}
 
-	// Ignore our own messages
-	if s.isOwnMessage(fromID, subtreeMessage.PeerID) {
+	// Ignore our own messages. The spoof check above proved fromID equals the
+	// claimed PeerID, so the sender comparison alone decides self.
+	if fromID == s.P2PClient.GetID() {
 		s.logger.Debugf("[handleSubtreeTopic] ignoring own subtree message for %s", subtreeMessage.Hash)
 		return
 	}
@@ -218,25 +274,16 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	// Track bytes received from this message
 	s.updateBytesReceived(fromID, subtreeMessage.PeerID, uint64(len(m)))
 
-	// Skip notifications from banned peers
-	if s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
-		s.logger.Debugf("[handleSubtreeTopic] skipping banned peer %s", fromID)
-		return
-	}
-
 	// Skip notifications from unhealthy peers
 	if s.shouldSkipUnhealthyPeer(fromID, "handleSubtreeTopic") {
 		return
 	}
 
-	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
-	if err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] error parsing hash: %v", err)
-		return
-	}
-
-	// Store the peer ID that sent this subtree
-	s.storePeerMapEntry(&s.subtreePeerMap, subtreeMessage.Hash, fromID, now)
+	// Store the peer ID that sent this subtree, keyed by the canonical hash
+	// string so the ReportInvalidSubtree lookup (which uses hash.String() from
+	// subtree validation) matches even when the announcer sent a non-canonical
+	// hex form.
+	s.storePeerMapEntry(&s.subtreePeerMap, hash.String(), fromID, now)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", fromID, subtreeMessage.Hash)
 
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
@@ -264,12 +311,24 @@ func (s *Server) addProtocolViolation(peerID string) {
 	s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
-// isBlacklistedBaseURL checks if the given baseURL matches any entry in the blacklist.
+// isBlacklistedBaseURL checks the given baseURL against the operator-configured
+// blacklist (settings.SubtreeValidation.BlacklistedBaseURLs).
 func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
-	inputHost := s.extractHost(baseURL)
+	if s.settings == nil {
+		return false
+	}
+
+	return isBaseURLBlacklisted(baseURL, s.settings.SubtreeValidation.BlacklistedBaseURLs)
+}
+
+// isBaseURLBlacklisted checks if the given baseURL matches any entry in the
+// blacklist. Package-level so both the gossip handlers (via the Server wrapper
+// above) and the sync PeerSelector can enforce the same blacklist.
+func isBaseURLBlacklisted(baseURL string, blacklist map[string]struct{}) bool {
+	inputHost := extractHost(baseURL)
 	if inputHost == "" {
 		// Fall back to exact string matching for invalid URLs
-		for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
+		for blocked := range blacklist {
 			if baseURL == blocked {
 				return true
 			}
@@ -279,10 +338,10 @@ func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 	}
 
 	// Check each blacklisted URL
-	for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
-		blockedHost := s.extractHost(blocked)
+	for blocked := range blacklist {
+		blockedHost := blacklistEntryHost(blocked)
 		if blockedHost == "" {
-			// Fall back to exact string matching for invalid blacklisted URLs
+			// Fall back to exact string matching for unparseable blacklisted entries
 			if baseURL == blocked {
 				return true
 			}
@@ -298,14 +357,29 @@ func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 	return false
 }
 
+// blacklistEntryHost extracts the normalized host of a blacklist entry.
+// Operators commonly configure bare hosts ("evil.example"), which url.Parse
+// reads as a path (empty host), so scheme-less entries are retried in
+// protocol-relative form. Returns "" only for entries with no parseable host.
+func blacklistEntryHost(blocked string) string {
+	if host := extractHost(blocked); host != "" {
+		return host
+	}
+
+	return extractHost("//" + blocked)
+}
+
 // extractHost extracts and normalizes the host component from a URL
-func (s *Server) extractHost(urlStr string) string {
+func extractHost(urlStr string) string {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return ""
 	}
 
-	host := parsedURL.Hostname()
+	// Strip trailing dots of a rooted FQDN so "evil.example." (or the
+	// non-resolvable "evil.example..") matches a blacklist entry for
+	// "evil.example".
+	host := strings.TrimRight(parsedURL.Hostname(), ".")
 	if host == "" {
 		return ""
 	}
@@ -341,6 +415,12 @@ func isLocalhostHostname(hostname string) bool {
 // - Loopback addresses (127.x.x.x, ::1)
 // - Private network addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x, fc00::/7)
 // - Link-local addresses (169.254.x.x, fe80::/10)
+//
+// This is a cheap static pre-filter only: it deliberately performs no DNS resolution, since
+// that would let a peer trigger a blocking lookup per announcement. A hostname that resolves
+// to an internal address therefore passes here and is stopped at connection time instead -
+// by the peer health check probe client and by the shared
+// block/subtree fetch client (util.NewSSRFSafeDialContext).
 func (s *Server) validateDataHubURL(urlStr string) error {
 	if urlStr == "" {
 		return errors.NewInvalidArgumentError("DataHubURL is empty")
@@ -355,7 +435,10 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 		return errors.NewInvalidArgumentError("DataHubURL has invalid scheme: %s (only http/https allowed)", parsed.Scheme)
 	}
 
-	hostname := parsed.Hostname()
+	// Canonicalize before checking: strip trailing dots of a rooted FQDN and
+	// lowercase, so "localhost.", "LOCALHOST" or "127.0.0.1." cannot slip past
+	// the checks below (DNS resolution is case-insensitive).
+	hostname := strings.ToLower(strings.TrimRight(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
 	}
@@ -374,6 +457,27 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	}
 
 	return nil
+}
+
+// checkDataHubURL runs the trust checks shared by the block and subtree
+// announcement handlers: SSRF validation (a failure counts as a protocol
+// violation) and the operator-configured blacklist (a match drops the message
+// without penalising the peer). Returns false when the message must be dropped.
+// handleNodeStatusTopic runs the same two checks inline because a blacklist
+// match there only strips the BaseURL instead of dropping the telemetry.
+func (s *Server) checkDataHubURL(dataHubURL, fromID, handlerName string) bool {
+	if err := s.validateDataHubURL(dataHubURL); err != nil {
+		s.logger.Errorf("[%s] invalid DataHubURL from peer %s: %v", handlerName, fromID, err)
+		s.addProtocolViolation(fromID)
+		return false
+	}
+
+	if s.isBlacklistedBaseURL(dataHubURL) {
+		s.logger.Warnf("[%s] blocked notification from blacklisted DataHubURL %s (peer %s)", handlerName, dataHubURL, fromID)
+		return false
+	}
+
+	return true
 }
 
 func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID string) {
@@ -396,6 +500,28 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
+	// Drop messages from banned peers before any registration or further
+	// processing (and before field validation and the spoof check, so a
+	// banned peer cannot keep triggering uncached AddBanScore RPCs). Own
+	// messages are identified by the real sender, not the claimed PeerID, so
+	// a banned peer spoofing our ID cannot dodge the skip.
+	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect:
+	// display-only free text is sanitized in place, a malformed
+	// protocol-format field drops the message and scores the sender.
+	rejectedTxMessage.sanitizeFields()
+
+	if err = rejectedTxMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleRejectedTxTopic] invalid rejected tx message field from peer %s: %v", fromID, err)
+		if fromID != s.P2PClient.GetID() {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+
 	// Check that fromID matches the rejected tx peer ID
 	if fromID != rejectedTxMessage.PeerID {
 		s.logger.Errorf("[handleRejectedTxTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, rejectedTxMessage.PeerID)
@@ -403,7 +529,9 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
-	if s.isOwnMessage(fromID, rejectedTxMessage.PeerID) {
+	// The spoof check above proved fromID equals the claimed PeerID, so the
+	// sender comparison alone decides self.
+	if fromID == s.P2PClient.GetID() {
 		s.logger.Debugf("[handleRejectedTxTopic] ignoring own rejected tx message for %s", rejectedTxMessage.TxID)
 		return
 	}
@@ -415,10 +543,6 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 
 	// Track bytes received from this message
 	s.updateBytesReceived(fromID, rejectedTxMessage.PeerID, uint64(len(m)))
-
-	if s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
-		return
-	}
 
 	// Skip notifications from unhealthy peers
 	if s.shouldSkipUnhealthyPeer(fromID, "handleRejectedTxTopic") {
@@ -449,141 +573,88 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 	return ""
 }
 
-// contains checks if a slice of strings contains a specific string.
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		bootstrapAddr, err := ma.NewMultiaddr(s)
-		if err != nil {
-			continue
-		}
+// localHeightCacheTTL bounds how stale the cached local height may be. The
+// height only feeds advertised-tip sanitization caps and periodic sync
+// evaluation, both tolerant of a second of staleness. Failed reads are cached
+// with the shorter error TTL: long enough to shed the per-message RPC storm
+// during a blockchain outage, short enough that recovery is picked up quickly
+// (while an error entry is served, advertised tips are capped as if the local
+// height were 0).
+const (
+	localHeightCacheTTL      = time.Second
+	localHeightErrorCacheTTL = 200 * time.Millisecond
+)
 
-		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
-		if err != nil {
-			continue
-		}
-
-		if peerInfo.ID.String() == item {
-			return true
-		}
-	}
-
-	return false
+type localHeightCacheEntry struct {
+	height    uint32
+	ok        bool
+	fetchedAt time.Time
 }
 
-// startInvalidBlockConsumer initializes and starts the Kafka consumer for invalid blocks
-func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
-	var kafkaURL *url.URL
-
-	var brokerURLs []string
-
-	// Use InvalidBlocksConfig URL if available, otherwise construct one
-	if s.settings.Kafka.InvalidBlocksConfig != nil {
-		s.logger.Infof("Using InvalidBlocksConfig URL: %s", s.settings.Kafka.InvalidBlocksConfig.String())
-		kafkaURL = s.settings.Kafka.InvalidBlocksConfig
-
-		// For non-memory schemes, we need to extract broker URLs from the host
-		if kafkaURL.Scheme != "memory" {
-			brokerURLs = strings.Split(kafkaURL.Host, ",")
-		}
-	} else {
-		// Fall back to the old way of constructing the URL
-		host := s.settings.Kafka.Hosts
-
-		s.logger.Infof("Starting invalid block consumer on topic: %s", s.settings.Kafka.InvalidBlocks)
-		s.logger.Infof("Raw Kafka host from settings: %s", host)
-
-		// Split the host string in case it contains multiple hosts
-		hosts := strings.Split(host, ",")
-		brokerURLs = make([]string, 0, len(hosts))
-
-		// Process each host to ensure it has a port
-		for _, h := range hosts {
-			// Trim any whitespace
-			h = strings.TrimSpace(h)
-
-			// Skip empty hosts
-			if h == "" {
-				continue
-			}
-
-			// Check if the host string contains a port
-			if !strings.Contains(h, ":") {
-				// If no port is specified, use the default Kafka port from settings
-				h = h + ":" + strconv.Itoa(s.settings.Kafka.Port)
-				s.logger.Infof("Added default port to Kafka host: %s", h)
-			}
-
-			brokerURLs = append(brokerURLs, h)
-		}
-
-		if len(brokerURLs) == 0 {
-			return errors.NewConfigurationError("no valid Kafka hosts found")
-		}
-
-		s.logger.Infof("Using Kafka brokers: %v", brokerURLs)
-
-		// Create a valid URL for the Kafka consumer
-		kafkaURLString := fmt.Sprintf("kafka://%s/%s?partitions=%d",
-			brokerURLs[0], // Use the first broker for the URL
-			s.settings.Kafka.InvalidBlocks,
-			s.settings.Kafka.Partitions)
-
-		s.logger.Infof("Kafka URL: %s", kafkaURLString)
-
-		var err error
-
-		kafkaURL, err = url.Parse(kafkaURLString)
-		if err != nil {
-			return errors.NewConfigurationError("invalid Kafka URL: %w", err)
-		}
-	}
-
-	// Create the Kafka consumer config
-	cfg := kafka.KafkaConsumerConfig{
-		Logger:            s.logger,
-		URL:               kafkaURL,
-		BrokersURL:        brokerURLs,
-		Topic:             s.settings.Kafka.InvalidBlocks,
-		Partitions:        s.settings.Kafka.Partitions,
-		ConsumerGroupID:   s.settings.Kafka.InvalidBlocks + "-consumer",
-		AutoCommitEnabled: true,
-		Replay:            false,
-		// TLS/Auth configuration
-		EnableTLS:          s.settings.Kafka.EnableTLS,
-		TLSSkipVerify:      s.settings.Kafka.TLSSkipVerify,
-		TLSCAFile:          s.settings.Kafka.TLSCAFile,
-		TLSCertFile:        s.settings.Kafka.TLSCertFile,
-		TLSKeyFile:         s.settings.Kafka.TLSKeyFile,
-		EnableDebugLogging: s.settings.Kafka.EnableDebugLogging,
-	}
-
-	// Create the Kafka consumer group - this will handle the memory scheme correctly
-	consumer, err := kafka.NewKafkaConsumerGroup(cfg)
-	if err != nil {
-		return errors.NewServiceError("failed to create Kafka consumer", err)
-	}
-
-	// Store the consumer for cleanup
-	s.invalidBlocksKafkaConsumerClient = consumer
-
-	// Start the consumer
-	consumer.Start(ctx, s.processInvalidBlockMessage)
-
-	return nil
-}
-
-// getLocalHeight returns the current local blockchain height.
-func (s *Server) getLocalHeight() uint32 {
+// getLocalHeight returns the current local blockchain height. The result is
+// cached briefly: gossip handlers call this per message (via
+// sanitizeAdvertisedTip) and must not issue a blockchain gRPC round-trip each
+// time. Failures are cached too (with a shorter TTL), so a blockchain outage
+// does not turn back into a per-message RPC storm. Cache misses issue one RPC
+// bounded by defaultRPCTimeout derived from the caller's ctx so a hung
+// blockchain service cannot stall the caller (the sync coordinator's monitor
+// loops reach this on every tick via its local-height callback).
+func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 	if s.blockchainClient == nil {
 		return 0
 	}
 
-	_, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx)
-	if err != nil || bhMeta == nil {
-		return 0
+	if e := s.localHeightCache.Load(); e != nil {
+		ttl := localHeightCacheTTL
+		if !e.ok {
+			ttl = localHeightErrorCacheTTL
+		}
+		if time.Since(e.fetchedAt) < ttl {
+			return e.height
+		}
 	}
 
-	return bhMeta.Height
+	rpcCtx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
+	defer cancel()
+
+	height, ok := uint32(0), false
+	if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(rpcCtx); err == nil && bhMeta != nil {
+		height, ok = bhMeta.Height, true
+	}
+
+	s.localHeightCache.Store(&localHeightCacheEntry{height: height, ok: ok, fetchedAt: time.Now()})
+
+	return height
+}
+
+func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
+	hash, err := chainhash.NewHashFromStr(advertisedHash)
+	if err != nil {
+		// Log the length, never the value: node_status deliberately feeds the
+		// raw advertised hash through here (sanitizeAdvertisedTip must see what
+		// the peer actually sent), so this is the one place a peer-controlled
+		// string of near-message-cap size could otherwise reach the logs.
+		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash (len %d): %v", peerID, len(advertisedHash), err)
+		return 0, nil, false
+	}
+
+	maxLead := uint32(0)
+	if s.settings != nil {
+		maxLead = s.settings.P2P.MaxUnvalidatedAdvertisedHeightLead
+	}
+
+	maxAcceptedHeight := uint64(localHeight) + uint64(maxLead)
+	if maxAcceptedHeight > uint64(^uint32(0)) {
+		maxAcceptedHeight = uint64(^uint32(0))
+	}
+
+	if uint64(advertisedHeight) > maxAcceptedHeight {
+		cappedHeight := uint32(maxAcceptedHeight)
+		s.logger.Warnf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, cappedHeight, localHeight, maxLead)
+		return cappedHeight, hash, true
+	}
+
+	return advertisedHeight, hash, true
 }
 
 // registerPeer is a fire-and-forget shorthand for the centralized registry's
@@ -609,11 +680,19 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 }
 
 func (s *Server) addPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, false)
+		return
+	}
 	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
 }
 
 // addConnectedPeer adds a peer and marks it as directly connected
 func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, true)
+		return
+	}
 	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
 	if s.peerRegistry == nil {
 		return
@@ -643,6 +722,12 @@ func (s *Server) InjectPeerForTesting(peerID peer.ID, clientName, dataHubURL str
 }
 
 func (s *Server) removePeer(peerID peer.ID) {
+	// Clear batcher state first: pending updates for a removed peer are stale,
+	// and its next message must re-register it rather than being skipped as
+	// recently asserted.
+	if s.registryBatcher != nil {
+		s.registryBatcher.forget(peerID.String())
+	}
 	if s.peerRegistry != nil {
 		idStr := peerID.String()
 		if err := s.peerRegistry.UpdateConnectionState(s.gCtx, idStr, false); err != nil {
@@ -690,47 +775,109 @@ func (s *Server) getSyncPeer() peer.ID {
 
 // updateStorage updates peer storage mode in the centralized registry.
 func (s *Server) updateStorage(peerID peer.ID, mode string) {
-	if s.peerRegistry != nil && mode != "" {
+	if mode == "" {
+		return
+	}
+	if s.registryBatcher != nil {
+		s.registryBatcher.enqueueStorage(peerID.String(), mode)
+		return
+	}
+	if s.peerRegistry != nil {
 		if err := s.peerRegistry.UpdateStorage(s.gCtx, peerID.String(), mode); err != nil {
 			s.logger.Warnf("[updateStorage] UpdateStorage %s failed: %v", peerID, err)
 		}
 	}
 }
 
+// startInvalidBlocksConsumer starts the injected invalid-blocks Kafka consumer
+// with processInvalidBlockMessage. The consumer field is never reassigned after
+// this, so Stop() closes the consumer that is actually running.
+func (s *Server) startInvalidBlocksConsumer(ctx context.Context) {
+	if s.invalidBlocksKafkaConsumerClient == nil {
+		s.logger.Errorf("[startInvalidBlocksConsumer] invalid-blocks Kafka consumer not configured (kafka_invalidBlocksConfig unset), peers will not be banned for invalid blocks")
+		return
+	}
+
+	s.logger.Infof("[startInvalidBlocksConsumer] starting invalid blocks Kafka consumer on topic: %s", s.settings.Kafka.InvalidBlocks)
+	// Transient handler failures (e.g. peer registry unavailable) get two
+	// retries with backoff (three attempts total) before the offset is
+	// committed; after that the message is skipped so it cannot stall the
+	// partition.
+	s.invalidBlocksKafkaConsumerClient.Start(ctx, s.processInvalidBlockMessage, kafka.WithRetryAndMoveOn(2, 2, time.Second))
+}
+
 func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
-	ctx := context.Background()
+	// Use the server context so an in-flight AddBanScore is cancelled at shutdown.
+	ctx := s.gCtx
 
 	var invalidBlockMsg kafkamessage.KafkaInvalidBlockTopicMessage
 	if err := proto.Unmarshal(message.Value, &invalidBlockMsg); err != nil {
-		s.logger.Errorf("failed to unmarshal invalid block message: %v", err)
-		return err
+		// A malformed message can never succeed on retry: log and skip it.
+		s.logger.Errorf("[processInvalidBlockMessage] failed to unmarshal invalid block message: %v", err)
+		return nil
 	}
 
 	blockHash := invalidBlockMsg.GetBlockHash()
 	reason := invalidBlockMsg.GetReason()
 
-	s.logger.Infof("[handleInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
+	s.logger.Infof("[processInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
 
-	// Look up the peer ID that sent this block
-	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
-	if err != nil {
-		s.logger.Warnf("[handleInvalidBlockMessage] %v", err)
-		return nil // Not an error, just no peer to ban
+	// Kafka is at-least-once and the revalidation path can republish the same
+	// block, so a block must be scored once, not once per delivery. The old
+	// code got that for free — the ban was gated on a peer-map entry deleted
+	// after scoring — but the message now carries its own attribution, so the
+	// dedupe has to be explicit. The record is TTL-bounded like the peer maps:
+	// a redelivery after the TTL can re-score, which matches the attribution
+	// window the map-gated path always had.
+	if prev, ok := s.reportedInvalidBlocks.Load(blockHash); ok {
+		s.logger.Debugf("[processInvalidBlockMessage] already scored peer %s for invalid block %s, skipping duplicate delivery", prev.peerID, blockHash)
+		return nil
+	}
+
+	// Attribution, strongest source first. The message's peer ID is block
+	// validation's own record of who announced the block (spoof-checked at
+	// gossip time), carried end-to-end so it cannot be washed out: the peer map
+	// is bounded and eviction-prone, so a peer that floods distinct hashes
+	// between serving an invalid block and its verdict — or the offender doing
+	// the same to its own entry — used to erase the only attribution and void
+	// the ban (issue 1433).
+	peerID := invalidBlockMsg.GetPeerId()
+
+	if peerID == "" {
+		// Older producers and paths without provenance (setTxMined): the peer
+		// map entry stored at announcement time.
+		var err error
+		if peerID, err = s.getPeerFromMap(&s.blockPeerMap, blockHash, "block"); err != nil {
+			// Last resort, mirroring ReportInvalidSubtree: resolve the DataHub
+			// URL the block was fetched from back to the peer serving it.
+			if peerURL := invalidBlockMsg.GetPeerUrl(); peerURL != "" {
+				peerID = s.getPeerIDFromDataHubURL(peerURL)
+			}
+
+			if peerID == "" {
+				s.logger.Warnf("[processInvalidBlockMessage] %v", err)
+				return nil // Not an error, just no peer to ban
+			}
+		}
 	}
 
 	// Add ban score to the peer
-	s.logger.Infof("[handleInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
+	s.logger.Infof("[processInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
 		peerID, blockHash, reason)
 
 	req := &p2p_api.AddBanScoreRequest{
 		PeerId: peerID,
-		Reason: "invalid_block",
+		Reason: ReasonInvalidBlock,
 	}
 
 	if _, err := s.AddBanScore(ctx, req); err != nil {
-		s.logger.Errorf("[handleInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
+		s.logger.Errorf("[processInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
 		return err
 	}
+
+	// Recorded only after a successful score, so the consumer's in-process
+	// retries of a failed AddBanScore are not deduplicated away.
+	s.reportedInvalidBlocks.Store(blockHash, peerMapEntry{peerID: peerID, timestamp: time.Now()})
 
 	// Remove the block from the map to avoid memory leaks
 	s.blockPeerMap.Delete(blockHash)
@@ -788,44 +935,24 @@ func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, err
 }
 
 // cleanupPeerMaps performs periodic cleanup of blockPeerMap and subtreePeerMap
-// It removes entries older than TTL and enforces size limits using LRU eviction
+// and of the reputation, IP-ban and ban-status caches. It removes entries older
+// than their TTL; size is enforced at insert instead (issue 1409), so there is
+// no size pass here.
 func (s *Server) cleanupPeerMaps() {
 	now := time.Now()
 
-	// Collect entries to delete
-	var blockKeysToDelete []string
-	var subtreeKeysToDelete []string
-	blockCount := 0
-	subtreeCount := 0
-
-	// First pass: count entries and collect expired ones
-	s.blockPeerMap.Range(func(key, value interface{}) bool {
-		blockCount++
-		if entry, ok := value.(peerMapEntry); ok {
-			if now.Sub(entry.timestamp) > s.peerMapTTL {
-				blockKeysToDelete = append(blockKeysToDelete, key.(string))
-			}
-		}
-		return true
-	})
-
-	s.subtreePeerMap.Range(func(key, value interface{}) bool {
-		subtreeCount++
-		if entry, ok := value.(peerMapEntry); ok {
-			if now.Sub(entry.timestamp) > s.peerMapTTL {
-				subtreeKeysToDelete = append(subtreeKeysToDelete, key.(string))
-			}
-		}
-		return true
-	})
-
-	// Delete expired entries
-	for _, key := range blockKeysToDelete {
-		s.blockPeerMap.Delete(key)
-	}
-	for _, key := range subtreeKeysToDelete {
-		s.subtreePeerMap.Delete(key)
-	}
+	// Expire the attribution maps in a single locked pass each. Size is not
+	// enforced here: the maps are bounded at insert (issue 1409), so by the
+	// time this runs they are already within the cap.
+	//
+	// Resolve the TTL rather than trusting the field: a Server that never
+	// reached applyPeerMapLimits leaves it at zero, and a zero TTL puts the
+	// cutoff at now, expiring every entry on every tick and switching off ban
+	// attribution entirely. The cap fails closed, so this does too.
+	ttlCutoff := now.Add(-s.peerMapTTLOrDefault())
+	blockExpired := s.blockPeerMap.DeleteExpired(ttlCutoff)
+	subtreeExpired := s.subtreePeerMap.DeleteExpired(ttlCutoff)
+	s.reportedInvalidBlocks.DeleteExpired(ttlCutoff)
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
 	// inserts; without this sweep the map would grow once per unique peer ID
@@ -843,90 +970,184 @@ func (s *Server) cleanupPeerMaps() {
 		s.reputationCache.Delete(key)
 	}
 
+	// Evict expired ipBanCache entries for the same reason: isPeerIPBanned
+	// only ever inserts, one entry per unique peer ID gossip is seen from.
+	var ipBanKeysToDelete []string
+	s.ipBanCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(ipBanCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				ipBanKeysToDelete = append(ipBanKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range ipBanKeysToDelete {
+		s.ipBanCache.Delete(key)
+	}
+
+	// Evict expired liveConnCache entries: the liveness checks insert one
+	// entry per unique peer ID gossip is seen from.
+	var liveConnKeysToDelete []string
+	s.liveConnCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(liveConnCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				liveConnKeysToDelete = append(liveConnKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range liveConnKeysToDelete {
+		s.liveConnCache.Delete(key)
+	}
+
+	// Evict expired banStatusCache entries: shouldSkipBannedPeer inserts one
+	// entry per unique peer ID gossip is seen from.
+	var banStatusKeysToDelete []string
+	s.banStatusCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(banStatusCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				banStatusKeysToDelete = append(banStatusKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range banStatusKeysToDelete {
+		s.banStatusCache.Delete(key)
+	}
+
 	// Log cleanup stats
-	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 {
-		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries",
-			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete))
+	if blockExpired > 0 || subtreeExpired > 0 || len(reputationKeysToDelete) > 0 || len(ipBanKeysToDelete) > 0 || len(banStatusKeysToDelete) > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries, %d expired IP-ban entries, %d expired ban-status entries",
+			blockExpired, subtreeExpired, len(reputationKeysToDelete), len(ipBanKeysToDelete), len(banStatusKeysToDelete))
 	}
 
-	// Second pass: enforce size limits if needed
-	remainingBlockCount := blockCount - len(blockKeysToDelete)
-	remainingSubtreeCount := subtreeCount - len(subtreeKeysToDelete)
-
-	if remainingBlockCount > s.peerMapMaxSize {
-		s.enforceMapSizeLimit(&s.blockPeerMap, s.peerMapMaxSize, "block")
-	}
-
-	if remainingSubtreeCount > s.peerMapMaxSize {
-		s.enforceMapSizeLimit(&s.subtreePeerMap, s.peerMapMaxSize, "subtree")
+	// Surface how many entries the inline cap evicted since the last sweep
+	// (issue 1409) — flood visibility without a per-insert log line. Sustained
+	// eviction means announcements are arriving faster than the cap can hold.
+	// Under the fair-share rule (issue 1503) a dominant contributor's pressure
+	// mostly lands on its own entries once it exceeds its share, so eviction
+	// volume alone no longer implies other peers' attribution is being lost —
+	// which is why the attribution matters as much as the count: pressure
+	// spread across peers is throughput and a larger cap helps, whereas one
+	// dominant contributor is a flood, where a larger cap just hands the
+	// attacker more memory and a longer sweep — ban the peer instead.
+	if blockEvictions, subtreeEvictions := s.blockPeerMap.EvictionsSinceLastRead(), s.subtreePeerMap.EvictionsSinceLastRead(); blockEvictions.total > 0 || subtreeEvictions.total > 0 {
+		s.logger.Warnf("[cleanupPeerMaps] peer maps at capacity since the last sweep: evicted %d block entries (%s) and %d subtree entries (%s)",
+			blockEvictions.total, blockEvictions, subtreeEvictions.total, subtreeEvictions)
 	}
 
 	// Log current sizes
 	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
-		remainingBlockCount, remainingSubtreeCount)
-}
-
-// enforceMapSizeLimit removes oldest entries from a map to enforce size limit
-func (s *Server) enforceMapSizeLimit(m *sync.Map, maxSize int, mapType string) {
-	type entryWithKey struct {
-		key       string
-		timestamp time.Time
-	}
-
-	var entries []entryWithKey
-
-	// Collect all entries with their timestamps
-	m.Range(func(key, value interface{}) bool {
-		if entry, ok := value.(peerMapEntry); ok {
-			entries = append(entries, entryWithKey{
-				key:       key.(string),
-				timestamp: entry.timestamp,
-			})
-		}
-		return true
-	})
-
-	// Sort by timestamp (oldest first)
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].timestamp.Before(entries[j].timestamp)
-	})
-
-	// Remove oldest entries to get under the limit
-	toRemove := len(entries) - maxSize
-	if toRemove > 0 {
-		for i := 0; i < toRemove; i++ {
-			m.Delete(entries[i].key)
-		}
-		s.logger.Warnf("[enforceMapSizeLimit] removed %d oldest %s entries to enforce size limit of %d",
-			toRemove, mapType, maxSize)
-	}
+		s.blockPeerMap.Len(), s.subtreePeerMap.Len())
 }
 
 // startPeerMapCleanup starts the periodic cleanup goroutine
 // Helper methods to reduce redundancy
 
-// isOwnMessage checks if a message is from this node
-func (s *Server) isOwnMessage(from string, peerID string) bool {
-	return from == s.P2PClient.GetID() || peerID == s.P2PClient.GetID()
-}
-
-// shouldSkipBannedPeer checks if we should skip a message from a banned peer.
-// Banning lives in the centralized peer registry now; failures are tolerated
-// (return false) so a transient registry blip doesn't drop traffic silently.
+// shouldSkipBannedPeer checks if we should skip a message from a banned peer:
+// score-based bans live in the centralized peer registry, operator IP/subnet
+// bans in the local ban list. Registry failures are tolerated (return false)
+// so a transient registry blip doesn't drop traffic silently. Registry lookups
+// are cached for reputationCacheTTL to avoid a gRPC round-trip per gossip
+// message; local ban transitions (onPeerBanned) overwrite the cache entry
+// immediately.
 func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
-	if s.peerRegistry == nil {
-		return false
+	if s.peerRegistry != nil {
+		if banned, ok := s.cachedBanStatus(from); ok {
+			if banned {
+				s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+				return true
+			}
+		} else {
+			banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
+			if err != nil {
+				// Error breaker: cache the failure as not-banned (fail open,
+				// same staleness contract as the reputation cache) so a
+				// degraded registry is hit — and logged — at most once per
+				// TTL per peer instead of once per gossip message.
+				s.banStatusCache.Store(from, banStatusCacheEntry{banned: false, expiresAt: time.Now().Add(reputationCacheTTL)})
+				s.logger.Warnf("[%s] IsPeerBanned %s failed (treating as not banned for %s): %v", messageType, from, reputationCacheTTL, err)
+			} else {
+				s.banStatusCache.Store(from, banStatusCacheEntry{banned: banned, expiresAt: time.Now().Add(reputationCacheTTL)})
+				if banned {
+					s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+					return true
+				}
+			}
+		}
 	}
-	banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
-	if err != nil {
-		s.logger.Warnf("[%s] IsPeerBanned %s failed: %v", messageType, from, err)
-		return false
-	}
-	if banned {
-		s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
+
+	if s.isPeerIPBanned(from) {
+		s.logger.Debugf("[%s] ignoring notification from IP-banned peer %s", messageType, from)
 		return true
 	}
+
 	return false
+}
+
+type banStatusCacheEntry struct {
+	banned    bool
+	expiresAt time.Time
+}
+
+// cachedBanStatus returns the cached registry ban status for the peer and
+// whether a fresh cache entry existed.
+func (s *Server) cachedBanStatus(peerID string) (bool, bool) {
+	if v, ok := s.banStatusCache.Load(peerID); ok {
+		entry := v.(banStatusCacheEntry)
+		if time.Now().Before(entry.expiresAt) {
+			return entry.banned, true
+		}
+	}
+	return false, false
+}
+
+type ipBanCacheEntry struct {
+	banned    bool
+	expiresAt time.Time
+}
+
+// isPeerIPBanned reports whether any of the peer's connected addresses match
+// an entry in the IP/subnet ban list. This is what keeps operator IP bans
+// effective for gossip: the current P2P client cannot sever the libp2p
+// connection, so a banned peer stays connected and must be filtered here.
+// Results are cached briefly to avoid a GetPeers scan per gossip message.
+func (s *Server) isPeerIPBanned(peerID string) bool {
+	if s.banList == nil || s.P2PClient == nil {
+		return false
+	}
+
+	now := time.Now()
+	if v, ok := s.ipBanCache.Load(peerID); ok {
+		entry := v.(ipBanCacheEntry)
+		if now.Before(entry.expiresAt) {
+			return entry.banned
+		}
+	}
+
+	banned := false
+	live := false
+	for _, p := range s.P2PClient.GetPeers() {
+		if p.ID != peerID {
+			continue
+		}
+		live = len(p.Addrs) > 0
+		for _, addr := range p.Addrs {
+			if ip := extractIPFromMultiaddr(addr); ip != "" && s.banList.IsBanned(ip) {
+				banned = true
+				break
+			}
+		}
+		break
+	}
+
+	s.ipBanCache.Store(peerID, ipBanCacheEntry{banned: banned, expiresAt: now.Add(reputationCacheTTL)})
+	// This walk just observed the peer's connectedness; record it so the
+	// hasLiveConnection check that follows on the same gossip path does not
+	// have to repeat the walk.
+	s.cacheLiveConn(peerID, live, now)
+
+	return banned
 }
 
 // shouldSkipUnhealthyPeer checks if we should skip a message from an unhealthy
@@ -980,28 +1201,34 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 	return false
 }
 
-// storePeerMapEntry stores a peer entry in the specified map
-func (s *Server) storePeerMapEntry(peerMap *sync.Map, hash string, from string, timestamp time.Time) {
-	entry := peerMapEntry{
+// storePeerMapEntry stores a peer entry in the specified map. The map is
+// bounded inline (issue 1409): at capacity an insert from a peer already
+// holding its fair share evicts that peer's own oldest entry, and only a peer
+// below its share evicts the global oldest (issue 1503) — so a distinct-hash
+// flood cannot grow memory without bound between sweeps, and its eviction
+// pressure past that share lands on the flooder's own entries rather than
+// other peers' attribution (up to one share of others' oldest entries can
+// still be displaced while ramping up; see the cappedPeerMap type comment). A
+// peer can still age out its OWN attribution by flooding (issue 1433). For
+// blocks, neither residual voids the ban: the invalid-block Kafka message
+// carries the announcer's peer ID and DataHub URL end-to-end, so
+// processInvalidBlockMessage uses this map only when block validation did not
+// know the block's provenance.
+func (s *Server) storePeerMapEntry(peerMap *cappedPeerMap, hash string, from string, timestamp time.Time) {
+	peerMap.Store(hash, peerMapEntry{
 		peerID:    from,
 		timestamp: timestamp,
-	}
-	peerMap.Store(hash, entry)
+	})
 }
 
-// getPeerFromMap retrieves and validates a peer entry from a map
-func (s *Server) getPeerFromMap(peerMap *sync.Map, hash string, mapType string) (string, error) {
-	peerIDVal, ok := peerMap.Load(hash)
+// getPeerFromMap retrieves a peer entry from a map
+func (s *Server) getPeerFromMap(peerMap *cappedPeerMap, hash string, mapType string) (string, error) {
+	entry, ok := peerMap.Load(hash)
 	if !ok {
 		s.logger.Warnf("[getPeerFromMap] no peer found for %s %s", mapType, hash)
 		return "", errors.NewNotFoundError("no peer found for %s %s", mapType, hash)
 	}
 
-	entry, ok := peerIDVal.(peerMapEntry)
-	if !ok {
-		s.logger.Errorf("[getPeerFromMap] peer entry for %s %s is not a peerMapEntry: %v", mapType, hash, peerIDVal)
-		return "", errors.NewInvalidArgumentError("peer entry for %s %s is not a peerMapEntry", mapType, hash)
-	}
 	return entry.peerID, nil
 }
 
@@ -1014,41 +1241,6 @@ func (s *Server) parseHash(hashStr string, context string) (*chainhash.Hash, err
 	}
 
 	return hash, nil
-}
-
-// shouldSkipDuringSync checks if we should skip processing during sync
-func (s *Server) shouldSkipDuringSync(from string, originatorPeerID string, messageHeight uint32, messageType string) bool {
-	syncPeer := s.getSyncPeer()
-	if syncPeer == "" {
-		return false
-	}
-
-	syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx)
-	if err != nil || !syncing {
-		return false
-	}
-
-	// Get sync peer's height from registry
-	syncPeerHeight := int32(0)
-	if peerInfo, exists := s.getPeer(syncPeer); exists {
-		syncPeerHeight = int32(peerInfo.Height)
-	}
-
-	// Discard announcements from peers that are behind our sync peer
-	if messageHeight < uint32(syncPeerHeight) {
-		s.logger.Debugf("[%s] Discarding announcement at height %d from %s (below sync peer height %d)",
-			messageType, messageHeight, from, syncPeerHeight)
-		return true
-	}
-
-	// Skip if it's not from our sync peer
-	peerID, err := peer.Decode(originatorPeerID)
-	if err != nil || peerID != syncPeer {
-		s.logger.Debugf("[%s] Skipping announcement during sync (not from sync peer)", messageType)
-		return true
-	}
-
-	return false
 }
 
 func (s *Server) startPeerMapCleanup(ctx context.Context) {
@@ -1068,11 +1260,168 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 				return
 			case <-s.peerMapCleanupTicker.C:
 				s.cleanupPeerMaps()
+				// Reconcile on its own goroutine so a slow registry can never
+				// delay the cache sweep above (the only expirer of the
+				// reputation/ban caches); skip the tick if the previous pass
+				// is still running.
+				if s.reconcileInFlight.CompareAndSwap(false, true) {
+					go func() {
+						defer s.reconcileInFlight.Store(false)
+						s.reconcileConnectionStates(ctx)
+					}()
+				}
 			}
 		}
 	}()
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
+}
+
+// reconcileTimeout bounds one reconcileConnectionStates pass so a wedged or
+// flooded registry cannot pin the reconcile goroutine (and its RPCs) forever.
+const reconcileTimeout = 30 * time.Second
+
+// snapshotLiveConnIDs returns the set of peer IDs that currently have an
+// open libp2p connection. Liveness comes from P2PClient.GetPeers(): verified
+// against go-p2p-message-bus v0.1.17 (client.go GetPeers), Addrs is built
+// from host.Network().ConnsToPeer — open connections only, not the peerstore
+// — while the peer list itself is every peer that ever authored a message on
+// a subscribed topic (gossip-only publishers included, never pruned). So the
+// Addrs filter is what separates live neighbours from gossip-only authors;
+// it is not redundant with the listing. This differs from the p2p service's
+// own GetPeers RPC, which is filtered to IsConnected registry entries.
+func (s *Server) snapshotLiveConnIDs() map[string]struct{} {
+	live := make(map[string]struct{})
+	if s.P2PClient != nil {
+		for _, p := range s.P2PClient.GetPeers() {
+			if len(p.Addrs) > 0 {
+				live[p.ID] = struct{}{}
+			}
+		}
+	}
+	return live
+}
+
+type liveConnCacheEntry struct {
+	live      bool
+	expiresAt time.Time
+}
+
+// cacheLiveConn records whether the peer had an open connection when a
+// GetPeers walk last saw it, valid for reputationCacheTTL.
+func (s *Server) cacheLiveConn(peerID string, live bool, now time.Time) {
+	s.liveConnCache.Store(peerID, liveConnCacheEntry{live: live, expiresAt: now.Add(reputationCacheTTL)})
+}
+
+// hasLiveConnection reports whether the peer has an open libp2p connection,
+// answered from liveConnCache (populated by isPeerIPBanned's walk, which the
+// gossip handlers run for the same peer immediately before this) or, on a
+// miss, by a targeted GetPeers walk cached for reputationCacheTTL. A freshly
+// connected neighbour is therefore visible on its first message, while a
+// gossip-relayed publisher walks once per TTL and stays unflagged. The answer
+// can be up to reputationCacheTTL stale after a disconnect; the reconcile
+// sweep corrects that within one cleanup interval.
+func (s *Server) hasLiveConnection(peerID string) bool {
+	now := time.Now()
+	if v, ok := s.liveConnCache.Load(peerID); ok {
+		entry := v.(liveConnCacheEntry)
+		if now.Before(entry.expiresAt) {
+			return entry.live
+		}
+	}
+
+	if s.P2PClient == nil {
+		return false
+	}
+
+	live := false
+	for _, p := range s.P2PClient.GetPeers() {
+		if p.ID != peerID {
+			continue
+		}
+		live = len(p.Addrs) > 0
+		break
+	}
+
+	s.cacheLiveConn(peerID, live, now)
+
+	return live
+}
+
+// reconcileConnectionStates synchronizes the registry's IsConnected flags with
+// actual libp2p connectedness, in both directions: it clears the flag on
+// entries with no live connection and sets it on live peers the hot path
+// missed (their messages arrived before the liveness snapshot included them).
+// Nothing else ever clears the flag: go-p2p-message-bus exposes no disconnect
+// callback (see networkDisconnector) and the only other clearing site is the
+// ban path (removePeer), so without this sweep every flagged peer would stay
+// cleanup-exempt in the registry for the life of the process.
+func (s *Server) reconcileConnectionStates(ctx context.Context) {
+	if s.P2PClient == nil || s.peerRegistry == nil {
+		return
+	}
+
+	live := s.snapshotLiveConnIDs()
+
+	// Seed the per-peer liveness cache from the snapshot just built: nearly
+	// free (bounded by open connections), and it tightens the hot path right
+	// after this pass — a peer this pass is about to clear must not be
+	// re-flagged off a stale cached "live" for the next few seconds.
+	now := time.Now()
+	for id := range live {
+		s.cacheLiveConn(id, true, now)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
+
+	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	if err != nil {
+		s.logger.Warnf("[reconcileConnectionStates] ListPeers failed: %v", err)
+		return
+	}
+
+	cleared, flagged := 0, 0
+	for _, info := range peers {
+		if ctx.Err() != nil {
+			s.logger.Warnf("[reconcileConnectionStates] pass cut short (%v) after clearing %d and flagging %d peers", ctx.Err(), cleared, flagged)
+			return
+		}
+
+		_, isLive := live[info.ID]
+		switch {
+		case info.IsConnected && !isLive:
+			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, false); err != nil {
+				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s false failed: %v", info.ID, err)
+				continue
+			}
+			// Overwrite any stale cached "live" so the hot path cannot
+			// re-flag this peer off a pre-disconnect cache entry, and drop
+			// the batcher's reassert memory so a peer that reconnects gets
+			// re-marked connected on its next message instead of being
+			// skipped as recently asserted.
+			s.cacheLiveConn(info.ID, false, time.Now())
+			if s.registryBatcher != nil {
+				s.registryBatcher.forgetAssertState(info.ID)
+			}
+			cleared++
+		case !info.IsConnected && isLive:
+			// Deliberately no batcher poke here, unlike the clear branch: the
+			// batcher's assert memory is either absent (next message asserts
+			// anyway) or stale past the reassert TTL, and at worst the peer's
+			// next message re-sends one redundant, idempotent
+			// UpdateConnectionState(true). Not worth coupling for.
+			if err := s.peerRegistry.UpdateConnectionState(ctx, info.ID, true); err != nil {
+				s.logger.Warnf("[reconcileConnectionStates] UpdateConnectionState %s true failed: %v", info.ID, err)
+				continue
+			}
+			flagged++
+		}
+	}
+
+	if cleared > 0 || flagged > 0 {
+		s.logger.Infof("[reconcileConnectionStates] reconciled connection flags: %d cleared, %d flagged live", cleared, flagged)
+	}
 }
 
 // startPeerRegistryCleanup and startPeerRegistryCacheSave have been removed.
@@ -1081,12 +1430,20 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 // is intentionally deferred to a follow-up PR; the Cleanup method itself ships in PR1).
 
 func (s *Server) listenForBanEvents(ctx context.Context) {
+	// Without a libp2p connection gater we cannot refuse dials from banned
+	// addresses, so periodically re-check connected peers against the ban list
+	// to catch peers that reconnected after the initial ban event.
+	sweep := time.NewTicker(banSweepInterval)
+	defer sweep.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case event := <-s.banChan:
 			s.handleBanEvent(ctx, event)
+		case <-sweep.C:
+			s.disconnectPeersOnBanList(ctx, "address on ban list")
 		}
 	}
 }
@@ -1096,41 +1453,175 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 		return // we only care about new bans
 	}
 
-	// Only handle PeerID-based banning
-	if event.PeerID == "" {
-		s.logger.Warnf("[handleBanEvent] Ban event received without PeerID, ignoring (PeerID-only banning enabled)")
+	if event.PeerID != "" {
+		s.logger.Infof("[handleBanEvent] Received ban event for PeerID: %s (reason: %s)", event.PeerID, event.Reason)
+
+		peerID, err := peer.Decode(event.PeerID)
+		if err != nil {
+			s.logger.Errorf("[handleBanEvent] Invalid PeerID in ban event: %s, error: %v", event.PeerID, err)
+			return
+		}
+
+		s.disconnectBannedPeerByID(ctx, peerID, event.Reason)
+
 		return
 	}
 
-	s.logger.Infof("[handleBanEvent] Received ban event for PeerID: %s (reason: %s)", event.PeerID, event.Reason)
-
-	// Parse the PeerID
-	peerID, err := peer.Decode(event.PeerID)
-	if err != nil {
-		s.logger.Errorf("[handleBanEvent] Invalid PeerID in ban event: %s, error: %v", event.PeerID, err)
-		return
-	}
-
-	// Disconnect by PeerID
-	s.disconnectBannedPeerByID(ctx, peerID, event.Reason)
+	// IP/subnet ban with no PeerID (operator BanPeer RPC, startup replay). The
+	// ban list has already been updated, so disconnect every connected peer
+	// whose address matches an entry.
+	s.disconnectPeersOnBanList(ctx, event.Reason)
 }
 
-// disconnectBannedPeerByID disconnects a specific peer by their PeerID
-func (s *Server) disconnectBannedPeerByID(_ context.Context, peerID peer.ID, reason string) {
-	// Check if we're connected to this peer
-	peers := s.P2PClient.GetPeers()
+// extractIPFromMultiaddr returns the literal IP component of a libp2p
+// multiaddr string such as "/ip4/1.2.3.4/tcp/9905/p2p/12D3KooW...". It returns
+// "" for addresses without a literal IP (DNS names), for relay circuits, and
+// for strings that don't parse as a multiaddr. Relay circuits must be
+// rejected: for a relayed connection the transport address is the RELAY's
+// (e.g. "/ip4/<relay-ip>/tcp/9905/p2p/<relayID>/p2p-circuit"), so treating it
+// as the peer's IP would ban or match the relay and every peer behind it.
+// Peer-ID bans cover peers reached over a circuit.
+func extractIPFromMultiaddr(addrStr string) string {
+	maddr, err := ma.NewMultiaddr(addrStr)
+	if err != nil {
+		return ""
+	}
 
-	for _, p := range peers {
-		if p.ID == peerID.String() {
-			s.logger.Infof("[disconnectBannedPeerByID] Disconnecting banned peer: %s (reason: %s)", peerID, reason)
+	return extractIPFromParsedMultiaddr(maddr)
+}
 
-			// Remove peer from SyncCoordinator before disconnecting
-			// Remove peer from registry
-			s.removePeer(peerID)
+// extractIPFromParsedMultiaddr is extractIPFromMultiaddr for an
+// already-parsed multiaddr; it applies the same relay-circuit rejection.
+func extractIPFromParsedMultiaddr(maddr ma.Multiaddr) string {
+	if isRelayCircuit(maddr) {
+		return ""
+	}
 
-			return
+	if ip, err := maddr.ValueForProtocol(ma.P_IP4); err == nil {
+		return ip
+	}
+
+	if ip, err := maddr.ValueForProtocol(ma.P_IP6); err == nil {
+		return ip
+	}
+
+	return ""
+}
+
+// isRelayCircuit reports whether the multiaddr contains a libp2p relay
+// circuit component (/p2p-circuit). Every IP/DNS component of such an address
+// names the RELAY, not the peer behind it, so ban logic must never attribute
+// those components to the peer.
+func isRelayCircuit(maddr ma.Multiaddr) bool {
+	_, err := maddr.ValueForProtocol(ma.P_CIRCUIT)
+	return err == nil
+}
+
+// checkMultiaddrBanned reports whether the dial target of a multiaddr is on
+// the IP/subnet ban list. Literal IPs are checked directly; DNS components
+// (/dns, /dns4, /dns6, /dnsaddr) are resolved and every returned address is
+// checked. A parse or resolution failure returns an error so callers can fail
+// closed. Relay circuits pass without any check: their IP/DNS components name
+// the relay, not the dial target, so checking them would refuse to dial every
+// peer behind a banned relay; peer-ID bans cover circuit peers.
+func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool, error) {
+	if s.banList == nil {
+		return false, nil
+	}
+
+	maddr, err := ma.NewMultiaddr(addrStr)
+	if err != nil {
+		return false, errors.NewInvalidArgumentError("invalid multiaddr %s: %v", addrStr, err)
+	}
+
+	if isRelayCircuit(maddr) {
+		return false, nil
+	}
+
+	if ip := extractIPFromParsedMultiaddr(maddr); ip != "" {
+		return s.banList.IsBanned(ip), nil
+	}
+
+	host := ""
+	for _, proto := range []int{ma.P_DNS, ma.P_DNS4, ma.P_DNS6, ma.P_DNSADDR} {
+		if v, verr := maddr.ValueForProtocol(proto); verr == nil {
+			host = v
+			break
+		}
+	}
+	if host == "" {
+		return false, nil
+	}
+
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return false, errors.NewServiceError("cannot resolve %s for ban check: %v", host, err)
+	}
+
+	for _, ip := range ips {
+		if s.banList.IsBanned(ip.String()) {
+			return true, nil
 		}
 	}
 
-	s.logger.Debugf("[disconnectBannedPeerByID] Peer %s not found in connected peers", peerID)
+	return false, nil
+}
+
+// disconnectPeersOnBanList disconnects every connected peer whose multiaddr IP
+// matches an entry (IP or subnet) in the IP-based ban list.
+func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
+	if s.P2PClient == nil || s.banList == nil {
+		return
+	}
+
+	// Without network severance a banned peer stays connected at the libp2p
+	// layer forever, so the periodic sweep would re-match it on every pass.
+	// Only act when there is something to do: the peer re-entered the registry
+	// or the client can actually close the connection.
+	_, canSever := s.P2PClient.(networkDisconnector)
+
+	for _, p := range s.P2PClient.GetPeers() {
+		for _, addr := range p.Addrs {
+			ip := extractIPFromMultiaddr(addr)
+			if ip == "" || !s.banList.IsBanned(ip) {
+				continue
+			}
+
+			pid, err := peer.Decode(p.ID)
+			if err != nil {
+				s.logger.Errorf("[disconnectPeersOnBanList] failed to decode peer ID %s: %v", p.ID, err)
+				break
+			}
+
+			if _, inRegistry := s.getPeer(pid); inRegistry || canSever {
+				s.disconnectBannedPeerByID(ctx, pid, reason)
+			}
+
+			break
+		}
+	}
+}
+
+// networkDisconnector is implemented by P2P clients that can sever the
+// underlying libp2p connection. go-p2p-message-bus does not implement it as of
+// v0.1.17 (nothing up to v0.1.23 exposes the host, a gater, or a disconnect);
+// once the library gains this capability, network-layer ban enforcement starts
+// working here without further changes.
+type networkDisconnector interface {
+	DisconnectPeer(ctx context.Context, peerID peer.ID) error
+}
+
+// disconnectBannedPeerByID drops a peer at the application layer (registry +
+// sync coordinator) and, when the P2P client supports it, closes the libp2p
+// connection as well.
+func (s *Server) disconnectBannedPeerByID(ctx context.Context, peerID peer.ID, reason string) {
+	s.logger.Infof("[disconnectBannedPeerByID] Disconnecting banned peer %s (reason: %s)", peerID, reason)
+
+	if nd, ok := s.P2PClient.(networkDisconnector); ok {
+		if err := nd.DisconnectPeer(ctx, peerID); err != nil {
+			s.logger.Errorf("[disconnectBannedPeerByID] network disconnect of %s failed: %v", peerID, err)
+		}
+	}
+
+	s.removePeer(peerID)
 }

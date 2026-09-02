@@ -45,6 +45,12 @@ type PeerInfo struct {
 	TransactionsReceived int64 // Number of transactions received from this peer
 	CatchupBlocks        int64 // Number of blocks received during catchup
 
+	// Catchup-specific counters (recorded via RecordCatchupAttempt/Success/Failure),
+	// distinct from the generic interaction counters above.
+	CatchupAttempts  int64 // Catchup attempts made to this peer (including unresolved ones)
+	CatchupSuccesses int64 // Catchup operations that completed successfully
+	CatchupFailures  int64 // Catchup operations that failed
+
 	// Sync attempt tracking for backoff and recovery
 	LastSyncAttempt      time.Time // When we last attempted to sync with this peer
 	SyncAttemptCount     int       // Number of sync attempts with this peer
@@ -67,7 +73,7 @@ type PeerInfo struct {
 type ClientI interface {
 	// GetPeers retrieves a list of connected peers from the P2P network.
 	// It provides information about all active peer connections including their
-	// addresses, connection details, and network statistics.
+	// heights, ban scores, and network statistics.
 	//
 	// Parameters:
 	// - ctx: Context for the operation, allowing for cancellation and timeouts
@@ -163,16 +169,15 @@ type ClientI interface {
 	// RecordCatchupFailure records a failed catchup attempt from a peer.
 	RecordCatchupFailure(ctx context.Context, peerID string) error
 
+	// RecordCatchupFailureWithKind records a failed catchup attempt with optional diagnostic context.
+	RecordCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) error
+
 	// RecordCatchupMalicious records malicious behavior detected during catchup.
 	RecordCatchupMalicious(ctx context.Context, peerID string) error
 
 	// UpdateCatchupError stores the last catchup error for a peer.
 	// This helps track why catchup failed for specific peers.
 	UpdateCatchupError(ctx context.Context, peerID string, errorMsg string) error
-
-	// UpdateCatchupReputation updates the reputation score for a peer.
-	// Score should be between 0 and 100.
-	UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error
 
 	// ResetReputation resets reputation metrics for a peer or all peers.
 	// If peerID is empty, resets all peers. Returns the number of peers reset.
@@ -186,9 +191,17 @@ type ClientI interface {
 	// This increases the peer's reputation score for providing valid data.
 	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
 
+	// ReportValidBlockHeaders reports that a peer successfully served a batch of block
+	// headers during catchup. Credits a generic interaction success (reputation and
+	// response time) without touching the catchup-operation counters.
+	ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error
+
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	// This increases the peer's reputation score for providing valid blocks.
 	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error
+
+	// ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
+	ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error
 
 	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
 	// A peer is considered malicious if they are banned or have a very low reputation score.

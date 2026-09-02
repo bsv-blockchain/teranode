@@ -63,8 +63,8 @@ func TestHTTPServer_Endpoints(t *testing.T) {
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			// Check if this is an invalid transaction by seeing if it has inputs and outputs
 			if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
 				return nil, echo.NewHTTPError(http.StatusBadRequest, "invalid transaction: no inputs or outputs")
@@ -206,8 +206,8 @@ func TestValidatorHTTP_Endpoints(t *testing.T) {
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
@@ -315,8 +315,8 @@ func TestHTTPServerIntegration(t *testing.T) {
 
 	// Create a mock validator to replace the real one
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
@@ -358,8 +358,8 @@ func TestHTTPServerHandlers(t *testing.T) {
 
 	// Create a mock validator for testing
 	txid, _ := chainhash.NewHashFromStr("63f7f771376f9f9369e650d7a72d1f0328c2e5582eb3381b913a4a36dc78ec6e")
-	mockValidator := &TestMockValidator{
-		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+	mockValidator := &MockValidator{
+		ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
@@ -428,67 +428,6 @@ func TestHTTPServerHandlers(t *testing.T) {
 	})
 }
 
-// TestMockValidator provides a test double for validator functionality.
-type TestMockValidator struct {
-	validateTxFunc func(ctx context.Context, tx *bt.Tx) (*meta.Data, error)
-}
-
-func (m *TestMockValidator) Init(ctx context.Context) error {
-	return nil
-}
-
-func (m *TestMockValidator) Start(ctx context.Context) error {
-	return nil
-}
-
-func (m *TestMockValidator) Stop() error {
-	return nil
-}
-
-func (m *TestMockValidator) Health(ctx context.Context, _ bool) (int, string, error) {
-	return http.StatusOK, "OK", nil
-}
-
-func (m *TestMockValidator) ValidateTx(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
-	if m.validateTxFunc != nil {
-		return m.validateTxFunc(ctx, tx)
-	}
-
-	return &meta.Data{}, nil
-}
-
-func (m *TestMockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
-	if m.validateTxFunc != nil {
-		return m.validateTxFunc(ctx, tx)
-	}
-
-	return &meta.Data{}, nil
-}
-
-func (m *TestMockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error) {
-	if m.validateTxFunc != nil {
-		return m.validateTxFunc(ctx, tx)
-	}
-
-	return &meta.Data{}, nil
-}
-
-func (m *TestMockValidator) GetBlockHeight() uint32 {
-	return 101
-}
-
-func (m *TestMockValidator) GetMedianBlockTime() uint32 {
-	return uint32(time.Now().Unix()) // nolint:gosec
-}
-
-func (m *TestMockValidator) TriggerBatcher() {
-	// No-op implementation for testing
-}
-
-func (m *TestMockValidator) EnsureMTPLoaded(_ context.Context, _ uint32) error {
-	return nil
-}
-
 // TestServer_Start_FSMContextCancellation verifies graceful shutdown handling
 // when the context is cancelled during the FSM wait. The error must be returned
 // (not swallowed) and must be a context error so the service manager can
@@ -510,4 +449,50 @@ func TestServer_Start_FSMContextCancellation(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
 	mockBlockchainClient.AssertExpectations(t)
+}
+
+// TestHandleSingleTxAttachesVerdictHeader pins the server half of the contract
+// that lets an HTTP caller classify a rejection.
+//
+// The response body is a rendered error string, so a caller can print it but
+// cannot act on it. Propagation's large-transaction fallback — the only path on
+// which a Kafka-wired node answers a submitter synchronously — therefore wrapped
+// the whole response as SERVICE_ERROR and reported a permanently invalid
+// transaction as a retryable 500. The header carries the public code and message
+// across so the caller can tell a verdict from a fault.
+func TestHandleSingleTxAttachesVerdictHeader(t *testing.T) {
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.Disabled = true
+
+	server := NewServer(ulogger.TestLogger{}, tSettings, &utxo.MockUtxostore{}, &blockchain.Mock{}, nil, nil, nil, nil, nil)
+	server.validator = &MockValidator{
+		ValidateFunc: func(_ context.Context, _ *bt.Tx) (*meta.Data, error) {
+			// A verdict as the validator produces it: the client-safe reason
+			// under a wrapper that names node-internal state.
+			return nil, errors.NewProcessingError("[Validate] error validating transaction",
+				errors.NewTxPolicyError("insufficient-fee"))
+		},
+	}
+
+	tx, err := bt.NewTxFromBytes(sampleTx)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/tx", bytes.NewReader(tx.ExtendedBytes()))
+	req.Header.Set(echo.HeaderContentType, echo.MIMETextPlain)
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, server.handleSingleTx(ctx)(echo.New().NewContext(req, rec)))
+
+	verdict := errors.HTTPErrorFrom(rec.Header())
+	require.NotNil(t, verdict, "a rejection must carry a machine-readable verdict")
+	require.Equal(t, errors.ERR_TX_POLICY, verdict.Code())
+	require.Equal(t, "insufficient-fee", verdict.Message())
+	require.NotContains(t, verdict.Message(), "error validating transaction",
+		"only the public cause crosses, not the wrapper around it")
+
+	// The body and status are unchanged, so a caller that predates the header
+	// behaves exactly as before.
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, rec.Body.String(), "[handleSingleTx] Failed to process transaction: ")
 }

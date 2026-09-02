@@ -19,6 +19,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+const aerospikeInvalidValueMsg = "[Aerospike] Invalid value %s=%v"
+
 var aerospikeConnectionMutex sync.Mutex
 var aerospikeConnections map[string]*uaerospike.Client
 
@@ -67,6 +69,14 @@ var aerospikeHistogramLastBuckets = *safemap.New[string, []uint64]()
 
 func init() {
 	aerospikeConnections = make(map[string]*uaerospike.Client)
+
+	// Raise the aerospike client's read buffer to 512MB for large records.
+	// aerospike.MaxBufferSize is a package-global in the client library that its
+	// batch/read commands consult concurrently. Writing it here in init (once,
+	// before main and before any client or batch read exists) establishes a
+	// happens-before edge with those reads; writing it on every GetAerospikeClient
+	// call instead raced with in-flight batch reads on already-running clients.
+	aerospike.MaxBufferSize = 1024 * 1024 * 512 // 512MB
 }
 
 // GetAerospikeClient creates or retrieves a cached Aerospike client for the given URL.
@@ -93,9 +103,6 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	} else {
 		logger.Infof("[AEROSPIKE] Reusing aerospike client: %v", url.Host)
 	}
-
-	// increase buffer size to 256MB for large records
-	aerospike.MaxBufferSize = 1024 * 1024 * 512 // 512MB
 
 	return client, nil
 }
@@ -401,6 +408,12 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	// util/uaerospike.WithSemaphoreMultiplier for the precise contract.
 	clientOpts := []uaerospike.ClientOption{
 		uaerospike.WithSemaphoreMultiplier(tSettings.Aerospike.SemaphoreMultiplier),
+		uaerospike.WithOverloadRetry(
+			tSettings.Aerospike.OverloadRetryMaxElapsed,
+			tSettings.Aerospike.OverloadRetryBaseBackoff,
+			tSettings.Aerospike.OverloadRetryMaxBackoff,
+		),
+		uaerospike.WithLogger(logger),
 	}
 
 	// policy = aerospike.NewClientPolicy()
@@ -488,6 +501,16 @@ func aerospikePolicySummary(p *aerospike.ClientPolicy) string {
 
 func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *settings.Settings) {
 	if client == nil {
+		return
+	}
+
+	if !tSettings.Aerospike.EnableClientMetrics {
+		// Gated by aerospike_enable_client_metrics. This skips only the
+		// client.Stats() polling goroutine below. client.EnableMetrics(nil) is
+		// disabled unconditionally (see the comment further down, pending #1001),
+		// so this flag has no effect on the per-batch nodeStats contention either
+		// way — it cannot be used to relieve it.
+		logger.Infof("[Aerospike] client metrics disabled (aerospike_enable_client_metrics=false)")
 		return
 	}
 
@@ -725,7 +748,7 @@ func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Lo
 
 	valueBool, err := strconv.ParseBool(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%t", key, valueBool)
@@ -742,7 +765,7 @@ func getQueryInt(url *url.URL, key string, defaultValue int, logger ulogger.Logg
 
 	valueInt, err := strconv.Atoi(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%d", key, valueInt)
@@ -759,7 +782,7 @@ func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logg
 
 	valueDuration, err := time.ParseDuration(value)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%s", key, valueDuration.String())
@@ -776,7 +799,7 @@ func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger ulog
 
 	valueFloat64, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
+		return defaultValue, errors.NewInvalidArgumentError(aerospikeInvalidValueMsg, key, value, err)
 	}
 
 	logger.Infof("[Aerospike] %s=%f", key, valueFloat64)
@@ -871,6 +894,12 @@ func WithExpiration(ttlSeconds uint32) AerospikeWritePolicyOptions {
 // GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied.
 // Used to manage default connection parameters for write operations with strong consistency.
 // If no options are provided, the policy will use the configured default values.
+//
+// CommitLevel is deliberately not configurable: every consumer writes state whose
+// loss is not self-healing (UTXO record creation, the tx-creation lock, the
+// conflict WAL, setMined, unspend, preserve/DAH writes), so a master-only ACK
+// would trade a resync for throughput. The pruner relaxes its own idempotent
+// removals instead — see stores/utxo/aerospike/pruner/prune_policies.go.
 func GetAerospikeWritePolicy(tSettings *settings.Settings, generation uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, aerospike.TTLDontExpire)
 
@@ -916,6 +945,7 @@ func GetAerospikeBatchPolicy(tSettings *settings.Settings) *aerospike.BatchPolic
 
 // GetAerospikeBatchWritePolicy creates a new Aerospike batch write policy with strong consistency.
 // Used for batch write operations to ensure data integrity across multiple records.
+// CommitLevel is deliberately not configurable — see GetAerospikeWritePolicy.
 func GetAerospikeBatchWritePolicy(tSettings *settings.Settings) *aerospike.BatchWritePolicy {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 

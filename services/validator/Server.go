@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -405,12 +404,12 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // shutdown orchestration.
 //
 // Parameters:
-//   - ctx: Context for shutdown operation (currently unused but maintained for interface consistency)
+//   - ctx: Context bounding the shutdown; producer stops are raced against it so a wedged broker can't stall shutdown
 //
 // Returns:
 //   - error: Any shutdown errors encountered during the cleanup process
 //     Returns nil if shutdown is successful or if no cleanup was necessary
-func (v *Server) Stop(_ context.Context) error {
+func (v *Server) Stop(ctx context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
 	}
@@ -421,6 +420,24 @@ func (v *Server) Stop(_ context.Context) error {
 			v.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 		}
 	}
+
+	// DC15: drain the tx-meta batcher BEFORE stopping the txmeta producer below,
+	// so queued tx-meta is flushed INTO the producer first; then the producer
+	// flushes to Kafka. The batcher lives on the concrete *Validator (same
+	// package); type-assert so non-*Validator Interface impls (test doubles) are
+	// skipped. Bounded drain (go-batcher v2.0.4 Close blocks + is idempotent).
+	if val, ok := v.validator.(*Validator); ok && val.txmetaKafkaBatcher != nil {
+		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, val.txmetaKafkaBatcher.Close)
+	}
+
+	// DC11: stop the async producers so their final flush runs during shutdown
+	// instead of racing process exit. Each Stop() is raced against ctx so a wedged
+	// broker flush can't block past the bounded Stop() window — the outstanding
+	// Stop() finishes the flush later if it can. Each is nil-guarded and
+	// non-fatal; failures are logged and shutdown continues.
+	kafka.StopProducerCtx(ctx, v.logger, "validator txmeta", v.txMetaKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, v.logger, "validator rejectedTx", v.rejectedTxKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, v.logger, "validator policy-rejected tx", v.policyRejectedTxKafkaProducerClient)
 
 	return nil
 }
@@ -449,14 +466,9 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 // the server-side option mapping, preventing the field-by-field mapping from
 // silently drifting between sides.
 //
-// Returns an error when the wire form contains malformed ParentMetadata
-// entries (nil or wrong-length hash). Failing closed is deliberate: a
-// silently-dropped ParentMetadata entry would force the validator into the
-// UTXO-store fallback for that input, where an in-block parent has empty
-// BlockHeights and would be stamped with unconfirmedParentHeight → BDK
-// rejection with bad-txns-unconfirmed-input-in-block. The whole point of
-// carrying ParentMetadata over the wire is to prevent that silent rejection
-// shape, so any wire degradation must surface as a request-level error.
+// The (*Options, error) signature is retained for caller stability even though
+// every field is now a scalar optional that cannot fail to project; the error
+// is always nil.
 func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (*Options, error) {
 	opts := NewDefaultOptions()
 
@@ -496,11 +508,13 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.UnconfirmedParentsAtCandidateHeight = *req.UnconfirmedParentsAtCandidateHeight
 	}
 
-	parentMetadata, err := parentMetadataFromWire(req.ParentMetadata)
-	if err != nil {
-		return nil, err
+	if req.SkipScriptValidation != nil {
+		opts.SkipScriptValidation = *req.SkipScriptValidation
 	}
-	opts.ParentMetadata = parentMetadata
+
+	if req.OutpointOnlySpend != nil {
+		opts.OutpointOnlySpend = *req.OutpointOnlySpend
+	}
 
 	return opts, nil
 }
@@ -519,42 +533,6 @@ func isProtobufContentType(contentType string) bool {
 		ct = strings.TrimSpace(ct[:idx])
 	}
 	return ct == "application/x-protobuf" || ct == "application/protobuf"
-}
-
-// parentMetadataFromWire reconstructs the in-memory ParentMetadata map from
-// the repeated proto form. Returns nil for an empty/missing field — both
-// proto3 round-trip identically and a nil map signals "no in-block-parent
-// metadata supplied for this request" downstream.
-//
-// Fails closed on malformed entries: a nil entry or a parent_hash whose
-// length is not chainhash.HashSize is rejected with an error rather than
-// silently skipped. Rationale: any client that emits a malformed entry has
-// a bug, and silently dropping the entry would force the validator into the
-// UTXO-store fallback for the corresponding input. For an in-block parent
-// that path stamps the unconfirmedParentHeight sentinel, which the BDK
-// adapter then translates to MEMPOOL_HEIGHT and rejects with
-// bad-txns-unconfirmed-input-in-block — exactly the silent consensus-mode
-// rejection that carrying ParentMetadata on the wire is meant to prevent.
-// Surfacing the wire error as a request-level error keeps the client's bug
-// visible instead of letting it manifest as a misleading consensus
-// rejection downstream.
-func parentMetadataFromWire(src []*validator_api.ParentTxMetadata) (map[chainhash.Hash]*ParentTxMetadata, error) {
-	if len(src) == 0 {
-		return nil, nil
-	}
-	out := make(map[chainhash.Hash]*ParentTxMetadata, len(src))
-	for i, entry := range src {
-		if entry == nil {
-			return nil, errors.NewProcessingError("[parentMetadataFromWire] entry %d is nil", i)
-		}
-		if len(entry.ParentHash) != chainhash.HashSize {
-			return nil, errors.NewProcessingError("[parentMetadataFromWire] entry %d has malformed parent_hash length: got %d bytes, want %d", i, len(entry.ParentHash), chainhash.HashSize)
-		}
-		var hash chainhash.Hash
-		copy(hash[:], entry.ParentHash)
-		out[hash] = &ParentTxMetadata{BlockHeight: entry.BlockHeight}
-	}
-	return out, nil
 }
 
 // validateTransaction performs the internal validation logic for a single transaction.
@@ -857,6 +835,23 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 		}
 	}
 
+	// Parity with the gRPC body field (UnconfirmedParentsAtCandidateHeight) and
+	// the client's buildValidateTxHTTPQuery, so the legacy query-string /tx path
+	// cannot silently drop the flag a block-validation / legacy-sync caller set.
+	if unconfirmedParentsStr := c.QueryParam("unconfirmedParentsAtCandidateHeight"); unconfirmedParentsStr != "" {
+		options.UnconfirmedParentsAtCandidateHeight = unconfirmedParentsStr == trueString || unconfirmedParentsStr == "1"
+	}
+
+	// Parity with the gRPC body fields (SkipScriptValidation / OutpointOnlySpend) so
+	// the HTTP fallback path carries the below-checkpoint fast-path flags end-to-end.
+	if skipScriptStr := c.QueryParam("skipScriptValidation"); skipScriptStr != "" {
+		options.SkipScriptValidation = skipScriptStr == trueString || skipScriptStr == "1"
+	}
+
+	if outpointOnlyStr := c.QueryParam("outpointOnlySpend"); outpointOnlyStr != "" {
+		options.OutpointOnlySpend = outpointOnlyStr == trueString || outpointOnlyStr == "1"
+	}
+
 	return blockHeight, options
 }
 
@@ -891,12 +886,11 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 
 		// The /tx endpoint supports two body shapes, discriminated by Content-Type:
 		//   - application/x-protobuf: body is a serialised ValidateTransactionRequest
-		//     (the modern path; carries every field gRPC carries, including
-		//     ParentMetadata which has no query-string representation).
+		//     (the modern path; carries every field gRPC carries).
 		//   - any other Content-Type (legacy, including application/octet-stream):
 		//     body is the raw tx bytes; scalar fields come from query params via
 		//     extractValidationParams. Kept for backward compatibility with
-		//     non-protobuf callers; ParentMetadata is necessarily nil on this path.
+		//     non-protobuf callers.
 		var req *validator_api.ValidateTransactionRequest
 		if isProtobufContentType(c.Request().Header.Get("Content-Type")) {
 			req = &validator_api.ValidateTransactionRequest{}
@@ -913,9 +907,18 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 			req = buildValidateTxRequest(body, blockHeight, options)
 		}
 
-		// Process the transaction and return appropriate response
+		// Process the transaction and return appropriate response.
+		//
+		// The verdict also goes out as a machine-readable header. The body below
+		// is a rendered error string: a caller can print it but cannot classify
+		// it, so propagation's large-transaction fallback used to wrap whatever
+		// came back as SERVICE_ERROR and report a permanently invalid transaction
+		// to its own client as a retryable 500. errors.AttachHTTPError carries the
+		// public code and message across instead, and leaves the status and body
+		// untouched for callers that predate it.
 		response, err := v.validateTransaction(ctx, req)
 		if err != nil {
+			errors.AttachHTTPError(c.Response().Header(), err)
 			return c.String(http.StatusInternalServerError, "[handleSingleTx] Failed to process transaction: "+err.Error())
 		}
 

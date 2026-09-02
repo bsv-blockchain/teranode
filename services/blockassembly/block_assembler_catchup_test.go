@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,63 @@ func injectMockStp(t *testing.T, items *baTestItems, mockStp *subtreeprocessor.M
 	// Stop is called by t.Cleanup registered in setupBlockAssemblyTest.
 	mockStp.On("Stop", mock.Anything).Return()
 	items.blockAssembler.subtreeProcessor = mockStp
+}
+
+// TestProcessNewBlockAnnouncement_StuckMetrics covers the observability added for issue
+// #980 Bug B: when block assembly cannot advance, the only detection mechanism was a
+// human watching external chain-tip monitoring. A tip-lag gauge and a processing-stuck
+// counter make the stall alertable.
+func TestProcessNewBlockAnnouncement_StuckMetrics(t *testing.T) {
+	initPrometheusMetrics()
+
+	// A catch-up that keeps failing must leave the tip-lag gauge elevated and bump the
+	// processing-stuck counter, instead of silently logging and returning.
+	t.Run("failed catch-up records lag and stuck counter", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		genesis := genesisHeader(t, items)
+
+		chain := buildChain(genesis, 5, 700)
+		addChain(t, items, chain)
+
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		// Catch-up delegates to Reorg(empty, blocks); make it fail like ProcessConflicting did.
+		mockStp.On("Reorg", mock.Anything, mock.Anything).
+			Return(errors.NewProcessingError("tx is not conflicting"))
+		injectMockStp(t, items, mockStp)
+
+		// BA stuck at genesis; tip is at height 5 → lag of 5.
+		items.blockAssembler.setBestBlockHeader(genesis, 0)
+
+		stuckBefore := testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("catchup"))
+
+		items.blockAssembler.processNewBlockAnnouncement(t.Context())
+
+		require.Equal(t, float64(5), testutil.ToFloat64(prometheusBlockAssemblyTipLagBlocks),
+			"tip-lag gauge must reflect blocks behind the chain tip")
+		stuckAfter := testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("catchup"))
+		require.Equal(t, float64(1), stuckAfter-stuckBefore,
+			"processing-stuck counter must increment on a failed catch-up")
+	})
+
+	// A successful advance to the tip must clear the lag gauge.
+	t.Run("successful catch-up clears lag", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		genesis := genesisHeader(t, items)
+
+		chain := buildChain(genesis, 3, 800)
+		addChain(t, items, chain)
+
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		mockStp.On("Reorg", mock.Anything, mock.Anything).Return(nil)
+		injectMockStp(t, items, mockStp)
+
+		items.blockAssembler.setBestBlockHeader(genesis, 0)
+
+		items.blockAssembler.processNewBlockAnnouncement(t.Context())
+
+		require.Equal(t, float64(0), testutil.ToFloat64(prometheusBlockAssemblyTipLagBlocks),
+			"tip-lag gauge must return to zero once caught up")
+	})
 }
 
 // TestProcessNewBlockAnnouncement_CatchupVsReorg covers the routing logic introduced

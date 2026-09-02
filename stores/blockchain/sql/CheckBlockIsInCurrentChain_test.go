@@ -71,7 +71,7 @@ func TestCheckBlockIsInCurrentChain_EmptyBlockIDs(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{})
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestCheckBlockIsInCurrentChain_SingleBlockInChain(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	blockID, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestCheckBlockIsInCurrentChain_MultipleBlocksInChain(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestCheckBlockIsInCurrentChain_NonExistentBlockID(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	_, _, err = s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -140,7 +140,7 @@ func TestCheckBlockIsInCurrentChain_NonExistentBlockID(t *testing.T) {
 
 func TestCheckBlockIsInCurrentChain_InMemory_ContextCancellation(t *testing.T) {
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	blockID, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestCheckBlockIsInCurrentChain_InMemory_ClosedDB(t *testing.T) {
 	blockID, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
 
-	s.Close()
+	s.Close(context.Background())
 
 	// Negative fast path is in-memory: an above-maxBlockID id is rejected without
 	// touching the (now closed) DB.
@@ -185,7 +185,7 @@ func TestCheckBlockIsInCurrentChain_InMemory_ClosedDB(t *testing.T) {
 
 func TestCheckBlockIsInCurrentChain_InMemory_PhantomBelowMaxID(t *testing.T) {
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	_, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -211,6 +211,44 @@ func TestCheckBlockIsInCurrentChain_InMemory_PhantomBelowMaxID(t *testing.T) {
 	assert.True(t, result)
 }
 
+// TestCheckBlockIsInCurrentChain_InMemory_UninitialisedMaxBlockID reproduces the
+// 2026-06-18 mainnet cascade. On a restart mid-catchup the startup
+// rebuildOffChainSet timed out on a cold cache and returned before setting
+// maxBlockID, leaving the atomic at 0 once the rebuild guard was released. With
+// maxID==0 the in-memory path dropped every committed parent id as "above the
+// highest id" and returned (false, nil) — a false negative that checkOldBlockIDs
+// escalates into a PERMANENT block invalidation, which froze the chain. A real
+// chain's MAX(id) is never 0 (genesis is committed as id 1), so maxID==0 means
+// "uninitialised" and must fall through to the authoritative parent_id CTE rather
+// than reject. Pre-fix this returned false; post-fix it returns true.
+func TestCheckBlockIsInCurrentChain_InMemory_UninitialisedMaxBlockID(t *testing.T) {
+	s := newStoreWithInMemoryChainCheck(t)
+	defer s.Close(context.Background())
+
+	_, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	block2ID, _, err := s.StoreBlock(context.Background(), block2, "")
+	require.NoError(t, err)
+
+	// Precondition: block2 is genuinely on the main chain (maxBlockID populated).
+	ok, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(block2ID)})
+	require.NoError(t, err)
+	require.True(t, ok, "precondition: block2 must be on the main chain")
+
+	// Simulate the post-timeout startup window: the rebuild guard is released (so
+	// the in-memory path is active) but maxBlockID was never set.
+	require.Zero(t, s.mainChainRebuilding.Load(), "in-memory path requires guard==0")
+	s.maxBlockID.Store(0)
+
+	// A committed, on-chain parent id must NOT be reported off-chain just because
+	// maxBlockID is uninitialised. Pre-fix this returned (false, nil) and the
+	// caller permanently invalidated the block.
+	ok, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(block2ID)})
+	require.NoError(t, err)
+	require.True(t, ok, "uninitialised maxBlockID (0) must fall through to the CTE, not reject an on-chain block")
+}
+
 func TestCheckBlockIsInCurrentChain_MixedOnChainAndOffChain(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	storeURL, err := url.Parse("sqlitememory:///")
@@ -218,7 +256,7 @@ func TestCheckBlockIsInCurrentChain_MixedOnChainAndOffChain(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Build main chain: genesis -> block1 -> block2
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
@@ -257,7 +295,7 @@ func TestCheckBlockIsInCurrentChain_InvalidatedBlock(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -316,7 +354,7 @@ func waitForStartupRebuild(tb testing.TB, s *SQL) {
 
 func TestCheckBlockIsInCurrentChain_InMemory_SingleBlockInChain(t *testing.T) {
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	blockID, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -328,7 +366,7 @@ func TestCheckBlockIsInCurrentChain_InMemory_SingleBlockInChain(t *testing.T) {
 
 func TestCheckBlockIsInCurrentChain_InMemory_MultipleBlocksInChain(t *testing.T) {
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -347,7 +385,7 @@ func TestCheckBlockIsInCurrentChain_InMemory_MultipleBlocksInChain(t *testing.T)
 
 func TestCheckBlockIsInCurrentChain_InMemory_NonExistentBlockID(t *testing.T) {
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	_, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -359,7 +397,7 @@ func TestCheckBlockIsInCurrentChain_InMemory_NonExistentBlockID(t *testing.T) {
 
 func TestCheckBlockIsInCurrentChain_InMemory_MixedOnChainAndOffChain(t *testing.T) {
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
@@ -388,7 +426,7 @@ func TestCheckBlockIsInCurrentChain_InMemory_GenesisOnly(t *testing.T) {
 	// When only genesis exists, maxBlockID is 0 (genesis has id=0).
 	// Non-zero IDs should return false, not be incorrectly treated as on-chain.
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{1})
 	require.NoError(t, err)
@@ -406,7 +444,7 @@ func TestCheckBlockIsInCurrentChain_InMemory_GenesisOnly(t *testing.T) {
 
 func TestCheckBlockIsInCurrentChain_InMemory_InvalidatedBlock(t *testing.T) {
 	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)

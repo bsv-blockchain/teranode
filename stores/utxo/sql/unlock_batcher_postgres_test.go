@@ -36,7 +36,7 @@ func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 				WithStartupTimeout(5*time.Minute),
 		),
 	)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, pgContainer.Terminate(ctx))
 	})
@@ -63,6 +63,35 @@ func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 	require.NotNil(t, store.unlockBatcher, "unlockBatcher should be initialised for Postgres with LockedBatcherSize > 1")
 
 	return store, ctx
+}
+
+// TestConflictWAL_Postgres exercises the conflict-resolution write-ahead log
+// against real Postgres — the ON CONFLICT DO NOTHING idempotency path and the
+// BYTEA intent_id / tx_hashes columns that the SQLite path cannot cover.
+func TestConflictWAL_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, _ := setupPostgresStore(t)
+
+	tests.ConflictWAL(t, store)
+}
+
+// TestConflictWALCrashRecovery_Postgres runs the per-step-boundary crash-restart
+// harness against real Postgres. It exercises the FULL ProcessConflicting /
+// ReverseProcessConflicting execution path (Mark/Unspend/Spend/Unmark + WAL),
+// which the sqlitememory store cannot host — SetConflicting holds a transaction
+// while the background get-batcher needs a second connection, and sqlitememory's
+// single-connection model deadlocks. Postgres has a real connection pool.
+func TestConflictWALCrashRecovery_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, _ := setupPostgresStore(t)
+
+	tests.ConflictWALCrashRecovery(t, store)
 }
 
 // TestCreateMinedUnspendableSetsDAH_Postgres is the Postgres counterpart of the

@@ -537,12 +537,13 @@ chaos_isolate() {
 }
 
 chaos_heal() {
-  if [[ -n "${1:-}" ]]; then
+  local node_num="${1:-}"
+  if [[ -n "$node_num" ]]; then
     local ctr
-    ctr=$(container_name "$1")
-    echo "restoring teranode$1 peer traffic..."
+    ctr=$(container_name "$node_num")
+    echo "restoring teranode$node_num peer traffic..."
     netns_iptables "$ctr" -F 2>/dev/null || true
-    echo "teranode$1 healed"
+    echo "teranode$node_num healed"
     return
   fi
   echo "restoring all nodes..."

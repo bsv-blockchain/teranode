@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -68,7 +69,7 @@ func waitForAerospikeWritesReady(client *uaerospike.Client) error {
 		return err
 	}
 
-	return errors.NewProcessingError("aerospike namespace %q did not become write-ready after %v: %w", aerospikeNamespace, time.Duration(attempts)*delay, lastErr)
+	return errors.NewProcessingError("aerospike namespace %q did not become write-ready after %v", aerospikeNamespace, time.Duration(attempts)*delay, lastErr)
 }
 
 const (
@@ -314,7 +315,7 @@ func prepareBatchStoreItem(t *testing.T, s *teranode_aerospike.Store, tx *bt.Tx,
 		blockHeight,
 		blockIDs,
 		0,
-		make(chan error, 1),
+		completion.NewGroup(1),
 	)
 
 	return bItem, binsToStore

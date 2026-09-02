@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -44,7 +44,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -56,6 +56,7 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -96,9 +97,10 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 			return aErr
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "freeze",
-			aerospike.NewValue(s.calculateOffsetForOutput(spend.Vout)),
-			aerospike.NewValue(spend.UTXOHash[:]),
+		batchRecords = append(batchRecords, s.teranodeBatchRecord(
+			batchUDFPolicy, LuaPackage, aeroKey, subOpFreeze, "freeze",
+			s.calculateOffsetForOutput(spend.Vout),
+			spend.UTXOHash[:],
 		))
 	}
 
@@ -106,39 +108,39 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 
 	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
 	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
-		return errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), err)
+		return errors.NewStorageError("[freeze][%d] failed to batch freeze %d aerospike utxos: %s", batchID, len(spends), err.Error(), err)
 	}
 
 	// check the return value of the batch operation
 	errorsThrown := make([]error, 0, len(spends))
 
-	for _, record := range batchRecords {
-		if record.BatchRec().Err != nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), record.BatchRec().Err))
-		} else {
-			// check the return value of the batch operation
-			response := record.BatchRec().Record
-			if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
-				res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
-				if err != nil {
-					errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to parse response", batchID, err))
-				} else if res.Status == LuaStatusError {
-					if res.ErrorCode == LuaErrorCodeSpent {
-						// Extract spending data from error message
-						hexData := strings.TrimPrefix(res.Message, "SPENT:")
-						if spendingData, parseErr := spendpkg.NewSpendingDataFromString(hexData); parseErr == nil {
-							errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, spendingData))
-						} else {
-							errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo: %s", batchID, res.Message))
-						}
-					}
-				}
+	for idx, record := range batchRecords {
+		spendDesc := describeUTXOSpend(spends[idx])
+
+		res, err := s.teranodeBatchRecordResponse(fmt.Sprintf("[freeze][%d][%s]", batchID, spendDesc), record)
+		if err != nil {
+			// The UDF path ignores TX_NOT_FOUND on freeze (only SPENT is
+			// reported below); keep the native path's KEY_NOT_FOUND — the same
+			// condition under UPDATE_ONLY — equally silent.
+			if !errors.Is(err, errors.ErrTxNotFound) {
+				errorsThrown = append(errorsThrown, err)
+			}
+			continue
+		}
+
+		if res.Status == LuaStatusError && res.ErrorCode == LuaErrorCodeSpent {
+			// Extract spending data from error message
+			hexData := strings.TrimPrefix(res.Message, "SPENT:")
+			if spendingData, parseErr := spendpkg.NewSpendingDataFromString(hexData); parseErr == nil {
+				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, spendDesc, spendingData))
+			} else {
+				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo: %s", batchID, spendDesc, res.Message))
 			}
 		}
 	}
 
 	if len(errorsThrown) > 0 {
-		return errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown)
+		return errors.NewStorageError("[freeze][%d] failed to batch freeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown)
 	}
 
 	return nil
@@ -172,9 +174,10 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 			return aErr
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "unfreeze",
-			aerospike.NewValue(s.calculateOffsetForOutput(spend.Vout)),
-			aerospike.NewValue(spend.UTXOHash[:]),
+		batchRecords = append(batchRecords, s.teranodeBatchRecord(
+			batchUDFPolicy, LuaPackage, aeroKey, subOpUnfreeze, "unfreeze",
+			s.calculateOffsetForOutput(spend.Vout),
+			spend.UTXOHash[:],
 		))
 	}
 
@@ -182,31 +185,28 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 
 	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
 	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
-		return errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), err)
+		return errors.NewStorageError("[unfreeze][%d] failed to batch unfreeze %d aerospike utxos: %s", batchID, len(spends), err.Error(), err)
 	}
 
 	// check the return value of the batch operation
 	errorsThrown := make([]error, 0, len(spends))
 
-	for _, record := range batchRecords {
-		if record.BatchRec().Err != nil {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to batch unfreeze %d aerospike utxos", batchID, len(spends), record.BatchRec().Err))
-		} else {
-			// check the return value of the batch operation
-			response := record.BatchRec().Record
-			if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
-				res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
-				if err != nil {
-					errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to parse response", batchID, err))
-				} else if res.Status == LuaStatusError {
-					errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to unfreeze aerospike utxo: %s", batchID, res.Message))
-				}
-			}
+	for idx, record := range batchRecords {
+		spendDesc := describeUTXOSpend(spends[idx])
+
+		res, err := s.teranodeBatchRecordResponse(fmt.Sprintf("[unfreeze][%d][%s]", batchID, spendDesc), record)
+		if err != nil {
+			errorsThrown = append(errorsThrown, err)
+			continue
+		}
+
+		if res.Status == LuaStatusError {
+			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] failed to unfreeze aerospike utxo: %s", batchID, spendDesc, res.Message))
 		}
 	}
 
 	if len(errorsThrown) > 0 {
-		return errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to batch unfreeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown)
+		return errors.NewStorageError("[unfreeze][%d] failed to batch unfreeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown)
 	}
 
 	return nil
@@ -241,34 +241,29 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 
 	batchRecords := []aerospike.BatchRecordIfc{
-		aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "reassign",
-			aerospike.NewValue(s.calculateOffsetForOutput(oldUtxo.Vout)),
-			aerospike.NewValue(oldUtxo.UTXOHash[:]),
-			aerospike.NewValue(newUtxo.UTXOHash[:]),
-			aerospike.NewIntegerValue(int(s.blockHeight.Load())),
-			aerospike.NewIntegerValue(utxo.ReAssignedUtxoSpendableAfterBlocks),
+		s.teranodeBatchRecord(
+			batchUDFPolicy, LuaPackage, aeroKey, subOpReassign, "reassign",
+			s.calculateOffsetForOutput(oldUtxo.Vout),
+			oldUtxo.UTXOHash[:],
+			newUtxo.UTXOHash[:],
+			int(s.GetBlockHeight()),
+			utxo.ReAssignedUtxoSpendableAfterBlocks,
 		),
 	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
 	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
-		return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo", err)
+		return errors.NewStorageError("[reassign][%s] failed to reassign aerospike utxo: %s", describeUTXOSpend(oldUtxo), err.Error(), err)
 	}
 
 	// check whether an error was thrown
-	if batchRecords[0].BatchRec().Err != nil {
-		return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo", batchRecords[0].BatchRec().Err)
+	res, err := s.teranodeBatchRecordResponse(fmt.Sprintf("[reassign][%s]", describeUTXOSpend(oldUtxo)), batchRecords[0])
+	if err != nil {
+		return err
 	}
 
-	// check the return value of the batch operation
-	response := batchRecords[0].BatchRec().Record
-	if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
-		res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
-		if err != nil {
-			return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to parse response: %s", err)
-		} else if res.Status == LuaStatusError {
-			return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo: %s", res.Message)
-		}
+	if res.Status == LuaStatusError {
+		return errors.NewStorageError("[reassign][%s] failed to reassign aerospike utxo: %s", describeUTXOSpend(oldUtxo), res.Message)
 	}
 
 	return nil

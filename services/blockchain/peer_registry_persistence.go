@@ -39,7 +39,12 @@ type persistedBanEntry struct {
 	Reasons   []string  `json:"reasons,omitempty"`
 }
 
-const persistedRegistryVersion = 1
+// Version history:
+//   - 1: initial format
+//   - 2: added catchup-specific counters (CatchupAttempts/CatchupSuccesses/
+//     CatchupFailures) to PeerInfo. Bumped so a downgraded binary refuses to
+//     re-save (and thereby silently zero) counters it does not understand.
+const persistedRegistryVersion = 2
 
 // errFutureRegistryVersion is returned by loadPeerRegistry when the blob's
 // envelope.Version is newer than this binary supports. Callers (currently
@@ -146,7 +151,8 @@ func loadPeerRegistry(ctx context.Context, logger ulogger.Logger, store blob.Sto
 		// events that refresh LastSeen — using the max of both at load would keep
 		// entries alive slightly longer but adds no correctness benefit.
 		if p.IsBanned || p.LastSeen.After(cutoff) {
-			live = append(live, p)
+			peerCopy := clonePeerInfo(p)
+			live = append(live, &peerCopy)
 		}
 	}
 
@@ -175,15 +181,7 @@ func (r *CentralizedPeerRegistry) Save(ctx context.Context, store blob.Store) er
 	r.mu.RLock()
 	peers := make([]*PeerInfo, 0, len(r.peers))
 	for _, p := range r.peers {
-		peerCopy := *p
-		// Deep-copy BlockHash so the snapshot doesn't share the underlying
-		// [32]byte with the live entry. Mirrors Register's pattern and
-		// guarantees no aliasing even if future code starts mutating the
-		// array in place rather than swapping the pointer.
-		if p.BlockHash != nil {
-			hashCopy := *p.BlockHash
-			peerCopy.BlockHash = &hashCopy
-		}
+		peerCopy := clonePeerInfo(p)
 		peers = append(peers, &peerCopy)
 	}
 	bans := make(map[string]persistedBanEntry, len(r.banScores))
@@ -242,7 +240,12 @@ func (r *CentralizedPeerRegistry) Load(ctx context.Context, store blob.Store, tt
 
 	r.peers = make(map[string]*PeerInfo, len(peers))
 	for _, p := range peers {
-		entry := *p
+		entry := clonePeerInfo(p)
+		// A persisted connection flag cannot be true across a restart; the
+		// p2p reconciliation sweep re-flags live peers. Restoring it as-is
+		// would report phantom connections and exempt the entries from
+		// cleanup until the first sweep.
+		entry.IsConnected = false
 		r.peers[entry.ID] = &entry
 	}
 

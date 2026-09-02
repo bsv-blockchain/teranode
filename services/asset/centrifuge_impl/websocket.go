@@ -89,6 +89,12 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	upgrade := &websocket.Upgrader{
 		ReadBufferSize:    c.ReadBufferSize,
 		EnableCompression: c.Compression,
+		// Advertise the Centrifuge protobuf subprotocol so a client requesting it
+		// (Sec-WebSocket-Protocol: centrifuge-protobuf) negotiates protobuf rather
+		// than being silently served JSON. Clients that request no subprotocol
+		// (e.g. the dashboard's raw WebSocket) continue to use JSON. Matches the
+		// upstream centrifuge WebsocketHandler.
+		Subprotocols: []string{"centrifuge-protobuf"},
 	}
 	if c.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool
@@ -161,13 +167,23 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Negotiate the protocol from the subprotocol the upgrader selected. Defaults
+	// to JSON (no/other subprotocol); protobuf only when the client requested and
+	// the upgrader echoed "centrifuge-protobuf". The transport then reads AND
+	// writes in the matching codec — hardcoding JSON here would decode a protobuf
+	// client's frames as JSON, disconnecting it with "bad request".
+	protoType := centrifuge.ProtocolTypeJSON
+	if conn.Subprotocol() == "centrifuge-protobuf" {
+		protoType = centrifuge.ProtocolTypeProtobuf
+	}
+
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		opts := websocketTransportOptions{
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
-			protoType:          centrifuge.ProtocolTypeJSON,
+			protoType:          protoType,
 		}
 
 		graceCh := make(chan struct{})

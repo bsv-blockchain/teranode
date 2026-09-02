@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -407,6 +408,55 @@ func TestUnspend(t *testing.T) {
 	// Spend again with the same spending tx — should succeed because the UTXO is now unspent.
 	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
+}
+
+// TestUnspendLockedFlag proves the #1154 fix: a spend-rollback (Unspend with no
+// flagAsLocked) must not clear a parent's independently-set 2PC locked flag, matching
+// the Aerospike unspend UDF which never touches locked. It also proves the deliberate
+// semantics are retained: an explicit false clears locked, an explicit true keeps it set.
+func TestUnspendLockedFlag(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, tx := setup(ctx, t)
+
+	// Parent created with the 2PC locked flag set.
+	_, err := utxoStore.Create(ctx, tx, 0, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	lockedNow := func() bool {
+		m := &meta.Data{}
+		require.NoError(t, utxoStore.GetMeta(ctx, tx.TxIDChainHash(), m))
+		return m.Locked
+	}
+	require.True(t, lockedNow(), "parent should be locked after Create(WithLocked(true))")
+
+	// Spend a child of the locked parent. The parent is locked, so IgnoreLocked is required.
+	spendTx := utxo2.GetSpendingTx(tx, 0)
+	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1, utxo.IgnoreFlags{IgnoreLocked: true})
+	require.NoError(t, err)
+
+	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	spend := &utxo.Spend{
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		UTXOHash:     utxohash,
+		SpendingData: spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0),
+	}
+
+	// No flag: the parent's locked flag must be left untouched.
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}))
+	require.True(t, lockedNow(), "Unspend without a flag must not clear the parent's locked flag")
+
+	// Explicit true: still locked.
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}, true))
+	require.True(t, lockedNow(), "Unspend(true) must keep the parent locked")
+
+	// Explicit false: locked is cleared (ReverseProcessConflicting semantics).
+	require.NoError(t, utxoStore.Unspend(ctx, []*utxo.Spend{spend}, false))
+	require.False(t, lockedNow(), "Unspend(false) must clear the parent's locked flag")
 }
 
 func TestGetSpend(t *testing.T) {
@@ -949,6 +999,21 @@ func Test_SmokeTests(t *testing.T) {
 		tests.Conflicting(t, db)
 	})
 
+	t.Run("sql conflict WAL", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.ConflictWAL(t, db)
+	})
+
+	t.Run("sql unspend idempotent", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.UnspendIdempotent(t, db)
+	})
+
 	t.Run("spend error types", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
@@ -968,6 +1033,18 @@ func Test_SmokeTests(t *testing.T) {
 		db, _ := setup(ctx, t)
 
 		tests.SetBlockHeightZero(t, db)
+	})
+
+	t.Run("set block state contract", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetBlockStateContract(t, db)
+	})
+
+	t.Run("set block state snapshot under concurrency", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetBlockStateSnapshotUnderConcurrency(t, db)
 	})
 
 	t.Run("set locked behavior", func(t *testing.T) {
@@ -1004,6 +1081,60 @@ func Test_SmokeTests(t *testing.T) {
 		require.NoError(t, err)
 
 		tests.SpendIdempotent(t, db)
+	})
+
+	t.Run("spend and create", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreate(t, db)
+	})
+
+	t.Run("spend and create create only", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateCreateOnly(t, db)
+	})
+
+	t.Run("spend and create spend only", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendOnly(t, db)
+	})
+
+	t.Run("spend and create tx exists keeps spends", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateTxExistsKeepsSpends(t, db)
+	})
+
+	t.Run("spend and create spend error surfaces per input", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendErrorSurfacesPerInput(t, db)
+	})
+
+	t.Run("spend and create invalid options", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateInvalidOptions(t, db)
 	})
 
 	t.Run("set mined with spent", func(t *testing.T) {
@@ -1083,13 +1214,13 @@ func TestSetTTL(t *testing.T) {
 
 	// Verify the exact DAH value: blockHeight + 1 + retention (mirrors aerospike set_mined.go:162)
 	retention := store.settings.GetUtxoStoreBlockHeightRetention()
-	expectedDAH := int64(store.blockHeight.Load() + 1 + retention)
+	expectedDAH := int64(store.GetBlockHeight() + 1 + retention)
 	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be blockHeight + 1 + retention")
 
 	// Verify DAH bump: advance block height, re-run setDAH — DAH should increase
 	oldDAH := *tombstoneMillis
-	store.blockHeight.Store(store.blockHeight.Load() + 100) // advance 100 blocks
-	expectedBumpedDAH := int64(store.blockHeight.Load() + 1 + retention)
+	require.NoError(t, store.SetBlockHeight(store.GetBlockHeight()+100)) // advance 100 blocks
+	expectedBumpedDAH := int64(store.GetBlockHeight() + 1 + retention)
 
 	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
@@ -1153,7 +1284,7 @@ func TestSetTTL(t *testing.T) {
 
 	// Verify conflicting COALESCE: DAH is already set, calling setDAH again should NOT overwrite it
 	existingConflictingDAH := *tombstoneMillis
-	store.blockHeight.Store(store.blockHeight.Load() + 50) // advance more
+	require.NoError(t, store.SetBlockHeight(store.GetBlockHeight()+50)) // advance more
 
 	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
@@ -1318,39 +1449,344 @@ func TestRawDB(t *testing.T) {
 	assert.Equal(t, 1, result)
 }
 
+// setExpiredPreservation marks the given transaction as having an expired
+// preservation: it sets preserve_until to a height already passed and clears
+// delete_at_height (matching what PreserveTransactions does at preserve time).
+func setExpiredPreservation(ctx context.Context, t *testing.T, store *Store, transactionID int, currentHeight uint32) {
+	t.Helper()
+	_, err := store.db.ExecContext(ctx,
+		"UPDATE transactions SET preserve_until = $1, delete_at_height = NULL WHERE id = $2",
+		currentHeight-10, transactionID)
+	require.NoError(t, err)
+}
+
+// txIDAndDAH reads the row id and delete_at_height for a transaction by hash.
+func txIDAndDAH(ctx context.Context, t *testing.T, store *Store, hash []byte) (int, sql.NullInt64) {
+	t.Helper()
+	var (
+		id  int
+		dah sql.NullInt64
+	)
+	err := store.db.QueryRowContext(ctx,
+		"SELECT id, delete_at_height FROM transactions WHERE hash = $1", hash).Scan(&id, &dah)
+	require.NoError(t, err)
+	return id, dah
+}
+
+// markMinedAndSpend marks a transaction as mined and on the longest chain, then
+// spends the given output indices. Passing spendIdxs == nil spends every output.
+func markMinedAndSpend(ctx context.Context, t *testing.T, store *Store, tx *bt.Tx, transactionID int, spendIdxs []int) {
+	t.Helper()
+	_, err := store.db.ExecContext(ctx,
+		"INSERT INTO block_ids (transaction_id, block_id, block_height, subtree_idx) VALUES ($1, $2, $3, $4)",
+		transactionID, 100, 100, 0)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx,
+		"UPDATE transactions SET unmined_since = NULL WHERE id = $1", transactionID)
+	require.NoError(t, err)
+
+	spendingData := spendpkg.NewSpendingData(tx.TxIDChainHash(), 1).Bytes()
+	if spendIdxs == nil {
+		_, err = store.db.ExecContext(ctx,
+			"UPDATE outputs SET spending_data = $1 WHERE transaction_id = $2", spendingData, transactionID)
+		require.NoError(t, err)
+		return
+	}
+	for _, idx := range spendIdxs {
+		_, err = store.db.ExecContext(ctx,
+			"UPDATE outputs SET spending_data = $1 WHERE transaction_id = $2 AND idx = $3", spendingData, transactionID, idx)
+		require.NoError(t, err)
+	}
+}
+
+// TestProcessExpiredPreservations verifies the invariant that delete_at_height
+// is only stamped at preservation expiry when the transaction is genuinely safe
+// to drop (mined, on the longest chain, AND fully spent). Stamping a DAH on a
+// transaction that still has live outputs would let the pruner delete a live
+// UTXO — the data-loss bug this test guards against.
 func TestProcessExpiredPreservations(t *testing.T) {
+	const currentHeight = uint32(100)
+
+	t.Run("no_expired_preservations_is_noop", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store, tx := setup(ctx, t)
+
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		err = store.ProcessExpiredPreservations(ctx, currentHeight)
+		require.NoError(t, err)
+
+		_, dah := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+		require.False(t, dah.Valid, "untouched tx must not be stamped")
+	})
+
+	t.Run("ineligible_unmined_unspent_tx_is_not_stamped", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store, tx := setup(ctx, t)
+
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		id, _ := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+		setExpiredPreservation(ctx, t, store, id, currentHeight)
+
+		err = store.ProcessExpiredPreservations(ctx, currentHeight)
+		require.NoError(t, err)
+
+		var preserveUntil sql.NullInt64
+		var dah sql.NullInt64
+		err = store.db.QueryRowContext(ctx,
+			"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", id).Scan(&preserveUntil, &dah)
+		require.NoError(t, err)
+		require.False(t, preserveUntil.Valid, "preserve_until must be cleared")
+		require.False(t, dah.Valid, "unmined/unspent tx must NOT be stamped for deletion")
+	})
+
+	t.Run("eligible_mined_fully_spent_tx_is_stamped", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store, tx := setup(ctx, t)
+
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		id, _ := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+		markMinedAndSpend(ctx, t, store, tx, id, nil) // spend all outputs
+		setExpiredPreservation(ctx, t, store, id, currentHeight)
+
+		err = store.ProcessExpiredPreservations(ctx, currentHeight)
+		require.NoError(t, err)
+
+		var preserveUntil sql.NullInt64
+		var dah sql.NullInt64
+		err = store.db.QueryRowContext(ctx,
+			"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", id).Scan(&preserveUntil, &dah)
+		require.NoError(t, err)
+		require.False(t, preserveUntil.Valid, "preserve_until must be cleared")
+		require.True(t, dah.Valid, "eligible tx must be stamped for deletion")
+		expectedDAH := int64(currentHeight + store.settings.GetUtxoStoreBlockHeightRetention())
+		require.Equal(t, expectedDAH, dah.Int64)
+	})
+
+	t.Run("conflicting_tx_is_stamped_without_being_mined", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store, tx := setup(ctx, t)
+
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		id, _ := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+		// Conflicting txs get a DAH regardless of mined/spent state (the first CASE branch).
+		_, err = store.db.ExecContext(ctx,
+			"UPDATE transactions SET conflicting = true WHERE id = $1", id)
+		require.NoError(t, err)
+		setExpiredPreservation(ctx, t, store, id, currentHeight)
+
+		err = store.ProcessExpiredPreservations(ctx, currentHeight)
+		require.NoError(t, err)
+
+		var preserveUntil sql.NullInt64
+		var dah sql.NullInt64
+		err = store.db.QueryRowContext(ctx,
+			"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", id).Scan(&preserveUntil, &dah)
+		require.NoError(t, err)
+		require.False(t, preserveUntil.Valid, "preserve_until must be cleared")
+		require.True(t, dah.Valid, "conflicting tx must be stamped for deletion without being mined")
+		expectedDAH := int64(currentHeight + store.settings.GetUtxoStoreBlockHeightRetention())
+		require.Equal(t, expectedDAH, dah.Int64)
+	})
+
+	t.Run("retention_zero_clears_preservation_without_stamping", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store, tx := setup(ctx, t)
+		store.settings.GlobalBlockHeightRetention = 0
+		store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		id, _ := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+		// Eligible-looking (mined + fully spent), but retention 0 disables pruning entirely.
+		markMinedAndSpend(ctx, t, store, tx, id, nil)
+		setExpiredPreservation(ctx, t, store, id, currentHeight)
+
+		err = store.ProcessExpiredPreservations(ctx, currentHeight)
+		require.NoError(t, err)
+
+		var preserveUntil sql.NullInt64
+		var dah sql.NullInt64
+		err = store.db.QueryRowContext(ctx,
+			"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", id).Scan(&preserveUntil, &dah)
+		require.NoError(t, err)
+		require.False(t, preserveUntil.Valid, "preserve_until must be cleared")
+		require.False(t, dah.Valid, "retention 0 disables pruning — no DAH must be stamped")
+	})
+
+	t.Run("mined_fully_spent_but_off_longest_chain_is_not_stamped", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store, tx := setup(ctx, t)
+
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		id, _ := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+		// Mined and fully spent, but NOT on the longest chain: unmined_since is set. The eligibility
+		// CASE keys on unmined_since IS NULL, so this must not be stamped — exercises the
+		// off-longest-chain dimension the reorg-window test does not (it never sets unmined_since).
+		markMinedAndSpend(ctx, t, store, tx, id, nil) // sets unmined_since = NULL
+		_, err = store.db.ExecContext(ctx,
+			"UPDATE transactions SET unmined_since = $1 WHERE id = $2", uint32(50), id)
+		require.NoError(t, err)
+		setExpiredPreservation(ctx, t, store, id, currentHeight)
+
+		err = store.ProcessExpiredPreservations(ctx, currentHeight)
+		require.NoError(t, err)
+
+		var preserveUntil sql.NullInt64
+		var dah sql.NullInt64
+		err = store.db.QueryRowContext(ctx,
+			"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", id).Scan(&preserveUntil, &dah)
+		require.NoError(t, err)
+		require.False(t, preserveUntil.Valid, "preserve_until must be cleared")
+		require.False(t, dah.Valid, "off-longest-chain parent must NOT be stamped (unmined_since IS NOT NULL)")
+	})
+}
+
+// TestProcessExpiredPreservations_PartialSpendParentNotStamped is the regression
+// test for the data-loss scenario: a parent P with outputs A and B, mined, where
+// an old unmined child spent A but B was never spent (P is NOT fully spent). P is
+// preserved, the child resolves, and the preservation expires. The expiry path
+// must NOT stamp a delete_at_height on P, because B is still a live UTXO and the
+// pruner deletes on the DAH stamp.
+func TestProcessExpiredPreservations_PartialSpendParentNotStamped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	store, tx := setup(ctx, t)
 
-	// Create a transaction to work with
+	const currentHeight = uint32(100)
+
 	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
-	// Test ProcessExpiredPreservations with no expired preservations
-	currentHeight := uint32(100)
+	id, _ := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+
+	// Mined, on longest chain, but only output idx 0 spent — output(s) >0 remain live.
+	markMinedAndSpend(ctx, t, store, tx, id, []int{0})
+	setExpiredPreservation(ctx, t, store, id, currentHeight)
+
 	err = store.ProcessExpiredPreservations(ctx, currentHeight)
 	require.NoError(t, err)
 
-	// Manually set a preservation for testing
-	transactionID := 0
-	err = store.db.QueryRowContext(ctx, "SELECT id FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&transactionID)
+	var preserveUntil sql.NullInt64
+	var dah sql.NullInt64
+	err = store.db.QueryRowContext(ctx,
+		"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", id).Scan(&preserveUntil, &dah)
+	require.NoError(t, err)
+	require.False(t, preserveUntil.Valid, "preserve_until must be cleared")
+	require.False(t, dah.Valid, "partially-spent parent must NOT be stamped — output B is a live UTXO")
+}
+
+// TestPreserveTransactions_OnlyPreservesPruneEligible verifies the Phase-1 layer:
+// preservation only targets transactions that are actually prune-eligible (already
+// carry a delete_at_height stamp). A transaction with no stamp is not at risk of
+// pruning, so preserving it is pointless work — and it is exactly the not-fully-spent
+// input that the unconditional expiry path could later turn into a bad deletion stamp.
+func TestPreserveTransactions_OnlyPreservesPruneEligible(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store, tx := setup(ctx, t)
+
+	// txEligible: stands in for a fully-spent + mined parent — it carries a DAH stamp.
+	_, err := store.Create(ctx, tx, 0)
+	require.NoError(t, err)
+	eligibleID, _ := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+	_, err = store.db.ExecContext(ctx,
+		"UPDATE transactions SET delete_at_height = $1 WHERE id = $2", 500, eligibleID)
 	require.NoError(t, err)
 
-	preserveUntil := currentHeight - 10 // Set to expire
-	_, err = store.db.ExecContext(ctx, "UPDATE transactions SET preserve_until = $1 WHERE id = $2", preserveUntil, transactionID)
+	// txIneligible: not fully spent → no DAH stamp → not at risk of pruning.
+	txIneligible := tx.Clone()
+	txIneligible.Version++
+	_, err = store.Create(ctx, txIneligible, 0)
+	require.NoError(t, err)
+	ineligibleID, ineligibleDAH := txIDAndDAH(ctx, t, store, txIneligible.TxIDChainHash()[:])
+	require.False(t, ineligibleDAH.Valid)
+
+	const preserveUntilHeight = uint32(1000)
+	err = store.PreserveTransactions(ctx,
+		[]chainhash.Hash{*tx.TxIDChainHash(), *txIneligible.TxIDChainHash()}, preserveUntilHeight)
 	require.NoError(t, err)
 
-	// Test ProcessExpiredPreservations with expired preservation
-	err = store.ProcessExpiredPreservations(ctx, currentHeight)
+	// Eligible tx: preserved (preserve_until set, DAH cleared so it is held).
+	var pu, dah sql.NullInt64
+	err = store.db.QueryRowContext(ctx,
+		"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", eligibleID).Scan(&pu, &dah)
+	require.NoError(t, err)
+	require.True(t, pu.Valid, "prune-eligible tx must be preserved")
+	require.Equal(t, int64(preserveUntilHeight), pu.Int64)
+	require.False(t, dah.Valid, "preservation clears the DAH so the tx is held")
+
+	// Ineligible tx: untouched — no preserve_until, no DAH.
+	err = store.db.QueryRowContext(ctx,
+		"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", ineligibleID).Scan(&pu, &dah)
+	require.NoError(t, err)
+	require.False(t, pu.Valid, "tx with no DAH is not at risk and must not be preserved")
+	require.False(t, dah.Valid)
+}
+
+// TestProcessExpiredPreservations_ReorgUnspendDuringWindow proves the two layers work
+// together. A parent that is fully spent + mined (and therefore prune-eligible) is
+// preserved. A reorg then un-spends one of its outputs, so it is no longer fully spent
+// — but while it is preserved the normal stamping logic is frozen and never notices.
+// When the preservation expires the setter must re-check eligibility and refuse to
+// stamp, otherwise the now-live UTXO would be lost.
+func TestProcessExpiredPreservations_ReorgUnspendDuringWindow(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store, tx := setup(ctx, t)
+
+	const currentHeight = uint32(100)
+
+	_, err := store.Create(ctx, tx, 0)
+	require.NoError(t, err)
+	id, _ := txIDAndDAH(ctx, t, store, tx.TxIDChainHash()[:])
+
+	// Fully spent + mined + stamped → prune-eligible.
+	markMinedAndSpend(ctx, t, store, tx, id, nil) // spend all outputs
+	_, err = store.db.ExecContext(ctx,
+		"UPDATE transactions SET delete_at_height = $1 WHERE id = $2", 500, id)
 	require.NoError(t, err)
 
-	// Verify the preservation was processed (preserve_until should be NULL)
-	var preserveUntilResult sql.NullInt64
-	err = store.db.QueryRowContext(ctx, "SELECT preserve_until FROM transactions WHERE id = $1", transactionID).Scan(&preserveUntilResult)
+	// Phase 1 preserves it (the gate sees the DAH stamp): preserve_until set, DAH cleared.
+	require.NoError(t, store.PreserveTransactions(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, currentHeight-10))
+
+	var pu, dah sql.NullInt64
+	err = store.db.QueryRowContext(ctx,
+		"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", id).Scan(&pu, &dah)
 	require.NoError(t, err)
-	assert.False(t, preserveUntilResult.Valid) // Should be NULL
+	require.True(t, pu.Valid, "eligible parent should have been preserved")
+	require.False(t, dah.Valid)
+
+	// Reorg: un-spend output 0. The parent now has a live UTXO again. While preserved,
+	// setDAH is frozen, so the DAH stays cleared and nothing notices the change.
+	_, err = store.db.ExecContext(ctx,
+		"UPDATE outputs SET spending_data = NULL WHERE transaction_id = $1 AND idx = 0", id)
+	require.NoError(t, err)
+
+	// Preservation expires → setter re-checks eligibility and must NOT stamp.
+	require.NoError(t, store.ProcessExpiredPreservations(ctx, currentHeight))
+
+	err = store.db.QueryRowContext(ctx,
+		"SELECT preserve_until, delete_at_height FROM transactions WHERE id = $1", id).Scan(&pu, &dah)
+	require.NoError(t, err)
+	require.False(t, pu.Valid, "preserve_until must be cleared")
+	require.False(t, dah.Valid, "reorg un-spent an output — parent must NOT be re-stamped for deletion")
 }
 
 func TestSetMinedMultiBatched(t *testing.T) {
@@ -2643,5 +3079,652 @@ func TestBuildCompositeValuesPairs(t *testing.T) {
 		clause, args := buildCompositeValuesPairs(nil, 1, "postgres")
 		require.Equal(t, "", clause)
 		require.Nil(t, args)
+	})
+}
+
+// newTestStore creates a fresh in-memory SQLite store for minimal-create tests.
+// Uses the default BatchSQLOperations setting (true → createInputsBatched path on SQLite).
+func newTestStore(t *testing.T) (*Store, *sql.DB) {
+	t.Helper()
+	return newTestStoreBatch(t, true)
+}
+
+// newTestStoreBatch creates a fresh in-memory SQLite store with BatchSQLOperations forced.
+// On SQLite, batchSQL=true exercises createInputsBatched; batchSQL=false exercises createInputsPerRow.
+// (The createCTE / buildInputArrays path is postgres-only and unreachable from this harness.)
+func newTestStoreBatch(t *testing.T, batchSQL bool) (*Store, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.UtxoStore.BatchSQLOperations = batchSQL
+	tSettings.BatcherDrainMode = true
+	tSettings.Pruner.UTXODefensiveEnabled = false
+
+	dbName := "minimal_create_test_batched"
+	if !batchSQL {
+		dbName = "minimal_create_test_perrow"
+	}
+	utxoStoreURL, err := url.Parse("sqlitememory:///" + dbName)
+	require.NoError(t, err)
+
+	store, err := New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	return store, store.db.DB
+}
+
+// newExtendedTxWithOutputs builds a transaction with n outputs and a fully-decorated
+// (extended) input whose PreviousTxSatoshis and PreviousTxScript are populated.
+// The unlocking_script column is NOT NULL in the schema so an empty script is provided.
+func newExtendedTxWithOutputs(t *testing.T, n int) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+
+	// Use a deterministic prev hash so the tx is reproducible.
+	prevHashBytes := make([]byte, 32)
+	prevHashBytes[0] = 0xDE
+	prevHash, err := chainhash.NewHash(prevHashBytes)
+	require.NoError(t, err)
+
+	lockScript, err := bscript.NewP2PKHFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+	require.NoError(t, err)
+
+	// Build a decorated input. Use PreviousTxIDAdd to properly initialise the internal hash field.
+	emptyUnlocking := bscript.Script{}
+	input := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0xFFFFFFFF,
+		PreviousTxSatoshis: 100_000,
+		PreviousTxScript:   lockScript,
+		UnlockingScript:    &emptyUnlocking,
+	}
+	require.NoError(t, input.PreviousTxIDAdd(prevHash))
+	tx.Inputs = append(tx.Inputs, input)
+
+	for i := 0; i < n; i++ {
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(10_000)))
+	}
+	return tx
+}
+
+// newSpendingTx builds a transaction spending vOut from parent without decorating the input
+// (PreviousTxSatoshis=0, PreviousTxScript=nil) to simulate the below-checkpoint path.
+// An empty unlocking script satisfies the NOT NULL constraint on inputs.unlocking_script.
+func newSpendingTx(t *testing.T, parent *bt.Tx, vOut uint32) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+
+	emptyUnlocking := bscript.Script{}
+	input := &bt.Input{
+		PreviousTxOutIndex: vOut,
+		SequenceNumber:     0xFFFFFFFF,
+		UnlockingScript:    &emptyUnlocking,
+		// PreviousTxSatoshis defaults to 0, PreviousTxScript defaults to nil.
+	}
+	require.NoError(t, input.PreviousTxIDAdd(parent.TxIDChainHash()))
+	tx.Inputs = append(tx.Inputs, input)
+	return tx
+}
+
+// newExtendedSpendingTx builds a transaction spending parent's vOut with the input FULLY
+// decorated (PreviousTxSatoshis and PreviousTxScript populated). Used to prove that the
+// SkipExtendedInputs flag FORCES the columns to zero even when the input carries real values.
+func newExtendedSpendingTx(t *testing.T, parent *bt.Tx, vOut uint32) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+
+	emptyUnlocking := bscript.Script{}
+	input := &bt.Input{
+		PreviousTxOutIndex: vOut,
+		SequenceNumber:     0xFFFFFFFF,
+		UnlockingScript:    &emptyUnlocking,
+		PreviousTxSatoshis: parent.Outputs[vOut].Satoshis,
+		PreviousTxScript:   parent.Outputs[vOut].LockingScript,
+	}
+	require.NoError(t, input.PreviousTxIDAdd(parent.TxIDChainHash()))
+	tx.Inputs = append(tx.Inputs, input)
+	return tx
+}
+
+// corruptPreviousScript replaces the PreviousTxScript on input 0 of tx with a
+// different script so that UTXOHashFromInput computes a hash that will not match
+// what was stored when the parent was created. Used only in hash-enforcement tests.
+func corruptPreviousScript(t *testing.T, tx *bt.Tx) {
+	t.Helper()
+	badScript, err := bscript.NewP2PKHFromAddress("1CounterpartyXXXXXXXXXXXXXXXUWLpVr")
+	require.NoError(t, err)
+	tx.Inputs[0].PreviousTxScript = badScript
+}
+
+// addOutputs appends n P2PKH outputs to tx.
+func addOutputs(t *testing.T, tx *bt.Tx, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(5_000)))
+	}
+}
+
+// queryOutputUTXOHash reads utxo_hash for a specific output (txHash, vout) from the DB.
+func queryOutputUTXOHash(t *testing.T, db *sql.DB, txHash *chainhash.Hash, vout int) []byte {
+	t.Helper()
+	row := db.QueryRow(`
+		SELECT o.utxo_hash
+		FROM outputs o
+		JOIN transactions tx ON tx.id = o.transaction_id
+		WHERE tx.hash = ? AND o.idx = ?`, txHash[:], vout)
+	var h []byte
+	require.NoError(t, row.Scan(&h))
+	return h
+}
+
+// queryInputRow reads the input row columns we care about for testing.
+// Returns (previous_tx_satoshis, previous_tx_script, previous_transaction_hash, previous_tx_idx).
+func queryInputRow(t *testing.T, db *sql.DB, txHash *chainhash.Hash, idx int) (int64, []byte, []byte, int32) {
+	t.Helper()
+	row := db.QueryRow(`
+		SELECT i.previous_tx_satoshis, i.previous_tx_script, i.previous_transaction_hash, i.previous_tx_idx
+		FROM inputs i
+		JOIN transactions tx ON tx.id = i.transaction_id
+		WHERE tx.hash = ? AND i.idx = ?`, txHash[:], idx)
+	var sats int64
+	var script []byte
+	var prevHash []byte
+	var prevIdx int32
+	require.NoError(t, row.Scan(&sats, &script, &prevHash, &prevIdx))
+	return sats, script, prevHash, prevIdx
+}
+
+// TestMinimalCreate_FeeZero_OutputsIntact verifies that WithSkipExtendedInputs(true):
+// - does not call GetFees (so an un-decorated tx is accepted without error)
+// - returns Fee=0 in meta
+// - fully persists the output (utxo_hash matches)
+// - zeroes previous_tx_satoshis and previous_tx_script in the inputs row
+// - retains the outpoint (previous_transaction_hash, previous_tx_idx)
+func TestMinimalCreate_FeeZero_OutputsIntact(t *testing.T) {
+	store, db := newTestStore(t)
+	ctx := context.Background()
+
+	// Extended parent so we have a real output to spend; child is NOT extended.
+	parent := newExtendedTxWithOutputs(t, 2)
+	_, err := store.Create(ctx, parent, 1)
+	require.NoError(t, err)
+
+	child := newSpendingTx(t, parent, 0) // not extended
+	addOutputs(t, child, 1)              // one new output
+	txMeta, err := store.Create(ctx, child, 2, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err, "minimal create must not call GetFees on an un-decorated tx")
+	require.Equal(t, uint64(0), txMeta.Fee, "fee is zero below checkpoint")
+
+	// Output fully persisted with its OWN utxo_hash (parent-independent).
+	wantHash, err := util.UTXOHashFromOutput(child.TxIDChainHash(), child.Outputs[0], 0)
+	require.NoError(t, err)
+	gotHash := queryOutputUTXOHash(t, db, child.TxIDChainHash(), 0)
+	require.Equal(t, wantHash[:], gotHash)
+
+	// Per-input parent columns are zeroed/empty, but the outpoint is retained.
+	sats, script, prevHash, prevIdx := queryInputRow(t, db, child.TxIDChainHash(), 0)
+	require.Equal(t, int64(0), sats)
+	require.Empty(t, script)
+	require.Equal(t, child.Inputs[0].PreviousTxIDChainHash()[:], prevHash, "outpoint retained for pruner")
+	require.Equal(t, int32(child.Inputs[0].PreviousTxOutIndex), prevIdx)
+}
+
+// TestCreate_FlagOff_ByteIdentical verifies that when WithSkipExtendedInputs is NOT set (default),
+// the extended satoshis and script are persisted unchanged — flag-off is byte-identical to prior behaviour.
+func TestCreate_FlagOff_ByteIdentical(t *testing.T) {
+	store, db := newTestStore(t)
+	tx := newExtendedTxWithOutputs(t, 2)
+	_, err := store.Create(context.Background(), tx, 1) // no options
+	require.NoError(t, err)
+	sats, script, _, _ := queryInputRow(t, db, tx.TxIDChainHash(), 0)
+	require.Equal(t, int64(tx.Inputs[0].PreviousTxSatoshis), sats, "flag off persists real satoshis")
+	require.NotEmpty(t, script, "flag off persists the parent script")
+}
+
+// TestMinimalCreate_ForcesZero_AllInputPaths proves that SkipExtendedInputs FORCES the parent
+// columns to zero even when the child input carries REAL (decorated) satoshis/script — across
+// both SQLite input-insertion paths: createInputsBatched (BatchSQLOperations=true, the default)
+// and createInputsPerRow (BatchSQLOperations=false). This is the meaningful flag test: an
+// un-decorated input would round-trip zeros regardless of the flag, so here we decorate the
+// input and assert the flag still zeroes the columns while retaining the outpoint.
+func TestMinimalCreate_ForcesZero_AllInputPaths(t *testing.T) {
+	cases := []struct {
+		name     string
+		batchSQL bool
+	}{
+		{"batched (createInputsBatched)", true},
+		{"perRow (createInputsPerRow)", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, db := newTestStoreBatch(t, tc.batchSQL)
+			ctx := context.Background()
+
+			parent := newExtendedTxWithOutputs(t, 2)
+			_, err := store.Create(ctx, parent, 1)
+			require.NoError(t, err)
+
+			// Child IS decorated (real parent satoshis + script) — the flag must override it.
+			child := newExtendedSpendingTx(t, parent, 0)
+			require.NotZero(t, child.Inputs[0].PreviousTxSatoshis, "precondition: input is decorated")
+			require.NotNil(t, child.Inputs[0].PreviousTxScript, "precondition: input is decorated")
+
+			_, err = store.Create(ctx, child, 2, utxo.WithSkipExtendedInputs(true))
+			require.NoError(t, err)
+
+			sats, script, prevHash, prevIdx := queryInputRow(t, db, child.TxIDChainHash(), 0)
+			require.Equal(t, int64(0), sats, "flag forces satoshis to zero even when input is decorated")
+			require.Empty(t, script, "flag forces script to nil even when input is decorated")
+			require.Equal(t, child.Inputs[0].PreviousTxIDChainHash()[:], prevHash, "outpoint retained")
+			require.Equal(t, int32(child.Inputs[0].PreviousTxOutIndex), prevIdx, "outpoint idx retained")
+		})
+	}
+}
+
+// TestOutpointOnlySpend_SkipsHashCheck proves that SkipUTXOHashCheck=true allows spending
+// an undecorated child (no PreviousTxScript) without a hash-mismatch or locking-script error,
+// while double-spend protection (spending_data IS NULL guard) still rejects a second spender.
+func TestOutpointOnlySpend_SkipsHashCheck(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Parent: extended (so its utxo_hash is stored). Child: NOT extended (no PreviousTxScript).
+	parent := newExtendedTxWithOutputs(t, 1)
+	_, err := store.Create(ctx, parent, 1)
+	require.NoError(t, err)
+
+	child := newSpendingTx(t, parent, 0) // no PreviousTxScript — GetSpends would fail on this
+	_, err = store.Create(ctx, child, 2, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+
+	// Outpoint-only spend: hash check skipped, must succeed.
+	_, err = store.Spend(ctx, child, 2, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err)
+
+	// Double-spend by a genuinely different tx (different txid via extra output) must still be rejected.
+	doubleSpender := newSpendingTx(t, parent, 0)
+	addOutputs(t, doubleSpender, 1) // distinct txid from child
+	_, err = store.Spend(ctx, doubleSpender, 2, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.Error(t, err)
+}
+
+// TestSpend_FlagOff_StillEnforcesHash proves that when SkipUTXOHashCheck=false (the default),
+// the hash comparison is still enforced: a spending tx whose claimed parent script differs from
+// what was stored at create time must be rejected with a hash-mismatch error.
+func TestSpend_FlagOff_StillEnforcesHash(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Create parent with real decoration so utxo_hash is anchored to a specific script+satoshis.
+	parent := newExtendedTxWithOutputs(t, 1)
+	_, err := store.Create(ctx, parent, 1)
+	require.NoError(t, err)
+
+	// Child is fully decorated (same script/sats) — would normally succeed the hash check.
+	child := newExtendedSpendingTx(t, parent, 0)
+
+	// Corrupt the claimed parent script so UTXOHashFromInput computes a different hash.
+	corruptPreviousScript(t, child)
+
+	// Flag OFF: hash must be enforced and mismatch must be rejected.
+	_, err = store.Spend(ctx, child, 2, utxo.IgnoreFlags{IgnoreLocked: true})
+	require.Error(t, err, "hash mismatch must still be rejected when flag is off")
+}
+
+// newTestStoreNamed creates a fresh in-memory SQLite store with the given unique name.
+// Use distinct names when two stores must coexist in the same test (e.g. equivalence tests).
+func newTestStoreNamed(t *testing.T, name string) (*Store, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.UtxoStore.BatchSQLOperations = true
+	tSettings.BatcherDrainMode = true
+	tSettings.Pruner.UTXODefensiveEnabled = false
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///" + name)
+	require.NoError(t, err)
+
+	store, err := New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	return store, store.db.DB
+}
+
+// outputRowFields holds the per-output columns we compare for UTXO-set equivalence.
+type outputRowFields struct {
+	utxoHash               []byte
+	lockingScript          []byte
+	satoshis               int64
+	coinbaseSpendingHeight int64
+	spendingData           []byte
+}
+
+// queryAllOutputRows reads every output row from the store (ordered by transaction hash then idx)
+// and returns a map keyed by "txhex:idx" for stable cross-store comparison.
+func queryAllOutputRows(t *testing.T, db *sql.DB) map[string]outputRowFields {
+	t.Helper()
+	rows, err := db.Query(`
+		SELECT hex(t.hash), o.idx, o.utxo_hash, o.locking_script, o.satoshis,
+		       o.coinbase_spending_height, o.spending_data
+		FROM outputs o
+		JOIN transactions tx ON tx.id = o.transaction_id
+		JOIN transactions t ON t.id = o.transaction_id
+		ORDER BY t.hash, o.idx`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	result := make(map[string]outputRowFields)
+	for rows.Next() {
+		var txHex string
+		var idx int64
+		var f outputRowFields
+		require.NoError(t, rows.Scan(&txHex, &idx, &f.utxoHash, &f.lockingScript, &f.satoshis,
+			&f.coinbaseSpendingHeight, &f.spendingData))
+		key := fmt.Sprintf("%s:%d", txHex, idx)
+		result[key] = f
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
+// TestInBlockParentChild_OutpointOnly (T-U5): verifies that an in-block parent→child spend
+// under the minimal-create + outpoint-only path succeeds. The parent is minimal-created (no
+// extended inputs), and the child that spends the parent's output is also minimal-created;
+// the subsequent outpoint-only spend of the child must succeed.
+//
+// This exercises the §4.3 invariant: within a below-checkpoint block, all parents created in
+// the same block have their outputs persisted-and-visible before any in-block child Spend runs.
+func TestInBlockParentChild_OutpointOnly(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Parent: minimal create (no extended inputs, fee=0).
+	parent := newExtendedTxWithOutputs(t, 1)
+	_, err := store.Create(ctx, parent, 500, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err, "minimal create of in-block parent must succeed")
+
+	// Child: spends parent's output 0; minimal create too.
+	child := newSpendingTx(t, parent, 0)
+	addOutputs(t, child, 1)
+	_, err = store.Create(ctx, child, 500, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err, "minimal create of in-block child must succeed")
+
+	// Outpoint-only spend of the child tx (spending one of child's own outputs).
+	// child spends parent's output 0; we now spend child's output 0.
+	grandchild := newSpendingTx(t, child, 0)
+	addOutputs(t, grandchild, 1)
+	_, err = store.Create(ctx, grandchild, 500, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err, "minimal create of grandchild must succeed")
+
+	_, err = store.Spend(ctx, grandchild, 500, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err, "outpoint-only spend of in-block grandchild must succeed")
+
+	// Also exercise spending the original child (its inputs were spent by grandchild above; spend child outputs).
+	_, err = store.Spend(ctx, child, 500, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err, "outpoint-only spend of in-block child must succeed")
+}
+
+// TestUTXOSetEquivalence_OutputsByteIdentical (T-I1 — decisive correctness test): processes the
+// SAME sequence of create+spend operations into two fresh stores — control (flags OFF) and
+// treatment (WithSkipExtendedInputs + SkipUTXOHashCheck) — and asserts that every output's
+// per-output columns are BYTE-IDENTICAL between the two stores. The only permitted differences
+// are the per-input previous_tx_satoshis (0 in treatment) and previous_tx_script (empty in
+// treatment); output utxo_hash, locking_script, satoshis, coinbase_spending_height, and
+// spending_data MUST match exactly. The test MUST fail if any output utxo_hash differs.
+//
+// Includes a tx chain (parent→child) so some outputs are spent, exercising the spend path.
+// A sequence-locked tx (SequenceNumber != 0xFFFFFFFF) is included per spec §4.5 / §6 T-I1.
+func TestUTXOSetEquivalence_OutputsByteIdentical(t *testing.T) {
+	ctx := context.Background()
+
+	storeA, dbA := newTestStoreNamed(t, "equivalence_control")
+	storeB, dbB := newTestStoreNamed(t, "equivalence_treatment")
+
+	const height = uint32(500)
+
+	// Build a set of transactions:
+	//   tx1: standalone — two outputs, no spend (remains unspent).
+	//   tx2: parent in a chain — one output, to be spent by tx3.
+	//   tx3: spends tx2:0 — one new output, decorated (real PreviousTxSatoshis so
+	//        the control store's GetFees call succeeds). PreviousTxSatoshis does NOT
+	//        affect the txid (txid uses Bytes() not ExtendedBytes()), so both stores
+	//        see the same transaction hash and the same output utxo_hash.
+	//   tx4: sequence-locked tx (non-0xFFFFFFFF sequence number) per spec §4.5.
+	tx1 := newExtendedTxWithOutputs(t, 2)
+
+	tx2 := newExtendedTxWithOutputs(t, 1)
+
+	// tx3: decorated (real satoshis so control-store GetFees doesn't error); same txid
+	// as an undecorated variant because txid = hash(non-extended bytes).
+	tx3 := newExtendedSpendingTx(t, tx2, 0)
+	addOutputs(t, tx3, 1)
+
+	// tx4: sequence-locked (BIP68-style, non-final sequence). Extended input so the
+	// control store can compute fees; treatment store will zero the satoshis.
+	tx4 := bt.NewTx()
+	lockScript4, err := bscript.NewP2PKHFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+	require.NoError(t, err)
+	seqLockedInput := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0x00000001, // non-final, sequence-locked — exercises §4.5
+		UnlockingScript:    func() *bscript.Script { s := bscript.Script{}; return &s }(),
+		PreviousTxSatoshis: tx1.Outputs[0].Satoshis + 5000, // surplus so fees >= 0
+		PreviousTxScript:   lockScript4,
+	}
+	require.NoError(t, seqLockedInput.PreviousTxIDAdd(tx1.TxIDChainHash()))
+	tx4.Inputs = append(tx4.Inputs, seqLockedInput)
+	addOutputs(t, tx4, 1)
+
+	// ---- control store A: all flags OFF (normal path) ----
+	// tx1, tx2, tx4: extended inputs — GetFees succeeds.
+	// tx3: decorated input (real PreviousTxSatoshis) — GetFees succeeds.
+	_, err = storeA.Create(ctx, tx1, height)
+	require.NoError(t, err)
+	_, err = storeA.Create(ctx, tx2, height)
+	require.NoError(t, err)
+	_, err = storeA.Create(ctx, tx3, height)
+	require.NoError(t, err)
+	_, err = storeA.Create(ctx, tx4, height)
+	require.NoError(t, err)
+
+	// Spend tx3's output:0 from store A. Use SkipUTXOHashCheck on BOTH stores for
+	// consistency — the decisive correctness assertion is output-hash equality at create
+	// time, not the spend hash path. The output utxo_hash is set at Create and never
+	// changed by Spend.
+	tx3Spender := newExtendedSpendingTx(t, tx3, 0)
+	_, err = storeA.Spend(ctx, tx3Spender, height, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err)
+
+	// ---- treatment store B: flags ON (minimal create, outpoint-only spend) ----
+	_, err = storeB.Create(ctx, tx1, height, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+	_, err = storeB.Create(ctx, tx2, height, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+	_, err = storeB.Create(ctx, tx3, height, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+	_, err = storeB.Create(ctx, tx4, height, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+
+	tx3SpenderB := newSpendingTx(t, tx3, 0)
+	_, err = storeB.Spend(ctx, tx3SpenderB, height, utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err)
+
+	// ---- compare output rows ----
+	rowsA := queryAllOutputRows(t, dbA)
+	rowsB := queryAllOutputRows(t, dbB)
+
+	require.Equal(t, len(rowsA), len(rowsB),
+		"control and treatment stores must have the same number of output rows; got A=%d B=%d", len(rowsA), len(rowsB))
+
+	for key, fa := range rowsA {
+		fb, ok := rowsB[key]
+		require.True(t, ok, "output %s present in control but missing in treatment", key)
+
+		// The decisive assertion: output utxo_hash MUST be byte-identical.
+		// This fails the test if the fast path corrupts or omits the own-output hash.
+		require.Equal(t, fa.utxoHash, fb.utxoHash,
+			"output %s: utxo_hash MUST be byte-identical between control and treatment (spec §1.4 T-I1)", key)
+
+		require.Equal(t, fa.lockingScript, fb.lockingScript,
+			"output %s: locking_script must be byte-identical", key)
+		require.Equal(t, fa.satoshis, fb.satoshis,
+			"output %s: satoshis must be identical", key)
+		require.Equal(t, fa.coinbaseSpendingHeight, fb.coinbaseSpendingHeight,
+			"output %s: coinbase_spending_height must be identical", key)
+		require.Equal(t, fa.spendingData, fb.spendingData,
+			"output %s: spending_data must be identical", key)
+	}
+
+	// Verify treatment store contains no keys absent from control (catch phantom rows).
+	for key := range rowsB {
+		_, ok := rowsA[key]
+		require.True(t, ok, "output %s present in treatment but missing in control", key)
+	}
+
+	// Sanity: we must have observed at least 4 outputs (tx1×2 + tx2×1 + tx4×1; tx3×1 is spent).
+	require.GreaterOrEqual(t, len(rowsA), 4, "expected at least 4 output rows in control store")
+}
+
+// TestMinimalCreate_CoinbaseMaturity_OutpointOnlySpend is the executable store-level
+// coverage of the consensus core of spec T-B1 (the full multi-block cross-checkpoint
+// flow remains deferred to e2e). It proves that a coinbase created via the
+// below-checkpoint minimal path (WithSkipExtendedInputs) still records
+// coinbase_spending_height, and that an outpoint-only spend (SkipUTXOHashCheck) of
+// that coinbase output still enforces coinbase maturity — the flag only zeroes input
+// parent data, never the output-side maturity guard.
+func TestMinimalCreate_CoinbaseMaturity_OutpointOnlySpend(t *testing.T) {
+	store, db := newTestStore(t)
+	ctx := context.Background()
+
+	maturity := uint32(store.settings.ChainCfgParams.CoinbaseMaturity)
+	require.Positive(t, maturity, "test settings must set a non-zero coinbase maturity for this to be meaningful")
+
+	const createHeight = uint32(100)
+
+	// A real coinbase tx (block 500,000); its single input is the null coinbase input.
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff580320a107152f5669614254432f48656c6c6f20576f726c64212f2cfabe6d6dbcbb1b0222e1aeebaca2a9c905bb23a3ad0302898ec600a9033a87ec1645a446010000000000000010f829ba0b13a84def80c389cde9840000ffffffff0174fdaf4a000000001976a914f1c075a01882ae0972f95d3a4177c86c852b7d9188ac00000000")
+	require.NoError(t, err)
+	require.True(t, coinbaseTx.IsCoinbase(), "precondition: tx is a coinbase")
+
+	// Minimal create below checkpoint.
+	meta, err := store.Create(ctx, coinbaseTx, createHeight, utxo.WithSkipExtendedInputs(true))
+	require.NoError(t, err)
+	require.True(t, meta.IsCoinbase)
+
+	// Maturity was still recorded despite the minimal create.
+	var gotCSH int64
+	require.NoError(t, db.QueryRow(`
+		SELECT o.coinbase_spending_height
+		FROM outputs o JOIN transactions tx ON tx.id = o.transaction_id
+		WHERE tx.hash = ? AND o.idx = 0`, coinbaseTx.TxIDChainHash()[:]).Scan(&gotCSH))
+	require.Equal(t, int64(createHeight+maturity), gotCSH,
+		"minimal create must still set coinbase_spending_height = height + maturity")
+
+	// Outpoint-only spend one block before maturity: must be rejected as immature.
+	spender := newSpendingTx(t, coinbaseTx, 0)
+	_, err = store.Spend(ctx, spender, createHeight+maturity-1,
+		utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.Error(t, err, "spending a below-checkpoint coinbase before maturity must fail even outpoint-only")
+	require.True(t, errors.Is(err, errors.ErrTxCoinbaseImmature),
+		"expected coinbase-immature error, got: %v", err)
+
+	// At maturity height: the same outpoint-only spend succeeds.
+	_, err = store.Spend(ctx, spender, createHeight+maturity,
+		utxo.IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true})
+	require.NoError(t, err, "spending at maturity height must succeed")
+}
+
+// TestGetBlockPlacementFieldsIndependently pins a field-selection bug that was silent.
+//
+// BlockIDs, BlockHeights and SubtreeIdxs are index-aligned placement fields served by
+// one query against the block_ids table, and that query used to run only when the
+// caller asked for BlockIDs. Asking for either of the other two on its own returned an
+// empty slice and no error — indistinguishable from a transaction never mined.
+//
+// It matters because BlockHeights feeds the input script block height used for BIP68
+// relative locktime, so a caller that dropped the apparently-unused BlockIDs from its
+// field list would have changed consensus-relevant behaviour with no failure to see.
+//
+// Each read path is checked against each of the two previously-broken fields. The two
+// paths reach the query through separate checks, and each check ORs the two fields
+// separately, so any one of the four could be removed without the others noticing.
+func TestGetBlockPlacementFieldsIndependently(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, tx := setup(ctx, t)
+
+	_, err := utxoStore.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		BlockID:        7,
+		BlockHeight:    99,
+		SubtreeIdx:     3,
+		OnLongestChain: true,
+	})
+	require.NoError(t, err)
+
+	placementFields := []struct {
+		name  string
+		field fields.FieldName
+		check func(*testing.T, *meta.Data)
+	}{
+		{"BlockHeights", fields.BlockHeights, func(t *testing.T, d *meta.Data) {
+			require.Equal(t, []uint32{99}, d.BlockHeights)
+		}},
+		{"SubtreeIdxs", fields.SubtreeIdxs, func(t *testing.T, d *meta.Data) {
+			require.Equal(t, []int{3}, d.SubtreeIdxs)
+		}},
+	}
+
+	// getUnbatched is called directly. Routing it to via the public Get would depend on
+	// configuration: settings.conf sets utxostore_getBatcherSize = 4096, so a plain Get
+	// travels the batched path instead, and a developer running with the struct-tag
+	// default of 1 would silently move these cases onto the other path.
+	for _, tc := range placementFields {
+		t.Run("unbatched read with only "+tc.name, func(t *testing.T) {
+			data, err := utxoStore.getUnbatched(ctx, tx.TxIDChainHash(), []fields.FieldName{tc.field})
+			require.NoError(t, err)
+			tc.check(t, data)
+		})
+	}
+
+	// BatchDecorate is likewise called directly, so this pins the batched path whatever
+	// the batcher is configured to do. It is the path the validator's parent prefetch
+	// uses, via Get when a batcher exists.
+	for _, tc := range placementFields {
+		t.Run("batched read with only "+tc.name, func(t *testing.T) {
+			items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash(), Idx: 0}}
+
+			require.NoError(t, utxoStore.BatchDecorate(ctx, items, tc.field))
+			require.NoError(t, items[0].Err)
+			require.NotNil(t, items[0].Data)
+			tc.check(t, items[0].Data)
+		})
+	}
+
+	// The two direct-call groups above cover the field selection on both paths. This
+	// case additionally confirms the public Get reaches one of them, since Get routes on
+	// both the batcher's presence and the field list.
+	t.Run("public Get with only BlockHeights", func(t *testing.T) {
+		data, err := utxoStore.Get(ctx, tx.TxIDChainHash(), fields.BlockHeights)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{99}, data.BlockHeights,
+			"asking for BlockHeights alone must return them, not an empty slice")
+	})
+
+	// The existing behaviour must be untouched: BlockIDs alone still returns all three,
+	// which is what every caller in the tree relies on today.
+	t.Run("BlockIDs alone still returns all three", func(t *testing.T) {
+		data, err := utxoStore.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{7}, data.BlockIDs)
+		require.Equal(t, []uint32{99}, data.BlockHeights)
+		require.Equal(t, []int{3}, data.SubtreeIdxs)
 	})
 }

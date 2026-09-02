@@ -22,7 +22,7 @@ import (
 type LockFreeQueue struct {
 	head        *TxBatch                // Points to the head of the queue (sentinel node)
 	tail        atomic.Pointer[TxBatch] // Atomic pointer to the tail
-	queueLength atomic.Int64            // Tracks the current number of batches in the queue
+	queueLength atomic.Int64            // Tracks the current number of TRANSACTIONS queued (see below), not batches
 	clock       clock                   // Source of batch timestamps; replaced in tests
 }
 
@@ -39,10 +39,19 @@ func NewLockFreeQueue() *LockFreeQueue {
 	}
 }
 
-// length returns the current number of batches in the queue.
+// length returns the current number of transactions queued, not the number
+// of batches. enqueueBatch/dequeueBatch/dequeueBatchUntil all add or
+// subtract len(nodes) (the transaction count of a batch), never 1 per
+// batch. This distinction bit us once already: the drain bound at
+// dequeueDuringBlockMovement compared its transaction budget against a
+// variable it believed counted batches, so with ~1k transactions/batch the
+// bound admitted ~1000x more work than intended and a pod sat 35+ minutes
+// at 558 GB RSS before anyone noticed (see that function's docstring for the
+// full account). Read this as "queued transactions", never "queued
+// batches".
 //
 // Returns:
-//   - int64: The current queue length (number of batches)
+//   - int64: The current queue length (number of transactions)
 //
 //go:inline
 func (q *LockFreeQueue) length() int64 {

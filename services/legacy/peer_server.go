@@ -95,6 +95,10 @@ const (
 	// AddRebroadcastInventory drops on full rather than blocking the
 	// hot relay path, so this is best-effort, not lossless.
 	modifyRebroadcastInvBuffer = 1024
+
+	// cantSplitBanPeerMsg is logged when a peer address cannot be split into
+	// host and port during ban handling.
+	cantSplitBanPeerMsg = "can't split ban peer %s %v"
 )
 
 var (
@@ -226,8 +230,6 @@ type peerState struct {
 	outboundPeers   *txmap.SyncedMap[int32, *serverPeer]
 	persistentPeers *txmap.SyncedMap[int32, *serverPeer]
 	banned          *txmap.SyncedMap[string, time.Time]
-	outboundGroups  *txmap.SyncedMap[string, int]
-	connectionCount *txmap.SyncedMap[string, int]
 }
 
 // Count returns the count of all known peers.
@@ -235,12 +237,172 @@ func (ps *peerState) Count() int {
 	return ps.inboundPeers.Length() + ps.outboundPeers.Length() + ps.persistentPeers.Length()
 }
 
-// CountIP returns the count of all peers matching the IP.
-func (ps *peerState) CountIP(host string) int {
-	count, found := ps.connectionCount.Get(host)
-	if !found {
-		return 0
+// countFailedDial reports whether a failed dial should count against the
+// address that failed.
+//
+// It should only count when the node has evidence that its own connectivity is
+// fine, or a spell of broken networking would walk the whole address book,
+// blame every address for the node's own fault, and leave it with nowhere to
+// dial on recovery. svnode makes the same judgement the same way, at
+// net.cpp:1943, requiring at least min(nMaxConnections-1, 2) distinct outbound
+// netgroups before it will hold an address responsible.
+//
+// svnode counts netgroups where this counts automatic outbound peers, and in
+// Teranode those are the same number: newAddressFunc refuses any candidate
+// whose group is already represented, so every automatic outbound peer holds a
+// distinct group by construction.
+func (s *server) countFailedDial() bool {
+	if s.connManager == nil {
+		return false
 	}
+
+	required := cfg.MaxPeers - 1
+	if required > 2 {
+		required = 2
+	}
+
+	return s.connManager.AutomaticOutboundCount() >= required
+}
+
+// recordFailedDial tells the address manager that a dial to this address did
+// not produce a connection.
+func (s *server) recordFailedDial(addr net.Addr) {
+	host, portStr, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return
+	}
+
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return
+	}
+
+	portUint16, err := safeconversion.Uint64ToUint16(port)
+	if err != nil {
+		return
+	}
+
+	s.addrManager.Attempt(wire.NewNetAddressIPPort(ip, portUint16, 0), s.countFailedDial())
+}
+
+// outboundGroups derives the set of netgroups currently occupied by automatic
+// outbound peers.
+//
+// Derived, not maintained. This used to be a tally incremented when a peer was
+// added and decremented when it left, across four separate mutation sites, and
+// two of them were wrong: named peers claimed a group they never occupied, and
+// a peer that dropped before its handshake claimed one it never released,
+// barring that segment for the life of the process. Both were symptoms of the
+// same thing — a derived quantity kept by hand.
+//
+// Reading it from the peer list instead makes those bugs unrepresentable. There
+// is no claim to forget and no release to skip; membership of outboundPeers is
+// the whole rule, and that list is already the authority on which peers hold an
+// automatic slot. Inbound and named peers are excluded for free, because they
+// are kept in different lists. svnode does exactly this, rebuilding its
+// setConnected from vNodes on every pass of ThreadOpenConnections rather than
+// carrying a counter.
+//
+// The cost is a walk of the automatic tier per address selection — at most a
+// handful of peers, and only when the node is about to dial.
+func (ps *peerState) outboundGroups() map[string]struct{} {
+	groups := make(map[string]struct{}, ps.outboundPeers.Length())
+
+	ps.outboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		if na := sp.NA(); na != nil {
+			groups[addrmgr.GroupKey(na)] = struct{}{}
+		}
+
+		return true
+	})
+
+	return groups
+}
+
+// connectedHosts returns the host of every peer the node currently holds, in
+// any tier.
+//
+// Coarser than the netgroup set and deliberately so: it is what the feeler
+// probe uses to avoid opening a second connection to a host the node is already
+// talking to. The netgroup set cannot answer that question, because it is
+// derived from the automatic outbound list alone and so cannot see inbound or
+// named peers at all.
+//
+// Host rather than host:port, because MaxPeersPerIP is the rule a remote is
+// likely to be applying to us, and a second connection to a host we are
+// mid-download from is a good way to lose the first one.
+func (ps *peerState) connectedHosts() map[string]struct{} {
+	hosts := make(map[string]struct{}, ps.Count())
+
+	note := func(sp *serverPeer) {
+		if host, _, err := net.SplitHostPort(sp.Addr()); err == nil {
+			hosts[host] = struct{}{}
+		}
+	}
+
+	for _, list := range []*txmap.SyncedMap[int32, *serverPeer]{
+		ps.inboundPeers, ps.outboundPeers, ps.persistentPeers,
+	} {
+		list.Iterate(func(_ int32, sp *serverPeer) bool {
+			note(sp)
+
+			return true
+		})
+	}
+
+	return hosts
+}
+
+// CountExcludingPermanent returns the peers that draw on MaxPeers: the inbound
+// and automatic outbound tiers. Permanent (addnode) peers have their own budget
+// and are additive to this figure, so they are deliberately left out.
+func (ps *peerState) CountExcludingPermanent() int {
+	return ps.inboundPeers.Length() + ps.outboundPeers.Length()
+}
+
+// CountIP returns how many peers the node holds from the given host.
+//
+// Derived, not maintained, for the same reason the netgroup set is. The tally
+// this replaces was incremented when a peer was added and decremented when it
+// left, and the two did not always pair up: handleAddPeerMsg's
+// already-connected dedup deletes the displaced peer from its list directly, so
+// when that peer's disconnect arrived, handleDonePeerMsg no longer found it and
+// took the fall-through branch that decrements nothing. The count ratcheted up
+// and never came back down, and after MaxPeersPerIP such events the node
+// refused every peer from that host for the life of the process.
+//
+// Counting the peers themselves cannot drift: there is nothing to decrement.
+// svnode does the same, deriving nConnectionsFromAddr by walking vNodes at
+// accept time (net.cpp:1273) rather than carrying a counter.
+//
+// Persistent peers are excluded, matching what the old tally counted: they are
+// named by the operator, so holding several from one host is a deliberate
+// choice rather than a stranger crowding the node out.
+func (ps *peerState) CountIP(host string) int {
+	count := 0
+
+	tally := func(sp *serverPeer) {
+		if peerHost, _, err := net.SplitHostPort(sp.Addr()); err == nil && peerHost == host {
+			count++
+		}
+	}
+
+	ps.inboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		tally(sp)
+
+		return true
+	})
+
+	ps.outboundPeers.Iterate(func(_ int32, sp *serverPeer) bool {
+		tally(sp)
+
+		return true
+	})
 
 	return count
 }
@@ -347,6 +509,32 @@ type server struct {
 	assetHTTPAddress  string
 	banList           *p2p.BanList
 	banChan           chan p2p.BanEvent
+
+	// feelerAttempted and feelerVerified count probes launched and probes that
+	// completed a BSV version exchange. Reported on the per-probe log line so
+	// the feature's slow, statistical benefit can be checked from the logs
+	// rather than inferred. Never reset.
+	feelerAttempted atomic.Uint64
+	feelerVerified  atomic.Uint64
+
+	// feelerTokens hands out the reserved probe slots: one token per slot,
+	// taken for the whole life of a probe and returned when it ends. Created by
+	// startFeeler, nil when feelers are disabled.
+	feelerTokens chan struct{}
+
+	// feelerHandshake is how long a probe waits for a version message, settled
+	// from legacy_feelerHandshakeTimeout by startFeeler. Resolved once because
+	// the setting is fixed at startup and its two guards warn: doing it per
+	// probe reported a startup mistake as permanent runtime noise. Written
+	// before the feeler goroutine exists and never again, which is what makes it
+	// safe to read from a probe without synchronisation.
+	feelerHandshake time.Duration
+
+	// feelerSlots is how many peer slots are held back for feeler probes. It
+	// is deducted from the peer-admission ceiling and never from the automatic
+	// outbound target, mirroring svnode's nMaxInbound arithmetic
+	// (net.cpp:1261). Zero disables feelers entirely, reservation included.
+	feelerSlots int
 
 	// multistream association tracking
 	associationMgr *peer.AssociationManager
@@ -534,9 +722,9 @@ func (sp *serverPeer) pushAddrMsg(addresses []*wire.NetAddress) {
 // disconnected.
 func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 	// No warning is logged and no score is calculated if banning is disabled.
-	// if cfg.DisableBanning {
-	//	return
-	// }
+	if cfg.DisableBanning {
+		return
+	}
 	if sp.isWhitelisted {
 		sp.server.logger.Debugf("Misbehaving whitelisted peer %s: %s", sp, reason)
 		return
@@ -572,6 +760,17 @@ func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 // all of the provided desired service flags set.
 func hasServices(advertised, desired wire.ServiceFlag) bool {
 	return advertised&desired == desired
+}
+
+// isBSVUserAgent reports whether a peer's user agent identifies a BSV node.
+//
+// Extracted so the feeler probe applies the same test as the ordinary peer
+// path. A probe that promoted a BTC or BCH node into the tried table would not
+// merely waste itself: promotion can evict an existing tried entry, so it would
+// push out a genuine BSV peer and degrade the very pool the probe exists to
+// improve.
+func isBSVUserAgent(userAgent string) bool {
+	return strings.Contains(userAgent, "Bitcoin SV") || strings.Contains(userAgent, "BSV")
 }
 
 // OnVersion is invoked when a peer receives a version bitcoin message
@@ -610,11 +809,15 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// Only allow connections from peers running BSV Blockchain nodes
 	// This prevents connections from BCH/BTC/BTG and other incompatible forks
 	userAgent := msg.UserAgent
-	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
-		sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
-
-		// Ban the peer to prevent repeated connection attempts from incompatible clients
-		sp.server.BanPeer(sp)
+	if !isBSVUserAgent(userAgent) {
+		// Ban the peer to prevent repeated connection attempts from incompatible
+		// clients, unless banning is disabled. The peer is rejected either way.
+		if cfg.DisableBanning {
+			sp.server.logger.Warnf("Rejecting peer %s with non-BSV user agent (banning disabled): %s", sp.Peer, userAgent)
+		} else {
+			sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
+			sp.server.BanPeer(sp)
+		}
 
 		reason := "Only BSV Blockchain clients are supported"
 
@@ -907,27 +1110,64 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	sp.server.syncManager.QueueTx(tx, sp.Peer, nil)
 }
 
-// OnBlock is invoked when a peer receives a block bitcoin message. It
-// blocks until the bitcoin block has been fully processed.
-func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+// OnBlock is invoked when a peer receives a block bitcoin message. With block
+// prefetch enabled (the default) it admits the block against the prefetch budget
+// and returns, leaving validation to run in the background (see awaitBlockResult)
+// so the read-loop can download the next block while this one is processed; with
+// prefetch disabled (budget 0) it blocks until the block has been fully processed.
+// Either way blocks are handed to the sync manager in order.
+func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payloadSize int64) {
 	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnBlock",
 		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
 	)
 
 	// Check if this peer is banned
 	host, _, err := net.SplitHostPort(sp.Addr())
-	if err == nil {
-		// Use a channel to get the response from the query
-		respChan := make(chan bool)
 
-		// Create a proper query message to check if the peer is banned
-		sp.server.query <- &isPeerBannedMsg{
-			addr:  host,
-			reply: respChan,
+	// Bound the pre-admission phase (ban-check round-trip + GetBlockHeader) so a
+	// wedged query goroutine or a hung header lookup cannot park the read-loop
+	// indefinitely: under prefetch the per-message watchdog is disarmed for block
+	// messages, and the netsync stall detector only covers the sync peer, so a
+	// non-sync peer would otherwise leak its slot until daemon shutdown. These
+	// calls are sub-ms in a healthy node and budget backpressure is strictly after
+	// them, so PeerProcessingTimeout only ever fires on a genuine hang. Applied on
+	// both ingestion paths (harmless for the synchronous one, where the watchdog
+	// still covers blocks). Fall back to 3m (netsync's
+	// defaultBlockProcessingStallTimeout) when the setting is unset so an operator
+	// zeroing it cannot reintroduce the hang. Only the pre-admission calls read
+	// this context; AcquireBlockPrefetch/QueueBlock keep sp.ctx/sp.quit.
+	preAdmitTimeout := sp.server.settings.Legacy.PeerProcessingTimeout
+	if preAdmitTimeout <= 0 {
+		preAdmitTimeout = 3 * time.Minute
+	}
+
+	preAdmitCtx, cancelPreAdmit := context.WithTimeout(sp.ctx, preAdmitTimeout)
+	defer cancelPreAdmit()
+
+	if err == nil {
+		// Ban-check round-trip bounded by preAdmitCtx. ok=false means the query
+		// send or its reply was cancelled/timed out before an answer arrived.
+		isBanned, ok := sp.checkBannedBounded(preAdmitCtx, host)
+		if !ok {
+			// A pre-admission DEADLINE means the query path is wedged: the block
+			// was solicited (netsync marked it requested and fetchHeaderBlocks
+			// already advanced startHeader past it), so silently dropping it
+			// strands the hash — nothing re-requests it and IBD stalls on this
+			// single block. Rotate the sync peer instead: the primary disconnect
+			// drives handleDonePeerMsg → updateSyncPeer → startSync, which clears
+			// requestedBlocks and re-drives the fetch from a fresh locator
+			// (restoring the pre-prefetch watchdog behaviour). On parent cancel
+			// (daemon shutdown / peer teardown) just drop the block.
+			if preAdmitTimedOut(preAdmitCtx) {
+				disconnectMisbehaving(sp, fmt.Sprintf("pre-admission ban-check timed out for block %s, disconnecting to trigger sync peer rotation", msg.BlockHash()))
+				return
+			}
+
+			sp.server.logger.Warnf("dropping block %s: ban-check cancelled by teardown for peer %s", msg.BlockHash(), sp)
+
+			return
 		}
 
-		// Wait for the response
-		isBanned := <-respChan
 		if isBanned {
 			sp.server.logger.Warnf("Ignoring block %s from banned legacy peer %s",
 				msg.BlockHash().String(), sp.Addr())
@@ -955,41 +1195,365 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	iv := wire.NewInvVect(wire.InvTypeBlock, blockHash)
 	sp.AddKnownInventory(iv)
 
-	// single round-trip: GetBlockHeader tells us both existence and validity
-	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, blockHash)
+	// single round-trip: GetBlockHeader tells us both existence and validity.
+	// preAdmitCtx bounds this lookup (see the pre-admission timeout above).
+	_, meta, err := sp.server.blockchainClient.GetBlockHeader(preAdmitCtx, blockHash)
+	if err != nil && preAdmitCtx.Err() != nil {
+		// The lookup was cut short by the pre-admission context, so the error
+		// says nothing about whether we already have the block. Proceeding as
+		// "not known valid" would charge a possibly known-valid block against
+		// the prefetch budget and fully re-validate it. On a genuine deadline,
+		// treat the wedged lookup like the wedged ban-check above: rotate the
+		// sync peer so netsync re-drives the fetch. On parent cancel (daemon
+		// shutdown / peer teardown) just drop the block.
+		if preAdmitTimedOut(preAdmitCtx) {
+			disconnectMisbehaving(sp, fmt.Sprintf("pre-admission header lookup timed out for block %s, disconnecting to trigger sync peer rotation", blockHash))
+		}
+
+		return
+	}
+
 	blockIsKnownValid := err == nil && !meta.Invalid
 
 	if !blockIsKnownValid {
-		// Queue the block up to be handled by the block
-		// manager and intentionally block further receives
-		// until the bitcoin block is fully processed and known
-		// good or bad.  This helps prevent a malicious peer
-		// from queuing up a bunch of bad blocks before
-		// disconnecting (or being disconnected) and wasting
-		// memory.  Additionally, this behavior is depended on
-		// by at least the block acceptance test tool as the
-		// reference implementation processes blocks in the same
-		// thread and therefore blocks further messages until
-		// the bitcoin block has been fully processed.
+		// Queue the block up to be handled by the block manager. The reference
+		// implementation processes blocks on the read thread, blocking further
+		// messages until each block is fully processed; at least the block
+		// acceptance test tool depends on that ordering. We keep blocks strictly
+		// ordered (the sync manager's single block-queue goroutine is FIFO) but
+		// decouple download from processing so the next block can be fetched
+		// while this one validates.
 		//
-		// QueueBlock is the last use of `block`: the sync manager extracts the
-		// *wire.MsgBlock into its own queue message and the netsync pipeline owns
-		// it from there (releasing the arena mid-processing). Referencing only
-		// blockHash past this point lets the wrapper and the raw bytes be
-		// collected while we wait.
-		sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
+		// QueueBlock is the last use of `block` here: the sync manager extracts
+		// the *wire.MsgBlock into its own queue message and the netsync pipeline
+		// owns it from there (releasing the arena mid-processing). Referencing
+		// only blockHash past this point lets the wrapper and the raw bytes be
+		// collected once processing is done.
+		sm := sp.server.syncManager
 
-		err = <-sp.blockProcessed
-		if err != nil {
-			sp.server.logger.Errorf("block processing failed: %v", err)
+		if !sm.UsePrefetchIngestion() {
+			// Synchronous ingestion: block the read-loop until the block is fully
+			// processed. One block in flight per peer with full TCP backpressure —
+			// the original behaviour. Taken when prefetch is disabled (kill switch
+			// legacy_blockPrefetchBufferBytes=0) OR on regression net, where the
+			// block-acceptance tooling depends on submit-then-query ordering that
+			// only this synchronous path guarantees. Also intentionally limits how
+			// many bad blocks a malicious peer can queue before being disconnected.
+			//
+			// Clear any stale result left in the shared reply channel by a prior
+			// block's shutdown-drain (the buffer is size 1 and reused across
+			// synchronous blocks); without this a stale error could be read as this
+			// block's result. Benign today (only reachable at daemon exit) but keeps
+			// the shared-channel contract robust.
+			select {
+			case <-sp.blockProcessed:
+			default:
+			}
 
-			// Only disconnect on block validation failures, not on local
-			// infrastructure issues (database, Kafka, etc.) which would
-			// just cause unnecessary sync peer rotation.
-			if !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrStorageError) {
-				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
+			sm.QueueBlock(block, sp.Peer, sp.blockProcessed)
+
+			// Wait for processing, but also bail on teardown so a lost shutdown
+			// race on the block-queue drain can't block the read-loop forever.
+			// sp.quit closes on individual disconnect and shutdown; sp.ctx (the
+			// ServiceManager errgroup Init context) is cancelled on daemon shutdown.
+			select {
+			case err = <-sp.blockProcessed:
+			case <-sp.quit:
+				return
+			case <-sp.ctx.Done():
 				return
 			}
+
+			if err != nil {
+				sp.server.logger.Errorf("block processing failed: %v", err)
+
+				if shouldDisconnectOnBlockErr(err) {
+					// Evict the whole association so the sync peer actually rotates; see
+					// disconnectMisbehaving (a bare sp disconnect misses the primary).
+					disconnectMisbehaving(sp, fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
+					return
+				}
+			}
+
+			return
+		}
+
+		// Reject unrequested blocks before they can consume prefetch budget.
+		// handleBlockMsg makes the same check after queueing and disconnects the
+		// peer, but under async prefetch a misbehaving peer could otherwise admit
+		// a flood of unrequested blocks against the shared budget before that
+		// downstream disconnect fires — starving the real sync peer's read-loop
+		// and inflating buffered-block memory. Gating here keeps a malicious peer
+		// to at most one unrequested block in flight (matching the original
+		// synchronous backpressure) and also spares fabricated blocks the
+		// SerializeSize walk below. Blocks we actually requested take the fast path.
+		if !sm.BlockRequested(sp.Peer, blockHash) {
+			// Unrequested block: evict the whole association (primary drives the
+			// sync-peer rotation, plus the stream sub-peer's own connection), mirroring
+			// handleBlockMsg's downstream eviction. See disconnectMisbehaving.
+			disconnectMisbehaving(sp, fmt.Sprintf("Got unrequested block %s, disconnecting", blockHash))
+			return
+		}
+
+		// Weight the block by its serialized size. The live read-loop uses the
+		// streaming reader, which measures the payload off the wire for free and
+		// hands it in as payloadSize — so the SerializeSize() walk below is only
+		// a belt-and-braces fallback for callers that supply neither the wire
+		// measurement nor the raw bytes.
+		size := blockAdmissionWeight(payloadSize, buf, msg)
+
+		// Bounded async prefetch. Admit the block against the global byte budget
+		// FIRST — this blocks the read-loop only when in-flight blocks already
+		// fill the budget, which is the backpressure that bounds the memory
+		// pinned by buffered blocks (a malicious peer cannot outrun it, and an
+		// oversized block is admitted alone). Admitting before QueueBlock is
+		// essential: otherwise the block would sit in the deep msgChan/blockQueue
+		// pinning its decode arena without being counted against the budget.
+		// sp.quit lets a budget-parked read-loop unblock on peer teardown; sp.ctx
+		// (the ServiceManager errgroup Init context) is cancelled on daemon
+		// shutdown but not by legacy.Server.Stop() alone. Mirrors awaitBlockResult.
+		weight, err := sm.AcquireBlockPrefetch(sp.ctx, sp.quit, *blockHash, size)
+		if err != nil {
+			if errors.Is(err, netsync.ErrDuplicateBlockInFlight) {
+				// A copy of this requested hash is already admitted or queued. Drop the
+				// duplicate WITHOUT disconnecting or queueing: the first copy will be
+				// processed, and if it is invalid that copy's awaitBlockResult
+				// disconnects the peer. Dropping here bounds duplicates against the
+				// budget (one copy per hash), the dedup half of the admission gate.
+				sp.server.logger.Debugf("dropping duplicate in-flight block %s from %s", blockHash, sp)
+				return
+			}
+
+			// ctx cancelled or peer torn down: nothing reserved, drop the block.
+			return
+		}
+
+		// Per-block buffered(1) reply channel. handleBlockMsg always sends
+		// exactly one result; the buffer guarantees that send never blocks even
+		// if this peer has since disconnected and no goroutine is waiting. That
+		// is what stops a disconnected peer from wedging the single shared
+		// block-processing goroutine — and through it every other peer.
+		done := make(chan error, 1)
+		sm.QueueBlock(block, sp.Peer, done)
+
+		// Return immediately so the read-loop downloads the next block while this
+		// one is validated; the result (budget release + disconnect-on-failure)
+		// is handled off the read-loop.
+		go sp.awaitBlockResult(done, weight, blockHash)
+	}
+}
+
+// checkBannedBounded runs the ban-check round-trip (server.query send + reply)
+// under ctx so a wedged query goroutine or a never-serviced channel cannot park
+// the read-loop. It returns (banned, ok); ok=false means the round-trip was
+// cancelled/timed out before a reply arrived and the caller must drop the block
+// without proceeding. Extracted from OnBlock so the bounded pre-admission path is
+// unit-testable (a query channel nobody services + a cancelled ctx).
+func (sp *serverPeer) checkBannedBounded(ctx context.Context, host string) (banned bool, ok bool) {
+	// Use a channel to get the response from the query. Buffered(1) because the
+	// receive below can be abandoned on ctx.Done(): if the deadline fires in the
+	// window after handleQuery dequeues the message but before it sends the reply,
+	// an unbuffered send would have no receiver and would wedge the single
+	// peerHandler/handleQuery goroutine that serializes every peer-state query for
+	// the whole server. The buffer keeps that reply send non-blocking regardless.
+	respChan := make(chan bool, 1)
+
+	// Create a proper query message to check if the peer is banned. Both the send
+	// and the receive select on ctx.Done() so neither can block indefinitely.
+	select {
+	case sp.server.query <- &isPeerBannedMsg{addr: host, reply: respChan}:
+	case <-ctx.Done():
+		return false, false
+	}
+
+	// Wait for the response.
+	select {
+	case banned = <-respChan:
+		return banned, true
+	case <-ctx.Done():
+		return false, false
+	}
+}
+
+// preAdmitTimedOut reports whether a failed pre-admission call should rotate
+// the sync peer: true only when the pre-admission context hit its own deadline
+// (a wedged local round-trip that stranded a requested block), not when the
+// parent context was cancelled (daemon shutdown / peer teardown), where the
+// block is simply dropped. Callers must only consult this after the
+// pre-admission call has actually failed.
+func preAdmitTimedOut(preAdmitCtx context.Context) bool {
+	return errors.Is(preAdmitCtx.Err(), context.DeadlineExceeded)
+}
+
+// shouldDisconnectOnBlockErr reports whether a block-processing error should
+// rotate the sync peer. Block validation failures disconnect the peer; transient
+// LOCAL conditions must not, since they would only cause unnecessary sync-peer
+// churn. The suppressed set is service/storage errors plus the per-block backoff
+// throttle (ErrServiceUnavailable, #1187) and ErrStorageUnavailable ("no
+// aerospike nodes available") — the backoff skip returns ErrServiceUnavailable
+// on every re-delivery, so disconnecting on it would churn through sync peers for
+// a fault that is ours, not the peer's. errors.IsTransientLocalError is the
+// shared classifier (also used by the netsync backoff path) so the two decisions
+// cannot drift apart.
+func shouldDisconnectOnBlockErr(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return !errors.IsTransientLocalError(err)
+}
+
+// tearDownAssociationStreams closes the live connection of every stream
+// sub-peer in assoc except the given peer. It is the primary-disconnect
+// counterpart to disconnectMisbehaving: when an association's PRIMARY goes away
+// (misbehaviour eviction, sync-peer rotation, remote hang-up), handleDonePeerMsg
+// removes only the association BOOKKEEPING, which left the DATA1 sub-peer's TCP
+// connection open reading blocks off the wire for a dead association, and left a
+// budget-parked sub-peer read-loop parked forever — AcquireBlockPrefetch waits
+// on the sub-peer's own serverPeer.quit, which only closes when the sub-peer's
+// own connection drops. Disconnecting the sub-peer closes its peer.Peer.quit,
+// unblocking its peerDoneHandler, which closes its serverPeer.quit and unparks
+// the waiter. StreamPeers() includes the primary (registered as the GENERAL
+// stream at construction), so callers pass it as except — it is already
+// disconnecting. DisconnectWithInfo is idempotent (atomic guard), so overlap
+// with disconnectMisbehaving's explicit stream disconnect, or a sub-peer already
+// mid-teardown, is safe.
+func tearDownAssociationStreams(assoc *peer.Association, except *peer.Peer) {
+	if assoc == nil {
+		return
+	}
+
+	for _, p := range assoc.StreamPeers() {
+		if p == nil || p == except {
+			continue
+		}
+
+		p.DisconnectWithInfo("association primary disconnected")
+	}
+}
+
+// disconnectMisbehaving evicts a peer's whole association for misbehaviour. It
+// disconnects the association PRIMARY — whose disconnect drives
+// handleDonePeerMsg's associationMgr.Remove(...), rotating the sync peer — and
+// ALSO the stream sub-peer's live TCP connection when it is distinct from the
+// primary. This distinction is load-bearing under the shipped default config
+// (legacy_allowBlockPriority + prefetch): blocks then arrive on the DATA1
+// sub-peer, so sp.Peer is the sub-peer. Disconnecting only sp there would leave
+// the association intact — netsync DonePeer early-returns for a sub-peer and
+// handleDonePeerMsg only does assoc.RemoveStream(...), so openRequiredStreams
+// re-opens DATA1 and the node keeps syncing from a peer serving invalid blocks
+// (IBD stalls). Resolving to the primary is what actually rotates the sync peer.
+// handleDonePeerMsg now also tears down the association's sub-peer connections on
+// primary disconnect (via tearDownAssociationStreams), so eviction of the whole
+// association is covered even when the bad block arrives on the primary; the
+// explicit stream disconnect here is kept as the fast path (it fires immediately,
+// not one peerHandler round-trip later). DisconnectWithWarning is idempotent
+// (atomic guard), so the non-stream case (target == sp.Peer) disconnects exactly
+// once and the overlap with the centralized teardown is harmless.
+func disconnectMisbehaving(sp *serverPeer, reason string) {
+	target := misbehaviorDisconnectTarget(sp.Peer)
+	target.DisconnectWithWarning(reason)
+
+	if target != sp.Peer {
+		sp.DisconnectWithWarning(reason + " (stream)")
+	}
+}
+
+// misbehaviorDisconnectTarget resolves the peer whose disconnect evicts a
+// misbehaving peer's entire association. For a stream sub-peer (e.g. a
+// BlockPriority DATA stream) it returns the association's primary peer, so
+// disconnecting the returned target drives handleDonePeerMsg's
+// associationMgr.Remove(...) eviction rather than the RemoveStream(...) that
+// leaves the primary/association intact. For a peer with no association — or a
+// primary peer — it returns the peer itself. This mirrors handleBlockMsg's
+// stream-peer → primary resolution for unrequested blocks.
+func misbehaviorDisconnectTarget(p *peer.Peer) *peer.Peer {
+	if assoc := p.AssociationRef(); assoc != nil {
+		if primary := assoc.PrimaryPeer(); primary != nil {
+			return primary
+		}
+	}
+
+	return p
+}
+
+// blockAdmissionWeight returns the byte weight a block should be charged against
+// the prefetch budget. payloadSize is the exact serialized block size the
+// streaming read-loop measures off the wire (message bytes minus the wire
+// header); it is the cheap, allocation-free measurement and is preferred when
+// positive. buf, when non-nil, is the raw serialized payload from a buffered
+// read path, so len(buf) is its size for free. Only when neither is available
+// does it fall back to msg.SerializeSize(), which walks the entire tx set — the
+// O(all-tx) cost the wire measurement exists to keep off the read-loop.
+func blockAdmissionWeight(payloadSize int64, buf []byte, msg *wire.MsgBlock) int64 {
+	if payloadSize > 0 {
+		return payloadSize
+	}
+
+	if len(buf) > 0 {
+		return int64(len(buf))
+	}
+
+	return int64(msg.SerializeSize())
+}
+
+// awaitBlockResult releases the prefetch budget reserved for an asynchronously
+// queued block once its background processing completes, and disconnects the
+// peer on a validation failure. It runs as a short-lived goroutine per in-flight
+// prefetched block; the number of live instances is bounded by the prefetch
+// budget. It deliberately captures only blockHash (not the block or its decode
+// arena) so the block's memory can be released while processing proceeds.
+func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash *chainhash.Hash) {
+	// Release the reserved budget AND drop the in-flight-dedup hash exactly once on
+	// every exit path (normal reply, sp.quit hold-then-drain, sp.ctx backstop).
+	// Pairing the hash removal with the budget release here is what keeps the two
+	// halves of the admission gate on one lifetime: a copy of this hash cannot be
+	// re-admitted until this block has fully left the pipeline.
+	defer sp.server.syncManager.ReleaseBlockPrefetch(*blockHash, weight)
+
+	var err error
+
+	select {
+	case err = <-done:
+	case <-sp.quit:
+		// The peer is being torn down (individual disconnect or shutdown;
+		// peerDoneHandler closes sp.quit in both), but the block is still
+		// queued/validating in the netsync pipeline — its decoded memory stays
+		// live. Hold the reserved budget until the block actually leaves the
+		// pipeline; releasing it now (on peer lifetime rather than block
+		// completion) would let the semaphore under-count and over-admit, so
+		// buffered-block memory could exceed the budget under churny disconnects.
+		//
+		// While the SyncManager runs, handleBlockMsg always replies on the
+		// buffered(1) done channel; on shutdown the sm.quit drain replies with an
+		// error. The one narrow exception is a shutdown race where the feeder
+		// enqueues after that drain returned and no reply is ever sent — then we
+		// fall back to sp.ctx. sp.ctx is the ServiceManager's errgroup-derived Init
+		// context: it IS cancelled on daemon shutdown (signal / ForceShutdown /
+		// errgroup), though legacy.Server.Stop() alone does not cancel it. Only the
+		// disconnect action below is skipped here — the peer is already gone.
+		select {
+		case e := <-done:
+			// Log a late validation failure for observability parity with the
+			// connected path; the peer is already gone, so do not disconnect.
+			if e != nil {
+				sp.server.logger.Errorf("block %s processing failed after peer teardown: %v", blockHash, e)
+			}
+		case <-sp.ctx.Done():
+		}
+
+		return
+	case <-sp.ctx.Done():
+		return
+	}
+
+	if err != nil {
+		sp.server.logger.Errorf("block processing failed: %v", err)
+
+		if shouldDisconnectOnBlockErr(err) {
+			// Evict the whole association so the sync peer actually rotates; see
+			// disconnectMisbehaving (a bare sp disconnect misses the primary).
+			disconnectMisbehaving(sp, fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
 		}
 	}
 }
@@ -1640,6 +2204,27 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 		return err
 	}
 
+	// A node bootstrapped from a UTXO-set snapshot stores transactions as their
+	// live outputs only, and the UTXO store hands that shape straight back for a
+	// reader that asked for fields.Tx. Bytes() below either panics on a nil output
+	// hole — swallowed by the deferred recover above, leaving the peer with silence
+	// — or serializes cleanly into a short, 0-input transaction that does not hash
+	// to what the peer asked for, which would then go on the wire as if it did.
+	// Same gate as the asset boundary (services/asset/repository.isRequestedTransaction):
+	// the predicate must come first, because TxIDChainHash() dereferences the same
+	// nil *bt.Output.
+	if !txMeta.TxIsSerializable() || !txMeta.Tx.TxIDChainHash().IsEqual(hash) {
+		err = fmt.Errorf("[pushTxMsg] tx %v is not retained in full by this node", hash)
+
+		sp.server.logger.Warnf("%s", err.Error())
+
+		if doneChan != nil {
+			doneChan <- struct{}{}
+		}
+
+		return err
+	}
+
 	tx, err := bsvutil.NewTxFromBytes(txMeta.Tx.Bytes())
 	if err != nil {
 		sp.server.logger.Warnf("[pushTxMsg] Unable to deserialize tx %v: %v", hash, err)
@@ -1931,8 +2516,16 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	}
 
 	// Limit max number of total peers.
-	if state.Count() >= cfg.MaxPeers {
-		reason := fmt.Sprintf("Max peers reached [%d] - disconnecting peer", cfg.MaxPeers)
+	//
+	// Permanent (addnode) peers are excluded because they are budgeted
+	// separately by MaxAddnodePeers, following svnode: its inbound capacity is
+	// nMaxConnections minus the OUTBOUND and feeler budgets only, and its
+	// addnode semaphore is independent of nMaxConnections entirely. Counting
+	// them here would make named peers cost the node inbound capacity, which is
+	// the additive budget undone at the door.
+	ceiling := peerAdmissionCeiling(cfg.MaxPeers, s.feelerSlots)
+	if state.CountExcludingPermanent() >= ceiling {
+		reason := fmt.Sprintf("Max peers reached [%d] - disconnecting peer", ceiling)
 		sp.DisconnectWithInfo(reason)
 		// TODO: how to handle permanent peers here?
 		// they should be rescheduled.
@@ -1944,20 +2537,11 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 
 	if sp.Inbound() {
 		state.inboundPeers.Set(sp.ID(), sp)
-
-		count, _ := state.connectionCount.Get(host)
-		state.connectionCount.Set(host, count+1)
 	} else {
-		count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-		state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count+1)
-
 		if sp.persistent {
 			state.persistentPeers.Set(sp.ID(), sp)
 		} else {
 			state.outboundPeers.Set(sp.ID(), sp)
-
-			count, _ = state.connectionCount.Get(host)
-			state.connectionCount.Set(host, count+1)
 		}
 	}
 
@@ -1984,7 +2568,14 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 			s.logger.Debugf("Removed stream type %d from association %s",
 				sp.Peer.StreamType(), assoc.ID())
 		} else {
-			// Primary peer disconnected - remove the entire association.
+			// Primary peer disconnected - tear down the whole association:
+			// close every sub-peer's live connection, then remove the
+			// bookkeeping. Removing only the bookkeeping left the DATA1 sub-peer
+			// reading off the wire (or parked forever in AcquireBlockPrefetch) on
+			// a connection nothing would ever close. Teardown runs before Remove
+			// so stale sub-peer connections are already dropping by the time the
+			// association ID becomes free for a reconnecting peer to re-register.
+			tearDownAssociationStreams(assoc, sp.Peer)
 			s.associationMgr.Remove(assoc.RawID())
 			s.logger.Debugf("Removed association %s (primary peer disconnected)", assoc.ID())
 		}
@@ -2007,22 +2598,11 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 	}
 
 	if _, ok := list.Get(sp.ID()); ok {
-		if !sp.Inbound() && sp.VersionKnown() {
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		}
-
 		if !sp.Inbound() && sp.connReq != nil {
 			s.connManager.Disconnect(sp.connReq.ID())
 		}
 
 		list.Delete(sp.ID())
-
-		host, _, err := net.SplitHostPort(sp.Addr())
-		if err == nil && !sp.persistent {
-			count, _ := state.connectionCount.Get(host)
-			state.connectionCount.Set(host, count-1)
-		}
 
 		sp.server.logger.Debugf("Removed peer %s", sp)
 
@@ -2047,7 +2627,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		sp.server.logger.Debugf(cantSplitBanPeerMsg, sp.Addr(), err)
 		return
 	}
 
@@ -2072,7 +2652,7 @@ func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, banUntil int64) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		sp.server.logger.Debugf(cantSplitBanPeerMsg, sp.Addr(), err)
 		return
 	}
 
@@ -2100,7 +2680,7 @@ func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, b
 func (s *server) handleUnbanPeerMsg(state *peerState, spAddr bannedPeerAddr) {
 	host, _, err := net.SplitHostPort(string(spAddr))
 	if err != nil {
-		s.logger.Errorf("can't split ban peer %s %v", spAddr, err)
+		s.logger.Errorf(cantSplitBanPeerMsg, spAddr, err)
 		return
 	}
 
@@ -2127,6 +2707,13 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 		// message.
 		if msg.invVect.Type == wire.InvTypeBlock && sp.WantsHeaders() {
 			s.handleRelayBlockMsg(sp, msg)
+			return
+		}
+
+		// Peers that have not negotiated sendheaders still need the block
+		// announced via a plain inventory message.
+		if msg.invVect.Type == wire.InvTypeBlock {
+			s.handleRelayBlockInvMsg(sp, msg)
 			return
 		}
 
@@ -2212,6 +2799,13 @@ func (s *server) handleRelayBlockMsg(sp *serverPeer, msg relayMsg) {
 	sp.QueueMessage(msgHeaders, nil)
 }
 
+// handleRelayBlockInvMsg queues a plain inventory vector for a block to a peer
+// that has not negotiated sendheaders. Peers that did negotiate sendheaders are
+// announced via a headers message instead, in handleRelayBlockMsg.
+func (s *server) handleRelayBlockInvMsg(sp serverPeerQueueInventory, msg relayMsg) {
+	sp.QueueInventory(msg.invVect)
+}
+
 // handleBroadcastMsg deals with broadcasting messages to peers.  It is invoked
 // from the peerHandler goroutine.
 func (s *server) handleBroadcastMsg(state *peerState, bmsg *broadcastMsg) {
@@ -2238,9 +2832,24 @@ type getPeersMsg struct {
 	reply chan []*serverPeer
 }
 
-type getOutboundGroup struct {
-	key   string
-	reply chan int
+type getOutboundGroups struct {
+	reply chan map[string]struct{}
+}
+
+// feelerSnapshot is everything the feeler probe needs to know about the current
+// peer set, read in one pass so that a whole selection is judged against a
+// single consistent view.
+type feelerSnapshot struct {
+	// outboundGroups are the netgroups held by automatic outbound peers. A
+	// probe must not claim one, so it must not pick an address in one.
+	outboundGroups map[string]struct{}
+
+	// hosts is the host of every peer in any tier.
+	hosts map[string]struct{}
+}
+
+type getFeelerSnapshotMsg struct {
+	reply chan feelerSnapshot
 }
 
 type getAddedNodesMsg struct {
@@ -2308,9 +2917,27 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		// })
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
-		// Limit max number of total peers.
-		if state.Count() >= cfg.MaxPeers {
-			msg.reply <- errors.NewProcessingError("max peers reached")
+		// Each tier is checked against its own budget, the same way the startup
+		// list and the peer-admission door are. Before this, the runtime path
+		// compared every peer against MaxPeers, which disagreed with both: a
+		// node holding its full automatic quota plus a few named peers could
+		// never gain another named peer however small MaxAddnodePeers was, and
+		// nothing enforced MaxAddnodePeers here at all, so the startup budget
+		// could be walked straight past at runtime.
+		//
+		// The ceiling here is MaxPeers less the feeler reservation, the same
+		// figure the door in handleAddPeerMsg applies. A one-shot addnode
+		// becomes an ordinary automatic peer, so if the two disagreed the node
+		// would admit a peer through one path that the other had just refused.
+		ceiling := peerAdmissionCeiling(cfg.MaxPeers, s.feelerSlots)
+		if !connectNodeAdmitted(msg.permanent, state.persistentPeers.Length(),
+			state.CountExcludingPermanent(), s.settings.Legacy.MaxAddnodePeers, ceiling) {
+			if msg.permanent {
+				msg.reply <- errors.NewProcessingError("max addnode peers reached [%d]", s.settings.Legacy.MaxAddnodePeers)
+			} else {
+				msg.reply <- errors.NewProcessingError("max peers reached [%d]", ceiling)
+			}
+
 			return
 		}
 
@@ -2342,24 +2969,21 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 
 		msg.reply <- nil
 	case removeNodeMsg:
-		found := disconnectPeer(state.persistentPeers, msg.cmp, func(sp *serverPeer) {
-			// Keep group counts ok since we remove from
-			// the list now.
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		})
+		// No group release here: this removes a permanent peer, and permanent
+		// peers no longer claim a netgroup when they are added.
+		found := disconnectPeer(state.persistentPeers, msg.cmp, nil)
 
 		if found {
 			msg.reply <- nil
 		} else {
 			msg.reply <- errors.NewProcessingError("peer not found")
 		}
-	case getOutboundGroup:
-		count, ok := state.outboundGroups.Get(msg.key)
-		if ok {
-			msg.reply <- count
-		} else {
-			msg.reply <- 0
+	case getOutboundGroups:
+		msg.reply <- state.outboundGroups()
+	case getFeelerSnapshotMsg:
+		msg.reply <- feelerSnapshot{
+			outboundGroups: state.outboundGroups(),
+			hosts:          state.connectedHosts(),
 		}
 	// Request a list of the persistent (added) peers.
 	case getAddedNodesMsg:
@@ -2379,21 +3003,13 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		}
 
 		// Check outbound peers.
-		found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
-			// Keep group counts ok since we remove from
-			// the list now.
-			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-		})
+		found = disconnectPeer(state.outboundPeers, msg.cmp, nil)
 		if found {
 			// If there are multiple outbound connections to the same
 			// ip:port, continue disconnecting them all until no such
 			// peers are found.
 			for found {
-				found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
-					count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
-					state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
-				})
+				found = disconnectPeer(state.outboundPeers, msg.cmp, nil)
 			}
 			msg.reply <- nil
 
@@ -2428,6 +3044,87 @@ func disconnectPeer(peerList *txmap.SyncedMap[int32, *serverPeer], compareFunc f
 	}
 
 	return false
+}
+
+// automaticOutboundTarget returns how many automatic outbound peers the
+// connection manager should aim for, given the configured target and the
+// overall peer cap.
+//
+// Permanent (addnode) peers are NOT deducted here. They are budgeted
+// separately by MaxAddnodePeers, the way svnode gives them their own semaphore
+// (semAddnode) rather than a share of maxconnections: asking for named peers
+// buys them in addition to the node's ordinary capacity, and never at the cost
+// of an automatic slot. MaxPeers therefore bounds the automatic and inbound
+// tiers, which is exactly what svnode's nMaxInbound arithmetic does.
+func automaticOutboundTarget(configured uint32, maxPeers int) uint32 {
+	if maxPeers < 0 {
+		return 0
+	}
+
+	if maxPeers < int(configured) {
+		return uint32(maxPeers)
+	}
+
+	return configured
+}
+
+// addnodePeers caps the configured named peers at their own budget, returning
+// the peers to dial and how many were dropped.
+//
+// svnode enforces this with a semaphore of MaxAddnodePeers permits, so a long
+// -addnode list simply waits rather than growing the node without limit. The
+// list here is fixed at startup, so the equivalent is to take the first
+// budget-many and say plainly what was left out.
+func addnodePeers(configured []string, budget int) (dial []string, dropped int) {
+	if budget < 0 {
+		budget = 0
+	}
+
+	if len(configured) <= budget {
+		return configured, 0
+	}
+
+	return configured[:budget], len(configured) - budget
+}
+
+// permanentPeerList resolves the named peers to dial at startup, and applies
+// the addnode budget to the addnode list only.
+//
+// The two lists are not the same kind of thing. connectPeers is connect-only
+// mode: it is the node's ENTIRE connectivity, there is no address source at
+// all, and MaxPeers is set to the length of that very list — so capping it
+// would strand whatever an operator listed past the budget with nothing to
+// fall back on, and the node would run permanently below the capacity it just
+// sized itself for. addPeers is additive to a node that is already dialling
+// the network for itself, so a cap there costs it nothing it cannot replace.
+//
+// svnode draws the line in the same place: semAddnode gates
+// ThreadOpenAddedConnections (net.cpp:2021), while the -connect loop in
+// ThreadOpenConnections (net.cpp:1772) dials every entry with no semaphore at
+// all.
+func permanentPeerList(connectPeers, addPeers []string, budget int) (dial []string, dropped int) {
+	if len(connectPeers) > 0 {
+		return connectPeers, 0
+	}
+
+	return addnodePeers(addPeers, budget)
+}
+
+// connectNodeAdmitted reports whether a runtime addnode request has room in the
+// tier it will join.
+//
+// A permanent request joins the named tier and is bounded by MaxAddnodePeers; a
+// one-shot becomes an ordinary automatic outbound peer and is bounded by
+// MaxPeers alongside the inbound peers. Checking each against its own budget is
+// what keeps this path agreeing with the startup list and with the admission
+// check in handleAddPeerMsg — the budgets are only additive if every path that
+// spends them says so.
+func connectNodeAdmitted(permanent bool, persistentCount, automaticCount, maxAddnode, maxPeers int) bool {
+	if permanent {
+		return persistentCount < maxAddnode
+	}
+
+	return automaticCount < maxPeers
 }
 
 // newPeerConfig returns the configuration for the given serverPeer.
@@ -2525,6 +3222,13 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	if err != nil {
 		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.GetAddr(), err)
 		s.connManager.Disconnect(c.ID())
+
+		// Without this the nil peer was assigned to sp.Peer and then used:
+		// AssociateConnection is a method on the embedded *peer.Peer, so the
+		// very next steps dereferenced it and brought the node down. Disconnect
+		// closes the connection for us, since the connection manager recorded
+		// it before invoking this callback.
+		return
 	}
 
 	sp.Peer = p
@@ -2538,7 +3242,7 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	sp.AssociateConnection(conn)
 
 	go s.peerDoneHandler(sp)
-	s.addrManager.Attempt(sp.NA())
+	s.addrManager.Attempt(sp.NA(), s.countFailedDial())
 }
 
 // peerDoneHandler handles peer disconnects by notifiying the server that it's
@@ -2583,8 +3287,6 @@ func (s *server) peerHandler() {
 		outboundPeers:   txmap.NewSyncedMap[int32, *serverPeer](),
 		persistentPeers: txmap.NewSyncedMap[int32, *serverPeer](),
 		banned:          txmap.NewSyncedMap[string, time.Time](),
-		outboundGroups:  txmap.NewSyncedMap[string, int](),
-		connectionCount: txmap.NewSyncedMap[string, int](),
 	}
 
 	if !cfg.DisableDNSSeed {
@@ -2601,6 +3303,13 @@ func (s *server) peerHandler() {
 	}
 
 	go s.connManager.Start()
+
+	// Started here, alongside the connection manager, because the two are two
+	// halves of the same job: the connection manager spends the outbound
+	// budget, and the feeler keeps the pool of addresses worth spending it on
+	// healthy. It also has to be here rather than in newServer, because it
+	// depends on s.query being served, which is this loop.
+	s.startFeeler()
 
 out:
 	for {
@@ -2741,13 +3450,69 @@ func (s *server) ConnectedCount() int32 {
 	return <-replyChan
 }
 
-// OutboundGroupCount returns the number of peers connected to the given
-// outbound group key.
-func (s *server) OutboundGroupCount(key string) int {
-	replyChan := make(chan int)
-	s.query <- getOutboundGroup{key: key, reply: replyChan}
+// OutboundGroups returns the set of netgroups currently occupied by automatic
+// outbound peers, read from the peer list at the moment of the call.
+//
+// Returned as a set rather than queried one key at a time so a caller sifting
+// candidate addresses reads a single consistent snapshot, instead of asking
+// once per candidate and seeing the peer set shift underneath it. svnode builds
+// the same set once per pass of ThreadOpenConnections for the same reason.
+// Both halves of the exchange give up on shutdown. This runs on a dial
+// goroutine, and the peer handler stops serving queries the moment s.quit
+// closes — it then drains s.query without answering, so an unguarded send
+// would be accepted and the reply would never come, parking the dial goroutine
+// for the life of the process. An empty set is the safe answer at that point:
+// the connection manager is being stopped in the very next statement of the
+// peer handler, so at worst the caller picks one more address that is never
+// dialled.
+func (s *server) OutboundGroups() map[string]struct{} {
+	// Buffered so that abandoning the reply cannot wedge the peer handler:
+	// handleQuery sends the answer unguarded, and on an unbuffered channel a
+	// caller that had already given up would block it there for good.
+	replyChan := make(chan map[string]struct{}, 1)
 
-	return <-replyChan
+	select {
+	case s.query <- getOutboundGroups{reply: replyChan}:
+	case <-s.quit:
+		return nil
+	}
+
+	select {
+	case groups := <-replyChan:
+		return groups
+	case <-s.quit:
+		return nil
+	}
+}
+
+// feelerPeerSnapshot reads the peer set the feeler probe sifts candidates
+// against, in a single query.
+//
+// One query per selection pass, not one per candidate. The peer handler is a
+// single goroutine serving every peer-state question in the service, so a
+// hundred round trips to sift a hundred addresses would put the probe in its
+// way for no benefit, and would let the peer set shift under the sift.
+//
+// Both halves of the exchange give up on shutdown, for the reason spelled out
+// on OutboundGroups: the peer handler drains s.query without answering once
+// s.quit closes, so an unguarded send would be accepted and never replied to.
+// An empty snapshot is the safe answer, because the probe that reads it is
+// about to check s.quit itself.
+func (s *server) feelerPeerSnapshot() feelerSnapshot {
+	replyChan := make(chan feelerSnapshot, 1)
+
+	select {
+	case s.query <- getFeelerSnapshotMsg{reply: replyChan}:
+	case <-s.quit:
+		return feelerSnapshot{}
+	}
+
+	select {
+	case snap := <-replyChan:
+		return snap
+	case <-s.quit:
+		return feelerSnapshot{}
+	}
 }
 
 // AddBytesSent adds the passed number of bytes to the total bytes sent counter
@@ -3115,7 +3880,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	blockAssembly *blockassembly.Client,
 	listenAddrs []string, assetHTTPAddress string) (*server, error) {
 	// init config
-	c, _, err := loadConfig(logger)
+	c, _, err := loadConfig(logger, tSettings.Policy.ExcessiveBlockSize)
 	if err != nil {
 		return nil, err
 	}
@@ -3320,6 +4085,12 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	var newAddressFunc func() (net.Addr, error)
 	if len(cfg.ConnectPeers) == 0 {
 		newAddressFunc = func() (net.Addr, error) {
+			// One snapshot for the whole selection, so every candidate is
+			// judged against the same peer set. Asking per candidate would let
+			// the set shift mid-sift, and would pay for a peer walk on each of
+			// the hundred tries below rather than once.
+			occupiedGroups := s.OutboundGroups()
+
 			for tries := 0; tries < 100; tries++ {
 				addr := s.addrManager.GetAddress()
 				if addr == nil {
@@ -3332,8 +4103,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 				// in the same group so that we are not connecting
 				// to the same network segment at the expense of
 				// others.
-				key := addrmgr.GroupKey(addr.NetAddress())
-				if s.OutboundGroupCount(key) != 0 {
+				if _, occupied := occupiedGroups[addrmgr.GroupKey(addr.NetAddress())]; occupied {
 					continue
 				}
 
@@ -3359,19 +4129,45 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	}
 
 	// Create a connection manager.
-	targetOutbound := cfg.TargetOutboundPeers
-	if cfg.MaxPeers < int(targetOutbound) {
-		targetOutbound = uint32(cfg.MaxPeers)
+	//
+	// permanentPeers is resolved before the target is computed because the two
+	// are related: the replenishment pass counts only the automatic tier, so
+	// the node's outbound total is the target PLUS its addnode peers. MaxPeers
+	// has to bound that total rather than the automatic half alone.
+	permanentPeers, droppedPeers := permanentPeerList(cfg.ConnectPeers, cfg.AddPeers, tSettings.Legacy.MaxAddnodePeers)
+	if droppedPeers > 0 {
+		logger.Warnf("More addnode peers configured than legacy_maxAddnodePeers allows [%d]: dialing the first %d, ignoring %d", tSettings.Legacy.MaxAddnodePeers, len(permanentPeers), droppedPeers)
 	}
+
+	targetOutbound := automaticOutboundTarget(cfg.TargetOutboundPeers, cfg.MaxPeers)
 
 	cmgr, err := connmgr.New(logger, &connmgr.Config{
 		Listeners:      listeners,
 		OnAccept:       s.inboundPeerConnected,
 		RetryDuration:  connectionRetryInterval,
 		TargetOutbound: targetOutbound,
-		Dial:           bsvdDial,
-		OnConnection:   s.outboundPeerConnected,
-		GetNewAddress:  newAddressFunc,
+		Dial: func(addr net.Addr) (net.Conn, error) {
+			conn, err := bsvdDial(addr)
+			if err != nil {
+				// A dial that never produced a connection is the only evidence
+				// the address book ever gets that an address is dead. Without
+				// this it only ever learns that addresses are good, so an
+				// address that stopped answering keeps full selection weight
+				// for ever and the node spends dials on it indefinitely.
+				// svnode records the same thing in the failure arm of
+				// ConnectNode (net.cpp:425).
+				s.recordFailedDial(addr)
+			}
+
+			return conn, err
+		},
+		OnConnection:  s.outboundPeerConnected,
+		GetNewAddress: newAddressFunc,
+		// A minute between replenishment passes meant a peer lost early in an
+		// interval left the node running below target for the rest of it — during
+		// IBD that is a minute of lost download bandwidth per disconnect. Zero
+		// restores the historical one-minute cadence.
+		ReplenishInterval: tSettings.Legacy.ReplenishInterval,
 	})
 	if err != nil {
 		return nil, err
@@ -3379,13 +4175,15 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	s.connManager = cmgr
 
+	// Set after the manager exists, because the reservation has to be judged
+	// against the target the manager will really chase rather than the one
+	// computed above — connmgr.New substitutes its own default for a configured
+	// zero. Note that the target itself is NOT reduced: the reservation comes
+	// out of the joint inbound/automatic ceiling, exactly as svnode takes its
+	// feeler budget out of nMaxInbound.
+	s.setFeelerBudget(logger, tSettings.Legacy.MaxFeelerPeers, len(cfg.ConnectPeers) > 0, cfg.MaxPeers)
+
 	// Start up persistent peers.
-	permanentPeers := cfg.ConnectPeers
-
-	if len(permanentPeers) == 0 {
-		permanentPeers = cfg.AddPeers
-	}
-
 	for _, addr := range permanentPeers {
 		netAddr, err := addrStringToNetAddr(addr)
 		if err != nil {

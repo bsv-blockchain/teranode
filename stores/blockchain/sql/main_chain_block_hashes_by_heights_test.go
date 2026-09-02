@@ -212,7 +212,7 @@ func newOnMainChainTestStoreForBench(b *testing.B) *SQL {
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(b, err)
 
-	b.Cleanup(func() { _ = s.Close() })
+	b.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	waitForStartupRebuild(b, s)
 

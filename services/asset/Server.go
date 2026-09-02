@@ -327,5 +327,16 @@ func (v *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	// DC14: also stop the Centrifuge server so the shutdown contract holds if it
+	// ever gains teardown logic. It is a no-op today (its goroutines are
+	// ctx-bound), but relying on that silently is the trap DC6/DC11 warn about.
+	if v.centrifugeServer != nil {
+		v.logger.Infof("[Asset] Stopping centrifuge server")
+
+		if err := v.centrifugeServer.Stop(ctx); err != nil {
+			v.logger.Errorf("[Asset] error stopping centrifuge server: %v", err)
+		}
+	}
+
 	return nil
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/muhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -85,6 +86,9 @@ type consolidator struct {
 
 	// previousBlockHash stores the hash of the previous block
 	previousBlockHash *chainhash.Hash
+
+	// acc accumulates the MuHash set commitment over the full materialized set.
+	acc *muhash.MuHash3072
 }
 
 // Addition represents a UTXO addition.
@@ -147,6 +151,7 @@ func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockc
 		deletions:              make(map[UTXODeletion]struct{}),
 		additions:              make(map[UTXODeletion]*Addition),
 		firstPreviousBlockHash: previousBlockHash,
+		acc:                    muhash.New(),
 	}
 }
 

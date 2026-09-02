@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -45,7 +45,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -56,7 +56,10 @@
 package aerospike
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -145,6 +148,14 @@ func (s *Store) SetExternalTxCache(c *util.ExpiringConcurrentCache[chainhash.Has
 	s.externalTxCache = c
 }
 
+// SetExternalOutpointsCache sets the cache for the outpoint-resolution
+// reconstruction. It is deliberately separate from the full-transaction cache —
+// see the field comments on Store — so tests that exercise both readers must wire
+// both.
+func (s *Store) SetExternalOutpointsCache(c *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]) {
+	s.externalOutpointsCache = c
+}
+
 // //////////////////////////////////////////////////////////////////////////////////////////////
 // //////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -156,7 +167,7 @@ func NewBatchStoreItem(
 	blockHeight uint32,
 	blockIDs []uint32,
 	lockTime uint32,
-	done chan error,
+	group *completion.Group,
 ) *BatchStoreItem {
 	return &BatchStoreItem{
 		txHash:      txHash,
@@ -165,7 +176,7 @@ func NewBatchStoreItem(
 		blockHeight: blockHeight,
 		blockIDs:    blockIDs,
 		lockTime:    lockTime,
-		done:        done,
+		group:       group,
 	}
 }
 
@@ -174,12 +185,17 @@ func (i *BatchStoreItem) GetTxHash() *chainhash.Hash {
 	return i.txHash
 }
 
-// SendDone was implemented to facilitate testing
+// SendDone was implemented to facilitate testing. It completes the item with
+// the given error (CAS-guarded, exactly-once).
 func (i *BatchStoreItem) SendDone(e error) {
-	i.done <- e
+	i.complete(e)
 }
 
-// RecvDone was implemented to facilitate testing
+// RecvDone was implemented to facilitate testing. It waits for the item's
+// completion group and returns the terminal result.
 func (i *BatchStoreItem) RecvDone() error {
-	return <-i.done
+	if i.group != nil {
+		_ = i.group.Wait(context.Background(), 0)
+	}
+	return i.result
 }

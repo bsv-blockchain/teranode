@@ -123,7 +123,7 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 	}()
 
 	if err = grpcServer.Serve(listener); err != nil {
-		return errors.NewServiceError("[%s] GRPC server failed [%w]", serviceName, err)
+		return errors.NewServiceError("[%s] GRPC server failed", serviceName, err)
 	}
 
 	return nil

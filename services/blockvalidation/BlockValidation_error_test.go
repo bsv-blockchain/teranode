@@ -122,7 +122,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 	setMinedChan := make(chan *chainhash.Hash, 1)
 
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	tSettings.BlockValidation.OptimisticMining = true
 	bv := &testBlockValidation{
@@ -187,9 +187,10 @@ func createCoinbaseAndChildTx(t *testing.T) (*bt.Tx, *bt.Tx, *bec.PrivateKey, *b
 }
 
 func storeTxsInUtxoStore(t *testing.T, utxoStore utxo.Store, coinbaseTx, childTx *bt.Tx, opts ...utxo.CreateOption) {
-	_, err := utxoStore.Create(context.Background(), coinbaseTx, 0, opts...)
+	createOpts := append([]utxo.CreateOption{utxo.WithCreateOnly()}, opts...)
+	_, _, err := utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, createOpts...)
 	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), childTx, 0, opts...)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, createOpts...)
 	require.NoError(t, err)
 }
 
@@ -386,7 +387,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	defer deferFunc()
 
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Use our thread-safe mock Kafka producer
 	mockKafka := &SafeMockKafkaProducer{}
@@ -516,7 +517,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	// bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Use our thread-safe mock Kafka producer
 	mockKafka := &SafeMockKafkaProducer{}

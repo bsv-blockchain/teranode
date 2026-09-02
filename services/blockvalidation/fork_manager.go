@@ -557,8 +557,10 @@ func (fm *ForkManager) DetermineForkID(ctx context.Context, block *model.Block, 
 	}
 
 	if err != nil {
-		blockHashStr := block.Hash().String()
-		forkID := "orphan-" + blockHashStr[len(blockHashStr)-8:]
+		// Use the full block hash (256 bits) so distinct orphan blocks never collide
+		// onto the same ForkBranch. Truncating to the last 8 hex chars (32 bits) allowed
+		// two different orphans to alias onto one fork and corrupt its bookkeeping.
+		forkID := "orphan-" + block.Hash().String()
 
 		if _, exists := fm.forks[forkID]; !exists {
 			now := time.Now()

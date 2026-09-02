@@ -113,7 +113,7 @@ func TestSubtreeStreamingHeadOfLineBackpressure(t *testing.T) {
 
 	// Populate the real utxo store, then wrap it so the head chunk stalls.
 	for i := 1; i < len(txs); i++ {
-		_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], testParams.height)
+		_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], testParams.height, utxo.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -152,9 +152,11 @@ func TestSubtreeStreamingHeadOfLineBackpressure(t *testing.T) {
 	txCount, _ := bt.NewVarIntFromBytes(buf[:10])
 	require.Equal(t, uint64(len(txs)), uint64(txCount))
 
-	// The stream must deliver every transaction — no mid-stream abort/truncation.
+	// The stream must deliver every transaction — no mid-stream abort/truncation. The
+	// assertion now says what it always claimed: a clean end, not io.ErrClosedPipe, which
+	// was the producer reporting its own success as a failure.
 	allTxData, err := io.ReadAll(r)
-	require.ErrorIs(t, err, io.ErrClosedPipe, "stream did not complete cleanly (truncated/aborted)")
+	require.NoError(t, err, "stream did not complete cleanly (truncated/aborted)")
 
 	offset := 0
 	for i := 0; i < len(txs); i++ {

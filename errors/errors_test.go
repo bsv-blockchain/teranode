@@ -180,6 +180,28 @@ func TestErrorWrapWithAdditionalContext(t *testing.T) {
 	}
 }
 
+// TestErrTxCreatingSentinelAndWrapChain pins two things introduced together:
+// the ErrTxCreating sentinel exists as a comparable value (before this,
+// errors.Is(err, errors.ErrTxCreating) did not even compile — only the
+// NewTxCreatingError constructor existed), and it survives being wrapped
+// exactly the way the validator wraps it: spendAndCreateInUtxoStore wraps the
+// store's error once with NewProcessingError, and validateInternal wraps it
+// again, before the retry loop's errors.Is check ever sees it.
+func TestErrTxCreatingSentinelAndWrapChain(t *testing.T) {
+	original := NewTxCreatingError("[SPEND_BATCH_LUA] transaction is creating")
+
+	require.True(t, Is(original, ErrTxCreating), "the constructor's error must match the ErrTxCreating sentinel directly")
+
+	onceWrapped := NewProcessingError("validator: UTXO Store spend and create failed for %s", "txid", original)
+	require.True(t, Is(onceWrapped, ErrTxCreating), "ErrTxCreating must still match after one layer of wrapping")
+
+	twiceWrapped := NewProcessingError("[Validate][%s] error spending utxos", "txid", onceWrapped)
+	require.True(t, Is(twiceWrapped, ErrTxCreating), "ErrTxCreating must still match after two layers of wrapping, matching the real validator call chain")
+
+	// A sibling sentinel must not spuriously match.
+	require.False(t, Is(twiceWrapped, ErrTxLocked), "ErrTxCreating must not be conflated with the distinct ErrTxLocked sentinel")
+}
+
 // TestErrorEquality tests the equality of custom errors.
 func TestErrorEquality(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "resource not found")
@@ -1426,14 +1448,73 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 			expected: codes.ResourceExhausted,
 		},
 		{
-			name:     "unmapped code TX_INVALID defaults to codes.Internal",
+			name:     "maps ERR_TX_INVALID to codes.InvalidArgument",
 			errCode:  ERR_TX_INVALID,
-			expected: codes.Internal,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_TX_LOCK_TIME to codes.InvalidArgument",
+			errCode:  ERR_TX_LOCK_TIME,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_UTXO_NON_FINAL to codes.InvalidArgument",
+			errCode:  ERR_UTXO_NON_FINAL,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_TX_POLICY to codes.InvalidArgument",
+			errCode:  ERR_TX_POLICY,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_TX_INVALID_DOUBLE_SPEND to codes.FailedPrecondition",
+			errCode:  ERR_TX_INVALID_DOUBLE_SPEND,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			name:     "maps ERR_TX_CONFLICTING to codes.FailedPrecondition",
+			errCode:  ERR_TX_CONFLICTING,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			name:     "maps ERR_UTXO_SPENT to codes.FailedPrecondition",
+			errCode:  ERR_UTXO_SPENT,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			name:     "maps ERR_TX_LOCKED to codes.FailedPrecondition",
+			errCode:  ERR_TX_LOCKED,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			// ERR_TX_CREATING (a large, multi-record parent still being
+			// written) is the same kind of transient chain-state conflict as
+			// ERR_TX_LOCKED, not an internal server fault, and must land in
+			// the same gRPC code family.
+			name:     "maps ERR_TX_CREATING to codes.FailedPrecondition",
+			errCode:  ERR_TX_CREATING,
+			expected: codes.FailedPrecondition,
+		},
+		{
+			// ERR_UTXO_FROZEN moved into the same family in this change. It is
+			// the one member that does not clear by itself, but it is still a
+			// verdict about the chain state rather than a fault in this node, and
+			// every code on publicCauseCodes needs a row here or WrapGRPCPublic
+			// returns its message inside a codes.Internal status.
+			name:     "maps ERR_UTXO_FROZEN to codes.FailedPrecondition",
+			errCode:  ERR_UTXO_FROZEN,
+			expected: codes.FailedPrecondition,
 		},
 		{
 			name:     "unmapped code BLOCK_NOT_FOUND defaults to codes.Internal",
 			errCode:  ERR_BLOCK_NOT_FOUND,
 			expected: codes.Internal,
+		},
+		{
+			name:     "maps ERR_TX_MISSING_PARENT to codes.FailedPrecondition",
+			errCode:  ERR_TX_MISSING_PARENT,
+			expected: codes.FailedPrecondition,
 		},
 		{
 			name:     "unmapped code STORAGE_ERROR defaults to codes.Internal",
@@ -1448,6 +1529,92 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 			require.Equal(t, tc.expected, actual)
 		})
 	}
+}
+
+// TestWrapGRPCTxVerdictStatus pins that the tx-verdict gRPC-code mapping reaches
+// the generic WrapGRPC wrapper — the path the single-tx ValidateTransaction RPC
+// uses — and not only WrapGRPCPublic. A verdict code wrapped by WrapGRPC must
+// carry the mapped status (client-error family) rather than the codes.Internal
+// default, so callers see the tx rejection as their fault, not a server fault.
+func TestWrapGRPCTxVerdictStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected codes.Code
+	}{
+		{
+			name:     "invalid-family verdict maps to InvalidArgument",
+			err:      New(ERR_TX_INVALID, "tx failed validation"),
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "conflict-family verdict maps to FailedPrecondition",
+			err:      New(ERR_TX_CONFLICTING, "tx conflicts with chain state"),
+			expected: codes.FailedPrecondition,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st, ok := status.FromError(WrapGRPC(tc.err))
+			require.True(t, ok)
+			require.Equal(t, tc.expected, st.Code())
+		})
+	}
+}
+
+// TestPublicCauseCodesHaveGRPCStatus is the guard that stops the next allowlist
+// addition repeating the ERR_TX_MISSING_PARENT slip. WrapGRPCPublic derives its
+// status from the public cause, so a code that is client-safe enough to surface
+// its message but has no row in ErrorCodeToGRPCCode ships that message inside a
+// codes.Internal status — the client is told the reason and simultaneously told
+// the node broke, and one that gates on st.Code() alone cannot classify it.
+func TestPublicCauseCodesHaveGRPCStatus(t *testing.T) {
+	for code := range publicCauseCodes {
+		require.NotEqual(t, codes.Internal, ErrorCodeToGRPCCode(code),
+			"%s is on publicCauseCodes but falls through to codes.Internal in ErrorCodeToGRPCCode; "+
+				"add a row for it, or drop it from the allowlist", code)
+	}
+}
+
+// TestWrapGRPCPublicMissingParent pins the gRPC half of the missing-parent
+// contract, the half TestPublicCauseAllowlist_MissingParent (in
+// services/propagation) does not reach: it covers UserMessage only.
+//
+// An out-of-order child is an ordering artifact — the same bytes are accepted
+// once the parent lands — so a caller must be able to retry it. That verdict has
+// to survive both halves of the wire: the status a client gating on st.Code()
+// reads, and the ERR code a client decoding the TError detail reconstructs.
+func TestWrapGRPCPublicMissingParent(t *testing.T) {
+	const (
+		childTxID  = "1111111111111111111111111111111111111111111111111111111111111111"
+		parentTxID = "2222222222222222222222222222222222222222222222222222222222222222"
+	)
+
+	// The chain propagation actually produces: the validator's missing-parent
+	// verdict, buried under two PROCESSING wrappers.
+	chain := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", childTxID,
+		NewProcessingError("[Validate][%s] error getting transaction input block heights", childTxID,
+			NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", childTxID, parentTxID)))
+
+	wrapped := WrapGRPCPublic(chain)
+
+	st, ok := status.FromError(wrapped)
+	require.True(t, ok)
+	require.Equal(t, codes.FailedPrecondition, st.Code(),
+		"a client gating on the transport status must not read an ordering artifact as a node fault")
+	require.Contains(t, st.Message(), parentTxID, "the missing parent must be named: %s", st.Message())
+
+	// And the detail must still reconstruct the application code, for clients
+	// that decode it rather than gating on the status.
+	reconstructed := UnwrapGRPC(wrapped)
+	require.NotNil(t, reconstructed)
+	require.Equal(t, ERR_TX_MISSING_PARENT, reconstructed.Code())
+	require.Contains(t, reconstructed.Message(), parentTxID)
+
+	// Nothing from outside the public cause may ride along.
+	require.NotContains(t, st.Message(), "failed to validate transaction")
+	require.NotContains(t, st.Message(), "input block heights")
 }
 
 // TestJoin tests the Join function to ensure it correctly combines multiple errors into a single error message.
@@ -2261,6 +2428,121 @@ func TestPublicError(t *testing.T) {
 	})
 }
 
+// lockTimeMsg mirrors the actionable non-final message produced by util/lock_time.go.
+const lockTimeMsg = "lock time (1783806110) as timestamp is not less than median block time (1783805456)"
+
+// TestDeepestPublicCause verifies the innermost allowlisted cause is selected and
+// that a non-allowlisted inner code yields no public cause.
+func TestDeepestPublicCause(t *testing.T) {
+	t.Run("innermost allowlisted cause wins", func(t *testing.T) {
+		lockErr := NewTxLockTimeError(lockTimeMsg)
+		nonFinalErr := NewUtxoNonFinalError("transaction is not final", lockErr)
+		procErr := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", "abc123", nonFinalErr)
+
+		cause := DeepestPublicCause(procErr)
+		require.NotNil(t, cause)
+		require.Equal(t, ERR_TX_LOCK_TIME, cause.Code())
+		require.Equal(t, lockTimeMsg, cause.Message())
+	})
+
+	t.Run("nil for non-allowlisted chain", func(t *testing.T) {
+		innerErr := New(ERR_STORAGE_ERROR, "db lookup failed")
+		procErr := NewProcessingError("failed to validate transaction", innerErr)
+
+		require.Nil(t, DeepestPublicCause(procErr))
+	})
+
+	t.Run("nil error returns nil", func(t *testing.T) {
+		require.Nil(t, DeepestPublicCause(nil))
+	})
+}
+
+// TestPublicCauseSurfacing proves the allowlisted verdict code+message survives every
+// public error boundary (UserMessage/PublicError/WrapGRPCPublic/WrapPublic) while a
+// non-allowlisted inner code still collapses to the outermost generic message, and no
+// file/line/data leaks.
+func TestPublicCauseSurfacing(t *testing.T) {
+	lockErr := NewTxLockTimeError(lockTimeMsg)
+	nonFinalErr := NewUtxoNonFinalError("transaction is not final", lockErr)
+	allowlistedChain := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", "abc123", nonFinalErr)
+
+	storageErr := New(ERR_STORAGE_ERROR, "internal db error at /var/db/internal.db")
+	collapsedChain := NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", "abc123", storageErr)
+
+	tests := []struct {
+		name        string
+		err         *Error
+		wantCode    ERR
+		wantMessage string
+	}{
+		{
+			name:        "allowlisted inner cause is surfaced",
+			err:         allowlistedChain,
+			wantCode:    ERR_TX_LOCK_TIME,
+			wantMessage: lockTimeMsg,
+		},
+		{
+			name:        "non-allowlisted inner code collapses to top-level",
+			err:         collapsedChain,
+			wantCode:    ERR_PROCESSING,
+			wantMessage: "[ProcessTransaction][abc123] failed to validate transaction",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// UserMessage renders the selected code+message.
+			require.Equal(t,
+				fmt.Sprintf(errCodeMsgFmt, tc.wantCode.String(), tc.wantCode, tc.wantMessage),
+				UserMessage(tc.err))
+
+			// PublicError carries the selected code+message and nothing else.
+			pub := PublicError(tc.err)
+			require.NotNil(t, pub)
+			require.Equal(t, tc.wantCode, pub.Code())
+			require.Equal(t, tc.wantMessage, pub.Message())
+			require.Empty(t, pub.file)
+			require.Zero(t, pub.line)
+			require.Empty(t, pub.function)
+			require.Nil(t, pub.WrappedErr())
+			require.Nil(t, pub.Data())
+		})
+	}
+
+	t.Run("WrapGRPCPublic surfaces the allowlisted cause without internal details", func(t *testing.T) {
+		result := WrapGRPCPublic(allowlistedChain)
+		require.NotNil(t, result)
+
+		st, ok := status.FromError(result)
+		require.True(t, ok)
+		// Status message carries the allowlisted cause, not the outer PROCESSING message.
+		require.Equal(t, lockTimeMsg, st.Message())
+
+		// The attached TError detail carries the same allowlisted cause and no internals.
+		unwrapped := UnwrapGRPC(result)
+		require.NotNil(t, unwrapped)
+		require.Equal(t, ERR_TX_LOCK_TIME, unwrapped.code)
+		require.Equal(t, lockTimeMsg, unwrapped.message)
+		require.Empty(t, unwrapped.file)
+		require.Zero(t, unwrapped.line)
+		require.Empty(t, unwrapped.function)
+		require.Nil(t, unwrapped.wrappedErr)
+		require.Nil(t, unwrapped.data)
+	})
+
+	t.Run("WrapPublic surfaces the allowlisted cause without internal details", func(t *testing.T) {
+		detail := WrapPublic(allowlistedChain)
+		require.NotNil(t, detail)
+		require.Equal(t, ERR_TX_LOCK_TIME, detail.Code)
+		require.Equal(t, lockTimeMsg, detail.Message)
+		require.Empty(t, detail.File)
+		require.Zero(t, detail.Line)
+		require.Empty(t, detail.Function)
+		require.Nil(t, detail.Data)
+		require.Nil(t, detail.WrappedError)
+	})
+}
+
 // TestWrapGRPCPublic tests the WrapGRPCPublic function for proper gRPC wrapping without internal details.
 func TestWrapGRPCPublic(t *testing.T) {
 	t.Run("nil error returns nil", func(t *testing.T) {
@@ -2573,4 +2855,117 @@ func TestSanitizationSecurityScenarios(t *testing.T) {
 		require.NotContains(t, userMsg, "/var/secrets/keyfile")
 		require.Contains(t, userMsg, "operation failed")
 	})
+}
+
+// TestNewStripsOrphanedWrapVerbs verifies that a %w verb left in an errors.New*
+// format string never renders as "%!w(MISSING)" nor survives literally, because
+// the trailing error argument is extracted as the wrapped error before formatting
+// (see issue #1332). The wrapped error is rendered via the " -> " chain instead.
+func TestNewStripsOrphanedWrapVerbs(t *testing.T) {
+	inner := New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase must start with the height")
+
+	tests := []struct {
+		name        string
+		build       func() *Error
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "verbs plus trailing %w (StoreBlock shape)",
+			build: func() *Error {
+				return New(ERR_STORAGE_ERROR, "failed to extract height for block %s (height %d): %w", "abc", 5, inner)
+			},
+			wantContain: []string{"failed to extract height for block abc (height 5)", " -> "},
+			wantAbsent:  []string{"%!w", "%w", "(height 5):"},
+		},
+		{
+			name:        "%w is the only verb",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "GetBlock: %w", inner) },
+			wantContain: []string{"GetBlock -> "},
+			wantAbsent:  []string{"%w", "GetBlock:"},
+		},
+		{
+			name:        "escaped %%w preserved",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "literal %%w here: %d", 1, inner) },
+			wantContain: []string{"literal %w here: 1"},
+			wantAbsent:  []string{"%!w"},
+		},
+		{
+			name:        "mid-string %w dropped",
+			build:       func() *Error { return New(ERR_SERVICE_ERROR, "[%s] server failed [%w]", "grpc", inner) },
+			wantContain: []string{"[grpc] server failed []"},
+			wantAbsent:  []string{"%!w", "[%w]"},
+		},
+		{
+			name:        "comma separator variant",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "load state, %w", inner) },
+			wantContain: []string{"load state -> "},
+			wantAbsent:  []string{"%w", "load state,"},
+		},
+		{
+			name:        "multiple %w dropped",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "x %w y %w", inner) },
+			wantContain: []string{"x y"},
+			wantAbsent:  []string{"%w", "%!w"},
+		},
+		{
+			name:        "no %w with wrapped err is byte-identical (hot path)",
+			build:       func() *Error { return New(ERR_STORAGE_ERROR, "plain %s", "value", inner) },
+			wantContain: []string{"plain value", " -> "},
+			wantAbsent:  []string{"%!", "%w"},
+		},
+		{
+			name:        "typed wrapper drops trailing %w",
+			build:       func() *Error { return NewStorageError("GetBlock %s: %w", "hash", inner) },
+			wantContain: []string{"GetBlock hash -> "},
+			wantAbsent:  []string{"%w", "GetBlock hash:"},
+		},
+		{
+			// The ')' inside the format string must not truncate stripping (#1335, ChiR1).
+			name:        "closing paren before trailing %w",
+			build:       func() *Error { return NewStorageError(`read state (pass --flag to override): %w`, inner) },
+			wantContain: []string{"read state (pass --flag to override) -> "},
+			wantAbsent:  []string{"%w", "%!w", "override):"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.build().Error()
+			for _, want := range tc.wantContain {
+				require.Contains(t, got, want, "rendered: %q", got)
+			}
+			for _, absent := range tc.wantAbsent {
+				require.NotContains(t, got, absent, "rendered: %q", got)
+			}
+		})
+	}
+
+	// A message with no wrapped error is left untouched: an unpaired %w with no
+	// error argument still renders per fmt (we do not strip when wErr == nil).
+	noWrap := New(ERR_STORAGE_ERROR, "plain %s", "value")
+	require.Contains(t, noWrap.Error(), "plain value")
+}
+
+// TestStripOrphanedWrapVerbs unit-tests the helper directly for separator edge cases.
+func TestStripOrphanedWrapVerbs(t *testing.T) {
+	cases := map[string]string{
+		"GetBlock: %w":         "GetBlock",
+		"failed %s: %w":        "failed %s",
+		" - %w":                "",
+		", %w":                 "",
+		":%w":                  "",
+		" %w":                  "",
+		"no verb here":         "no verb here",
+		"literal %%w stays":    "literal %%w stays", // escaped %%w is not a verb
+		"a [%w] b":             "a [] b",            // mid-string verb dropped, brackets remain
+		"x %w y %w":            "x y",               // both verbs dropped
+		"trailing text %w end": "trailing text end", // verb dropped, surrounding text kept
+		// a ')' inside the format before %w must not confuse stripping (#1335, ChiR1).
+		"read state (pass --flag to override): %w": "read state (pass --flag to override)",
+	}
+
+	for in, want := range cases {
+		require.Equal(t, want, stripOrphanedWrapVerbs(in), "input %q", in)
+	}
 }

@@ -497,7 +497,6 @@ func TestIsInfrastructureFailure(t *testing.T) {
 			types.PARTITION_UNAVAILABLE,
 			types.SERVER_MEM_ERROR,
 			types.SERVER_ERROR,
-			types.DEVICE_OVERLOAD,
 			types.BATCH_FAILED,
 			types.GRPC_ERROR,
 		}
@@ -505,6 +504,16 @@ func TestIsInfrastructureFailure(t *testing.T) {
 			require.True(t, isInfrastructureFailure(aErrWithCode(code)),
 				"ResultCode %d (%s) must count as infrastructure failure", code, types.ResultCodeToString(code))
 		}
+	})
+
+	t.Run("DeviceOverloadNotInfra", func(t *testing.T) {
+		// DEVICE_OVERLOAD is owned by the uaerospike overload-retry layer, which
+		// re-issues it under a bounded budget. If it reaches the breaker the
+		// retry has already given up; tripping into reject mode then makes
+		// recovery worse, not better, so it must not count as infrastructure
+		// failure.
+		require.False(t, isInfrastructureFailure(aErrWithCode(types.DEVICE_OVERLOAD)),
+			"DEVICE_OVERLOAD is handled by the overload-retry layer and must not trip the breaker")
 	})
 
 	t.Run("ConstSentinelErrorsAreClassified", func(t *testing.T) {

@@ -19,23 +19,21 @@
 //
 //	store := // initialize your UTXO store implementation
 //
-//	// Create UTXOs from a transaction
-//	metadata, err := store.Create(ctx, transaction, blockHeight)
+//	// Spend the transaction's inputs and create its outputs in one operation
+//	metadata, spends, err := store.SpendAndCreate(ctx, transaction, blockHeight)
 //
-//	// Spend UTXOs
-//	spends := []*Spend{
-//	    {
-//	        TxID: txID,
-//	        Vout: 0,
-//	        UTXOHash: utxoHash,
-//	        SpendingTxID: spendingTxID,
-//	    },
-//	}
-//	err = store.Spend(ctx, spends, blockHeight)
+//	// Only create the transaction's outputs (e.g. coinbase, no inputs to spend)
+//	metadata, _, err = store.SpendAndCreate(ctx, coinbaseTx, blockHeight, WithCreateOnly())
+//
+//	// Only spend the transaction's inputs
+//	_, spends, err = store.SpendAndCreate(ctx, transaction, blockHeight, WithSpendOnly())
 package utxo
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"sort"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -49,13 +47,83 @@ import (
 // before a reassigned UTXO becomes spendable.
 const ReAssignedUtxoSpendableAfterBlocks = 1_000
 
-// BlockState represents an atomic snapshot of blockchain state containing
-// both block height and median block time. This ensures consistency between
-// these values during validation, preventing race conditions that could occur
-// when reading them separately.
+// BlockState is the pair of chain-tip values validation reads together: the
+// block height and the median block time. GetBlockState returns it in a single
+// atomic load, so the two fields can never be torn mid-read the way separate
+// reads of two atomics could be; how consistent the pair is with one chain tip
+// is down to the writer (see SetBlockState).
 type BlockState struct {
 	Height     uint32 // Current block height
 	MedianTime uint32 // Median time of recent blocks
+}
+
+// ConflictIntentKind identifies the direction of a conflict-resolution
+// operation recorded in the write-ahead log.
+type ConflictIntentKind string
+
+const (
+	// ConflictIntentForward records a ProcessConflicting invocation.
+	ConflictIntentForward ConflictIntentKind = "forward"
+
+	// ConflictIntentReverse records a ReverseProcessConflicting invocation.
+	ConflictIntentReverse ConflictIntentKind = "reverse"
+)
+
+// ConflictIntent is a write-ahead-log record describing one in-flight
+// conflict-resolution operation (ProcessConflicting or
+// ReverseProcessConflicting). It is persisted durably BEFORE the operation's
+// first state mutation and removed once the operation's terminal step
+// completes, so a process kill between any two steps can be detected and the
+// operation replayed on restart. See ProcessConflicting / ReverseProcessConflicting.
+type ConflictIntent struct {
+	// Kind is the operation direction: forward = ProcessConflicting,
+	// reverse = ReverseProcessConflicting.
+	Kind ConflictIntentKind
+
+	// BlockHeight is the block height the operation was invoked with.
+	BlockHeight uint32
+
+	// BlockHash is the hash of the block whose movement triggered the operation
+	// — the moved-forward block for a forward intent, the moved-back block for a
+	// reverse intent. Startup replay gates on this block's chain membership so a
+	// stale intent (whose block was reorged out from under it) is discarded rather
+	// than blindly re-applied, which would undo a later, valid reorg.
+	BlockHash chainhash.Hash
+
+	// TxHashes is the operation's input hash slice — conflictingTxHashes for
+	// forward, demotedTxHashes for reverse.
+	TxHashes []chainhash.Hash
+
+	// StartedAt is the unix-nanosecond timestamp the intent was recorded.
+	StartedAt int64
+}
+
+// IntentID derives a deterministic identifier for the intent from its kind,
+// block hash, block height and the (sorted) set of tx hashes. Two invocations
+// with the same (kind, block, height, hashes) yield the same id, which makes
+// BeginConflictIntent idempotent across a crash-retry of the same operation
+// and lets startup replay deduplicate naturally. The hash ordering is
+// normalised so callers need not pre-sort.
+func (ci ConflictIntent) IntentID() chainhash.Hash {
+	sorted := make([]chainhash.Hash, len(ci.TxHashes))
+	copy(sorted, ci.TxHashes)
+	sort.Slice(sorted, func(i, j int) bool {
+		return bytes.Compare(sorted[i][:], sorted[j][:]) < 0
+	})
+
+	buf := make([]byte, 0, len(ci.Kind)+chainhash.HashSize+4+len(sorted)*chainhash.HashSize)
+	buf = append(buf, []byte(ci.Kind)...)
+	buf = append(buf, ci.BlockHash[:]...)
+
+	var heightBytes [4]byte
+	binary.BigEndian.PutUint32(heightBytes[:], ci.BlockHeight)
+	buf = append(buf, heightBytes[:]...)
+
+	for i := range sorted {
+		buf = append(buf, sorted[i][:]...)
+	}
+
+	return chainhash.HashH(buf)
 }
 
 // Spend represents a UTXO spending operation, containing both the UTXO being spent
@@ -76,9 +144,6 @@ type Spend struct {
 
 	// ConflictingTxID is the transaction ID that conflicts with this UTXO
 	ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
-
-	// BlockIDs is the list of blocks the transaction has been mined into
-	BlockIDs []uint32 `json:"blockIDs,omitempty"`
 
 	// error is the error that occurred during the spend operation
 	Err error `json:"err,omitempty"`
@@ -115,11 +180,6 @@ func (s *Spend) Clone() *Spend {
 		*clone.ConflictingTxID = *s.ConflictingTxID
 	}
 
-	if s.BlockIDs != nil {
-		clone.BlockIDs = make([]uint32, len(s.BlockIDs))
-		copy(clone.BlockIDs, s.BlockIDs)
-	}
-
 	return clone
 }
 
@@ -127,6 +187,10 @@ func (s *Spend) Clone() *Spend {
 type IgnoreFlags struct {
 	IgnoreConflicting bool
 	IgnoreLocked      bool
+	// SkipUTXOHashCheck disables the per-input utxo-hash integrity comparison during Spend.
+	// Set ONLY on the gated below-checkpoint outpoint-only path (spec §3.2 Seam 1). Default
+	// false — above-checkpoint and steady-state spends always enforce the hash.
+	SkipUTXOHashCheck bool
 }
 
 // ConflictingChildRemoval identifies one (parent, child) pair that should be
@@ -176,12 +240,18 @@ type CreateOption func(*CreateOptions)
 
 // CreateOptions holds optional parameters for UTXO creation.
 type CreateOptions struct {
-	MinedBlockInfos []MinedBlockInfo
-	TxID            *chainhash.Hash
-	IsCoinbase      *bool
-	Frozen          bool
-	Conflicting     bool
-	Locked          bool
+	MinedBlockInfos    []MinedBlockInfo
+	TxID               *chainhash.Hash
+	IsCoinbase         *bool
+	Frozen             bool
+	Conflicting        bool
+	Locked             bool
+	SkipExtendedInputs bool
+
+	// SpendAndCreate-specific options.
+	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
+	CreateOnly  bool        // skip the spend phase
+	SpendOnly   bool        // skip the create phase
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -231,6 +301,60 @@ func WithLocked(b bool) CreateOption {
 	}
 }
 
+// WithSkipExtendedInputs marks a create as minimal: compute meta with fee=0 (no GetFees) and
+// persist per-input parent script/satoshis as empty/zero, while ALWAYS retaining the per-input
+// outpoint and every output. Set ONLY on the gated below-checkpoint path (spec §3.2 Seam 3, §3.3).
+func WithSkipExtendedInputs(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.SkipExtendedInputs = b
+	}
+}
+
+// WithIgnoreConflicting makes the spend phase of SpendAndCreate ignore the
+// conflicting flag on the UTXOs being spent.
+func WithIgnoreConflicting(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.IgnoreConflicting = b
+	}
+}
+
+// WithIgnoreLocked makes the spend phase of SpendAndCreate ignore the locked
+// flag on the UTXOs being spent.
+func WithIgnoreLocked(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.IgnoreLocked = b
+	}
+}
+
+// WithSkipUTXOHashCheck disables the per-input utxo-hash integrity comparison in
+// the spend phase of SpendAndCreate. Set ONLY on the gated below-checkpoint
+// outpoint-only path (see IgnoreFlags.SkipUTXOHashCheck). The Aerospike store
+// does not implement the outpoint-only fast path and treats this flag as a
+// no-op (see SupportsOutpointOnlySpend).
+func WithSkipUTXOHashCheck(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.SkipUTXOHashCheck = b
+	}
+}
+
+// WithCreateOnly makes SpendAndCreate skip the spend phase: only the
+// transaction's outputs and metadata are stored (coinbase, seeding, and batch
+// flows whose inputs are spent elsewhere).
+func WithCreateOnly() CreateOption {
+	return func(o *CreateOptions) {
+		o.CreateOnly = true
+	}
+}
+
+// WithSpendOnly makes SpendAndCreate skip the create phase: only the
+// transaction's inputs are spent (reorg/conflict helpers and batch flows whose
+// outputs are created elsewhere).
+func WithSpendOnly() CreateOption {
+	return func(o *CreateOptions) {
+		o.SpendOnly = true
+	}
+}
+
 type MinedBlockInfo struct {
 	BlockID        uint32
 	BlockHeight    uint32
@@ -246,6 +370,17 @@ type Store interface {
 	// If checkLiveness is true, it performs additional liveness checks.
 	// Returns status code, status message and any error encountered.
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
+
+	// SupportsOutpointOnlySpend reports whether this store correctly honours the
+	// below-checkpoint outpoint-only fast path — i.e. whether it acts on the
+	// CreateOptions.SkipExtendedInputs and IgnoreFlags.SkipUTXOHashCheck flags rather
+	// than silently ignoring them. Callers that intend to skip decorate (and hence
+	// hand un-decorated inputs to Create/Spend) MUST consult this first: a store that
+	// returns false would still try to derive the UTXO hash from absent parent data
+	// and hard-error on every transaction. SQL stores return true; stores without
+	// fast-path support (e.g. Aerospike, pending Stage B) return false. Decorators
+	// delegate to the wrapped store.
+	SupportsOutpointOnlySpend() bool
 
 	// Close drains any in-flight batched writes (Create, Spend, Get, Unlock,
 	// or any other batched operations the implementation owns) and releases
@@ -267,11 +402,6 @@ type Store interface {
 	// caller must treat a context error as "drain not confirmed complete".
 	Close(ctx context.Context) error
 
-	// Create stores a new transaction's outputs as UTXOs and returns associated metadata.
-	// The blockHeight parameter is used to determine coinbase maturity.
-	// Additional options can be specified using CreateOption functions.
-	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error)
-
 	// Get retrieves UTXO metadata for a given transaction hash.
 	// The fields parameter can be used to specify which metadata fields to retrieve.
 	// If fields is empty, all fields will be retrieved.
@@ -285,8 +415,29 @@ type Store interface {
 
 	// Blockchain specific functions
 
-	// Spend marks all the UTXOs of the transaction as spent.
-	Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
+	// SpendAndCreate spends tx's inputs and creates its outputs + metadata as one
+	// logical operation. Implementations SHOULD make this atomic (followup work);
+	// the current shared sequential implementation spends, then creates, and
+	// unspends on create failure (except ErrTxExists — see below).
+	//
+	// Semantics (contract for all implementations):
+	//   - Default: spend inputs, then create outputs. On create failure other than
+	//     ErrTxExists, successful spends are rolled back before returning.
+	//   - ErrTxExists from the create phase is returned to the caller WITH the
+	//     spends left in place; the caller decides what to do with the existing tx.
+	//   - WithCreateOnly(): skip the spend phase (coinbase, seeding, batch flows
+	//     whose inputs are spent elsewhere). Returned []*Spend is nil.
+	//   - WithSpendOnly(): skip the create phase (reorg/conflict helpers, batch
+	//     flows whose outputs are created elsewhere). Returned *meta.Data is nil.
+	//   - On spend failure the returned []*Spend carries per-input Err values for
+	//     caller inspection (conflict detection).
+	//   - When the create phase fails and the spends were rolled back, the
+	//     returned []*Spend is nil; a non-nil slice alongside a non-nil error
+	//     means the spends are still in effect (ErrTxExists, or rollback failure).
+	//   - Transactions with no inputs to spend (synthesized seed txs) must pass
+	//     WithCreateOnly(); backend behaviour for a default-mode spend of a
+	//     zero-input tx is undefined.
+	SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error)
 
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
@@ -398,6 +549,27 @@ type Store interface {
 	// SetLocked marks transactions as locked for spending.
 	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
+	// conflict-resolution write-ahead log (crash safety for ProcessConflicting /
+	// ReverseProcessConflicting — see #861)
+
+	// BeginConflictIntent durably records a conflict-resolution intent BEFORE the
+	// operation's first state mutation. It MUST be committed durably before
+	// returning. Recording the same intent id more than once is idempotent (the
+	// id is deterministic over kind+height+hashes), so a crash-retry of the same
+	// operation does not create a duplicate. A non-nil error MUST abort the
+	// caller — the operation must not proceed without a durable intent record.
+	BeginConflictIntent(ctx context.Context, intent ConflictIntent) error
+
+	// CompleteConflictIntent deletes the intent record identified by intentID
+	// after the operation's terminal step has committed. Removing an
+	// already-absent intent is idempotent (no error).
+	CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error
+
+	// PendingConflictIntents returns every intent that was begun but not yet
+	// completed — i.e. operations that may have been interrupted by a crash.
+	// Called once at BlockAssembler startup to drive replay.
+	PendingConflictIntents(ctx context.Context) ([]ConflictIntent, error)
+
 	// MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.
 	// When onLongestChain is true, the unminedSince field is unset (transaction is mined).
 	// When onLongestChain is false, the unminedSince field is set to the current block height.
@@ -406,6 +578,11 @@ type Store interface {
 	// internal state functions
 
 	// SetBlockHeight updates the current block height in the store.
+	//
+	// height must be non-zero: implementations return an ErrInvalidArgument
+	// error for zero rather than publishing a height that cannot be told
+	// apart from a store that was never written. SetBlockState states the
+	// same precondition and the shared suite pins it for every store.
 	SetBlockHeight(height uint32) error
 
 	// GetBlockHeight returns the current block height from the store.
@@ -417,8 +594,25 @@ type Store interface {
 	// GetMedianBlockTime returns the current median block time from the store.
 	GetMedianBlockTime() uint32
 
-	// GetBlockState returns an atomic snapshot of both block height and median block time.
-	// This prevents race conditions that could occur when reading these values separately,
-	// ensuring consistency during validation operations.
+	// SetBlockState publishes the block height and median block time of one
+	// chain tip as a single atomic snapshot. This is the write side of
+	// GetBlockState's consistency guarantee: callers that have both values
+	// for the same tip (the blockchain notification listener) must use this
+	// rather than the two individual setters, whose back-to-back calls leave
+	// a window where a reader pairs a new height with a stale median time
+	// (issue 1443).
+	//
+	// height must be non-zero, matching SetBlockHeight: implementations
+	// return an ErrInvalidArgument error for zero rather than publishing a
+	// snapshot that cannot be distinguished from a store that was never
+	// written. medianTime has no such restriction — zero is the legitimate
+	// "not yet known" value.
+	SetBlockState(height, medianTime uint32) error
+
+	// GetBlockState returns the block height and median block time as one
+	// snapshot: both fields come from a single atomic load, so a reader can
+	// never observe a pair torn mid-read. The pair is only as consistent as
+	// its writer — SetBlockState publishes both fields from one tip
+	// atomically, while the individual setters update one field at a time.
 	GetBlockState() BlockState
 }

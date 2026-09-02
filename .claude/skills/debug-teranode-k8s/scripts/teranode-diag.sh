@@ -61,7 +61,7 @@ while [[ $# -gt 0 ]]; do
         --help|-h) print_help; exit 0 ;;
         --sample-pct)
             SAMPLE_PCT="$2"
-            if ! [[ "$SAMPLE_PCT" =~ ^[0-9]+$ ]] || [ "$SAMPLE_PCT" -lt 1 ] || [ "$SAMPLE_PCT" -gt 100 ]; then
+            if ! [[ "$SAMPLE_PCT" =~ ^[0-9]+$ ]] || [[ "$SAMPLE_PCT" -lt 1 ]] || [[ "$SAMPLE_PCT" -gt 100 ]]; then
                 echo "Error: --sample-pct must be 1-100" >&2; exit 1
             fi
             shift 2 ;;
@@ -88,32 +88,32 @@ ns_by_image() { kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.nam
 PART_OF_LABEL="${TERANODE_PART_OF_LABEL:-teranode.bsvblockchain.org/part-of=true}"
 
 # Teranode workload namespaces: by the operator "part-of" label, then the cluster CR, then app=blockchain.
-if [ -n "${TERANODE_NAMESPACES:-}" ]; then
+if [[ -n "${TERANODE_NAMESPACES:-}" ]]; then
     WORKLOAD_NAMESPACES=$(norm_list "$TERANODE_NAMESPACES")
 else
     WORKLOAD_NAMESPACES=$(kubectl get pods -A -l "$PART_OF_LABEL" --no-headers -o custom-columns=':metadata.namespace' 2>/dev/null | sort -u | xargs)
-    [ -z "$WORKLOAD_NAMESPACES" ] && WORKLOAD_NAMESPACES=$(ns_of_crd clusters.teranode.bsvblockchain.org)
-    [ -z "$WORKLOAD_NAMESPACES" ] && WORKLOAD_NAMESPACES=$(kubectl get pods -A -l app=blockchain --no-headers -o custom-columns=':metadata.namespace' 2>/dev/null | sort -u | xargs)
+    [[ -z "$WORKLOAD_NAMESPACES" ]] && WORKLOAD_NAMESPACES=$(ns_of_crd clusters.teranode.bsvblockchain.org)
+    [[ -z "$WORKLOAD_NAMESPACES" ]] && WORKLOAD_NAMESPACES=$(kubectl get pods -A -l app=blockchain --no-headers -o custom-columns=':metadata.namespace' 2>/dev/null | sort -u | xargs)
 fi
 
 # Aerospike namespaces: by the Aerospike operator CR, then by image.
-if [ -n "${AEROSPIKE_NAMESPACES:-}" ]; then
+if [[ -n "${AEROSPIKE_NAMESPACES:-}" ]]; then
     AERO_NAMESPACES=$(norm_list "$AEROSPIKE_NAMESPACES")
 else
     AERO_NAMESPACES=$(ns_of_crd aerospikeclusters.asdb.aerospike.com)
-    [ -z "$AERO_NAMESPACES" ] && AERO_NAMESPACES=$(ns_by_image 'aerospike')
+    [[ -z "$AERO_NAMESPACES" ]] && AERO_NAMESPACES=$(ns_by_image 'aerospike')
 fi
 
 # PostgreSQL namespaces: by CloudNativePG cluster CR, then by image.
-if [ -n "${POSTGRES_NAMESPACES:-}" ]; then
+if [[ -n "${POSTGRES_NAMESPACES:-}" ]]; then
     PG_NAMESPACES=$(norm_list "$POSTGRES_NAMESPACES")
 else
     PG_NAMESPACES=$(ns_of_crd clusters.postgresql.cnpg.io)
-    [ -z "$PG_NAMESPACES" ] && PG_NAMESPACES=$(ns_by_image 'postgres|cnpg')
+    [[ -z "$PG_NAMESPACES" ]] && PG_NAMESPACES=$(ns_by_image 'postgres|cnpg')
 fi
 
 # Kafka/Redpanda namespaces: by image (operator CRDs vary by distro).
-if [ -n "${KAFKA_NAMESPACES:-}" ]; then
+if [[ -n "${KAFKA_NAMESPACES:-}" ]]; then
     KAFKA_NAMESPACES=$(norm_list "$KAFKA_NAMESPACES")
 else
     KAFKA_NAMESPACES=$(ns_by_image 'redpanda|kafka|strimzi')
@@ -123,40 +123,40 @@ fi
 AERO_CONTAINER="${AEROSPIKE_CONTAINER:-}"
 AERO_DB_NS="${AEROSPIKE_DB_NS:-}"
 _first_aero_ns=$(echo "$AERO_NAMESPACES" | awk '{print $1}')
-if [ -n "$_first_aero_ns" ]; then
+if [[ -n "$_first_aero_ns" ]]; then
     _first_aero_pod=$(kubectl get pods -n "$_first_aero_ns" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v operator | grep -v '^$' | head -1)
-    if [ -z "$AERO_CONTAINER" ] && [ -n "$_first_aero_pod" ]; then
+    if [[ -z "$AERO_CONTAINER" ]] && [[ -n "$_first_aero_pod" ]]; then
         AERO_CONTAINER=$(kubectl get pod -n "$_first_aero_ns" "$_first_aero_pod" -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null | grep -i aerospike | grep -vi export | head -1)
     fi
-    [ -z "$AERO_CONTAINER" ] && AERO_CONTAINER="aerospike-server"
-    if [ -z "$AERO_DB_NS" ] && [ -n "$_first_aero_pod" ]; then
+    [[ -z "$AERO_CONTAINER" ]] && AERO_CONTAINER="aerospike-server"
+    if [[ -z "$AERO_DB_NS" ]] && [[ -n "$_first_aero_pod" ]]; then
         AERO_DB_NS=$(kubectl exec -n "$_first_aero_ns" "$_first_aero_pod" -c "$AERO_CONTAINER" -- asinfo -v 'namespaces' 2>/dev/null | tr ';' '\n' | grep -v '^$' | head -1 | tr -d '\r')
     fi
 fi
-[ -z "$AERO_CONTAINER" ] && AERO_CONTAINER="aerospike-server"
-[ -z "$AERO_DB_NS" ] && AERO_DB_NS="utxo-store"
+[[ -z "$AERO_CONTAINER" ]] && AERO_CONTAINER="aerospike-server"
+[[ -z "$AERO_DB_NS" ]] && AERO_DB_NS="utxo-store"
 
 # pprof ports. Teranode services default to 9091. The tx-blaster's pprof port varies
 # by deployment, so discover it from the pod's named 'profiler' port (fallback 9092).
 PPROF_PORT="${PPROF_PORT:-9091}"
-if [ -z "${BLASTER_PPROF_PORT:-}" ]; then
+if [[ -z "${BLASTER_PPROF_PORT:-}" ]]; then
     for _ns in $WORKLOAD_NAMESPACES; do
         _bp=$(kubectl get pods -n "$_ns" -l app=tx-blaster --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
-        if [ -n "$_bp" ]; then
+        if [[ -n "$_bp" ]]; then
             BLASTER_PPROF_PORT=$(kubectl get pod -n "$_ns" "$_bp" -o jsonpath='{range .spec.containers[*].ports[?(@.name=="profiler")]}{.containerPort}{end}' 2>/dev/null)
-            [ -n "$BLASTER_PPROF_PORT" ] && break
+            [[ -n "$BLASTER_PPROF_PORT" ]] && break
         fi
     done
 fi
-[ -z "${BLASTER_PPROF_PORT:-}" ] && BLASTER_PPROF_PORT=9092
+[[ -z "${BLASTER_PPROF_PORT:-}" ]] && BLASTER_PPROF_PORT=9092
 
 # UTXO store backend (informational): read the utxostore setting from a teranode pod.
 UTXO_BACKEND="unknown"
 _first_tn_ns=$(echo "$WORKLOAD_NAMESPACES" | awk '{print $1}')
-if [ -n "$_first_tn_ns" ]; then
+if [[ -n "$_first_tn_ns" ]]; then
     _tn_pod=$(kubectl get pods -n "$_first_tn_ns" -l app=propagation --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
-    [ -z "$_tn_pod" ] && _tn_pod=$(kubectl get pods -n "$_first_tn_ns" -l app=blockchain --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
-    if [ -n "$_tn_pod" ]; then
+    [[ -z "$_tn_pod" ]] && _tn_pod=$(kubectl get pods -n "$_first_tn_ns" -l app=blockchain --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
+    if [[ -n "$_tn_pod" ]]; then
         _scheme=$(kubectl exec -n "$_first_tn_ns" "$_tn_pod" -- sh -c 'printf "%s\n" "$utxostore"; grep -ihoE "utxostore[^=]*=[a-z]+://" /app/settings*.conf 2>/dev/null' 2>/dev/null | grep -oE '[a-z]+://' | head -1)
         case "$_scheme" in
             aerospike://) UTXO_BACKEND="aerospike" ;;
@@ -166,7 +166,7 @@ if [ -n "$_first_tn_ns" ]; then
         esac
     fi
 fi
-[ "$UTXO_BACKEND" = "unknown" ] && [ -n "$AERO_NAMESPACES" ] && UTXO_BACKEND="aerospike (assumed from namespaces)"
+[[ "$UTXO_BACKEND" = "unknown" ]] && [[ -n "$AERO_NAMESPACES" ]] && UTXO_BACKEND="aerospike (assumed from namespaces)"
 
 # ── Build node lookup table: hostname → IP role ─────────────────────────────
 # 'role' is an optional label; absent on many clusters (shows <none>) — harmless.
@@ -194,8 +194,8 @@ sample_pods() {
     local total
     total=$(echo "$pods" | wc -l | tr -d ' ')
     local count=$(( (total * SAMPLE_PCT + 99) / 100 ))
-    [ "$count" -lt 1 ] && count=1
-    [ "$count" -gt "$total" ] && count=$total
+    [[ "$count" -lt 1 ]] && count=1
+    [[ "$count" -gt "$total" ]] && count=$total
     if command -v gshuf &>/dev/null; then
         echo "$pods" | gshuf -n "$count" | sort
     elif command -v shuf &>/dev/null; then
@@ -210,7 +210,7 @@ node_info() {
     local node="$1"
     local info
     info=$(grep "^${node} " "$TMPDIR/node_lookup.txt" 2>/dev/null | head -1)
-    if [ -n "$info" ]; then
+    if [[ -n "$info" ]]; then
         echo "$info" | awk '{printf "%-14s %-12s", $2, $3}'
     else
         printf "%-14s %-12s" "?" "?"
@@ -451,7 +451,7 @@ fetch_node_net_stats() {
     for _i in $(seq 1 10); do
         local phase
         phase=$(kubectl get pod "$probe_name" -o jsonpath='{.status.phase}' 2>/dev/null)
-        [ "$phase" = "Running" ] && break
+        [[ "$phase" = "Running" ]] && break
         sleep 1
     done
 
@@ -479,7 +479,7 @@ create_probe_pod() {
     for _i in $(seq 1 15); do
         local phase
         phase=$(kubectl get pod "$name" -o jsonpath='{.status.phase}' 2>/dev/null)
-        [ "$phase" = "Running" ] && return 0
+        [[ "$phase" = "Running" ]] && return 0
         sleep 1
     done
     return 1
@@ -499,7 +499,7 @@ collect_aero_deep() {
         ASD_PID=$(nsenter -t 1 -m -u -i -n -p pgrep -x asd 2>/dev/null | head -1)
 
         echo "===PERF_STAT==="
-        if [ -n "$ASD_PID" ]; then
+        if [[ -n "$ASD_PID" ]]; then
             nsenter -t 1 -m -u -i -n -p perf stat -p $ASD_PID -e cycles,instructions,cache-misses,cache-references,context-switches,cpu-migrations,L1-dcache-load-misses --timeout 2000 2>&1
         else
             echo "(asd not found)"
@@ -543,7 +543,7 @@ collect_aero_deep() {
 
         echo "===ETHTOOL==="
         BOND_SLAVES=$(cat /proc/net/bonding/bond1 2>/dev/null | grep "Slave Interface" | head -1 | awk "{print \$NF}")
-        if [ -n "$BOND_SLAVES" ]; then
+        if [[ -n "$BOND_SLAVES" ]]; then
             echo "slave=$BOND_SLAVES"
             ethtool -S $BOND_SLAVES 2>/dev/null | grep -E "rx_dropped|tx_dropped|rx_errors|tx_errors|rx_pause|tx_pause|rx_out_of_buffer|rx_discards"
             echo "---ring---"
@@ -554,7 +554,7 @@ collect_aero_deep() {
 
         echo "===NVME_SMART==="
         for dev in /dev/nvme0 /dev/nvme1 /dev/nvme2 /dev/nvme3 /dev/nvme6 /dev/nvme7; do
-            if [ -e "$dev" ]; then
+            if [[ -e "$dev" ]]; then
                 name=$(basename $dev)
                 temp=$(nvme smart-log $dev 2>/dev/null | grep "^temperature" | awk "{print \$3}")
                 spare=$(nvme smart-log $dev 2>/dev/null | grep "available_spare[^_]" | awk "{print \$NF}")
@@ -733,7 +733,7 @@ header "SECTION 1: CLUSTER OVERVIEW"
 
 echo "  Timestamp: $TIMESTAMP"
 echo "  Sample percentage: ${SAMPLE_PCT}%"
-echo "  Host probes: $([ "$HOST_PROBES" -eq 1 ] && echo enabled || echo 'disabled (--host-probes to enable)')"
+echo "  Host probes: $([[ "$HOST_PROBES" -eq 1 ]] && echo enabled || echo 'disabled (--host-probes to enable)')"
 echo ""
 echo "  Discovered:"
 echo "    Teranode namespaces:  ${WORKLOAD_NAMESPACES:-(none)}"
@@ -741,18 +741,18 @@ echo "    Aerospike namespaces: ${AERO_NAMESPACES:-(none)}"
 echo "    Postgres namespaces:  ${PG_NAMESPACES:-(none)}"
 echo "    Kafka/Redpanda ns:    ${KAFKA_NAMESPACES:-(none)}"
 echo "    UTXO store backend:   ${UTXO_BACKEND}"
-[ -n "$AERO_NAMESPACES" ] && echo "    Aerospike: container=$AERO_CONTAINER  db-namespace=$AERO_DB_NS"
+[[ -n "$AERO_NAMESPACES" ]] && echo "    Aerospike: container=$AERO_CONTAINER  db-namespace=$AERO_DB_NS"
 echo "    pprof port=$PPROF_PORT  blaster pprof port=$BLASTER_PPROF_PORT"
 echo ""
 
 # FSM state is the highest-signal check for a node that seems inert (IDLE = does nothing;
 # CATCHINGBLOCKS = syncing, no mining). Served by the Asset server; best-effort probe.
-if [ -n "$WORKLOAD_NAMESPACES" ]; then
+if [[ -n "$WORKLOAD_NAMESPACES" ]]; then
     echo "  FSM state (per teranode namespace):"
     for NS in $WORKLOAD_NAMESPACES; do
         ASSET_POD=$(kubectl get pods -n "$NS" -l app=asset --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
         STATE=""
-        if [ -n "$ASSET_POD" ]; then
+        if [[ -n "$ASSET_POD" ]]; then
             STATE=$(kubectl exec -n "$NS" "$ASSET_POD" -- sh -c 'wget -qO- http://localhost:8090/api/v1/fsm/state 2>/dev/null || curl -s http://localhost:8090/api/v1/fsm/state 2>/dev/null' 2>/dev/null \
                 | grep -oE 'IDLE|RUNNING|CATCHINGBLOCKS|LEGACYSYNCING' | head -1)
         fi
@@ -793,7 +793,7 @@ for NS in $AERO_NAMESPACES; do
     subheader "Cluster: $NS"
 
     AERO_PODS=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v operator | grep -v '^$' | sort)
-    if [ -z "$AERO_PODS" ]; then
+    if [[ -z "$AERO_PODS" ]]; then
         echo "  (no pods found)"
         continue
     fi
@@ -835,7 +835,7 @@ for NS in $AERO_NAMESPACES; do
     done
 
     # Ticker delta from first sampled pod
-    if [ "$QUICK" -eq 0 ]; then
+    if [[ "$QUICK" -eq 0 ]]; then
         FIRST_POD=$(echo "$SAMPLED_AERO" | head -1)
         echo ""
         echo "  Throughput (ticker delta from $FIRST_POD):"
@@ -905,7 +905,7 @@ done
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 2B: POSTGRESQL HEALTH"
 
-if [ -z "$PG_NAMESPACES" ]; then
+if [[ -z "$PG_NAMESPACES" ]]; then
     echo "  (no PostgreSQL namespaces discovered — skipping. Set POSTGRES_NAMESPACES to override.)"
 else
     for NS in $PG_NAMESPACES; do
@@ -919,11 +919,11 @@ else
 
         # Find a primary pod (cnpg labels it), else any postgres pod
         PGPOD=$(kubectl get pods -n "$NS" -l cnpg.io/instanceRole=primary --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
-        [ -z "$PGPOD" ] && PGPOD=$(kubectl get pods -n "$NS" -l role=primary --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
-        [ -z "$PGPOD" ] && PGPOD=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -iE 'postgres|pg-|-pg' | grep -v operator | head -1)
-        if [ -z "$PGPOD" ]; then echo "  (no postgres pod found)"; continue; fi
+        [[ -z "$PGPOD" ]] && PGPOD=$(kubectl get pods -n "$NS" -l role=primary --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
+        [[ -z "$PGPOD" ]] && PGPOD=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -iE 'postgres|pg-|-pg' | grep -v operator | head -1)
+        if [[ -z "$PGPOD" ]]; then echo "  (no postgres pod found)"; continue; fi
         PGC=$(kubectl get pod -n "$NS" "$PGPOD" -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null | grep -iE 'postgres' | head -1)
-        [ -z "$PGC" ] && PGC=$(kubectl get pod -n "$NS" "$PGPOD" -o jsonpath='{.spec.containers[0].name}' 2>/dev/null)
+        [[ -z "$PGC" ]] && PGC=$(kubectl get pod -n "$NS" "$PGPOD" -o jsonpath='{.spec.containers[0].name}' 2>/dev/null)
 
         echo "  Connections by state:"
         kubectl exec -n "$NS" "$PGPOD" -c "$PGC" -- sh -c "psql -tAX -U postgres -c \"select state, count(*) from pg_stat_activity group by 1 order by 2 desc\"" 2>/dev/null \
@@ -944,13 +944,13 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 2C: KAFKA / REDPANDA HEALTH"
 
-if [ -z "$KAFKA_NAMESPACES" ]; then
+if [[ -z "$KAFKA_NAMESPACES" ]]; then
     echo "  (no Kafka/Redpanda namespaces discovered — skipping. Set KAFKA_NAMESPACES to override.)"
 else
     for NS in $KAFKA_NAMESPACES; do
         subheader "Kafka/Redpanda: $NS"
         KPOD=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -iE 'redpanda|kafka|broker' | grep -viE 'operator|console|exporter|connect' | head -1)
-        if [ -z "$KPOD" ]; then echo "  (no broker pod found)"; continue; fi
+        if [[ -z "$KPOD" ]]; then echo "  (no broker pod found)"; continue; fi
 
         if kubectl exec -n "$NS" "$KPOD" -- sh -c 'command -v rpk' >/dev/null 2>&1; then
             echo "  Consumer-group lag (rpk; lag = how far each consumer is behind, highest first):"
@@ -959,7 +959,7 @@ else
             # 'rpk group describe' has a TOTAL-LAG summary line.) Doing the loop host-side
             # with repeated kubectl-exec mishandles word-splitting, so keep it in-pod.
             LAGS=$(kubectl exec -n "$NS" "$KPOD" -- sh -c 'rpk group list 2>/dev/null | awk "NR>1 && NF>=2{print \$2}" | while read g; do lag=$(rpk group describe "$g" 2>/dev/null | awk "/^TOTAL-LAG/{print \$2; exit}"); printf "%s\t%s\n" "$g" "${lag:-?}"; done' 2>/dev/null)
-            if [ -z "$LAGS" ]; then
+            if [[ -z "$LAGS" ]]; then
                 echo "    (no consumer groups)"
             else
                 echo "$LAGS" | sort -t"$(printf '\t')" -k2,2 -nr | awk -F'\t' 'NF>=2{printf "    %-54s total-lag=%s\n", $1, $2}'
@@ -982,7 +982,7 @@ for NS in $AERO_NAMESPACES; do
     AERO_PODS=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v operator | grep -v '^$' | sort)
     SAMPLED_AERO=$(sample_pods "$AERO_PODS")
 
-    if [ "$QUICK" -eq 0 ]; then
+    if [[ "$QUICK" -eq 0 ]]; then
         for POD in $SAMPLED_AERO; do
             echo "  Disk I/O + CPU delta (${DELTA_SECS}s from $POD):"
 
@@ -1090,21 +1090,21 @@ done
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 3B: AEROSPIKE DEEP DIVE"
 
-if [ "$HOST_PROBES" -ne 1 ]; then
+if [[ "$HOST_PROBES" -ne 1 ]]; then
     echo "  (skipped — needs --host-probes. This creates privileged hostNetwork/hostPID pods"
     echo "   on Aerospike nodes for perf/ss/ethtool/nvme-cli/iostat, and only works where the"
     echo "   cluster permits such pods, e.g. bare-metal k0s. Managed clusters like EKS/GKE"
     echo "   typically forbid it. Re-run with --host-probes on a cluster that allows it.)"
 elif ! kubectl auth can-i create pods >/dev/null 2>&1; then
     echo "  (skipped — this kube context lacks permission to create probe pods)"
-elif [ -z "$AERO_NAMESPACES" ]; then
+elif [[ -z "$AERO_NAMESPACES" ]]; then
     echo "  (skipped — no Aerospike namespaces discovered)"
 else
     # Collect unique Aerospike nodes across all clusters
     AERO_NODE_LIST=""
     for NS in $AERO_NAMESPACES; do
         AERO_PODS=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v operator | grep -v '^$' | sort)
-        [ -z "$AERO_PODS" ] && continue
+        [[ -z "$AERO_PODS" ]] && continue
         SAMPLED_AERO=$(sample_pods "$AERO_PODS")
         for POD in $SAMPLED_AERO; do
             NODE=$(kubectl get pod -n "$NS" "$POD" -o jsonpath='{.spec.nodeName}' 2>/dev/null)
@@ -1153,7 +1153,7 @@ else
     # Parse and display results
     for NODE in $AERO_NODE_LIST; do
         f="$TMPDIR/aerodeep_${NODE}.txt"
-        if [ -s "$f" ]; then
+        if [[ -s "$f" ]]; then
             subheader "Deep dive: $NODE"
             parse_aero_deep "$f" "$NODE"
         fi
@@ -1174,8 +1174,8 @@ header "SECTION 4: PROPAGATION PODS"
 for NS in $WORKLOAD_NAMESPACES; do
     PROP_PODS=$(kubectl get pods -n "$NS" -l app=propagation --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v '^$' | sort)
     PROP_COUNT=0
-    [ -n "$PROP_PODS" ] && PROP_COUNT=$(echo "$PROP_PODS" | wc -l | tr -d ' ')
-    [ "$PROP_COUNT" -eq 0 ] && continue
+    [[ -n "$PROP_PODS" ]] && PROP_COUNT=$(echo "$PROP_PODS" | wc -l | tr -d ' ')
+    [[ "$PROP_COUNT" -eq 0 ]] && continue
 
     SAMPLED=$(sample_pods "$PROP_PODS")
     SAMPLED_COUNT=$(echo "$SAMPLED" | wc -l | tr -d ' ')
@@ -1184,7 +1184,7 @@ for NS in $WORKLOAD_NAMESPACES; do
 
     # CPU summary (always all pods)
     CPU_DATA=$(kubectl top pods -n "$NS" --no-headers 2>/dev/null | grep propagation)
-    if [ -n "$CPU_DATA" ]; then
+    if [[ -n "$CPU_DATA" ]]; then
         echo "$CPU_DATA" | awk '{gsub(/m$/,"",$2); cpu=$2; sum+=cpu; count++; if(count==1||cpu>max)max=cpu; if(count==1||cpu<min)min=cpu} END {printf "  CPU: avg=%dm  min=%dm  max=%dm  total=%dm  pods=%d\n", sum/count, min, max, sum, count}'
     fi
 
@@ -1200,7 +1200,7 @@ for NS in $WORKLOAD_NAMESPACES; do
     echo "  Throttling (sample=$FIRST_PROP): nr_throttled=$NR_THROTTLED  throttled_usec=$THROTTLED_US"
 
     # Node kernel CPU
-    if [ "$QUICK" -eq 0 ]; then
+    if [[ "$QUICK" -eq 0 ]]; then
         NODE_CPU=$(kubectl exec -n "$NS" "$FIRST_PROP" -- sh -c "cat /proc/stat | head -1; sleep $DELTA_SECS; cat /proc/stat | head -1" 2>/dev/null)
         echo -n "  Node kernel "; echo "$NODE_CPU" | parse_cpu_delta
     fi
@@ -1218,7 +1218,7 @@ for NS in $WORKLOAD_NAMESPACES; do
     PROFILE_FILES=""
     for POD in $SAMPLED; do
         f="$TMPDIR/prop_${NS}_${POD}.txt"
-        [ -s "$f" ] && PROFILE_FILES="$PROFILE_FILES $f"
+        [[ -s "$f" ]] && PROFILE_FILES="$PROFILE_FILES $f"
     done
     aggregate_goroutines $PROFILE_FILES
 done
@@ -1231,8 +1231,8 @@ header "SECTION 5: BLASTER PODS"
 for NS in $WORKLOAD_NAMESPACES; do
     BLASTER_PODS=$(kubectl get pods -n "$NS" -l app=tx-blaster --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v '^$' | sort)
     BLASTER_COUNT=0
-    [ -n "$BLASTER_PODS" ] && BLASTER_COUNT=$(echo "$BLASTER_PODS" | wc -l | tr -d ' ')
-    [ "$BLASTER_COUNT" -eq 0 ] && continue
+    [[ -n "$BLASTER_PODS" ]] && BLASTER_COUNT=$(echo "$BLASTER_PODS" | wc -l | tr -d ' ')
+    [[ "$BLASTER_COUNT" -eq 0 ]] && continue
 
     SAMPLED=$(sample_pods "$BLASTER_PODS")
     SAMPLED_COUNT=$(echo "$SAMPLED" | wc -l | tr -d ' ')
@@ -1241,7 +1241,7 @@ for NS in $WORKLOAD_NAMESPACES; do
 
     # CPU summary
     CPU_DATA=$(kubectl top pods -n "$NS" --no-headers 2>/dev/null | grep blaster)
-    if [ -n "$CPU_DATA" ]; then
+    if [[ -n "$CPU_DATA" ]]; then
         echo "$CPU_DATA" | awk '{gsub(/m$/,"",$2); cpu=$2; sum+=cpu; count++; if(count==1||cpu>max)max=cpu; if(count==1||cpu<min)min=cpu} END {printf "  CPU: avg=%dm  min=%dm  max=%dm  total=%dm  pods=%d\n", sum/count, min, max, sum, count}'
     fi
 
@@ -1255,7 +1255,7 @@ for NS in $WORKLOAD_NAMESPACES; do
 
     # Schedstat from first sampled pod
     SCHED=$(kubectl exec -n "$NS" "$FIRST_BLASTER" -- cat /proc/1/schedstat 2>/dev/null)
-    if [ -n "$SCHED" ]; then
+    if [[ -n "$SCHED" ]]; then
         echo "$SCHED" | BLASTER_NAME="$FIRST_BLASTER" python3 -c "
 import sys, os
 parts = sys.stdin.read().strip().split()
@@ -1270,7 +1270,7 @@ if len(parts) >= 2:
     fi
 
     # Node kernel CPU
-    if [ "$QUICK" -eq 0 ]; then
+    if [[ "$QUICK" -eq 0 ]]; then
         NODE_CPU=$(kubectl exec -n "$NS" "$FIRST_BLASTER" -- sh -c "cat /proc/stat | head -1; sleep $DELTA_SECS; cat /proc/stat | head -1" 2>/dev/null)
         echo -n "  Node kernel "; echo "$NODE_CPU" | parse_cpu_delta
     fi
@@ -1288,7 +1288,7 @@ if len(parts) >= 2:
     PROFILE_FILES=""
     for POD in $SAMPLED; do
         f="$TMPDIR/blaster_${NS}_${POD}.txt"
-        [ -s "$f" ] && PROFILE_FILES="$PROFILE_FILES $f"
+        [[ -s "$f" ]] && PROFILE_FILES="$PROFILE_FILES $f"
     done
     aggregate_goroutines $PROFILE_FILES
 done
@@ -1313,9 +1313,9 @@ for NS in $WORKLOAD_NAMESPACES; do
     # ── Block Assembly ──
     BA_PODS=$(kubectl get pods -n "$NS" -l app=block-assembly --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v '^$' | sort)
     BA_COUNT=0
-    [ -n "$BA_PODS" ] && BA_COUNT=$(echo "$BA_PODS" | wc -l | tr -d ' ')
+    [[ -n "$BA_PODS" ]] && BA_COUNT=$(echo "$BA_PODS" | wc -l | tr -d ' ')
 
-    if [ "$BA_COUNT" -gt 0 ]; then
+    if [[ "$BA_COUNT" -gt 0 ]]; then
         SAMPLED_BA=$(sample_pods "$BA_PODS")
         SAMPLED_BA_COUNT=$(echo "$SAMPLED_BA" | wc -l | tr -d ' ')
 
@@ -1335,7 +1335,7 @@ for NS in $WORKLOAD_NAMESPACES; do
         PROFILE_FILES=""
         for POD in $SAMPLED_BA; do
             f="$TMPDIR/ba_${NS}_${POD}.txt"
-            [ -s "$f" ] && PROFILE_FILES="$PROFILE_FILES $f"
+            [[ -s "$f" ]] && PROFILE_FILES="$PROFILE_FILES $f"
         done
         aggregate_goroutines $PROFILE_FILES
     fi
@@ -1343,9 +1343,9 @@ for NS in $WORKLOAD_NAMESPACES; do
     # ── Block Validator ──
     BV_PODS=$(kubectl get pods -n "$NS" -l app=block-validator --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v '^$' | sort)
     BV_COUNT=0
-    [ -n "$BV_PODS" ] && BV_COUNT=$(echo "$BV_PODS" | wc -l | tr -d ' ')
+    [[ -n "$BV_PODS" ]] && BV_COUNT=$(echo "$BV_PODS" | wc -l | tr -d ' ')
 
-    if [ "$BV_COUNT" -gt 0 ]; then
+    if [[ "$BV_COUNT" -gt 0 ]]; then
         SAMPLED_BV=$(sample_pods "$BV_PODS")
         SAMPLED_BV_COUNT=$(echo "$SAMPLED_BV" | wc -l | tr -d ' ')
 
@@ -1377,7 +1377,7 @@ for NS in $WORKLOAD_NAMESPACES; do
         PROFILE_FILES=""
         for POD in $SAMPLED_BV; do
             f="$TMPDIR/bv_${NS}_${POD}.txt"
-            [ -s "$f" ] && PROFILE_FILES="$PROFILE_FILES $f"
+            [[ -s "$f" ]] && PROFILE_FILES="$PROFILE_FILES $f"
         done
         aggregate_goroutines $PROFILE_FILES
     fi
@@ -1388,11 +1388,11 @@ done
 # ═══════════════════════════════════════════════════════════════════════════════
 header "SECTION 7: NETWORKING"
 
-if [ "$QUICK" -eq 1 ]; then
+if [[ "$QUICK" -eq 1 ]]; then
     echo "  (skipped — use without --quick for network data)"
 else
     # ── Node-level bandwidth (one debug pod per unique node role) ──
-    if [ "$HOST_PROBES" -ne 1 ]; then
+    if [[ "$HOST_PROBES" -ne 1 ]]; then
         subheader "Node-level bandwidth"
         echo "  (skipped — needs --host-probes; it creates hostNetwork probe pods on the"
         echo "   data-carrying nodes. Pod-level throughput below uses exec only and still runs.)"
@@ -1402,7 +1402,7 @@ else
     # Prefer the 'role' node label; fall back to the nodes that actually host propagation +
     # aerospike pods when a cluster has no recognizable role labels.
     awk '!seen[$3]++ {print $3, $1}' "$TMPDIR/node_lookup.txt" | grep -E '^(txblaster|teranode|aerospike|blocks)' > "$TMPDIR/role_nodes.txt"
-    if [ ! -s "$TMPDIR/role_nodes.txt" ]; then
+    if [[ ! -s "$TMPDIR/role_nodes.txt" ]]; then
         for _ns in $WORKLOAD_NAMESPACES; do
             kubectl get pods -n "$_ns" -l app=propagation -o wide --no-headers 2>/dev/null | awk '{print "teranode", $7}'
         done > "$TMPDIR/role_nodes.txt"
@@ -1416,7 +1416,7 @@ else
     NODE_ROLES=()
     NODE_NAMES=()
     while read role node; do
-        [ -z "$role" ] || [ -z "$node" ] && continue
+        [[ -z "$role" ]] || [[ -z "$node" ]] && continue
         NODE_ROLES+=("$role")
         NODE_NAMES+=("$node")
     done < "$TMPDIR/role_nodes.txt"
@@ -1432,9 +1432,9 @@ else
     printf "  %-14s %-25s %10s %12s %12s %10s\n" "----" "----" "----------" "-------" "-------" "------"
 
     while read role node; do
-        [ -z "$role" ] || [ -z "$node" ] && continue
+        [[ -z "$role" ]] || [[ -z "$node" ]] && continue
         f="$TMPDIR/nodenet_${role}_${node}.txt"
-        [ ! -s "$f" ] && continue
+        [[ ! -s "$f" ]] && continue
         ROLE_V="$role" NODE_V="$node" DELTA="$DELTA_SECS" python3 -c "
 import sys, os
 role = os.environ.get('ROLE_V', '?')
@@ -1493,12 +1493,12 @@ else:
     # Sample one propagation pod per workload namespace
     for NS in $WORKLOAD_NAMESPACES; do
         FIRST_PROP=$(kubectl get pods -n "$NS" -l app=propagation --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v '^$' | head -1)
-        if [ -n "$FIRST_PROP" ]; then
+        if [[ -n "$FIRST_PROP" ]]; then
             fetch_pod_net_stats "$NS" "$FIRST_PROP" "$TMPDIR/podnet_prop_${NS}.txt" &
         fi
 
         FIRST_BLASTER=$(kubectl get pods -n "$NS" -l app=tx-blaster --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v '^$' | head -1)
-        if [ -n "$FIRST_BLASTER" ]; then
+        if [[ -n "$FIRST_BLASTER" ]]; then
             fetch_pod_net_stats "$NS" "$FIRST_BLASTER" "$TMPDIR/podnet_blaster_${NS}.txt" &
         fi
     done
@@ -1506,7 +1506,7 @@ else:
     # Sample one aerospike pod per cluster — Aerospike uses hostNetwork so read bond1
     for NS in $AERO_NAMESPACES; do
         FIRST_AERO=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v operator | grep -v '^$' | head -1)
-        if [ -n "$FIRST_AERO" ]; then
+        if [[ -n "$FIRST_AERO" ]]; then
             (kubectl exec -n "$NS" "$FIRST_AERO" -c "$AERO_CONTAINER" -- sh -c "
                 cat /proc/net/dev | grep -E 'bond1|bond0|eth0' | head -1 > /tmp/_net1
                 cat /proc/net/snmp | grep '^Tcp:' > /tmp/_tcp1
@@ -1529,7 +1529,7 @@ else:
     printf "  %-14s %-25s %12s %12s %12s %10s %8s\n" "----" "---" "-------" "-------" "---------" "----------" "-----"
 
     for f in "$TMPDIR"/podnet_*.txt; do
-        [ ! -s "$f" ] && continue
+        [[ ! -s "$f" ]] && continue
         fname=$(basename "$f" .txt)
         python3 -c "
 import sys, os
@@ -1614,9 +1614,9 @@ print(f'  {ptype:<14} {label:<25} {rx_mbps:>12.1f} {tx_mbps:>12.1f} {retrans_s:>
 
     # Read from any propagation pod (softnet_stat is host-level)
     FIRST_NS=$(echo "$WORKLOAD_NAMESPACES" | awk '{print $1}')
-    if [ -n "$FIRST_NS" ]; then
+    if [[ -n "$FIRST_NS" ]]; then
         FIRST_PROP=$(kubectl get pods -n "$FIRST_NS" -l app=propagation --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v '^$' | head -1)
-        if [ -n "$FIRST_PROP" ]; then
+        if [[ -n "$FIRST_PROP" ]]; then
             SOFTNET=$(kubectl exec -n "$FIRST_NS" "$FIRST_PROP" -- cat /proc/net/softnet_stat 2>/dev/null)
             echo "$SOFTNET" | python3 -c "
 import sys
@@ -1652,7 +1652,7 @@ echo ""
 
 for NS in $AERO_NAMESPACES; do
     FIRST_POD=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v operator | grep -v '^$' | head -1)
-    [ -z "$FIRST_POD" ] && continue
+    [[ -z "$FIRST_POD" ]] && continue
 
     CACHE=$(kubectl exec -n "$NS" "$FIRST_POD" -c "$AERO_CONTAINER" -- asinfo -v "namespace/$AERO_DB_NS" 2>/dev/null | tr ';' '\n' | grep '^cache_read_pct=' | cut -d= -f2)
     RW=$(kubectl exec -n "$NS" "$FIRST_POD" -c "$AERO_CONTAINER" -- asinfo -v 'statistics' 2>/dev/null | tr ';' '\n' | grep '^rw_in_progress=' | cut -d= -f2)
@@ -1683,19 +1683,19 @@ HINTS=""
 
 for NS in $AERO_NAMESPACES; do
     FIRST_POD=$(kubectl get pods -n "$NS" --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v operator | grep -v '^$' | head -1)
-    [ -z "$FIRST_POD" ] && continue
+    [[ -z "$FIRST_POD" ]] && continue
     CACHE=$(kubectl exec -n "$NS" "$FIRST_POD" -c "$AERO_CONTAINER" -- asinfo -v "namespace/$AERO_DB_NS" 2>/dev/null | tr ';' '\n' | grep '^cache_read_pct=' | cut -d= -f2)
     CACHE_INT=$(echo "$CACHE" | cut -d. -f1)
-    if [ -n "$CACHE_INT" ] && [ "$CACHE_INT" -lt 50 ] 2>/dev/null; then
+    if [[ -n "$CACHE_INT" ]] && [[ "$CACHE_INT" -lt 50 ]] 2>/dev/null; then
         HINTS="${HINTS}  [!] $NS: cache-read-pct=${CACHE}% — Aerospike is disk-bound. Consider read-page-cache=true or larger post-write-cache.\n"
     fi
 done
 
 for NS in $WORKLOAD_NAMESPACES; do
     FIRST_PROP=$(kubectl get pods -n "$NS" -l app=propagation --no-headers -o custom-columns=':metadata.name' 2>/dev/null | grep -v '^$' | head -1)
-    if [ -n "$FIRST_PROP" ]; then
+    if [[ -n "$FIRST_PROP" ]]; then
         NR_T=$(kubectl exec -n "$NS" "$FIRST_PROP" -- cat /sys/fs/cgroup/cpu.stat 2>/dev/null | grep '^nr_throttled' | awk '{print $2}')
-        if [ -n "$NR_T" ] && [ "$NR_T" -gt 1000 ] 2>/dev/null; then
+        if [[ -n "$NR_T" ]] && [[ "$NR_T" -gt 1000 ]] 2>/dev/null; then
             HINTS="${HINTS}  [!] $NS propagation: nr_throttled=$NR_T — CPU throttling detected. Increase CPU limit.\n"
         fi
     fi
@@ -1703,18 +1703,18 @@ done
 
 # Check perf data for IPC issues
 for f in "$TMPDIR"/aerodeep_*.txt; do
-    [ ! -s "$f" ] && continue
+    [[ ! -s "$f" ]] && continue
     NODE=$(basename "$f" .txt | sed 's/aerodeep_//')
     IPC=$(grep "insn per cycle" "$f" 2>/dev/null | sed -n 's/.*# *\([0-9.]*\) *insn per cycle.*/\1/p')
-    if [ -n "$IPC" ]; then
+    if [[ -n "$IPC" ]]; then
         IPC_INT=$(echo "$IPC" | awk '{printf "%d", $1 * 100}')
-        if [ "$IPC_INT" -lt 60 ] 2>/dev/null; then
+        if [[ "$IPC_INT" -lt 60 ]] 2>/dev/null; then
             HINTS="${HINTS}  [!] Aerospike node $NODE: IPC=${IPC} — CPU is memory-stalled. auto-pin=numa and larger partition-tree-sprigs would help.\n"
         fi
     fi
 done
 
-if [ -z "$HINTS" ]; then
+if [[ -z "$HINTS" ]]; then
     echo "  (no obvious storage/CPU signals from automated checks)"
     echo "  Next: review the goroutine profiles above for the busiest pipeline stage,"
     echo "  confirm FSM state (Section 1), and check Kafka/Redpanda consumer lag (Section 2C)"

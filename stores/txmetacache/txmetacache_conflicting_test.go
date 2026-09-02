@@ -293,3 +293,17 @@ func TestSetConflicting_ForwardsReturnValues(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{parentHash}, store.lastInput,
 		"underlying store should have received exactly the input hashes")
 }
+
+// TestTxMetaCache_SupportsOutpointOnlySpend_Delegates verifies the cache decorator forwards
+// the wrapped store's below-checkpoint fast-path capability in both directions. In production
+// the SQL store is wrapped by the TxMetaCache, so if this did not delegate, the fast-path
+// gates (which query capability through the wrapper) would see false and stay off.
+func TestTxMetaCache_SupportsOutpointOnlySpend_Delegates(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		inner := &utxo.MockUtxostore{SupportsOutpointOnlySpendResult: want}
+		c, err := NewTxMetaCache(context.Background(), test.CreateBaseTestSettings(t), ulogger.TestLogger{}, inner, Unallocated)
+		require.NoError(t, err)
+		require.Equal(t, want, c.SupportsOutpointOnlySpend(),
+			"TxMetaCache must delegate SupportsOutpointOnlySpend to the wrapped store")
+	}
+}

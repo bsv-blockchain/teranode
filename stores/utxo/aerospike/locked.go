@@ -2,14 +2,15 @@ package aerospike
 
 import (
 	"context"
-	"time"
+	"sync"
+	"sync/atomic"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
-	"golang.org/x/sync/errgroup"
 )
 
 // batchLocked represents a batch operation to set the locked flag on a transaction
@@ -18,58 +19,110 @@ type batchLocked struct {
 	txHash     chainhash.Hash
 	childIndex uint32 // This will default to 0 which is the master record
 	setValue   bool
-	errCh      chan error // Channel for completion notification
+	group      *completion.Group
+	completed  atomic.Bool
+	result     error // written by the CAS winner, after the CAS and before group.Done(); see complete
+	// onError, if set, is invoked with the result the first time this item
+	// completes with a non-nil error. SetLocked uses it to fail-fast (cancel the
+	// shared wait on the first failing hash); nil for callers that don't need it.
+	onError func(error)
 }
 
-// waitForLockedResult waits for a single locked-batch item to complete, bounded
-// so a wedged lockedBatcher can never pin the caller — or a dispatch worker —
-// forever.
-func (s *Store) waitForLockedResult(ctx context.Context, errCh chan error) error {
-	if s.batcherWait <= 0 {
-		select {
-		case err := <-errCh:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
+// complete writes err into the item's result slot and marks the shared
+// group's completion counter. Idempotent: only the first call has any
+// effect, so a panic-recovery sweep over an already-completed item (or the
+// deferred child-record signal below) never double-signals or races a
+// second write into result.
+func (b *batchLocked) complete(err error) {
+	if b.completed.CompareAndSwap(false, true) {
+		b.result = err
+		if err != nil && b.onError != nil {
+			b.onError(err)
 		}
-	}
-
-	timer := time.NewTimer(s.batcherWait)
-	defer timer.Stop()
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return errors.NewServiceUnavailableError("set locked did not complete within %s", s.batcherWait)
+		b.group.Done()
 	}
 }
 
 func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
-	g, ctx := errgroup.WithContext(ctx)
+	items := make([]*batchLocked, len(txHashes))
+	group := completion.NewGroup(int32(len(txHashes)))
 
-	for _, txHash := range txHashes {
-		txHash := txHash
+	// Restore the errgroup.WithContext fail-fast: cancel the wait the moment the
+	// first hash fails, so a partial failure returns immediately instead of
+	// blocking on the remaining in-flight hashes. Only the caller-side wait is
+	// cancelled — waitCtx is never handed to the dispatcher, so in-flight
+	// Aerospike writes for the other hashes are left to finish; we just stop
+	// waiting on them. The first captured error is returned (matching
+	// errgroup.Wait's "first non-nil error" contract).
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-		g.Go(func() error {
-			errCh := make(chan error, 1)
+	var (
+		mu       sync.Mutex
+		firstErr error
+	)
 
-			s.lockedBatcher.PutCtx(ctx, &batchLocked{
-				ctx:      ctx,
-				txHash:   txHash,
-				setValue: setValue,
-				errCh:    errCh,
-			})
-
-			// Now we need to get totalRecords and do all the child records if necessary...
-
-			return s.waitForLockedResult(ctx, errCh)
-		})
+	failFast := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		mu.Unlock()
 	}
 
-	return g.Wait()
+	for idx, txHash := range txHashes {
+		items[idx] = &batchLocked{
+			ctx:      ctx,
+			txHash:   txHash,
+			setValue: setValue,
+			group:    group,
+			onError:  failFast,
+		}
+	}
+
+	// Enqueue all hashes as one ordered group via a single PutBatchCtx, instead
+	// of one PutCtx per hash — cutting the per-item channel-send and collector-
+	// select overhead to a single operation for the whole set.
+	// Guard the enqueue: Store.Close closes the locked batcher last, so a
+	// SetLocked racing shutdown would otherwise panic. One send carries the whole
+	// group, so a rejected send rejects every hash — completing each item also
+	// trips its onError/failFast, which cancels waitCtx and captures firstErr.
+	if enqueueErr := safeBatcherPutBatchCtx(s.lockedBatcher, ctx, items, "locked"); enqueueErr != nil {
+		for _, item := range items {
+			item.complete(enqueueErr)
+		}
+	}
+
+	// s.batcherWait <= 0 means unbounded (ctx-only) — Group.Wait treats a
+	// non-positive timeout the same way. waitCtx cancellation (from failFast on
+	// the first failing hash, or from the parent ctx) also unblocks the wait.
+	waitErr := group.Wait(waitCtx, s.batcherWait)
+
+	// Parent-context cancellation takes precedence: surface the raw context
+	// error, not a wrapped teranode error type (matches the previous behavior).
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+
+	// Fail-fast: the first failing hash captured its error and cancelled the
+	// wait. Every failing complete() runs failFast, so this also covers the
+	// all-completed case where a hash failed.
+	mu.Lock()
+	fe := firstErr
+	mu.Unlock()
+
+	if fe != nil {
+		return fe
+	}
+
+	// No hash failed and the parent ctx is fine, so a non-nil waitErr is the
+	// batcherWait timeout.
+	if waitErr != nil {
+		return errors.NewServiceUnavailableError("set locked did not complete within %s", s.batcherWait)
+	}
+
+	return nil
 }
 
 // setLockedBatch sets the locked flag on the given transactions in a batch.
@@ -82,11 +135,13 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 // mirrors how the create path writes a tx's extra/external records, and keeps
 // the lockedBatcher free of self-referential edges so Close can drain it safely.
 func (s *Store) setLockedBatch(batch []*batchLocked) {
-	// go-batcher recovers panics in this fn; re-signal every errCh on panic so a
+	// go-batcher recovers panics in this fn; re-complete every item on panic so a
 	// crash (e.g. in ParseLuaMapResponse) cannot orphan the waiting submitters.
+	// complete is CAS-guarded, so this never double-signals an item some earlier
+	// stage already completed.
 	defer func() {
 		signalBatchPanic(recover(), batch, "setLockedBatch", s.logger, func(it *batchLocked, err error) {
-			trySignal(it.errCh, err)
+			it.complete(err)
 		})
 	}()
 
@@ -107,7 +162,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 			// into a process crash. Surface it to the caller and keep the batch
 			// index aligned with a NOOP placeholder instead.
 			var keyErr error = errors.NewProcessingError("[setLockedBatch] failed to create key", err)
-			trySignal(batchItem.errCh, keyErr)
+			batchItem.complete(keyErr)
 
 			handled[idx] = true
 			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
@@ -115,12 +170,9 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 			continue
 		}
 
-		batchRecords[idx] = aerospike.NewBatchUDF(
-			batchUDFPolicy,
-			key,
-			LuaPackage,
-			"setLocked",
-			aerospike.NewValue(batchItem.setValue),
+		batchRecords[idx] = s.teranodeBatchRecord(
+			batchUDFPolicy, LuaPackage, key, subOpSetLocked, "setLocked",
+			batchItem.setValue,
 		)
 	}
 
@@ -130,16 +182,15 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				continue
 			}
 
-			var sendErr error = errors.NewProcessingError("could not batch write locked flag", err)
-			trySignal(batchItem.errCh, sendErr)
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] BatchOperate failed while setting locked=%t: %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), err.Error(), err))
 		}
 
 		return
 	}
 
 	// Process master results. Items reporting child/extra records defer their
-	// errCh signal to the inline child pass below (tracked via childErr, one
-	// terminal result per item so each errCh is signalled exactly once).
+	// completion to the inline child pass below (tracked via childErr, one
+	// terminal result per item so each item is completed exactly once).
 	childErr := make(map[int]error)
 
 	var (
@@ -152,51 +203,66 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 			continue
 		}
 
-		if recErr := batchRecord.BatchRec().Err; recErr != nil {
-			var sendErr error = errors.NewProcessingError("could not batch write locked flag", recErr)
-			trySignal(batch[idx].errCh, sendErr)
+		batchItem := batch[idx]
 
+		if batchRecord == nil {
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] missing batch record while setting locked=%t; %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord)))
 			continue
 		}
 
-		response := batchRecord.BatchRec().Record
+		batchRec := batchRecord.BatchRec()
+		if batchRec == nil {
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] missing batch record while setting locked=%t; %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord)))
+			continue
+		}
+
+		if batchRec.Err != nil {
+			s.demoteNativeOnUnsupported(batchRec.Err)
+
+			// Native UPDATE_ONLY reports a missing record as KEY_NOT_FOUND;
+			// map it to the TxNotFoundError the UDF path's TX_NOT_FOUND
+			// status produces below.
+			if isKeyNotFound(batchRec.Err) {
+				batchItem.complete(errors.NewTxNotFoundError("transaction not found: %s", describeLockedBatchItem(batchItem), batchRec.Err))
+				continue
+			}
+
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] batch record failed while setting locked=%t; %s: %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord), batchRec.Err.Error(), batchRec.Err))
+			continue
+		}
+
+		response := batchRec.Record
 		if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
-			// Previously this fell through without signalling — orphaning the
-			// submitter on any nil/missing-bin response. Signal an error instead.
-			var sendErr error = errors.NewProcessingError("setLocked: missing response for %s", batch[idx].txHash.String())
-			trySignal(batch[idx].errCh, sendErr)
-
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] missing expected response bin %q while setting locked=%t; %s", describeLockedBatchItem(batchItem), LuaSuccess.String(), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord)))
 			continue
 		}
 
-		res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
+		rawResponse := response.Bins[LuaSuccess.String()]
+		res, err := s.ParseLuaMapResponse(rawResponse)
 		if err != nil {
-			var sendErr error = errors.NewProcessingError("could not parse response", err)
-			trySignal(batch[idx].errCh, sendErr)
-
+			batchItem.complete(errors.NewProcessingError("[setLocked][%s] failed to parse response bin %q (value %s) while setting locked=%t; %s: %s", describeLockedBatchItem(batchItem), LuaSuccess.String(), describeAerospikeValue(rawResponse), lockedBatchSetValue(batchItem), describeAerospikeBatchRecord(batchRecord), err.Error(), err))
 			continue
 		}
 
 		if res.Status != LuaStatusOK {
 			if res.ErrorCode == LuaErrorCodeTxNotFound {
-				var sendErr error = errors.NewTxNotFoundError("transaction not found: %s", batch[idx].txHash.String())
-				trySignal(batch[idx].errCh, sendErr)
+				batchItem.complete(errors.NewTxNotFoundError("transaction not found: %s", describeLockedBatchItem(batchItem)))
 			} else {
-				var sendErr error = errors.NewProcessingError("error from setLocked: %s", res.Message)
-				trySignal(batch[idx].errCh, sendErr)
+				batchItem.complete(errors.NewProcessingError("[setLocked][%s] error from setLocked while setting locked=%t: %s", describeLockedBatchItem(batchItem), lockedBatchSetValue(batchItem), res.Message))
 			}
-
 			continue
 		}
 
 		extraRecords := res.ChildCount
 		if extraRecords == 0 {
-			trySignal(batch[idx].errCh, error(nil))
-
+			batchItem.complete(nil)
 			continue
 		}
 
-		// Collect this item's child records for the inline batch below.
+		// Child/extra records are written inline by the pass below rather than
+		// re-queued into the lockedBatcher: re-entry from inside the batcher
+		// callback deadlocks a draining Close (see the function doc). Defer this
+		// item's completion to that pass via childErr (one terminal result each).
 		childErr[idx] = nil
 
 		for i := 1; i <= extraRecords; i++ {
@@ -204,16 +270,13 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 
 			key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 			if err != nil {
-				childErr[idx] = errors.NewProcessingError("could not create child key for locked flag", err)
+				childErr[idx] = errors.NewProcessingError("[setLocked][%s] could not create child key for locked flag", describeLockedBatchItem(batchItem), err)
 				break
 			}
 
-			childRecords = append(childRecords, aerospike.NewBatchUDF(
-				batchUDFPolicy,
-				key,
-				LuaPackage,
-				"setLocked",
-				aerospike.NewValue(batch[idx].setValue),
+			childRecords = append(childRecords, s.teranodeBatchRecord(
+				batchUDFPolicy, LuaPackage, key, subOpSetLocked, "setLocked",
+				batch[idx].setValue,
 			))
 			childOwner = append(childOwner, idx)
 		}
@@ -237,6 +300,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				}
 
 				if childRecord.BatchRec().Err != nil {
+					s.demoteNativeOnUnsupported(childRecord.BatchRec().Err)
 					childErr[idx] = errors.NewProcessingError("could not write locked child record", childRecord.BatchRec().Err)
 					continue
 				}
@@ -256,8 +320,22 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 		}
 	}
 
-	// Signal each child-bearing item exactly once with its terminal result.
+	// Complete each child-bearing item exactly once with its terminal result.
 	for idx, e := range childErr {
-		trySignal(batch[idx].errCh, e)
+		batch[idx].complete(e)
 	}
+}
+
+func describeLockedBatchItem(batchItem *batchLocked) string {
+	if batchItem == nil {
+		return "<nil>"
+	}
+	return batchItem.txHash.String()
+}
+
+func lockedBatchSetValue(batchItem *batchLocked) bool {
+	if batchItem == nil {
+		return false
+	}
+	return batchItem.setValue
 }

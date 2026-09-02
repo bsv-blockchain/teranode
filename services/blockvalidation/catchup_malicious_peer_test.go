@@ -89,14 +89,16 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 
 		httpMock.Activate()
 
-		// Mock validation that these headers are invalid
+		// Mock validation that these headers are invalid. GetBlockHeader conveys both
+		// existence and height in a single RPC during common-ancestor finding: a
+		// block-not-found error marks the header as absent and stops the walk.
 		for _, header := range maliciousHeaders {
 			mockBlockchainClient.On("GetBlockExists", mock.Anything, header.Hash()).
 				Return(false, nil).Maybe()
 
-			// Mock that validation would fail for these headers
 			mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).
-				Return(nil, errors.NewNotFoundError("suspicious header")).Maybe()
+				Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("suspicious header")).Maybe()
 		}
 
 		// Try to catch up with the first malicious peer
@@ -172,10 +174,16 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 				Return(header, &model.BlockHeaderMeta{Height: 1001}, nil).Maybe()
 		}
 
-		// Mock validation - malicious headers are invalid
+		// Mock validation - malicious headers are invalid. They are absent from our
+		// chain, so GetBlockHeader reports not found and the common-ancestor walk
+		// stops at the divergence point. (The fork point at index 0 is covered by the
+		// earlier bestBlockHeader-specific mock, which wins by registration order.)
 		for _, header := range maliciousHeaders {
 			mockBlockchainClient.On("GetBlockExists", mock.Anything, header.Hash()).
 				Return(false, nil).Maybe()
+			mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).
+				Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("block not found")).Maybe()
 		}
 
 		// System should eventually find and use the honest peer
@@ -246,6 +254,12 @@ func TestCatchup_SybilAttack(t *testing.T) {
 
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
+
+		// Anchored parent-chain runs for every honest-chain block being validated:
+		// CheckHeaderContextual requires GetBlockHeaders(parent) to actually return the
+		// parent's chain (issue 1467). Registered before the catch-all below so testify
+		// matches these first.
+		registerParentChainHeaders(mockBlockchainClient, mainnetHeaders, 1000)
 
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -429,13 +443,17 @@ func TestCatchup_SybilAttack(t *testing.T) {
 			}(honestBlocks),
 		)
 
-		// Mock validation for honest chain headers (excluding common ancestor which is already mocked as existing)
+		// Mock validation for honest chain headers (excluding common ancestor which is
+		// already mocked as existing). Their heights sit above our own chain tip (1000,
+		// the height GetBestBlockHeader is mocked with above), so the common-ancestor
+		// walk stops at bestBlockHeader instead of treating blocks we hold but have not
+		// adopted as potential ancestors.
 		for i := 1; i < len(mainnetHeaders); i++ {
 			header := mainnetHeaders[i]
 			mockBlockchainClient.On("GetBlockExists", mock.Anything, header.Hash()).
 				Return(false, nil).Maybe()
 			mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).
-				Return(header, &model.BlockHeaderMeta{}, nil).Maybe()
+				Return(header, &model.BlockHeaderMeta{Height: uint32(1000 + i)}, nil).Maybe()
 		}
 
 		// Mock GetBlock for the common ancestor (needed during validation)
@@ -458,14 +476,16 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		mockBlockchainClient.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).
 			Return(nil).Maybe()
 
-		// Mock validation for adversarial fork headers (excluding the common ancestor which is already mocked)
+		// Mock validation for adversarial fork headers (excluding the common ancestor
+		// which is already mocked). These headers don't exist in our blockchain:
+		// GetBlockHeader reports not found, which stops the common-ancestor walk at
+		// the divergence point.
 		for _, header := range adversarialForkHeaders {
 			mockBlockchainClient.On("GetBlockExists", mock.Anything, header.Hash()).
 				Return(false, nil).Maybe()
-			// Return error for GetBlockHeader - these headers are rejected by blockchain validation
-			// This simulates that the adversarial headers don't exist in our blockchain
 			mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).
-				Return(nil, errors.NewNotFoundError("invalid fork header")).Maybe()
+				Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("invalid fork header")).Maybe()
 		}
 
 		// Test Sybil resistance
@@ -579,6 +599,10 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 
 			mockBlockchainClient.On("GetBlockExists", mock.Anything, brokenHeaders[i].Hash()).
 				Return(false, nil).Maybe()
+			// Absent from our chain: not-found stops the common-ancestor walk
+			mockBlockchainClient.On("GetBlockHeader", mock.Anything, brokenHeaders[i].Hash()).
+				Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("block not found")).Maybe()
 		}
 
 		httpmock.RegisterResponder(
@@ -671,6 +695,10 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 		for _, header := range shuffledHeaders {
 			mockBlockchainClient.On("GetBlockExists", mock.Anything, header.Hash()).
 				Return(false, nil).Maybe()
+			// Absent from our chain: not-found stops the common-ancestor walk
+			mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).
+				Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("block not found")).Maybe()
 		}
 
 		httpMock.RegisterHeaderResponse("http://confused-peer", shuffledHeaders)
@@ -745,9 +773,14 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
 			Return(&model.Block{Height: 950}, nil).Maybe()
 
-		// Mock GetBlockHeader for common ancestor - use mock.Anything for hash
-		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+		// Mock GetBlockHeader for the common ancestor. Any other header is absent from
+		// our chain and reports not found, so the common-ancestor walk stops right
+		// after the ancestor instead of treating unprocessed peer headers as present.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
 			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Setup HTTP mocks
 		httpMock := testhelpers.NewHTTPMockSetup(t)
@@ -825,9 +858,14 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
 			Return(&model.Block{Height: 990}, nil).Maybe()
 
-		// Mock GetBlockHeader for common ancestor - use mock.Anything for hash
-		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+		// Mock GetBlockHeader for the common ancestor. Any other header is absent from
+		// our chain and reports not found, so the common-ancestor walk stops right
+		// after the ancestor instead of treating unprocessed peer headers as present.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
 			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Setup HTTP mocks
 		httpMock := testhelpers.NewHTTPMockSetup(t)

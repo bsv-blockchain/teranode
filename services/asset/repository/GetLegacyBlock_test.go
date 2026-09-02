@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	memory_blob "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -108,7 +109,7 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
 		if i != 0 {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), tx, params.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), tx, params.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 	}
@@ -157,7 +158,7 @@ func TestGetLegacyWireBlockWithSubtreeStore(t *testing.T) {
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
 		if i != 0 {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), tx, params.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), tx, params.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 	}
@@ -229,8 +230,11 @@ func assertBlockFromReader(t *testing.T, r *io.PipeReader, bytes []byte, block *
 	transactionCount, _ := bt.NewVarIntFromBytes(bytes[:n])
 	assert.Equal(t, block.TransactionCount, uint64(transactionCount))
 
+	// A complete block must end cleanly. This used to require io.ErrClosedPipe, which
+	// encoded the producer's success-as-failure close: streamOrAbort read that as a
+	// mid-stream fault and aborted the connection on every successful legacy block.
 	bytes, err = io.ReadAll(r)
-	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.NoError(t, err)
 
 	// check the coinbase transaction
 	coinbaseTx, coinbaseSize, err := bt.NewTxFromStream(bytes)
@@ -252,8 +256,98 @@ func assertBlockFromReader(t *testing.T, r *io.PipeReader, bytes []byte, block *
 
 	// check the end of the stream
 	n, err = r.Read(bytes)
-	assert.Equal(t, io.ErrClosedPipe, err)
+	assert.Equal(t, io.EOF, err)
 	assert.Equal(t, 0, n)
+}
+
+// TestGetLegacyBlockReader_SuccessEndsWithCleanEOF pins the producer's success signal.
+//
+// Both success paths used to end with w.CloseWithError(io.ErrClosedPipe), so a complete
+// body was delivered and then reported as a failure. io.Copy in streamOrAbort's
+// writeStreamRemainder therefore returned non-nil on a perfectly good response, and the
+// helper hijacked the connection and closed it WITHOUT the chunked terminator on every
+// successful legacy block. That was invisible while nginx spoke HTTP/1.0 upstream (a body
+// ends at connection close there, so a missing terminator means nothing); with
+// proxy_http_version 1.1 it becomes "upstream prematurely closed connection while reading
+// upstream" on every block_legacy fetch — never cached, and a 502 for responses still
+// sitting in proxy_buffers. It also breaks the SV-peer push in services/legacy, which
+// io.ReadAll's this body and surfaces the unclean end as an error.
+//
+// A completed stream must therefore end in io.EOF. io.ErrClosedPipe stays reserved for
+// genuine failures.
+func TestGetLegacyBlockReader_SuccessEndsWithCleanEOF(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	// drainAndAssertCleanEOF reads the rest of the body and requires that the stream
+	// terminated cleanly. io.ReadAll swallows io.EOF, so a non-nil error here means the
+	// producer signalled a failure; a follow-up Read pins the sentinel itself.
+	drainAndAssertCleanEOF := func(t *testing.T, r io.Reader) []byte {
+		body, err := io.ReadAll(r)
+		require.NoError(t, err, "a complete legacy block must not report a failure: streamOrAbort would hijack the connection and drop the chunked terminator")
+
+		n, err := r.Read(make([]byte, 1))
+		require.Equal(t, 0, n)
+		require.Equal(t, io.EOF, err, "the stream must end in io.EOF; io.ErrClosedPipe is reserved for genuine failures")
+
+		return body
+	}
+
+	t.Run("block with no subtrees", func(t *testing.T) {
+		ctx := setup(t)
+
+		block, _ := newBlock(ctx, t, params)
+
+		// Take the len(block.Subtrees) == 0 branch: only the coinbase is streamed.
+		block.Subtrees = nil
+		block.TransactionCount = 1
+
+		blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+		blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+
+		r, err := ctx.repo.GetLegacyBlockReader(t.Context(), &chainhash.Hash{})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = r.Close()
+		}()
+
+		body := drainAndAssertCleanEOF(t, r)
+
+		// magic(4) + size(4) + header(80) + tx count varint(1), then the coinbase.
+		require.Len(t, body, 4+4+model.BlockHeaderSize+1+coinbase.Size())
+	})
+
+	t.Run("block with subtrees streamed from the subtree store", func(t *testing.T) {
+		ctx := setup(t)
+
+		block, subtree := newBlock(ctx, t, params)
+
+		blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+		blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+
+		for i, tx := range params.txs {
+			if i != 0 {
+				_, _, err := ctx.repo.UtxoStore.SpendAndCreate(t.Context(), tx, params.height, utxo.WithCreateOnly())
+				require.NoError(t, err)
+			}
+		}
+
+		subtreeBytes, err := subtree.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+		r, err := ctx.repo.GetLegacyBlockReader(t.Context(), &chainhash.Hash{})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = r.Close()
+		}()
+
+		body := drainAndAssertCleanEOF(t, r)
+
+		// Every transaction must still be there — the clean close must not cost bytes.
+		require.Len(t, body, 4+4+model.BlockHeaderSize+1+coinbase.Size()+tx1.Size())
+	})
 }
 
 type blockInfo struct {
@@ -388,7 +482,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 
 		// Add all non-coinbase transactions to the UTXO store
 		for i := 1; i < len(txs); i++ {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], testParams.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], testParams.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -419,9 +513,10 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		txCount, _ := bt.NewVarIntFromBytes(buf[:10])
 		assert.Equal(t, uint64(len(txs)), uint64(txCount))
 
-		// Read all transaction data
+		// Read all transaction data. The producer closes the pipe cleanly once every
+		// subtree has been streamed, so a complete stream ends in io.EOF.
 		allTxData, err := io.ReadAll(r)
-		require.ErrorIs(t, err, io.ErrClosedPipe) // Pipe closes after all data
+		require.NoError(t, err)
 
 		// Parse transactions from the stream and verify order
 		offset := 0
@@ -485,7 +580,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
 		for i := 1; i < len(txs); i++ {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], testParams.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], testParams.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -508,7 +603,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		require.NoError(t, err)
 
 		allTxData, err := io.ReadAll(r)
-		require.ErrorIs(t, err, io.ErrClosedPipe)
+		require.NoError(t, err)
 
 		// Verify all transactions are present and in order
 		offset := 0
@@ -563,7 +658,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
 		for i := 1; i < len(txs); i++ {
-			_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], testParams.height)
+			_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], testParams.height, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -584,7 +679,7 @@ func TestWriteTransactionsViaSubtreeStoreStreaming(t *testing.T) {
 		require.NoError(t, err)
 
 		allTxData, err := io.ReadAll(r)
-		require.ErrorIs(t, err, io.ErrClosedPipe)
+		require.NoError(t, err)
 
 		offset := 0
 		for i := 0; i < len(txs); i++ {
@@ -670,7 +765,7 @@ func TestGetLegacyBlockNoDuplication(t *testing.T) {
 			// Setup UTXO store if needed (for fallback path)
 			if tc.setupUTXOStore {
 				for i := 1; i < len(txs); i++ {
-					_, err := ctx.repo.UtxoStore.Create(context.Background(), txs[i], blockParams.height)
+					_, _, err := ctx.repo.UtxoStore.SpendAndCreate(context.Background(), txs[i], blockParams.height, utxo.WithCreateOnly())
 					require.NoError(t, err)
 				}
 				// Also need the subtree itself for fallback

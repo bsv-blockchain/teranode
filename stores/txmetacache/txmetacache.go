@@ -43,14 +43,12 @@ import (
 // These metrics are critical for operational monitoring and can help identify:
 // - Cache hit ratio (hits vs. misses) to evaluate cache effectiveness
 // - Insertion and eviction rates to detect memory pressure
-// - Age-related expiration patterns through hitOldTx tracking
 type metrics struct {
 	insertions atomic.Uint64 // Tracks number of items inserted into the cache; indicates write throughput
 	hits       atomic.Uint64 // Tracks number of successful cache retrievals; indicates cache effectiveness
 	misses     atomic.Uint64 // Tracks number of failed cache retrievals; helps identify sizing issues
 	evictions  atomic.Uint64 // Tracks number of items evicted from the cache; indicates memory pressure
 	getOrigin  atomic.Uint64 // Tracks origin-store metadata retrievals
-	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions; monitors expiration policy
 }
 
 const (
@@ -493,6 +491,36 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, f ...fields
 	return t.utxoStore.Get(ctx, hash, f...)
 }
 
+const (
+	metaBytesBufInitialCapacity = 256
+	metaBytesBufMaxRetain       = 64 * 1024
+)
+
+// metaBytesBufPool recycles the per-transaction MetaBytes serialization buffers
+// used to repopulate the cache in BatchDecorate. The initial capacity covers the
+// common single-parent transaction (17-byte header + a few dozen inpoint bytes)
+// with headroom; larger transactions grow their buffer on first use.
+var metaBytesBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, metaBytesBufInitialCapacity)
+		return &b
+	},
+}
+
+// putMetaBytesBuf returns a buffer to metaBytesBufPool, mirroring the max-retain
+// guard on putTxMetaCacheReadBuffer: an occasional large-parent tx must not pin a
+// hundreds-of-KB backing array in the pool forever and ratchet up process RSS, so
+// any buffer grown past metaBytesBufMaxRetain is dropped for a fresh initial-cap one.
+func putMetaBytesBuf(bp *[]byte) {
+	if cap(*bp) > metaBytesBufMaxRetain {
+		*bp = make([]byte, 0, metaBytesBufInitialCapacity)
+	} else {
+		*bp = (*bp)[:0]
+	}
+
+	metaBytesBufPool.Put(bp)
+}
+
 // BatchDecorate retrieves metadata for multiple transactions in a single batch operation.
 // This is more efficient than calling Get for each transaction individually.
 //
@@ -518,6 +546,19 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	keys := make([][]byte, 0, len(hashes))
 	values := make([][]byte, 0, len(hashes))
 
+	// The per-tx MetaBytes serialization buffers are recycled through a pool:
+	// SetCacheMultiValuesRaw (SetMulti) copies the value bytes into the cache's
+	// own chunk storage before returning, so each buffer is dead afterwards.
+	// They are held in `values` until then, so return them only after the cache
+	// write completes (deferred), not per iteration.
+	bufPtrs := make([]*[]byte, 0, len(hashes))
+
+	defer func() {
+		for _, bp := range bufPtrs {
+			putMetaBytesBuf(bp)
+		}
+	}()
+
 	for _, data := range hashes {
 		if data == nil || data.Data == nil {
 			continue
@@ -528,20 +569,41 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 			continue
 		}
 
+		// Never cache a partial meta. A cached entry must be complete enough to
+		// serialize for subtree validation, which requires TxInpoints (the parent
+		// tx hashes). A reduced-field BatchDecorate — e.g. the {BlockIDs,
+		// BlockHeights} parent prefetch in subtree validation — leaves TxInpoints
+		// empty, so caching it would poison the cache: a later subtree-meta
+		// serialize rejects the inpoints-less node and the block wedges forever.
+		// Every non-coinbase tx has at least one parent, so empty ParentTxHashes
+		// here means the field was not populated; skip caching it and let the
+		// store (which can reconstruct inpoints from its inputs) serve the read.
+		if !data.Data.IsCoinbase && len(data.Data.TxInpoints.ParentTxHashes) == 0 {
+			continue
+		}
+
 		if len(data.Data.TxInpoints.ParentTxHashes) > 48 {
 			t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
 		}
 
-		// get the metabytes directly here.
-		txMetaBytes, err := data.Data.MetaBytes()
+		// Serialize into a pooled buffer; the cache copies it on insert.
+		bufPtr := metaBytesBufPool.Get().(*[]byte)
+
+		txMetaBytes, err := data.Data.MetaBytesInto((*bufPtr)[:0])
 		if err != nil {
+			putMetaBytesBuf(bufPtr)
+
 			if errors.Is(err, errors.ErrProcessing) {
 				t.logger.Debugf("error serializing txMeta for [%s]: %v", data.Hash.String(), err)
 			} else {
 				t.logger.Errorf("error serializing txMeta for [%s]: %v", data.Hash.String(), err)
 			}
+
 			continue
 		}
+
+		*bufPtr = txMetaBytes // keep the (possibly grown) backing array for reuse
+		bufPtrs = append(bufPtrs, bufPtr)
 
 		keys = append(keys, data.Hash.CloneBytes())
 		values = append(values, txMetaBytes)
@@ -559,48 +621,6 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	}
 
 	return nil
-}
-
-// Create adds a new transaction to the system, updating both the underlying store and the cache.
-// This is typically called when a new transaction is seen, either from the mempool or in a block.
-//
-// Parameters:
-// - ctx: Context for the operation
-// - tx: The transaction to create metadata for
-// - blockHeight: The current blockchain height
-// - opts: Optional creation options such as block information
-//
-// Returns:
-// - The created transaction metadata
-// - Error if creation fails
-//
-// This method delegates the creation to the underlying store and then adds the result to the cache.
-func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
-	txMeta, err := t.utxoStore.Create(ctx, tx, blockHeight, opts...)
-	if err != nil {
-		return txMeta, err
-	}
-
-	options := &utxo.CreateOptions{}
-	for _, opt := range opts {
-		opt(options)
-	}
-
-	var txHash *chainhash.Hash
-
-	if options.TxID != nil {
-		txHash = options.TxID
-	} else {
-		txHash = tx.TxIDChainHash()
-	}
-
-	// add to cache, but only if the blockIDs have not been set
-	if len(txMeta.BlockIDs) == 0 && !txMeta.Conflicting {
-		// don't return errors from SetCache, as it is not critical if the cache fails to set
-		_ = t.SetCache(txHash, txMeta)
-	}
-
-	return txMeta, nil
 }
 
 // SetMined marks a transaction as mined in the underlying store and evicts it
@@ -827,6 +847,11 @@ func (t *TxMetaCache) Health(ctx context.Context, checkLiveness bool) (int, stri
 	return t.utxoStore.Health(ctx, checkLiveness)
 }
 
+// SupportsOutpointOnlySpend delegates to the wrapped store.
+func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
+	return t.utxoStore.SupportsOutpointOnlySpend()
+}
+
 // Close delegates to the wrapped UTXO store so its in-flight batched writes
 // are drained on shutdown. The cache itself holds only in-memory state; no
 // extra teardown is required here beyond letting it be garbage-collected
@@ -849,19 +874,35 @@ func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Sp
 	return t.utxoStore.GetSpend(ctx, spend)
 }
 
-// Spend marks UTXOs as spent by a transaction.
-// This method delegates directly to the underlying UTXO store without caching.
-//
-// Parameters:
-// - ctx: Context for the operation
-// - tx: The transaction that spends the UTXOs
-// - ignoreFlags: Optional flags to modify spending behavior
-//
-// Returns:
-// - Array of Spend objects representing the spent UTXOs
-// - Error if the spend operation fails
-func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	return t.utxoStore.Spend(ctx, tx, blockHeight, ignoreFlags...)
+// SpendAndCreate delegates the combined spend+create operation to the underlying
+// store and caches the returned metadata the same way Create does. The metadata
+// is nil (and nothing is cached) on error or with WithSpendOnly.
+func (t *TxMetaCache) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	txMeta, spends, err := t.utxoStore.SpendAndCreate(ctx, tx, blockHeight, opts...)
+	if err != nil || txMeta == nil {
+		return txMeta, spends, err
+	}
+
+	options := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	var txHash *chainhash.Hash
+
+	if options.TxID != nil {
+		txHash = options.TxID
+	} else {
+		txHash = tx.TxIDChainHash()
+	}
+
+	// add to cache, but only if the blockIDs have not been set
+	if len(txMeta.BlockIDs) == 0 && !txMeta.Conflicting {
+		// don't return errors from SetCache, as it is not critical if the cache fails to set
+		_ = t.SetCache(txHash, txMeta)
+	}
+
+	return txMeta, spends, nil
 }
 
 // Unspend marks previously spent UTXOs as unspent.
@@ -1024,6 +1065,22 @@ func (t *TxMetaCache) SetLocked(ctx context.Context, txHashes []chainhash.Hash, 
 	return t.utxoStore.SetLocked(ctx, txHashes, setValue)
 }
 
+// BeginConflictIntent delegates to the wrapped store. The conflict-resolution
+// write-ahead log lives in the durable backend, not the in-memory cache.
+func (t *TxMetaCache) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	return t.utxoStore.BeginConflictIntent(ctx, intent)
+}
+
+// CompleteConflictIntent delegates to the wrapped store.
+func (t *TxMetaCache) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return t.utxoStore.CompleteConflictIntent(ctx, intentID)
+}
+
+// PendingConflictIntents delegates to the wrapped store.
+func (t *TxMetaCache) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	return t.utxoStore.PendingConflictIntents(ctx)
+}
+
 // MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.
 //
 // Parameters:
@@ -1093,6 +1150,12 @@ func (t *TxMetaCache) SetMedianBlockTime(height uint32) error {
 // consensus-determined time.
 func (t *TxMetaCache) GetMedianBlockTime() uint32 {
 	return t.utxoStore.GetMedianBlockTime()
+}
+
+// SetBlockState publishes block height and median block time to the
+// underlying store as one atomic snapshot; see utxo.Store.
+func (t *TxMetaCache) SetBlockState(height, medianTime uint32) error {
+	return t.utxoStore.SetBlockState(height, medianTime)
 }
 
 func (t *TxMetaCache) GetBlockState() utxo.BlockState {

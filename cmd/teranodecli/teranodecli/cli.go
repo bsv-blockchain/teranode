@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 
 	"github.com/bsv-blockchain/teranode/cmd/aerospikekafkaconnector"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
@@ -20,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/monitor"
 	"github.com/bsv-blockchain/teranode/cmd/reconsiderblock"
 	"github.com/bsv-blockchain/teranode/cmd/resetblockassembly"
+	"github.com/bsv-blockchain/teranode/cmd/rewindblockchain/rewindblockchain"
 	"github.com/bsv-blockchain/teranode/cmd/seeder"
 	"github.com/bsv-blockchain/teranode/cmd/setfsmstate"
 	cmdSettings "github.com/bsv-blockchain/teranode/cmd/settings"
@@ -30,6 +32,13 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+)
+
+const (
+	flagCPUProfile        = "cpu-profile"
+	flagMemProfile        = "mem-profile"
+	usageCPUProfileOutput = "CPU profile output"
+	usageMemProfileOutput = "Memory profile output"
 )
 
 // commandHelp stores the command descriptions
@@ -51,6 +60,7 @@ var commandHelp = map[string]string{
 	"resetblockassembly":      "Reset block assembly state",
 	"checkblockassembly":      "Check block assembly state by validating unmined transaction inputs (read-only)",
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
+	"rewindblockchain":        "Rewind blockchain DB, UTXO store and subtree blobs to Block Assembly's persisted height (DESTRUCTIVE, node must be stopped)",
 	"validate-utxo-set":       "Validate UTXO set file",
 	"subtreebench":            "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
 	"loadunminedbench":        "Benchmark loadUnminedTransactions with CPU and memory profiling",
@@ -201,8 +211,29 @@ func Start(args []string, version, commit string) {
 				logger, tSettings, *kafkaURL, *txid, *namespace, *set, *statsInterval)
 		}
 	case "utxopersister":
+		endHeight := uint32Flag(cmd.FlagSet, "end-height", 0,
+			"Build the UTXO set up to this block height and exit (one-shot). 0 = run the service.")
+		startHeight := uint32Flag(cmd.FlagSet, "start-height", 0,
+			"Start the one-shot build on top of the existing utxo-set at this height (0 = genesis). Requires --end-height.")
+		updateLastProcessed := cmd.FlagSet.Bool("update-last-processed", false,
+			"After a one-shot build, write lastProcessed.dat = end-height so a later service start resumes there.")
+
 		cmd.Execute = func(args []string) error {
+			if *endHeight > 0 {
+				if *startHeight >= *endHeight {
+					return errors.NewProcessingError("--start-height (%d) must be less than --end-height (%d)", *startHeight, *endHeight)
+				}
+
+				return utxopersister.RunUtxoPersisterToHeight(logger, tSettings,
+					*startHeight, *endHeight, *updateLastProcessed)
+			}
+
+			if *startHeight > 0 || *updateLastProcessed {
+				return errors.NewProcessingError("--start-height / --update-last-processed require --end-height")
+			}
+
 			utxopersister.RunUtxoPersister(logger, tSettings)
+
 			return nil
 		}
 	case "seeder":
@@ -210,7 +241,7 @@ func Start(args []string, version, commit string) {
 		hash := cmd.FlagSet.String("hash", "", "Hash of the UTXO set / headers to process.")
 		skipHeaders := cmd.FlagSet.Bool("skipHeaders", false, "Skip processing headers.")
 		skipUTXOs := cmd.FlagSet.Bool("skipUTXOs", false, "Skip processing UTXOs.")
-		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat exists.")
+		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat or BlockAssembler state already exists.")
 		cmd.Execute = func(args []string) error {
 			if *inputDir == "" {
 				return errors.NewProcessingError("Please provide an inputDir")
@@ -220,9 +251,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Please provide a hash")
 			}
 
-			seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force)
-
-			return nil
+			return seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force)
 		}
 	case "bitcointoutxoset":
 		blockchainDir := cmd.FlagSet.String("bitcoinDir", "", "Location of bitcoin data")
@@ -413,6 +442,8 @@ func Start(args []string, version, commit string) {
 
 			return fixChainwork(*dbURL, *dryRun, *batchSize, uint32(*startHeight), uint32(*endHeight))
 		}
+	case "rewindblockchain":
+		cmd.Execute = rewindExecute(logger, tSettings, registerRewindFlags(cmd.FlagSet))
 	case "validate-utxo-set":
 		verbose := cmd.FlagSet.Bool("verbose", false, "verbose output showing individual UTXOs")
 
@@ -464,8 +495,8 @@ func Start(args []string, version, commit string) {
 		subtreeSize := cmd.FlagSet.Int("subtree-size", 1_048_576, "Size of subtree")
 		producers := cmd.FlagSet.Int("producers", 16, "Number of producer goroutines")
 		iterations := cmd.FlagSet.Int("iterations", 10_000_000, "Number of transactions to process")
-		cpuProfile := cmd.FlagSet.String("cpu-profile", "cpu.prof", "Output file for CPU profile")
-		memProfile := cmd.FlagSet.String("mem-profile", "mem.prof", "Output file for memory profile")
+		cpuProfile := cmd.FlagSet.String(flagCPUProfile, "cpu.prof", "Output file for CPU profile")
+		memProfile := cmd.FlagSet.String(flagMemProfile, "mem.prof", "Output file for memory profile")
 		duration := cmd.FlagSet.Int("duration", 0, "Duration to run benchmark in seconds (0 for iteration-based, processes all items)")
 
 		cmd.Execute = func(args []string) error {
@@ -473,8 +504,8 @@ func Start(args []string, version, commit string) {
 		}
 	case "loadunminedbench":
 		txCount := cmd.FlagSet.Int("tx-count", 1_000_000, "Number of transactions")
-		cpuProfile := cmd.FlagSet.String("cpu-profile", "loadunmined_cpu.prof", "CPU profile output")
-		memProfile := cmd.FlagSet.String("mem-profile", "loadunmined_mem.prof", "Memory profile output")
+		cpuProfile := cmd.FlagSet.String(flagCPUProfile, "loadunmined_cpu.prof", usageCPUProfileOutput)
+		memProfile := cmd.FlagSet.String(flagMemProfile, "loadunmined_mem.prof", usageMemProfileOutput)
 		aerospikeURL := cmd.FlagSet.String("aerospike-url", "", "Aerospike URL (empty=testcontainer)")
 
 		cmd.Execute = func(args []string) error {
@@ -483,8 +514,8 @@ func Start(args []string, version, commit string) {
 	case "txmapbench":
 		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
 		txsPerSubtree := cmd.FlagSet.Int("txs-per-subtree", 1_048_576, "Transactions per subtree")
-		cpuProfile := cmd.FlagSet.String("cpu-profile", "createtransactionmap_cpu.prof", "CPU profile output")
-		memProfile := cmd.FlagSet.String("mem-profile", "createtransactionmap_mem.prof", "Memory profile output")
+		cpuProfile := cmd.FlagSet.String(flagCPUProfile, "createtransactionmap_cpu.prof", usageCPUProfileOutput)
+		memProfile := cmd.FlagSet.String(flagMemProfile, "createtransactionmap_mem.prof", usageMemProfileOutput)
 
 		cmd.Execute = func(args []string) error {
 			return runCreateTxMapBenchmark(*numSubtrees, *txsPerSubtree, *cpuProfile, *memProfile)
@@ -492,8 +523,8 @@ func Start(args []string, version, commit string) {
 	case "remainderbench":
 		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
 		txsPerSubtree := cmd.FlagSet.Int("txs-per-subtree", 1_048_576, "Transactions per subtree")
-		cpuProfile := cmd.FlagSet.String("cpu-profile", "processremaindertxanddequeue_cpu.prof", "CPU profile output")
-		memProfile := cmd.FlagSet.String("mem-profile", "processremaindertxanddequeue_mem.prof", "Memory profile output")
+		cpuProfile := cmd.FlagSet.String(flagCPUProfile, "processremaindertxanddequeue_cpu.prof", usageCPUProfileOutput)
+		memProfile := cmd.FlagSet.String(flagMemProfile, "processremaindertxanddequeue_mem.prof", usageMemProfileOutput)
 
 		cmd.Execute = func(args []string) error {
 			return runProcessRemainderBenchmark(*numSubtrees, *txsPerSubtree, *cpuProfile, *memProfile)
@@ -561,4 +592,100 @@ func formatSatoshis(satoshis uint64) string {
 	}
 
 	return string(result)
+}
+
+// uint32Value is a flag.Value that parses into a uint32, rejecting values
+// outside the uint32 range at parse time rather than silently truncating.
+type uint32Value uint32
+
+func (u *uint32Value) Set(s string) error {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return err
+	}
+
+	*u = uint32Value(n)
+
+	return nil
+}
+
+func (u *uint32Value) String() string {
+	return strconv.FormatUint(uint64(*u), 10)
+}
+
+// uint32Flag registers a uint32-typed flag on fs and returns a pointer to its value.
+func uint32Flag(fs *flag.FlagSet, name string, value uint32, usage string) *uint32 {
+	p := new(uint32)
+	*p = value
+	fs.Var((*uint32Value)(p), name, usage)
+
+	return p
+}
+
+// rewindFlags holds the parsed rewindblockchain flag values. Registration lives
+// here rather than inline in the dispatch switch so tests can exercise the flag
+// surface without executing a rewind, which opens real stores.
+type rewindFlags struct {
+	targetHeight *int64
+	dryRun       *bool
+	assumeYes    *bool
+	forceNotIdle *bool
+	forceDeep    *bool
+	verify       *bool
+	concurrency  *int
+}
+
+// registerRewindFlags registers the rewindblockchain flags on fs. Names and
+// defaults are copied verbatim from cmd/rewindblockchain/main.go and are
+// documented in docs/howto/miners/minersHowToTeranodeCLI.md; do not rename them.
+func registerRewindFlags(fs *flag.FlagSet) *rewindFlags {
+	return &rewindFlags{
+		targetHeight: fs.Int64("target-height", -1, "Target height to rewind to (default: read state[\"BlockAssembler\"])"),
+		dryRun:       fs.Bool("dry-run", false, "Log actions but do not modify any store"),
+		assumeYes:    fs.Bool("assume-yes", false, "Skip interactive confirmation prompt"),
+		forceNotIdle: fs.Bool("force-not-idle", false, "Proceed even if FSM is not IDLE (DANGEROUS)"),
+		forceDeep:    fs.Bool("force-deep", false, "Allow rewind deeper than 100 blocks (coinbase-maturity risk)"),
+		verify:       fs.Bool("verify", false, "Run post-rewind consistency checks"),
+		concurrency:  fs.Int("concurrency", 0, "Subtree-load concurrency (0 = settings.BlockAssembly.MoveBackBlockConcurrency or 4)"),
+	}
+}
+
+// rewindExecute builds the Execute closure for the rewindblockchain command.
+// Split out of the dispatch switch so the positional-argument guard below is
+// reachable from a test: the guard returns before Rewind is called, so a test
+// can drive it without opening any store.
+//
+// The guard matters because Go's flag package stops parsing at the first
+// non-flag argument. Without it, `rewindblockchain --assume-yes 1749330
+// --force-deep` parses only --assume-yes and discards the rest, leaving
+// TargetHeight at -1 so resolveTarget silently falls back to
+// state["BlockAssembler"] — an irreversible rewind to an unasked-for height,
+// with the confirmation prompt skipped.
+func rewindExecute(logger ulogger.Logger, tSettings *settings.Settings, rewind *rewindFlags) func(args []string) error {
+	return func(args []string) error {
+		if len(args) > 0 {
+			return errors.NewProcessingError("rewindblockchain takes no positional arguments (got %v); use --target-height", args)
+		}
+
+		_, err := rewindblockchain.Rewind(context.Background(), logger, tSettings, rewind.options())
+
+		return err
+	}
+}
+
+// options converts the parsed flags into rewindblockchain.Options, wiring the
+// process stdin/stdout so the destructive-action confirmation prompt works
+// under `kubectl exec -it` / `docker compose run`.
+func (f *rewindFlags) options() rewindblockchain.Options {
+	return rewindblockchain.Options{
+		TargetHeight: *f.targetHeight,
+		DryRun:       *f.dryRun,
+		AssumeYes:    *f.assumeYes,
+		ForceNotIdle: *f.forceNotIdle,
+		ForceDeep:    *f.forceDeep,
+		Verify:       *f.verify,
+		Concurrency:  *f.concurrency,
+		Stdin:        os.Stdin,
+		Stdout:       os.Stdout,
+	}
 }

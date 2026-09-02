@@ -5,11 +5,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -74,6 +77,18 @@ type PeerRegistryClientI interface {
 	// RecordCatchupError stores the peer's most recent catchup error.
 	RecordCatchupError(ctx context.Context, peerID, errMsg string) error
 
+	// RecordCatchupAttempt increments the peer's catchup-attempt counter and
+	// updates sync backoff tracking.
+	RecordCatchupAttempt(ctx context.Context, peerID string) error
+
+	// RecordCatchupSuccess increments the peer's catchup-success counter and
+	// records a successful interaction with the given response time.
+	RecordCatchupSuccess(ctx context.Context, peerID string, responseTimeMs int64) error
+
+	// RecordCatchupFailure increments the peer's catchup-failure counter and
+	// records a failed interaction.
+	RecordCatchupFailure(ctx context.Context, peerID string) error
+
 	// ResetReputation resets reputation for a peer (or all peers when peerID is empty).
 	// Returns the count of peers reset.
 	ResetReputation(ctx context.Context, peerID string) (int32, error)
@@ -81,6 +96,9 @@ type PeerRegistryClientI interface {
 	// ReconsiderBadPeers resets reputation for peers whose last failure is older than cooldown.
 	// Returns the count of peers reconsidered.
 	ReconsiderBadPeers(ctx context.Context, cooldown time.Duration) (int32, error)
+
+	// RecordValidatedPeerProgress stores locally validated peer chain progress.
+	RecordValidatedPeerProgress(ctx context.Context, peerID string, height uint32, blockHash *chainhash.Hash, chainWork []byte) error
 
 	// Close releases any resources held by the client.
 	// For clients created with NewPeerRegistryClientFromConn, Close is a no-op
@@ -308,6 +326,43 @@ func (c *PeerRegistryClient) RecordCatchupError(ctx context.Context, peerID, err
 	return err
 }
 
+// RecordCatchupAttempt implements PeerRegistryClientI. During a rolling upgrade
+// the blockchain service may predate this RPC; fall back to the legacy
+// RecordSyncAttempt call so sync backoff tracking keeps working (only the new
+// catchup-attempt counter is lost until the server is upgraded).
+func (c *PeerRegistryClient) RecordCatchupAttempt(ctx context.Context, peerID string) error {
+	_, err := c.client.RecordCatchupAttempt(ctx, &blockchain_api.RecordCatchupAttemptRequest{PeerId: peerID})
+	if status.Code(err) == codes.Unimplemented {
+		_, err = c.client.RecordSyncAttempt(ctx, &blockchain_api.RecordSyncAttemptRequest{PeerId: peerID})
+	}
+	return err
+}
+
+// RecordCatchupSuccess implements PeerRegistryClientI. Falls back to the legacy
+// UpdatePeerMetrics(success) call when the blockchain service predates this RPC,
+// so reputation credit keeps flowing during a rolling upgrade.
+func (c *PeerRegistryClient) RecordCatchupSuccess(ctx context.Context, peerID string, responseTimeMs int64) error {
+	_, err := c.client.RecordCatchupSuccess(ctx, &blockchain_api.RecordCatchupSuccessRequest{
+		PeerId:         peerID,
+		ResponseTimeMs: responseTimeMs,
+	})
+	if status.Code(err) == codes.Unimplemented {
+		return c.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, true, false, false, responseTimeMs)
+	}
+	return err
+}
+
+// RecordCatchupFailure implements PeerRegistryClientI. Falls back to the legacy
+// UpdatePeerMetrics(failure) call when the blockchain service predates this RPC,
+// so reputation penalties keep applying during a rolling upgrade.
+func (c *PeerRegistryClient) RecordCatchupFailure(ctx context.Context, peerID string) error {
+	_, err := c.client.RecordCatchupFailure(ctx, &blockchain_api.RecordCatchupFailureRequest{PeerId: peerID})
+	if status.Code(err) == codes.Unimplemented {
+		return c.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, false, true, false, 0)
+	}
+	return err
+}
+
 // ResetReputation implements PeerRegistryClientI.
 func (c *PeerRegistryClient) ResetReputation(ctx context.Context, peerID string) (int32, error) {
 	resp, err := c.client.ResetReputation(ctx, &blockchain_api.ResetReputationRequest{PeerId: peerID})
@@ -326,6 +381,17 @@ func (c *PeerRegistryClient) ReconsiderBadPeers(ctx context.Context, cooldown ti
 		return 0, err
 	}
 	return resp.Reconsidered, nil
+}
+
+// RecordValidatedPeerProgress implements PeerRegistryClientI.
+func (c *PeerRegistryClient) RecordValidatedPeerProgress(ctx context.Context, peerID string, height uint32, blockHash *chainhash.Hash, chainWork []byte) error {
+	_, err := c.client.RecordValidatedPeerProgress(ctx, &blockchain_api.RecordValidatedPeerProgressRequest{
+		PeerId:    peerID,
+		Height:    height,
+		BlockHash: blockHashToBytes(blockHash),
+		ChainWork: append([]byte(nil), chainWork...),
+	})
+	return err
 }
 
 // Close releases the underlying gRPC connection if this client owns it.
@@ -446,12 +512,31 @@ func (l *localPeerRegistryClient) RecordCatchupError(_ context.Context, peerID, 
 	return nil
 }
 
+func (l *localPeerRegistryClient) RecordCatchupAttempt(_ context.Context, peerID string) error {
+	l.reg.RecordCatchupAttempt(peerID)
+	return nil
+}
+
+func (l *localPeerRegistryClient) RecordCatchupSuccess(_ context.Context, peerID string, responseTimeMs int64) error {
+	l.reg.RecordCatchupSuccess(peerID, responseTimeMs)
+	return nil
+}
+
+func (l *localPeerRegistryClient) RecordCatchupFailure(_ context.Context, peerID string) error {
+	l.reg.RecordCatchupFailure(peerID)
+	return nil
+}
+
 func (l *localPeerRegistryClient) ResetReputation(_ context.Context, peerID string) (int32, error) {
 	return int32(l.reg.ResetReputation(peerID)), nil
 }
 
 func (l *localPeerRegistryClient) ReconsiderBadPeers(_ context.Context, cooldown time.Duration) (int32, error) {
 	return int32(l.reg.ReconsiderBadPeers(cooldown)), nil
+}
+
+func (l *localPeerRegistryClient) RecordValidatedPeerProgress(_ context.Context, peerID string, height uint32, blockHash *chainhash.Hash, chainWork []byte) error {
+	return l.reg.RecordValidatedPeerProgress(peerID, height, blockHash, chainWork)
 }
 
 func (l *localPeerRegistryClient) Close() error { return nil }

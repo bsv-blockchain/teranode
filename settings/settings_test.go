@@ -2,6 +2,7 @@ package settings
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,7 @@ func TestGenesisActivationHeight(t *testing.T) {
 		params *chaincfg.Params
 		expect uint32
 	}{
-		{"RegressionNet", &chaincfg.RegressionNetParams, 10000},
+		{"RegressionNet", &chaincfg.RegressionNetParams, 100},
 		{"TestNet", &chaincfg.TestNetParams, 1344302},
 		{"MainNet", &chaincfg.MainNetParams, 620538},
 	}
@@ -145,4 +146,47 @@ func TestMaxRawTxFee_EnvZeroDisables(t *testing.T) {
 	t.Setenv("maxrawtxfee", "0")
 	tSettings := NewSettings()
 	require.Equal(t, uint64(0), tSettings.Policy.MaxRawTxFee)
+}
+
+// Pin the script-size policy default. This is the ceiling on an individual
+// locking or unlocking script and is pushed into the BDK script engine at
+// validator startup; it matches maxtxsizepolicy (100MB) so the script limit is
+// not the binding constraint on an otherwise-acceptable transaction.
+func TestMaxScriptSizePolicy_Default(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings.Policy)
+	require.Equal(t, 100_000_000, tSettings.Policy.MaxScriptSizePolicy)
+}
+
+// Operators can still tighten (or loosen) the ceiling via the
+// maxscriptsizepolicy key.
+func TestMaxScriptSizePolicy_EnvOverride(t *testing.T) {
+	t.Setenv("maxscriptsizepolicy", "500000")
+	tSettings := NewSettings()
+	require.Equal(t, 500_000, tSettings.Policy.MaxScriptSizePolicy)
+}
+
+func TestP2PSyncHardeningDefaultsAreLoaded(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+
+	require.Equal(t, uint32(10_000), tSettings.P2P.MaxUnvalidatedAdvertisedHeightLead)
+	require.Equal(t, 3, tSettings.P2P.MaxUnprovenSyncProbesPerBackoffWindow)
+	require.Equal(t, time.Hour, tSettings.P2P.FullStoragePenaltyDuration)
+	require.Equal(t, 24*time.Hour, tSettings.P2P.FullDeliveryFreshnessWindow)
+	require.Equal(t, 5*time.Minute, tSettings.P2P.SyncPeerNoProgressTimeout)
+}
+
+func TestP2PFullStoragePenaltyDuration_EnvOverride(t *testing.T) {
+	t.Setenv("p2p_full_storage_penalty_duration", "2h")
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+	require.Equal(t, 2*time.Hour, tSettings.P2P.FullStoragePenaltyDuration)
+}
+
+func TestP2PSyncPeerNoProgressTimeout_EnvOverride(t *testing.T) {
+	t.Setenv("p2p_sync_peer_no_progress_timeout", "12m")
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+	require.Equal(t, 12*time.Minute, tSettings.P2P.SyncPeerNoProgressTimeout)
 }

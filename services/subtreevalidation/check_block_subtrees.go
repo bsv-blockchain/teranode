@@ -20,6 +20,9 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
@@ -53,10 +56,316 @@ func (c *countingReadCloser) Close() error {
 // CheckBlockSubtrees validates that all subtrees referenced in a block exist in storage.
 //
 // subtree information for blocks that reference unavailable subtrees.
+// loadSubtreeBatch fetches and deserializes the transactions for one batch of
+// subtrees. It is the read-only LOAD phase of CheckBlockSubtrees: it reads
+// subtree files (or fetches them from a peer), writes the content-addressed
+// FileTypeSubtreeToCheck marker, and decodes the subtree's transactions into
+// memory. It performs NO UTXO Spend/Create, so it is safe to run ahead of — and
+// concurrently with — the PROCESS phase (processTransactionsInLevels) of an
+// earlier batch. See the producer/consumer pipeline in CheckBlockSubtrees.
+//
+// On success it returns the batch's transactions consolidated into a single
+// slice plus the per-subtree arenas backing their script data. The caller MUST
+// release the arenas (putSubtreeArena) once processTransactionsInLevels has
+// consumed the txs. On error it releases any arenas it allocated before
+// returning, so the caller never has to clean up after a failed load.
+//
+// ctx governs the batch load itself (errgroup, store reads) and is the
+// pipeline's cancellable per-load context — when CheckBlockSubtrees aborts
+// (a later batch's processing fails) this ctx is cancelled to stop the load.
+// fetchCtx is the durable top-level request context, deliberately NOT derived
+// from the pipeline's load-abort context: it governs only the on-demand peer
+// subtree_data download (see the rationale at the fetch site) so that a
+// cross-batch abort does not cancel an in-flight peer fetch and trigger the
+// peer's storer.Abort. Pass the same context for both only when there is no
+// pipeline (e.g. tests).
+func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest, batchSubtrees []chainhash.Hash, peerID string, dah uint32) (allTransactions []*bt.Tx, batchArenas []*bt.Arena, err error) {
+	// Load transactions for this batch of subtrees in parallel
+	subtreeTxs := make([][]*bt.Tx, len(batchSubtrees))
+	batchArenas = make([]*bt.Arena, len(batchSubtrees))
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
+
+	for subtreeIdx, subtreeHash := range batchSubtrees {
+		subtreeHash := subtreeHash
+		subtreeIdx := subtreeIdx
+
+		g.Go(func() (err error) {
+			// A subtree may be available locally under either:
+			//   - FileTypeSubtreeToCheck — fetched from a peer, pending validation
+			//   - FileTypeSubtree        — already validated (e.g. legacy catch-up's
+			//                               quickValidationMode validated txs inline
+			//                               before writing the subtree)
+			// We must consult both before falling back to an HTTP fetch. Otherwise
+			// CheckBlockSubtrees will try to HTTP-download a subtree we already have
+			// — and for baseURL="legacy" the synthetic URL has no scheme, so the
+			// request fails outright.
+			localFileType, localExists, err := u.findLocalSubtreeFile(gCtx, subtreeHash)
+			if err != nil {
+				return errors.NewStorageError("[CheckBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
+			}
+
+			var subtreeToCheck *subtreepkg.Subtree
+
+			if localExists {
+				// read from whichever local file we found
+				subtreeReader, err := u.subtreeStore.GetIoReader(gCtx, subtreeHash[:], localFileType)
+				if err != nil {
+					return errors.NewStorageError("[CheckBlockSubtrees][%s] failed to get subtree from store", subtreeHash.String(), err)
+				}
+				defer subtreeReader.Close()
+
+				// Use pooled bufio.Reader to reduce allocations (eliminates 50% of GC pressure)
+				bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+				bufferedReader.Reset(subtreeReader)
+				defer func() {
+					bufferedReader.Reset(nil) // Clear reference before returning to pool
+					bufioReaderPool.Put(bufferedReader)
+				}()
+
+				subtreeToCheck, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
+				if err != nil {
+					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to deserialize subtree", subtreeHash.String(), err)
+				}
+			} else {
+				// get the subtree from the peer
+				url := fmt.Sprintf("%s/subtree/%s", request.BaseUrl, subtreeHash.String())
+
+				// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
+				// malicious peer can't OOM us by streaming oversized responses. This must be
+				// independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which only
+				// controls what *this node* assembles; peers may legitimately produce larger subtrees.
+				maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
+				subtreeNodeBytes, err := util.DoHTTPRequestBounded(gCtx, url, maxSubtreeBytes)
+				if err != nil {
+					return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree from %s", subtreeHash.String(), url, err)
+				}
+
+				// Track bytes downloaded from peer
+				if u.p2pClient != nil && peerID != "" {
+					if err := u.p2pClient.RecordBytesDownloaded(gCtx, peerID, uint64(len(subtreeNodeBytes))); err != nil {
+						u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), len(subtreeNodeBytes), peerID, err)
+					}
+				}
+
+				// Bound the leaf count by the receive-side cap (same rationale as the body cap above):
+				// peers may legitimately produce subtrees larger than the local assembly policy. The
+				// bounded HTTP read already enforces this, but we keep the explicit check as a guard
+				// before subtreepkg.NewIncompleteTreeByLeafCount allocates against the count.
+				leafCount := len(subtreeNodeBytes) / chainhash.HashSize
+				maxIncomingLeaves := int(maxSubtreeBytes / int64(chainhash.HashSize))
+				if err := validateSubtreeLeafCount(subtreeHash, leafCount, maxIncomingLeaves); err != nil {
+					return err
+				}
+
+				subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
+				if err != nil {
+					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to create subtree structure", subtreeHash.String(), err)
+				}
+
+				var nodeHash chainhash.Hash
+				for i := 0; i < len(subtreeNodeBytes)/chainhash.HashSize; i++ {
+					copy(nodeHash[:], subtreeNodeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize])
+
+					if nodeHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+						if err = subtreeToCheck.AddCoinbaseNode(); err != nil {
+							return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add coinbase node to subtree", subtreeHash.String(), err)
+						}
+					} else {
+						if err = subtreeToCheck.AddNode(nodeHash, 0, 0); err != nil {
+							return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add node to subtree", subtreeHash.String(), err)
+						}
+					}
+				}
+
+				if !subtreeHash.Equal(*subtreeToCheck.RootHash()) {
+					return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree root hash mismatch: %s", subtreeHash.String(), subtreeToCheck.RootHash().String())
+				}
+
+				subtreeBytes, err := subtreeToCheck.Serialize()
+				if err != nil {
+					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to serialize subtree", subtreeHash.String(), err)
+				}
+
+				// Store the subtreeToCheck marker for later processing, with a DAH of
+				// current block height + subtree-validation retention (set above).
+				if err = u.subtreeStore.Set(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes, options.WithDeleteAt(dah)); err != nil {
+					// ErrBlobAlreadyExists is benign: the subtree filename is its content
+					// hash (verified above), so an existing file holds identical bytes. This
+					// happens when the same block is validated concurrently (announced by two
+					// peers) or retried after a partial attempt — racing on this content-
+					// addressed write must not fail the block. Mirrors the same handling for
+					// FileTypeSubtree/FileTypeSubtreeMeta in ValidateSubtreeInternal.
+					if errors.Is(err, errors.ErrBlobAlreadyExists) {
+						u.logger.Warnf("[CheckBlockSubtrees][%s] subtreeToCheck already exists in store", subtreeHash.String())
+					} else {
+						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to store subtreeToCheck", subtreeHash.String(), err)
+					}
+				}
+			}
+
+			// Adaptive-fetch gate: when optimistic, skip subtreeData entirely.
+			//
+			// What this skip is: the work below is only a prewarm. It bulk-loads
+			// the subtree's txs from subtreeData so the real validation step
+			// (ValidateSubtreeInternal, run for every subtree further down) finds
+			// them already cached. Skipping it leaves subtreeTxs[subtreeIdx] nil,
+			// so the bulk processTransactionsInLevels does nothing for this subtree.
+			//
+			// What this skip is NOT: it does not skip validation. Every subtree
+			// still goes through ValidateSubtreeInternal below, which checks the
+			// UTXO store for each tx and fetches anything genuinely missing from
+			// peers on demand (getSubtreeMissingTxs → processMissingTransactions).
+			// So if the optimistic assumption is wrong — a tx was not delivered by
+			// propagation — that tx is still recovered and validated normally. The
+			// only cost of a wrong guess is bandwidth (the tx is fetched during
+			// validation instead of being prewarmed here); correctness and data
+			// integrity are never at risk.
+			//
+			// Capture the live mode (not just the boolean) so the
+			// observation we record below can be tagged with the mode
+			// the work was actually performed in. Subtree workers run
+			// concurrently via the errgroup and the mode can transition
+			// between sample and Record; tagging the observation lets
+			// the state machine drop cross-mode samples instead of
+			// applying them to the wrong window.
+			modeAtSample := u.adaptiveFetch.Mode()
+			optimistic := modeAtSample == adaptivefetch.ModeOptimistic
+
+			if !optimistic {
+				// PHASE 2: Exact pre-allocation. Only sized when we will actually
+				// populate the slice (pessimistic path). In optimistic mode we
+				// leave subtreeTxs[subtreeIdx] as nil to avoid allocating a
+				// large *bt.Tx-pointer backing array that would never be filled —
+				// downstream consolidation handles nil/empty entries naturally.
+				subtreeTxs[subtreeIdx] = make([]*bt.Tx, 0, subtreeToCheck.Length())
+
+				// Allocate a per-subtree arena for zero-copy script decoding.
+				// The arena is stored in batchArenas[subtreeIdx] so it can be released
+				// after processTransactionsInLevels consumes the batch's txs.
+				// Only allocated on the pessimistic path; in optimistic mode no
+				// subtreeData is fetched, so no arena is needed and
+				// batchArenas[subtreeIdx] stays nil (the release loops guard on nil).
+				arena := getSubtreeArena()
+				batchArenas[subtreeIdx] = arena
+
+				subtreeDataExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+				if err != nil {
+					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store", subtreeHash.String(), err)
+				}
+
+				if !subtreeDataExists {
+					// get the subtree data from the peer and process it directly
+					url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
+
+					// Retry on 503 — peer's asset service may reject under admission control
+					// while it generates the file on-demand from Aerospike.
+					//
+					// IMPORTANT: pass fetchCtx, NOT ctx or gCtx, to the HTTP fetch and the
+					// stream processor. Both ctx (the pipeline's per-load context) and gCtx
+					// (the errgroup's child of ctx) are cancelled when this load is aborted —
+					// either by a sibling subtree failing in this batch (gCtx) or by a LATER
+					// batch's processing failing, which cancels the pipeline load context
+					// (ctx). Cancelling here closes the upstream connection, so the peer
+					// aborts its on-demand creation (storer.Abort), discarding work already
+					// paid for in Aerospike reads. fetchCtx is the durable top-level request
+					// context, independent of both abort paths, so each fetch completes (or
+					// hits its own http_streaming_timeout) and the peer finishes writing its
+					// subtreeData file — converting otherwise-wasted Aerospike work into a
+					// pre-warmed cache for the next retry. The trade-off is that abort
+					// detection waits for in-flight peers instead of cancelling early;
+					// acceptable here because the per-fetch streaming timeout still bounds it.
+					body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(fetchCtx, url)
+					if subtreeDataErr != nil {
+						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
+					}
+
+					// Wrap with counting reader to track bytes downloaded
+					var bytesRead uint64
+					countingBody := &countingReadCloser{
+						reader:    body,
+						bytesRead: &bytesRead,
+					}
+
+					// Process transactions directly from the stream while storing to disk.
+					// Same rationale as above for using fetchCtx instead of ctx/gCtx.
+					err = u.processSubtreeDataStream(fetchCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah, arena)
+					_ = countingBody.Close()
+
+					// Track bytes downloaded from peer after stream is consumed
+					// Decouple the context to ensure tracking completes even if parent context is cancelled
+					if u.p2pClient != nil && peerID != "" {
+						trackCtx, _, deferFn := tracing.DecoupleTracingSpan(gCtx, "subtreevalidation", "recordBytesDownloaded")
+						defer deferFn()
+						if err := u.p2pClient.RecordBytesDownloaded(trackCtx, peerID, bytesRead); err != nil {
+							u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), bytesRead, peerID, err)
+						}
+					}
+
+					if err != nil {
+						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to process subtree data stream", subtreeHash.String(), err)
+					}
+				} else {
+					// SubtreeData exists, extract transactions from stored file
+					err = u.extractAndCollectTransactions(gCtx, subtreeToCheck, &subtreeTxs[subtreeIdx], arena)
+					if err != nil {
+						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to extract transactions", subtreeHash.String(), err)
+					}
+				}
+			}
+
+			// Record a synthetic warm-up observation for the adaptive-fetch
+			// state machine. The rationale (why MissingFetches is 0 today,
+			// why that is safe, and the TODO to plumb real counts) lives
+			// once on adaptivefetch.State.RecordSyntheticWarmup. The State is
+			// armed on first FSM RUNNING (see Server), so a node stays
+			// pessimistic through cold-start IBD and only earns optimism once
+			// proven synced.
+			u.adaptiveFetch.RecordSyntheticWarmup(modeAtSample, subtreeToCheck.Length(), 0)
+
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		// Release arenas allocated by goroutines that completed before the error.
+		for i := range batchArenas {
+			if batchArenas[i] != nil {
+				putSubtreeArena(batchArenas[i])
+			}
+		}
+
+		return nil, nil, errors.NewProcessingError("[CheckBlockSubtrees] failed to load subtree transactions", err)
+	}
+
+	// Collect all transactions from this batch of subtrees
+	// Calculate exact capacity needed across all subtrees in this batch to avoid reallocations
+	totalTxCapacity := 0
+	for _, txs := range subtreeTxs {
+		totalTxCapacity += len(txs)
+	}
+
+	allTransactions = make([]*bt.Tx, 0, totalTxCapacity)
+	for _, txs := range subtreeTxs {
+		if len(txs) > 0 {
+			allTransactions = append(allTransactions, txs...)
+		}
+	}
+
+	return allTransactions, batchArenas, nil
+}
+
 func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
+	}
+
+	if request.BaseUrl != "" {
+		if err := util.ValidateURL(request.BaseUrl); err != nil {
+			return nil, errors.NewInvalidArgumentError("[CheckBlockSubtrees] invalid BaseUrl: %v", err)
+		}
 	}
 
 	// Pre-CSV candidate block timestamp can be picked up cheaply from the block
@@ -181,6 +490,19 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		}
 	}
 
+	// Capture the FSM state ONCE for the whole CheckBlockSubtrees call and reuse
+	// it for both the per-batch processTransactionsInLevels pass and the
+	// validateSubtree closure below. Querying it twice (once per pipeline) could
+	// straddle an FSM transition and give the two pipelines divergent
+	// WithAddTXToBlockAssembly settings for the same block. While catching up
+	// blocks, transactions must NOT be added to block assembly.
+	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get FSM current state", err))
+	}
+
+	addTXToBlockAssembly := *currentState != blockchain.FSMStateCATCHINGBLOCKS
+
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
 	if err != nil {
@@ -222,343 +544,124 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			block.TransactionCount, len(block.Subtrees))
 	}
 
-	// Block-scoped in-block-parent metadata accumulator. Lives for the entire
-	// CheckBlockSubtrees call: survives across batches AND across the
-	// ordered-retry phase below. Mutated only at synchronisation points (after
-	// each level's g.Wait() inside processTransactionsInLevels, and after
-	// Phase 2 g.Wait() in the ordered retry). Per-tx goroutines see only
-	// their own pre-filtered map; the shared accumulator is never read or
-	// written from within a per-tx goroutine.
-	//
-	// blockAccumulator is the underlying live map. batchAccumulator wraps it
-	// as the single-map composite (delta=live) used by the sequential batch
-	// loop below. validateMissingSubtreesWithOrderedRetryAccumulated constructs
-	// its own snapshot+delta and single-map composites internally.
-	blockAccumulator := make(map[chainhash.Hash]*validator.ParentTxMetadata)
-	batchAccumulator := &parentMetadataAccumulator{delta: blockAccumulator}
+	// Process subtrees in batches to limit memory usage. The read-only LOAD of
+	// each batch (loadSubtreeBatch) is pipelined one batch ahead of the
+	// ordered, UTXO-mutating PROCESS (processTransactionsInLevels) so the
+	// otherwise-idle inter-batch gap overlaps with validation — see
+	// runLoadProcessPipeline for the ordering and arena-release contract.
+	numBatches := (totalSubtrees + subtreesBatchSize - 1) / subtreesBatchSize
 
-	// Process subtrees in batches to limit memory usage
-	// Each batch loads subtree data, processes transactions, then GCs before next batch
-	for batchStart := 0; batchStart < totalSubtrees; batchStart += subtreesBatchSize {
-		batchEnd := batchStart + subtreesBatchSize
-		if batchEnd > totalSubtrees {
-			batchEnd = totalSubtrees
-		}
-
-		batchNum := (batchStart / subtreesBatchSize) + 1
-		batchSubtrees := missingSubtrees[batchStart:batchEnd]
-		u.logger.Debugf("[CheckBlockSubtrees] Processing subtree batch %d/%d with %d subtrees for block %s", batchNum, (totalSubtrees+subtreesBatchSize-1)/subtreesBatchSize, len(batchSubtrees), block.Hash().String())
-
-		// Load transactions for this batch of subtrees in parallel
-		subtreeTxs := make([][]*bt.Tx, len(batchSubtrees))
-		batchArenas := make([]*bt.Arena, len(batchSubtrees))
-		g, gCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
-
-		for subtreeIdx, subtreeHash := range batchSubtrees {
-			subtreeHash := subtreeHash
-			subtreeIdx := subtreeIdx
-
-			g.Go(func() (err error) {
-				// A subtree may be available locally under either:
-				//   - FileTypeSubtreeToCheck — fetched from a peer, pending validation
-				//   - FileTypeSubtree        — already validated (e.g. legacy catch-up's
-				//                               quickValidationMode validated txs inline
-				//                               before writing the subtree)
-				// We must consult both before falling back to an HTTP fetch. Otherwise
-				// CheckBlockSubtrees will try to HTTP-download a subtree we already have
-				// — and for baseURL="legacy" the synthetic URL has no scheme, so the
-				// request fails outright.
-				localFileType, localExists, err := u.findLocalSubtreeFile(gCtx, subtreeHash)
-				if err != nil {
-					return errors.NewStorageError("[CheckBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
-				}
-
-				var subtreeToCheck *subtreepkg.Subtree
-
-				if localExists {
-					// read from whichever local file we found
-					subtreeReader, err := u.subtreeStore.GetIoReader(gCtx, subtreeHash[:], localFileType)
-					if err != nil {
-						return errors.NewStorageError("[CheckBlockSubtrees][%s] failed to get subtree from store", subtreeHash.String(), err)
-					}
-					defer subtreeReader.Close()
-
-					// Use pooled bufio.Reader to reduce allocations (eliminates 50% of GC pressure)
-					bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
-					bufferedReader.Reset(subtreeReader)
-					defer func() {
-						bufferedReader.Reset(nil) // Clear reference before returning to pool
-						bufioReaderPool.Put(bufferedReader)
-					}()
-
-					subtreeToCheck, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
-					if err != nil {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to deserialize subtree", subtreeHash.String(), err)
-					}
-				} else {
-					// get the subtree from the peer
-					url := fmt.Sprintf("%s/subtree/%s", request.BaseUrl, subtreeHash.String())
-
-					// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
-					// malicious peer can't OOM us by streaming oversized responses. This must be
-					// independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which only
-					// controls what *this node* assembles; peers may legitimately produce larger subtrees.
-					maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
-
-					subtreeNodeBytes, err := util.DoHTTPRequestBounded(gCtx, url, maxSubtreeBytes)
-					if err != nil {
-						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree from %s", subtreeHash.String(), url, err)
-					}
-
-					// Track bytes downloaded from peer
-					if u.p2pClient != nil && peerID != "" {
-						if err := u.p2pClient.RecordBytesDownloaded(gCtx, peerID, uint64(len(subtreeNodeBytes))); err != nil {
-							u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), len(subtreeNodeBytes), peerID, err)
-						}
-					}
-
-					// Bound the leaf count by the receive-side cap (same rationale as the body cap above):
-					// peers may legitimately produce subtrees larger than the local assembly policy. The
-					// bounded HTTP read already enforces this, but we keep the explicit check as a guard
-					// before subtreepkg.NewIncompleteTreeByLeafCount allocates against the count.
-					leafCount := len(subtreeNodeBytes) / chainhash.HashSize
-					maxIncomingLeaves := int(maxSubtreeBytes / int64(chainhash.HashSize))
-					if err := validateSubtreeLeafCount(subtreeHash, leafCount, maxIncomingLeaves); err != nil {
-						return err
-					}
-
-					subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
-					if err != nil {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to create subtree structure", subtreeHash.String(), err)
-					}
-
-					var nodeHash chainhash.Hash
-					for i := 0; i < len(subtreeNodeBytes)/chainhash.HashSize; i++ {
-						copy(nodeHash[:], subtreeNodeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize])
-
-						if nodeHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-							if err = subtreeToCheck.AddCoinbaseNode(); err != nil {
-								return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add coinbase node to subtree", subtreeHash.String(), err)
-							}
-						} else {
-							if err = subtreeToCheck.AddNode(nodeHash, 0, 0); err != nil {
-								return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add node to subtree", subtreeHash.String(), err)
-							}
-						}
-					}
-
-					if !subtreeHash.Equal(*subtreeToCheck.RootHash()) {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree root hash mismatch: %s", subtreeHash.String(), subtreeToCheck.RootHash().String())
-					}
-
-					subtreeBytes, err := subtreeToCheck.Serialize()
-					if err != nil {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to serialize subtree", subtreeHash.String(), err)
-					}
-
-					// Store the subtreeToCheck for later processing
-					// we not set a DAH as this is part of a block and will be permanently stored anyway
-					if err = u.subtreeStore.Set(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes, options.WithDeleteAt(dah)); err != nil {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to store subtree", subtreeHash.String(), err)
-					}
-				}
-
-				// Adaptive-fetch gate: when optimistic, skip subtreeData entirely.
-				//
-				// What this skip is: the work below is only a prewarm. It bulk-loads
-				// the subtree's txs from subtreeData so the real validation step
-				// (ValidateSubtreeInternal, run for every subtree further down) finds
-				// them already cached. Skipping it leaves subtreeTxs[subtreeIdx] nil,
-				// so the bulk processTransactionsInLevels does nothing for this subtree.
-				//
-				// What this skip is NOT: it does not skip validation. Every subtree
-				// still goes through ValidateSubtreeInternal below, which checks the
-				// UTXO store for each tx and fetches anything genuinely missing from
-				// peers on demand (getSubtreeMissingTxs → processMissingTransactions).
-				// So if the optimistic assumption is wrong — a tx was not delivered by
-				// propagation — that tx is still recovered and validated normally. The
-				// only cost of a wrong guess is bandwidth (the tx is fetched during
-				// validation instead of being prewarmed here); correctness and data
-				// integrity are never at risk.
-				//
-				// Capture the live mode (not just the boolean) so the
-				// observation we record below can be tagged with the mode
-				// the work was actually performed in. Subtree workers run
-				// concurrently via the errgroup and the mode can transition
-				// between sample and Record; tagging the observation lets
-				// the state machine drop cross-mode samples instead of
-				// applying them to the wrong window.
-				modeAtSample := u.adaptiveFetch.Mode()
-				optimistic := modeAtSample == adaptivefetch.ModeOptimistic
-
-				if !optimistic {
-					// PHASE 2: Exact pre-allocation. Only sized when we will actually
-					// populate the slice (pessimistic path). In optimistic mode we
-					// leave subtreeTxs[subtreeIdx] as nil to avoid allocating a
-					// large *bt.Tx-pointer backing array that would never be filled —
-					// downstream consolidation handles nil/empty entries naturally.
-					subtreeTxs[subtreeIdx] = make([]*bt.Tx, 0, subtreeToCheck.Length())
-
-					// Allocate a per-subtree arena for zero-copy script decoding.
-					// The arena is stored in batchArenas[subtreeIdx] so it can be released
-					// after processTransactionsInLevels consumes the batch's txs.
-					// Only allocated on the pessimistic path; in optimistic mode no
-					// subtreeData is fetched, so no arena is needed and
-					// batchArenas[subtreeIdx] stays nil (the release loops guard on nil).
-					arena := getSubtreeArena()
-					batchArenas[subtreeIdx] = arena
-
-					subtreeDataExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-					if err != nil {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store", subtreeHash.String(), err)
-					}
-
-					if !subtreeDataExists {
-						// get the subtree data from the peer and process it directly
-						url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
-
-						// Retry on 503 — peer's asset service may reject under admission control
-						// while it generates the file on-demand from Aerospike.
-						//
-						// IMPORTANT: pass the parent ctx, NOT gCtx, to the HTTP fetch and the
-						// stream processor. gCtx is the errgroup's cancellable context — using
-						// it here means a single sibling failure cancels every in-flight
-						// subtree_data download in this batch. Because each cancellation closes
-						// the upstream connection, the peer aborts its on-demand creation
-						// (storer.Abort), discarding work that was already paid for in Aerospike
-						// reads. Detaching from gCtx lets each fetch complete (or hit its own
-						// http_streaming_timeout) so the peer can finish writing its subtreeData
-						// file — converting wasted Aerospike work into a pre-warmed cache for
-						// the next retry. The trade-off is that batch failure detection waits
-						// for in-flight peers instead of cancelling early; acceptable here
-						// because the per-fetch streaming timeout still bounds it.
-						body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
-						if subtreeDataErr != nil {
-							return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
-						}
-
-						// Wrap with counting reader to track bytes downloaded
-						var bytesRead uint64
-						countingBody := &countingReadCloser{
-							reader:    body,
-							bytesRead: &bytesRead,
-						}
-
-						// Process transactions directly from the stream while storing to disk.
-						// Same rationale as above for using ctx instead of gCtx.
-						err = u.processSubtreeDataStream(ctx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah, arena)
-						_ = countingBody.Close()
-
-						// Track bytes downloaded from peer after stream is consumed
-						// Decouple the context to ensure tracking completes even if parent context is cancelled
-						if u.p2pClient != nil && peerID != "" {
-							trackCtx, _, deferFn := tracing.DecoupleTracingSpan(gCtx, "subtreevalidation", "recordBytesDownloaded")
-							defer deferFn()
-							if err := u.p2pClient.RecordBytesDownloaded(trackCtx, peerID, bytesRead); err != nil {
-								u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), bytesRead, peerID, err)
-							}
-						}
-
-						if err != nil {
-							return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to process subtree data stream", subtreeHash.String(), err)
-						}
-					} else {
-						// SubtreeData exists, extract transactions from stored file
-						err = u.extractAndCollectTransactions(gCtx, subtreeToCheck, &subtreeTxs[subtreeIdx], arena)
-						if err != nil {
-							return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to extract transactions", subtreeHash.String(), err)
-						}
-					}
-				}
-
-				// Record a synthetic warm-up observation for the adaptive-fetch
-				// state machine. The rationale (why MissingFetches is 0 today,
-				// why that is safe, and the TODO to plumb real counts) lives
-				// once on adaptivefetch.State.RecordSyntheticWarmup. The State is
-				// armed on first FSM RUNNING (see Server), so a node stays
-				// pessimistic through cold-start IBD and only earns optimism once
-				// proven synced.
-				u.adaptiveFetch.RecordSyntheticWarmup(modeAtSample, subtreeToCheck.Length(), 0)
-
-				return nil
-			})
-		}
-
-		if err = g.Wait(); err != nil {
-			// Release arenas allocated by goroutines that completed before the error.
-			for i := range batchArenas {
-				if batchArenas[i] != nil {
-					putSubtreeArena(batchArenas[i])
-				}
-			}
-			return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to get subtree tx hashes for batch %d", batchNum, err)
-		}
-
-		// Collect all transactions from this batch of subtrees
-		// Calculate exact capacity needed across all subtrees in this batch to avoid reallocations
-		totalTxCapacity := 0
-		for _, txs := range subtreeTxs {
-			totalTxCapacity += len(txs)
-		}
-		allTransactions := make([]*bt.Tx, 0, totalTxCapacity)
-		for _, txs := range subtreeTxs {
-			if len(txs) > 0 {
-				allTransactions = append(allTransactions, txs...)
+	// releaseArenas returns a batch's per-subtree arenas to the pool. Called for
+	// every batch whose txs are no longer referenced (after processing, or for a
+	// loaded-ahead batch abandoned on abort).
+	releaseArenas := func(arenas []*bt.Arena) {
+		for i := range arenas {
+			if arenas[i] != nil {
+				putSubtreeArena(arenas[i])
 			}
 		}
-
-		// Release 2D subtree transaction slice after consolidation
-		// All transactions now in allTransactions, original 2D structure no longer needed
-		subtreeTxs = nil //nolint:ineffassign // Intentional early GC hint
-
-		batchTxCount := len(allTransactions)
-		totalBatches := (totalSubtrees + subtreesBatchSize - 1) / subtreesBatchSize
-		u.logger.Debugf("[CheckBlockSubtrees] Batch %d/%d loaded %d transactions for block %s, now processing", batchNum, totalBatches, batchTxCount, block.Hash().String())
-
-		// Process transactions for this batch
-		if batchTxCount > 0 {
-			if err = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds, batchAccumulator); err != nil {
-				// Release arenas before returning — txs won't be consumed further.
-				for i := range batchArenas {
-					if batchArenas[i] != nil {
-						putSubtreeArena(batchArenas[i])
-					}
-				}
-				return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to process transactions in batch %d", batchNum, err)
-			}
-			totalProcessedTxs += batchTxCount
-
-			// Release transaction slice after processing completes
-			// Transactions are now in UTXO store and validator cache, original slice no longer needed
-			allTransactions = nil //nolint:ineffassign // Intentional early GC hint
-		}
-
-		// Release per-subtree arenas: all *bt.Tx pointers were consumed by
-		// processTransactionsInLevels above, so the arena-backed script slices
-		// are no longer referenced and the arenas can be returned to the pool.
-		for i := range batchArenas {
-			if batchArenas[i] != nil {
-				putSubtreeArena(batchArenas[i])
-				batchArenas[i] = nil
-			}
-		}
-		batchArenas = nil //nolint:ineffassign // Intentional early GC hint
-
-		batchSubtrees = nil //nolint:ineffassign // Intentional early GC hint for batch slice view
-		u.logger.Debugf("[CheckBlockSubtrees] Batch %d/%d complete for block %s (%d txs processed, %d total), memory reclaimed", batchNum, totalBatches, block.Hash().String(), batchTxCount, totalProcessedTxs)
 	}
 
-	u.logger.Infof("[CheckBlockSubtrees] Completed processing %d transactions across %d subtree batches", totalProcessedTxs, (totalSubtrees+subtreesBatchSize-1)/subtreesBatchSize)
+	err = runLoadProcessPipeline(ctx, numBatches,
+		func(loadCtx context.Context, batchIdx int) ([]*bt.Tx, []*bt.Arena, error) {
+			batchStart := batchIdx * subtreesBatchSize
+			batchEnd := batchStart + subtreesBatchSize
+			if batchEnd > totalSubtrees {
+				batchEnd = totalSubtrees
+			}
+
+			batchSubtrees := missingSubtrees[batchStart:batchEnd]
+			u.logger.Debugf("[CheckBlockSubtrees] Loading subtree batch %d/%d with %d subtrees for block %s", batchIdx+1, numBatches, len(batchSubtrees), block.Hash().String())
+
+			// loadCtx (the pipeline's per-load context) governs the load and is
+			// cancelled on abort; ctx is the durable top-level request context
+			// passed as fetchCtx so an in-flight peer subtree_data download is not
+			// cancelled by a later batch's failure. See loadSubtreeBatch.
+			txs, arenas, loadErr := u.loadSubtreeBatch(loadCtx, ctx, request, batchSubtrees, peerID, dah)
+			if loadErr != nil {
+				// Restore the batch context the pre-pipeline loop carried — with
+				// loads running ahead, knowing which batch failed matters more.
+				return nil, nil, errors.NewProcessingError("[CheckBlockSubtrees] failed to load subtree batch %d/%d", batchIdx+1, numBatches, loadErr)
+			}
+
+			return txs, arenas, nil
+		},
+		func(batchIdx int, allTransactions []*bt.Tx, _ []*bt.Arena) error {
+			batchTxCount := len(allTransactions)
+			u.logger.Debugf("[CheckBlockSubtrees] Batch %d/%d loaded %d transactions for block %s, now processing", batchIdx+1, numBatches, batchTxCount, block.Hash().String())
+
+			if batchTxCount > 0 {
+				if procErr := u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds, addTXToBlockAssembly); procErr != nil {
+					return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to process transactions in batch %d", batchIdx+1, procErr)
+				}
+
+				totalProcessedTxs += batchTxCount
+			}
+
+			return nil
+		},
+		releaseArenas,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	u.logger.Infof("[CheckBlockSubtrees] Completed processing %d transactions across %d subtree batches", totalProcessedTxs, numBatches)
 
 	// validateSubtree is the per-subtree action used by both the parallel and
 	// sequential passes below. Extracted as a closure so the phase-2/phase-3
-	// ordering logic (validateMissingSubtreesWithOrderedRetryAccumulated) can
-	// be unit tested against a stub validator without requiring full subtree
-	// data infrastructure. The accumulator argument is a single-map view
-	// (delta=live) in Phase 3 (sequential) and a snapshot+delta view in
-	// Phase 2 (parallel) — see validateMissingSubtreesWithOrderedRetryAccumulated.
-	validateSubtree := func(validateCtx context.Context, subtreeHash chainhash.Hash, accumulator *parentMetadataAccumulator) (*subtreepkg.Subtree, error) {
+	// ordering logic (validateMissingSubtreesWithOrderedRetry) can be unit
+	// tested against a stub validator without requiring full subtree data
+	// infrastructure.
+	//
+	// WithUnconfirmedParentsAtCandidateHeight: a block tx spending a same-block
+	// parent finds that parent in the UTXO store with empty BlockHeights
+	// (SetMinedMulti only runs after block acceptance), so the validator would
+	// stamp the unconfirmedParentHeight sentinel and BDK would reject a
+	// legitimate block with bad-txns-unconfirmed-input-in-block. The option
+	// resolves the sentinel to the candidate height — exact for in-block
+	// parents, including cross-subtree and cross-batch ones (no shared state
+	// needed).
+	//
+	// CONSENSUS SAFETY: fail-open at tx level — a parent that is unconfirmed
+	// and NOT in the block (mempool floater) is no longer rejected here. The
+	// three contract conditions (see Options.UnconfirmedParentsAtCandidateHeight):
+	//   (a) locally-held, PoW-checked block — ValidateBlock verifies nBits and
+	//       target difficulty BEFORE calling CheckBlockSubtrees (exception:
+	//       blocks at or below the highest checkpoint skip the difficulty
+	//       check there; block.Valid still enforces PoW before acceptance);
+	//   (b) floater membership backstop — NOT a synchronous reject here. A
+	//       not-in-block unconfirmed parent surfaces from block.Valid as
+	//       ErrBlockIncomplete; the backstop is block-validation's FSM-gated
+	//       handling of that error (BlockValidation.isCaughtUp): in a caught-up
+	//       state the floater block is invalidated/rolled back (including the
+	//       optimistically-added block), in CATCHINGBLOCKS it
+	//       stays incomplete and is retried (preserving #1031);
+	//   (c) block-assembly contamination — FSM-gated off in
+	//       CATCHINGBLOCKS (both this closure and
+	//       processTransactionsInLevels gate on the same addTXToBlockAssembly
+	//       captured once above);
+	//       in RUNNING the substitution is byte-identical to the everyday
+	//       mempool policy-mode path (substituteUnconfirmedHeights with the
+	//       candidate height ≈ tip+1), so no new class of transaction reaches
+	//       block assembly.
+	subtreeValidatorOptions := []validator.Option{
+		validator.WithSkipPolicyChecks(true),
+		validator.WithInBlock(true),
+		validator.WithCreateConflicting(true),
+		validator.WithIgnoreLocked(true),
+		validator.WithCandidateBlockTime(candidateBlockTime),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithUnconfirmedParentsAtCandidateHeight(true),
+	}
+
+	// Reuse the FSM state captured once at the top of CheckBlockSubtrees so this
+	// closure and processTransactionsInLevels cannot diverge across a transition.
+	if !addTXToBlockAssembly {
+		subtreeValidatorOptions = append(subtreeValidatorOptions, validator.WithAddTXToBlockAssembly(false))
+	}
+
+	validateSubtree := func(validateCtx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error) {
 		v := ValidateSubtree{
 			SubtreeHash:   subtreeHash,
 			BaseURL:       request.BaseUrl,
@@ -566,22 +669,16 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			PeerID:        peerID,
 		}
 
-		return u.validateSubtreeInternalImpl(
+		return u.ValidateSubtreeInternal(
 			validateCtx,
 			v,
 			block.Height,
 			blockIds,
-			accumulator,
-			validator.WithSkipPolicyChecks(true),
-			validator.WithInBlock(true),
-			validator.WithCreateConflicting(true),
-			validator.WithIgnoreLocked(true),
-			validator.WithCandidateBlockTime(candidateBlockTime),
-			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+			subtreeValidatorOptions...,
 		)
 	}
 
-	if err := u.validateMissingSubtreesWithOrderedRetryAccumulated(ctx, missingSubtrees, blockAccumulator, validateSubtree); err != nil {
+	if err := u.validateMissingSubtreesWithOrderedRetry(ctx, missingSubtrees, validateSubtree); err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
 
@@ -692,117 +789,6 @@ func (u *Server) validateMissingSubtreesWithOrderedRetry(
 		}
 
 		if _, err := validateFn(ctx, subtreeHash); err != nil {
-			return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err)
-		}
-	}
-
-	return nil
-}
-
-// validateMissingSubtreesWithOrderedRetryAccumulated is the accumulator-aware
-// sibling of validateMissingSubtreesWithOrderedRetry, used by the
-// block-validation path. The block-scoped accumulator (passed in as the
-// live map) survives the whole CheckBlockSubtrees call and feeds
-// in-block-parent metadata into per-tx validations across batches and across
-// ordered-retry phases.
-//
-// Phase 2 (parallel) must not mutate the shared accumulator from goroutines
-// — the same validateFn would race. The safe shape is: one read-only shared
-// snapshot of the live accumulator + one fresh per-subtree delta map.
-// Each Phase 2 goroutine holds a parentMetadataAccumulator value pointing
-// at the SAME snapshot (read-only — no synchronization required) and its
-// OWN delta. Reads check delta first then snapshot; writes go to delta only.
-// This avoids the O(len(missingSubtrees) * len(liveAccumulator)) copy
-// churn that a per-subtree full snapshot would incur on large blocks.
-//
-// After g.Wait(), Phase 2 deltas are merged into the live accumulator in
-// block-subtree order, **but only for subtrees that fully succeeded**. A
-// subtree that failed in Phase 2 is retried in Phase 3 and its txs are
-// merged then (preserves the invariant "accumulator entries describe txs
-// from successful subtrees only"). Merges use first-writer-wins, so the
-// earliest block-order subtree's entry for a given hash sticks.
-//
-// Phase 3 (sequential) reuses the live accumulator directly — single
-// goroutine, no race. Phase 3 retries see all Phase 2 successes plus any
-// earlier Phase 3 successes from this loop.
-func (u *Server) validateMissingSubtreesWithOrderedRetryAccumulated(
-	ctx context.Context,
-	missingSubtrees []chainhash.Hash,
-	liveAccumulator map[chainhash.Hash]*validator.ParentTxMetadata,
-	validateFn func(ctx context.Context, subtreeHash chainhash.Hash, accumulator *parentMetadataAccumulator) (*subtreepkg.Subtree, error),
-) error {
-	failedParallel := make([]bool, len(missingSubtrees))
-	subtreeDeltas := make([]map[chainhash.Hash]*validator.ParentTxMetadata, len(missingSubtrees))
-
-	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
-
-	// Single shared read-only snapshot of the live accumulator. All Phase 2
-	// goroutines reference this same map for reads; writes go to per-subtree
-	// deltas. Safe because the live accumulator is NOT mutated between
-	// here and g.Wait() — the only writers are the deltas, and the per-batch
-	// processTransactionsInLevels writes have already drained sequentially
-	// before this function was called.
-	snapshot := liveAccumulator
-
-	for i, subtreeHash := range missingSubtrees {
-		i, subtreeHash := i, subtreeHash
-
-		// Each subtree gets its own fresh delta map (owned by that one
-		// goroutine — no concurrent access). Allocated empty; the goroutine
-		// writes its successful tx hashes into it via acc.add during
-		// processMissingTransactions per-level merges.
-		deltaForSubtree := make(map[chainhash.Hash]*validator.ParentTxMetadata)
-		subtreeDeltas[i] = deltaForSubtree
-
-		accForSubtree := &parentMetadataAccumulator{
-			snapshot: snapshot,
-			delta:    deltaForSubtree,
-		}
-
-		g.Go(func() error {
-			if _, err := validateFn(gCtx, subtreeHash, accForSubtree); err != nil {
-				u.logger.Debugf("[CheckBlockSubtreesRequest] Phase 2 failed to validate subtree %s: %v", subtreeHash.String(), err)
-				failedParallel[i] = true
-				return nil
-			}
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed during parallel subtree validation", err)
-	}
-
-	// Merge Phase 2 successes into the live accumulator in block-subtree
-	// order. Failed-Phase-2 subtrees are skipped: their partial contributions
-	// (if any) are retried in Phase 3 and merged there with full state.
-	// Each delta is small (only the txs THIS subtree added), so the merge
-	// is O(sum-of-delta-sizes), not O(missingSubtrees * liveAccumulator).
-	for i := range missingSubtrees {
-		if failedParallel[i] {
-			continue
-		}
-		for h, m := range subtreeDeltas[i] {
-			if _, exists := liveAccumulator[h]; !exists {
-				liveAccumulator[h] = m
-			}
-		}
-		// Release the delta — its entries now live in liveAccumulator (for
-		// successful subtrees) or have been deliberately dropped (failed
-		// subtrees — handled by Phase 3 below).
-		subtreeDeltas[i] = nil
-	}
-
-	// Phase 3: sequential retries with the live accumulator. delta=live;
-	// no snapshot needed because there is no concurrency to isolate against.
-	liveView := &parentMetadataAccumulator{delta: liveAccumulator}
-	for i, subtreeHash := range missingSubtrees {
-		if !failedParallel[i] {
-			continue
-		}
-
-		if _, err := validateFn(ctx, subtreeHash, liveView); err != nil {
 			return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err)
 		}
 	}
@@ -987,30 +973,16 @@ func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtr
 // candidateBlockTime; post-CSV consumes candidateParentMedianTime. Each is
 // expected to be zero in the era it is not consumed; see Options.CandidateBlockTime
 // and Options.CandidateParentMedianTime in services/validator/options.go.
-// This ensures transactions are processed in dependency order while maximizing parallelism
-// processTransactionsInLevels processes one batch of subtree transactions in
-// dependency-level order. When blockAccumulator is non-nil it doubles as the
-// block-scoped in-block-parent metadata accumulator:
-//   - Per-tx pre-filter: each tx's ParentMetadata is filtered down to the
-//     accumulator entries the tx's input prevouts actually reference, then
-//     attached to a per-tx Options clone before the validation goroutine is
-//     spawned. The shared accumulator is never touched from per-tx goroutines.
-//   - Cross-level growth: after each level's g.Wait(), the successful txs of
-//     that level are merged into the accumulator. By the time level N+1
-//     spawns, the accumulator covers every successful tx from levels 0..N
-//     across all earlier batches and earlier levels of this batch.
+// This ensures transactions are processed in dependency order while maximizing parallelism.
 //
-// This closes both Path 2 (skip-level grandparents, which the prior per-level
-// buildParentMetadata only fed for level-1) and the cross-batch case (an
-// in-block parent created in batch K is visible to a child in batch K+1
-// because the accumulator survives across batch boundaries when the caller
-// reuses the same map).
-//
-// When blockAccumulator is nil this function still works for callers that
-// don't hold block context (peer-announced subtree validation): ParentMetadata
-// is simply not set on per-tx Options and the validator falls back to the
-// UTXO store. That path remains best-effort.
-func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, blockIds map[uint32]bool, blockAccumulator *parentMetadataAccumulator) error {
+// In-block parents (parents in the same candidate block, whose BlockHeights
+// are still empty because SetMinedMulti only runs after block acceptance)
+// resolve through the WithUnconfirmedParentsAtCandidateHeight option set
+// below: the validator substitutes the unconfirmedParentHeight sentinel with
+// the candidate block height before BDK/BIP68 consume the heights. See the
+// consensus-safety discussion on the validateSubtree closure in
+// CheckBlockSubtrees — the same three contract conditions apply here.
+func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, blockIds map[uint32]bool, addTXToBlockAssembly bool) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processTransactionsInLevels",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processTransactionsInLevels] Processing %d transactions at block height %d", len(allTransactions), blockHeight),
@@ -1050,29 +1022,6 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	}
 
 	alreadyValidated := len(txHashes) - missed
-
-	// Seed the block-scoped accumulator with txs that are part of this
-	// candidate batch but were already known to the cache or UTXO store
-	// (e.g. validated earlier via peer-announced subtree path, or seen in
-	// an earlier batch of this same block). Without this seeding, a child
-	// in this batch — or in a later batch — referencing such a parent would
-	// see an empty ParentMetadata entry, fall through to the UTXO-store
-	// BlockHeights path, find it empty (the parent's blocks_transactions
-	// row is only written by SetMinedMulti after this block is accepted),
-	// and the validator would stamp unconfirmedParentHeight — triggering
-	// bad-txns-unconfirmed-input-in-block on a legitimate block.
-	//
-	// Done before the missed==0 early return so even an all-known batch
-	// contributes its parents to the accumulator for subsequent batches.
-	// first-writer-wins (acc.add): if an entry already exists from an
-	// earlier batch we keep it.
-	if blockAccumulator != nil {
-		for i, tx := range allTransactions {
-			if tx != nil && txMetaSlice[i].isSet {
-				blockAccumulator.add(txHashes[i], &validator.ParentTxMetadata{BlockHeight: blockHeight})
-			}
-		}
-	}
 
 	if missed == 0 {
 		u.logger.Debugf("[processTransactionsInLevels] All transactions already validated, skipping processing")
@@ -1115,6 +1064,11 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	u.logger.Debugf("[processTransactionsInLevels] Processing transactions across %d levels", maxLevel+1)
 
+	// WithUnconfirmedParentsAtCandidateHeight must agree with the
+	// validateSubtree closure in CheckBlockSubtrees (which carries the full
+	// consensus-safety rationale) — both routes validate txs of the same
+	// PoW-checked candidate block, and divergence would make accept/reject
+	// branch-dependent.
 	validatorOptions := []validator.Option{
 		validator.WithSkipPolicyChecks(true),
 		validator.WithInBlock(true),
@@ -1122,15 +1076,14 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		validator.WithIgnoreLocked(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithUnconfirmedParentsAtCandidateHeight(true),
 	}
 
-	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
-	if err != nil {
-		return errors.NewProcessingError("[processTransactionsInLevels] Failed to get FSM current state", err)
-	}
-
-	// While catching up blocks, disable adding transactions to block assembly
-	if *currentState == blockchain.FSMStateCATCHINGBLOCKS {
+	// addTXToBlockAssembly is captured once by the caller (CheckBlockSubtrees)
+	// from a single FSM read, so this pass and the validateSubtree closure cannot
+	// diverge across an FSM transition. While catching up blocks it is false,
+	// disabling adding transactions to block assembly.
+	if !addTXToBlockAssembly {
 		validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
 	}
 
@@ -1143,18 +1096,14 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		return errors.NewProcessingError("[processTransactionsInLevels] failed to pre-load MTP store: %v", err)
 	}
 
-	// Track validation results
+	// Track validation results. firstErr keeps the first swallowed per-tx error so
+	// the summary error below can chain a cause instead of only reporting counts.
 	var (
 		errorsFound         atomic.Uint64
 		missingParentErrors atomic.Uint64
+		firstErrMu          sync.Mutex
+		firstErr            error
 	)
-
-	// Track successfully validated transactions for THIS level only. After the
-	// level's g.Wait() these are merged into blockAccumulator so future levels
-	// (and future batches / ordered-retry phases) see them via per-tx
-	// pre-filtering. Each level's set is freshly allocated to avoid retaining
-	// pointers to released tx data.
-	var levelSuccessMutex sync.Mutex
 
 	// Process each level in series, but all transactions within a level in parallel
 	for level := uint32(0); level <= maxLevel; level++ {
@@ -1164,11 +1113,6 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		}
 
 		u.logger.Debugf("[processTransactionsInLevels] Processing level %d/%d with %d transactions", level+1, maxLevel+1, len(levelTxs))
-
-		// Collect successful txs for THIS level so we can merge them into the
-		// block-scoped accumulator after g.Wait(). Pre-allocated to the level
-		// size — the worst-case is every tx succeeds.
-		levelSuccessfulTxs := make([]chainhash.Hash, 0, len(levelTxs))
 
 		// PHASE 2 OPTIMIZATION: Extend transactions with in-block parent outputs
 		// This avoids Aerospike fetches for intra-block dependencies (~500MB+ savings)
@@ -1194,6 +1138,22 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			}
 		}
 
+		// Bulk-read this level's distinct parent transactions once, so the
+		// validator resolves each input's height/outputs from the prefetch instead
+		// of issuing a per-parent Get for every child (the fan-out dedup win).
+		// Built per level AFTER the previous level's transactions were created, so
+		// an in-block parent from an earlier level is seen exactly as a per-parent
+		// Get would see it (empty BlockHeights → unconfirmed sentinel). Parents the
+		// store does not resolve are omitted, so the validator falls back to a Get
+		// and the existing missing-parent handling is preserved.
+		prefetchedParents, prefetchErr := u.prefetchLevelParents(ctx, levelTxs)
+		if prefetchErr != nil {
+			return prefetchErr
+		}
+
+		levelValidatorOptions := *processedValidatorOptions
+		levelValidatorOptions.PrefetchedParents = prefetchedParents
+
 		// Process all transactions at this level in parallel
 		g, gCtx := errgroup.WithContext(ctx)
 		util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.SpendBatcherSize*2)
@@ -1216,31 +1176,15 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 				continue
 			}
 
-			// Pre-filter the block-scoped accumulator to just this tx's input
-			// parents and clone Options so the spawned goroutine never touches
-			// the shared accumulator. When blockAccumulator is nil (peer-only
-			// caller), filterParentMetadataForInputs returns nil and the
-			// per-tx Options carry no ParentMetadata — same effect as the
-			// peer-announced path that has no block context.
-			perTxOpts := *processedValidatorOptions
-			perTxOpts.ParentMetadata = filterParentMetadataForInputs(tx, blockAccumulator)
-
 			g.Go(func() error {
 				// Use existing blessMissingTransaction logic for validation
-				txMeta, err := u.blessMissingTransaction(gCtx, blockHash, subtreeHash, tx, blockHeight, blockIds, &perTxOpts)
+				txMeta, err := u.blessMissingTransaction(gCtx, blockHash, subtreeHash, tx, blockHeight, blockIds, &levelValidatorOptions)
 				if err != nil {
 					u.logger.Debugf("[processTransactionsInLevels] Failed to validate transaction %s: %v", tx.TxIDChainHash().String(), err)
 
 					// TX_EXISTS is not an error - transaction was already validated
 					if errors.Is(err, errors.ErrTxExists) {
 						u.logger.Debugf("[processTransactionsInLevels] Transaction %s already exists, skipping", tx.TxIDChainHash().String())
-						// Mark as successful since it already exists. The map
-						// mutation against blockAccumulator happens after
-						// g.Wait() — the goroutine only writes to the
-						// per-level slice under a mutex.
-						levelSuccessMutex.Lock()
-						levelSuccessfulTxs = append(levelSuccessfulTxs, *tx.TxIDChainHash())
-						levelSuccessMutex.Unlock()
 						return nil
 					}
 
@@ -1257,17 +1201,24 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 						// possible because phase 3 revalidation can't resolve these.
 						u.logger.Warnf("[processTransactionsInLevels] Invalid transaction detected: %s: %v", tx.TxIDChainHash().String(), err)
 						return err
+					} else if errors.Is(err, errors.ErrUtxoWalkLimitExceeded) {
+						// The conflicting-walk budget is deterministic for this block: every
+						// remaining conflicting tx would re-derive the same failure, so fail
+						// the level immediately (issue 1391).
+						u.logger.Errorf("[processTransactionsInLevels] Conflicting-walk limit exceeded for transaction %s: %v", tx.TxIDChainHash().String(), err)
+						return err
 					} else {
 						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v", tx.TxIDChainHash().String(), err)
+
+						firstErrMu.Lock()
+						if firstErr == nil {
+							firstErr = err
+						}
+						firstErrMu.Unlock()
 					}
 
 					return nil // Don't fail the entire level
 				}
-
-				// Validation succeeded - mark transaction as successful
-				levelSuccessMutex.Lock()
-				levelSuccessfulTxs = append(levelSuccessfulTxs, *tx.TxIDChainHash())
-				levelSuccessMutex.Unlock()
 
 				if txMeta == nil {
 					u.logger.Debugf("[processTransactionsInLevels] Transaction metadata is nil for %s", tx.TxIDChainHash().String())
@@ -1282,21 +1233,6 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		// Fail early if we get an actual tx error thrown
 		if err = g.Wait(); err != nil {
 			return errors.NewProcessingError("[processTransactionsInLevels] Failed to process level %d", level+1, err)
-		}
-
-		// Synchronisation point: merge this level's successes into the
-		// block-scoped accumulator. Safe — all per-tx goroutines for this
-		// level have returned (g.Wait above), and the next level's goroutines
-		// haven't been spawned yet. Per-tx goroutines never read or write the
-		// accumulator directly; they only see their own pre-computed filtered
-		// map and write tx hashes into levelSuccessfulTxs under a mutex.
-		// acc.add is first-writer-wins: if a tx was already seeded as
-		// already-known (or merged in an earlier level) the existing entry
-		// is preserved.
-		if blockAccumulator != nil {
-			for _, txHash := range levelSuccessfulTxs {
-				blockAccumulator.add(txHash, &validator.ParentTxMetadata{BlockHeight: blockHeight})
-			}
 		}
 
 		u.logger.Debugf("[processTransactionsInLevels] Processing level %d/%d with %d transactions DONE", level+1, maxLevel+1, len(levelTxs))
@@ -1324,6 +1260,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			u.logger.Infof("[processTransactionsInLevels] %d missing-parent errors (deferred to sequential revalidation)", errorsFound.Load())
 			return nil
 		}
+		if firstErr != nil {
+			return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load(), firstErr)
+		}
+
 		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load())
 	}
 
@@ -1332,6 +1272,118 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	txMetaSlice = nil //nolint:ineffassign // Intentional early GC hint
 
 	return nil
+}
+
+// prefetchParentBaseFields are the metadata fields a bulk parent read always
+// fetches to stand in for the validator's per-parent Get: block IDs/heights, for
+// the unconfirmed-parent sentinel + height resolution. The parent tx outputs
+// (fields.Tx) are appended only when the level has a non-extended tx — see
+// prefetchLevelParents.
+var prefetchParentBaseFields = []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
+
+// prefetchLevelParents bulk-reads the distinct parent transactions referenced by
+// a level's transactions and returns them keyed by parent hash, for
+// validator.Options.PrefetchedParents.
+//
+// It deduplicates shared parents — a fan-out level (one funding tx, many
+// children) reads that parent ONCE instead of once per child — and batches the
+// reads. Parents the store reports as not-found (ErrTxNotFound) are omitted: the
+// validator falls back to a per-parent Get for them, which preserves the existing
+// missing-parent → deferred-revalidation handling. Any other per-item read error
+// — or a function-level error from BatchDecorate — aborts: the bulk read is an
+// optimization, never an authority, but a DB failure must halt, not be silently
+// downgraded to a fallback Get that masks it.
+func (u *Server) prefetchLevelParents(ctx context.Context, levelTxs []missingTx) (map[chainhash.Hash]*meta.Data, error) {
+	distinct := make(map[chainhash.Hash]struct{})
+
+	// Mirror the validator's per-tx `extend := !tx.IsExtended()` decision at the
+	// level grain: only fetch the parent tx outputs (fields.Tx) if at least one tx
+	// in this level still needs extending. A fully-extended level (e.g. all inputs
+	// extended via extendTxWithInBlockParents) resolves heights from
+	// BlockIDs/BlockHeights alone, so fetching Tx would force a needless
+	// external-store round-trip per distinct parent.
+	needTx := false
+
+	for _, mTx := range levelTxs {
+		if mTx.tx == nil {
+			continue
+		}
+
+		if !mTx.tx.IsExtended() {
+			needTx = true
+		}
+
+		for _, in := range mTx.tx.Inputs {
+			parentHash := *in.PreviousTxIDChainHash()
+			if parentHash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+				continue
+			}
+
+			distinct[parentHash] = struct{}{}
+		}
+	}
+
+	if len(distinct) == 0 {
+		return nil, nil
+	}
+
+	prefetchFields := prefetchParentBaseFields
+	if needTx {
+		prefetchFields = append(append([]fields.FieldName(nil), prefetchParentBaseFields...), fields.Tx)
+	}
+
+	items := make([]*utxostore.UnresolvedMetaData, 0, len(distinct))
+	for parentHash := range distinct {
+		parentHash := parentHash
+		items = append(items, &utxostore.UnresolvedMetaData{Hash: parentHash})
+	}
+
+	batchSize := u.settings.BlockValidation.ProcessTxMetaUsingStoreBatchSize
+	if batchSize <= 0 {
+		batchSize = 1024
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency)
+
+	for i := 0; i < len(items); i += batchSize {
+		i := i
+
+		g.Go(func() error {
+			end := subtreepkg.Min(i+batchSize, len(items))
+			return u.utxoStore.BatchDecorate(gCtx, items[i:end], prefetchFields...)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, errors.NewStorageError("[prefetchLevelParents] failed to bulk-read level parents", err)
+	}
+
+	result := make(map[chainhash.Hash]*meta.Data, len(items))
+
+	for _, item := range items {
+		if item.Err != nil {
+			// BatchDecorate reports per-record failures on item.Err while returning
+			// a nil function error (the Aerospike contract). A genuine not-found is
+			// expected — the parent lives in a later batch (cross-subtree) — so we
+			// omit it and let the validator fall back to a per-parent Get, preserving
+			// the missing-parent / deferred-revalidation path. Any OTHER per-item
+			// error (store timeout, external-store read failure, decode error) is a
+			// real DB failure: it must halt the level, never be silently downgraded
+			// to a fallback Get that would mask the failure and amplify reads.
+			if errors.Is(item.Err, errors.ErrTxNotFound) {
+				continue
+			}
+
+			return nil, errors.NewStorageError("[prefetchLevelParents] failed to read parent %s", item.Hash, item.Err)
+		}
+
+		if item.Data != nil {
+			result[item.Hash] = item.Data
+		}
+	}
+
+	return result, nil
 }
 
 // buildParentMapFromLevel builds a hash map of all transactions in a level for quick parent lookups.
@@ -1349,141 +1401,6 @@ func buildParentMapFromLevel(parentLevelTxs []missingTx) map[chainhash.Hash]*bt.
 		}
 	}
 	return parentMap
-}
-
-// buildParentMetadata creates a map of parent transaction metadata for use by the validator.
-// This allows the validator to skip UTXO store lookups for in-block parents.
-//
-// CRITICAL: Only includes transactions that successfully validated (present in successfulTxs).
-// This prevents validation bypass where child references a failed parent transaction.
-//
-// The metadata includes block height (where the parent will be mined) which is needed
-// for coinbase maturity checks and other validation rules.
-func buildParentMetadata(parentLevelTxs []missingTx, blockHeight uint32, successfulTxs map[chainhash.Hash]bool) map[chainhash.Hash]*validator.ParentTxMetadata {
-	if len(parentLevelTxs) == 0 || len(successfulTxs) == 0 {
-		return nil
-	}
-
-	metadata := make(map[chainhash.Hash]*validator.ParentTxMetadata, len(successfulTxs))
-	for _, mTx := range parentLevelTxs {
-		if mTx.tx != nil {
-			txHash := *mTx.tx.TxIDChainHash()
-			// Only include transactions that successfully validated
-			if successfulTxs[txHash] {
-				metadata[txHash] = &validator.ParentTxMetadata{
-					BlockHeight: blockHeight,
-				}
-			}
-		}
-	}
-	return metadata
-}
-
-// parentMetadataAccumulator carries the block-scoped in-block-parent metadata
-// view used by per-tx pre-filtering inside processTransactionsInLevels /
-// processMissingTransactions. The view is logically (snapshot ∪ delta):
-// reads check delta first, then snapshot; writes go to delta only.
-//
-// Two usage modes:
-//
-//   - Single-map (snapshot=nil, delta=live): used by the batch loop in
-//     CheckBlockSubtrees and by Phase 3 sequential retries. There is no
-//     concurrency, so delta IS the live accumulator and per-level merges
-//     write directly into it.
-//
-//   - Snapshot+delta (snapshot=live, delta=per-subtree-fresh): used by
-//     Phase 2 parallel subtree validation. Multiple goroutines hold their
-//     own accumulator value pointing at the SAME snapshot map (read-only
-//     access, no synchronization required) and their OWN fresh delta map.
-//     After Phase 2 g.Wait(), the successful subtrees' deltas are merged
-//     into the live accumulator in block-subtree order. This avoids the
-//     O(len(missingSubtrees) * len(accumulator)) copy churn that a
-//     per-subtree full snapshot would incur on large blocks.
-//
-// A nil *parentMetadataAccumulator is the peer-announced path: per-tx
-// filtering is a no-op and per-level merges are skipped — preserves the
-// pre-accumulator peer-validation behaviour.
-type parentMetadataAccumulator struct {
-	snapshot map[chainhash.Hash]*validator.ParentTxMetadata
-	delta    map[chainhash.Hash]*validator.ParentTxMetadata
-}
-
-// lookup returns the metadata for h, checking delta first then snapshot.
-// Returns nil if h is in neither map (or the accumulator itself is nil).
-func (a *parentMetadataAccumulator) lookup(h chainhash.Hash) *validator.ParentTxMetadata {
-	if a == nil {
-		return nil
-	}
-	if a.delta != nil {
-		if m, ok := a.delta[h]; ok {
-			return m
-		}
-	}
-	if a.snapshot != nil {
-		if m, ok := a.snapshot[h]; ok {
-			return m
-		}
-	}
-	return nil
-}
-
-// add inserts (h, m) into delta when h is not already covered by snapshot
-// or by a prior delta entry. First-writer-wins; preserves the consensus
-// invariant that an in-block parent's BlockHeight is recorded ONCE per block
-// (the height of the block being validated). Callers must serialise add()
-// calls on the same accumulator value — single-map mode relies on per-level
-// g.Wait() barriers; snapshot+delta mode gives each delta to exactly one
-// goroutine.
-func (a *parentMetadataAccumulator) add(h chainhash.Hash, m *validator.ParentTxMetadata) {
-	if a == nil {
-		return
-	}
-	if a.lookup(h) != nil {
-		return
-	}
-	if a.delta == nil {
-		a.delta = make(map[chainhash.Hash]*validator.ParentTxMetadata)
-	}
-	a.delta[h] = m
-}
-
-// filterParentMetadataForInputs returns the subset of accumulator entries
-// whose hashes appear in this transaction's input prevouts. Used as the
-// per-tx pre-filter step before spawning a validation goroutine, so the
-// goroutine body never touches the shared block-scoped accumulator and the
-// gRPC/HTTP request only carries the (typically small) set of in-block-parent
-// metadata this tx actually needs — not the full block accumulator.
-//
-// Returns nil when there are no matches or when either input is empty. A nil
-// result is semantically identical to "no ParentMetadata supplied" downstream
-// and round-trips through proto as an absent field.
-//
-// Pre-filtering happens on the caller goroutine before g.Go, so this helper
-// is called single-threaded for each tx; safe even though Go map iteration
-// itself is not concurrent-write-safe.
-func filterParentMetadataForInputs(tx *bt.Tx, acc *parentMetadataAccumulator) map[chainhash.Hash]*validator.ParentTxMetadata {
-	if tx == nil || acc == nil {
-		return nil
-	}
-	var out map[chainhash.Hash]*validator.ParentTxMetadata
-	for _, in := range tx.Inputs {
-		if in == nil {
-			continue
-		}
-		hp := in.PreviousTxIDChainHash()
-		if hp == nil {
-			continue
-		}
-		if meta := acc.lookup(*hp); meta != nil {
-			if out == nil {
-				// Lazy-allocate: most txs have zero in-block parents in the
-				// accumulator, so we avoid the map allocation in the common case.
-				out = make(map[chainhash.Hash]*validator.ParentTxMetadata, len(tx.Inputs))
-			}
-			out[*hp] = meta
-		}
-	}
-	return out
 }
 
 // extendTxWithInBlockParents extends a transaction's inputs with parent output data
@@ -1585,11 +1502,13 @@ func (u *Server) fetchCandidateParentMedianTime(ctx context.Context, parentHash 
 // services/legacy/netsync for the rationale — duplicated by design (small,
 // internal, avoids a new shared util package).
 //
-// nil pointers and nil header responses are hard errors: production callers
-// only invoke this at heights at or above CSVHeight, well past the chain's
-// first `depth` blocks, so we never legitimately walk off the beginning.
-// Tolerating short returns would silently produce an incomplete MTP on a
-// transient cache miss; raising loudly forces the caller to surface it.
+// nil pointers and nil header responses are hard errors. Walking off the
+// BEGINNING of the chain is not one of them: the loop breaks at genesis,
+// because CSVHeight is 0 on teratestnet, tstn and stn, so a candidate can
+// legitimately sit below the first `depth` blocks and a genesis-terminated
+// run is the correct short window there. Tolerating other short returns would
+// silently produce an incomplete MTP on a transient cache miss; raising
+// loudly forces the caller to surface it.
 func (u *Server) walkParentChain(ctx context.Context, startHash *chainhash.Hash, depth uint64) ([]*model.BlockHeader, error) {
 	headers := make([]*model.BlockHeader, 0, depth)
 	cur := startHash
@@ -1609,6 +1528,15 @@ func (u *Server) walkParentChain(ctx context.Context, startHash *chainhash.Hash,
 		}
 
 		headers = append(headers, header)
+
+		// Stop at genesis. Its HashPrevBlock is the all-zero hash, not nil, so the nil guard
+		// above never fires — without this the walk asks GetBlockHeader for the zero hash and
+		// fails with "failed at depth N". A run that ends at genesis is a complete window; the
+		// caller's genesis carve-out decides whether it is long enough.
+		if header.HashPrevBlock == nil || header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			break
+		}
+
 		cur = header.HashPrevBlock
 	}
 
@@ -1660,6 +1588,17 @@ func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []
 		return 0, errors.NewProcessingError("returned chain head does not match requested parent hash (possible reorg between header probe and fetch)")
 	}
 
+	// A run LONGER than the window is as wrong as one shorter than it, and just as invisible to
+	// the anchor and linkage checks: an over-long run is still anchored at the parent and still
+	// correctly linked, but its median covers blocks the consensus rule excludes. Unreachable
+	// while the only caller requests exactly MedianTimeBlocks, which the store cannot exceed;
+	// enforced so that all three copies of this helper — here, netsync, and block assembly's
+	// verifyParentChainRun — agree, and a later change to the request size fails loudly rather
+	// than silently widening the window in some of them.
+	if uint64(len(headers)) > blockchain.MedianTimeBlocks {
+		return 0, errors.NewProcessingError("run below parent %s holds %d headers, more than the %d the median window covers", parentHash.String(), len(headers), blockchain.MedianTimeBlocks)
+	}
+
 	for i := 1; i < len(headers); i++ {
 		if headers[i] == nil {
 			return 0, errors.NewProcessingError("nil header at depth %d", i)
@@ -1669,6 +1608,24 @@ func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []
 		cur := headers[i].Hash()
 		if prev == nil || cur == nil || !prev.IsEqual(cur) {
 			return 0, errors.NewProcessingError("parent-chain link broken at depth %d (possible reorg between header probe and fetch)", i)
+		}
+	}
+
+	// The anchor and link checks above cannot see a run truncated at its OLDEST
+	// end: such a run is still anchored at parentHash and still correctly
+	// linked, but the median comes out of a narrower window and stops being the
+	// consensus one. svnode cannot express that state — GetMedianTimePast walks
+	// pprev pointers, so its window is shorter than MedianTimeBlocks only when
+	// the chain itself ends at genesis. Re-establish that here, matching
+	// model.Block CheckHeaderContextual: a short run is legitimate only when its
+	// oldest header is genesis. On the batched path the error sends the caller to
+	// walkParentChain, which walks by hash — immune to the batched query's race — and
+	// stops at genesis, so it returns either the full window or a genuinely
+	// genesis-terminated one that this same carve-out then accepts.
+	if uint64(len(headers)) < blockchain.MedianTimeBlocks {
+		oldest := headers[len(headers)-1]
+		if oldest.HashPrevBlock == nil || !oldest.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			return 0, errors.NewProcessingError("parent-chain run holds only %d of %d headers and does not reach genesis, so its median is not the consensus median-time-past", len(headers), blockchain.MedianTimeBlocks)
 		}
 	}
 

@@ -299,7 +299,6 @@ func (b *BanList) Unsubscribe(ch chan BanEvent) {
 func (b *BanList) Clear() {
 	b.mu.Lock()
 	b.bannedPeers = make(map[string]BanInfo)
-	b.subscribers = make(map[chan BanEvent]struct{})
 	b.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

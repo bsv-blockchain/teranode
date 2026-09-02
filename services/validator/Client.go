@@ -30,8 +30,8 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -51,8 +51,30 @@ type batchItem struct {
 	// req contains the validation request for a single transaction
 	req *validator_api.ValidateTransactionRequest
 
-	// done is a channel that receives the validation result
-	done chan validateBatchResponse
+	// group is the shared completion group the submitter waits on; the
+	// dispatcher calls Done exactly once per item via complete.
+	group *completion.Group
+
+	// completed guards exactly-once completion (CAS).
+	completed atomic.Bool
+
+	// result holds the validation outcome (metadata + error) for this item.
+	// Written by the CAS winner, after the CAS and before group.Done(); safe
+	// to read only once group.Wait returns nil.
+	result validateBatchResponse
+}
+
+// complete writes resp into the item's result slot and marks the shared
+// group's completion counter. Idempotent: only the first call has any effect,
+// so a panic-recovery sweep over an already-completed item never
+// double-signals or races a second write into result.
+func (it *batchItem) complete(resp validateBatchResponse) {
+	if it.completed.CompareAndSwap(false, true) {
+		it.result = resp
+		if it.group != nil {
+			it.group.Done()
+		}
+	}
 }
 
 // Client implements a gRPC client for the validator service, providing transaction
@@ -151,9 +173,20 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return client, nil
 }
 
-// Stop gracefully shuts down the validator client. Currently a no-op as the
-// underlying gRPC connection lifecycle is managed externally.
-func (c *Client) Stop() {
+// Close gracefully shuts down the validator client: it drains the request
+// batcher (flushing queued validations while the connection is still live) and
+// then releases the gRPC connection it dialed in NewClient. The bounded drain
+// runs BEFORE the conn close.
+func (c *Client) Close() error {
+	if c.batcher != nil {
+		util.DrainBatcher(c.logger, "validator_client", util.DefaultBatcherDrainTimeout, c.batcher.Close)
+	}
+
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+
+	return nil
 }
 
 // Health checks the health of the remote validator service. When checkLiveness is true,
@@ -278,37 +311,10 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 		InBlock:                             &opts.InBlock,
 		CandidateBlockTime:                  candidateBlockTimePtr(opts),
 		CandidateParentMedianTime:           candidateParentMedianTimePtr(opts),
-		ParentMetadata:                      parentMetadataToWire(opts.ParentMetadata),
 		UnconfirmedParentsAtCandidateHeight: unconfirmedParentsAtCandidateHeightPtr(opts),
+		SkipScriptValidation:                &opts.SkipScriptValidation,
+		OutpointOnlySpend:                   &opts.OutpointOnlySpend,
 	}
-}
-
-// parentMetadataToWire serialises the in-memory ParentMetadata map into the
-// repeated proto form. Each entry's parent hash is copied defensively so the
-// wire representation does not alias the source map's hash bytes; the cost is
-// one 32-byte copy per entry and it removes any slice-aliasing surprise if the
-// source map outlives the marshalled message.
-//
-// Returns nil for a nil source map and nil for an empty source map — both
-// proto3 round-trip identically to a missing field on the wire, and the
-// server-side reconstruction normalises both back to a nil Options.ParentMetadata.
-func parentMetadataToWire(src map[chainhash.Hash]*ParentTxMetadata) []*validator_api.ParentTxMetadata {
-	if len(src) == 0 {
-		return nil
-	}
-	out := make([]*validator_api.ParentTxMetadata, 0, len(src))
-	for hash, meta := range src {
-		if meta == nil {
-			continue
-		}
-		parentHash := make([]byte, chainhash.HashSize)
-		copy(parentHash, hash[:])
-		out = append(out, &validator_api.ParentTxMetadata{
-			ParentHash:  parentHash,
-			BlockHeight: meta.BlockHeight,
-		})
-	}
-	return out
 }
 
 // buildValidateTxHTTPQuery constructs the query string for the HTTP fallback
@@ -349,6 +355,18 @@ func buildValidateTxHTTPQuery(opts *Options, blockHeight uint32) url.Values {
 
 	if opts.CandidateParentMedianTime > 0 {
 		queryParams.Add("candidateParentMedianTime", fmt.Sprintf("%d", opts.CandidateParentMedianTime))
+	}
+
+	if opts.UnconfirmedParentsAtCandidateHeight {
+		queryParams.Add("unconfirmedParentsAtCandidateHeight", "true")
+	}
+
+	if opts.SkipScriptValidation {
+		queryParams.Add("skipScriptValidation", "true")
+	}
+
+	if opts.OutpointOnlySpend {
+		queryParams.Add("outpointOnlySpend", "true")
 	}
 
 	if blockHeight > 0 {
@@ -398,13 +416,21 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	// Batch mode
-	doneCh := make(chan validateBatchResponse)
-	c.batcher.PutCtx(ctx, &batchItem{
-		req:  buildValidateTxRequest(tx.SerializeBytes(), blockHeight, validationOptions),
-		done: doneCh,
-	})
+	group := completion.NewGroup(1)
+	item := &batchItem{
+		req:   buildValidateTxRequest(tx.SerializeBytes(), blockHeight, validationOptions),
+		group: group,
+	}
+	c.batcher.PutCtx(ctx, item)
 
-	r := <-doneCh
+	// group.Wait(context.Background(), 0): 0 timeout allocates no timer and a
+	// background context never cancels, so this blocks purely on the dispatcher
+	// completing the item — identical to the previous bare <-doneCh receive (no
+	// timeout, no ctx arm). It can only return nil, so the result slot is always
+	// safe to read here.
+	_ = group.Wait(context.Background(), 0)
+
+	r := item.result
 
 	if r.err != nil {
 		c.logger.Errorf("[ValidateWithOptions] failed to validate batched transaction: %v", r.err)
@@ -421,7 +447,10 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	return result, nil
 }
 
-// handleValidationError processes validation errors and attempts HTTP fallback if appropriate
+// handleValidationError processes validation errors and attempts HTTP fallback
+// when the gRPC call failed because the message was too large. A successful
+// fallback returns nil; a failed fallback returns the HTTP verdict, not the
+// original ResourceExhausted error.
 func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options, err error) error {
 	// Check if the error is related to message size (ResourceExhausted)
 	st, ok := status.FromError(err)
@@ -442,13 +471,32 @@ func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeig
 
 	c.logger.Errorf("[ValidateWithOptions][%s] HTTP fallback also failed: %v", tx.TxID(), httpErr)
 
-	return errors.UnwrapGRPC(err)
+	// The HTTP response is the actual verdict (or the old wrapping, when the
+	// header is absent). Returning the original ResourceExhausted would tell
+	// the caller the transaction was too large for gRPC, which is no longer
+	// the failure — it was submitted, and rejected.
+	return httpErr
 }
 
 // sendBatchToValidator sends a batch of transactions to the validator via gRPC.
 // If the batch exceeds the gRPC message size limit, it falls back to validating
 // each transaction individually over HTTP.
 func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
+	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
+	// panic part-way through would strand every submitter blocked on group.Wait
+	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
+	// re-completing an item an earlier stage already completed is a no-op.
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.Errorf("[sendBatchToValidator] recovered panic, failing %d batch item(s): %v", len(batch), r)
+
+			err := errors.NewProcessingError("panic in sendBatchToValidator: %v", r)
+			for _, item := range batch {
+				item.complete(validateBatchResponse{err: err})
+			}
+		}
+	}()
+
 	// Prepare batch request
 	requests := make([]*validator_api.ValidateTransactionRequest, 0, len(batch))
 	for _, item := range batch {
@@ -496,10 +544,10 @@ func (c *Client) handleBatchHTTPFallback(ctx context.Context, batch []*batchItem
 
 		tx, err := bt.NewTxFromBytes(txReq.TransactionData)
 		if err != nil {
-			item.done <- validateBatchResponse{
+			item.complete(validateBatchResponse{
 				metaData: nil,
 				err:      errors.NewServiceError("Failed to parse transaction for HTTP fallback: %v", err),
-			}
+			})
 
 			continue
 		}
@@ -513,14 +561,13 @@ func (c *Client) handleBatchHTTPFallback(ctx context.Context, batch []*batchItem
 		// validation needs).
 		//
 		// The request was just built by this client via buildValidateTxRequest,
-		// so optionsFromValidateRequest cannot fail here in practice (the
-		// ParentMetadata wire form is built by parentMetadataToWire and is
-		// well-formed by construction). The error is still propagated to surface
+		// so optionsFromValidateRequest cannot fail here in practice (every field
+		// is well-formed by construction). The error is still propagated to surface
 		// any future bug in the client-side builder.
 		options, err := optionsFromValidateRequest(txReq)
 		if err != nil {
 			c.logger.Errorf("[%s] HTTP fallback rejected: client-built request failed projection: %v", tx.TxID(), err)
-			item.done <- validateBatchResponse{metaData: nil, err: err}
+			item.complete(validateBatchResponse{metaData: nil, err: err})
 			continue
 		}
 
@@ -529,21 +576,35 @@ func (c *Client) handleBatchHTTPFallback(ctx context.Context, batch []*batchItem
 
 		if httpErr == nil {
 			c.logger.Debugf("[%s] Successfully validated via HTTP fallback", tx.TxID())
-			item.done <- validateBatchResponse{metaData: nil, err: nil}
+			item.complete(validateBatchResponse{metaData: nil, err: nil})
 		} else {
 			c.logger.Errorf("[%s] HTTP fallback failed: %v", tx.TxID(), httpErr)
-			item.done <- validateBatchResponse{metaData: nil, err: httpErr}
+			item.complete(validateBatchResponse{metaData: nil, err: httpErr})
 		}
 	}
 }
 
 // processBatchResponse handles successful batch responses
 func (c *Client) processBatchResponse(batch []*batchItem, resp *validator_api.ValidateTransactionBatchResponse) {
+	// The server must return one Errors + Metadata entry per batch item. If it
+	// returns fewer (a contract violation), indexing resp.Errors[i]/Metadata[i]
+	// would panic; the sweep would still release callers, but with an opaque
+	// "panic in sendBatchToValidator" error. Guard the lengths and fail every
+	// item with a clear error instead, mirroring the propagation client.
+	if len(resp.Errors) != len(batch) || len(resp.Metadata) != len(batch) {
+		err := errors.NewProcessingError("[processBatchResponse] validator returned %d errors / %d metadata for a batch of %d", len(resp.Errors), len(resp.Metadata), len(batch))
+		for _, item := range batch {
+			item.complete(validateBatchResponse{err: err})
+		}
+
+		return
+	}
+
 	for i, item := range batch {
 		if !resp.Errors[i].IsNil() {
-			item.done <- validateBatchResponse{metaData: nil, err: resp.Errors[i]}
+			item.complete(validateBatchResponse{metaData: nil, err: resp.Errors[i]})
 		} else {
-			item.done <- validateBatchResponse{metaData: resp.Metadata[i], err: nil}
+			item.complete(validateBatchResponse{metaData: resp.Metadata[i], err: nil})
 		}
 	}
 }
@@ -551,7 +612,7 @@ func (c *Client) processBatchResponse(batch []*batchItem, resp *validator_api.Va
 // notifyAllBatchItems notifies all items in a batch with the same response
 func (c *Client) notifyAllBatchItems(batch []*batchItem, metadata []byte, err error) {
 	for _, item := range batch {
-		item.done <- validateBatchResponse{metaData: metadata, err: err}
+		item.complete(validateBatchResponse{metaData: metadata, err: err})
 	}
 }
 
@@ -561,9 +622,9 @@ func (c *Client) notifyAllBatchItems(batch []*batchItem, metadata []byte, err er
 // The request body is a serialised ValidateTransactionRequest with
 // Content-Type: application/x-protobuf — the same proto definition as gRPC.
 // Using the proto-body shape avoids URL/query-string length limits in proxies
-// and load balancers (relevant when ParentMetadata can carry many entries) and
-// guarantees field parity with gRPC by construction: anything we add to the
-// proto reaches the server here too, with no scalar-query-string drift.
+// and load balancers and guarantees field parity with gRPC by construction:
+// anything we add to the proto reaches the server here too, with no
+// scalar-query-string drift.
 //
 // The legacy application/octet-stream path remains supported by the server's
 // /tx handler for backward compatibility with non-protobuf callers; this
@@ -587,7 +648,7 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	fullURL := c.validatorHTTPAddr.ResolveReference(endpoint)
 
 	// Marshal the full request via the shared builder — same proto, same field
-	// projection as gRPC, including ParentMetadata.
+	// projection as gRPC.
 	body, err := proto.Marshal(buildValidateTxRequest(tx.SerializeBytes(), blockHeight, validationOptions))
 	if err != nil {
 		return errors.NewServiceError("[ValidateWithOptions][%s] error marshalling protobuf body for /tx endpoint: %v", tx.TxID(), err)
@@ -608,11 +669,27 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	}
 	defer resp.Body.Close()
 
-	// Check response status
+	// Check response status.
+	//
+	// Same contract as propagation's fallback: prefer the verdict the server
+	// attached as a header over wrapping the whole response as a SERVICE_ERROR.
+	// Without it a rejection reaches an RPC client through
+	// services/rpc/handlers.go as an opaque service failure carrying the
+	// validator's internal error chain verbatim, and callers that classify on the
+	// error code read a permanent rejection as something worth retrying.
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+
+		verdict := errors.HTTPErrorFrom(resp.Header)
+		if verdict == nil {
+			return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+				tx.TxID(), resp.StatusCode, string(body))
+		}
+
+		c.logger.Warnf("[ValidateWithOptions][%s] validator /tx endpoint rejected transaction: status=%d body=%s",
 			tx.TxID(), resp.StatusCode, string(body))
+
+		return errors.New(verdict.Code(), "[ValidateWithOptions][%s] %s", tx.TxID(), verdict.Message())
 	}
 
 	c.logger.Debugf("[ValidateWithOptions][%s] successfully validated using validator /tx endpoint", tx.TxID())

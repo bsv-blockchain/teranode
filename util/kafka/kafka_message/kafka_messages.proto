@@ -13,12 +13,15 @@ message KafkaBlockTopicMessage {
 message KafkaInvalidBlockTopicMessage {
   string blockHash = 1;
   string reason = 2;
+  string peer_id = 3;  // Peer that announced the block; primary ban attribution, immune to peer-map eviction
+  string peer_url = 4; // DataHub URL the block was fetched from; fallback attribution via peer registry lookup
 }
 
 message KafkaInvalidSubtreeTopicMessage {
   string subtreeHash = 1;
   string peerUrl = 2;
   string reason = 3;
+  string peer_id = 4;  // ID of the peer whose DataHub served the invalid bytes (authoritative attribution)
 }
 
 message KafkaSubtreeTopicMessage {

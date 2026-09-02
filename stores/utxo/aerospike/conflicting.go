@@ -22,7 +22,10 @@ func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetCounterConflicting),
 	)
 
-	return utxo.GetCounterConflictingTxHashes(ctx, s, txHash)
+	// unbounded: this is the conflict-demotion path (ProcessConflicting), which
+	// must always walk the full descendant set to completion — a budget failure
+	// here would wedge block assembly on the block forever (issue 1391)
+	return utxo.GetCounterConflictingTxHashes(ctx, s, txHash, 0)
 }
 
 // GetConflictingChildren returns the conflicting transactions for the given transaction hash
@@ -31,7 +34,7 @@ func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash)
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetConflicting),
 	)
 
-	return utxo.GetConflictingChildren(ctx, s, hash)
+	return utxo.GetConflictingChildren(ctx, s, hash, s.settings.UtxoStore.ConflictingChildrenMaxNodes)
 }
 
 // SetConflicting sets the conflicting flag on the given transactions
@@ -86,14 +89,11 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 
 		// set the conflicting flag using a lua script in the batch
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(
-			batchUDFPolicy,
-			key,
-			LuaPackage,
-			"setConflicting",
-			aerospike.NewValue(setValue),
-			aerospike.NewIntegerValue(int(s.blockHeight.Load())),
-			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
+		batchRecords = append(batchRecords, s.teranodeBatchRecord(
+			batchUDFPolicy, LuaPackage, key, subOpSetConflicting, "setConflicting",
+			setValue,
+			int(s.GetBlockHeight()),
+			s.settings.GetUtxoStoreBlockHeightRetention(),
 		))
 
 		for i, input := range tx.Inputs {

@@ -159,6 +159,28 @@ func (pq *BlockPriorityQueue) Add(blockFound processBlockFound, priority BlockPr
 	updateQueueSizeMetrics(pq.items)
 }
 
+// takeIfPresent removes and returns the block matching hash if it is still queued,
+// reporting whether it was found. Used by Get's fast path to claim the front block
+// without copying the whole queue.
+func (pq *BlockPriorityQueue) takeIfPresent(hash *chainhash.Hash) (processBlockFound, bool) {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
+
+	for i, currentItem := range pq.items {
+		if currentItem.blockFound.hash.IsEqual(hash) {
+			if blockQueueWaitTime != nil {
+				blockQueueWaitTime.Observe(time.Since(currentItem.timestamp).Seconds())
+			}
+
+			pq.removeItem(i)
+
+			return currentItem.blockFound, true
+		}
+	}
+
+	return processBlockFound{}, false
+}
+
 func (pq *BlockPriorityQueue) Get(ctx context.Context, bp BlockProcessor) (block processBlockFound, status GetStatus) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -176,6 +198,31 @@ func (pq *BlockPriorityQueue) Get(ctx context.Context, bp BlockProcessor) (block
 
 	if pq.needsSort {
 		pq.sortItems()
+	}
+
+	// Fast path: in steady state the highest-priority (front) block is immediately
+	// processable, so probe it first without copying the whole queue. Only fall back
+	// to the full scan below when the front block is blocked or already taken.
+	front := pq.items[0]
+	pq.mu.Unlock()
+
+	if ctx.Err() != nil {
+		return processBlockFound{}, GetEmpty
+	}
+
+	if canProcess, err := bp.CanProcessBlock(ctx, front.blockFound.hash); err == nil && canProcess {
+		if takenBlock, ok := pq.takeIfPresent(front.blockFound.hash); ok {
+			return takenBlock, GetOK
+		}
+	}
+
+	// Slow path: the front block was blocked or taken by another worker. Copy the
+	// queue once so the CanProcessBlock round-trips below run without holding the lock.
+	pq.mu.Lock()
+
+	if len(pq.items) == 0 {
+		pq.mu.Unlock()
+		return processBlockFound{}, GetEmpty
 	}
 
 	itemsCopy := make([]*PrioritizedBlock, len(pq.items))
@@ -265,9 +312,15 @@ func (pq *BlockPriorityQueue) WaitForBlock(ctx context.Context, bp BlockProcesso
 			// to avoid busy loop burning CPU
 			pq.mu.Lock()
 
-			// Double-check queue status after acquiring lock
-			// Items might have been added between Get() and Lock()
-			if len(pq.items) > 0 {
+			// Double-check queue status after acquiring lock.
+			// Only GetEmpty can be resolved by items appearing: for GetEmpty the
+			// queue was empty, so if items are now present we retry Get() instead
+			// of parking. For GetAllBlocked the queue is by definition non-empty,
+			// so len(pq.items) > 0 is always true; we must still cond.Wait() and let
+			// a Signal from Add (new block), FinishProcessingBlock, or the fork
+			// BlockProcessingGuard.Release (a processing slot freeing up) wake us when
+			// a block becomes processable, otherwise this spins at 100% CPU re-running Get().
+			if status == GetEmpty && len(pq.items) > 0 {
 				pq.mu.Unlock()
 				continue // Items appeared, try Get() again
 			}
@@ -343,7 +396,7 @@ func (pq *BlockPriorityQueue) GetAlternativeSource(blockHash *chainhash.Hash) (p
 }
 
 // getQueueStats returns statistics about the queue without locking
-func (pq *BlockPriorityQueue) getQueueStats(items []*PrioritizedBlock) (chainExtending, nearFork, deepFork int) {
+func getQueueStats(items []*PrioritizedBlock) (chainExtending, nearFork, deepFork int) {
 	for _, item := range items {
 		switch item.priority {
 		case PriorityChainExtending:
@@ -361,7 +414,7 @@ func (pq *BlockPriorityQueue) GetQueueStats() (chainExtending, nearFork, deepFor
 	pq.mu.Lock()
 	defer pq.mu.Unlock()
 
-	return pq.getQueueStats(pq.items)
+	return getQueueStats(pq.items)
 }
 
 func (pq *BlockPriorityQueue) Clear() {
@@ -477,8 +530,7 @@ func updateQueueSizeMetrics(items []*PrioritizedBlock) {
 		return
 	}
 
-	pq := &BlockPriorityQueue{items: items}
-	chainExtending, nearFork, deepFork := pq.getQueueStats(items)
+	chainExtending, nearFork, deepFork := getQueueStats(items)
 	prometheusBlockPriorityQueueSize.WithLabelValues("chain_extending").Set(float64(chainExtending))
 	prometheusBlockPriorityQueueSize.WithLabelValues("near_fork").Set(float64(nearFork))
 	prometheusBlockPriorityQueueSize.WithLabelValues("deep_fork").Set(float64(deepFork))

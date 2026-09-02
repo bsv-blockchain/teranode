@@ -21,7 +21,7 @@ func TestExampleUsage(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 

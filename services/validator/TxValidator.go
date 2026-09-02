@@ -149,20 +149,75 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 	// scripts is pure overhead. The caller is responsible for ensuring the block
 	// is actually trusted (see SyncManager.quickValidationAllowed).
 	if validationOptions.SkipScriptValidation {
-		// The normal path leans on BDK to reject MEMPOOL_HEIGHT in consensus mode
-		// (bdk/core/txvalidator.cpp:779), but skipping script validation bypasses
-		// BDK entirely. Without this guard the unconfirmedParentHeight sentinel
-		// would propagate to BIP68 (height conversion produces -1 from 0xFFFFFFFF
-		// in sequenceLocks; MTP lookup in Validator.readMTPsLocked clamps to
-		// blockMTP) and the tx would be silently accepted. Mirror BDK's
-		// UnconfirmedInputInBlock rejection here.
-		if validationOptions.SkipPolicyChecks {
-			for _, h := range utxoHeights {
-				if h == unconfirmedParentHeight {
-					return errors.NewTxInvalidError("bad-txns-unconfirmed-input-in-block")
+		// Skipping script validation bypasses BDK entirely, so the money-range and
+		// no-inflation invariants BDK normally enforces are applied here as a
+		// Go-side backstop. Output money-range/total is always checked first
+		// (implCheckTransactionCommon). The unconfirmed-parent sentinel and the
+		// input money-range/inflation check (implCheckInputValues) then run in an
+		// ERA-DEPENDENT order that mirrors BDK: pre-Genesis the sentinel first,
+		// post-Genesis the input/inflation check first. See the era switch below
+		// for why (bdk/core/txvalidator.cpp).
+		totalOut, err := tv.checkOutputValues(tx)
+		if err != nil {
+			return err
+		}
+
+		// The unconfirmed-parent sentinel guard mirrors BDK's UnconfirmedInputInBlock
+		// rejection, which only applies in consensus mode. Without it the
+		// unconfirmedParentHeight sentinel would propagate to BIP68: with the int64
+		// height arithmetic in sequenceLocks the sentinel evaluates to 4294967295
+		// (not the old int32 wrap to -1), so an unguarded sentinel would FAIL the
+		// height check rather than be silently accepted; we still reject explicitly
+		// here to surface the correct error instead of a generic BIP68 height
+		// failure (the MTP lookup in Validator.readMTPsLocked clamps to blockMTP).
+		sentinelGuard := func() error {
+			if validationOptions.SkipPolicyChecks {
+				for _, h := range utxoHeights {
+					if h == unconfirmedParentHeight {
+						return errors.NewTxInvalidError("bad-txns-unconfirmed-input-in-block")
+					}
 				}
 			}
+			return nil
 		}
+
+		// The input money-range/inflation check needs previous-output values. The
+		// OutpointOnlySpend fast path intentionally leaves the transaction un-extended
+		// and reads no parent values (Validator.validateInternal skips parent extension
+		// below the highest checkpoint, where PoW + checkpoint linkage already establish
+		// canonicality). Skip the check there, matching the parent-value-dependent extend
+		// and BIP68 guards which are gated on OutpointOnlySpend for the same reason. Every
+		// other skip-path caller supplies an extended transaction, so the backstop still
+		// runs (and still fails closed on a value-less non-OutpointOnlySpend transaction).
+		inflationGuard := func() error {
+			if validationOptions.OutpointOnlySpend {
+				return nil
+			}
+			return tv.checkInputValuesAndInflation(tx, totalOut)
+		}
+
+		// The sentinel is placed before or after the input/inflation check
+		// depending on protocol era, matching BDK: pre-Genesis the MEMPOOL_HEIGHT
+		// rejection runs in the consensus sigops check before input values, while
+		// post-Genesis that check returns early and the sentinel is only reached
+		// after input values during script verification. The >= boundary matches
+		// the Genesis comparison used in sequenceLocks.
+		if blockHeight < tv.settings.ChainCfgParams.GenesisActivationHeight {
+			if err := sentinelGuard(); err != nil {
+				return err
+			}
+			if err := inflationGuard(); err != nil {
+				return err
+			}
+		} else {
+			if err := inflationGuard(); err != nil {
+				return err
+			}
+			if err := sentinelGuard(); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	}
 
@@ -172,6 +227,67 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 	// SkipPolicyChecks is equivalent to BDK consensus=true.
 	// https://github.com/bsv-blockchain/teranode/issues/2367
 	return tv.bdk.ValidateTransaction(tx, blockHeight, validationOptions.SkipPolicyChecks, utxoHeights)
+}
+
+// checkOutputValues enforces the per-output and total-output money-range
+// invariants that BDK applies in implCheckTransactionCommon. Bitcoin reads each
+// 8-byte output value into a signed 64-bit amount, so a uint64 with the high bit
+// set is negative and rejected as bad-txns-vout-negative before the upper-bound
+// check. The running total is bounded after each addition, which also makes the
+// accumulation overflow-safe: every addend is within [0, MaxSatoshis], so the
+// total cannot wrap uint64 before it is rejected.
+func (tv *TxValidator) checkOutputValues(tx *bt.Tx) (uint64, error) {
+	totalOut := uint64(0)
+
+	for _, out := range tx.Outputs {
+		if out.Satoshis > math.MaxInt64 {
+			return 0, errors.NewTxInvalidError("bad-txns-vout-negative")
+		}
+
+		if out.Satoshis > MaxSatoshis {
+			return 0, errors.NewTxInvalidError("bad-txns-vout-toolarge")
+		}
+
+		totalOut += out.Satoshis
+		if totalOut > MaxSatoshis {
+			return 0, errors.NewTxInvalidError("bad-txns-txouttotal-toolarge")
+		}
+	}
+
+	return totalOut, nil
+}
+
+// checkInputValuesAndInflation enforces the input money-range and no-inflation
+// invariants that BDK applies in implCheckInputValues: each input value and the
+// running total must be within [0, MaxSatoshis], and the sum of inputs must be at
+// least totalOut (the output total already computed and bounded by
+// checkOutputValues; equality is allowed, i.e. a zero-fee transaction).
+// A high-bit or over-range input value both map to bad-txns-inputvalues-outofrange,
+// matching how the money-range predicate collapses the two cases.
+//
+// Precondition: tx is in extended format so previous-output values are populated;
+// this holds for every caller that reaches ValidateTransaction. If a value-less
+// transaction were passed, the sum of inputs would be zero and the check fails
+// closed (bad-txns-in-belowout) rather than admitting coins from nothing.
+func (tv *TxValidator) checkInputValuesAndInflation(tx *bt.Tx, totalOut uint64) error {
+	totalIn := uint64(0)
+
+	for _, in := range tx.Inputs {
+		if in.PreviousTxSatoshis > MaxSatoshis {
+			return errors.NewTxInvalidError("bad-txns-inputvalues-outofrange")
+		}
+
+		totalIn += in.PreviousTxSatoshis
+		if totalIn > MaxSatoshis {
+			return errors.NewTxInvalidError("bad-txns-inputvalues-outofrange")
+		}
+	}
+
+	if totalIn < totalOut {
+		return errors.NewTxInvalidError("bad-txns-in-belowout")
+	}
+
+	return nil
 }
 
 // ValidateBIP68 verifies that BIP68 relative lock-time constraints are satisfied.
@@ -229,7 +345,13 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 	// Initial value -1 means "no constraint": the semantics of nLockTime are the
 	// last INVALID height/time, so -1 means any height or time is valid.
 	// This matches BSV C++: int32_t nMinHeight = -1; int64_t nMinTime = -1;
-	minHeight := int32(-1)
+	//
+	// nMinHeight is computed in int64 (rather than int32 as in the C++ reference)
+	// so that the height arithmetic below cannot silently overflow/wrap. utxoHeights
+	// are uint32 and sequenceMasked is at most 0x0000ffff, so coinHeight + nSequence - 1
+	// always fits in int64 exactly; the resulting comparison decisions are identical to
+	// the in-range int32 computation but defined for the full uint32 input domain.
+	minHeight := int64(-1)
 	minTime := int64(-1)
 
 	// Process each input to determine lock requirements
@@ -270,8 +392,9 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 
 			// Add the relative height offset to the UTXO's height, minus 1
 			// (matching Bitcoin Core: nMinHeight = coinHeight + nSequence - 1,
-			// so the tx is valid starting from blockHeight >= coinHeight + nSequence)
-			nTxHeight := int32(utxoHeights[i]) + int32(sequenceMasked) - 1
+			// so the tx is valid starting from blockHeight >= coinHeight + nSequence).
+			// Computed in int64 to avoid int32 overflow/wrap on the uint32 inputs.
+			nTxHeight := int64(utxoHeights[i]) + int64(sequenceMasked) - 1
 
 			// Update minimum height if this input requires a later height
 			if nTxHeight > minHeight {
@@ -284,13 +407,13 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 	// The transaction can only be included if both height and time requirements are met
 
 	// Check height requirement: minimum required height must be less than current block height.
-	// blockHeight is uint32 but int32 conversion would wrap for values > math.MaxInt32; reject
-	// such heights as invalid since no realistic block will ever reach that range.
+	// blockHeight is uint32; int32 conversion would wrap for values > math.MaxInt32, so reject
+	// such heights as invalid since no realistic block will ever reach that range. This preserves
+	// the prior decision boundary while minHeight is now compared in int64 (overflow-free).
 	if blockHeight > math.MaxInt32 {
 		return errors.NewTxInvalidError("block height %d exceeds maximum safe int32 value", blockHeight)
 	}
-	blockHeightInt32 := int32(blockHeight)
-	if minHeight >= blockHeightInt32 {
+	if minHeight >= int64(blockHeight) {
 		return errors.NewTxInvalidError("transaction sequence lock height not satisfied: required %d, current %d", minHeight, blockHeight)
 	}
 

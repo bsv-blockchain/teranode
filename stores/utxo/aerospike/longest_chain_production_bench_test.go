@@ -149,7 +149,7 @@ func createProductionLikeTransactions(b *testing.B, ctx context.Context, store u
 		g.Go(func() error {
 			tx := createRealisticTransaction(seedOffset + i)
 
-			_, err := store.Create(gCtx, tx, uint32(100000+(seedOffset+i)%1000))
+			_, _, err := store.SpendAndCreate(gCtx, tx, uint32(100000+(seedOffset+i)%1000), utxo.WithCreateOnly())
 			if err != nil {
 				return err
 			}

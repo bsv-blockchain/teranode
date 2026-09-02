@@ -16,7 +16,7 @@ import (
 // short-circuit in sequenceLocks() does not pre-empt the logic under test.
 // Tests that specifically verify the post-Genesis bypass should NOT use this
 // helper — they should use test.CreateBaseTestSettings(t) and rely on the
-// regtest Genesis activation height (10000).
+// regtest Genesis activation height from the chain params.
 func bip68TestSettings(t testing.TB) *settings.Settings {
 	t.Helper()
 	tSettings := test.CreateBaseTestSettings(t)

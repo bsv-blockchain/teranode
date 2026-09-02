@@ -12,6 +12,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
+const errFailedCloseIterator = "failed to close iterator: %v"
+
 // unminedTxIterator implements utxo.UnminedTxIterator for SQL
 type unminedTxIterator struct {
 	store *Store
@@ -86,7 +88,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 	more := it.rows.Next()
 	if !more {
 		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
+			it.store.logger.Warnf(errFailedCloseIterator, err)
 		}
 
 		return nil, nil
@@ -105,7 +107,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 
 	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt, &locked, &isCoinbase, &unminedSince); err != nil {
 		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
+			it.store.logger.Warnf(errFailedCloseIterator, err)
 		}
 
 		it.err = err
@@ -129,7 +131,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 	rows, err := it.store.db.QueryContext(ctx, q2, id)
 	if err != nil {
 		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
+			it.store.logger.Warnf(errFailedCloseIterator, err)
 		}
 
 		it.err = err
@@ -159,7 +161,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 
 		if err = rows.Scan(&previousTxHashBytes, &previousTxIdx, &input.PreviousTxSatoshis, &input.PreviousTxScript, &input.UnlockingScript, &input.SequenceNumber); err != nil {
 			if err = it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
+				it.store.logger.Warnf(errFailedCloseIterator, err)
 			}
 
 			return nil, err
@@ -169,7 +171,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 		previousTxHash, err = chainhash.NewHash(previousTxHashBytes)
 		if err != nil {
 			if err = it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
+				it.store.logger.Warnf(errFailedCloseIterator, err)
 			}
 
 			return nil, err
@@ -177,7 +179,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 
 		if err = input.PreviousTxIDAdd(previousTxHash); err != nil {
 			if err = it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
+				it.store.logger.Warnf(errFailedCloseIterator, err)
 			}
 
 			return nil, err
@@ -189,7 +191,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 	txInpoints, err := subtree.NewTxInpointsFromInputs(tx.Inputs)
 	if err != nil {
 		if err = it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
+			it.store.logger.Warnf(errFailedCloseIterator, err)
 		}
 
 		return nil, errors.NewProcessingError("failed to create tx inpoints from inputs", err)
@@ -208,7 +210,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 	rows2, err := it.store.db.QueryContext(ctx, q3, id)
 	if err != nil {
 		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
+			it.store.logger.Warnf(errFailedCloseIterator, err)
 		}
 
 		it.err = err
@@ -223,7 +225,7 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 
 		if err = rows2.Scan(&blockId); err != nil {
 			if err = it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
+				it.store.logger.Warnf(errFailedCloseIterator, err)
 			}
 
 			return nil, err

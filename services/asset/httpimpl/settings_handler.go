@@ -110,14 +110,8 @@ func (h *SettingsHandler) GetSettings(c echo.Context) error {
 			cmp = strings.Compare(strings.ToLower(filtered[i].Key), strings.ToLower(filtered[j].Key))
 		case "name":
 			cmp = strings.Compare(strings.ToLower(filtered[i].Name), strings.ToLower(filtered[j].Name))
-		case "category":
-			cmp = strings.Compare(strings.ToLower(filtered[i].Category), strings.ToLower(filtered[j].Category))
-			if cmp == 0 {
-				// Secondary sort by key within category
-				cmp = strings.Compare(strings.ToLower(filtered[i].Key), strings.ToLower(filtered[j].Key))
-			}
 		default:
-			// Default to category then key
+			// "category" and any unknown field sort by category, then key.
 			cmp = strings.Compare(strings.ToLower(filtered[i].Category), strings.ToLower(filtered[j].Category))
 			if cmp == 0 {
 				cmp = strings.Compare(strings.ToLower(filtered[i].Key), strings.ToLower(filtered[j].Key))

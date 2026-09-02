@@ -36,7 +36,7 @@ type CatchupTestSuite struct {
 	Server         *Server // Direct access to Server
 	MockBlockchain *blockchain.Mock
 	MockUTXOStore  *utxo.MockUtxostore
-	MockValidator  *validator.MockValidatorClient
+	MockValidator  *validator.MockValidator
 	HttpMock       *testhelpers.HTTPMockSetup
 	Config         *testhelpers.CatchupServerConfig
 	CleanupFuncs   []func()
@@ -74,11 +74,8 @@ func NewCatchupTestSuiteWithConfig(t *testing.T, config *testhelpers.CatchupServ
 func (s *CatchupTestSuite) setupMocks() {
 	s.MockBlockchain = &blockchain.Mock{}
 	s.MockUTXOStore = &utxo.MockUtxostore{}
-	s.MockValidator = &validator.MockValidatorClient{UtxoStore: s.MockUTXOStore}
+	s.MockValidator = &validator.MockValidator{UtxoStore: s.MockUTXOStore}
 	s.HttpMock = testhelpers.NewHTTPMockSetup(s.T)
-
-	// Provide a permissive default for Spend to avoid unexpected calls from concurrent validation goroutines.
-	s.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
 
 	// Permissive default for GetBlockByHeight — used by locator capping when
 	// blockchain height > UTXO height. Returns error so capping falls back to blockchain height.

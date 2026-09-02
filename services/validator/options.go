@@ -9,13 +9,8 @@ package validator
 
 import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
-
-// ParentTxMetadata holds metadata about a parent transaction needed for validation
-// This allows the validator to skip UTXO store lookups for in-block parents
-type ParentTxMetadata struct {
-	BlockHeight uint32 // The block height where this transaction was mined
-}
 
 // Options defines the configuration options for validation operations
 type Options struct {
@@ -40,12 +35,6 @@ type Options struct {
 
 	// IgnoreLocked determines whether to ignore transactions marked as locked when spending
 	IgnoreLocked bool
-
-	// ParentMetadata provides pre-fetched metadata for parent transactions
-	// When provided, the validator will check this map before calling utxoStore.Get()
-	// This enables validation to proceed without UTXO store lookups for in-block parents
-	// Key: parent transaction hash, Value: metadata (block height)
-	ParentMetadata map[chainhash.Hash]*ParentTxMetadata
 
 	// SkipTxMetaPublishing determines whether txmeta should be published to Kafka
 	// When true, the validator won't publish transaction metadata to the txmeta Kafka topic
@@ -113,11 +102,11 @@ type Options struct {
 	// (consensus-mode sentinel → MEMPOOL_HEIGHT → BDK rejects with
 	// bad-txns-unconfirmed-input-in-block).
 	//
-	// Exists for the legacy block-sync path: a tx in a mined block that spends
-	// a same-block parent finds that parent in the UTXO store with empty
+	// Exists for block validation: a tx in a mined block that spends a
+	// same-block parent finds that parent in the UTXO store with empty
 	// BlockHeights (SetMinedMulti only runs after block acceptance), so the
 	// validator stamps the sentinel and BDK rejects a legitimate block. On
-	// that path the candidate height IS the parent's true height, so the
+	// those paths the candidate height IS the parent's true height, so the
 	// substitution is exact — it feeds BDK's per-input protocol-era flag
 	// selection and the BIP68/MTP lookups with the height the parent will be
 	// mined at.
@@ -135,22 +124,26 @@ type Options struct {
 	//
 	// CONSENSUS SAFETY — fail-open, gate carefully. With this set, a parent
 	// that is genuinely unconfirmed-and-NOT-in-the-block (a mempool floater)
-	// is no longer rejected at tx level; the membership backstop is block
-	// validation's checkParentsExistOnChain (model/Block.go), which fails
-	// block acceptance with BlockIncompleteError — retry/catchup-ordering
-	// semantics (issue #1031), NOT an invalid-block marking; pinned by the
-	// "parent has no block ID" case in model/Block_test.go. The block is
-	// never accepted while the floater stays unmined. Tx-level blessing has
-	// already happened by then: the floater child's UTXO spends and txmeta
-	// exist in the store, in exactly the state a policy-mode mempool-chain
-	// admission of the same txs would produce (policy mode substitutes
-	// tip+1 ≈ candidate height) — cleaned up by the same unmined-tx
-	// machinery, no new cleanup obligations. Setting this flag is
-	// therefore only sound when BOTH:
+	// is no longer rejected at tx level. The floater backstop is NOT here and
+	// is NOT a synchronous checkParentsExistOnChain rejection before acceptance:
+	// such a parent surfaces from block.Valid as ErrBlockIncomplete (model's
+	// getParentTxMetaBlockIDs returns BlockIncompleteError for empty-BlockIDs),
+	// which is NOT ErrBlockInvalid, and under optimistic mining the block has
+	// already been added by the time block.Valid runs in the background. The
+	// real backstop is block-validation's FSM-gated ErrBlockIncomplete handling
+	// (BlockValidation.go: the optimistic background goroutine, the
+	// non-optimistic path, and reValidateBlock, all via isCaughtUp): in a
+	// caught-up state the floater block is invalidated/rolled back, in
+	// CATCHINGBLOCKS it stays incomplete and is retried
+	// (preserving #1031). Setting this flag is therefore only sound when ALL of:
 	//   - the tx comes from a locally-held, PoW-checked block (not a peer
 	//     announcement), AND
-	//   - the full block-level parent-membership check will run before the
-	//     block is accepted.
+	//   - the FSM-gated ErrBlockIncomplete backstop in block validation will
+	//     run (it always does, on every block.Valid path), AND
+	//   - mempool/block-assembly contamination vectors are absent or
+	//     acceptable (sync states run with block assembly disabled; in
+	//     RUNNING the candidate-height substitution matches the everyday
+	//     mempool policy-mode behaviour at tip+1).
 	//
 	// Block assembly: the flag is compatible with AddTXToBlockAssembly=true
 	// (an earlier revision hard-errored on the combination; that broke
@@ -162,10 +155,45 @@ type Options struct {
 	// cannot differ post-Genesis. Accepted-block txs are mined-removed from
 	// assembly as always.
 	//
-	// The sole intended setter is the legacy branch of
-	// subtreevalidation.checkSubtreeFromBlock, in every FSM state. MUST NOT
-	// be set on peer-facing or mempool-admission paths.
+	// The intended setters are subtreevalidation's checkSubtreeFromBlock
+	// legacy branch and CheckBlockSubtrees (the block-validation path, which
+	// runs after ValidateBlock's PoW checks). MUST NOT be set on peer-facing
+	// subtree handling or mempool-admission paths.
 	UnconfirmedParentsAtCandidateHeight bool
+
+	// PrefetchedParents supplies parent-transaction metadata already read in
+	// bulk by the caller (the per-level bulk reader on the catchup path), keyed
+	// by parent tx hash. When a parent is present here the validator uses it
+	// instead of issuing a per-parent utxoStore.Get, which deduplicates the
+	// many reads of a shared parent in fan-out blocks and batches the rest.
+	//
+	// It is a pure read-source swap: the entry must carry exactly what a Get
+	// would return for the requested fields (BlockIDs, BlockHeights, and Tx
+	// when the tx needs extending). The unconfirmed-parent sentinel logic is
+	// unchanged — an entry with empty BlockHeights still resolves to
+	// unconfirmedParentHeight. The validator falls back to a store Get for any
+	// parent absent from this map, or present but missing the Tx needed for
+	// extension, so the prefetch can never reduce correctness. nil = always
+	// read from the store (the non-catchup default).
+	PrefetchedParents map[chainhash.Hash]*meta.Data
+
+	// OutpointOnlySpend enables the below-checkpoint fast path:
+	//   - Parent Get (block-heights + extend) is skipped entirely — utxoHeights
+	//     is left nil, which is safe because SkipScriptValidation must also be
+	//     set on this path, bypassing the BDK/BIP68 code that consumes heights.
+	//   - Spend is issued with IgnoreFlags.SkipUTXOHashCheck=true so the SQL
+	//     store builds spends via outpoint lookup (no UTXO-hash comparison).
+	//   - Create is issued with utxo.WithSkipExtendedInputs(true) so fee
+	//     computation is skipped for un-extended inputs.
+	//   - The SkipUtxoCreation fallback calls util.TxMetaDataFromTxNoFee
+	//     instead of util.TxMetaDataFromTx (which calls GetFees and errors on
+	//     un-decorated inputs).
+	//
+	// MUST be paired with WithSkipScriptValidation(true). Default OFF — every
+	// code path when false is byte-identical to the pre-existing behaviour.
+	// The checkpoint gate is enforced by the caller (Stage C task C2); this
+	// option simply honours the flag.
+	OutpointOnlySpend bool
 }
 
 // Option defines a function type for setting options
@@ -311,18 +339,6 @@ func WithSkipScriptValidation(skip bool) Option {
 	}
 }
 
-// WithParentMetadata creates an option to provide pre-fetched parent transaction metadata
-// Parameters:
-//   - metadata: Map of parent transaction hashes to their metadata (block height, etc.)
-//
-// Returns:
-//   - Option: Function that sets the parentMetadata option
-func WithParentMetadata(metadata map[chainhash.Hash]*ParentTxMetadata) Option {
-	return func(o *Options) {
-		o.ParentMetadata = metadata
-	}
-}
-
 // WithCandidateBlockTime creates an option carrying the candidate block's
 // own header timestamp. Required by block-validation callers when validating
 // pre-CSV blocks; ignored in other contexts. See Options.CandidateBlockTime.
@@ -368,6 +384,14 @@ func WithCandidateParentMedianTime(mtp uint32) Option {
 func WithUnconfirmedParentsAtCandidateHeight(enabled bool) Option {
 	return func(o *Options) {
 		o.UnconfirmedParentsAtCandidateHeight = enabled
+	}
+}
+
+// WithOutpointOnlySpend enables the below-checkpoint outpoint-only fast path.
+// See Options.OutpointOnlySpend for the full contract.
+func WithOutpointOnlySpend(b bool) Option {
+	return func(o *Options) {
+		o.OutpointOnlySpend = b
 	}
 }
 

@@ -8,12 +8,16 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
+	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -187,6 +191,146 @@ type mockServerPeer struct {
 
 func (m *mockServerPeer) QueueInventory(invVect *wire.InvVect) {
 	m.Called(invVect)
+}
+
+// TestHandleRelayBlockInvMsg verifies that a newly-relayed block is announced
+// via a plain inventory message to peers that have NOT negotiated sendheaders.
+// handleRelayInvMsg only special-cases InvTypeBlock when sp.WantsHeaders() is
+// true (sending a headers message via handleRelayBlockMsg); peers that never
+// sent "sendheaders" must still get the block via QueueInventory, or they get
+// no announcement for the block at all.
+func TestHandleRelayBlockInvMsg(t *testing.T) {
+	sp := &mockServerPeer{}
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	msg := relayMsg{invVect: invVect}
+
+	s := &server{}
+
+	sp.Mock.On("QueueInventory", invVect).Return()
+
+	s.handleRelayBlockInvMsg(sp, msg)
+
+	sp.AssertCalled(t, "QueueInventory", invVect)
+}
+
+// tcpAddrConn wraps a net.Pipe end so both sides report a *net.TCPAddr. peer.Peer
+// builds a wire.NetAddress from the connection's remote address, which only works
+// for TCP (or socks) addresses, and net.Pipe reports a "pipe" address.
+type tcpAddrConn struct {
+	net.Conn
+
+	local  *net.TCPAddr
+	remote *net.TCPAddr
+}
+
+func (c *tcpAddrConn) LocalAddr() net.Addr  { return c.local }
+func (c *tcpAddrConn) RemoteAddr() net.Addr { return c.remote }
+
+// TestHandleRelayInvMsgBlockToNonSendHeadersPeer drives handleRelayInvMsg itself -
+// not just the extracted helper - over a real, fully handshaked peer that never
+// sent "sendheaders", and asserts the block reaches the wire as a plain inv
+// message. This pins the dispatch in handleRelayInvMsg: without the InvTypeBlock
+// fallback branch, a non-sendheaders peer gets no announcement for the block at
+// all and no inv is ever written.
+func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	logger := ulogger.TestLogger{}
+
+	invReceived := make(chan *wire.MsgInv, 1)
+
+	// The remote end records the inv messages it receives. Neither side sends
+	// "sendheaders", so WantsHeaders() stays false on both peers.
+	remoteCfg := &peer.Config{
+		Listeners: peer.MessageListeners{
+			OnInv: func(_ *peer.Peer, msg *wire.MsgInv) {
+				select {
+				case invReceived <- msg:
+				default:
+				}
+			},
+		},
+		UserAgentName:          "remote",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               wire.SFNodeNetwork,
+		TrickleInterval:        10 * time.Millisecond,
+		TstAllowSelfConnection: true,
+	}
+
+	localCfg := &peer.Config{
+		UserAgentName:          "local",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               wire.SFNodeNetwork,
+		TrickleInterval:        10 * time.Millisecond,
+		TstAllowSelfConnection: true,
+	}
+
+	remoteEnd, localEnd := net.Pipe()
+
+	remoteAddr := &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 8333}
+	localAddr := &net.TCPAddr{IP: net.ParseIP("10.0.0.2"), Port: 8333}
+
+	remotePeer := peer.NewInboundPeer(logger, tSettings, remoteCfg)
+	remotePeer.AssociateConnection(&tcpAddrConn{Conn: remoteEnd, local: remoteAddr, remote: localAddr})
+
+	localPeer, err := peer.NewOutboundPeer(logger, tSettings, localCfg, remoteAddr.String())
+	require.NoError(t, err)
+
+	localPeer.AssociateConnection(&tcpAddrConn{Conn: localEnd, local: localAddr, remote: remoteAddr})
+
+	t.Cleanup(func() {
+		localPeer.DisconnectWithInfo("test cleanup")
+		remotePeer.DisconnectWithInfo("test cleanup")
+	})
+
+	// The inv is dropped by the peer's queue handler until the version handshake
+	// has completed, so wait for both sides to finish negotiating.
+	require.Eventually(t, func() bool {
+		return localPeer.VersionKnown() && localPeer.VerAckReceived() &&
+			remotePeer.VersionKnown() && remotePeer.VerAckReceived()
+	}, 10*time.Second, 10*time.Millisecond, "peers did not complete the version handshake")
+
+	s := &server{logger: logger}
+
+	sp := &serverPeer{
+		Peer:   localPeer,
+		server: s,
+		quit:   make(chan struct{}),
+	}
+
+	// Precondition for the fallback: this peer did not negotiate sendheaders.
+	require.False(t, sp.WantsHeaders())
+	require.True(t, sp.Connected())
+
+	state := &peerState{
+		inboundPeers:    txmap.NewSyncedMap[int32, *serverPeer](),
+		outboundPeers:   txmap.NewSyncedMap[int32, *serverPeer](),
+		persistentPeers: txmap.NewSyncedMap[int32, *serverPeer](),
+		banned:          txmap.NewSyncedMap[string, time.Time](),
+	}
+	state.inboundPeers.Set(1, sp)
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	// No msg.data: a non-sendheaders peer must be announced the block by
+	// inventory, which needs nothing but the inv vector. If the dispatch ever
+	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
+	// missing block header and nothing is sent.
+	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+
+	select {
+	case msg := <-invReceived:
+		require.Len(t, msg.InvList, 1)
+		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
+		require.Equal(t, blockHash, msg.InvList[0].Hash)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	}
 }
 
 // TestHandleRelayTxMsg tests the handleRelayTxMsg function's behavior with various fee filter scenarios
@@ -888,12 +1032,131 @@ func TestServerPeerAddBanScoreExists(t *testing.T) {
 	assert.NotNil(t, sp.addBanScore)
 }
 
-// TestServerOutboundGroupCountExists tests the OutboundGroupCount method exists
-func TestServerOutboundGroupCountExists(t *testing.T) {
+// TestServerPeerAddBanScoreRespectsDisableBanning verifies that addBanScore
+// honours cfg.DisableBanning by leaving the ban score untouched when banning is
+// disabled, and that it still accumulates normally when banning is enabled.
+// cfg.DisableBanning is set from the `legacy_config_DisableBanning` setting via
+// setConfigValuesFromSettings; the `nobanning` struct tag is inert because the
+// legacy command line parser is commented out.
+func TestServerPeerAddBanScoreRespectsDisableBanning(t *testing.T) {
+	// cfg is a package-level variable read by addBanScore; save/restore it so
+	// this test doesn't leak state into other tests in the package.
+	origCfg := cfg
+	defer func() { cfg = origCfg }()
+
+	tests := []struct {
+		name            string
+		disableBanning  bool
+		expectIncreased bool
+	}{
+		{
+			name:            "banning enabled: score accumulates",
+			disableBanning:  false,
+			expectIncreased: true,
+		},
+		{
+			name:            "banning disabled: score does not accumulate",
+			disableBanning:  true,
+			expectIncreased: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg = &config{
+				DisableBanning: tt.disableBanning,
+				BanThreshold:   100,
+			}
+
+			sp := &serverPeer{}
+
+			sp.addBanScore(1, 0, "test")
+
+			if tt.expectIncreased {
+				require.NotZero(t, sp.banScore.Int())
+			} else {
+				require.Zero(t, sp.banScore.Int())
+			}
+		})
+	}
+}
+
+// TestServerPeerOnVersionRespectsDisableBanning verifies that the non-BSV user
+// agent check in OnVersion honours cfg.DisableBanning: the peer is rejected
+// either way, but it is only added to the ban list when banning is enabled.
+func TestServerPeerOnVersionRespectsDisableBanning(t *testing.T) {
+	// cfg is a package-level variable read by OnVersion; save/restore it so
+	// this test doesn't leak state into other tests in the package.
+	origCfg := cfg
+	defer func() { cfg = origCfg }()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	tests := []struct {
+		name           string
+		disableBanning bool
+		expectBanned   bool
+	}{
+		{
+			name:           "banning enabled: peer is banned",
+			disableBanning: false,
+			expectBanned:   true,
+		},
+		{
+			name:           "banning disabled: peer is rejected but not banned",
+			disableBanning: true,
+			expectBanned:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg = &config{
+				DisableBanning: tt.disableBanning,
+				BanThreshold:   100,
+			}
+
+			// banPeers is buffered so BanPeer does not block without the
+			// peer handler running.
+			s := &server{
+				logger:   ulogger.TestLogger{},
+				settings: tSettings,
+				banPeers: make(chan *serverPeer, 1),
+			}
+
+			sp := &serverPeer{
+				ctx:    context.Background(),
+				server: s,
+				Peer:   peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{}),
+			}
+
+			msg := &wire.MsgVersion{
+				ProtocolVersion: int32(wire.ProtocolVersion),
+				UserAgent:       "/Bitcoin Cash Node:27.0.0/",
+			}
+
+			reject := sp.OnVersion(sp.Peer, msg)
+
+			// The peer is rejected regardless: disabling banning only
+			// suppresses the ban, not the fork-client rejection.
+			require.NotNil(t, reject)
+			require.Equal(t, wire.RejectNonstandard, reject.Code)
+
+			if tt.expectBanned {
+				require.Len(t, s.banPeers, 1)
+			} else {
+				require.Empty(t, s.banPeers)
+			}
+		})
+	}
+}
+
+// TestServerOutboundGroupsExists tests the OutboundGroups method exists
+func TestServerOutboundGroupsExists(t *testing.T) {
 	// This method requires complex channel setup and peer state management
 	// We'll just verify the method exists on server
 	s := &server{}
-	assert.NotNil(t, s.OutboundGroupCount)
+	assert.NotNil(t, s.OutboundGroups)
 }
 
 // TestServerPeerPushAddrMsgExists tests the pushAddrMsg method exists
@@ -1152,4 +1415,434 @@ func TestMergeCheckpointsFunc(t *testing.T) {
 	assert.Equal(t, int32(200), merged[1].Height)
 	assert.Equal(t, int32(300), merged[2].Height)
 	assert.Equal(t, int32(400), merged[3].Height)
+}
+
+// TestShouldDisconnectOnBlockErr verifies the block-processing error policy that
+// both the synchronous and the async-prefetch ingestion paths in OnBlock share:
+// validation failures rotate the sync peer, local infrastructure errors do not.
+func TestShouldDisconnectOnBlockErr(t *testing.T) {
+	// No error: nothing to disconnect for.
+	require.False(t, shouldDisconnectOnBlockErr(nil))
+
+	// Local infrastructure problems must NOT churn the sync peer.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("grpc down")))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageError("db unavailable")))
+
+	// #1187: the per-block backoff skip returns ErrServiceUnavailable on every
+	// in-window re-delivery, and ErrStorageUnavailable is "no aerospike nodes
+	// available" — both are our local fault, not the peer's, so they must NOT
+	// disconnect the delivering peer (this is the regression that churned peers).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceUnavailableError("in backoff")))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageUnavailableError("no aerospike nodes available")))
+
+	// Wrapped transient-local errors are still suppressed (chain is walked).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("wrap", errors.NewStorageError("inner"))))
+
+	// A genuine block validation failure rotates the peer.
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
+}
+
+// TestCheckBannedBounded verifies the bounded ban-check round-trip extracted from
+// OnBlock's pre-admission phase. Under prefetch the per-message watchdog is
+// disarmed for block messages and the netsync stall detector only watches the
+// sync peer, so a wedged query goroutine must NOT be allowed to park the
+// read-loop: the round-trip returns ok=false (drop the block) when the query send
+// or its reply cannot complete within the context, and (banned, true) when the
+// query goroutine answers.
+func TestCheckBannedBounded(t *testing.T) {
+	t.Run("send times out when nobody services the query", func(t *testing.T) {
+		// Unbuffered query with no reader: the send can never complete, so an
+		// already-cancelled context must make the round-trip bail with ok=false.
+		sp := &serverPeer{server: &server{query: make(chan interface{})}}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
+		require.False(t, ok, "a never-serviced query send must return ok=false")
+		require.False(t, banned)
+	})
+
+	t.Run("reply times out when the query is read but never answered", func(t *testing.T) {
+		s := &server{query: make(chan interface{})}
+		sp := &serverPeer{server: s}
+
+		// Drain the send but never reply, forcing the second select to wait out
+		// the context — the wedged-query-goroutine case this bound exists for.
+		go func() { <-s.query }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
+		require.False(t, ok, "a missing reply must return ok=false")
+		require.False(t, banned)
+	})
+
+	t.Run("returns the ban verdict when the query goroutine answers", func(t *testing.T) {
+		for _, want := range []bool{true, false} {
+			s := &server{query: make(chan interface{})}
+			sp := &serverPeer{server: s}
+
+			go func() {
+				msg := (<-s.query).(*isPeerBannedMsg)
+				msg.reply <- want
+			}()
+
+			banned, ok := sp.checkBannedBounded(context.Background(), "127.0.0.1")
+			require.True(t, ok, "a serviced round-trip must return ok=true")
+			require.Equal(t, want, banned)
+		}
+	})
+}
+
+// TestPreAdmitTimedOut verifies the deadline-vs-cancel policy OnBlock uses to
+// decide whether a failed pre-admission call (ban-check ok=false, or a
+// GetBlockHeader that erred under preAdmitCtx) should rotate the sync peer.
+// Only a genuine deadline (the wedged-local-round-trip case that strands a
+// requested block) returns true; a parent or direct cancel — daemon shutdown /
+// peer teardown — returns false so the block is dropped without a disconnect
+// storm across every peer that happens to be inside OnBlock.
+func TestPreAdmitTimedOut(t *testing.T) {
+	t.Run("deadline exceeded → rotate", func(t *testing.T) {
+		// Already-past deadline: Err() latches context.DeadlineExceeded.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		defer cancel()
+
+		<-ctx.Done()
+		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+		require.True(t, preAdmitTimedOut(ctx))
+	})
+
+	t.Run("parent cancelled → drop, no rotate", func(t *testing.T) {
+		// The daemon-shutdown shape: sp.ctx (parent) is cancelled, so the
+		// derived preAdmitCtx reports Canceled, not DeadlineExceeded.
+		parent, cancelParent := context.WithCancel(context.Background())
+		child, cancelChild := context.WithTimeout(parent, time.Hour)
+		defer cancelChild()
+
+		cancelParent()
+
+		<-child.Done()
+		require.ErrorIs(t, child.Err(), context.Canceled)
+		require.False(t, preAdmitTimedOut(child))
+	})
+
+	t.Run("direct cancel → drop, no rotate", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		require.False(t, preAdmitTimedOut(ctx))
+	})
+
+	t.Run("live context → no rotate (defensive; callers gate on failure)", func(t *testing.T) {
+		require.False(t, preAdmitTimedOut(context.Background()))
+	})
+}
+
+// TestBlockAdmissionWeight verifies the prefetch-budget weight selection used by
+// OnBlock: the wire-measured payload size is preferred, then the raw buffer
+// length, and only as a last resort the O(all-tx) SerializeSize() walk.
+func TestBlockAdmissionWeight(t *testing.T) {
+	msg := wire.NewMsgBlock(wire.NewBlockHeader(1, &chainhash.Hash{}, &chainhash.Hash{}, 1, 1))
+	fallback := int64(msg.SerializeSize())
+	require.Positive(t, fallback, "empty block must still serialize to a positive size")
+
+	// Wire measurement present: used even when buf is also non-nil.
+	require.Equal(t, int64(1000), blockAdmissionWeight(1000, make([]byte, 200), msg))
+
+	// No wire measurement, but the raw buffer is available: use its length.
+	require.Equal(t, int64(200), blockAdmissionWeight(0, make([]byte, 200), msg))
+
+	// Neither available: fall back to SerializeSize().
+	require.Equal(t, fallback, blockAdmissionWeight(0, nil, msg))
+
+	// A non-positive wire measurement must not be trusted; fall through.
+	require.Equal(t, fallback, blockAdmissionWeight(-1, nil, msg))
+}
+
+// TestMisbehaviorDisconnectTarget verifies the unrequested-block eviction
+// resolves a stream sub-peer to its association primary (so the whole
+// association is torn down), while a peer with no association disconnects
+// itself. This mirrors handleBlockMsg's stream-peer → primary resolution.
+func TestMisbehaviorDisconnectTarget(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	// A peer with no association is its own disconnect target.
+	lone := newPeer()
+	require.Same(t, lone, misbehaviorDisconnectTarget(lone))
+
+	// A stream sub-peer resolves to the association primary.
+	primary := newPeer()
+	assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+	primary.SetAssociation(assoc)
+
+	dataStream := newPeer()
+	require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
+	dataStream.SetAssociation(assoc)
+
+	require.Same(t, primary, misbehaviorDisconnectTarget(dataStream))
+
+	// The primary itself resolves to itself.
+	require.Same(t, primary, misbehaviorDisconnectTarget(primary))
+}
+
+// TestDisconnectMisbehaving verifies the shared misbehaviour-eviction helper used
+// at all three disconnect sites: for a stream sub-peer it disconnects BOTH the
+// association primary (whose disconnect drives handleDonePeerMsg's
+// associationMgr.Remove, rotating the sync peer) AND the stream's own connection;
+// for a lone peer it disconnects only that peer, exactly once (idempotent guard).
+// DisconnectWithWarning closes the peer's quit channel, so WaitForDisconnect
+// returning is the observable disconnect signal.
+func TestDisconnectMisbehaving(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	// disconnected reports whether p was disconnected within a short window
+	// (DisconnectWithWarning closes p.quit, which WaitForDisconnect awaits).
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
+
+	t.Run("stream sub-peer evicts both the primary and the stream", func(t *testing.T) {
+		primary := newPeer()
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+
+		dataStream := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
+		dataStream.SetAssociation(assoc)
+
+		disconnectMisbehaving(&serverPeer{Peer: dataStream}, "bad block")
+
+		require.True(t, disconnected(primary), "the association primary must be disconnected to rotate the sync peer")
+		require.True(t, disconnected(dataStream), "the stream sub-peer's own connection must be disconnected too")
+	})
+
+	t.Run("lone peer disconnects only itself", func(t *testing.T) {
+		lone := newPeer()
+
+		require.NotPanics(t, func() { disconnectMisbehaving(&serverPeer{Peer: lone}, "bad block") })
+		require.True(t, disconnected(lone))
+	})
+}
+
+// TestTearDownAssociationStreams verifies the primary-disconnect teardown that
+// handleDonePeerMsg now performs: when an association's primary goes away, every
+// sub-peer stream connection is closed (fixing the DATA1 stream leak and the
+// budget-parked sub-peer read-loop), while the primary itself — passed as
+// except, since it is already disconnecting — is left untouched.
+// DisconnectWithInfo closes the peer's quit channel, so WaitForDisconnect
+// returning is the observable disconnect signal.
+func TestTearDownAssociationStreams(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
+
+	buildAssoc := func() (*peer.Association, *peer.Peer, *peer.Peer, *peer.Peer) {
+		primary := newPeer()
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+
+		data1 := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, data1))
+		data1.SetAssociation(assoc)
+		data1.SetStreamType(wire.StreamTypeData1)
+
+		data2 := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData2, data2))
+		data2.SetAssociation(assoc)
+		data2.SetStreamType(wire.StreamTypeData2)
+
+		return assoc, primary, data1, data2
+	}
+
+	t.Run("closes every sub-peer stream, leaves the primary", func(t *testing.T) {
+		assoc, primary, data1, data2 := buildAssoc()
+
+		tearDownAssociationStreams(assoc, primary)
+
+		require.False(t, disconnected(primary), "the primary is passed as except and must not be disconnected here")
+		require.True(t, disconnected(data1), "the DATA1 sub-peer connection must be closed")
+		require.True(t, disconnected(data2), "the DATA2 sub-peer connection must be closed")
+	})
+
+	t.Run("nil association is a no-op", func(t *testing.T) {
+		require.NotPanics(t, func() { tearDownAssociationStreams(nil, newPeer()) })
+	})
+
+	t.Run("idempotent when a sub-peer is already tearing down", func(t *testing.T) {
+		assoc, primary, data1, data2 := buildAssoc()
+
+		// Pre-disconnect one sub-peer: the helper must not panic (atomic guard)
+		// and must still close the remaining sub-peer.
+		data1.DisconnectWithWarning("already gone")
+
+		require.NotPanics(t, func() { tearDownAssociationStreams(assoc, primary) })
+		require.True(t, disconnected(data1))
+		require.True(t, disconnected(data2))
+		require.False(t, disconnected(primary))
+	})
+}
+
+// TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
+// path: awaitBlockResult must hold the reserved budget until the block actually
+// finishes processing — even after the peer is torn down (sp.quit) — because the
+// block's memory is still live in the netsync pipeline. It releases (via defer)
+// only when done arrives, or, as a shutdown-race backstop, when sp.ctx (the
+// ServiceManager errgroup Init context, cancelled on daemon shutdown) fires. A
+// nil prefetch budget makes ReleaseBlockPrefetch a no-op, so this exercises the
+// control flow without standing up a full SyncManager.
+func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
+	newPeer := func(ctx context.Context) *serverPeer {
+		return &serverPeer{
+			server: &server{syncManager: &netsync.SyncManager{}, logger: ulogger.TestLogger{}},
+			ctx:    ctx,
+			quit:   make(chan struct{}),
+		}
+	}
+
+	t.Run("holds after sp.quit until the block completes", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		// Peer torn down, but the block is still queued: must NOT return yet
+		// (that would release the budget while the block's memory is still live).
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult released on sp.quit instead of holding until the block completed")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		// Block finishes processing: now it releases and exits.
+		done <- nil
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not exit after the block completed")
+		}
+	})
+
+	t.Run("sp.ctx is the shutdown-race backstop after sp.quit", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		sp := newPeer(ctx)
+		done := make(chan error, 1) // reply never arrives (shutdown drain race)
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before the block completed or ctx cancelled")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		cancel() // daemon shutdown cancels the errgroup ctx
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not exit on sp.ctx cancellation")
+		}
+	})
+
+	t.Run("completes when the reply arrives", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+		done <- nil // successful processing, no disconnect
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not return after the reply arrived")
+		}
+	})
+
+	t.Run("validation failure after sp.quit does not disconnect", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+
+		// Recover in the goroutine and assert on the test goroutine: a
+		// disconnect-worthy validation error arriving after teardown must be
+		// logged but NOT disconnect the already-gone peer. The embedded
+		// *peer.Peer is nil, so reaching DisconnectWithWarning would panic —
+		// a nil recovered value therefore proves the disconnect path is skipped.
+		panicked := make(chan any, 1)
+		finished := make(chan struct{})
+		go func() {
+			defer func() {
+				panicked <- recover()
+				close(finished)
+			}()
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+		}()
+
+		// Tear down with done still empty so the goroutine must take the sp.quit
+		// branch and park in its inner wait (rather than racing the outer <-done).
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before the late reply arrived")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		// The late validation failure now arrives: logged, but must not disconnect.
+		done <- errors.NewBlockInvalidError("bad block after teardown")
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not return after the late reply")
+		}
+
+		require.Nil(t, <-panicked, "awaitBlockResult must not disconnect (panic) a torn-down peer")
+	})
 }

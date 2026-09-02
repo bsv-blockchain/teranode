@@ -53,6 +53,29 @@ func IsRetryableError(err error) bool {
 	return false
 }
 
+// IsTransientLocalError reports whether err is a transient LOCAL infrastructure
+// condition — a service or storage failure/unavailability originating in this
+// node's own stack (e.g. an overloaded or briefly-unavailable UTXO store) — as
+// opposed to a peer fault. Legacy block sync uses it as the single source of
+// truth for two decisions that must stay in lock-step: whether to record a
+// per-block backoff / suppress rejecting the block to the peer (netsync) and
+// whether to keep the delivering peer instead of disconnecting it (peer_server).
+//
+// The set is {ErrServiceError, ErrStorageError, ErrServiceUnavailable,
+// ErrStorageUnavailable} and the check walks the wrapped chain. It intentionally
+// differs from IsRetryableError, which omits ErrServiceError (and adds network
+// codes) — these two predicates are not interchangeable.
+func IsTransientLocalError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return errors.Is(err, ErrServiceError) ||
+		errors.Is(err, ErrStorageError) ||
+		errors.Is(err, ErrServiceUnavailable) ||
+		errors.Is(err, ErrStorageUnavailable)
+}
+
 // IsNetworkError determines if an error is network-related.
 // This includes timeouts, connection failures, and invalid responses.
 //

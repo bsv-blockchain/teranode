@@ -21,8 +21,71 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/errgroup"
 )
+
+// prometheusUtxoConflictingWalkNodes and prometheusUtxoConflictingWalkDepth record the
+// shape of each completed GetConflictingChildren walk. The cone is unbounded by
+// construction — it is every spender of every output of a transaction's descendants —
+// and in the #1391 incident it was a linear self-spend chain growing by roughly a
+// hundred transactions per block, so the walk degenerated to one store round trip per
+// node with no fan-out at all. These free functions have no logger, so the histograms
+// are the surface that makes a growing cone visible before it becomes a stall.
+// Only completed walks are observed; an aborted walk returns before the observation.
+var (
+	prometheusUtxoConflictingWalkNodes = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "utxo",
+			Name:      "conflicting_walk_nodes",
+			Help:      "Number of transactions visited by a completed conflicting-descendant walk",
+			Buckets:   prometheus.ExponentialBuckets(1, 4, 10),
+		},
+	)
+
+	prometheusUtxoConflictingWalkDepth = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "utxo",
+			Name:      "conflicting_walk_depth",
+			Help:      "Number of BFS levels walked by a completed conflicting-descendant walk",
+			Buckets:   prometheus.ExponentialBuckets(1, 4, 8),
+		},
+	)
+
+	// prometheusUtxoConflictingWalkDuration replaces the store-method duration
+	// histogram (e.g. aerospike txmeta_get_conflicting) for the walks that
+	// GetCounterConflictingTxHashes now runs via the package-level function —
+	// bypassing the Store wrapper so the maxNodes budget flows also bypassed its
+	// tracing histogram. This one observes every walk, on every backend.
+	prometheusUtxoConflictingWalkDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "utxo",
+			Name:      "conflicting_walk_duration",
+			Help:      "Duration of a conflicting-descendant walk",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+)
+
+// conflictingWalkFanOut caps the per-level width of the conflicting-descendant
+// walks (GetAndLockChildren and GetConflictingChildren), which previously opened
+// one concurrent store read per level member with no ceiling. 128 matches the
+// counter-conflicting GetMeta errgroup in subtreevalidation and is safe on the
+// SQL backend, where Store.get falls back to getUnbatched whenever the requested
+// bins include ConflictingChildren or Utxos (stores/utxo/sql/sql.go) — exactly
+// the fields these walks request — so every level member is a concurrent
+// unbatched query against postgres_maxOpenConns (50 by default).
+//
+// Known tradeoff, accepted deliberately: on Aerospike a wide level fills the
+// getBatcher (conf utxostore_getBatcherSize 4096) in ~N/128 timer-triggered
+// waves instead of ~N/4096 fill-triggered flushes, so very wide cones walk
+// slower than a batcher-matched ceiling would allow. The incident cone was
+// fully linear (one node per level), where the ceiling is moot.
+const conflictingWalkFanOut = 128
 
 // step5RetryDelays controls the bounded back-off when SetLocked(false) fails at the very
 // last step of ProcessConflicting. The slice length is the number of attempts; the value
@@ -69,11 +132,41 @@ var step5RetryDelays = []time.Duration{0, 50 * time.Millisecond, 200 * time.Mill
 //     (notably block assembly) need this superset to populate a conflictingMap
 //     so the queue→subtree dequeue path can reject children of conflicting
 //     parents that arrive after the cascade has run.
-func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, conflictingTxHashes []chainhash.Hash,
+func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockHash chainhash.Hash, conflictingTxHashes []chainhash.Hash,
 	processedConflictingHashesMap map[chainhash.Hash]struct{}) (losingTxHashesMap txmap.TxMap, allMarkedConflicting []chainhash.Hash, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
 	defer deferFn()
+
+	// Crash-safety write-ahead log (#861): record the intent durably BEFORE any
+	// state mutation, and remove it once the operation completes successfully. A
+	// SIGKILL between steps (which bypasses the in-process rollback below) leaves
+	// the intent behind for BlockAssembler startup replay. An in-process failure
+	// also leaves it — the deferred rollback unwinds the partial state and a
+	// restart re-attempts the (idempotent) operation from the restored precondition.
+	// A failed Begin aborts before mutating anything: without a durable intent we
+	// cannot guarantee crash recovery, so the operation must not proceed.
+	walIntent := ConflictIntent{
+		Kind:        ConflictIntentForward,
+		BlockHeight: blockHeight,
+		BlockHash:   blockHash,
+		TxHashes:    conflictingTxHashes,
+		StartedAt:   time.Now().UnixNano(),
+	}
+	if beginErr := s.BeginConflictIntent(ctx, walIntent); beginErr != nil {
+		return nil, nil, errors.NewProcessingError("[ProcessConflicting] failed to record WAL intent before processing", beginErr)
+	}
+
+	// Registered before the rollback defer below, so it runs AFTER it (LIFO) and
+	// observes the final err (including a rollback-failure escalation). Only a
+	// genuinely successful operation removes the intent; otherwise it persists for
+	// replay. Completion is best-effort: a failed delete just leaves an intent
+	// that replays idempotently on the next restart.
+	defer func() {
+		if err == nil {
+			_ = s.CompleteConflictIntent(ctx, walIntent.IntentID())
+		}
+	}()
 
 	// State for the deferred compensating rollback. Each commit phase flips a flag; the
 	// deferred block reads them on the way out and undoes whatever happened — see #4561.
@@ -137,6 +230,18 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 			txMeta, err := s.Get(gCtx, &txHash, fields.Tx, fields.BlockIDs, fields.Conflicting)
 			if err != nil {
 				return errors.NewProcessingError("[ProcessConflicting][%s] error getting tx", txHash.String(), err)
+			}
+
+			// A missing record surfaces as (nil, nil) on some backends (e.g. Aerospike
+			// get returns nil for a not-found tx). Guard before dereferencing txMeta —
+			// WAL replay can feed a winner hash whose tx was pruned between crash and
+			// restart, and a clean error there is logged+counted by the replay path
+			// rather than panicking node startup. Mirrors the nil guard in
+			// ReverseProcessConflicting. Note: only a nil meta means "not found"; a
+			// non-nil meta with a nil Tx is left to the existing flow (callers may
+			// supply only the fields they need).
+			if txMeta == nil {
+				return errors.NewTxNotFoundError("[ProcessConflicting][%s] winning tx not found", txHash.String())
 			}
 
 			// the transaction should be marked as conflicting, otherwise it shouldn't be in this process
@@ -211,10 +316,8 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 	var tErr *errors.Error
 
 	for _, tx := range winningTxs {
-		spends, spendErr := s.Spend(ctx, tx, blockHeight, IgnoreFlags{
-			IgnoreConflicting: true,
-			IgnoreLocked:      true,
-		})
+		_, spends, spendErr := s.SpendAndCreate(ctx, tx, blockHeight, WithSpendOnly(),
+			WithIgnoreConflicting(true), WithIgnoreLocked(true))
 		// Capture per-input partial successes regardless of overall outcome so the rollback
 		// can undo them via Unspend(false) (parents at step 3 entry were unlocked-by-us, so
 		// the unspend MUST NOT relock).
@@ -294,13 +397,34 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 //     feed this into processedConflictingHashesMap so the subsequent
 //     moveForwardBlock pass skips ProcessConflicting on these hashes —
 //     re-running it would double-apply the UTXO swap and fail.
-func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32, demotedTxHashes []chainhash.Hash) (cascadedToConflicting []chainhash.Hash, allTouched []chainhash.Hash, err error) {
+func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockHash chainhash.Hash, demotedTxHashes []chainhash.Hash) (cascadedToConflicting []chainhash.Hash, allTouched []chainhash.Hash, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ReverseProcessConflicting")
 	defer deferFn()
 
 	if len(demotedTxHashes) == 0 {
 		return nil, nil, nil
 	}
+
+	// Crash-safety write-ahead log (#861): record the reverse intent before any
+	// state mutation and remove it on successful completion. See ProcessConflicting
+	// for the full rationale. ReverseProcessConflicting self-heals partial state via
+	// the isReverseFullyApplied guard, so replay from any step boundary is safe.
+	walIntent := ConflictIntent{
+		Kind:        ConflictIntentReverse,
+		BlockHeight: blockHeight,
+		BlockHash:   blockHash,
+		TxHashes:    demotedTxHashes,
+		StartedAt:   time.Now().UnixNano(),
+	}
+	if beginErr := s.BeginConflictIntent(ctx, walIntent); beginErr != nil {
+		return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting] failed to record WAL intent before processing", beginErr)
+	}
+
+	defer func() {
+		if err == nil {
+			_ = s.CompleteConflictIntent(ctx, walIntent.IntentID())
+		}
+	}()
 
 	demotedSet := make(map[chainhash.Hash]struct{}, len(demotedTxHashes))
 	for _, h := range demotedTxHashes {
@@ -387,10 +511,8 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 				continue
 			}
 
-			if _, spendErr := s.Spend(ctx, counterMeta.Tx, blockHeight, IgnoreFlags{
-				IgnoreConflicting: true,
-				IgnoreLocked:      true,
-			}); spendErr != nil {
+			if _, _, spendErr := s.SpendAndCreate(ctx, counterMeta.Tx, blockHeight, WithSpendOnly(),
+				WithIgnoreConflicting(true), WithIgnoreLocked(true)); spendErr != nil {
 				return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error spending counter %s", demotedHash.String(), counterHash.String(), spendErr)
 			}
 
@@ -423,22 +545,26 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 }
 
 // isReverseFullyApplied returns true iff every input of the demoted tx D has
-// parent.SpendingDatas[vout] populated with a non-nil spender that is not D
-// itself. Used as the post-D.Conflicting=true guard to distinguish a fully
-// applied reverse from a partial one (Mark/Unspend done but Spend(C) failed
-// last time around).
+// parent.SpendingDatas[vout] populated with a non-nil spender C that is not D
+// itself AND C is no longer flagged Conflicting. Used as the post-D.Conflicting=true
+// guard to distinguish a fully applied reverse from a partial one.
 //
 // Returns false (no error) on:
 //   - any input whose parent.SpendingDatas[vout] is nil (post-Unspend, pre-Spend
-//     state)
+//     state — Spend(C) failed last time around)
 //   - any input whose parent.SpendingDatas[vout].TxID equals demotedHash
 //     (Unspend never ran successfully for that input)
-//   - any input whose parent has no SpendingDatas slice or is shorter than vout
-//     (defensive: a parent that's been pruned / never existed shouldn't block
-//     retry, but it also shouldn't be claimed as fully reversed)
+//   - any input whose recorded spender C is still Conflicting=true — this is the
+//     crash-between-Spend(C)-and-Unmark(C) state (#861): parent[vout] already
+//     points at C, but the final UnmarkConflictingRecursively(C) never ran, so
+//     C is wrongly still conflicting. Returning false re-runs the steps, whose
+//     Mark(D)/Unspend(D)/Spend(C) are idempotent and whose Unmark(C) finishes the job.
+//   - any input whose parent has no SpendingDatas slice or is shorter than vout,
+//     or whose recorded spender record is missing (defensive: cannot confirm full
+//     application, so retry rather than claim done)
 //
-// Returns true only when ALL inputs unambiguously have a non-D spender. An
-// error is surfaced for any Get failure on a parent — that's a store-level
+// Returns true only when ALL inputs unambiguously have a non-D, non-conflicting
+// spender. An error is surfaced for any Get failure — that's a store-level
 // problem, not a state question, and the caller must abort the reverse rather
 // than make assumptions.
 func isReverseFullyApplied(ctx context.Context, s Store, demotedTx *bt.Tx, demotedHash chainhash.Hash) (bool, error) {
@@ -465,6 +591,18 @@ func isReverseFullyApplied(ctx context.Context, s Store, demotedTx *bt.Tx, demot
 		}
 
 		if sd.TxID.IsEqual(&demotedHash) {
+			return false, nil
+		}
+
+		// The recorded spender C must also be non-conflicting. A crash between
+		// Spend(C) and UnmarkConflictingRecursively(C) leaves parent[vout]->C
+		// with C still Conflicting=true; that is NOT a fully-applied reverse.
+		spenderMeta, err := s.Get(ctx, sd.TxID, fields.Conflicting)
+		if err != nil {
+			return false, errors.NewProcessingError("[isReverseFullyApplied][%s] error getting recorded spender %s meta", demotedHash.String(), sd.TxID.String(), err)
+		}
+
+		if spenderMeta == nil || spenderMeta.Conflicting {
 			return false, nil
 		}
 	}
@@ -729,7 +867,8 @@ func rollbackProcessConflicting(ctx context.Context, s Store, conflictingTxHashe
 				continue
 			}
 
-			if _, e := s.Spend(ctx, txMeta.Tx, blockHeight, IgnoreFlags{IgnoreConflicting: true, IgnoreLocked: true}); e != nil {
+			if _, _, e := s.SpendAndCreate(ctx, txMeta.Tx, blockHeight, WithSpendOnly(),
+				WithIgnoreConflicting(true), WithIgnoreLocked(true)); e != nil {
 				rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 2 (re-spend tx %s) failed", h.String(), e))
 			}
 		}
@@ -850,6 +989,9 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 	for len(currentLevel) > 0 {
 		results := make([]*meta.Data, len(currentLevel))
 		g, gCtx := errgroup.WithContext(ctx)
+		// Same per-level ceiling as GetConflictingChildren, same rationale — see
+		// conflictingWalkFanOut.
+		g.SetLimit(conflictingWalkFanOut)
 
 		for i, current := range currentLevel {
 			i := i
@@ -909,8 +1051,17 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 	return children, nil
 }
 
-func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {
-	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetConflictingChildren")
+// GetConflictingChildren walks the descendant graph of the given transaction —
+// every recorded spender plus explicit conflicting children — and returns all
+// reachable transaction hashes (excluding the root). maxNodes bounds the walk:
+// when the total number of visited transactions (including the root) would
+// exceed it, the walk fails closed with ERR_UTXO_WALK_LIMIT_EXCEEDED. A
+// maxNodes <= 0 disables the bound; the conflict-demotion path relies on this
+// to always run to completion (issue 1391).
+func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash, maxNodes int) ([]chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetConflictingChildren",
+		tracing.WithHistogram(prometheusUtxoConflictingWalkDuration),
+	)
 
 	defer deferFn()
 
@@ -922,10 +1073,38 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 	visited := make(map[chainhash.Hash]struct{})
 	visited[hash] = struct{}{}
 	currentLevel := []chainhash.Hash{hash}
+	depth := 0
+
+	// visit adds a child to the walk. The frozen sentinel stays in the result set
+	// (callers check for it) but is never enqueued — it is not a real record. The
+	// budget counts every visited transaction including the root; the check runs
+	// per insert so a single wide level cannot overshoot it.
+	var nextLevel []chainhash.Hash
+
+	visit := func(child chainhash.Hash) error {
+		if _, ok := visited[child]; ok {
+			return nil
+		}
+
+		visited[child] = struct{}{}
+
+		if maxNodes > 0 && len(visited) > maxNodes {
+			return errors.NewUtxoWalkLimitExceededError("[GetConflictingChildren][%s] conflicting-descendant walk exceeded %d transactions (utxostore_conflictingChildrenMaxNodes)", hash.String(), maxNodes)
+		}
+
+		if !child.Equal(subtree.FrozenBytesTxHash) {
+			nextLevel = append(nextLevel, child)
+		}
+
+		return nil
+	}
 
 	for len(currentLevel) > 0 {
+		depth++
+
 		results := make([]*meta.Data, len(currentLevel))
 		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(conflictingWalkFanOut)
 
 		for i, current := range currentLevel {
 			i := i
@@ -944,7 +1123,8 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 			return nil, err
 		}
 
-		var nextLevel []chainhash.Hash
+		nextLevel = nil
+
 		for _, txMeta := range results {
 			if txMeta == nil {
 				continue
@@ -952,9 +1132,8 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 
 			if txMeta.ConflictingChildren != nil {
 				for _, child := range txMeta.ConflictingChildren {
-					if _, ok := visited[child]; !ok {
-						visited[child] = struct{}{}
-						nextLevel = append(nextLevel, child)
+					if err := visit(child); err != nil {
+						return nil, err
 					}
 				}
 			}
@@ -962,10 +1141,8 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 			if txMeta.SpendingDatas != nil {
 				for _, spendingData := range txMeta.SpendingDatas {
 					if spendingData != nil {
-						child := *spendingData.TxID
-						if _, ok := visited[child]; !ok {
-							visited[child] = struct{}{}
-							nextLevel = append(nextLevel, child)
+						if err := visit(*spendingData.TxID); err != nil {
+							return nil, err
 						}
 					}
 				}
@@ -973,6 +1150,9 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 		}
 		currentLevel = nextLevel
 	}
+
+	prometheusUtxoConflictingWalkNodes.Observe(float64(len(visited)))
+	prometheusUtxoConflictingWalkDepth.Observe(float64(depth))
 
 	// exclude the root hash from the result
 	delete(visited, hash)
@@ -985,7 +1165,12 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 	return conflictingChildren, nil
 }
 
-func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+// GetCounterConflictingTxHashes returns the given transaction plus, for every
+// input, the transaction the store records as spending that same output (the
+// counter-conflicting transaction) and that spender's full descendant set.
+// maxNodes bounds each descendant walk (see GetConflictingChildren); <= 0
+// means unbounded.
+func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhash.Hash, maxNodes int) ([]chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetCounterConflictingTxHashes")
 
 	defer deferFn()
@@ -1027,6 +1212,14 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 		parentTxs[*parentTxHash] = spendingTxIDs
 	}
 
+	// validate every input and collect the unique counter-spenders in first-seen
+	// input order; several inputs are typically spent by the same counter tx and
+	// its descendant walk must run only once, not once per input. Dedupe on a
+	// dedicated set: counterConflictingMap is seeded with txHash, and a spender
+	// equal to txHash itself must still be walked.
+	seenSpenders := make(map[chainhash.Hash]struct{}, len(txMeta.Tx.Inputs))
+	uniqueSpendingTxIDs := make([]chainhash.Hash, 0, len(txMeta.Tx.Inputs))
+
 	for _, input := range txMeta.Tx.Inputs {
 		parenTxIDS, ok := parentTxs[*input.PreviousTxIDChainHash()]
 		if ok {
@@ -1040,19 +1233,28 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 			if spendingTxID != nil {
 				counterConflictingMap[*spendingTxID] = struct{}{}
 
-				childHashes, err := s.GetConflictingChildren(ctx, *spendingTxID)
-				if err != nil {
-					return nil, err
-				}
-
-				for _, childHash := range childHashes {
-					if childHash.Equal(subtree.FrozenBytesTxHash) {
-						return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] tx has frozen child", spendingTxID.String())
-					}
-
-					counterConflictingMap[childHash] = struct{}{}
+				if _, ok := seenSpenders[*spendingTxID]; !ok {
+					seenSpenders[*spendingTxID] = struct{}{}
+					uniqueSpendingTxIDs = append(uniqueSpendingTxIDs, *spendingTxID)
 				}
 			}
+		}
+	}
+
+	for _, spendingTxID := range uniqueSpendingTxIDs {
+		// call the package-level walk directly (not the Store method) so the
+		// caller-chosen maxNodes budget flows into the BFS
+		childHashes, err := GetConflictingChildren(ctx, s, spendingTxID, maxNodes)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, childHash := range childHashes {
+			if childHash.Equal(subtree.FrozenBytesTxHash) {
+				return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] tx has frozen child", spendingTxID.String())
+			}
+
+			counterConflictingMap[childHash] = struct{}{}
 		}
 	}
 

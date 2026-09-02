@@ -303,6 +303,8 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
+	d.daemonStores.retainClient(blockAssemblyClient)
+
 	// Create a Kafka consumer group for rejected transactions
 	var rejectedTxKafkaConsumerClient *kafka.KafkaConsumerGroup
 
@@ -313,15 +315,21 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
-	invalidBlocksKafkaConsumerClient, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
+	// These consumers are optional (nil when unconfigured): map typed nils to
+	// true nils so the server's nil checks behave correctly.
+	invalidBlocksKafkaConsumerGroup, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
 	if err != nil {
 		return err
 	}
 
-	invalidSubtreeKafkaConsumerClient, err := getKafkaInvalidSubtreeConsumerGroup(createLogger("kpis"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
+	invalidBlocksKafkaConsumerClient := nonNilConsumerGroup(invalidBlocksKafkaConsumerGroup)
+
+	invalidSubtreeKafkaConsumerGroup, err := getKafkaInvalidSubtreeConsumerGroup(createLogger("kpis"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
 	if err != nil {
 		return err
 	}
+
+	invalidSubtreeKafkaConsumerClient := nonNilConsumerGroup(invalidSubtreeKafkaConsumerGroup)
 
 	// Create Kafka producers for subtrees and blocks
 	var subtreeKafkaProducerClient *kafka.KafkaAsyncProducer
@@ -488,6 +496,8 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
+	d.daemonStores.retainClient(legacyPeerClient)
+
 	p2pClient, err := d.daemonStores.GetP2PClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
 		return err
@@ -569,6 +579,8 @@ func (d *Daemon) startAlertService(ctx context.Context, appSettings *settings.Se
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(peerClient)
 
 	// Create the P2P client for the Alert service
 	p2pClient, err = d.daemonStores.GetP2PClient(ctx, createLogger(loggerAlert), appSettings)
@@ -876,6 +888,8 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		d.daemonStores.retainClient(blockAssemblyClient)
+
 		// Create the P2P client for the BlockValidation service
 		var p2pClient p2p.ClientI
 
@@ -985,6 +999,8 @@ func (d *Daemon) startValidatorService(
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(blockAssemblyClient)
 
 	// Add the Validator service to the ServiceManager
 	return d.ServiceManager.AddService(serviceValidatorFormal, validator.NewServer(
@@ -1139,6 +1155,8 @@ func (d *Daemon) startLegacyService(
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(blockassemblyClient)
 
 	// Add the Legacy service to the ServiceManager
 	return d.ServiceManager.AddService(serviceLegacyFormal, legacy.New(

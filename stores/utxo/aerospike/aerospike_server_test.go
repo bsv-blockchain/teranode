@@ -600,7 +600,10 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
-		assert.Equal(t, 11, value.Bins[fields.DeleteAtHeight.String()])
+		// setMined stamps the DAH relative to the height of the block the tx is mined
+		// into (BlockHeight=123), plus the retention window — not the store's cached
+		// chain tip.
+		assert.Equal(t, int(123+tSettings.GetUtxoStoreBlockHeightRetention()), value.Bins[fields.DeleteAtHeight.String()])
 
 		// try to spend with different txid
 		spends, err = store.Spend(ctx, spendTx3, 1)
@@ -1003,7 +1006,7 @@ func TestAerospike(t *testing.T) {
 		assert.Nil(t, rec.Bins["creating"])
 
 		// Increment via multi API
-		require.NoError(t, store.IncrementSpentRecordsMulti([]*chainhash.Hash{bigTx.TxIDChainHash()}, 1))
+		require.NoError(t, store.IncrementSpentRecordsMulti([]*chainhash.Hash{bigTx.TxIDChainHash()}, 1, 0))
 
 		rec2, err := client.Get(util.GetAerospikeReadPolicy(tSettings), bigTxKey)
 		require.NoError(t, err)
@@ -1062,7 +1065,7 @@ func TestAerospike(t *testing.T) {
 		var invalid chainhash.Hash // zero hash, not present
 		ids := []*chainhash.Hash{valid, &invalid}
 
-		aggErr := store.IncrementSpentRecordsMulti(ids, 1)
+		aggErr := store.IncrementSpentRecordsMulti(ids, 1, 0)
 		require.Error(t, aggErr)
 		t.Logf("Error: %v", aggErr)
 
@@ -1316,7 +1319,7 @@ func TestIncrementSpentRecords(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 0, totalExtraRecs)
 
-	res, err := store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
+	res, err := store.IncrementSpentRecords(tx.TxIDChainHash(), 1, 0)
 	require.NoError(t, err)
 
 	// Lua now clamps spentExtraRecs to [0, totalExtraRecs] instead of erroring.
@@ -1649,6 +1652,63 @@ func TestSmokeTests(t *testing.T) {
 		tests.Conflicting(t, store)
 	})
 
+	t.Run("aerospike_conflict_WAL", func(t *testing.T) {
+		tests.ConflictWAL(t, store)
+	})
+
+	t.Run("aerospike_unspend_idempotent", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.UnspendIdempotent(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreate(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_create_only", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateCreateOnly(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_spend_only", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendOnly(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_tx_exists_keeps_spends", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateTxExistsKeepsSpends(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_spend_error_surfaces_per_input", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendErrorSurfacesPerInput(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_invalid_options", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateInvalidOptions(t, store)
+	})
+
+	t.Run("aerospike_conflict_WAL_crash_recovery", func(t *testing.T) {
+		tests.ConflictWALCrashRecovery(t, store)
+	})
+
 	t.Run("aerospike_mined_then_spend_all_prunes", func(t *testing.T) {
 		// Pruner service is a process-wide singleton. Reset at both ends so
 		// this subtest doesn't leak a started service into later aerospike
@@ -1679,6 +1739,16 @@ func TestSmokeTests(t *testing.T) {
 		}
 
 		tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
+	})
+
+	// Last: these cases move the shared store's block height, and cannot restore
+	// it if the store started at zero.
+	t.Run("aerospike_set_block_state", func(t *testing.T) {
+		tests.SetBlockStateContract(t, store)
+	})
+
+	t.Run("aerospike_set_block_state_concurrent", func(t *testing.T) {
+		tests.SetBlockStateSnapshotUnderConcurrency(t, store)
 	})
 }
 
@@ -1933,7 +2003,7 @@ func TestAerospikeWithBatchSize(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 2, totalExtraRecs)
 
-		_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
+		_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1, 0)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, txKey)
@@ -1947,7 +2017,7 @@ func TestAerospikeWithBatchSize(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 1, spentExtraRecs)
 
-		_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), -1)
+		_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), -1, 0)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, txKey)

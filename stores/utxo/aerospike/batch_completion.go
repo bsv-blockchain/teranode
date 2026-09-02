@@ -17,24 +17,24 @@ import (
 // go-batcher recovers panics raised inside the batch fn (see
 // dispatchAndRecord in go-batcher/v2: it wraps b.fn(batch) in a deferred
 // recover). Without our own guard, a panic part-way through a dispatch fn
-// leaves every not-yet-signalled per-item completion channel orphaned: the
-// worker survives, but the submitter goroutines waiting on those channels park
-// forever (the contexts threaded down from legacy sync / validation have no
-// deadline). That is the mechanism behind the production goroutine leak
-// (thousands parked in (*Store).get's select).
+// leaves the not-yet-completed items un-signalled: the worker survives, but the
+// submitter goroutines waiting on the shared completion.Group park forever
+// (group.Wait, and the contexts threaded down from legacy sync / validation
+// have no deadline). That is the mechanism behind the production goroutine leak
+// (thousands parked in (*Store).get's wait).
 //
 // Install it as the FIRST statement of each dispatch fn:
 //
 //	defer func() {
 //	    signalBatchPanic(recover(), batch, "sendGetBatch", s.logger, func(it *batchGetItem, err error) {
-//	        util.SafeSend(it.done, batchGetItemData{Err: err}, batchSignalTimeout)
+//	        it.complete(err)
 //	    })
 //	}()
 //
-// signal MUST be non-blocking / panic-safe (wrap util.SafeSend) so that a
-// submitter that already left (e.g. timed out) cannot block the worker, and a
-// double-send on a buffered-1 channel cannot deadlock it. Returns true if a
-// panic was actually handled (recovered != nil).
+// signal MUST be non-blocking and idempotent. Production passes it.complete,
+// which is CAS-guarded, so signalling an item an earlier stage already completed
+// is a safe no-op (no double-signal, no block). Returns true if a panic was
+// actually handled (recovered != nil).
 func signalBatchPanic[T any](recovered any, batch []T, fnName string, logger ulogger.Logger, signal func(item T, err error)) bool {
 	if recovered == nil {
 		return false
@@ -54,27 +54,6 @@ func signalBatchPanic[T any](recovered any, batch []T, fnName string, logger ulo
 	return true
 }
 
-// trySignal delivers v on a completion channel without blocking and without
-// re-delivering when a result is already queued. It is the correct primitive for
-// the buffered-1 completion channels used across the batchers (get/outpoint/
-// spend/increment/setDAH/locked): a still-waiting submitter receives the value
-// immediately, an already-signalled channel (buffer full) is left untouched, and
-// a departed submitter cannot wedge the worker. Do NOT use it for unbuffered
-// channels — there it would race the receiver and silently drop the signal.
-func trySignal[T any](ch chan T, v T) {
-	select {
-	case ch <- v:
-	default:
-	}
-}
-
-// batchSignalTimeout bounds a single non-blocking completion send. It exists
-// only so an unbuffered completion channel whose submitter has already departed
-// cannot wedge the worker. Buffered-1 channels (the common case) never reach the
-// timeout. Kept small because it is paid per item only on the rare error/panic
-// fan-out paths.
-const batchSignalTimeout = 5 * time.Second
-
 // batcherWaitTimeout bounds how long a submitter waits for a batcher to deliver
 // a result before giving up with a ServiceUnavailable error. This is the
 // keystone guarantee against permanent leaks: even if a dispatch fn never
@@ -82,14 +61,51 @@ const batchSignalTimeout = 5 * time.Second
 // the caller goroutine is released after this bound instead of parking for the
 // life of the process.
 //
-// It is derived from the batch policy's own TotalTimeout (the maximum a healthy
-// batch can legitimately take, retries included) plus grace, so it never fires
-// during normal slow operation — only on a genuine wedge. Falls back to a sane
-// default when the policy carries no total timeout.
+// It must outlast the longest a batch can *legitimately* take, or it fires
+// during normal slow operation and aborts work the lower layers would still
+// have completed (the legacy-sync stall this guard once caused). Two layers
+// contribute to that legitimate time:
+//
+//   - the batch policy TotalTimeout — the ceiling on a single BatchOperate, and
+//   - the uaerospike overload-retry wrapper, which runs an initial BatchOperate
+//     and *then* starts an OverloadRetryMaxElapsed budget clock
+//     (retryBatchOnOverload sets its deadline after the first attempt, see
+//     util/uaerospike/overload_retry.go), re-issuing the still-overloaded
+//     records until that budget is spent.
+//
+// So the legitimate submit-to-completion wall time is roughly
+// initial-attempt (≤ TotalTimeout) + overload budget. The guard sums both —
+// rather than taking the larger — because the budget clock starts only after
+// the initial attempt, so the two windows are sequential, not overlapping.
+// Summing also keeps the coupling from silently going stale: lowering a
+// context's TotalTimeout can no longer drop the guard below the overload
+// budget.
+//
+// Best-effort, not a strict bound: the initial connection-permit wait
+// (~TotalTimeout/10, acquirePermit) and the untimed permit re-acquisition
+// between retries (reacquirePermit) still fall outside the sum; the +30s grace
+// only partially absorbs them. Falls back to a sane default when the policy
+// carries no total timeout; adds nothing when the overload retry layer is
+// disabled (OverloadRetryMaxElapsed <= 0), preserving the prior behaviour.
 func batcherWaitTimeout(tSettings *settings.Settings) time.Duration {
-	d := util.GetAerospikeBatchPolicy(tSettings).TotalTimeout
+	return batcherWaitFor(
+		util.GetAerospikeBatchPolicy(tSettings).TotalTimeout,
+		tSettings.Aerospike.OverloadRetryMaxElapsed,
+	)
+}
+
+// batcherWaitFor is the pure leak-guard formula extracted from batcherWaitTimeout
+// so the coverage invariant (guard always outlasts the overload budget) can be
+// unit-tested without a live Aerospike client populating the batch policy. See
+// batcherWaitTimeout for the rationale behind summing the two windows.
+func batcherWaitFor(totalTimeout, overloadBudget time.Duration) time.Duration {
+	d := totalTimeout
 	if d <= 0 {
 		d = 2 * time.Minute
+	}
+
+	if overloadBudget > 0 {
+		d += overloadBudget
 	}
 
 	return d + 30*time.Second

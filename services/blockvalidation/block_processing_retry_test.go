@@ -226,6 +226,59 @@ func TestProcessCatchupChItem(t *testing.T) {
 		require.Nil(t, u.processBlockNotify.Get(*b.Hash()))
 	})
 
+	// Issue 1439: a torn, stale or mis-keyed external transaction blob is now an
+	// ErrStorageError. This handler had a dedicated ErrServiceError case that
+	// short-circuits before peer blaming precisely because a local failure is not
+	// the peer's fault, but no matching case for storage — so the error fell
+	// through to reportCatchupFailureForError AND ReportPeerFailure against an
+	// honest primary, then charged every cached alternative in turn.
+	t.Run("storage error is local: counts toward cap, never blames the peer", func(t *testing.T) {
+		u, _ := newServer(3, errors.NewStorageError("[GetTxFromExternalStore][abc] external tx does not hash to the key it was stored under"))
+		b := testBlock()
+		u.processBlockNotify.Set(*b.Hash(), true, ttlcache.DefaultTTL)
+		u.catchupAlternatives.Set(*b.Hash(), []processBlockCatchup{{block: b, peerID: "altpeer"}}, ttlcache.DefaultTTL)
+
+		u.processCatchupChItem(ctx, item(b))
+
+		it := u.blockCatchupAttempts.Get(*b.Hash())
+		require.NotNil(t, it, "a local storage fault must still count toward the #1057 cap")
+		require.Equal(t, 1, it.Value())
+		require.Nil(t, u.processBlockNotify.Get(*b.Hash()))
+		require.Nil(t, u.catchupAlternatives.Get(*b.Hash()))
+
+		mockBC := u.blockchainClient.(*blockchain.Mock)
+		mockBC.AssertNotCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	// The predicate here is the union of two helpers because neither covers the
+	// local cases alone: IsLocalError is context plus ErrStorageError and misses
+	// the *Unavailable codes, while IsTransientLocalError covers those and misses
+	// context entirely. Using either alone left one class of purely local failure
+	// still charged to an honest primary.
+	for name, localErr := range map[string]error{
+		"context cancellation (shutdown or catchup deadline)": errors.NewContextCanceledError("catchup context cancelled"),
+		"a local service outage (aerospike batch timeout)":    errors.NewServiceUnavailableError("aerospike get batch did not complete within"),
+		"an unavailable store":                                errors.NewStorageUnavailableError("disk below threshold"),
+	} {
+		t.Run(name+" is local: counts toward cap, never blames the peer", func(t *testing.T) {
+			u, _ := newServer(3, localErr)
+			b := testBlock()
+			u.processBlockNotify.Set(*b.Hash(), true, ttlcache.DefaultTTL)
+			u.catchupAlternatives.Set(*b.Hash(), []processBlockCatchup{{block: b, peerID: "altpeer"}}, ttlcache.DefaultTTL)
+
+			u.processCatchupChItem(ctx, item(b))
+
+			it := u.blockCatchupAttempts.Get(*b.Hash())
+			require.NotNil(t, it, "a local fault must still count toward the #1057 cap")
+			require.Equal(t, 1, it.Value())
+			require.Nil(t, u.processBlockNotify.Get(*b.Hash()))
+			require.Nil(t, u.catchupAlternatives.Get(*b.Hash()))
+
+			mockBC := u.blockchainClient.(*blockchain.Mock)
+			mockBC.AssertNotCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
+
 	t.Run("failure that advanced the chain resets the counter (does not count)", func(t *testing.T) {
 		u, _ := newServer(3, errors.NewServiceError("dropped mid-batch"))
 		b := testBlock()
@@ -294,6 +347,92 @@ func TestProcessCatchupChItem(t *testing.T) {
 		require.Nil(t, u.processBlockNotify.Get(*b.Hash()), "guard cleared on alternative success")
 		require.Nil(t, u.blockCatchupAttempts.Get(*b.Hash()), "counter reset on alternative success")
 		require.Nil(t, u.catchupAlternatives.Get(*b.Hash()), "alternatives cleared on success")
+	})
+
+	// ChiR1 regression: the ErrExternal classification from
+	// fetchAndStoreSubtreeAndSubtreeData reaches processCatchupChItem buried in
+	// the middle of the chain — fetchSubtreeDataForBlock wraps it in a
+	// ServiceError (get_blocks.go) and orderedDelivery wraps that in a
+	// ProcessingError. errors.Is matches by code across the whole chain, so
+	// errors.Is(err, ErrServiceError) is ALSO true for this error; the handler
+	// must check ErrExternal before ErrServiceError or the peer-failure path is
+	// never taken for peer-unreachable/HTTP-error failures.
+	t.Run("external error buried under service and processing wraps takes the peer-failure path", func(t *testing.T) {
+		// Reconstruct the real catchup-path chain, innermost first:
+		// fetchSubtreeFromPeer(HTTP failure) -> ExternalError(all peers failed)
+		// -> ServiceError(fetchSubtreeDataForBlock) -> ProcessingError(orderedDelivery).
+		httpErr := errors.NewServiceError("failed to fetch subtree from http://peer/subtree/aa")
+		allPeersErr := errors.NewExternalError("all peers failed to fetch subtree aa", httpErr)
+		svcWrap := errors.NewServiceError("failed to fetch subtree data for block bb", allPeersErr)
+		chain := errors.NewProcessingError("worker failed for block bb", svcWrap)
+
+		require.True(t, errors.Is(chain, errors.ErrServiceError), "precondition: the chain also matches ErrServiceError — that is the trap")
+		require.True(t, errors.Is(chain, errors.ErrExternal))
+
+		u, _ := newServer(3, chain)
+		b := testBlock()
+		u.processBlockNotify.Set(*b.Hash(), true, ttlcache.DefaultTTL)
+		u.catchupAlternatives.Set(*b.Hash(), []processBlockCatchup{{block: b, peerID: "altpeer"}}, ttlcache.DefaultTTL)
+
+		u.processCatchupChItem(ctx, item(b))
+
+		require.Nil(t, u.processBlockNotify.Get(*b.Hash()), "peer-failure path must clear the processing guard")
+		require.Nil(t, u.catchupAlternatives.Get(*b.Hash()), "peer-failure path must clear cached alternatives")
+
+		it := u.blockCatchupAttempts.Get(*b.Hash())
+		require.NotNil(t, it, "an all-peers-failed cycle must count toward the #1057 cap")
+		require.Equal(t, 1, it.Value())
+
+		mockBC := u.blockchainClient.(*blockchain.Mock)
+		mockBC.AssertCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, "catchup", mock.Anything)
+	})
+
+	t.Run("plain external error takes the peer-failure path", func(t *testing.T) {
+		u, _ := newServer(3, errors.NewExternalError("all peers failed"))
+		b := testBlock()
+		u.processBlockNotify.Set(*b.Hash(), true, ttlcache.DefaultTTL)
+
+		u.processCatchupChItem(ctx, item(b))
+
+		require.Nil(t, u.processBlockNotify.Get(*b.Hash()))
+
+		it := u.blockCatchupAttempts.Get(*b.Hash())
+		require.NotNil(t, it)
+		require.Equal(t, 1, it.Value())
+
+		mockBC := u.blockchainClient.(*blockchain.Mock)
+		mockBC.AssertCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, "catchup", mock.Anything)
+	})
+
+	// The two cases above build ErrExternal chains WITHOUT the already-reported
+	// marker. Production never emits that shape: fetchAndStoreSubtreeAndSubtreeData
+	// applies markCatchupFailureReported to every all-peers-failed error, and it is
+	// the only producer of this ErrExternal in the package. This case pins the real
+	// shape — ReportPeerFailure is the sync-peer ROTATION signal (blockchain
+	// PeerFailure notification -> p2p HandleCatchupFailure -> currentSyncPeer cleared
+	// + triggerSyncLocked), so it must still fire even though the marker suppresses
+	// the duplicate reputation charge in reportCatchupFailureForError. Gating it on
+	// the marker silently disabled rotation and left recovery to the 5-minute
+	// SyncPeerNoProgressTimeout.
+	t.Run("marked external error (production shape) still reports peer failure for rotation", func(t *testing.T) {
+		// Exactly what get_blocks.go returns, then the wraps it picks up on the way up.
+		marked := markCatchupFailureReported(errors.NewExternalError("all 3 peer attempts failed to fetch subtree aa"))
+		svcWrap := errors.NewServiceError("failed to fetch subtree data for block bb", marked)
+		chain := errors.NewProcessingError("worker failed for block bb", svcWrap)
+
+		require.True(t, catchupFailureAlreadyReported(chain), "precondition: production marks every all-peers-failed error")
+		require.True(t, errors.Is(chain, errors.ErrExternal))
+
+		u, _ := newServer(3, chain)
+		b := testBlock()
+		u.processBlockNotify.Set(*b.Hash(), true, ttlcache.DefaultTTL)
+
+		u.processCatchupChItem(ctx, item(b))
+
+		require.Nil(t, u.processBlockNotify.Get(*b.Hash()))
+
+		mockBC := u.blockchainClient.(*blockchain.Mock)
+		mockBC.AssertCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, "catchup", mock.Anything)
 	})
 
 	t.Run("invalid block clears notify without counting toward cap", func(t *testing.T) {

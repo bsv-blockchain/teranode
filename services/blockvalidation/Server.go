@@ -129,6 +129,11 @@ type Server struct {
 	// for checking if coinbase transactions have been processed
 	blockAssemblyClient blockassembly.ClientI
 
+	// subtreeValidationClient is the subtree validation client this server
+	// constructs in Init (service-owned, not borrowed from the daemon). It is
+	// closed exactly once in Stop().
+	subtreeValidationClient subtreevalidation.Interface
+
 	// blockFoundCh receives notifications of newly discovered blocks
 	// that need validation. This channel buffers requests when high load occurs.
 	blockFoundCh chan processBlockFound
@@ -245,6 +250,10 @@ type Server struct {
 	// Protected by activeCatchupCtxMu for thread-safe access.
 	blocksFetched   atomic.Int64
 	blocksValidated atomic.Int64
+
+	// cacheBustCounter produces the unique token appended to a peer request URL when
+	// a previous response from that peer looked poisoned. See peer_cache_bypass.go.
+	cacheBustCounter atomic.Uint64
 
 	// previousCatchupAttempt stores details about the last failed catchup attempt.
 	// This is used to display in the dashboard why we switched from one peer to another.
@@ -363,7 +372,18 @@ func New(
 		blockClassifier:     NewBlockClassifier(logger, nearForkThreshold, blockchainClient),
 		forkManager:         fm,
 		catchupCh:           make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
-		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
+		// 10m TTL is a safety net: entries are normally removed by explicit Delete
+		// when catchup completes or fails, but a missed Delete on any error/early-return
+		// branch would otherwise leak the entry permanently. Mirrors catchupAlternatives,
+		// the sibling cache for the same in-flight block.
+		processBlockNotify: ttlcache.New[chainhash.Hash, bool](
+			ttlcache.WithTTL[chainhash.Hash, bool](10*time.Minute),
+			// Do not extend the window on reads, for the same reason as
+			// blockCatchupAttempts below: the enqueue gate reads this entry on every
+			// duplicate announcement, so touch-on-hit would let a stream of duplicates
+			// hold the suppression open past the safety-net TTL.
+			ttlcache.WithDisableTouchOnHit[chainhash.Hash, bool](),
+		),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),
@@ -602,6 +622,19 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("[Init] failed to create subtree validation client", err)
 	}
 
+	// Service-owned: retain it so Stop() closes it. If Init fails before
+	// completing, close it here and clear the field so Stop() doesn't double
+	// close (closeSubtreeValidationClient is nil-safe and idempotent).
+	u.subtreeValidationClient = subtreeValidationClient
+
+	initOK := false
+
+	defer func() {
+		if !initOK {
+			u.closeSubtreeValidationClient()
+		}
+	}()
+
 	storeURL := u.settings.UtxoStore.UtxoStore
 	if storeURL == nil {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
@@ -682,7 +715,28 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}()
 
+	initOK = true
+
 	return nil
+}
+
+// closeSubtreeValidationClient closes the service-owned subtree validation
+// client exactly once. Nil-safe (for Server-literal test fixtures that never
+// ran Init) and idempotent (clears the field after closing). The client is held
+// by the Interface type, which does not declare Close, so it is closed via the
+// optional Close() error the concrete client gained in Fix group A.
+func (u *Server) closeSubtreeValidationClient() {
+	if u.subtreeValidationClient == nil {
+		return
+	}
+
+	if c, ok := u.subtreeValidationClient.(interface{ Close() error }); ok {
+		if err := c.Close(); err != nil {
+			u.logger.Errorf("[BlockValidation] failed to close subtree validation client: %v", err)
+		}
+	}
+
+	u.subtreeValidationClient = nil
 }
 
 func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
@@ -1047,10 +1101,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // It ensures clean termination of all service resources and connections.
 //
 // Parameters:
-//   - ctx: Context for shutdown operations (currently unused)
+//   - ctx: Context bounding the shutdown; the BlockValidation.Close() (which stops the invalid-block producer) is raced against it so a wedged broker can't stall shutdown
 //
 // Returns an error if shutdown encounters issues, though typically returns nil
-func (u *Server) Stop(_ context.Context) error {
+func (u *Server) Stop(ctx context.Context) error {
 	u.processBlockNotify.Stop()
 	u.catchupAlternatives.Stop()
 	// nil-guarded: this cache is newer than some Server-literal test fixtures that
@@ -1059,16 +1113,41 @@ func (u *Server) Stop(_ context.Context) error {
 		u.blockCatchupAttempts.Stop()
 	}
 
-	// Wait for all background tasks in BlockValidation to complete
+	// Wait for all background tasks in BlockValidation to complete, bounded by the
+	// caller's stop deadline (ctx) so a worker whose Init ctx was not cancelled first
+	// cannot hang shutdown indefinitely.
 	if u.blockValidation != nil {
-		u.blockValidation.Wait()
+		u.blockValidation.Wait(ctx)
 		u.blockValidation.StopCaches()
+
+		// DC11: drain the BlockValidation-owned invalid-block kafka producer via
+		// Close(). Close() ends in a producer Stop() whose final flush does not
+		// honour a deadline, so it is raced against ctx here: a wedged broker flush
+		// can't block past the bounded Stop() window, and the outstanding Close()
+		// (its inner producer Stop()) finishes the flush later if it can. Guarded
+		// and non-fatal.
+		closeDone := make(chan struct{})
+		go func() {
+			defer close(closeDone)
+			if err := u.blockValidation.Close(); err != nil {
+				u.logger.Errorf("[BlockValidation] failed to close block validation cleanly: %v", err)
+			}
+		}()
+
+		select {
+		case <-closeDone:
+		case <-ctx.Done():
+			u.logger.Errorf("[BlockValidation] block validation close exceeded stop budget; relying on outstanding close: %v", ctx.Err())
+		}
 	}
 
 	// close the kafka consumer gracefully
 	if err := u.kafkaConsumerClient.Close(); err != nil {
 		u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 	}
+
+	// close the service-owned subtree validation client (constructed in Init)
+	u.closeSubtreeValidationClient()
 
 	return nil
 }
@@ -1252,6 +1331,15 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		baseURL = "legacy" // default to legacy if not provided
 	}
 
+	// baseURL is peer-supplied; reject obvious SSRF targets early for a clean error.
+	// The "legacy" sentinel has no http/https scheme, so ValidateURL returns nil for it
+	// (only http/https URLs are inspected) and the legacy default is unaffected. The
+	// dial-time guard in util.ssrfDialContext remains the backstop for DNS-resolved
+	// private addresses.
+	if err = util.ValidateURL(baseURL); err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid base URL", err))
+	}
+
 	if err = u.processBlockFound(ctx, block.Header.Hash(), request.PeerId, baseURL, block); err != nil {
 		// error from processBlockFound is already wrapped
 		return nil, errors.WrapGRPC(err)
@@ -1295,7 +1383,12 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		return nil, errors.WrapGRPC(err)
 	}
 
-	blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.PreviousBlockHeaderCount)
+	// parentHeaderRun rather than a bare GetBlockHeaders: GetBlockHeaders memoizes its answer per
+	// (startHash, count) for chainWalkCacheTTL, so a run that cannot carry the median-time-past
+	// window stays unusable for the whole TTL and every retry replays it. This entry point has no
+	// re-queue behind it — cmd/checkblock and RPC callers get one attempt — so the hash-walk
+	// rebuild is the only repair available here. See issue #1467.
+	blockHeaders, blockHeadersMeta, err := u.blockValidation.parentHeaderRun(ctx, block, u.settings.BlockValidation.PreviousBlockHeaderCount)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err))
 	}
@@ -1309,12 +1402,27 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 	// Create meta regenerator for potential meta file recovery (no peer URL for gRPC, local store only)
 	metaRegenerator := u.blockValidation.createMetaRegenerator(nil)
+	block.SetCheckpointConfirmedAncestor(u.blockValidation.checkpointConfirmedAncestor(ctx, block))
 	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		// Transient catchup-state (e.g. parent tx not yet in our store) must not be
 		// reported as a consensus failure to the caller. See issue #1031.
 		if errors.Is(err, errors.ErrBlockIncomplete) {
 			return nil, errors.WrapGRPC(errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err))
 		}
+
+		// Infrastructure failures are not verdicts on the block: a storage/service outage, or a
+		// parent-header run from our own store that was unanchored or unlinked (issue #1467),
+		// says nothing about consensus validity. Relabelling them "block is not valid" tells an
+		// operator running cmd/checkblock that a perfectly good block is consensus-invalid.
+		//
+		// Deliberately NOT a blanket ErrProcessing pass-through: block.Valid reports genuine
+		// consensus failures as processing errors too (model/Block.go's target-difficulty check,
+		// for one), so passing all of them through would mislabel real invalid blocks as
+		// infrastructure trouble — the mirror image of the bug being fixed here.
+		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrBlockHeaderContext) {
+			return nil, errors.WrapGRPC(err)
+		}
+
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
@@ -1326,6 +1434,25 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		Ok:      true,
 		Message: fmt.Sprintf("Block %s is valid", block.String()),
 	}, nil
+}
+
+// deriveBlockHeight settles a peer-supplied block height against the on-chain parent.
+//
+// block.Height is a varint in the block body (model.NewBlockFromBytes) and is not covered
+// by the header hash, so on the peer-fetched path it cannot be trusted. An honest peer sends
+// either the correct height or 0 (the field "can be left empty"); any other value is a lie
+// and the block is rejected. The returned height (parentHeight + 1) is authoritative and must
+// be written back onto the block before anything downstream reads block.Height — the
+// checkpoint guard, the difficulty skip, block-assembly gating and the coinbase subsidy all
+// key off it. Catchup (get_blocks.go) and the operator revalidation endpoint already carry
+// authoritative heights, so this settlement is only needed on the peer-fetched route.
+func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
+	derived := parentHeight + 1
+	if claimed != 0 && claimed != derived {
+		return 0, errors.NewBlockInvalidError("claimed height %d does not match parent height %d + 1", claimed, parentHeight)
+	}
+
+	return derived, nil
 }
 
 // processBlockFound processes a newly discovered block by validating it and managing
@@ -1401,10 +1528,40 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return nil
 	}
 
+	// Settle the peer-supplied height against the on-chain parent before anything reads
+	// block.Height (block-assembly gating and the unified-route decision below, and downstream
+	// the checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
+	// See deriveBlockHeight.
+	_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+	if err != nil {
+		return errors.NewServiceError("[processBlockFound][%s] failed to get parent header %s", hash.String(), block.Header.HashPrevBlock.String(), err)
+	}
+
+	// No implementation returns a nil meta with a nil error, but the settled height is
+	// security-relevant, so fail closed rather than derive it from a nil dereference.
+	// Mirrors the guard on the sibling GetBlockHeader call in ProcessBlock.
+	if parentMeta == nil {
+		return errors.NewServiceError("[processBlockFound][%s] nil metadata for parent header %s", hash.String(), block.Header.HashPrevBlock.String())
+	}
+
+	settledHeight, err := deriveBlockHeight(block.Height, parentMeta.Height)
+	if err != nil {
+		return errors.NewBlockInvalidError("[processBlockFound][%s] rejecting block with peer-inconsistent height", hash.String(), err)
+	}
+
+	block.Height = settledHeight
+
 	// Wait for block assembly to be ready before processing the block
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return err
+	}
+
+	// Unified below-checkpoint route: legacy blocks go through the same
+	// quick-validation machinery as native catchup (default off).
+	if u.legacyUnifiedRoute(block, baseURL) {
+		u.logger.Debugf("[processBlockFound][%s] unified route: quick-validating legacy block at height %d", block.Hash().String(), block.Height)
+		return u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
 	}
 
 	// validate the block
@@ -1423,6 +1580,28 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	}
 
 	return nil
+}
+
+// legacyUnifiedRoute reports whether this block should take the unified
+// below-checkpoint route: legacy-sourced, operator opted into both the
+// outpoint-only fast path and the unified route, and the shared eligibility
+// gate holds (store capability + hardcoded checkpoint boundary via
+// model.OutpointOnlyEligible — never the operator catchup override). When true,
+// processBlockFound hands the block to quickValidateBlock — the same machinery
+// the native catchup path uses below checkpoints — instead of full validation.
+// Netsync has already written the subtree files, verified PoW and the merkle
+// root, and waited for block assembly; quickValidateBlock does UTXO
+// create+spend, AddBlock(MinedSet+SubtreesSet) and DAH.
+func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string) bool {
+	if !u.settings.BlockValidation.LegacyUnifiedBelowCheckpoint {
+		return false
+	}
+
+	if baseURL != "legacy" {
+		return false
+	}
+
+	return model.OutpointOnlyEligible(u.settings, u.utxoStore, u.settings.ChainCfgParams, block.Height)
 }
 
 // checkParentProcessingComplete ensures that a block's parent has completed validation
@@ -1449,43 +1628,51 @@ func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model
 	delay := 10 * time.Millisecond
 	maxDelay := 10 * time.Second
 
-	// check if the parent block is being validated, then wait for it to finish.
-	blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock)
+	parentHash := block.Header.HashPrevBlock
 
-	if blockBeingFinalized {
-		u.logger.Infof("[processBlockFound][%s] parent block is being validated (hash: %s), waiting for it to finish: validated %v",
-			block.Hash().String(),
-			block.Header.HashPrevBlock.String(),
-			u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock),
-		)
+	// Wait while the parent is still finalizing - either actively being processed by the
+	// setMined worker, or waiting out a setTxMined retry backoff. Consulting
+	// setMinedRetryPending (via isParentFinalizing) keeps the child blocked across the
+	// parent's whole retry window; the backoff is now off-loaded and releases the
+	// blockHashesCurrentlyValidated claim immediately, so without this the child would
+	// fall straight through to the bounded parent-mined wait and give up (block-found
+	// churn) while a transiently-failing parent is still retrying.
+	if !u.blockValidation.isParentFinalizing(parentHash) {
+		return
+	}
 
-		retries := 0
+	u.logger.Infof("[processBlockFound][%s] parent block is being finalized (hash: %s), waiting for it to finish",
+		block.Hash().String(),
+		parentHash.String(),
+	)
 
-		for {
-			blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock)
+	retries := 0
 
-			if !blockBeingFinalized {
-				break
-			}
-
-			if (retries % 10) == 0 {
-				u.logger.Infof("[processBlockFound][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: validated %v",
-					block.Hash().String(),
-					retries,
-					block.Header.HashPrevBlock.String(),
-					u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock),
-				)
-			}
-
-			time.Sleep(delay)
-
-			delay *= 2
-			if delay > maxDelay {
-				delay = maxDelay
-			}
-
-			retries++
+	for u.blockValidation.isParentFinalizing(parentHash) {
+		if (retries % 10) == 0 {
+			u.logger.Infof("[processBlockFound][%s] parent block is still (%d) being finalized (hash: %s), waiting for it to finish",
+				block.Hash().String(),
+				retries,
+				parentHash.String(),
+			)
 		}
+
+		// Honour shutdown: the parent's retry window can be long (worst case ~111s), so a
+		// bare sleep here would keep this goroutine alive well past a stop request.
+		select {
+		case <-ctx.Done():
+			u.logger.Warnf("[processBlockFound][%s] context cancelled while waiting for parent %s to finalize: %s",
+				block.Hash().String(), parentHash.String(), ctx.Err())
+			return
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+
+		retries++
 	}
 }
 
@@ -1664,20 +1851,103 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			return
 		}
 
-		// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue
-		if errors.Is(err, errors.ErrServiceError) {
+		// Peer-side failure: every peer we tried (primary + alternatives)
+		// returned bad/incomplete data or rejected/failed the request.
+		// Distinguished from ErrServiceError so the silent "clear markers,
+		// retry" loop below doesn't absorb peer issues. We clear markers (so
+		// future P2P notifications for this block can re-trigger catchup),
+		// report peer failure for the originating peer (so P2P routes the
+		// next attempt to a different peer), and log loudly. This avoids the
+		// hot-loop where the same peer keeps being asked for the same
+		// missing subtree data.
+		//
+		// ORDER IS LOAD-BEARING: this check must run before the
+		// ErrServiceError check. errors.Is matches by code across the whole
+		// wrapped chain, and the ERR_EXTERNAL classification from
+		// fetchAndStoreSubtreeAndSubtreeData arrives buried mid-chain — it
+		// wraps the per-peer ServiceError, and is itself re-wrapped by
+		// fetchSubtreeDataForBlock (ServiceError) and orderedDelivery
+		// (ProcessingError) on the way up. So errors.Is(err, ErrServiceError)
+		// is also true for these errors, and matching on the outermost code
+		// would see ERR_PROCESSING. ERR_EXTERNAL anywhere in the chain means
+		// a peer-side failure was classified, which is what we dispatch on.
+		if errors.Is(err, errors.ErrExternal) {
 			// #1057: count this cycle toward the per-block cap (unless it made
-			// progress) so a persistent local service error cannot drive unbounded
-			// re-entry.
+			// progress) so persistently failing peers cannot drive unbounded
+			// re-entry via repeated P2P notifications.
 			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
-			u.logger.Warnf("[catchup] Local service error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
+			u.logger.Warnf("[catchup] All peers failed for block %s (attempt %d/%d), clearing markers and reporting peer failure to allow retry from a different peer: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
+			u.processBlockNotify.Delete(*c.block.Hash())
+			u.catchupAlternatives.Delete(*c.block.Hash())
+
+			// Peers that actually failed were charged individually at the point of
+			// failure (recordCatchupPeerFailure / markCatchupFailureReported). Charging
+			// c.peerID here would blame the catchup primary for another peer's failure,
+			// which is what drove healthy peers to 0% success in issue 1368. The
+			// already-reported marker check inside reportCatchupFailureForError
+			// suppresses exactly that duplicate *reputation* charge.
+			u.reportCatchupFailureForError(ctx, c.peerID, err)
+
+			// ReportPeerFailure is deliberately NOT gated on catchupFailureAlreadyReported.
+			// It is not a reputation call — it is the sync-peer ROTATION signal, and it has
+			// to fire on every all-peers-failed cycle:
+			//
+			//   blockchain.Server.ReportPeerFailure broadcasts NotificationType_PeerFailure
+			//   -> p2p.Server routes failure_type "catchup" to
+			//      syncCoordinator.HandleCatchupFailure (and its subscription listener
+			//      deliberately bypasses the "skip notifications while syncing" filter for
+			//      this type — "needed to switch peers on catchup failure")
+			//   -> SyncCoordinator clears currentSyncPeer and calls triggerSyncLocked, i.e.
+			//      immediate re-selection of a different sync peer.
+			//
+			// A marker gate here is dead code in production: fetchAndStoreSubtreeAndSubtreeData
+			// applies markCatchupFailureReported unconditionally to every all-peers-failed
+			// error and is the only producer of this ErrExternal in the package, so the gate
+			// is always false and rotation never happens. A stuck node would then depend on
+			// the sync coordinator's 30s periodicEvaluation, which only rotates on reputation
+			// below 20 or the 5-minute SyncPeerNoProgressTimeout — a peer with history (say
+			// 100 successes and 1 failure) trips neither, so recovery costs the full five
+			// minutes per stuck cycle.
+			//
+			// The price is one extra interaction-failure charge against the primary. That is
+			// accepted, and consistent with the round-2 adjudication documented in
+			// catchup.go's failedPeers drain: an over-charge is directionally accurate while
+			// an under-charge hides a real failure, and the duplicate increment is a
+			// telemetry-precision cost rather than a reputation-math break. Losing peer
+			// rotation to save one charge is the worse trade — do not re-add the gate.
+			if reportErr := u.blockchainClient.ReportPeerFailure(ctx, c.block.Hash(), c.peerID, "catchup", err.Error()); reportErr != nil {
+				u.logger.Errorf("[catchup] failed to report peer failure for block %s peer %s: %v", c.block.Hash().String(), c.peerID, reportErr)
+			}
+
+			return
+		}
+
+		// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue.
+		// Must run after the ErrExternal check above (see the ordering note there).
+		//
+		// ErrStorageError belongs here for the same reason: a failed read of our own
+		// blob store — a torn, stale or mis-keyed external transaction (issue 1439) —
+		// is this node's disk being wrong, and no peer can fix it. Without this case
+		// the error fell through to reportCatchupFailureForError and ReportPeerFailure
+		// against an honest primary, and then charged every cached alternative in
+		// turn. recordCatchupPeerFailure already exempts storage errors for exactly
+		// this reason; this closes the matching hole on the terminal-error path.
+		//
+		// isLocalCatchupFault is the union of two errors-package helpers, neither of
+		// which covers this on its own; its doc comment carries the reasoning.
+		if isLocalCatchupFault(err) {
+			// #1057: count this cycle toward the per-block cap (unless it made
+			// progress) so a persistent local service or storage error cannot drive
+			// unbounded re-entry.
+			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
+			u.logger.Warnf("[catchup] Local service/storage error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
 			u.processBlockNotify.Delete(*c.block.Hash())
 			u.catchupAlternatives.Delete(*c.block.Hash())
 			return
 		}
 
-		// Report catchup failure to P2P service
-		u.reportCatchupFailure(ctx, c.peerID)
+		// Report catchup failure to P2P service.
+		u.reportCatchupFailureForError(ctx, c.peerID, err)
 
 		u.logger.Errorf("[Init] failed to process catchup signal for block [%s] from peer %s: %v", c.block.Hash().String(), c.peerID, err)
 
@@ -1747,7 +2017,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 					break
 				} else {
 					u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
-					u.reportCatchupFailure(ctx, alt.peerID)
+					u.reportCatchupFailureForError(ctx, alt.peerID, altErr)
 				}
 			}
 		} else {

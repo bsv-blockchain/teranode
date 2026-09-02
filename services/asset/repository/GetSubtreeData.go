@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/util"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
@@ -32,6 +33,21 @@ func resetQuorumForTests() {
 	defer assetQuorumMu.Unlock()
 	assetQuorumOnce = sync.Once{}
 	assetQuorum = nil
+}
+
+// countingWriter counts the bytes that pass through it. Used by
+// dualStreamWithFileCreation to tell "generated nothing" apart from "generated
+// something", which the writer chain itself cannot report.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+
+	return n, err
 }
 
 // semaphoreReadCloser wraps an io.ReadCloser and releases a semaphore permit when closed.
@@ -237,21 +253,48 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 	// Create pipe for HTTP response
 	httpReader, httpWriter := io.Pipe()
 
-	// Use MultiWriter to write to both file storage and HTTP pipe simultaneously
-	multiWriter := io.MultiWriter(storer, httpWriter)
+	// Use MultiWriter to write to both file storage and HTTP pipe simultaneously.
+	// Counted so an empty generation can be rejected before the blob is finalised.
+	counted := &countingWriter{w: io.MultiWriter(storer, httpWriter)}
 
 	// Background goroutine: generate data and write to both destinations
 	g, gCtx := errgroup.WithContext(ctx)
-	g.Go(func() error {
+	g.Go(func() (retErr error) {
 		defer releaseSemaphorePermit(repo.semGetSubtreeDataReader)
 		defer releaseSemaphorePermit(repo.semSubtreeDataCreate)
 		if release != nil {
 			defer release() // Release quorum lock when done
 		}
 
+		// This goroutine outlives the request — the caller reads the pipe after
+		// GetSubtreeDataReader has returned — so no HTTP-layer recover can reach a
+		// panic in here. On panic do what the error paths below do: discard the temp
+		// blob rather than finalise a partial subtreeData (see #1377), fail the pipe
+		// so the consumer stops waiting, and count it as a server-side failure.
+		defer util.RecoverToError(repo.logger, &retErr, func(panicErr error) {
+			storer.Abort(panicErr)
+			_ = httpWriter.CloseWithError(panicErr)
+			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed").Inc()
+		}, "GetSubtreeDataReader %s", subtreeHash.String())()
+
 		// Write all transactions to both destinations
-		err := repo.writeTransactionsViaSubtreeStoreStreaming(gCtx, multiWriter, nil, subtreeHash)
+		err := repo.writeTransactionsViaSubtreeStoreStreaming(gCtx, counted, nil, subtreeHash)
+
+		// A successful pass that wrote nothing must not be committed. It happens when the
+		// subtree stream header reports numLeaves == 0 — a corrupt or truncated subtree
+		// file — where writeTransactionsViaSubtreeStoreStreaming short-circuits with nil,
+		// and FileStorer.Close then finalises a zero-byte blob. Exists would return true
+		// for that hash from then on, so every later request would take the stored-file
+		// branch and never retry generation: a transient generation fault would become a
+		// hard 500 for this hash until DAH pruning (~288 blocks). No endpoint can serve
+		// an empty subtreeData, so fail here instead and leave nothing behind — the
+		// handler's 500 then stays retryable.
+		if err == nil && counted.n == 0 {
+			err = errors.NewProcessingError("[GetSubtreeDataReader] generated subtreeData for %s is empty", subtreeHash.String())
+		}
+
 		if err != nil {
+			// Abort discards the temp file rather than finalising it.
 			storer.Abort(err)
 			_ = httpWriter.CloseWithError(err)
 			// "Client gone" — the HTTP client (or proxy) disconnected mid-stream, which

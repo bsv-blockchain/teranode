@@ -18,6 +18,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	errMaxBytesCannotBeZero      = "maxBytes cannot be zero"
+	errTooBigMaxBytes            = "too big maxBytes=%d; should be smaller than %d"
+	errFailedConvertingMaxChunks = "failed converting maxChunks"
+	errKVDoesNotFitChunk         = "key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes"
+	errCannotAllocateChunk       = "cannot allocate chunk"
+	msgChunks                    = "chunks: "
+)
+
 // ImprovedCache Design Calculations and Memory Model:
 //
 // The cache is designed to efficiently handle billions of transaction entries with
@@ -906,17 +915,17 @@ type bucketNative struct {
 
 func (b *bucketNative) Init(maxBytes uint64, _ int) error {
 	if maxBytes == 0 {
-		return errors.NewProcessingError("maxBytes cannot be zero")
+		return errors.NewProcessingError(errMaxBytesCannotBeZero)
 	}
 
 	if maxBytes >= maxBucketSize {
-		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+		return errors.NewProcessingError(errTooBigMaxBytes, maxBytes, maxBucketSize)
 	}
 
 	maxChunks := (maxBytes + ChunkSize - 1) / ChunkSize
 	maxChunksInt, errConv := safeconversion.Uint64ToInt(maxChunks)
 	if errConv != nil {
-		return errors.NewProcessingError("failed converting maxChunks", errConv)
+		return errors.NewProcessingError(errFailedConvertingMaxChunks, errConv)
 	}
 
 	b.chunks = make([][]byte, maxChunksInt)
@@ -1044,7 +1053,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+		return errors.NewProcessingError(errKVDoesNotFitChunk, kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -1099,7 +1108,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 		chunk, err = b.getChunk()
 
 		if err != nil {
-			return errors.NewProcessingError("cannot allocate chunk", err)
+			return errors.NewProcessingError(errCannotAllocateChunk, err)
 		}
 
 		chunk = chunk[:0]
@@ -1345,11 +1354,11 @@ type bucketTrimmed struct {
 
 func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 	if maxBytes == 0 {
-		return errors.NewInvalidArgumentError("maxBytes cannot be zero")
+		return errors.NewInvalidArgumentError(errMaxBytesCannotBeZero)
 	}
 
 	if maxBytes >= maxBucketSize {
-		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+		return errors.NewProcessingError(errTooBigMaxBytes, maxBytes, maxBucketSize)
 	}
 
 	// IMPORTANT: Use floor division so this bucket can never mmap more than maxBytes
@@ -1361,7 +1370,7 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 	b.maxSlabChunks = calcMaxSlabChunks(maxBytes, maxChunks)
 	maxChunksInt, err := safeconversion.Uint64ToInt(maxChunks)
 	if err != nil {
-		return errors.NewProcessingError("failed converting maxChunks", err)
+		return errors.NewProcessingError(errFailedConvertingMaxChunks, err)
 	}
 	b.chunks = make([][]byte, maxChunksInt)
 	// Inner shard count of 1 — see bucketNative.Init for the rationale. The
@@ -1470,7 +1479,7 @@ func (b *bucketTrimmed) UpdateStats(s *Stats) {
 }
 
 func (b *bucketTrimmed) listChunks() {
-	fmt.Println("chunks: ", b.chunks)
+	fmt.Println(msgChunks, b.chunks)
 }
 
 func (b *bucketTrimmed) SetMulti(keys [][]byte, values [][]byte) {
@@ -1505,7 +1514,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+		return errors.NewProcessingError(errKVDoesNotFitChunk, kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -1562,7 +1571,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 		chunk, err = b.getChunk()
 
 		if err != nil {
-			return errors.NewProcessingError("cannot allocate chunk", err)
+			return errors.NewProcessingError(errCannotAllocateChunk, err)
 		}
 
 		chunk = chunk[:0]
@@ -1829,11 +1838,11 @@ type bucketPreallocated struct {
 
 func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) error {
 	if maxBytes == 0 {
-		return errors.NewProcessingError("maxBytes cannot be zero")
+		return errors.NewProcessingError(errMaxBytesCannotBeZero)
 	}
 
 	if maxBytes >= maxBucketSize {
-		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+		return errors.NewProcessingError(errTooBigMaxBytes, maxBytes, maxBucketSize)
 	}
 
 	// allocate memory for all chunks of the bucket
@@ -1917,7 +1926,7 @@ func (b *bucketPreallocated) UpdateStats(s *Stats) {
 }
 
 func (b *bucketPreallocated) listChunks() {
-	fmt.Println("chunks: ", b.chunks)
+	fmt.Println(msgChunks, b.chunks)
 }
 
 // SetMulti stores multiple (k, v) entries with 1-1 mapping for the same bucket. OWERWRITES.
@@ -1967,7 +1976,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+		return errors.NewProcessingError(errKVDoesNotFitChunk, kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -2154,11 +2163,11 @@ type bucketUnallocated struct {
 
 func (b *bucketUnallocated) Init(maxBytes uint64, _ int) error {
 	if maxBytes == 0 {
-		return errors.NewProcessingError("maxBytes cannot be zero")
+		return errors.NewProcessingError(errMaxBytesCannotBeZero)
 	}
 
 	if maxBytes >= maxBucketSize {
-		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+		return errors.NewProcessingError(errTooBigMaxBytes, maxBytes, maxBucketSize)
 	}
 
 	// IMPORTANT: Use floor division so this bucket can never mmap more than maxBytes
@@ -2172,7 +2181,7 @@ func (b *bucketUnallocated) Init(maxBytes uint64, _ int) error {
 	b.maxSlabChunks = calcMaxSlabChunks(maxBytes, maxChunks)
 	maxChunksInt, err := safeconversion.Uint64ToInt(maxChunks)
 	if err != nil {
-		return errors.NewProcessingError("failed converting maxChunks", err)
+		return errors.NewProcessingError(errFailedConvertingMaxChunks, err)
 	}
 
 	b.chunks = make([][]byte, maxChunksInt)
@@ -2265,7 +2274,7 @@ func (b *bucketUnallocated) UpdateStats(s *Stats) {
 }
 
 func (b *bucketUnallocated) listChunks() {
-	fmt.Println("chunks: ", b.chunks)
+	fmt.Println(msgChunks, b.chunks)
 }
 
 func (b *bucketUnallocated) SetMulti(keys [][]byte, values [][]byte) {
@@ -2300,7 +2309,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+		return errors.NewProcessingError(errKVDoesNotFitChunk, kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -2355,7 +2364,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 		chunk, err = b.getChunk()
 
 		if err != nil {
-			return errors.NewProcessingError("cannot allocate chunk", err)
+			return errors.NewProcessingError(errCannotAllocateChunk, err)
 		}
 
 		chunk = chunk[:0]

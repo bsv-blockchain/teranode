@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ import (
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -149,6 +151,13 @@ type trackingBlockchainClient struct {
 	notificationCh   chan *blockchain_api.Notification
 	setMinedOnce     sync.Once
 	setMinedCalled   chan struct{}
+
+	// fsmStateOverride, when non-nil, makes GetFSMCurrentState report this state
+	// instead of delegating to the embedded client. LocalClient hardwires
+	// FSMStateRUNNING, so this is how a test drives CATCHINGBLOCKS
+	// (or an error) through BlockValidation.isCaughtUp.
+	fsmStateOverride    *blockchain.FSMStateType
+	fsmStateOverrideErr error
 }
 
 func newTrackingBlockchainClient(client blockchain.ClientI) *trackingBlockchainClient {
@@ -179,12 +188,50 @@ func (t *trackingBlockchainClient) withSetMinedTracking() *trackingBlockchainCli
 	return t
 }
 
+// withFSMState forces GetFSMCurrentState to report the given state, bypassing
+// the embedded LocalClient (which always reports RUNNING). Used to drive the
+// catchup branch of BlockValidation.isCaughtUp.
+func (t *trackingBlockchainClient) withFSMState(state blockchain.FSMStateType) *trackingBlockchainClient {
+	t.fsmStateOverride = &state
+	return t
+}
+
+// withFSMError forces GetFSMCurrentState to fail, exercising the fail-safe
+// branch of isCaughtUp (an FSM-query error must be treated as not-caught-up so
+// a transient hiccup never wrongly invalidates a #1031 catchup block).
+func (t *trackingBlockchainClient) withFSMError(err error) *trackingBlockchainClient {
+	t.fsmStateOverrideErr = err
+	return t
+}
+
+func (t *trackingBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockchain.FSMStateType, error) {
+	if t.fsmStateOverrideErr != nil {
+		return nil, t.fsmStateOverrideErr
+	}
+	if t.fsmStateOverride != nil {
+		return t.fsmStateOverride, nil
+	}
+	return t.ClientI.GetFSMCurrentState(ctx)
+}
+
 func (t *trackingBlockchainClient) InvalidateBlock(ctx context.Context, hash *chainhash.Hash) ([]chainhash.Hash, error) {
 	hashes, err := t.ClientI.InvalidateBlock(ctx, hash)
 	t.invalidateOnce.Do(func() {
 		close(t.invalidateCalled)
 	})
 	return hashes, err
+}
+
+// invalidateWasCalled reports whether InvalidateBlock has been observed yet
+// (non-blocking). Used by the #1031 guard test to assert a catchup floater is
+// NOT rolled back.
+func (t *trackingBlockchainClient) invalidateWasCalled() bool {
+	select {
+	case <-t.invalidateCalled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *trackingBlockchainClient) Subscribe(ctx context.Context, tag string) (chan *blockchain_api.Notification, error) {
@@ -285,7 +332,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 
-	validatorClient := &validator.MockValidatorClient{UtxoStore: utxoStore}
+	validatorClient := &validator.MockValidator{UtxoStore: utxoStore}
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	if err != nil {
@@ -342,19 +389,19 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	// Create a grandparent transaction for parentTx
 	grandParentForParentTx := newTx(1000) // Create without parent
-	_, err = utxoStore.Create(context.Background(), grandParentForParentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), grandParentForParentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Add parentTx to UTXO store since tx1, tx2, tx3, tx4 all reference it as their parent
 	// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
-	_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Create tx1 to reference parentTx instead of using the hex string version
 	// This ensures the parent relationship is under our control
 	// Use version 10 to differentiate from tx2 which uses version 1
 	tx1New := newTx(10, parentTx.TxIDChainHash())
-	_, err = utxoStore.Create(context.Background(), tx1New, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1New, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Update hashes to use the new transactions
@@ -368,17 +415,17 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	require.NoError(t, subtreeData.AddTx(tx1New, 1))
 
-	_, err = utxoStore.Create(context.Background(), tx2, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	require.NoError(t, subtreeData.AddTx(tx2, 2))
 
-	_, err = utxoStore.Create(context.Background(), tx3, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	require.NoError(t, subtreeData.AddTx(tx3, 3))
 
-	_, err = utxoStore.Create(context.Background(), tx4, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx4, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -405,7 +452,10 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	require.NoError(t, err)
 
 	coinbase.Outputs = nil
-	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
+	// Pay just the block subsidy (no fees claimed). At height 100 the coinbase-reward check runs
+	// (it is skipped for height 0), and under-claiming is always valid, so this stays robust
+	// regardless of the exact fees the subtree txs carry.
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
@@ -438,13 +488,17 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		blockHeader.Nonce++
 	}
 
+	// Height 100 is below mainnet's lowest checkpoint (11111), so difficulty is legitimately
+	// skipped by model.BelowCheckpoint (the block cannot meet real mainnet genesis difficulty).
+	// The previous height 0 relied on the raw 0 <= highestCheckpoint skip that BelowCheckpoint's
+	// height > 0 guard removes. Subsidy is unchanged (50 BTC below the first halving).
 	block, err := model.NewBlock(
 		blockHeader,
 		coinbase,
 		subtreeHashes,            // should be the subtree with placeholder
 		uint64(subtree.Length()), // nolint:gosec
 		123123,
-		0, 0)
+		100, 0)
 	require.NoError(t, err)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
@@ -492,7 +546,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		// This ensures that when we create child transactions, their parents exist
 		// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
 		parentTx := newTx(uint32(i + 10000)) // Create parent without parent (no second param)
-		_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 		require.NoError(t, err)
 
 		//nolint:gosec
@@ -503,7 +557,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 
 		fees += 100
 
-		_, err = utxoStore.Create(context.Background(), tx, 0)
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx, 0, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -625,7 +679,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 
 	require.True(t, coinbase.IsCoinbase())
 
-	_, err = utxoStore.Create(context.Background(), coinbase, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbase, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(4)
@@ -713,7 +767,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 
 	require.True(t, coinbase.IsCoinbase())
 
-	_, err = utxoStore.Create(context.Background(), coinbase, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbase, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(4)
@@ -800,7 +854,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 
 	// Create parent transaction for tx2, tx3, tx4 (they all reference parentTx)
 	// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
-	_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Create tx1 with a parent reference to parentTx
@@ -816,16 +870,16 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx2))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx3))
 
-	_, err = utxoStore.Create(context.Background(), tx1Test, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1Test, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(context.Background(), tx2, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(context.Background(), tx3, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx3, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(context.Background(), tx4, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx4, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -930,7 +984,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 
 	txns := []*bt.Tx{tx1, tx2, tx3, tx4}
 	for i, tx := range txns {
-		_, err := utxoStore.Create(context.Background(), tx, 0)
+		_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, 0, utxostore.WithCreateOnly())
 		require.NoError(t, err, "Failed to store tx%d: %v", i+1, tx.TxIDChainHash())
 		t.Logf("Stored tx%d: %s", i+1, tx.TxIDChainHash())
 	}
@@ -1072,7 +1126,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 		// This ensures that when we create child transactions, their parents exist
 		// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
 		parentTx := newTx(uint32(i + 10000)) // Create parent without parent (no second param)
-		_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
 		require.NoError(t, err)
 
 		tx := newTx(uint32(i), parentTx.TxIDChainHash()) //nolint:gosec
@@ -1082,7 +1136,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 
 		fees += 100
 
-		_, err = utxoStore.Create(context.Background(), tx, 0)
+		_, _, err = utxoStore.SpendAndCreate(context.Background(), tx, 0, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -1229,7 +1283,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 	// Store all transactions except tx3 (which will be our missing transaction)
 	for _, tx := range txs[:3] { // Store all except tx3
-		_, err := utxoStore.Create(context.Background(), tx, 100)
+		_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, 100, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -1264,8 +1318,11 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 		fees += tx.TotalInputSatoshis() - tx.TotalOutputSatoshis()
 	}
 
-	// Create block header
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	// Create block header. Use the regtest expected nBits (207fffff) so the difficulty-
+	// correctness check passes: block.Height here is 0, which no longer skips difficulty
+	// now that the skip uses model.BelowCheckpoint (height > 0 guard) rather than a raw
+	// height <= highestCheckpoint(0) comparison.
+	nBits, _ := model.NewNBitFromString("207fffff")
 	hashPrevBlock := chaincfg.RegressionNetParams.GenesisBlock.BlockHash()
 
 	// Calculate merkle root using coinbase and subtree
@@ -1791,9 +1848,9 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 	require.NoError(t, err)
 
 	// Store transactions in txMetaStore
-	_, err = txMetaStore.Create(context.Background(), coinbaseTx, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = txMetaStore.Create(context.Background(), tx1, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), tx1, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Create a subtree with coinbase and tx1
@@ -1822,7 +1879,11 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	// genesis+1 block: ValidateBlock's difficulty gate runs GetNextWorkRequired
+	// BEFORE subtree blessing, so the header must carry the regtest-expected target
+	// (207fffff). 2000ffff would be rejected on the nBits check before reaching
+	// CheckBlockSubtrees and the subtree-error classification path under test.
+	nBits, _ := model.NewNBitFromString("207fffff")
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
@@ -1879,11 +1940,11 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
 	// add the coinbase to the utxo store
-	_, err = utxoStore.Create(t.Context(), coinbaseTx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = utxoStore.SpendAndCreate(t.Context(), coinbaseTx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 1,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Two double-spend txs
@@ -1910,11 +1971,11 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	_ = tx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store in utxoStore
-	_, err = utxoStore.Create(context.Background(), tx1, 2)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx1, 2, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// since this was a double spend it should be marked as conflicting
-	_, err = utxoStore.Create(context.Background(), tx2, 2, utxostore.WithConflicting(true))
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), tx2, 2, utxostore.WithConflicting(true), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	err = utxoStore.SetBlockHeight(2)
@@ -2037,9 +2098,9 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	_ = tx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store in txMetaStore
-	_, _ = txMetaStore.Create(context.Background(), coinbaseTx, 0)
-	_, _ = txMetaStore.Create(context.Background(), tx1, 0)
-	_, _ = txMetaStore.Create(context.Background(), tx2, 0)
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx1, 0, utxostore.WithCreateOnly())
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx2, 0, utxostore.WithCreateOnly())
 
 	// Subtree: coinbase, tx2, tx1 (wrong order: tx2 before tx1)
 	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
@@ -2130,11 +2191,11 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	_, err = txMetaStore.Create(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Normal tx spending coinbase
@@ -2149,8 +2210,8 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	_ = tx1.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store transactions
-	_, _ = txMetaStore.Create(context.Background(), coinbaseTx, 0)
-	_, _ = txMetaStore.Create(context.Background(), tx1, 0)
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
+	_, _, _ = txMetaStore.SpendAndCreate(context.Background(), tx1, 0, utxostore.WithCreateOnly())
 
 	// Subtree: coinbase, tx1
 	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
@@ -2813,11 +2874,11 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	_, err = txMetaStore.Create(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// parentTx spends coinbase
@@ -2853,25 +2914,25 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	_ = childTx2.AddP2PKHOutputFromAddress(address.AddressString, parentTx.Outputs[0].Satoshis-1000)
 	_ = childTx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	_, err = txMetaStore.Create(context.Background(), parentTx, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), parentTx, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), childTx1, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx1, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), childTx2, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx2, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Subtree: coinbase, tx1, tx2 (correct order)
@@ -2970,11 +3031,11 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 			blockHeight = 101
 		}
 
-		_, err := txMetaStore.Create(context.Background(), tx, blockID, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+		_, _, err := txMetaStore.SpendAndCreate(context.Background(), tx, blockID, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 			BlockID:     blockID,
 			BlockHeight: blockHeight,
 			SubtreeIdx:  0,
-		}))
+		}), utxostore.WithCreateOnly())
 		require.NoError(t, err)
 	}
 
@@ -3096,9 +3157,9 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	_ = normalTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store both in txMetaStore
-	_, err = txMetaStore.Create(context.Background(), coinbaseTx, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = txMetaStore.Create(context.Background(), normalTx, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), normalTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and the same normalTx twice
@@ -3206,7 +3267,6 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
 		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
@@ -3308,7 +3368,6 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
 		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
@@ -3329,11 +3388,11 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	_, err := txMetaStore.Create(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err := txMetaStore.SpendAndCreate(t.Context(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// parentTx spends coinbase
@@ -3369,25 +3428,25 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 	_ = childTx2.AddP2PKHOutputFromAddress(address.AddressString, parentTx.Outputs[0].Satoshis-1000)
 	_ = childTx2.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	_, err = txMetaStore.Create(context.Background(), parentTx, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), parentTx, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), childTx1, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx1, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), childTx2, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx2, 101, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     101,
 		BlockHeight: 101,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Subtree: coinbase, tx1, tx2 (correct order)
@@ -3450,11 +3509,17 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		100, 0,
 	)
 
-	// Update the GetBlockHeaders mock to return the actual block header
-	// This ensures the bloom filter hash matches between storage and retrieval
+	// Update the GetBlockHeaders mock to return the block's actual parent chain — the
+	// regtest genesis header, since the block is anchored on the regtest genesis hash.
+	// CheckHeaderContextual verifies the chain is anchored at the block's parent (issue
+	// 1467), so returning the block's own header no longer passes. The meta ID is kept
+	// so the bloom filter hash still matches between storage and retrieval.
+	genesisHeader := regtestGenesisHeader(t)
+	require.True(t, genesisHeader.Hash().IsEqual(blockHeader.HashPrevBlock), "fixture block must be anchored on the regtest genesis")
+
 	for _, call := range mockBlockchain.ExpectedCalls {
 		if call.Method == "GetBlockHeaders" {
-			call.ReturnArguments = mock.Arguments{[]*model.BlockHeader{blockHeader}, []*model.BlockHeaderMeta{{ID: 100}}, nil}
+			call.ReturnArguments = mock.Arguments{[]*model.BlockHeader{genesisHeader}, []*model.BlockHeaderMeta{{ID: 100}}, nil}
 			break
 		}
 	}
@@ -3730,6 +3795,332 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	}
 }
 
+// TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously proves the issue #1149
+// fix: under optimistic mining, a block whose timestamp is more than two hours in the future is
+// rejected synchronously at receipt time, BEFORE it is optimistically added to the chain. Before
+// the fix the 2-hours-in-the-future check ran only in the background block.Valid() goroutine, so
+// ValidateBlock returned nil and the too-far-future block was transiently added then reverted.
+func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = true
+
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	nBits, _ := model.NewNBitFromString("207fffff")
+	// Timestamp three hours in the future — past the two-hour bound.
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Add(3 * time.Hour).Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
+	block, _ := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()),  //nolint:gosec
+		uint64(coinbaseTx.Size()), //nolint:gosec
+		100, 0,
+	)
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
+	// storeInvalidBlock persists the rejected block with WithInvalid(true); the accept-path AddBlock
+	// must never fire. Both would match here, so we additionally assert the background path never runs.
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
+	// GetBlockHeaderIDs is only reached inside the optimistic background goroutine, which must not
+	// start when the header is rejected synchronously — mark it Maybe so a regression (block added
+	// optimistically) surfaces via the AssertNotCalled check below rather than a missing-mock panic.
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil).Maybe()
+	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
+
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
+	require.NoError(t, err)
+
+	// The block must be rejected synchronously, with the future-timestamp reason surfaced directly
+	// from ValidateBlock rather than swallowed by the optimistic background goroutine.
+	err = bv.ValidateBlock(ctx, block, "test", false)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	require.Contains(t, err.Error(), "two hours in the future")
+
+	// The optimistic background goroutine (which alone calls GetBlockHeaderIDs) must never start,
+	// confirming the rejection happened before the optimistic AddBlock.
+	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch verifies checkpoint
+// enforcement on the direct (non-catchup) ValidateBlock path (gap-analysis #4697):
+// a block whose height matches a hardcoded checkpoint but whose hash differs must be
+// rejected synchronously, before subtree validation and the optimistic AddBlock —
+// otherwise the difficulty-skip for sub-checkpoint heights would let a fabricated
+// block at a checkpoint height through with no checkpoint assertion.
+func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = true
+
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	const checkpointHeight = 100
+	block, _ := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()),  //nolint:gosec
+		uint64(coinbaseTx.Size()), //nolint:gosec
+		checkpointHeight, 0,
+	)
+
+	// Configure a checkpoint at the block's height whose hash differs from the block.
+	// (The block hash is deterministic from the mined header; any other hash mismatches.)
+	otherHash, err := chainhash.NewHashFromStr("00000000000000000000000000000000000000000000000000000000deadbeef")
+	require.NoError(t, err)
+	require.False(t, block.Hash().IsEqual(otherHash))
+	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight, Hash: otherHash}}
+
+	// Matches only the storeInvalidBlock write (AddBlock with WithInvalid(true)), so it cannot
+	// be satisfied by an accept-path write. The mock hands the variadic options to testify as a
+	// single []StoreBlockOption arg, which ProcessStoreBlockOptions resolves.
+	invalidStore := mock.MatchedBy(func(opts []blockchainoptions.StoreBlockOption) bool {
+		return blockchainoptions.ProcessStoreBlockOptions(opts...).Invalid
+	})
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, invalidStore).Return(nil).Once()
+	// GetBlockHeaderIDs is only reached inside the optimistic background goroutine, which must
+	// not start when the header is rejected synchronously.
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil).Maybe()
+	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	// Not reached: the guard now runs before GetBlockHeaders, but registered defensively.
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+
+	// The block must be rejected synchronously with the checkpoint-conflict reason.
+	err = bv.ValidateBlock(ctx, block, "test", false)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	require.Contains(t, err.Error(), "conflicts with hardcoded checkpoint")
+
+	// The block was persisted invalid (storeInvalidBlock -> AddBlock with WithInvalid(true)),
+	// proven by the invalidStore matcher; the accept path never ran (GetBlockHeaderIDs unused).
+	mockBlockchain.AssertCalled(t, "AddBlock", mock.Anything, block, mock.Anything, invalidStore)
+	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestBlockValidation_DirectPath_AcceptsMatchingCheckpoint is the positive control for the
+// guard above: a block sitting AT a configured checkpoint height whose hash IS the checkpoint
+// hash must pass the gate untouched. This is what backs the "can never reject a legitimate
+// block" claim — the mismatch test alone would still pass if the guard rejected everything at
+// a checkpoint height.
+//
+// Reaching GetBlockHeaders is the proof: it is the first blockchain call after the gate, and
+// the mismatch test asserts the converse (the gate returns before it).
+func TestBlockValidation_DirectPath_AcceptsMatchingCheckpoint(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	const checkpointHeight = 100
+	block, _ := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()),  //nolint:gosec
+		uint64(coinbaseTx.Size()), //nolint:gosec
+		checkpointHeight, 0,
+	)
+
+	// The checkpoint at this height IS this block — the legitimate case.
+	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight, Hash: block.Hash()}}
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+	mockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil).Maybe()
+	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+
+	// The block fails later on in this harness (no real parent chain or subtree data), which is
+	// fine — what matters is that it was NOT stopped by the checkpoint gate.
+	err := bv.ValidateBlock(ctx, block, "test", false)
+	if err != nil {
+		require.NotContains(t, err.Error(), "conflicts with hardcoded checkpoint")
+	}
+
+	mockBlockchain.AssertCalled(t, "GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDeriveBlockHeight covers the height-corroboration that closes the poisoning vector.
+// block.Height is a peer-supplied varint NOT covered by the header hash, so on the
+// peer-fetched route processBlockFound settles it against the on-chain parent before any
+// consumer (checkpoint guard, difficulty skip, block-assembly gating, coinbase subsidy)
+// reads it. An honest peer sends the correct height or 0; a lying non-zero height that would
+// relabel the honest tip with a checkpoint height is rejected here, before validation, so it
+// can never reach storeInvalidBlock and poison the real block.
+func TestDeriveBlockHeight(t *testing.T) {
+	const cp = 100 // a checkpoint height, for the poisoning case
+
+	tests := []struct {
+		name       string
+		claimed    uint32
+		parent     uint32
+		want       uint32
+		wantReject bool
+	}{
+		{name: "honest height passes", claimed: 501, parent: 500, want: 501},
+		{name: "genesis child derived", claimed: 1, parent: 0, want: 1},
+		{name: "wire height zeroed is derived", claimed: 0, parent: cp - 1, want: cp},
+		{name: "honest height at a checkpoint", claimed: cp, parent: cp - 1, want: cp},
+		// The poisoning attempt: relabel the honest tip (real height 501) as checkpoint height 100.
+		{name: "spoofed checkpoint height rejected", claimed: cp, parent: 500, wantReject: true},
+		{name: "wire height one past rejected", claimed: cp + 1, parent: cp - 1, wantReject: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := deriveBlockHeight(tc.claimed, tc.parent)
+			if tc.wantReject {
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // TestBlockValidation_SetMined_UpdatesTxMeta ensures that after block validation, calling setTxMined marks all block transactions as mined in the txMetaStore.
 func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	initPrometheusMetrics()
@@ -3766,13 +4157,13 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	_ = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
 	// Store both in txMetaStore
-	_, err = txMetaStore.Create(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = txMetaStore.Create(context.Background(), childTx, 0)
+	_, _, err = txMetaStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and normalTx
@@ -3891,13 +4282,13 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	_ = childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
 	_ = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	_, err := utxoStore.Create(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err := utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(2)
@@ -4001,6 +4392,263 @@ func TestSetMinedRetryBackoff(t *testing.T) {
 	require.Equal(t, 111*time.Second, total, "total worst-case backoff before drop changed - update operator docs")
 }
 
+// TestScheduleSetMinedRetry covers the off-loaded retry: instead of sleeping the
+// backoff inline on the sole setMinedChan drainer, the worker hands the wait + re-enqueue
+// to a dedicated, ctx-cancellable, WaitGroup-tracked goroutine that re-enqueues via the
+// non-blocking enqueueSetMined.
+func TestScheduleSetMinedRetry(t *testing.T) {
+	t.Run("re-enqueues after the backoff without blocking the caller", func(t *testing.T) {
+		u := newSetMinedTestBV(1)
+		ctx := context.Background()
+		h := chainhash.HashH([]byte("retry-me"))
+
+		const backoff = 500 * time.Millisecond
+
+		start := time.Now()
+		u.scheduleSetMinedRetry(ctx, &h, backoff)
+		// The caller (the worker) must return immediately - it cannot block for the
+		// backoff, otherwise it stops draining setMinedChan. A generous fraction of the
+		// backoff keeps this from flaking under CI/-race load while still failing loudly
+		// if scheduling ever waits out the full backoff inline.
+		require.Less(t, time.Since(start), backoff/2, "scheduling must not block the worker for the backoff")
+
+		select {
+		case got := <-u.setMinedChan:
+			require.True(t, got.IsEqual(&h), "the original block hash must be re-enqueued")
+		case <-time.After(2 * time.Second):
+			t.Fatal("block was never re-enqueued onto setMinedChan")
+		}
+
+		u.backgroundTasks.Wait() // goroutine must have finished after the re-enqueue
+	})
+
+	t.Run("context cancellation before the timer fires drops the retry", func(t *testing.T) {
+		u := newSetMinedTestBV(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		h := chainhash.HashH([]byte("cancel-before-fire"))
+
+		// Long backoff so ctx wins the race.
+		u.scheduleSetMinedRetry(ctx, &h, 10*time.Second)
+		cancel()
+
+		// The goroutine must exit promptly on ctx cancellation rather than wait out the
+		// full backoff.
+		done := make(chan struct{})
+		go func() { u.backgroundTasks.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("retry goroutine did not exit on context cancellation")
+		}
+
+		require.Len(t, u.setMinedChan, 0, "nothing must be re-enqueued after cancellation")
+		require.Nil(t, u.popSetMinedOverflow(), "nothing must land in the overflow set after cancellation")
+		_, pending := u.setMinedRetryPending.Load(h)
+		require.False(t, pending, "the pending marker must be cleared on cancellation")
+	})
+
+	t.Run("full channel: retry lands in overflow without blocking", func(t *testing.T) {
+		// With the buffer full, enqueueSetMined parks the hash in the overflow set rather
+		// than blocking (the worker is the sole drainer, so a blocking self-send would
+		// wedge it). Prove the off-loaded retry honours that: it re-enqueues into overflow
+		// and the goroutine finishes instead of parking on the send.
+		u := newSetMinedTestBV(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		filler := chainhash.HashH([]byte("filler"))
+		u.setMinedChan <- &filler // saturate the buffer
+
+		h := chainhash.HashH([]byte("overflow-me"))
+		u.scheduleSetMinedRetry(ctx, &h, 0) // fire immediately
+
+		done := make(chan struct{})
+		go func() { u.backgroundTasks.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("retry goroutine blocked instead of overflowing on a full channel")
+		}
+
+		require.Len(t, u.setMinedChan, 1, "the buffer stays full; the retry must not have displaced it")
+		got := u.popSetMinedOverflow()
+		require.NotNil(t, got, "the retry must be parked in the overflow set")
+		require.True(t, got.IsEqual(&h), "the overflowed hash must be the retried block")
+	})
+}
+
+// setMinedFaultClient is a thin decorator over a real blockchain.ClientI. It leaves
+// every method delegating to the real (sqlitememory-backed) client except the two the
+// setMinedChan worker uses to reach the retry branch, which it fault-injects for two
+// specific hashes. sqlitememory cannot itself produce "GetBlockHeader succeeds but
+// GetBlock fails", which is exactly the state that drives setTxMinedStatus into the
+// retry path, so a decorator is the minimal way to exercise the production wiring.
+type setMinedFaultClient struct {
+	blockchain.ClientI
+
+	// retryHash: header lookup succeeds (mined_set=false) so the worker proceeds to
+	// setTxMinedStatus, but the block fetch inside setTxMinedStatus fails, forcing the
+	// bounded-retry branch that now off-loads the re-enqueue via scheduleSetMinedRetry.
+	retryHash        *chainhash.Hash
+	getBlockAttempts atomic.Int32
+
+	// nextHash: header lookup reports mined_set=true so the worker short-circuits at
+	// its MinedSet guard. Seeing this proves the worker kept draining setMinedChan
+	// instead of stalling on retryHash's backoff.
+	nextHash     *chainhash.Hash
+	nextHashSeen chan struct{}
+	nextHashOnce sync.Once
+}
+
+func (c *setMinedFaultClient) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	switch {
+	case c.retryHash != nil && hash.IsEqual(c.retryHash):
+		return &model.BlockHeader{}, &model.BlockHeaderMeta{ID: 1, MinedSet: false}, nil
+	case c.nextHash != nil && hash.IsEqual(c.nextHash):
+		c.nextHashOnce.Do(func() { close(c.nextHashSeen) })
+		return &model.BlockHeader{}, &model.BlockHeaderMeta{ID: 2, MinedSet: true}, nil
+	default:
+		return c.ClientI.GetBlockHeader(ctx, hash)
+	}
+}
+
+func (c *setMinedFaultClient) GetBlock(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
+	if c.retryHash != nil && hash.IsEqual(c.retryHash) {
+		c.getBlockAttempts.Add(1)
+		// A generic (non-ErrBlockNotFound) failure so setTxMinedStatus takes the retry
+		// path rather than the "block is gone, drop it" path.
+		return nil, errors.NewServiceError("injected GetBlock failure for retry hash")
+	}
+
+	return c.ClientI.GetBlock(ctx, hash)
+}
+
+// TestSetMinedChanWorker_RetryDoesNotStallDrain is the production-level companion to
+// TestScheduleSetMinedRetry: it exercises the changed worker call site (start()'s
+// setTxMined failure branch). It proves the worker keeps draining setMinedChan during a
+// failed block's backoff instead of sleeping inline, and that the failed block is
+// genuinely re-enqueued for a later retry.
+func TestSetMinedChanWorker_RetryDoesNotStallDrain(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	retryHash := chainhash.HashH([]byte("worker-retry-hash"))
+	nextHash := chainhash.HashH([]byte("worker-next-hash"))
+
+	faultClient := &setMinedFaultClient{
+		ClientI:      blockchainClient,
+		retryHash:    &retryHash,
+		nextHash:     &nextHash,
+		nextHashSeen: make(chan struct{}),
+	}
+
+	// NewBlockValidation launches the setMinedChan worker over faultClient.
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, faultClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	// retryHash fails in setTxMinedStatus and must be re-enqueued off the worker; nextHash
+	// is enqueued right behind it. The first retry backoff is 1s (setMinedRetryBackoff(1)),
+	// so if the worker slept inline (the old behaviour) nextHash could not be seen for ~1s.
+	blockValidation.setMinedChan <- &retryHash
+	blockValidation.setMinedChan <- &nextHash
+
+	// The worker must process nextHash well within the 1s backoff, proving it kept draining.
+	select {
+	case <-faultClient.nextHashSeen:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("worker did not drain nextHash within the retry backoff - the retry stalled the drain loop")
+	}
+
+	// The failed block must be re-enqueued and retried (a second GetBlock attempt) after
+	// the backoff elapses, confirming scheduleSetMinedRetry actually put it back.
+	require.Eventually(t, func() bool {
+		return faultClient.getBlockAttempts.Load() >= 2
+	}, 3*time.Second, 20*time.Millisecond, "failed block was never re-enqueued for retry")
+}
+
+// TestSetMinedChanWorker_RetryPendingDedup guards the retry-counter regression: while a
+// block's setTxMined retry is waiting out its backoff, re-triggers for the same hash
+// (e.g. a child re-triggering its not-yet-mined parent) must be skipped rather than run a
+// second setTxMinedStatus. Re-processing during the window would advance the per-block
+// retry counter faster than the intended backoff steps and drop the block as
+// manual_intervention_required prematurely.
+func TestSetMinedChanWorker_RetryPendingDedup(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	retryHash := chainhash.HashH([]byte("dedup-retry-hash"))
+
+	faultClient := &setMinedFaultClient{
+		ClientI:   blockchainClient,
+		retryHash: &retryHash,
+	}
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, faultClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	// First failure schedules a retry and marks the block retry-pending for the 1s backoff.
+	blockValidation.setMinedChan <- &retryHash
+	require.Eventually(t, func() bool {
+		_, pending := blockValidation.setMinedRetryPending.Load(retryHash)
+		return pending
+	}, 2*time.Second, 5*time.Millisecond, "first failure must schedule a pending retry")
+
+	require.Equal(t, int32(1), faultClient.getBlockAttempts.Load(), "exactly one setTxMinedStatus attempt so far")
+
+	// Simulate a burst of re-triggers for the same block during the backoff window.
+	for i := 0; i < 5; i++ {
+		blockValidation.setMinedChan <- &retryHash
+	}
+
+	// The worker must drain them (consume from the channel) but skip each - proven by the
+	// channel emptying while the attempt count stays put and the retry counter stays at 1.
+	require.Eventually(t, func() bool {
+		return len(blockValidation.setMinedChan) == 0
+	}, 500*time.Millisecond, 5*time.Millisecond, "re-triggers must be drained by the worker")
+	require.Equal(t, int32(1), faultClient.getBlockAttempts.Load(), "re-triggers during the backoff must be skipped, not re-processed")
+
+	attempts, ok := blockValidation.setMinedRetries.Load(retryHash)
+	require.True(t, ok, "retry counter must be tracked for the failing block")
+	require.Equal(t, uint64(1), attempts, "skipped re-triggers must not inflate the retry counter")
+}
+
+// TestIsParentFinalizing guards the child parent-wait fix: checkParentProcessingComplete
+// must treat a parent that is either actively being processed OR waiting out a setTxMined
+// retry backoff as "still finalizing", so a child keeps waiting across the parent's whole
+// retry window instead of falling through to the bounded parent-mined wait and giving up.
+func TestIsParentFinalizing(t *testing.T) {
+	u := &BlockValidation{
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+	}
+	h := chainhash.HashH([]byte("parent"))
+
+	require.False(t, u.isParentFinalizing(&h), "an unknown block is not finalizing")
+
+	// Actively being processed by the setMined worker.
+	_ = u.blockHashesCurrentlyValidated.Put(h)
+	require.True(t, u.isParentFinalizing(&h), "a block in blockHashesCurrentlyValidated is finalizing")
+	require.NoError(t, u.blockHashesCurrentlyValidated.Delete(h))
+	require.False(t, u.isParentFinalizing(&h), "no longer finalizing once the claim is released")
+
+	// Waiting out a retry backoff (the off-loaded case the old code did not cover).
+	u.setMinedRetryPending.Store(h, struct{}{})
+	require.True(t, u.isParentFinalizing(&h), "a block with a pending setMined retry is finalizing")
+	u.setMinedRetryPending.Delete(h)
+	require.False(t, u.isParentFinalizing(&h), "no longer finalizing once the retry fires")
+}
+
 // TestBlockValidation_BlockchainSubscription_TriggersSetMined ensures that receiving a NotificationType_Block on the blockchainSubscription triggers setMined.
 func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	initPrometheusMetrics()
@@ -4033,13 +4681,13 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	_ = childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
 	_ = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	_, err := utxoStore.Create(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
+	_, _, err := utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 0,
 		SubtreeIdx:  0,
-	}))
+	}), utxostore.WithCreateOnly())
 	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(2)
@@ -4214,7 +4862,6 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
 		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		invalidBlockKafkaProducer:     mockKafka,
@@ -4323,8 +4970,15 @@ func TestBlockValidation_BlockValidMissingParent_NotPersistedInvalid(t *testing.
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	localClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
+
+	// Force CATCHINGBLOCKS so isCaughtUp() is false: a not-yet-absorbed parent is a
+	// transient #1031 catchup-ordering state, NOT a floater. The block must surface
+	// BLOCK_INCOMPLETE (retry) and must NOT be persisted invalid. LocalClient hardwires
+	// FSMStateRUNNING (caught up), which would wrongly route to the floater
+	// invalidate+persist path — see TestBlockValidation_FloaterPersistedInvalidWhenCaughtUp.
+	blockchainClient := newTrackingBlockchainClient(localClient).withFSMState(blockchain.FSMStateCATCHINGBLOCKS)
 
 	// Subtree validation succeeds — the failure must come from block.Valid's parent lookup.
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
@@ -4337,13 +4991,13 @@ func TestBlockValidation_BlockValidMissingParent_NotPersistedInvalid(t *testing.
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
-	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
 	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
 	childTx := newTx(7, parentTx.TxIDChainHash())
-	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Subtree: coinbase + childTx.
@@ -4425,4 +5079,131 @@ func TestCheckParentInvalid_CascadeIsIntentional(t *testing.T) {
 
 	// Unknown parent metadata is not treated as invalid.
 	require.False(t, bv.checkParentInvalid(nil))
+}
+
+func TestBlockValidation_FloaterPersistedInvalidWhenCaughtUp(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = false // force the synchronous block.Valid path
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	// Subtree validation succeeds — the failure must come from block.Valid's parent lookup.
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Coinbase paying exactly the block subsidy so checkBlockRewardAndFees passes.
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), coinbaseTx, 0, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
+	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
+	childTx := newTx(7, parentTx.TxIDChainHash())
+	_, _, err = utxoStore.SpendAndCreate(context.Background(), childTx, 0, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	// Subtree: coinbase + childTx.
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), 100, 0))
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	// Merkle root with coinbase swapped into the placeholder position.
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+	// Use the regtest expected target so the ValidateBlock difficulty gate (GetNextWorkRequired
+	// at genesis+1) accepts the block and we reach block.Valid.
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()), //nolint:gosec
+		uint64(coinbaseTx.Size()+childTx.Size()), //nolint:gosec
+		100, 0,
+	)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "caught-up floater must surface BLOCK_INVALID, got: %v", err)
+
+	exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
+	require.NoError(t, existsErr)
+	require.True(t, exists, "caught-up floater must be persisted as invalid (storeInvalidBlock)")
+}
+
+func TestQuickValidateOutpointOnly_GateBounds(t *testing.T) {
+	// A store that reports fast-path support; the gate now asks the store, not settings.
+	u := &BlockValidation{
+		settings:  test.CreateBaseTestSettings(t),
+		utxoStore: &utxostore.MockUtxostore{SupportsOutpointOnlySpendResult: true},
+	}
+	// Two hardcoded checkpoints; highest is height 200.
+	u.settings.ChainCfgParams = &chaincfg.Params{Checkpoints: []chaincfg.Checkpoint{{Height: 100}, {Height: 200}}}
+
+	u.settings.BlockValidation.OutpointOnlyBelowCheckpoint = false
+	require.False(t, u.quickValidateOutpointOnly(&model.Block{Height: 150}), "off by default")
+
+	u.settings.BlockValidation.OutpointOnlyBelowCheckpoint = true
+	require.True(t, u.quickValidateOutpointOnly(&model.Block{Height: 150}), "on, below highest checkpoint")
+	require.True(t, u.quickValidateOutpointOnly(&model.Block{Height: 200}), "on, at highest checkpoint")
+	require.False(t, u.quickValidateOutpointOnly(&model.Block{Height: 201}), "on, above highest checkpoint")
+
+	// Store-capability dimension: a store that does not support the fast path keeps it off
+	// even below the checkpoint with the flag on.
+	u.utxoStore = &utxostore.MockUtxostore{SupportsOutpointOnlySpendResult: false}
+	require.False(t, u.quickValidateOutpointOnly(&model.Block{Height: 150}), "unsupported store keeps it off")
 }

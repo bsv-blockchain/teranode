@@ -21,14 +21,14 @@ type P2PClientI interface {
 	// RecordCatchupFailure records a failed catchup attempt from a peer.
 	RecordCatchupFailure(ctx context.Context, peerID string) error
 
+	// RecordCatchupFailureWithKind records a failed catchup attempt with optional diagnostic context.
+	RecordCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) error
+
 	// RecordCatchupMalicious records malicious behavior detected during catchup.
 	RecordCatchupMalicious(ctx context.Context, peerID string) error
 
 	// UpdateCatchupError stores the last catchup error for a peer.
 	UpdateCatchupError(ctx context.Context, peerID string, errorMsg string) error
-
-	// UpdateCatchupReputation updates the reputation score for a peer.
-	UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error
 
 	// GetPeersForCatchup returns peers suitable for catchup operations.
 	// Returns a slice of PeerInfo sorted by reputation (highest first).
@@ -41,8 +41,16 @@ type P2PClientI interface {
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error
 
+	// ReportValidBlockHeaders reports that a peer successfully served a batch of block
+	// headers during catchup. Credits a generic interaction success (reputation) without
+	// touching the catchup-operation counters.
+	ReportValidBlockHeaders(ctx context.Context, peerID string, durationMs int64) error
+
 	// ReportValidSubtree reports that a subtree was successfully received and validated from a peer.
 	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
+
+	// ReportValidatedChainProgress reports locally validated header-chain progress for a peer.
+	ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error
 
 	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
 	// A peer is considered malicious if they are banned or have a very low reputation score.

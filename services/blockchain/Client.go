@@ -53,6 +53,9 @@ type Client struct {
 	lastHeartbeat         atomic.Int64                       // Unix nano timestamp of last heartbeat
 	subscriptionReady     chan struct{}                      // Closed when first subscription + FSM state fetch completes
 	subscriptionReadyOnce sync.Once                          // Ensures subscriptionReady is closed exactly once
+	subscriptionCancel    context.CancelFunc                 // Cancels the subscription context; driven by Close()
+	connCloseOnce         sync.Once                          // Ensures conn is closed exactly once (sync Close + ctx goroutine)
+	connCloseErr          error                              // Result of the single conn.Close()
 }
 
 // BestBlockHeader represents the best block header in the blockchain.
@@ -129,6 +132,10 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 		_, err = baClient.HealthGRPC(ctx, &emptypb.Empty{})
 		if err != nil {
+			// Close this iteration's conn before it is overwritten on the next
+			// loop or before returning, so failed health checks don't leak conns.
+			_ = baConn.Close()
+
 			if retries < maxRetries {
 				retries++
 				backoff := time.Duration(retries*retrySleep) * time.Millisecond
@@ -149,19 +156,33 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	running := atomic.Bool{}
 	running.Store(true)
 
+	// subscriptionCtx is the lifecycle context for all the long-running
+	// subscription goroutines. It is cancelled either when the caller's ctx is
+	// cancelled or by Close(), so a synchronous Close() makes shutdown terminal
+	// for the subscription loops (they stop retrying against a closed conn) and
+	// lets the ctx-done goroutine close the notification channel.
+	subscriptionCtx, subscriptionCancel := context.WithCancel(ctx)
+
 	c := &Client{
-		client:            blockchain_api.NewBlockchainAPIClient(baConn),
-		logger:            logger,
-		settings:          tSettings,
-		running:           &running,
-		conn:              baConn,
-		subscribers:       make([]clientSubscriber, 0),
-		subscriptionReady: make(chan struct{}),
+		client:             blockchain_api.NewBlockchainAPIClient(baConn),
+		logger:             logger,
+		settings:           tSettings,
+		running:            &running,
+		conn:               baConn,
+		subscribers:        make([]clientSubscriber, 0),
+		subscriptionReady:  make(chan struct{}),
+		subscriptionCancel: subscriptionCancel,
 	}
 
 	// start a subscription to the blockchain service
-	subscriptionCh, err := c.SubscribeToServer(ctx, source)
+	subscriptionCh, err := c.SubscribeToServer(subscriptionCtx, source)
 	if err != nil {
+		// The client owns baConn; close it so a subscribe failure doesn't leak
+		// it. Funnel through closeConn (not baConn.Close) because SubscribeToServer
+		// has already started the ctx-cancel goroutine that also closes the conn.
+		subscriptionCancel()
+		_ = c.closeConn()
+
 		return nil, err
 	}
 
@@ -169,7 +190,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
+			case <-subscriptionCtx.Done():
 				return
 			case notification, ok := <-subscriptionCh:
 				if !ok {
@@ -229,6 +250,37 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	}()
 
 	return c, nil
+}
+
+// closeConn closes the owned gRPC connection exactly once, regardless of how
+// many times it is called and from which path (synchronous Close or the
+// SubscribeToServer ctx-cancel goroutine). It returns the single close result.
+func (c *Client) closeConn() error {
+	c.connCloseOnce.Do(func() {
+		if c.conn != nil {
+			c.connCloseErr = c.conn.Close()
+		}
+	})
+
+	return c.connCloseErr
+}
+
+// Close synchronously and terminally shuts down the client. It marks the client
+// stopped and cancels the subscription context so SubscribeToServer's retry
+// loops exit (instead of retrying against a closed connection) and the ctx-done
+// goroutine closes the notification channel, then releases the gRPC connection.
+// Idempotent: running/cancel are safe to repeat and the conn is closed exactly
+// once via closeConn (which the ctx-done goroutine may also reach).
+func (c *Client) Close() error {
+	if c.running != nil {
+		c.running.Store(false)
+	}
+
+	if c.subscriptionCancel != nil {
+		c.subscriptionCancel()
+	}
+
+	return c.closeConn()
 }
 
 // Health checks the health status of the blockchain client.
@@ -1290,7 +1342,7 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 		c.logger.Infof("[Blockchain] server context done, closing subscription: %s", source)
 		c.running.Store(false)
 
-		err := c.conn.Close()
+		err := c.closeConn()
 		if err != nil {
 			c.logger.Errorf("[Blockchain] failed to close connection %v", err)
 		}
@@ -1794,15 +1846,35 @@ func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (boo
 	return *currentState == state, nil
 }
 
-// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
+// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state by
+// polling the current state until it matches the target or the context is cancelled.
 func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState FSMStateType) error {
-	if _, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
-		State: targetState,
-	}); err != nil {
-		return errors.UnwrapGRPC(err)
-	}
+	ticker := time.NewTicker(1 * time.Second) // Re-check the state on each tick.
+	defer ticker.Stop()
 
-	return nil
+	for {
+		currentState, err := c.GetFSMCurrentState(ctx)
+		if err == nil && *currentState == targetState {
+			return nil
+		}
+
+		if err != nil {
+			// Keep polling through transient errors rather than aborting the wait. A
+			// state read can fail during the pre-warm window (e.g. a gRPC blip before
+			// the FSMState subscription has populated the cache), which on a fresh node
+			// spans the whole initial block download. Callers treat a returned error as
+			// "stay pessimistic" with no retry, so bailing on a one-off blip would
+			// disable the optimization for the process lifetime. Only ctx cancellation
+			// below ends the wait.
+			c.logger.Debugf("[WaitForFSMtoTransitionToGivenState] state read failed, retrying: %v", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.

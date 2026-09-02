@@ -8,6 +8,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -136,6 +137,21 @@ func (m *MockSubtreeProcessor) QueueLength() int64 {
 	return args.Get(0).(int64)
 }
 
+func (m *MockSubtreeProcessor) LastDequeueTime() time.Time {
+	args := m.Called()
+	return args.Get(0).(time.Time)
+}
+
+func (m *MockSubtreeProcessor) ConsumerStarted() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
+func (m *MockSubtreeProcessor) ConsumerExited() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
 func (m *MockSubtreeProcessor) SubtreeCount() int {
 	args := m.Called()
 	return args.Int(0)
@@ -238,4 +254,10 @@ func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 // Stop implements Interface.Stop
 func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 	m.Called(ctx)
+}
+
+// ReconcileCoinbases implements Interface.ReconcileCoinbases
+func (m *MockSubtreeProcessor) ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error {
+	args := m.Called(ctx, gapBlocks)
+	return args.Error(0)
 }

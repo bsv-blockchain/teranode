@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1532,4 +1533,62 @@ func TestFileChecksumNotDeletedOnDelete(t *testing.T) {
 	// Check if checksum file still exists - this is the bug
 	_, err = os.Stat(filename)
 	require.True(t, os.IsNotExist(err), "Checksum file should be removed when content file is deleted")
+}
+
+// TestFile_BlockHeightCh_ConsumerExitsOnChannelClose pins that the
+// background goroutine consuming BlockHeightCh exits when the producer
+// closes the channel. Before the fix, the goroutine ran a bare
+// `for { <-ch }` which spun SetCurrentBlockHeight(0) at full CPU after
+// the channel was closed, and waited forever if the channel was never
+// closed - either way the goroutine never exited, leaking per store.
+func TestFile_BlockHeightCh_ConsumerExitsOnChannelClose(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockheightch-leak")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	storeURL, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	ch := make(chan uint32, 1)
+	fileStore, err := New(ulogger.TestLogger{}, storeURL, options.WithBlockHeightCh(ch))
+	require.NoError(t, err)
+
+	// Push a height, give the goroutine a tick to consume it, then close.
+	ch <- 42
+	// Spin on the atomic-loaded height (no public way to wait deterministically)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if fileStore.currentBlockHeight.Load() == 42 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	require.Equal(t, uint32(42), fileStore.currentBlockHeight.Load(),
+		"goroutine must consume from BlockHeightCh")
+
+	// Snapshot goroutine count, close the channel, and verify the goroutine
+	// exits within a reasonable window. The bare-for-receive bug would leave
+	// the goroutine alive (either waiting on a never-closed channel or
+	// spinning on a closed one).
+	before := runtime.NumGoroutine()
+	close(ch)
+
+	deadline = time.Now().Add(2 * time.Second)
+	var after int
+	for time.Now().Before(deadline) {
+		after = runtime.NumGoroutine()
+		if after < before {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Less(t, after, before,
+		"goroutine consuming BlockHeightCh must exit when the channel is closed - before=%d after=%d", before, after)
+
+	// And the height must NOT have been overwritten to 0 by a spin loop on
+	// the closed channel. (Pre-fix bug: closed channel's <-ch returns zero
+	// immediately and the bare for loop calls SetCurrentBlockHeight(0)
+	// every iteration.)
+	require.Equal(t, uint32(42), fileStore.currentBlockHeight.Load(),
+		"height must not be clobbered to 0 by a spin on the closed channel")
 }

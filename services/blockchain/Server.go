@@ -56,6 +56,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const errStoreNoBlobDeletion = "blockchain store does not support blob deletion"
+
 // subscriber represents a subscription to blockchain notifications.
 //
 // subscriber encapsulates the connection to a client interested in blockchain events,
@@ -116,6 +118,7 @@ type Blockchain struct {
 	kafkaChan                     chan *kafka.Message                  // Channel for Kafka messages
 	stats                         *gocore.Stat                         // Statistics tracking
 	finiteStateMachine            *fsm.FSM                             // FSM for blockchain state
+	fsmMu                         sync.Mutex                           // Serialises SendFSMEvent transitions (FSM read-modify-write + stateChangeTimestamp)
 	stateChangeTimestamp          time.Time                            // Timestamp of last state change
 	AppCtx                        context.Context                      // Application context
 	localTestStartState           string                               // Initial state for testing
@@ -410,13 +413,22 @@ func (b *Blockchain) Init(ctx context.Context) error {
 		b.logger.Errorf("[Blockchain][Init] Error getting FSM state: %v", err)
 	}
 
-	if stateStr == "" { // if no state is stored, set the default state
-		b.logger.Infof("[Blockchain][Init] Blockchain db doesn't have previous FSM state, storing FSM's default state: %v", b.finiteStateMachine.Current())
+	if stateStr == "" { // no persisted state: this is a fresh node
+		// A fresh node has no chain (height 0) and is therefore behind the
+		// network. Boot it directly into CATCHINGBLOCKS (catch-up mode) rather
+		// than IDLE, so downstream services that block on FSM != IDLE start
+		// immediately and the node proactively catches up. We deliberately do
+		// NOT boot into RUNNING: RUNNING switches on live subtree validation /
+		// block-assembly tx feeding before the node is caught up. Promotion to
+		// RUNNING happens only when a catchup completes above the highest
+		// checkpoint (catchup.restoreFSMState + guardRunBelowHighestCheckpoint).
+		// This restores the boot-into-sync behaviour the removed
+		// IDLE->LEGACYSYNCING edge used to provide.
+		b.finiteStateMachine.SetState(blockchain_api.FSMStateType_CATCHINGBLOCKS.String())
+		b.logger.Infof("[Blockchain][Init] fresh node, booting FSM into %v (catch-up mode)", b.finiteStateMachine.Current())
 
-		err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
-		if err != nil {
-			// TODO: just logging now, consider adding retry
-			b.logger.Errorf("[Blockchain][Init] Error setting FSM state in blockchain store if the state is empty: %v", err)
+		if err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current()); err != nil {
+			b.logger.Errorf("[Blockchain][Init] Error persisting initial CATCHINGBLOCKS state: %v", err)
 		}
 	} else { // if there is a state stored, set the FSM to that state
 		// Migration: the LEGACYSYNCING state was removed. A node persisted in it
@@ -958,11 +970,17 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 // - Releasing acquired resources
 //
 // Parameters:
-// - _: Context for the shutdown operation (currently unused)
+// - ctx: Context bounding the shutdown; the final-blocks producer stop is raced against it so a wedged broker can't stall shutdown
 //
 // Returns:
 // - Error if shutdown encounters issues, nil on successful shutdown
 func (b *Blockchain) Stop(ctx context.Context) error {
+	// DC11: stop the async final-blocks producer first — before the peer-registry
+	// save below, which can early-return on failure. The Stop() is raced against
+	// ctx so a wedged broker flush can't block past the bounded Stop() window; the
+	// outstanding Stop() finishes the flush later if it can. Guarded and non-fatal.
+	kafka.StopProducerCtx(ctx, b.logger, "blockchain final-blocks", b.blocksFinalKafkaAsyncProducer)
+
 	// Drain background goroutines (ban decay loop, cleanup loop) before saving
 	// so we can't race a write against the final Save snapshot. Close is
 	// idempotent and safe to call even if StartBanDecay never ran.
@@ -2294,6 +2312,13 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[Blockchain][InvalidateBlock] request's hash is not valid", err))
 	}
 
+	// Refuse to invalidate the genesis block. The store's recursive CTE would flip the
+	// whole chain invalid in one statement and it could not be undone via reconsiderblock.
+	// Guarded in the store too (defense in depth); reject early here with a clear error.
+	if b.settings != nil && b.settings.ChainCfgParams != nil && blockHash.IsEqual(b.settings.ChainCfgParams.GenesisHash) {
+		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[Blockchain][InvalidateBlock] cannot invalidate the genesis block"))
+	}
+
 	// invalidate block will also invalidate all child blocks
 	invalidatedHashes, err := b.store.InvalidateBlock(ctx, blockHash)
 	if err != nil {
@@ -2744,22 +2769,6 @@ func (b *Blockchain) GetFSMCurrentState(_ context.Context, _ *emptypb.Empty) (*b
 	}, nil
 }
 
-// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
-func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error {
-	for b.finiteStateMachine.Current() != targetState.String() {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
-		time.Sleep(1 * time.Second) // Wait and check again in 1 second
-	}
-
-	return nil
-}
-
 // WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.
 func (b *Blockchain) WaitUntilFSMTransitionFromIdleState(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	// Wait until:
@@ -2810,6 +2819,15 @@ func (b *Blockchain) IsFullyReady(ctx context.Context) (bool, error) {
 
 // SendFSMEvent sends an event to the finite state machine.
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
+	// Serialise FSM transitions. SendFSMEvent performs a read-modify-write across
+	// the FSM (prior-state checks -> Event -> stateChangeTimestamp update) that
+	// must be atomic; concurrent callers (e.g. Run and CatchUpBlocks arriving as
+	// separate gRPC requests) would otherwise race on stateChangeTimestamp and
+	// interleave transitions. The only FSM callback (enter_state -> SendNotification)
+	// does not re-enter SendFSMEvent, so holding this lock cannot deadlock.
+	b.fsmMu.Lock()
+	defer b.fsmMu.Unlock()
+
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
 	priorState := b.finiteStateMachine.Current()
@@ -2834,11 +2852,12 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	// service relay tx invs that post-Genesis peers ban on sight
 	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
 	//
-	// The gate only applies when the prior state already implies a "caught
-	// up" claim (CATCHINGBLOCKS → RUNNING). IDLE → RUNNING
-	// is the boot path: a fresh node has no tip yet, must reach RUNNING for
-	// downstream services (legacy, p2p) to start syncing, and tx relay is
-	// suppressed while FSM != RUNNING so allowing the transition is safe.
+	// The gate only applies when the prior state already implies a "caught up"
+	// claim (CATCHINGBLOCKS -> RUNNING). IDLE -> RUNNING is an operator override
+	// (e.g. teranodecli setfsmstate running) and stays exempt: a fresh node has
+	// no tip yet and tx relay is suppressed while FSM != RUNNING. Automatic boot
+	// no longer uses IDLE -> RUNNING; fresh nodes boot into CATCHINGBLOCKS (see
+	// Init) and only reach RUNNING by completing catchup above the checkpoint.
 	if eventReq.Event == blockchain_api.FSMEventType_RUN &&
 		priorState != blockchain_api.FSMStateType_IDLE.String() {
 		if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {
@@ -2923,21 +2942,11 @@ func (b *Blockchain) guardRunBelowHighestCheckpoint(ctx context.Context) error {
 }
 
 // HighestCheckpointHeight returns the largest Height in the supplied
-// checkpoint list, or 0 if the list is empty. Exported so callers in
-// other packages (e.g. blockvalidation) can share the same definition
-// rather than maintaining a parallel copy.
+// checkpoint list, or 0 if the list is empty. Retained for the many callers
+// in this and other packages; delegates to model.HighestCheckpointHeight so
+// there is a single definition (invariant I3) rather than a parallel copy.
 func HighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
-	var highest uint32
-	for _, cp := range checkpoints {
-		if cp.Height < 0 {
-			continue
-		}
-		h := uint32(cp.Height)
-		if h > highest {
-			highest = h
-		}
-	}
-	return highest
+	return model.HighestCheckpointHeight(checkpoints)
 }
 
 // Run transitions the blockchain service to the running state.
@@ -3403,7 +3412,7 @@ func (b *Blockchain) ScheduleBlobDeletion(ctx context.Context, req *blockchain_a
 		ScheduleBlobDeletion(ctx context.Context, req *blockchain_sql.ScheduleRequest) (int64, error)
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	schedReq := &blockchain_sql.ScheduleRequest{
@@ -3439,7 +3448,7 @@ func (b *Blockchain) CancelBlobDeletion(ctx context.Context, req *blockchain_api
 		CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType int32) error
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	err := storeWithBlobDeletion.CancelBlobDeletion(ctx, req.BlobKey, req.FileType, int32(req.StoreType))
@@ -3470,7 +3479,7 @@ func (b *Blockchain) ListScheduledDeletions(ctx context.Context, req *blockchain
 		ListScheduledBlobDeletions(ctx context.Context, filters *blockchain_sql.ListFilters) ([]*blockchain_sql.ScheduledDeletion, int, error)
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	filters := &blockchain_sql.ListFilters{
@@ -3516,7 +3525,7 @@ func (b *Blockchain) GetPendingBlobDeletions(ctx context.Context, req *blockchai
 		GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_sql.ScheduledDeletion, error)
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	deletions, err := storeWithBlobDeletion.GetPendingBlobDeletions(ctx, req.Height, limit)
@@ -3547,7 +3556,7 @@ func (b *Blockchain) RemoveBlobDeletion(ctx context.Context, req *blockchain_api
 		RemoveBlobDeletion(ctx context.Context, id int64) error
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	err := storeWithBlobDeletion.RemoveBlobDeletion(ctx, req.DeletionId)
@@ -3564,7 +3573,7 @@ func (b *Blockchain) IncrementBlobDeletionRetry(ctx context.Context, req *blockc
 		IncrementBlobDeletionRetry(ctx context.Context, id int64, maxRetries int) (shouldRemove bool, newRetryCount int, err error)
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	shouldRemove, newRetryCount, err := storeWithBlobDeletion.IncrementBlobDeletionRetry(ctx, req.DeletionId, int(req.MaxRetries))

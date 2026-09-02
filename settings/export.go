@@ -121,7 +121,7 @@ func extractFields(typ reflect.Type, path []int, entries *[]metadataEntry) {
 			fieldType := field.Type
 
 			// Handle pointer to struct (e.g., *PolicySettings)
-			if fieldType.Kind() == reflect.Ptr && fieldType.Elem().Kind() == reflect.Struct {
+			if fieldType.Kind() == reflect.Pointer && fieldType.Elem().Kind() == reflect.Struct {
 				extractFields(fieldType.Elem(), fieldPath, entries)
 			} else if fieldType.Kind() == reflect.Struct {
 				extractFields(fieldType, fieldPath, entries)
@@ -162,7 +162,7 @@ func getValueAtPath(val reflect.Value, path []int) reflect.Value {
 	for _, idx := range path {
 		val = val.Field(idx)
 		// Dereference pointers to access nested struct fields
-		if val.Kind() == reflect.Ptr {
+		if val.Kind() == reflect.Pointer {
 			if val.IsNil() {
 				// Return invalid value for nil pointers
 				return reflect.Value{}
@@ -201,7 +201,7 @@ func formatValue(val reflect.Value) string {
 			return u.String()
 		}
 		return fmt.Sprintf("%v", val.Interface())
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if val.IsNil() {
 			return ""
 		}

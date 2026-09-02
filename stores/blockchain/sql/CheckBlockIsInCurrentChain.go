@@ -41,6 +41,20 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 
 	maxID := uint32(s.maxBlockID.Load())
 
+	// Fail safe when maxBlockID is uninitialised. It is loaded synchronously at
+	// New() and refreshed by rebuildOffChainSet, but is held in an atomic that
+	// starts at 0. Genesis is committed with id 1 before either runs, so a real
+	// chain never has a committed MAX(id) of 0 — maxID==0 unambiguously means
+	// "not yet initialised" (e.g. the synchronous load errored and the first
+	// async rebuild has not completed). With maxID==0 the id<=maxID filter below
+	// would drop EVERY committed candidate as "dangling" and return a (false, nil)
+	// false negative — which checkOldBlockIDs escalates into a PERMANENT block
+	// invalidation. Defer to the authoritative, flag-free parent_id CTE instead;
+	// it needs no maxBlockID and cannot produce that false negative.
+	if maxID == 0 {
+		return s.checkBlockIsInCurrentChainSQL(ctx, blockIDs)
+	}
+
 	// Drop ids above the highest committed id. These are allocated-but-uncommitted
 	// (GetNextBlockID writes a tx's BlockIDs before AddBlock bumps maxBlockID), so
 	// they have no committed row and are definitively not on the main chain. This

@@ -133,6 +133,11 @@ type PropagationServer struct {
 	batchHandlerPool             chan struct{} // Non-blocking admission control for in-flight batch/tx handlers; nil when disabled
 	udpConns                     []*net.UDPConn
 	udpConnsMu                   sync.Mutex
+	// udpWg tracks the UDP reader goroutines and the per-transaction worker
+	// goroutines they spawn (which call ProcessTransaction). Stop() waits on it
+	// after closing the conns so no in-flight ProcessTransaction can still publish
+	// to the validator Kafka producer after that producer's channel is closed.
+	udpWg sync.WaitGroup
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -470,7 +475,11 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 		ps.udpConns = append(ps.udpConns, conn)
 		ps.udpConnsMu.Unlock()
 
+		ps.udpWg.Add(1)
+
 		go func(conn *net.UDPConn, allowedNets []*net.IPNet) {
+			defer ps.udpWg.Done()
+
 			// Loop forever reading from the socket
 			var (
 				// numBytes int
@@ -537,10 +546,16 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 						continue
 					}
 
-					// Process the received bytes using worker pool to limit concurrency
+					// Process the received bytes using worker pool to limit concurrency.
+					// Add to udpWg before spawning (while this reader still holds its
+					// own udpWg slot, so the counter is never observed at zero here)
+					// so Stop() can join in-flight ProcessTransaction calls.
 					select {
 					case ps.udpWorkerPool <- struct{}{}:
+						ps.udpWg.Add(1)
+
 						go func(txb []byte) {
+							defer ps.udpWg.Done()
 							defer func() { <-ps.udpWorkerPool }()
 							if _, err := ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 								Tx: txb,
@@ -562,20 +577,83 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 // Stop gracefully stops the PropagationServer, closing UDP listeners.
 //
 // Parameters:
-//   - ctx: context for stop operation (unused)
+//   - ctx: bounds the shutdown. The wait for UDP/tx workers and the validator
+//     producer stop are each raced against ctx so a wedged worker or broker
+//     cannot block Stop past the service-manager's per-service budget.
 //
 // Returns:
-//   - error: always returns nil in current implementation
-func (ps *PropagationServer) Stop(_ context.Context) error {
+//   - error: ctx.Err() — nil on a clean stop, the ctx error if the budget was hit
+//     (cleanup is still attempted on a best-effort, bounded basis before returning).
+func (ps *PropagationServer) Stop(ctx context.Context) error {
+	// Ordering: the validator Kafka producer is stopped LAST, after every
+	// transaction-ingress path that can call ProcessTransaction (which publishes to
+	// the producer) is quiesced. A late publish during the producer stop drops
+	// safely — Publish guards under channelMu and util.SafeSend recovers — so
+	// stopping last is not about avoiding a panic; it simply maximises the final
+	// flush by letting the workers finish first. So: close UDP conns + join their
+	// workers, drain the HTTP server, THEN stop the producer. (gRPC ingress is
+	// already drained before Stop() runs: StartGRPCServer GracefulStops on
+	// ctx-cancel and Start() — hence the service-manager's Wait() — returns only
+	// after that.)
+
+	// 1. Close UDP listeners so the reader goroutines exit, then wait for them and
+	//    any in-flight per-transaction worker goroutines to finish — bounded by ctx
+	//    so a wedged ProcessTransaction (e.g. a publish blocked on a dead broker)
+	//    cannot stall the whole shutdown.
 	ps.udpConnsMu.Lock()
-	defer ps.udpConnsMu.Unlock()
 	for _, conn := range ps.udpConns {
 		if err := conn.Close(); err != nil {
 			ps.logger.Errorf("Error closing UDP connection: %v", err)
 		}
 	}
 	ps.udpConns = nil
-	return nil
+	ps.udpConnsMu.Unlock()
+
+	udpDone := make(chan struct{})
+	go func() {
+		ps.udpWg.Wait()
+		close(udpDone)
+	}()
+
+	select {
+	case <-udpDone:
+	case <-ctx.Done():
+		ps.logger.Errorf("[Propagation] timed out waiting for UDP workers, proceeding with shutdown: %v", ctx.Err())
+	}
+
+	// 2. Drain the HTTP server so in-flight /tx and /txs handlers finish. Already
+	//    ctx-bounded; safe regardless of worker state.
+	if ps.httpServer != nil {
+		if err := ps.httpServer.Shutdown(ctx); err != nil {
+			ps.logger.Errorf("[Propagation] error shutting down http server: %v", err)
+		}
+	}
+
+	// 3. Stop the async validator producer so its final flush completes inside the
+	//    bounded Stop() window. Bounded against the remaining ctx so a wedged broker
+	//    Flush can't re-hang shutdown: when the budget is already spent (the timeout
+	//    path above) we stop WAITING here and return, leaving the outstanding Stop()
+	//    (and/or the producer's own ctx-cancel self-close) to complete the flush
+	//    later if it can — it is not guaranteed to finish, but shutdown no longer
+	//    blocks on it. A worker still publishing here drops safely (channelMu +
+	//    SafeSend). Guarded and non-fatal.
+	if ps.validatorKafkaProducerClient != nil {
+		stopDone := make(chan struct{})
+		go func() {
+			defer close(stopDone)
+			if err := ps.validatorKafkaProducerClient.Stop(); err != nil {
+				ps.logger.Errorf("[Propagation] failed to stop validator kafka producer gracefully: %v", err)
+			}
+		}()
+
+		select {
+		case <-stopDone:
+		case <-ctx.Done():
+			ps.logger.Errorf("[Propagation] validator producer stop exceeded stop budget; relying on async self-close")
+		}
+	}
+
+	return ctx.Err()
 }
 
 // handleSingleTx handles a single transaction request on the /tx endpoint.
@@ -608,18 +686,70 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 			return c.String(http.StatusBadRequest, "Invalid request body")
 		}
 
-		// Process the transaction and return appropriate response
-		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
+		// Process the transaction and return appropriate response. The parsed
+		// transaction comes back with the error so the failure can name it
+		// without parsing the body again: the only parse is the one inside
+		// processTransaction, which is guarded against a parser panic on
+		// adversarial input. It is nil exactly when there was nothing to name.
+		failedTx, err := ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
 			status := httpStatusForTxError(err)
 			if status >= 200 && status < 300 {
 				return c.String(status, "OK")
 			}
-			return c.String(status, "Failed to process transaction: "+errors.UserMessage(err))
+			return c.String(status, "Failed to process transaction: "+failureLine(failedTx, err))
 		}
 
 		return c.String(http.StatusOK, "OK")
 	}
+}
+
+// failureLine renders one failed transaction for a client-facing response
+// body: the public message, always naming the transaction it is about.
+//
+// The txid is not otherwise guaranteed to be there. The public error boundary
+// (errors.PublicError, and errors.UserMessage over it) surfaces the innermost
+// allowlisted cause and discards everything outside it — including the
+// "[ProcessTransaction][<txid>]" wrapper this package adds — so precisely the
+// failures with the most useful messages arrive anonymous:
+// "bad-txns-in-belowout", "insufficient-fee", "Script evaluated without error
+// but finished with a false/empty top stack element". A client submitting a
+// batch is then told that something failed, without being told what.
+//
+// The txid goes into the public message, and the line is then rendered by the
+// errors package itself, so the "CODE (n): " prefix stays at the head where
+// every existing consumer looks for it — including on errors.PublicError's own
+// fallback, which yields the bare literal "internal error" and would otherwise
+// produce a line with no code on it at all.
+//
+// tx may be nil (a parse failure, or a slot taken by context cancellation);
+// there is no transaction to name then, and the message is returned as-is.
+//
+// The txid is derived here, while rendering the line, rather than being
+// captured for every submission: a batch of N transactions with F failures
+// pays for F lookups rather than N. processTransactionInternal caches the
+// hash on the transaction, so each of those is a lookup and a hex encoding
+// rather than a re-serialization and a double-SHA.
+func failureLine(tx *bt.Tx, err error) string {
+	publicErr := errors.PublicError(err)
+	if publicErr == nil {
+		return ""
+	}
+
+	if tx == nil {
+		return publicErr.Error()
+	}
+
+	txid := tx.TxID()
+	if strings.Contains(publicErr.Message(), txid) {
+		// Already named — the outermost wrapper survived, or the cause names it
+		// itself. Don't say it twice.
+		return publicErr.Error()
+	}
+
+	// Rendered through errors.New so the code+message formatting has one owner.
+	// publicErr.Message() is passed as an argument, never as the format string.
+	return errors.New(publicErr.Code(), "[ProcessTransaction][%s] %s", txid, publicErr.Message()).Error()
 }
 
 // httpStatusForTxError maps a transaction processing error to the appropriate
@@ -638,7 +768,8 @@ func httpStatusForTxError(err error) int {
 	case errors.Is(err, errors.ErrTxInvalidDoubleSpend),
 		errors.Is(err, errors.ErrTxConflicting),
 		errors.Is(err, errors.ErrSpent),
-		errors.Is(err, errors.ErrTxLocked):
+		errors.Is(err, errors.ErrTxLocked),
+		errors.Is(err, errors.ErrTxCreating):
 		return http.StatusConflict
 	case errors.Is(err, errors.ErrTxMissingParent):
 		return http.StatusUnprocessableEntity
@@ -697,6 +828,12 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// happen only after processingWg.Wait() establishes happens-before.
 		const maxSubmissions = maxTransactionsPerRequest + 1 // +1 for ctx-cancel slot
 		errSlots := make([]error, maxSubmissions)
+		// txSlots holds the transaction that occupies each submission slot, so a
+		// failure can name it. Only a pointer is stored; the txid is derived
+		// later, in failureLine, and only for the slots that actually failed.
+		// Slots used by parse errors and the ctx-cancel path stay nil — there is
+		// no transaction to name.
+		txSlots := make([]*bt.Tx, maxSubmissions)
 		nextSlot := 0
 		processingWg := sync.WaitGroup{}
 		totalNrTransactions := 0
@@ -813,6 +950,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			// Reserve a submission slot for this tx and dispatch the worker.
 			slot := nextSlot
 			nextSlot++
+			txSlots[slot] = tx
 			processingWg.Add(1)
 
 			go processOne(tx, slot)
@@ -825,20 +963,47 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 
 		var errMsgs []string
 
-		for _, err := range errSlots[:nextSlot] {
+		// Derive the aggregate HTTP status from the per-tx errors using the same
+		// classifier as the single-tx path (httpStatusForTxError). A per-tx
+		// outcome that classifies as success (e.g. a duplicate submission ->
+		// StatusOK) is not a failure: skip it from both the body and the status,
+		// mirroring handleSingleTx which returns OK for those. Among the genuine
+		// failures the precedence is: a server fault (5xx, e.g. a storage error)
+		// dominates and forces 500 — the client cannot fix it by resubmitting;
+		// otherwise the first client-error (4xx) status in submission order wins,
+		// so a batch of pure tx rejections is a client error (e.g. 400) rather
+		// than a misleading 500.
+		aggStatus := http.StatusOK
+
+		for i, err := range errSlots[:nextSlot] {
 			if err == nil {
 				continue
 			}
 
-			errMsgs = append(errMsgs, errors.UserMessage(err))
+			txStatus := httpStatusForTxError(err)
+			if txStatus < http.StatusBadRequest {
+				// Success-classified outcome (e.g. duplicate submission): not a
+				// failure, so it does not enter the body or raise the status.
+				continue
+			}
+
+			errMsgs = append(errMsgs, failureLine(txSlots[i], err))
+
+			switch {
+			case txStatus >= http.StatusInternalServerError:
+				aggStatus = http.StatusInternalServerError
+			case aggStatus < http.StatusBadRequest:
+				aggStatus = txStatus
+			}
 		}
 
 		if earlyExitMsg != "" {
 			return c.String(http.StatusBadRequest, earlyExitMsg)
 		}
 
+		// errMsgs only holds genuine failures now, so aggStatus is always >= 400 here.
 		if len(errMsgs) > 0 {
-			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
+			return c.String(aggStatus, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
 		}
 
 		return c.String(http.StatusOK, "OK")
@@ -999,7 +1164,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 
 	ctxLogger.Debugf("[ProcessTransaction] processing transaction request")
 
-	if err := ps.processTransaction(ctx, req); err != nil {
+	if _, err := ps.processTransaction(ctx, req); err != nil {
 		ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
 
 		return nil, errors.WrapGRPCPublic(err)
@@ -1087,7 +1252,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			}
 
 			// just call the internal process transaction function for every transaction
-			if err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
+			if _, err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
 				// Use context-aware logger for trace correlation
@@ -1120,8 +1285,12 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 //   - req: transaction processing request
 //
 // Returns:
+//   - *bt.Tx: the parsed transaction, once parsing has succeeded, so a caller
+//     can name it in a client-facing failure without parsing the body a second
+//     time. nil when the body could not be parsed (or was rejected before
+//     parsing, on size), which is exactly when there is no transaction to name.
 //   - error: error if any processing step fails
-func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) error {
+func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*bt.Tx, error) {
 	ctx, span, endSpan := tracing.Tracer("propagation").Start(ctx, "processTransaction",
 		tracing.WithParentStat(ps.stats),
 	)
@@ -1137,7 +1306,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 			prometheusInvalidTransactions.Inc()
 			err := errors.NewTxInvalidError("[ProcessTransaction] transaction size %d exceeds maximum allowed size %d", txSize, maxTxSize)
 			span.RecordError(err)
-			return err
+			return nil, err
 		}
 	}
 
@@ -1159,18 +1328,18 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		err = errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
 		span.RecordError(err)
 
-		return err
+		return nil, err
 	}
 
 	if err = ps.processTransactionInternal(ctx, btTx); err != nil {
 		span.RecordError(err)
-		return err
+		return btTx, err
 	}
 
 	prometheusTransactionSize.Observe(float64(txSize))
 	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
-	return nil
+	return btTx, nil
 }
 
 // processTransactionInternal performs the core business logic for processing a transaction.
@@ -1198,6 +1367,15 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	)
 	defer endSpan(err)
 
+	// Cache the hash on the transaction. bt.Tx.TxIDChainHash re-serializes and
+	// double-hashes on every call unless SetTxHash has been used, and every
+	// ingest path asks for the txid repeatedly: the coinbase check below, the
+	// blob key, the Kafka message key, a Debugf argument that is evaluated
+	// whether or not debug logging is on, and every error message. Caching here
+	// covers HTTP /tx, gRPC, and HTTP /txs (which parses with ReadFrom and
+	// calls this directly), so one hash replaces all of them.
+	btTx.SetTxHash(btTx.TxIDChainHash())
+
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
@@ -1217,6 +1395,17 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
+	// This branch decides whether the submitter is ever told the verdict.
+	//
+	// With Kafka configured — kafka_validatortxsConfig is populated for the
+	// .operator context, so this is the production shape — a normal-sized
+	// transaction is published and this function returns nil, so /tx and /txs
+	// answer 200 OK before the validator has looked at it. Any rejection is
+	// discovered asynchronously and reaches the client through some other
+	// channel, if at all. Only two paths validate synchronously and can report a
+	// reason: the > KafkaMaxMessageBytes HTTP fallback just below, and the
+	// Kafka-less else-branch. Everything the surfaces above do with a rejection
+	// reason applies to those two and nothing else.
 	if ps.validatorKafkaProducerClient != nil {
 		txSize := len(txBytes)
 		maxKafkaMessageSize := ps.settings.Validator.KafkaMaxMessageBytes
@@ -1347,13 +1536,45 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 	// Check response status
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
-			btTx.TxID(), resp.StatusCode, string(body))
+		return ps.validatorRejection(ctx, btTx, resp, body)
 	}
 
 	ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", btTx.TxID())
 
 	return nil
+}
+
+// validatorRejection turns a non-OK response from the validator's /tx endpoint
+// into an error that says what actually happened to the transaction.
+//
+// This is the only path on which a Kafka-wired node answers a submitter with a
+// real verdict — every normal-sized transaction is published and answered 200 OK
+// before validation runs — so getting it wrong is not a corner case. It was
+// wrong: the whole response was wrapped as a SERVICE_ERROR, which is off
+// publicCauseCodes, so httpStatusForTxError classified a permanently invalid
+// transaction as a retryable 500, and the validator's rendered error chain —
+// file, line and function included — was spliced verbatim into a client-facing
+// body that errors.UserMessage could no longer strip, because by then it was
+// plain text inside one error's message.
+//
+// The validator attaches its public code and message as a header
+// (errors.AttachHTTPError). When it is there, that verdict is what the client is
+// told, under this node's [ProcessTransaction][<txid>] context, and the response
+// body goes to the log rather than into the returned error. When it is not —
+// an older validator, or a proxy answering on its behalf — the previous wrapping
+// stands (status and body included), so this degrades to the old behaviour
+// rather than losing the failure.
+func (ps *PropagationServer) validatorRejection(ctx context.Context, btTx *bt.Tx, resp *http.Response, body []byte) error {
+	verdict := errors.HTTPErrorFrom(resp.Header)
+	if verdict == nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+			btTx.TxID(), resp.StatusCode, string(body))
+	}
+
+	ps.logger.WithTraceContext(ctx).Warnf("[ProcessTransaction][%s] validator /tx endpoint rejected transaction: status=%d body=%s",
+		btTx.TxID(), resp.StatusCode, string(body))
+
+	return errors.New(verdict.Code(), "[ProcessTransaction][%s] %s", btTx.TxID(), verdict.Message())
 }
 
 // validateTransactionViaKafka sends a transaction to the validator through Kafka.

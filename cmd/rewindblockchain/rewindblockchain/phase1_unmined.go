@@ -45,7 +45,7 @@ func (e *env) runCleanupIterator(ctx context.Context, pf *preflightResult, mode 
 		return errors.NewProcessingError("unknown iterator mode %d", mode)
 	}
 	if err != nil {
-		return errors.NewStorageError("failed to open iterator: %w", err)
+		return errors.NewStorageError("failed to open iterator", err)
 	}
 	if it == nil {
 		return nil
@@ -60,7 +60,7 @@ func (e *env) runCleanupIterator(ctx context.Context, pf *preflightResult, mode 
 	for {
 		batch, nextErr := it.Next(ctx)
 		if nextErr != nil {
-			return errors.NewStorageError("iterator Next: %w", nextErr)
+			return errors.NewStorageError("iterator Next", nextErr)
 		}
 		if len(batch) == 0 {
 			return nil

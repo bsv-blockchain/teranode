@@ -95,17 +95,17 @@ func RunCreateTransactionMapBenchmark(numSubtrees, txsPerSubtree int, cpuProfile
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	if err != nil {
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to parse utxo store URL: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to parse utxo store URL", err)
 	}
 
 	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, utxoStoreURL)
 	if err != nil {
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create utxo store: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create utxo store", err)
 	}
 
 	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, nil, utxoStore, newSubtreeChan)
 	if err != nil {
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create subtree processor: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create subtree processor", err)
 	}
 
 	stp.SetCurrentItemsPerFile(1024 * 1024)
@@ -117,30 +117,30 @@ func RunCreateTransactionMapBenchmark(numSubtrees, txsPerSubtree int, cpuProfile
 	for s := 0; s < numSubtrees; s++ {
 		subtree, err := subtreepkg.NewTreeByLeafCount(txsPerSubtree)
 		if err != nil {
-			return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create subtree %d: %w", s, err)
+			return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create subtree %d", s, err)
 		}
 
 		if s == 0 {
 			if err := subtree.AddCoinbaseNode(); err != nil {
-				return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to add coinbase node: %w", err)
+				return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to add coinbase node", err)
 			}
 		}
 
 		for i := 0; i < txsPerSubtree-1; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d-%d", s, i)))
 			if err := subtree.AddNode(txHash, uint64(s*txsPerSubtree+i+1), 100); err != nil {
-				return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to add node: %w", err)
+				return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to add node", err)
 			}
 		}
 
 		subtreeBytes, err := subtree.Serialize()
 		if err != nil {
-			return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to serialize subtree: %w", err)
+			return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to serialize subtree", err)
 		}
 
 		// DAH = currentBlockHeight + retention. Benchmark runs at height 0, so DAH = retention.
 		if err := subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, options.WithDeleteAt(0+tSettings.GlobalBlockHeightRetention)); err != nil {
-			return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to store subtree: %w", err)
+			return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to store subtree", err)
 		}
 
 		blockSubtreesMap[*subtree.RootHash()] = s
@@ -151,12 +151,12 @@ func RunCreateTransactionMapBenchmark(numSubtrees, txsPerSubtree int, cpuProfile
 	// ===== PROFILING PHASE =====
 	cpuFile, err := os.Create(cpuProfile)
 	if err != nil {
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create CPU profile: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create CPU profile", err)
 	}
 
 	if err := pprof.StartCPUProfile(cpuFile); err != nil {
 		cpuFile.Close()
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to start CPU profile: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to start CPU profile", err)
 	}
 
 	// Run the benchmark
@@ -167,21 +167,21 @@ func RunCreateTransactionMapBenchmark(numSubtrees, txsPerSubtree int, cpuProfile
 	// Stop CPU profiling
 	pprof.StopCPUProfile()
 	if err := cpuFile.Close(); err != nil {
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to close CPU profile: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to close CPU profile", err)
 	}
 
 	// Write memory profile
 	runtime.GC()
 	memFile, err := os.Create(memProfile)
 	if err != nil {
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create memory profile: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to create memory profile", err)
 	}
 	if err := pprof.WriteHeapProfile(memFile); err != nil {
 		memFile.Close()
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to write memory profile: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to write memory profile", err)
 	}
 	if err := memFile.Close(); err != nil {
-		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to close memory profile: %w", err)
+		return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to close memory profile", err)
 	}
 
 	// Build result
@@ -236,13 +236,13 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 
 	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
 	if err != nil {
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create subtree processor: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create subtree processor", err)
 	}
 
 	// Initialize current subtree
 	newSubtree, err := subtreepkg.NewTreeByLeafCount(txsPerSubtree * 2)
 	if err != nil {
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create new subtree: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create new subtree", err)
 	}
 	stp.currentSubtree.Store(newSubtree)
 	stp.chainedSubtrees = nil
@@ -258,7 +258,7 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 	for s := 0; s < numChainedSubtrees; s++ {
 		subtree, err := subtreepkg.NewTreeByLeafCount(txsPerSubtree)
 		if err != nil {
-			return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create chained subtree %d: %w", s, err)
+			return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create chained subtree %d", s, err)
 		}
 
 		if s == 0 {
@@ -268,7 +268,7 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 		for i := 0; i < txsPerSubtree-1; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-chained-%d-%d", s, i)))
 			if err := subtree.AddSubtreeNode(subtreepkg.Node{Hash: txHash, Fee: 100}); err != nil {
-				return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to add chained subtree node: %w", err)
+				return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to add chained subtree node", err)
 			}
 			allTxHashes = append(allTxHashes, txHash)
 		}
@@ -278,13 +278,13 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 	// Create current subtree with transactions
 	currentSubtree, err := subtreepkg.NewTreeByLeafCount(txsPerSubtree)
 	if err != nil {
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create current subtree: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create current subtree", err)
 	}
 	_ = currentSubtree.AddCoinbaseNode()
 	for i := 0; i < txsPerSubtree-1; i++ {
 		txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-current-%d", i)))
 		if err := currentSubtree.AddSubtreeNode(subtreepkg.Node{Hash: txHash, Fee: 100}); err != nil {
-			return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to add current subtree node: %w", err)
+			return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to add current subtree node", err)
 		}
 		allTxHashes = append(allTxHashes, txHash)
 	}
@@ -295,7 +295,7 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 	transactionMap := NewSplitSwissMap(1024, len(allTxHashes))
 	for _, hash := range allTxHashes {
 		if err := transactionMap.Put(hash); err != nil {
-			return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to put hash in transaction map: %w", err)
+			return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to put hash in transaction map", err)
 		}
 	}
 
@@ -342,12 +342,12 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 	// ===== PROFILING PHASE =====
 	cpuFile, err := os.Create(cpuProfile)
 	if err != nil {
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create CPU profile: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create CPU profile", err)
 	}
 
 	if err := pprof.StartCPUProfile(cpuFile); err != nil {
 		cpuFile.Close()
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to start CPU profile: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to start CPU profile", err)
 	}
 
 	// Run the benchmark
@@ -358,21 +358,21 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 	// Stop CPU profiling
 	pprof.StopCPUProfile()
 	if err := cpuFile.Close(); err != nil {
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to close CPU profile: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to close CPU profile", err)
 	}
 
 	// Write memory profile
 	runtime.GC()
 	memFile, err := os.Create(memProfile)
 	if err != nil {
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create memory profile: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to create memory profile", err)
 	}
 	if err := pprof.WriteHeapProfile(memFile); err != nil {
 		memFile.Close()
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to write memory profile: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to write memory profile", err)
 	}
 	if err := memFile.Close(); err != nil {
-		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to close memory profile: %w", err)
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to close memory profile", err)
 	}
 
 	// Count remainder nodes

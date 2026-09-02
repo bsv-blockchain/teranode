@@ -2,7 +2,10 @@ package tests
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -92,32 +95,32 @@ var (
 func Store(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
-	_, err := db.Create(ctx, Tx, 1000)
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, testSpend0.TxID)
 	require.NoError(t, err)
 	require.Equal(t, testSpend0.TxID.String(), resp.Tx.TxID())
 
-	_, err = db.Create(context.Background(), Tx, 1000)
-	require.Error(t, err, errors.ErrTxExists)
+	_, _, err = db.SpendAndCreate(context.Background(), Tx, 1000, utxostore.WithCreateOnly())
+	require.ErrorIs(t, err, errors.ErrTxExists)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	_, err = db.Spend(context.Background(), spendTx, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(context.Background(), spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.NoError(t, err)
 
-	_, err = db.Create(context.Background(), Tx, 1000)
-	require.Error(t, err, errors.ErrSpent)
+	_, _, err = db.SpendAndCreate(context.Background(), Tx, 1000, utxostore.WithCreateOnly())
+	require.ErrorIs(t, err, errors.ErrTxExists)
 }
 
 func Spend(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
-	_, err := db.Create(ctx, Tx, 1000)
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, Tx.TxIDChainHash())
@@ -128,7 +131,7 @@ func Spend(t *testing.T, db utxostore.Store) {
 	spendTx2.Outputs = spendTx2.Outputs[1:]
 
 	// try to spend with different txid
-	spends, err := db.Spend(context.Background(), spendTx2, db.GetBlockHeight()+1)
+	_, spends, err := db.SpendAndCreate(context.Background(), spendTx2, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 
 	// check the individual spend error
@@ -139,11 +142,11 @@ func Spend(t *testing.T, db utxostore.Store) {
 func Restore(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
-	_, err := db.Create(ctx, Tx, 1000)
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.NoError(t, err)
 
 	// Build the unspend record with the SpendingData GetSpends populated inside Spend(spendTx).
@@ -163,19 +166,53 @@ func Restore(t *testing.T, db utxostore.Store) {
 	require.Equal(t, testSpend0.TxID.String(), resp.Tx.TxID())
 }
 
+// UnspendIdempotent proves Unspend is safe to re-apply to an already-unspent
+// output — the load-bearing assumption for WAL replay (#861): a crash between
+// the Unspend step and a later step means replay re-runs Unspend on an output
+// it already unspent. Mirrors SpendIdempotent for the reverse primitive.
+func UnspendIdempotent(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
+
+	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
+	_, _, err = db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+	require.NoError(t, err)
+
+	restoreSpends := []*utxostore.Spend{{
+		TxID:         TXHash,
+		Vout:         0,
+		UTXOHash:     utxoHash0,
+		SpendingData: spend.NewSpendingData(spendTx.TxIDChainHash(), 0),
+	}}
+
+	// First unspend restores the output.
+	require.NoError(t, db.Unspend(ctx, restoreSpends, false))
+
+	// Second unspend of the already-unspent output must be a no-op, not an error.
+	require.NoError(t, db.Unspend(ctx, restoreSpends, false), "re-unspending an already-unspent output must be idempotent")
+
+	// The output is unspent and the tx is intact.
+	resp, err := db.Get(ctx, TXHash)
+	require.NoError(t, err)
+	require.Equal(t, TXHash.String(), resp.Tx.TxID())
+}
+
 func Freeze(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	_, err := db.Create(ctx, Tx, 1000)
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	err = db.FreezeUTXOs(ctx, spends, tSettings)
 	require.NoError(t, err)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	spends, err := db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
+	_, spends, err := db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 
@@ -194,7 +231,7 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	require.Equal(t, int(utxostore.Status_OK), resp.Status)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.NoError(t, err)
 
 	resp, err = db.GetSpend(ctx, testSpend0)
@@ -215,7 +252,7 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	err := db.SetBlockHeight(101)
 	require.NoError(t, err)
 
-	_, err = db.Create(ctx, Tx, 0)
+	_, _, err = db.SpendAndCreate(ctx, Tx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
@@ -266,18 +303,18 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	require.Nil(t, resp.SpendingData)
 
 	// try to spend the old utxo, should fail
-	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.Error(t, err)
 
 	// try to spend the new utxo, should fail, block height not reached
-	_, err = db.Spend(ctx, spendTx2, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, spendTx2, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.Error(t, err)
 
 	err = db.SetBlockHeight(1101)
 	require.NoError(t, err)
 
 	// try to spend the new utxo, should succeed
-	_, err = db.Spend(ctx, spendTx2, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, spendTx2, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.NoError(t, err)
 }
 
@@ -287,7 +324,7 @@ func SetMined(t *testing.T, db utxostore.Store) {
 	err := db.SetBlockHeight(101)
 	require.NoError(t, err)
 
-	_, err = db.Create(ctx, Tx, 0)
+	_, _, err = db.SpendAndCreate(ctx, Tx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	blockIDsMap, err := db.SetMinedMulti(ctx, []*chainhash.Hash{TXHash}, utxostore.MinedBlockInfo{BlockID: 123, BlockHeight: 101, SubtreeIdx: 2})
@@ -330,15 +367,15 @@ func SetMined(t *testing.T, db utxostore.Store) {
 func Conflicting(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
-	_, err := db.Create(ctx, ParentTx, 999)
+	_, _, err := db.SpendAndCreate(ctx, ParentTx, 999, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	_, err = db.Create(ctx, Tx, 1000, utxostore.WithConflicting(true))
+	_, _, err = db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithConflicting(true), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
 
-	spends, err := db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
+	_, spends, err := db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.ErrorIs(t, spends[0].Err, errors.ErrTxConflicting)
 
@@ -356,6 +393,316 @@ func Conflicting(t *testing.T, db utxostore.Store) {
 	assert.False(t, txMeta.Conflicting)
 	require.Len(t, txMeta.ConflictingChildren, 1)
 	require.Equal(t, Tx.TxIDChainHash().String(), txMeta.ConflictingChildren[0].String())
+}
+
+// ConflictWAL exercises the conflict-resolution write-ahead log (crash safety
+// for ProcessConflicting / ReverseProcessConflicting — see #861): a begun
+// intent is durable and surfaces in PendingConflictIntents; Begin is idempotent
+// on the deterministic intent id; Complete removes it; completing an absent
+// intent is a no-op.
+func ConflictWAL(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	h1 := chainhash.HashH([]byte("wal-tx-1"))
+	h2 := chainhash.HashH([]byte("wal-tx-2"))
+
+	forward := utxostore.ConflictIntent{
+		Kind:        utxostore.ConflictIntentForward,
+		BlockHeight: 4242,
+		TxHashes:    []chainhash.Hash{h1, h2},
+		StartedAt:   1_700_000_000_000_000_000,
+	}
+
+	// No pending intents on a clean store.
+	pending, err := db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pending, "store should start with no pending intents")
+
+	// Begin → the intent becomes pending and round-trips its fields.
+	require.NoError(t, db.BeginConflictIntent(ctx, forward))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+
+	got := pending[0]
+	require.Equal(t, utxostore.ConflictIntentForward, got.Kind)
+	require.Equal(t, uint32(4242), got.BlockHeight)
+	require.Equal(t, int64(1_700_000_000_000_000_000), got.StartedAt)
+	require.ElementsMatch(t, []chainhash.Hash{h1, h2}, got.TxHashes)
+	require.Equal(t, forward.IntentID(), got.IntentID(), "round-tripped intent must hash to the same id")
+
+	// Begin is idempotent on the deterministic id — re-begin (even with the
+	// hashes in a different order) does not create a duplicate.
+	reordered := forward
+	reordered.TxHashes = []chainhash.Hash{h2, h1}
+	require.NoError(t, db.BeginConflictIntent(ctx, reordered))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "re-begin of the same intent must not duplicate")
+
+	// A second, distinct intent (reverse, different hashes) coexists.
+	reverse := utxostore.ConflictIntent{
+		Kind:        utxostore.ConflictIntentReverse,
+		BlockHeight: 99,
+		TxHashes:    []chainhash.Hash{chainhash.HashH([]byte("wal-tx-3"))},
+		StartedAt:   1_700_000_000_000_000_001,
+	}
+	require.NoError(t, db.BeginConflictIntent(ctx, reverse))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+
+	// Complete the forward intent → only the reverse remains.
+	require.NoError(t, db.CompleteConflictIntent(ctx, forward.IntentID()))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, reverse.IntentID(), pending[0].IntentID())
+
+	// Completing an already-absent intent is a no-op.
+	require.NoError(t, db.CompleteConflictIntent(ctx, forward.IntentID()))
+
+	// Complete the reverse intent → store is clean again.
+	require.NoError(t, db.CompleteConflictIntent(ctx, reverse.IntentID()))
+
+	pending, err = db.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+}
+
+// crashParentTx builds a standalone parent tx with one spendable output. The
+// seed makes the txid unique across crash-recovery sub-cases that share one db.
+func crashParentTx(seed byte) *bt.Tx {
+	parent := bt.NewTx()
+	// PreviousTxScript must be set so the tx is "extended" — the Aerospike
+	// backend's Create computes fees/utxo hashes from it and rejects non-extended txs.
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		PreviousTxSatoshis: 200000,
+		PreviousTxScript:   bscript.NewFromBytes([]byte{0x51}),
+		SequenceNumber:     0xFFFFFFFF,
+		UnlockingScript:    dummyUnlockingScript,
+	}
+	_ = in.PreviousTxIDAdd(&chainhash.Hash{seed, seed, seed, 0xCC})
+	parent.Inputs = []*bt.Input{in}
+	parent.Outputs = []*bt.Output{{Satoshis: 100000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+
+	return parent
+}
+
+// crashSpendTx builds a tx spending parent[0]; outSats makes its txid unique.
+func crashSpendTx(t *testing.T, parent *bt.Tx, outSats uint64) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+	require.NoError(t, tx.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	tx.Inputs[0].UnlockingScript = dummyUnlockingScript
+	tx.Outputs = []*bt.Output{{Satoshis: outSats, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+
+	return tx
+}
+
+func crashConflicting(t *testing.T, ctx context.Context, db utxostore.Store, h *chainhash.Hash) bool {
+	t.Helper()
+	m, err := db.Get(ctx, h, fields.Conflicting)
+	require.NoError(t, err)
+
+	return m.Conflicting
+}
+
+func crashLocked(t *testing.T, ctx context.Context, db utxostore.Store, h *chainhash.Hash) bool {
+	t.Helper()
+	m, err := db.Get(ctx, h, fields.Locked)
+	require.NoError(t, err)
+
+	return m.Locked
+}
+
+func crashSpender(t *testing.T, ctx context.Context, db utxostore.Store, parent *bt.Tx) *chainhash.Hash {
+	t.Helper()
+	m, err := db.Get(ctx, parent.TxIDChainHash(), fields.Utxos)
+	require.NoError(t, err)
+	require.NotEmpty(t, m.SpendingDatas)
+
+	if m.SpendingDatas[0] == nil {
+		return nil
+	}
+
+	return m.SpendingDatas[0].TxID
+}
+
+// ConflictWALCrashRecovery is the per-step-boundary crash-restart harness for
+// the conflict-resolution WAL (#861). For each step boundary of the forward
+// (ProcessConflicting) and reverse (ReverseProcessConflicting) operations it
+// reconstructs the on-disk partial state a SIGKILL would leave — the in-process
+// rollback never runs on a kill — and then performs the startup replay (re-run
+// the operation; forward seeds the processed-hashes map exactly as
+// BlockAssembler.replayConflictIntent does). It asserts the UTXO state converges
+// to the correct end-state with no operator action and the WAL is cleared.
+//
+// Runs against a bare store (no BlockAssembler), so it covers SQLite, Postgres
+// and Aerospike via the shared backend test suites.
+func ConflictWALCrashRecovery(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+	require.NoError(t, db.SetBlockHeight(20))
+
+	// --- Forward: ProcessConflicting end-state is winner=non-conflicting,
+	// loser=conflicting, parent[0] spent by winner, parent unlocked. ---
+	forwardCases := []struct {
+		name  string
+		seed  byte
+		build func(t *testing.T, parent, txW, txL *bt.Tx)
+	}{
+		{
+			name: "forward_after_step1_mark", seed: 0x31,
+			// losers marked, parent[0] still -> L, unlocked.
+			build: func(t *testing.T, parent, txW, txL *bt.Tx) {
+				_, _, err := db.SpendAndCreate(ctx, txL, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+				require.NoError(t, err)
+				_, _, err = db.SetConflicting(ctx, []chainhash.Hash{*txW.TxIDChainHash(), *txL.TxIDChainHash()}, true)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "forward_after_step2_unspend_lock", seed: 0x32,
+			// parent[0] -> nil, parent locked.
+			build: func(t *testing.T, parent, txW, txL *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txW.TxIDChainHash(), *txL.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+			},
+		},
+		{
+			name: "forward_after_step3_spend", seed: 0x33,
+			// parent[0] -> W, parent locked.
+			build: func(t *testing.T, parent, txW, txL *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txW.TxIDChainHash(), *txL.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				_, _, err = db.SpendAndCreate(ctx, txW, db.GetBlockHeight()+1, utxostore.WithSpendOnly(), utxostore.WithIgnoreConflicting(true), utxostore.WithIgnoreLocked(true))
+				require.NoError(t, err)
+				require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+			},
+		},
+		{
+			name: "forward_after_step4_unmark", seed: 0x34,
+			// winner unmarked, parent[0] -> W, parent locked.
+			build: func(t *testing.T, parent, txW, txL *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txL.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				_, _, err = db.SpendAndCreate(ctx, txW, db.GetBlockHeight()+1, utxostore.WithSpendOnly(), utxostore.WithIgnoreConflicting(true), utxostore.WithIgnoreLocked(true))
+				require.NoError(t, err)
+				require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+			},
+		},
+	}
+
+	for _, tc := range forwardCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := crashParentTx(tc.seed)
+			_, _, err := db.SpendAndCreate(ctx, parent, 1, utxostore.WithCreateOnly())
+			require.NoError(t, err)
+			require.NoError(t, db.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+			txL := crashSpendTx(t, parent, 90000)
+			_, _, err = db.SpendAndCreate(ctx, txL, db.GetBlockHeight(), utxostore.WithCreateOnly())
+			require.NoError(t, err)
+
+			txW := crashSpendTx(t, parent, 80000)
+			_, _, err = db.SpendAndCreate(ctx, txW, db.GetBlockHeight(), utxostore.WithConflicting(true), utxostore.WithCreateOnly())
+			require.NoError(t, err)
+
+			tc.build(t, parent, txW, txL)
+
+			// Crash left the forward intent behind.
+			intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentForward, BlockHeight: 20, TxHashes: []chainhash.Hash{*txW.TxIDChainHash()}, StartedAt: 1}
+			require.NoError(t, db.BeginConflictIntent(ctx, intent))
+
+			// Replay: seed the processed-hashes map exactly as BlockAssembler does.
+			seeded := map[chainhash.Hash]struct{}{*txW.TxIDChainHash(): {}}
+			_, _, err = utxostore.ProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txW.TxIDChainHash()}, seeded)
+			require.NoError(t, err)
+			require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
+
+			require.False(t, crashConflicting(t, ctx, db, txW.TxIDChainHash()), "winner must not be conflicting after replay")
+			require.True(t, crashConflicting(t, ctx, db, txL.TxIDChainHash()), "loser must remain conflicting after replay")
+			require.NotNil(t, crashSpender(t, ctx, db, parent))
+			require.Equal(t, txW.TxIDChainHash().String(), crashSpender(t, ctx, db, parent).String(), "parent[0] must be spent by the winner")
+			require.False(t, crashLocked(t, ctx, db, parent.TxIDChainHash()), "parent must be unlocked after replay")
+		})
+	}
+
+	// --- Reverse: ReverseProcessConflicting end-state is demoted=conflicting,
+	// parent[0] spent by the restored counter, counter=non-conflicting. ---
+	reverseCases := []struct {
+		name  string
+		seed  byte
+		build func(t *testing.T, parent, txD, txC *bt.Tx)
+	}{
+		{
+			name: "reverse_after_mark_D", seed: 0x41,
+			// D conflicting, parent[0] -> D (Unspend not yet run), C conflicting.
+			build: func(t *testing.T, parent, txD, txC *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txD.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				_, _, err = db.SpendAndCreate(ctx, txD, db.GetBlockHeight()+1, utxostore.WithSpendOnly(), utxostore.WithIgnoreConflicting(true), utxostore.WithIgnoreLocked(true))
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "reverse_after_unspend_D", seed: 0x42,
+			// D conflicting, parent[0] -> nil, C conflicting.
+			build: func(t *testing.T, parent, txD, txC *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txD.TxIDChainHash()}, true)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "reverse_after_spend_C", seed: 0x43,
+			// D conflicting, parent[0] -> C, C STILL conflicting (Unmark not yet run).
+			build: func(t *testing.T, parent, txD, txC *bt.Tx) {
+				_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*txD.TxIDChainHash()}, true)
+				require.NoError(t, err)
+				_, _, err = db.SpendAndCreate(ctx, txC, db.GetBlockHeight()+1, utxostore.WithSpendOnly(), utxostore.WithIgnoreConflicting(true), utxostore.WithIgnoreLocked(true))
+				require.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tc := range reverseCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := crashParentTx(tc.seed)
+			_, _, err := db.SpendAndCreate(ctx, parent, 1, utxostore.WithCreateOnly())
+			require.NoError(t, err)
+			require.NoError(t, db.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+			// C: counter / original spender — conflicting + in parent.ConflictingChildren.
+			txC := crashSpendTx(t, parent, 80000)
+			_, _, err = db.SpendAndCreate(ctx, txC, db.GetBlockHeight(), utxostore.WithConflicting(true), utxostore.WithCreateOnly())
+			require.NoError(t, err)
+
+			// D: the demoted winner.
+			txD := crashSpendTx(t, parent, 90000)
+			_, _, err = db.SpendAndCreate(ctx, txD, db.GetBlockHeight(), utxostore.WithCreateOnly())
+			require.NoError(t, err)
+
+			tc.build(t, parent, txD, txC)
+
+			intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentReverse, BlockHeight: 20, TxHashes: []chainhash.Hash{*txD.TxIDChainHash()}, StartedAt: 1}
+			require.NoError(t, db.BeginConflictIntent(ctx, intent))
+
+			_, _, err = utxostore.ReverseProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txD.TxIDChainHash()})
+			require.NoError(t, err)
+			require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
+
+			require.True(t, crashConflicting(t, ctx, db, txD.TxIDChainHash()), "demoted tx must be conflicting after reverse replay")
+			require.NotNil(t, crashSpender(t, ctx, db, parent))
+			require.Equal(t, txC.TxIDChainHash().String(), crashSpender(t, ctx, db, parent).String(), "parent[0] must be spent by the restored counter")
+			require.False(t, crashConflicting(t, ctx, db, txC.TxIDChainHash()), "restored counter must not be conflicting after reverse replay")
+		})
+	}
 }
 
 func Sanity(t *testing.T, db utxostore.Store) {
@@ -382,7 +729,7 @@ func Sanity(t *testing.T, db utxostore.Store) {
 		err = stx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i+2_000_000)
 		require.NoError(t, err)
 
-		_, err = db.Create(ctx, stx, 100)
+		_, _, err = db.SpendAndCreate(ctx, stx, 100, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 
 		// create spending tx
@@ -391,7 +738,7 @@ func Sanity(t *testing.T, db utxostore.Store) {
 		require.NoError(t, spentTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i))
 		require.NoError(t, spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", &bt.FeeQuote{}))
 
-		_, err = db.Spend(ctx, spentTx, db.GetBlockHeight()+1)
+		_, _, err = db.SpendAndCreate(ctx, spentTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		require.NoError(t, err)
 
 		txs = append(txs, stx)
@@ -428,12 +775,12 @@ func Benchmark(b *testing.B, db utxostore.Store) {
 	_ = spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", &bt.FeeQuote{})
 
 	for i := 0; i < b.N; i++ {
-		_, err := db.Create(ctx, Tx, 100)
+		_, _, err := db.SpendAndCreate(ctx, Tx, 100, utxostore.WithCreateOnly())
 		if err != nil {
 			b.Fatal(err)
 		}
 
-		spends, err = db.Spend(ctx, spentTx, db.GetBlockHeight()+1)
+		_, spends, err = db.SpendAndCreate(ctx, spentTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -469,7 +816,7 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 		require.NoError(t, nonExistentSpendTx.From(nonExistentHash.String(), 0, Tx.Outputs[0].LockingScript.String(), Tx.Outputs[0].Satoshis))
 		require.NoError(t, nonExistentSpendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 
-		resultSpends, err := db.Spend(ctx, nonExistentSpendTx, db.GetBlockHeight()+1)
+		_, resultSpends, err := db.SpendAndCreate(ctx, nonExistentSpendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.NotEmpty(t, resultSpends)
@@ -480,7 +827,7 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 		// Create a unique tx for this sub-test
 		uniqueTx := newTestTx(t, 3_000_000)
 
-		_, err := db.Create(ctx, uniqueTx, 1000)
+		_, _, err := db.SpendAndCreate(ctx, uniqueTx, 1000, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 		defer func() { _ = db.Delete(ctx, uniqueTx.TxIDChainHash()) }()
 
@@ -494,7 +841,7 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 		))
 		require.NoError(t, tamperedSpendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 
-		resultSpends, err := db.Spend(ctx, tamperedSpendTx, db.GetBlockHeight()+1)
+		_, resultSpends, err := db.SpendAndCreate(ctx, tamperedSpendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.NotEmpty(t, resultSpends)
@@ -515,7 +862,7 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 		coinbaseTx.Inputs = []*bt.Input{coinbaseInput}
 		require.NoError(t, coinbaseTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5_000_000_000))
 
-		_, err := db.Create(ctx, coinbaseTx, 1000, utxostore.WithSetCoinbase(true))
+		_, _, err := db.SpendAndCreate(ctx, coinbaseTx, 1000, utxostore.WithSetCoinbase(true), utxostore.WithCreateOnly())
 		require.NoError(t, err)
 		defer func() { _ = db.Delete(ctx, coinbaseTx.TxIDChainHash()) }()
 
@@ -530,7 +877,7 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 		))
 		require.NoError(t, coinbaseSpendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 
-		resultSpends, err := db.Spend(ctx, coinbaseSpendTx, 1000)
+		_, resultSpends, err := db.SpendAndCreate(ctx, coinbaseSpendTx, 1000, utxostore.WithSpendOnly())
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.NotEmpty(t, resultSpends)
@@ -542,7 +889,7 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 		// Create a unique tx for this sub-test using a fresh transaction
 		uniqueTx := newTestTx(t, 5_000_000)
 
-		_, err := db.Create(ctx, uniqueTx, 1000)
+		_, _, err := db.SpendAndCreate(ctx, uniqueTx, 1000, utxostore.WithCreateOnly())
 		require.NoError(t, err)
 		defer func() { _ = db.Delete(ctx, uniqueTx.TxIDChainHash()) }()
 
@@ -555,7 +902,7 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 		))
 		require.NoError(t, spendTx1.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 
-		_, err = db.Spend(ctx, spendTx1, db.GetBlockHeight()+1)
+		_, _, err = db.SpendAndCreate(ctx, spendTx1, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		require.NoError(t, err)
 
 		// Second spend with a DIFFERENT spending tx → double spend
@@ -567,7 +914,7 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 		))
 		require.NoError(t, spendTx2.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2000)) // different amount → different txid
 
-		resultSpends, err := db.Spend(ctx, spendTx2, db.GetBlockHeight()+1)
+		_, resultSpends, err := db.SpendAndCreate(ctx, spendTx2, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.NotEmpty(t, resultSpends)
@@ -605,6 +952,160 @@ func SetBlockHeightZero(t *testing.T, db utxostore.Store) {
 	require.ErrorIs(t, err, errors.ErrInvalidArgument)
 }
 
+// SetBlockStateContract pins the write side of the GetBlockState snapshot
+// guarantee on a real store (issue 1443): after one SetBlockState call the
+// snapshot AND the single-field getters must all agree. Height matters most
+// here: stores keep it in a separate atomic that DAH and maturity logic read
+// directly, so a SetBlockState that updated only the snapshot pair would
+// silently freeze those readers at a stale height while every pair-based test
+// stayed green. Height zero is rejected exactly like SetBlockHeight(0).
+//
+// The store's block state is restored on the way out, so this is safe to run
+// against a suite-wide shared store: later cases that derive a height from
+// GetBlockHeight() see what they would have seen without it. A store that
+// started at height zero cannot be restored — zero is not a settable height —
+// so run this case last against such a store.
+func SetBlockStateContract(t *testing.T, db utxostore.Store) {
+	prior := db.GetBlockState()
+	if prior.Height > 0 {
+		defer func() {
+			require.NoError(t, db.SetBlockState(prior.Height, prior.MedianTime))
+		}()
+	}
+
+	require.NoError(t, db.SetBlockState(4242, 1700000042))
+
+	state := db.GetBlockState()
+	require.Equal(t, uint32(4242), state.Height)
+	require.Equal(t, uint32(1700000042), state.MedianTime)
+	require.Equal(t, uint32(4242), db.GetBlockHeight(), "single-field height reader must stay in step with the snapshot")
+	require.Equal(t, uint32(1700000042), db.GetMedianBlockTime(), "single-field median reader must stay in step with the snapshot")
+
+	err := db.SetBlockState(0, 1700000042)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrInvalidArgument)
+}
+
+// SetBlockStateSnapshotUnderConcurrency pins the read side of the same
+// guarantee on a real store: GetBlockState must return a pair some single
+// writer actually published, never one assembled from two separate reads.
+//
+// The holder is already covered in isolation by TestBlockStateHolderSnapshot,
+// but nothing there stops a store's own GetBlockState from going back to two
+// independent atomic loads — which is exactly what issue 1443 was. That
+// regression would keep the sequential contract above green, because torn
+// pairs only appear while a writer is mid-update. So: one writer publishing
+// pairs with the fixed relation MedianTime == Height + 1000, readers checking
+// the relation holds on every snapshot they observe.
+//
+// Restores the prior block state on the way out, with the same height-zero
+// caveat as SetBlockStateContract.
+func SetBlockStateSnapshotUnderConcurrency(t *testing.T, db utxostore.Store) {
+	prior := db.GetBlockState()
+	if prior.Height > 0 {
+		defer func() {
+			require.NoError(t, db.SetBlockState(prior.Height, prior.MedianTime))
+		}()
+	}
+
+	const (
+		baseHeight = uint32(5_000_000)
+		iterations = uint32(20_000)
+		offset     = uint32(1000)
+	)
+
+	require.NoError(t, db.SetBlockState(baseHeight, baseHeight+offset))
+
+	var (
+		wg        sync.WaitGroup
+		tornMu    sync.Mutex
+		torn      []utxostore.BlockState
+		samples   atomic.Uint64
+		tornFound atomic.Bool
+	)
+
+	stop := make(chan struct{})
+
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+
+				got := db.GetBlockState()
+				samples.Add(1)
+
+				// Recorded and asserted after wg.Wait: testify's FailNow is only
+				// valid on the goroutine running the test.
+				if got.MedianTime != got.Height+offset {
+					tornMu.Lock()
+					torn = append(torn, got)
+					tornMu.Unlock()
+
+					tornFound.Store(true)
+
+					return
+				}
+			}
+		}()
+	}
+
+	// Recorded rather than asserted inside the loop: a FailNow here would skip
+	// close(stop) and leave the readers spinning for the rest of the run.
+	var writeErr error
+
+	// The writer keeps going until the readers have actually sampled, rather
+	// than stopping at a fixed count and asserting the sample total afterwards.
+	// On a single-processor run the readers may not be scheduled at all while a
+	// fixed-length writer loop runs, which would leave the torn-pair assertion
+	// vacuously true; asserting the count instead would fail the case on
+	// correct code. Gating the loop keeps it meaningful on one core either way.
+	//
+	// Note the tear itself is only reliably observable with GOMAXPROCS > 1: at
+	// -cpu=1 a reader can only interleave with the writer where the scheduler
+	// preempts it, so this case guards the regression in CI, not on one core.
+	const minSamples = uint64(1_000)
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for i := baseHeight + 1; ; i++ {
+		if writeErr = db.SetBlockState(i, i+offset); writeErr != nil {
+			break
+		}
+
+		// Readers exit on the first torn pair, so stop chasing minSamples once
+		// the case has already failed — otherwise a real tear costs a stall.
+		if tornFound.Load() {
+			break
+		}
+
+		if i-baseHeight >= iterations && samples.Load() >= minSamples {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+
+	close(stop)
+	wg.Wait()
+
+	require.NoError(t, writeErr)
+	require.Empty(t, torn, "GetBlockState returned torn pairs: %v", torn)
+	// Vacuity guard: the assertion above also holds for a reader loop that never
+	// ran. The writer loop gates on this, so reaching zero means the readers
+	// were starved for the full deadline rather than merely descheduled.
+	require.NotZero(t, samples.Load(), "readers observed no snapshots at all")
+}
+
 // SetLockedBehavior tests the SetLocked lifecycle:
 //   - Locking a tx makes its outputs report Status_LOCKED via GetSpend
 //   - Spending a locked tx returns ErrTxLocked
@@ -615,7 +1116,7 @@ func SetLockedBehavior(t *testing.T, db utxostore.Store) {
 	// Create a unique tx for this test
 	uniqueTx := newTestTx(t, 6_000_000)
 
-	_, err := db.Create(ctx, uniqueTx, 1000)
+	_, _, err := db.SpendAndCreate(ctx, uniqueTx, 1000, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, uniqueTx.TxIDChainHash()) }()
 
@@ -652,7 +1153,7 @@ func SetLockedBehavior(t *testing.T, db utxostore.Store) {
 	))
 	require.NoError(t, lockedSpendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 
-	resultSpends, err := db.Spend(ctx, lockedSpendTx, db.GetBlockHeight()+1)
+	_, resultSpends, err := db.SpendAndCreate(ctx, lockedSpendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.NotEmpty(t, resultSpends)
@@ -668,7 +1169,7 @@ func SetLockedBehavior(t *testing.T, db utxostore.Store) {
 	require.Equal(t, int(utxostore.Status_OK), resp.Status)
 
 	// Now spending should succeed
-	_, err = db.Spend(ctx, lockedSpendTx, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, lockedSpendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.NoError(t, err)
 }
 
@@ -686,12 +1187,12 @@ func SetConflictingBehavior(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
 	// Need a parent for Tx's input so conflicting child tracking works
-	_, err := db.Create(ctx, ParentTx, 999)
+	_, _, err := db.SpendAndCreate(ctx, ParentTx, 999, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, ParentTx.TxIDChainHash()) }()
 
 	// Create Tx marked as conflicting — Tx's input references ParentTx
-	_, err = db.Create(ctx, Tx, 1000, utxostore.WithConflicting(true))
+	_, _, err = db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithConflicting(true), utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
 
@@ -723,7 +1224,7 @@ func SetConflictingBehavior(t *testing.T, db utxostore.Store) {
 	))
 	require.NoError(t, conflictingSpendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 
-	resultSpends, err := db.Spend(ctx, conflictingSpendTx, db.GetBlockHeight()+1)
+	_, resultSpends, err := db.SpendAndCreate(ctx, conflictingSpendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.NotEmpty(t, resultSpends)
@@ -750,7 +1251,7 @@ func SetMinedUnminedSince(t *testing.T, db utxostore.Store) {
 
 	// Create Tx as unmined. Pass blockHeight=200 as the height when it was received.
 	// Since no WithMinedBlockInfo option is provided, unmined_since will be set to 200.
-	_, err = db.Create(ctx, Tx, 200)
+	_, _, err = db.SpendAndCreate(ctx, Tx, 200, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
 
@@ -802,7 +1303,7 @@ func SpendIdempotent(t *testing.T, db utxostore.Store) {
 	// Create a unique tx for this test
 	uniqueTx := newTestTx(t, 7_000_000)
 
-	_, err := db.Create(ctx, uniqueTx, 1000)
+	_, _, err := db.SpendAndCreate(ctx, uniqueTx, 1000, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, uniqueTx.TxIDChainHash()) }()
 
@@ -816,11 +1317,11 @@ func SpendIdempotent(t *testing.T, db utxostore.Store) {
 	require.NoError(t, idempotentSpendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 
 	// First spend succeeds
-	_, err = db.Spend(ctx, idempotentSpendTx, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, idempotentSpendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.NoError(t, err)
 
 	// Second spend with the SAME spending tx should be idempotent (no error)
-	_, err = db.Spend(ctx, idempotentSpendTx, db.GetBlockHeight()+1)
+	_, _, err = db.SpendAndCreate(ctx, idempotentSpendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.NoError(t, err, "re-spending with the same spending tx should be idempotent")
 }
 
@@ -835,7 +1336,7 @@ func SetMinedWithSpent(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 
 	// Create Tx as unmined
-	_, err = db.Create(ctx, Tx, 0)
+	_, _, err = db.SpendAndCreate(ctx, Tx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
 
@@ -849,7 +1350,7 @@ func SetMinedWithSpent(t *testing.T, db utxostore.Store) {
 		))
 		require.NoError(t, spendingTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 
-		_, err = db.Spend(ctx, spendingTx, db.GetBlockHeight()+1)
+		_, _, err = db.SpendAndCreate(ctx, spendingTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		require.NoError(t, err, "spending output %d should succeed", vout)
 	}
 
@@ -919,7 +1420,7 @@ func MinedThenSpendAllPrunes(t *testing.T, db utxostore.Store, prunerSvc pruner.
 	require.NoError(t, db.SetBlockHeight(mineHeight))
 
 	// Parent is referenced by Tx's input; create first (unmined is fine for this test).
-	_, err := db.Create(ctx, ParentTx, mineHeight-1)
+	_, _, err := db.SpendAndCreate(ctx, ParentTx, mineHeight-1, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, ParentTx.TxIDChainHash()) }()
 
@@ -927,7 +1428,7 @@ func MinedThenSpendAllPrunes(t *testing.T, db utxostore.Store, prunerSvc pruner.
 	// real production flow (tx arrives, gets validated, later a block includes it).
 	// Creating directly with WithMinedBlockInfo would skip the mined-transition path
 	// that the disk-bloat bug was observed under.
-	_, err = db.Create(ctx, Tx, mineHeight)
+	_, _, err = db.SpendAndCreate(ctx, Tx, mineHeight, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
 
@@ -957,7 +1458,7 @@ func MinedThenSpendAllPrunes(t *testing.T, db utxostore.Store, prunerSvc pruner.
 			out.Satoshis,
 		))
 		require.NoError(t, spendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
-		_, err = db.Spend(ctx, spendTx, mineHeight+1)
+		_, _, err = db.SpendAndCreate(ctx, spendTx, mineHeight+1, utxostore.WithSpendOnly())
 		require.NoError(t, err, "spending output %d should succeed", i)
 	}
 
@@ -976,4 +1477,163 @@ func MinedThenSpendAllPrunes(t *testing.T, db utxostore.Store, prunerSvc pruner.
 	_, err = db.Get(ctx, txHash)
 	require.Error(t, err, "tx must be deleted by pruner after all outputs are spent on a mined, on-longest-chain tx")
 	require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected ErrTxNotFound, got %v", err)
+}
+
+// newSpendAndCreateTx builds an extended transaction spending output `vout` of Tx.
+// The satoshi amount makes the txid unique per test case.
+func newSpendAndCreateTx(t *testing.T, vout uint32, satoshis uint64) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      Tx.TxIDChainHash(),
+		Vout:          vout,
+		LockingScript: Tx.Outputs[vout].LockingScript,
+		Satoshis:      Tx.Outputs[vout].Satoshis,
+	}))
+	tx.Inputs[0].UnlockingScript = dummyUnlockingScript
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", satoshis))
+
+	return tx
+}
+
+// SpendAndCreate proves the combined call spends the tx's inputs and creates its
+// outputs in one operation.
+func SpendAndCreate(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	spendingTx := newSpendAndCreateTx(t, 0, 1001)
+	_ = db.Delete(ctx, spendingTx.TxIDChainHash())
+
+	md, resultSpends, err := db.SpendAndCreate(ctx, spendingTx, db.GetBlockHeight()+1)
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Len(t, resultSpends, 1)
+
+	// the parent output is spent by spendingTx
+	resp, err := db.GetSpend(ctx, testSpend0)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
+	require.NotNil(t, resp.SpendingData)
+	require.Equal(t, spendingTx.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+
+	// spendingTx's own outputs were created
+	created, err := db.Get(ctx, spendingTx.TxIDChainHash())
+	require.NoError(t, err)
+	require.Equal(t, spendingTx.TxIDChainHash().String(), created.Tx.TxID())
+}
+
+// SpendAndCreateCreateOnly proves WithCreateOnly skips the spend phase entirely.
+func SpendAndCreateCreateOnly(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	md, resultSpends, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Nil(t, resultSpends)
+
+	resp, err := db.Get(ctx, Tx.TxIDChainHash())
+	require.NoError(t, err)
+	require.Equal(t, Tx.TxIDChainHash().String(), resp.Tx.TxID())
+
+	// creating again surfaces ErrTxExists, same as the old Create
+	_, _, err = db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.ErrorIs(t, err, errors.ErrTxExists)
+}
+
+// SpendAndCreateSpendOnly proves WithSpendOnly spends the inputs without creating
+// the transaction itself.
+func SpendAndCreateSpendOnly(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	spendingTx := newSpendAndCreateTx(t, 1, 2001)
+	_ = db.Delete(ctx, spendingTx.TxIDChainHash())
+
+	md, resultSpends, err := db.SpendAndCreate(ctx, spendingTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+	require.NoError(t, err)
+	require.Nil(t, md)
+	require.Len(t, resultSpends, 1)
+
+	// the parent output is spent
+	utxoHash1, err := util.UTXOHashFromOutput(Tx.TxIDChainHash(), Tx.Outputs[1], 1)
+	require.NoError(t, err)
+
+	resp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: Tx.TxIDChainHash(), Vout: 1, UTXOHash: utxoHash1})
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
+
+	// but the spending tx was NOT created
+	_, err = db.Get(ctx, spendingTx.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// SpendAndCreateTxExistsKeepsSpends proves the documented ErrTxExists contract:
+// when the create phase finds the tx already stored, the error is returned WITHOUT
+// rolling back the spends made in the spend phase.
+func SpendAndCreateTxExistsKeepsSpends(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	spendingTx := newSpendAndCreateTx(t, 2, 3001)
+	_ = db.Delete(ctx, spendingTx.TxIDChainHash())
+
+	// pre-create the spending tx without spending its input
+	_, _, err = db.SpendAndCreate(ctx, spendingTx, db.GetBlockHeight()+1, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	// combined call: spend phase succeeds, create phase hits ErrTxExists
+	_, resultSpends, err := db.SpendAndCreate(ctx, spendingTx, db.GetBlockHeight()+1)
+	require.ErrorIs(t, err, errors.ErrTxExists)
+	require.Len(t, resultSpends, 1)
+
+	// the spend must still be in place
+	utxoHash2, err := util.UTXOHashFromOutput(Tx.TxIDChainHash(), Tx.Outputs[2], 2)
+	require.NoError(t, err)
+
+	resp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: Tx.TxIDChainHash(), Vout: 2, UTXOHash: utxoHash2})
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
+}
+
+// SpendAndCreateSpendErrorSurfacesPerInput proves a spend-phase failure carries
+// per-input errors in the returned spends (conflict detection contract) and that
+// the create phase never runs.
+func SpendAndCreateSpendErrorSurfacesPerInput(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	winner := newSpendAndCreateTx(t, 3, 4001)
+	loser := newSpendAndCreateTx(t, 3, 4002)
+	_ = db.Delete(ctx, winner.TxIDChainHash())
+	_ = db.Delete(ctx, loser.TxIDChainHash())
+
+	_, _, err = db.SpendAndCreate(ctx, winner, db.GetBlockHeight()+1)
+	require.NoError(t, err)
+
+	_, resultSpends, err := db.SpendAndCreate(ctx, loser, db.GetBlockHeight()+1)
+	require.ErrorIs(t, err, errors.ErrUtxoError)
+	require.Len(t, resultSpends, 1)
+	require.ErrorIs(t, resultSpends[0].Err, errors.ErrSpent)
+	require.Equal(t, winner.TxIDChainHash().String(), resultSpends[0].ConflictingTxID.String())
+
+	// the loser must not have been created
+	_, err = db.Get(ctx, loser.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// SpendAndCreateInvalidOptions proves combining WithCreateOnly and WithSpendOnly
+// is rejected.
+func SpendAndCreateInvalidOptions(t *testing.T, db utxostore.Store) {
+	_, _, err := db.SpendAndCreate(context.Background(), Tx, 1000, utxostore.WithCreateOnly(), utxostore.WithSpendOnly())
+	require.ErrorIs(t, err, errors.ErrInvalidArgument)
 }

@@ -20,7 +20,7 @@ func TestGetBlocksSubtreesNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Genesis block has subtrees_set=true by default, so should return empty
 		blocks, err := subStore.GetBlocksSubtreesNotSet(context.Background())
@@ -35,7 +35,7 @@ func TestGetBlocksSubtreesNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Store block with subtrees_set=false (default)
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(false))
@@ -54,7 +54,7 @@ func TestGetBlocksSubtreesNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Store block with subtrees_set=true
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(true))
@@ -77,7 +77,7 @@ func TestGetBlocksSubtreesNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Store blocks with subtrees_set=false
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(false))
@@ -100,7 +100,7 @@ func TestGetBlocksSubtreesNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Store block with subtrees_set=false
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(false))
@@ -132,7 +132,7 @@ func TestGetBlocksSubtreesNotSet(t *testing.T) {
 
 		subStore, err := New(logger, dbURL, settings.NewSettings())
 		require.NoError(t, err)
-		defer subStore.Close()
+		defer subStore.Close(context.Background())
 
 		// Create cancelled context
 		ctx, cancel := context.WithCancel(context.Background())

@@ -33,7 +33,7 @@ The Peer Registry and Reputation System is a comprehensive peer management frame
 The system consists of three main components:
 
 - **Peer Registry**: A thread-safe data store that tracks all peer information and interaction history
-- **Peer Selector**: A stateless component that selects optimal peers based on reputation and other criteria
+- **Peer Selector**: A component that selects optimal peers based on reputation and other criteria, optionally probing peer availability over HTTP (with a short-lived result cache)
 - **Reputation Scoring**: An algorithm that calculates peer reliability scores (0-100) based on success rates, response times, and behavior patterns
 
 This architecture enables intelligent peer selection for critical operations like blockchain synchronization (catchup), ensuring that Teranode preferentially interacts with reliable peers while avoiding problematic ones.
@@ -83,7 +83,7 @@ The `PeerRegistry` is a thread-safe data store that maintains comprehensive info
 | `DataHubURL` | `string` | URL for fetching blocks/subtrees from peer |
 | `Storage` | `string` | Storage mode: "full", "pruned", or empty |
 | `ReputationScore` | `float64` | Overall reliability score (0-100) |
-| `IsConnected` | `bool` | Whether peer is directly connected |
+| `IsConnected` | `bool` | Whether the peer has an open libp2p connection AND has authored at least one gossip message since process start (liveness derives from the message bus's topic-peer set, so a connected-but-silent peer stays unflagged — and, unflagged, is evictable like any idle entry once its activity exceeds `p2p_peer_registry_ttl`). Set on the gossip path for live senders — a new neighbour is flagged on its first message — reconciled both ways by a periodic sweep in the p2p service (no libp2p disconnect callback exists; a stale flag can persist for up to one `p2p_peer_map_cleanup_interval` after a disconnect), and never restored from persistence |
 | `IsBanned` | `bool` | Whether peer is currently banned |
 
 **Interaction Metrics:**
@@ -101,7 +101,7 @@ The `PeerRegistry` is a thread-safe data store that maintains comprehensive info
 
 ### 3.2. Peer Selector
 
-The `PeerSelector` is a stateless, pure-function component that implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation.
+The `PeerSelector` implements the peer selection algorithm. It takes a list of peers and selection criteria, returning the optimal peer for a given operation. When HTTP health checking is enabled it probes candidate DataHub URLs before selecting (concurrently, with an overall deadline) and keeps a short-lived cache of probe results, so it is not a pure function. Those URLs come from peers, so the probes use a client that refuses to connect to internal addresses even when a peer-supplied hostname only resolves to one.
 
 **Selection Criteria:**
 
@@ -218,27 +218,30 @@ The peer selector uses a two-phase approach for optimal selection:
 #### Phase 1: Full Node Selection
 
 1. Filter for peers that explicitly announce as "full" storage mode
-2. Sort candidates by:
+2. Rank candidates by:
 
-   - Reputation score (highest first) - **primary**
-   - Ban score (lowest first) - **secondary**
-   - Block height (highest first) - **tertiary**
-   - Peer ID (for deterministic ordering) - **quaternary**
-3. Select the top candidate (or second if top was previous peer)
+   - Proven recent full-block delivery - **primary**
+   - Locally validated chain work (highest first) - **secondary**
+   - Reputation score (highest first) - **tertiary**
+   - Average response time (lowest first, peers with measurements first) - **quaternary**
+   - Ban score (lowest first) - **quinary**
+   - Validated block height (highest first) - **senary**
+3. Exclude the previously selected peer when any alternative exists
+4. Select uniformly at random among the top-ranked candidates that tie on
+   every criterion above
+
+There is deliberately no peer-ID tiebreak: peer IDs are attacker-grindable
+(cheap libp2p keypair generation), so a deterministic ID ordering would let a
+Sybil attacker mint an ID that always wins selection among otherwise equal
+candidates. Random selection within the top band caps a Sybil set's capture
+probability at its proportional share of that band.
 
 #### Phase 2: Pruned Node Fallback
 
 If no full nodes are available and fallback is enabled:
 
 1. Filter for peers not in "full" mode but meeting other criteria
-2. Sort by:
-
-   - Reputation score (highest first)
-   - Ban score (lowest first)
-   - Block height (lowest first) - **prefer youngest pruned nodes**
-   - Peer ID
-
-The preference for younger pruned nodes minimizes UTXO pruning risk during catchup.
+2. Rank and select using the same criteria and random tiebreak as Phase 1
 
 ### 5.3. Fallback to Pruned Nodes
 
@@ -250,7 +253,7 @@ Pruned node fallback is controlled by the `p2p_allow_pruned_node_fallback` setti
 When using pruned nodes:
 
 - Warning is logged about potential UTXO pruning risk
-- Youngest (lowest height) pruned node is preferred
+- Candidates are ranked with the same criteria as full nodes
 - Reputation still prioritized over height
 
 ## 6. Integration with Other Services

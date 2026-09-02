@@ -18,12 +18,9 @@ package utxopersister
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -31,6 +28,7 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/utxoseed"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -42,6 +40,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 )
+
+const logErrParsingBufferSize = "error parsing utxoPersister_buffer_size %q, using default of 4KB"
 
 // This type is responsible for reading and writing UTXO additions, deletions and sets to and from files.
 
@@ -306,7 +306,7 @@ func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 	}
 
 	for i, output := range tx.Outputs {
-		if utxo.ShouldStoreOutputAsUTXO(tx.IsCoinbase(), output, us.blockHeight) {
+		if utxo.ShouldStoreOutputAsUTXO(output, us.blockHeight, us.settings.ChainCfgParams.GenesisActivationHeight) {
 			iUint32, err := safeconversion.IntToUint32(i)
 			if err != nil {
 				return err
@@ -419,7 +419,7 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
-		us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+		us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 		bufferSize = 4096
 	}
@@ -459,7 +459,7 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
-		us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+		us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 		bufferSize = 4096
 	}
@@ -497,6 +497,26 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 // The method uses error groups to process UTXOs in parallel for better performance,
 // with coordinated error handling to ensure data integrity. Tracing is used for
 // performance monitoring and diagnostics throughout the operation.
+
+// writeWrapperAndFold writes w's serialized bytes to storer and folds its UTXOs
+// into the set commitment. The write and the fold are coupled here on purpose:
+// the commitment must see exactly the set that was written, so every persisted
+// wrapper is committed to c.acc in the same call. Routing all write paths
+// through this helper makes it structurally impossible for a future path to
+// persist a wrapper without committing it, which would silently produce a set
+// hash the loaded set cannot reproduce.
+func (c *consolidator) writeWrapperAndFold(storer *filestorer.FileStorer, w *UTXOWrapper) error {
+	if _, err := storer.Write(w.Bytes()); err != nil {
+		return errors.NewStorageError("error writing utxo wrapper", err)
+	}
+
+	for _, u := range w.UTXOs {
+		c.acc.Add(utxoseed.Element(w.TxID, u.Index, w.Height, w.Coinbase, u.Value, u.Script))
+	}
+
+	return nil
+}
+
 func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err error) {
 	if us == nil {
 		return errors.NewStorageError("UTXOSet is nil")
@@ -568,12 +588,14 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 	}
 
 	var (
-		readStat   = createStat.NewStat("readTX")
-		filterStat = createStat.NewStat("filterUTXOs")
-		writeStat  = createStat.NewStat("writeUTXOs")
-		ts         = gocore.CurrentTime()
-		txCount    uint64
-		utxoCount  uint64
+		readStat    = createStat.NewStat("readTX")
+		filterStat  = createStat.NewStat("filterUTXOs")
+		writeStat   = createStat.NewStat("writeUTXOs")
+		ts          = gocore.CurrentTime()
+		txCount     uint64
+		utxoCount   uint64
+		recordsRead uint64
+		utxosRead   uint64
 	)
 
 	if c.firstPreviousBlockHash.String() != c.settings.ChainCfgParams.GenesisHash.String() {
@@ -587,7 +609,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 		if err != nil {
-			us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+			us.logger.Warnf(logErrParsingBufferSize, utxopersisterBufferSize)
 
 			bufferSize = 4096
 		}
@@ -638,40 +660,48 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 				// height/coinbase + its UTXOs).
 				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader)
 				if err != nil {
-					// CreateUTXOSet appends a 16-byte footer (txCount +
-					// utxoCount) after the final UTXOWrapper. This loop does
-					// not consult that count, so it only learns the records
-					// are exhausted when the next read either lands exactly on
-					// EOF (a bare io.EOF) or short-reads the footer, which
-					// io.ReadFull reports as io.ErrUnexpectedEOF ("unexpected
-					// EOF"). cmd/utxovalidator handles the same footer.
-					//
-					// The short read is matched by substring, not
-					// structurally: errors.New flattens a non-*Error cause to
-					// its message (errors/errors.go:334-336), discarding the
-					// io.ErrUnexpectedEOF sentinel - so errors.Is(err,
-					// io.ErrUnexpectedEOF) would itself reduce to this same
-					// strings.Contains. (And do not fold the io.EOF clause into
-					// errors.Is: "EOF" is a substring of "unexpected EOF", so
-					// it would swallow this footer error too.) A structural fix
-					// - FromReader returning a typed sentinel, and validating
-					// records-read == txCount against the footer - is tracked
-					// as a follow-up.
-					//
-					// Consequence: a genuinely truncated tail is
-					// indistinguishable from the footer and is silently
-					// accepted (pre-existing; same as utxovalidator). Matching
-					// only "unexpected EOF" - not the broader "failed to read
-					// txid" utxovalidator also matches - keeps a real non-EOF
-					// read error loud rather than swallowed.
-					if err == io.EOF || strings.Contains(err.Error(), "unexpected EOF") {
-						break OUTER
+					// CreateUTXOSet unconditionally appends a 16-byte footer
+					// (txCount||utxoCount) after the final UTXOWrapper, with
+					// no marker byte in front of it. The only way this loop
+					// can legitimately be done is if the next read lands
+					// exactly on those footer bytes - which FromReader
+					// reports via the ErrRecordBoundary sentinel - and the
+					// footer's counts agree with what was actually read
+					// here. Anything else (a bare io.EOF, which can only
+					// happen if the footer itself is missing entirely; a
+					// short read at any other offset; or an
+					// ErrRecordBoundary whose footer bytes don't match) is a
+					// genuine truncation and must fail loudly rather than
+					// silently produce a new snapshot that omits the
+					// unread tail.
+					var boundary *ErrRecordBoundary
+					if !errors.As(err, &boundary) {
+						return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", c.firstPreviousBlockHash.String(), fileformat.FileTypeUtxoSet, recordsRead, err)
 					}
 
-					return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", c.firstPreviousBlockHash.String(), fileformat.FileTypeUtxoSet, txCount, err)
+					expectedTxCount, expectedUTXOCount, decErr := DecodeFooter(boundary.FooterBytes[:])
+					if decErr != nil {
+						return errors.NewStorageError("error decoding previous utxo-set (%s.%s) footer", c.firstPreviousBlockHash.String(), fileformat.FileTypeUtxoSet, decErr)
+					}
+
+					if expectedTxCount != recordsRead || expectedUTXOCount != utxosRead {
+						return errors.NewProcessingError("previous utxo-set (%s.%s) is truncated: footer expects %d transactions/%d utxos, only %d/%d were read",
+							c.firstPreviousBlockHash.String(), fileformat.FileTypeUtxoSet, expectedTxCount, expectedUTXOCount, recordsRead, utxosRead)
+					}
+
+					break OUTER
 				}
 
 				ts = readStat.AddTime(ts)
+
+				// Count every wrapper read from the previous file,
+				// unconditionally and before deletion filtering, so the
+				// truncation check above compares against what was actually
+				// read - not against txCount/utxoCount, which only track
+				// survivors after filtering and exist to write the *new*
+				// file's own footer below.
+				recordsRead++
+				utxosRead += uint64(len(utxoWrapper.UTXOs))
 
 				// Filter UTXOs based on the deletions map
 				utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, c.deletions, &utxoWrapper.TxID)
@@ -680,8 +710,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 				// Only write the UTXOWrapper if there are remaining UTXOs after deletions
 				if len(utxoWrapper.UTXOs) > 0 {
-					if _, err := storer.Write(utxoWrapper.Bytes()); err != nil {
-						return errors.NewStorageError("error writing utxo wrapper", err)
+					if err := c.writeWrapperAndFold(storer, utxoWrapper); err != nil {
+						return err
 					}
 
 					txCount++
@@ -706,8 +736,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		// Only write the UTXOWrapper if there are remaining UTXOs after deletions
 		if len(utxoWrapper.UTXOs) > 0 {
-			if _, err := storer.Write(utxoWrapper.Bytes()); err != nil {
-				return errors.NewStorageError("error writing utxo wrapper", err)
+			if err := c.writeWrapperAndFold(storer, utxoWrapper); err != nil {
+				return err
 			}
 
 			txCount++
@@ -902,14 +932,11 @@ func WriteHeadersToStore(ctx context.Context, logger ulogger.Logger, settings *s
 		return errors.NewStorageError("error creating utxo-headers file", err)
 	}
 
-	hasher := sha256.New()
-	multiWriter := io.MultiWriter(storer, hasher)
-
-	if err = binary.Write(multiWriter, binary.LittleEndian, bestBlock.Hash); err != nil {
+	if err = binary.Write(storer, binary.LittleEndian, bestBlock.Hash); err != nil {
 		return errors.NewProcessingError("couldn't write block hash to file", err)
 	}
 
-	if err = binary.Write(multiWriter, binary.LittleEndian, bestBlock.Height); err != nil {
+	if err = binary.Write(storer, binary.LittleEndian, bestBlock.Height); err != nil {
 		return errors.NewProcessingError("error writing block height", err)
 	}
 
@@ -919,7 +946,7 @@ func WriteHeadersToStore(ctx context.Context, logger ulogger.Logger, settings *s
 	)
 
 	for _, block := range blocks {
-		if err = block.Serialise(multiWriter); err != nil {
+		if err = block.Serialise(storer); err != nil {
 			return errors.NewProcessingError("couldn't write header to file", err)
 		}
 
@@ -932,12 +959,6 @@ func WriteHeadersToStore(ctx context.Context, logger ulogger.Logger, settings *s
 	}
 
 	logger.Infof("Wrote %d block headers with %d total transactions", recordCount, txCount)
-
-	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), tipHash.String()+".utxo-headers")
-
-	if err = blobStore.Set(ctx, tipHash[:], fileformat.FileTypeUtxoHeaders+".sha256", []byte(hashData), options.WithAllowOverwrite(true)); err != nil {
-		return errors.NewStorageError("error writing hash file", err)
-	}
 
 	return nil
 }

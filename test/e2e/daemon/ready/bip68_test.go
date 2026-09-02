@@ -29,10 +29,36 @@ const (
 	SequenceLockTimeMask        = validator.SequenceLockTimeMask        // 0x0000ffff
 )
 
+// Genesis and Chronicle activation heights pinned for every test in this file.
+//
+// sequenceLocks() enforces BIP68 only inside [CSVHeight, GenesisActivationHeight)
+// and returns nil past Genesis, so a regtest Genesis height at or below the heights
+// these tests operate at silently turns all of them into no-ops. Pinning here makes
+// the window a property of the test rather than of the chain params, which have moved
+// before (regtest Genesis went 10000 -> 100 in go-chaincfg v1.6.2).
+//
+// These are the historical regtest values, chosen so the BDK script engine — fed both
+// heights at services/validator/ScriptVerifierGoBDK.go:158,163 — sees exactly what it
+// saw when these tests were written. Mirrors bip68TestSettings in
+// services/validator/TxValidator_bip68_test.go.
+const (
+	bip68GenesisHeight   = uint32(10000)
+	bip68ChronicleHeight = uint32(15000)
+)
+
 // setupBIP68Test initializes both nodes with CSV height override
 // Generates initialHeight blocks on SV Node BEFORE starting Teranode for reliable IBD sync
 func setupBIP68Test(t *testing.T, csvHeight uint32, initialHeight int) (*daemon.TestDaemon, svnode.SVNodeI, *svnode.TxCreator) {
 	ctx := t.Context()
+
+	// Tests build a short chain on top of initialHeight — funding at +1 and asserting
+	// on blocks a handful further up (the widest span in this file is +15). 100 is a
+	// generous ceiling on that. Fail loudly here if those heights could ever reach
+	// Genesis, instead of letting the assertions pass vacuously.
+	require.Less(t, uint32(initialHeight)+100, bip68GenesisHeight,
+		"test heights must stay inside the BIP68 enforcement window [CSVHeight, Genesis)")
+	require.Less(t, csvHeight, bip68GenesisHeight,
+		"CSVHeight must sit below Genesis for the enforcement window to be non-empty")
 
 	// Start SV Node
 	sv := newSVNode()
@@ -57,6 +83,8 @@ func setupBIP68Test(t *testing.T, csvHeight uint32, initialHeight int) (*daemon.
 			test.SystemTestSettings(),
 			func(s *settings.Settings) {
 				s.ChainCfgParams.CSVHeight = csvHeight
+				s.ChainCfgParams.GenesisActivationHeight = bip68GenesisHeight
+				s.ChainCfgParams.ChronicleActivationHeight = bip68ChronicleHeight
 				s.Legacy.ConnectPeers = []string{sv.P2PHost()}
 				s.P2P.StaticPeers = []string{}
 			},
@@ -221,18 +249,18 @@ func TestBIP68_HeightBased_Accept(t *testing.T) {
 
 // TestBIP68_HeightBased_Reject verifies that a block containing a tx with an unsatisfied
 // height-based sequence lock is rejected by Teranode.
-//
-// NOTE: Skipped because model.NewBlockFromMsgBlock (model/Block.go:161) only populates the
-// coinbase subtree — non-coinbase txs are invisible to block.Valid() and therefore to
-// ValidateBlock. Fix that TODO first, then remove the t.Skip.
 func TestBIP68_HeightBased_Reject(t *testing.T) {
-	t.Skip("BIP68 reject: model.NewBlockFromMsgBlock (model/Block.go:161) only populates the coinbase subtree, so ValidateBlock never sees non-coinbase txs and cannot enforce BIP68 sequence locks on them")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
 	ctx := t.Context()
 
-	// Setup: CSV active at height 10, start with 110 initial blocks
+	// Setup: CSV active at height 10, start with 110 initial blocks.
+	// This test only proves enforcement while the block height sits in the window
+	// CSVHeight <= height < GenesisActivationHeight; past Genesis, relative-locktime
+	// enforcement is dropped and this check becomes a no-op. setupBIP68Test pins
+	// Genesis to bip68GenesisHeight and asserts the heights used here stay inside that
+	// window, so the chain params can no longer silently gut this test.
 	td, sv, txCreator := setupBIP68Test(t, 10, 110)
 	defer func() {
 		td.Stop(t)
@@ -271,8 +299,11 @@ func TestBIP68_HeightBased_Reject(t *testing.T) {
 	initialTDHeight := initialTDMeta.Height
 	require.Equal(t, fundingBlockHeight, initialTDHeight)
 
-	// Submit to Teranode via ValidateBlock — the correct full-validation path (calls block.Valid()
-	// with UTXO store and subtree store). Should reject because the sequence lock is not satisfied.
+	// Submit to Teranode via ProcessBlock — the full validation path that runs the
+	// subtree-validation pass and therefore consensus-validates every non-coinbase
+	// transaction, including the BIP68 sequence-lock check. block.Valid() alone does
+	// not evaluate sequence locks, so the lighter ValidateBlock RPC cannot reject on
+	// this rule. The block must be rejected because the sequence lock is not satisfied.
 	blockBytes, err := hex.DecodeString(block.Hex)
 	require.NoError(t, err)
 	msgBlock := &wire.MsgBlock{}
@@ -282,8 +313,19 @@ func TestBIP68_HeightBased_Reject(t *testing.T) {
 	require.NoError(t, err)
 	modelBlock.Height = fundingBlockHeight + 1
 
-	err = td.BlockValidationClient.ValidateBlock(ctx, modelBlock, nil)
+	// The serialised block carries the subtree root but not the transaction bodies,
+	// so persist the subtree (coinbase placeholder + the sequence-locked tx) to the
+	// subtree store for validation to reach the transaction.
+	td.StoreSubtreeForBlock(t, []*bt.Tx{tx}, modelBlock.Height+1000)
+
+	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, modelBlock.Height, "test", "", 0)
 	require.Error(t, err, "Teranode should reject block with unsatisfied height-based sequence lock (sequence=%d, UTXO age=1 block)", sequence)
+	// Assert the rejection is the height-based sequence-lock failure specifically, so the
+	// test cannot pass on an unrelated error (missing subtree data, merkle mismatch, fees).
+	// The validator surfaces this as a tx-invalid error reading "transaction sequence lock
+	// height not satisfied: ..." (services/validator/TxValidator.go).
+	require.ErrorContains(t, err, "sequence lock height not satisfied",
+		"rejection must be the BIP68 height-based sequence-lock failure, not an unrelated validation error")
 	t.Logf("Teranode rejected block as expected: %v", err)
 
 	// Verify Teranode height is unchanged
@@ -377,18 +419,18 @@ func TestBIP68_TimeBased_Accept(t *testing.T) {
 
 // TestBIP68_TimeBased_Reject verifies that a block containing a tx with an unsatisfied
 // time-based sequence lock is rejected by Teranode.
-//
-// NOTE: Same prerequisite as TestBIP68_HeightBased_Reject — model.NewBlockFromMsgBlock
-// (model/Block.go:161) only populates the coinbase subtree, so ValidateBlock never sees
-// non-coinbase txs. Fix that TODO first, then remove the t.Skip.
 func TestBIP68_TimeBased_Reject(t *testing.T) {
-	t.Skip("BIP68 reject: model.NewBlockFromMsgBlock (model/Block.go:161) only populates the coinbase subtree, so ValidateBlock never sees non-coinbase txs and cannot enforce BIP68 sequence locks on them")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
 	ctx := t.Context()
 
-	// Setup: CSV active at height 10, start with 110 initial blocks
+	// Setup: CSV active at height 10, start with 110 initial blocks.
+	// This test only proves enforcement while the block height sits in the window
+	// CSVHeight <= height < GenesisActivationHeight; past Genesis, relative-locktime
+	// enforcement is dropped and this check becomes a no-op. setupBIP68Test pins
+	// Genesis to bip68GenesisHeight and asserts the heights used here stay inside that
+	// window, so the chain params can no longer silently gut this test.
 	td, sv, txCreator := setupBIP68Test(t, 10, 110)
 	defer func() {
 		td.Stop(t)
@@ -427,8 +469,11 @@ func TestBIP68_TimeBased_Reject(t *testing.T) {
 	initialTDHeight := initialTDMeta.Height
 	require.Equal(t, fundingBlockHeight, initialTDHeight)
 
-	// Submit to Teranode via ValidateBlock — the correct full-validation path (calls block.Valid()
-	// with UTXO store and subtree store). Should reject because the time lock is not satisfied.
+	// Submit to Teranode via ProcessBlock — the full validation path that runs the
+	// subtree-validation pass and therefore consensus-validates every non-coinbase
+	// transaction, including the BIP68 sequence-lock check. block.Valid() alone does
+	// not evaluate sequence locks, so the lighter ValidateBlock RPC cannot reject on
+	// this rule. The block must be rejected because the time lock is not satisfied.
 	blockBytes, err := hex.DecodeString(block.Hex)
 	require.NoError(t, err)
 	msgBlock := &wire.MsgBlock{}
@@ -438,8 +483,19 @@ func TestBIP68_TimeBased_Reject(t *testing.T) {
 	require.NoError(t, err)
 	modelBlock.Height = fundingBlockHeight + 1
 
-	err = td.BlockValidationClient.ValidateBlock(ctx, modelBlock, nil)
+	// The serialised block carries the subtree root but not the transaction bodies,
+	// so persist the subtree (coinbase placeholder + the sequence-locked tx) to the
+	// subtree store for validation to reach the transaction.
+	td.StoreSubtreeForBlock(t, []*bt.Tx{tx}, modelBlock.Height+1000)
+
+	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, modelBlock.Height, "test", "", 0)
 	require.Error(t, err, "Teranode should reject block with unsatisfied time-based sequence lock (1000 × 512 seconds not elapsed)")
+	// Assert the rejection is the time-based sequence-lock failure specifically, so the
+	// test cannot pass on an unrelated error (missing subtree data, merkle mismatch, fees).
+	// The validator surfaces this as a tx-invalid error reading "transaction sequence lock
+	// time not satisfied: ..." (services/validator/TxValidator.go).
+	require.ErrorContains(t, err, "sequence lock time not satisfied",
+		"rejection must be the BIP68 time-based sequence-lock failure, not an unrelated validation error")
 	t.Logf("Teranode rejected block as expected: %v", err)
 
 	// Verify Teranode height is unchanged

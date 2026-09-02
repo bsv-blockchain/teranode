@@ -11,6 +11,7 @@ import (
 	blockassembly_api "github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -332,4 +333,92 @@ func TestStart_FSMContextCancellation(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
 	mockBlockchainClient.AssertExpectations(t)
+}
+
+// TestProcessExpiredPreservationsPhaseRuns verifies that Phase 1b calls
+// ProcessExpiredPreservations with the current block height when the feature is enabled
+// (pruner_skipProcessExpiredPreservations=false, the default). Phase 1 is skipped so the test
+// does not need to mock the unmined-tx iterator, and prunerService is nil so Phase 2 is skipped.
+func TestProcessExpiredPreservationsPhaseRuns(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	called := make(chan uint32, 1)
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, uint32(101)).
+		Run(func(args mock.Arguments) { called <- args.Get(1).(uint32) }).
+		Return(nil)
+
+	server := &Server{
+		ctx:         ctx,
+		logger:      ulogger.New("test"),
+		pruneNotify: make(chan pruneSignal, 1),
+		blobNotify:  make(chan pruneSignal, 1),
+		utxoStore:   mockStore,
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				SkipPreserveParents:             true,  // skip Phase 1 (no iterator to mock)
+				SkipProcessExpiredPreservations: false, // Phase 1b enabled
+			},
+		},
+	}
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	select {
+	case h := <-called:
+		require.Equal(t, uint32(101), h, "Phase 1b must call ProcessExpiredPreservations with the block height")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Phase 1b did not call ProcessExpiredPreservations")
+	}
+}
+
+// TestProcessExpiredPreservationsPhaseSkipped verifies the kill-switch: when
+// pruner_skipProcessExpiredPreservations=true, Phase 1b is skipped and ProcessExpiredPreservations
+// is never called, while the rest of the cycle still proceeds (blob worker is notified).
+func TestProcessExpiredPreservationsPhaseSkipped(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	called := make(chan struct{}, 1)
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { called <- struct{}{} }).
+		Return(nil)
+
+	server := &Server{
+		ctx:         ctx,
+		logger:      ulogger.New("test"),
+		pruneNotify: make(chan pruneSignal, 1),
+		blobNotify:  make(chan pruneSignal, 1),
+		utxoStore:   mockStore,
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				SkipPreserveParents:             true,
+				SkipProcessExpiredPreservations: true, // Phase 1b disabled (kill-switch)
+			},
+		},
+	}
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	// blobNotify is signalled before the phases run; once seen, Phase 1b would have executed if enabled.
+	select {
+	case <-server.blobNotify:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blob deletion worker should have been notified")
+	}
+
+	select {
+	case <-called:
+		t.Fatal("Phase 1b ran despite pruner_skipProcessExpiredPreservations=true")
+	case <-time.After(200 * time.Millisecond):
+		// expected: ProcessExpiredPreservations was not called
+	}
 }

@@ -68,7 +68,7 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-# build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
+# build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
 build: update_config build-teranode-with-dashboard build-teranode-cli clean_backup
 
 .PHONY: update_config
@@ -117,10 +117,6 @@ build-teranode-ci: set_debug_flags set_txmetacache_flag
 build-chainintegrity: set_debug_flags
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o chainintegrity.run ./compose/cmd/chainintegrity/
 
-.PHONY: build-tx-blaster
-build-tx-blaster: set_debug_flags
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
-
 .PHONY: build-teranode-cli
 build-teranode-cli:
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -o teranode-cli ./cmd/teranodecli
@@ -144,10 +140,6 @@ build-teranode-dev:
 # .PHONY: build-blockassembly-blaster
 # build-blockassembly-blaster: set_debug_flags
 # 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
-
-.PHONY: build-blockchainstatus
-build-blockchainstatus:
-	go build -o blockchainstatus.run ./cmd/blockchainstatus/
 
 # .PHONY: build-aerospiketest
 # build-aerospiketest:
@@ -183,16 +175,25 @@ install-tools:
 	go install gotest.tools/gotestsum@latest
 
 # TEST_PKGS: space-separated Go package patterns (e.g. ./services/propagation/...).
-# When set, runs only those packages without coverage instrumentation — used by CI
-# for service-scoped PRs to skip unrelated test compilation. When unset (default),
-# runs the full unit suite with coverage over all non-test packages.
+# When set, runs only those packages — used by CI for service-scoped PRs to skip
+# unrelated test compilation. Coverage is still written to coverage.out, but
+# -coverpkg is narrowed to the same scoped set: the downstream Sonar pipeline
+# requires coverage.out to exist on every run, while instrumenting ./... is what
+# drives the ~110GB peak on full runs. The scoped set is the reverse-dependency
+# closure, so it contains every changed production package Sonar reports on.
+# When unset (default), runs the full unit suite with coverage over all non-test
+# packages.
 .PHONY: test
+# TEST_PKGS is read from the recipe ENVIRONMENT ($$TEST_PKGS), not interpolated
+# by make into the shell text, so a tool-produced package list can never be
+# parsed as shell. `export` guarantees the recipe sees it however it was set.
+export TEST_PKGS
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 ifdef TEST_PKGS
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m $(TEST_PKGS)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg="$$(echo "$$TEST_PKGS" | tr ' ' ',')" $$TEST_PKGS
 else
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 endif
 
 # run tests in the test/longtest directory
@@ -210,9 +211,12 @@ longtest:
 # "test/sequentialtest/double_spend"). Empty (default) runs all packages. Used by
 # CI scoping; the runner reads it from the environment.
 .PHONY: sequentialtest
+# Exported (not make-interpolated) for the same reason as TEST_PKGS above: the
+# runner reads SEQ_PKGS straight from its environment.
+export SEQ_PKGS
 sequentialtest:
 	@mkdir -p /tmp/teranode-test-results
-	SEQ_PKGS="$(SEQ_PKGS)" TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
+	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
 
 # run sequential tests for specific database backends
 .PHONY: sequentialtest-sqlite
@@ -233,7 +237,7 @@ sequentialtest-aerospike:
 .PHONY: sequentialtest-shard
 sequentialtest-shard:
 	@mkdir -p /tmp/teranode-test-results
-	SEQ_PKGS="$(SEQ_PKGS)" TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO \
+	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO \
 		test/scripts/run_tests_sequentially.sh --shard $(SHARD) --total $(TOTAL) 2>&1 \
 		| tee /tmp/teranode-test-results/sequentialtest-shard-$(SHARD)-results.txt
 
@@ -509,8 +513,6 @@ clean_gen:
 .PHONY: clean
 clean:
 	rm -f ./teranode_*.tar.gz
-	rm -f blaster.run
-	rm -f blockchainstatus.run
 	rm -rf build/
 	rm -f coverage.out
 

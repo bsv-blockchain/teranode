@@ -28,8 +28,11 @@ import (
 // All methods succeed immediately without performing any actual storage operations.
 // This is useful for testing scenarios or when UTXO tracking needs to be disabled.
 type NullStore struct {
-	blockHeight     uint32
-	medianBlockTime uint32
+	// utxo.BlockStateFields gives the null store the same block-state
+	// behaviour as the real ones — including the rejection of height zero — so
+	// it satisfies the interface contract rather than being a laxer special
+	// case that the shared test suite would let through.
+	utxo.BlockStateFields
 }
 
 // BatchDecorate implements utxo.Store.
@@ -43,30 +46,8 @@ func NewNullStore() (*NullStore, error) {
 	return &NullStore{}, nil
 }
 
-func (m *NullStore) SetBlockHeight(height uint32) error {
-	m.blockHeight = height
-	return nil
-}
-
-func (m *NullStore) GetBlockHeight() uint32 {
-	return m.blockHeight
-}
-
-func (m *NullStore) SetMedianBlockTime(medianTime uint32) error {
-	m.medianBlockTime = medianTime
-	return nil
-}
-
-func (m *NullStore) GetMedianBlockTime() uint32 {
-	return m.medianBlockTime
-}
-
-func (m *NullStore) GetBlockState() utxo.BlockState {
-	return utxo.BlockState{
-		Height:     m.blockHeight,
-		MedianTime: m.medianBlockTime,
-	}
-}
+// SupportsOutpointOnlySpend reports false: the null store performs no real UTXO work.
+func (m *NullStore) SupportsOutpointOnlySpend() bool { return false }
 
 func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "NullStore Store available", nil
@@ -164,6 +145,34 @@ func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ig
 	return nil, nil
 }
 
+// SpendAndCreate implements utxo.Store as a no-op combination of Spend and Create.
+func (m *NullStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	options, err := utxo.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var spends []*utxo.Spend
+
+	if !options.CreateOnly {
+		spends, err = m.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
+		if err != nil {
+			return nil, spends, err
+		}
+
+		if options.SpendOnly {
+			return nil, spends, nil
+		}
+	}
+
+	md, err := m.Create(ctx, tx, blockHeight, opts...)
+	if err != nil {
+		return nil, spends, err
+	}
+
+	return md, spends, nil
+}
+
 func (m *NullStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	return nil
 }
@@ -226,6 +235,18 @@ func (m *NullStore) SetConflicting(ctx context.Context, txHashes []chainhash.Has
 
 func (m *NullStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
+}
+
+func (m *NullStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	return nil
+}
+
+func (m *NullStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return nil
+}
+
+func (m *NullStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	return nil, nil
 }
 
 func (m *NullStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
