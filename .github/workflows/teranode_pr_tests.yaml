@@ -36,7 +36,9 @@ jobs:
       pull-requests: read
     outputs:
       full: ${{ steps.s.outputs.full }}
-      any_go: ${{ steps.s.outputs.any_go }}
+      # any_go is intentionally not surfaced: no job gates on it any more (the
+      # linter always runs for Sonar). It still appears in the action's
+      # "Scope decision" log group for debugging.
       run_unit: ${{ steps.s.outputs.run_unit }}
       unit_pkgs: ${{ steps.s.outputs.unit_pkgs }}
     steps:
@@ -50,8 +52,11 @@ jobs:
 
   golangci-lint:
     name: golangci-lint
-    needs: [scope]
-    if: needs.scope.outputs.any_go == 'true'
+    # Deliberately NOT scope-gated. The downstream Sonar pipeline
+    # (sonar-inputs -> sonar-pr-analyze.yaml) hard-requires
+    # golangci-lint-report.xml, and a missing input fails the required
+    # "SonarQube Quality Gate" check. Skipping this job on docs-only PRs would
+    # turn every such PR red, so it always runs and always uploads a report.
     # arm64-safe: pure Go analysis, no containers (golangci-lint ships arm64).
     runs-on: teranode-runner-8-core-arm
     steps:
@@ -90,7 +95,15 @@ jobs:
   test:
     name: test
     needs: [scope]
-    if: needs.scope.outputs.full == 'true' || needs.scope.outputs.run_unit == 'true'
+    # Always runs, for two independent reasons:
+    #  1. Sonar: main's sonar-inputs job hard-requires coverage.out, so this job
+    #     must emit one on every run or the required Quality Gate check fails.
+    #  2. Fail-open: a status function is REQUIRED here. Without one, a scope job
+    #     that dies in checkout/setup-go/go-cache (before it can fail open) makes
+    #     this job SKIP, and a skipped required check satisfies branch
+    #     protection - a green PR with zero tests run.
+    # Scope then only decides WHAT runs; see the run step's branching.
+    if: ${{ !cancelled() }}
     runs-on: teranode-runner-16-core-arm
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -154,25 +167,36 @@ jobs:
             echo "::endgroup::"
           }
           trap summary EXIT
-          if [ "$SCOPE_FULL" != "true" ]; then
-            # Scoped run: only test the affected packages, no coverage instrumentation.
-            # This avoids compiling all packages under -coverpkg=./... which is the
-            # primary driver of the ~110GB peak on full runs.
+          if [ "$SCOPE_RESULT" != "success" ] || [ "$SCOPE_FULL" = "true" ]; then
+            # Full run. Also the fallback when the scope JOB itself failed before
+            # the tool could fail open - never trust an unwritten output set.
+            echo "Full unit suite (scope result=$SCOPE_RESULT full=$SCOPE_FULL)"
+            make test
+          elif [ -n "$UNIT_PKGS" ]; then
+            # Scoped run: compile and test only the affected packages. Coverage is
+            # still written, but -coverpkg is narrowed to the same set - that is
+            # what avoids the ./... instrumentation driving the ~110GB full-run peak.
+            echo "Scoped unit suite"
             make test TEST_PKGS="$UNIT_PKGS"
           else
-            make test
+            # No production package affected (e.g. an e2e-only change). There is
+            # nothing to test, but Sonar still requires a coverage profile, so
+            # emit a valid empty one rather than failing the required gate.
+            echo "No affected unit packages - emitting empty coverage profile"
+            echo "mode: atomic" > coverage.out
           fi
         # Pass scope outputs via env (not ${{ }} interpolated into the run-line) so
         # the tool-produced package list can never be parsed as shell.
         env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
           SCOPE_FULL: ${{ needs.scope.outputs.full }}
           UNIT_PKGS: ${{ needs.scope.outputs.unit_pkgs }}
         continue-on-error: false
 
       - name: Upload coverage report
-        # Coverage is only produced on full runs. Scoped runs skip -coverpkg=./...
-        # and produce no coverage.out.
-        if: always() && needs.scope.outputs.full == 'true'
+        # Unconditional: every path through the run step above leaves a
+        # coverage.out behind, and sonar-inputs treats a missing one as fatal.
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-report

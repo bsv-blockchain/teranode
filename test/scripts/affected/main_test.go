@@ -132,12 +132,79 @@ func TestCompute(t *testing.T) {
 
 func TestIsGlobalInput(t *testing.T) {
 	yes := []string{"go.mod", "go.sum", "Makefile", ".github/workflows/ci.yaml", ".github/actions/x/action.yml", "settings/dev.conf", "settings.conf", "settings_local.conf", ".golangci.yml", ".golangci.yaml", ".golangci.json", ".golangci.toml", "test/scripts/run_tests_sequentially.sh", "test/scripts/affected/main.go",
-		"Dockerfile", "test/utils/cmd/tstore/Dockerfile", "compose/docker-compose-blasters.yml", "compose/docker-compose-chainintegrity.yml", "test/docker-compose-host.yml", "test/docker-compose.e2etest.yml"}
+		"Dockerfile", "test/utils/cmd/tstore/Dockerfile", "compose/docker-compose-blasters.yml", "compose/docker-compose-chainintegrity.yml", "test/docker-compose-host.yml", "test/docker-compose.e2etest.yml",
+		// Every test runner script, not just the two originally whitelisted:
+		// make smoketest shells out to both of these.
+		"test/scripts/gotestsum_with_retry.sh", "test/scripts/list_test_shard.sh",
+		// Compose-mounted runtime assets. No Go import edge reaches them, but
+		// the e2e/chainintegrity nodes boot against them.
+		"compose/aerospike/aerospike-1.conf", "compose/scripts/generate-blocks.sh", "compose/grafana/dashboards/x.json"}
 	for _, f := range yes {
 		require.True(t, isGlobalInput(f), f)
 	}
-	no := []string{"services/blockchain/server.go", "docs/x.md", "README.md", "test/sequentialtest/x_test.go", "services/blockchain/config.json", "test/e2e/daemon/ready/ready_test.go"}
+	no := []string{"services/blockchain/server.go", "docs/x.md", "README.md", "test/sequentialtest/x_test.go", "services/blockchain/config.json", "test/e2e/daemon/ready/ready_test.go",
+		// Go sources under compose/ stay scoped - the import graph does see these.
+		"compose/cmd/chainintegrity/main.go", "compose/cmd/gennodes/main.go"}
 	for _, f := range no {
 		require.False(t, isGlobalInput(f), f)
 	}
+}
+
+// Embedded assets are compiled into their package, but the dir-prefix mapping
+// only catches embeds under the package dir - the root package owns no subtree.
+// go list reports them explicitly, so they are mapped by exact path instead.
+func TestEmbeddedAssetsMapToOwningPackage(t *testing.T) {
+	const m = modulePath
+
+	graph := func() []Pkg {
+		g := fixtureGraph()
+		// Root main embeds a root-level asset; blockchain embeds one under its dir.
+		g[0].EmbedFiles = []string{"version.txt"}
+		g[1].EmbedFiles = []string{"schema/blockchain.sql"}
+		g[5].TestEmbedFiles = []string{"testdata/blocks.json"} // test/e2e/daemon/ready
+		return g
+	}
+
+	t.Run("root-level embed maps to the root package", func(t *testing.T) {
+		res := compute([]string{"version.txt"}, graph())
+		require.False(t, res.Full, "a declared embed is mapped, not escalated to full")
+		require.True(t, res.RunUnit)
+		require.Contains(t, res.UnitPkgs, m)
+	})
+
+	t.Run("nested embed maps to its package and its importers", func(t *testing.T) {
+		res := compute([]string{"services/blockchain/schema/blockchain.sql"}, graph())
+		require.False(t, res.Full)
+		require.Contains(t, res.UnitPkgs, m+"/services/blockchain")
+		require.Contains(t, res.UnitPkgs, m+"/services/validator", "importers still pulled in")
+		require.True(t, res.RunSmoke, "e2e/ready imports blockchain")
+	})
+
+	t.Run("test embed maps to its suite", func(t *testing.T) {
+		res := compute([]string{"test/e2e/daemon/ready/testdata/blocks.json"}, graph())
+		require.False(t, res.Full)
+		require.True(t, res.RunSmoke)
+	})
+
+	// A parent package may embed a file that physically lives inside a nested
+	// package's directory. Both are affected, so neither mapping may short-circuit.
+	t.Run("embed inside a nested package attributes to both", func(t *testing.T) {
+		g := fixtureGraph()
+		// blockassembly embeds sub/tmpl.txt, which also sits in the directory
+		// owned by the nested package services/blockassembly/sub.
+		g = append(g, Pkg{ImportPath: m + "/services/blockassembly/sub", Dir: "services/blockassembly/sub"})
+		g[3].EmbedFiles = []string{"sub/tmpl.txt"}
+		require.Equal(t, m+"/services/blockassembly", g[3].ImportPath, "fixture index guard")
+
+		res := compute([]string{"services/blockassembly/sub/tmpl.txt"}, g)
+		require.False(t, res.Full)
+		require.Contains(t, res.UnitPkgs, m+"/services/blockassembly", "the embedding package")
+		require.Contains(t, res.UnitPkgs, m+"/services/blockassembly/sub", "the package owning the dir")
+	})
+
+	t.Run("root-level non-embed repo meta still maps to nothing", func(t *testing.T) {
+		res := compute([]string{"README.md", "AGENTS.md"}, graph())
+		require.False(t, res.Full)
+		require.False(t, res.RunUnit, "repo meta must not drag in the root package")
+	})
 }

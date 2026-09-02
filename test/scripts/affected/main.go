@@ -11,6 +11,7 @@
 // Output is GITHUB_OUTPUT-style `key=value` lines (or JSON with -json):
 //
 //	full=<bool>                  run the complete suite; ignore the scoped lists
+//	any_go=<bool>                a .go file changed (diagnostic only)
 //	reason=<string>              human-readable explanation
 //	run_unit=<bool>              run scoped unit tests
 //	unit_pkgs=<space-separated>  import paths for `make test TEST_PKGS=...`
@@ -65,12 +66,21 @@ type Pkg struct {
 	Deps         []string `json:"Deps"`         // transitive non-test deps
 	TestImports  []string `json:"TestImports"`  // direct imports of in-package _test.go
 	XTestImports []string `json:"XTestImports"` // direct imports of external _test package
+
+	// Embedded assets are compiled INTO the package, so changing one changes the
+	// package as surely as editing its .go files — but the dir-prefix mapping
+	// below only catches embeds that live under the package dir. The root
+	// package (Dir ".") owns no subtree, so without these its embeds would map
+	// to nothing and scope every test out. Paths are package-dir-relative.
+	EmbedFiles      []string `json:"EmbedFiles"`
+	TestEmbedFiles  []string `json:"TestEmbedFiles"`
+	XTestEmbedFiles []string `json:"XTestEmbedFiles"`
 }
 
 // Result is the scoping decision.
 type Result struct {
 	Full              bool     `json:"full"`
-	AnyGo             bool     `json:"any_go"` // any .go file changed → run linters
+	AnyGo             bool     `json:"any_go"` // any .go file changed (diagnostic; linters always run)
 	Reason            string   `json:"reason"`
 	RunUnit           bool     `json:"run_unit"`
 	UnitPkgs          []string `json:"unit_pkgs"`
@@ -91,19 +101,29 @@ func isGlobalInput(f string) bool {
 	case strings.HasPrefix(f, ".github/workflows/"),
 		strings.HasPrefix(f, ".github/actions/"),
 		strings.HasPrefix(f, "settings/"),
-		strings.HasPrefix(f, "test/scripts/affected/"),
-		f == "test/scripts/run_tests_sequentially.sh",
-		// Test/CI build & runtime infra the import graph cannot see: the compose
-		// stacks that wire e2e/smoke/chainintegrity nodes together, and the lint
-		// config (any encoding) that gates the linter jobs.
+		// EVERY test runner script, not just the scoping tool and the sequential
+		// runner: make smoketest also shells out to gotestsum_with_retry.sh and
+		// list_test_shard.sh, so a change to either alters how suites execute
+		// while mapping to no Go package.
+		strings.HasPrefix(f, "test/scripts/"),
+		// The e2e/smoke compose stacks, and the lint config in any encoding.
+		// (compose/ has its own value-dependent case below.)
 		strings.HasPrefix(f, "test/docker-compose"),
-		strings.HasPrefix(f, "compose/docker-compose"),
 		strings.HasSuffix(f, ".golangci.yml"),
 		strings.HasSuffix(f, ".golangci.yaml"),
 		strings.HasSuffix(f, ".golangci.json"),
 		strings.HasSuffix(f, ".golangci.toml"):
 		return true
 	}
+	// Everything the compose stacks mount into their nodes at runtime — aerospike
+	// configs (compose/aerospike/*.conf -> /etc/aerospike.conf), helper scripts
+	// (compose/scripts/), and the stack definitions themselves. None of it is a
+	// Go import edge, yet the suites boot against it. Go sources under compose/
+	// are excluded: those the import graph DOES see, so scoping them is safe.
+	if strings.HasPrefix(f, "compose/") && !strings.HasSuffix(f, ".go") {
+		return true
+	}
+
 	base := filepath.Base(f)
 	// Any Dockerfile (root image + test/utils helper images) builds something the
 	// e2e/smoke suites run against; a change there can break tests no Go edge links.
@@ -119,7 +139,9 @@ func isGlobalInput(f string) bool {
 //
 // pkgs must have Dir set to a REPO-RELATIVE path ("." for the module root).
 func compute(changedFiles []string, pkgs []Pkg) (res Result) {
-	// any_go gates linters; set it on whatever Result we return (full implies it).
+	// any_go is a diagnostic in the scope-decision log - the linter is no longer
+	// gated on it, because the Sonar pipeline requires its report on every run.
+	// Set it on whatever Result we return (full implies it).
 	anyGo := false
 	for _, f := range changedFiles {
 		if strings.HasSuffix(f, ".go") {
@@ -143,9 +165,23 @@ func compute(changedFiles []string, pkgs []Pkg) (res Result) {
 	}
 	refs := make([]pkgRef, 0, len(pkgs))
 	depsOf := make(map[string][]string, len(pkgs))
+	// Exact repo-relative path -> owning package, for assets compiled in via
+	// //go:embed. Consulted before the dir-prefix scan because an embed is an
+	// explicit declaration of ownership, and because the root package owns no
+	// subtree for the prefix scan to match.
+	embedOwner := make(map[string]string)
 	for _, p := range pkgs {
 		refs = append(refs, pkgRef{importPath: p.ImportPath, dir: p.Dir})
 		depsOf[p.ImportPath] = p.Deps
+		for _, group := range [][]string{p.EmbedFiles, p.TestEmbedFiles, p.XTestEmbedFiles} {
+			for _, e := range group {
+				rel := e
+				if p.Dir != "." {
+					rel = p.Dir + "/" + e
+				}
+				embedOwner[rel] = p.ImportPath
+			}
+		}
 	}
 
 	// Map each changed file to its owning package (longest matching dir prefix).
@@ -153,12 +189,22 @@ func compute(changedFiles []string, pkgs []Pkg) (res Result) {
 	// build tag) is treated conservatively as a full run.
 	changed := map[string]bool{}
 	for _, f := range changedFiles {
+		// Not exclusive with the dir-prefix scan below, and deliberately not a
+		// short-circuit: a package may embed a file that also sits inside a
+		// NESTED package's directory, in which case both are affected.
+		embedded := false
+		if ip, ok := embedOwner[f]; ok {
+			changed[ip] = true
+			embedded = true
+		}
 		best := ""
 		bestLen := -1
 		for _, r := range refs {
 			if r.dir == "." {
 				// Root package owns only root-level .go files — not everything
 				// under the tree (".") and not repo-meta files (README, LICENSE).
+				// Root-level embedded assets are handled by embedOwner above, so
+				// widening this to non-.go files would only pull in repo meta.
 				if !strings.Contains(f, "/") && strings.HasSuffix(f, ".go") && bestLen < 0 {
 					best, bestLen = r.importPath, 0
 				}
@@ -171,6 +217,9 @@ func compute(changedFiles []string, pkgs []Pkg) (res Result) {
 			}
 		}
 		if best == "" {
+			if embedded {
+				continue // already attributed to the package that embeds it
+			}
 			if strings.HasSuffix(f, ".go") {
 				return Result{Full: true, Reason: "changed .go file maps to no known package: " + f}
 			}

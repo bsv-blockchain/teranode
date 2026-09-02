@@ -87,19 +87,42 @@ never scopes out); a missing tag hides import edges (unsafe). Union = safe.
 
 ### P5 — Wire `teranode_pr_tests.yaml`
 - Replace the current dorny-based `changes` job with a `scope` job (P2 action).
-- Gate `golangci-lint` on `any_go`/`full`; gate `test` on `run_unit`; pass `unit_pkgs`.
-- Keep coverage-only-on-full + sonar `continue-on-error` (already on branch).
+- `golangci-lint` and `test` are **not** scope-gated: the downstream Sonar
+  pipeline (`sonar-inputs` -> `sonar-pr-analyze.yaml`) hard-requires
+  `golangci-lint-report.xml` and `coverage.out`, and a missing input fails the
+  required "SonarQube Quality Gate" check. Both jobs always run and always
+  upload; `scope` only decides WHAT `test` runs (`unit_pkgs` via `TEST_PKGS`).
+- Coverage is therefore produced on every run, including scoped ones, with
+  `-coverpkg` narrowed to the scoped set (the closure contains every changed
+  production package, so Sonar's new-code coverage is unaffected). Instrumenting
+  `./...` is what drives the ~110GB full-run peak, not writing a profile.
+- `any_go` is retained as a diagnostic in the scope-decision log only.
 
 ### P6 — Wire `teranode_pr_smoketests.yaml`
 - Add `scope` job; gate `smoketest` on `run_smoke`, `sequential` on `run_seq`
   (pass `seq_pkgs`). prunertest / legacy-sync / chainintegrity: **run iff the
   closure touches their package**, else skip on PRs; always run on merge-to-main
   and `ci-full`. (Resolved.)
+- Every gated job's `if:` carries a status function and a
+  `needs.scope.result != 'success'` clause. This is load-bearing: without it a
+  `scope` job that dies at the runner/step level - checkout, setup-go, go-cache,
+  i.e. before the action can fail open - leaves `$GITHUB_OUTPUT` unwritten, every
+  gate evaluates `'' == 'true'` false, and the jobs are **skipped rather than
+  failed**. A skipped required check satisfies branch protection, so the failure
+  mode is a green PR with zero tests run.
 
 ### P7 — Safety net
 - Confirm push→`main` runs full unit+smoke (it does via `teranode_main_tests.yaml`).
 - **Add `make sequentialtest` to `teranode_main_tests.yaml`** to close the gap, so
-  the merge gate truly covers all three scoped suites.
+  the merge gate truly covers all three scoped suites. (Done: sharded across 7,
+  no `SEQ_PKGS`, and **not** `continue-on-error` - an advisory job leaves the
+  workflow green and so catches nothing.)
+- **Add `legacy-sync` and `chainintegrity` to `teranode_main_tests.yaml`.** These
+  were the two PR-gated suites with no merge-to-main gate at all: `make smoketest`
+  `-skip`s every `TestLegacySync*`, `teranode_main_build.yaml` has chainintegrity
+  commented out, and nightly runs the separate binary-based `chainintegrity.run`
+  rather than the `test/e2e/chainintegrity` go-test suite. Without them a closure
+  mis-scope for either suite would never be caught anywhere. (Done.)
 
 ### P8 — Migration / rollout
 - Land P1–P4 (tool + scripts) with unit tests first; verify the tool locally against
@@ -110,5 +133,14 @@ never scopes out); a missing tag hides import edges (unsafe). Union = safe.
 - **Build-tag gaps** → mitigated by union tags + full-on-merge safety net.
 - **`go list` needs module cache** in the scope job → cache restore; ~1.3s graph build once warm.
 - **e2e per-package granularity** is coarse (run-or-skip), not per-test — acceptable.
-- **Generated/embedded inputs** (proto, testdata) → treated as changing their package.
-- prunertest/legacy-sync/chainintegrity gating policy still open (P6).
+- **Generated/embedded inputs** (proto, testdata) → treated as changing their
+  package. `//go:embed` assets are mapped via `go list`'s `EmbedFiles` /
+  `TestEmbedFiles` / `XTestEmbedFiles` rather than by directory prefix, so a
+  root-package embed (which owns no subtree to prefix-match) still maps correctly.
+- **Runtime inputs no import edge can express** are Tier-0 global inputs: all of
+  `test/scripts/` (the smoke runner shells out to `gotestsum_with_retry.sh` and
+  `list_test_shard.sh`), and all non-Go files under `compose/` (aerospike configs
+  mounted as `/etc/aerospike.conf`, `compose/scripts/` helpers, and the stack
+  definitions). Go sources under `compose/` stay scoped - those the graph does see.
+- prunertest/legacy-sync/chainintegrity gating policy resolved (P6/P7): PR-gated
+  on the closure, with a real merge-to-main gate for each.

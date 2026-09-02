@@ -19,7 +19,7 @@ outputs:
     description: Run the complete suite; ignore the scoped lists.
     value: ${{ steps.scope.outputs.full }}
   any_go:
-    description: Any .go file changed -> run linters.
+    description: Any .go file changed (diagnostic only; linters always run).
     value: ${{ steps.scope.outputs.any_go }}
   run_unit:
     description: Run scoped unit tests.
@@ -98,12 +98,13 @@ runs:
         fi
         echo "::group::Changed files"; cat /tmp/changed-files.txt; echo "::endgroup::"
 
-        # Human-readable decision in the log (non-fatal - log only).
-        go run ./test/scripts/affected -json < /tmp/changed-files.txt || true
-
         # Machine-readable set: stage to a temp file so a tool failure or short
         # write falls back to full, never appends a partial set to $GITHUB_OUTPUT.
+        # Run ONCE - `go list` over the whole module with the union tag set is the
+        # expensive part, so the log below echoes the staged output rather than
+        # re-running the tool in -json mode just to print a decision.
         if go run ./test/scripts/affected < /tmp/changed-files.txt > /tmp/scope-output.txt; then
+          echo "::group::Scope decision"; cat /tmp/scope-output.txt; echo "::endgroup::"
           cat /tmp/scope-output.txt >> "$GITHUB_OUTPUT"
         else
           echo "::warning::scope: affected tool failed - running full suite"

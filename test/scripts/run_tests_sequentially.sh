@@ -93,6 +93,16 @@ if [ -n "$PACKAGES" ]; then
     done
     test_files="${filtered%$'\n'}"
     echo "Scoped sequential run to packages: $PACKAGES"
+
+    # An empty result here is a legitimate outcome, not a failure: CI scoping can
+    # surface a package under test/sequentialtest/ that carries no *_test.go of
+    # its own (a shared helper package, say). Failing would turn a correctly
+    # scoped change red, so treat it as a clean skip. The UNSCOPED empty case
+    # below is still an error — it means the suite itself has gone missing.
+    if [ -z "$test_files" ]; then
+        echo "No sequential test files under the scoped packages - nothing to run"
+        exit 0
+    fi
 fi
 
 if [ -z "$test_files" ]; then
