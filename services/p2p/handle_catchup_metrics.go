@@ -180,8 +180,13 @@ func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.Record
 	// malicious reports cross the ban threshold. Best-effort via the shared
 	// fire-and-forget helper: the malicious record above already landed and is
 	// what the catchup gates consume, so a score failure must not fail the RPC.
+	// If the charge itself failed (e.g. the registry gRPC call errored), release
+	// the throttle stamp so the next report retries rather than silently
+	// dropping the escalation for a full window.
 	if s.shouldChargeCatchupMalicious(req.PeerId) {
-		s.applyBanScore(req.PeerId, ReasonCatchupMalicious)
+		if err := s.applyBanScore(req.PeerId, ReasonCatchupMalicious); err != nil {
+			s.clearCatchupMaliciousCharge(req.PeerId)
+		}
 	}
 
 	return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
@@ -193,6 +198,13 @@ func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.Record
 // cycle (the direct report, the deferred catchup-lock release, and the
 // unvalidatable-peer error handler); the window collapses those into a single
 // charge so one offense scores once and only genuinely repeated offenses ban.
+//
+// Coupling to watch: escalation only works because one catchup_malicious charge
+// (blockchain.DefaultBanConfig ReasonPoints, 50) exceeds the ban-score decay
+// across one window (window * DecayAmount = 10min * 1/min = 10). If this window
+// is ever widened past points/DecayAmount, or the points lowered below it, the
+// score can never accumulate and no repeat offender is banned. The blockchain
+// side pins that invariant with TestCatchupMaliciousPointsOutrunWindowDecay.
 const catchupMaliciousChargeWindow = 10 * time.Minute
 
 // shouldChargeCatchupMalicious reports whether a malicious report for peerID
@@ -220,6 +232,16 @@ func (s *Server) shouldChargeCatchupMalicious(peerID string) bool {
 	s.catchupMaliciousLastCharge[peerID] = now
 
 	return true
+}
+
+// clearCatchupMaliciousCharge removes a peer's throttle stamp so the next
+// malicious report is eligible to charge again. Called when a charge failed to
+// land, so a transient registry error does not suppress escalation for a full
+// window.
+func (s *Server) clearCatchupMaliciousCharge(peerID string) {
+	s.catchupMaliciousChargeMu.Lock()
+	defer s.catchupMaliciousChargeMu.Unlock()
+	delete(s.catchupMaliciousLastCharge, peerID)
 }
 
 // UpdateCatchupError records the most recent catchup error reported against a peer.

@@ -2722,20 +2722,24 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 }
 
 // applyBanScore is a fire-and-forget helper used from internal codepaths that
-// can't usefully propagate an error (libp2p notifiees, gossip handlers).
-func (s *Server) applyBanScore(peerID, reason string) {
+// can't usefully propagate an error (libp2p notifiees, gossip handlers). It
+// returns the AddBanScore error (nil on success, or when no registry is wired)
+// for the rare caller that needs to know whether the charge actually landed;
+// statement-context callers ignore it and keep their fire-and-forget shape.
+func (s *Server) applyBanScore(peerID, reason string) error {
 	if s.peerRegistry == nil {
-		return
+		return nil
 	}
 	score, banned, err := s.peerRegistry.AddBanScore(s.gCtx, peerID, reason, 0)
 	if err != nil {
 		s.logger.Warnf("[applyBanScore] AddBanScore %s/%s failed: %v", peerID, reason, err)
-		return
+		return err
 	}
 	s.logger.Infof("[applyBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t", peerID, reason, score, banned)
 	if banned {
 		s.onPeerBanned(peerID, reason)
 	}
+	return nil
 }
 
 // onPeerBanned reacts to a NEW ban transition (score crossed threshold this

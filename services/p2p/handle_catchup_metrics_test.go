@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -23,7 +24,16 @@ import (
 func freshTestServer(t *testing.T) (*Server, *blockchain.CentralizedPeerRegistry, peer.ID) {
 	t.Helper()
 
-	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	return freshTestServerWithBanConfig(t, blockchain.DefaultBanConfig())
+}
+
+// freshTestServerWithBanConfig is freshTestServer with a caller-supplied
+// BanConfig, for tests that need to observe ban-score accumulation without the
+// ban+removal that DefaultBanConfig's threshold triggers.
+func freshTestServerWithBanConfig(t *testing.T, cfg blockchain.BanConfig) (*Server, *blockchain.CentralizedPeerRegistry, peer.ID) {
+	t.Helper()
+
+	reg := blockchain.NewCentralizedPeerRegistry(cfg)
 	client := blockchain.NewLocalPeerRegistryClient(reg)
 
 	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 0)
@@ -45,6 +55,18 @@ type failingValidatedProgressRegistry struct {
 
 func (f *failingValidatedProgressRegistry) RecordValidatedPeerProgress(_ context.Context, _ string, _ uint32, _ *chainhash.Hash, _ []byte) error {
 	return f.err
+}
+
+// failingAddBanScoreRegistry wraps a real registry client but makes AddBanScore
+// fail, so the throttle-rollback path in RecordCatchupMalicious can be tested.
+// All other calls (UpdatePeerMetrics, etc.) pass through to the real registry.
+type failingAddBanScoreRegistry struct {
+	blockchain.PeerRegistryClientI
+	err error
+}
+
+func (f *failingAddBanScoreRegistry) AddBanScore(_ context.Context, _, _ string, _ int32) (int32, bool, error) {
+	return 0, false, f.err
 }
 
 func TestRecordCatchupAttempt_RegistersSyncAttempt(t *testing.T) {
@@ -280,19 +302,27 @@ func TestRecordCatchupMalicious_SameWindowReportsChargeOnce(t *testing.T) {
 	require.False(t, got.IsBanned)
 }
 
-func TestRecordCatchupMalicious_RepeatedOffensesBanPeer(t *testing.T) {
-	s, reg, pid := freshTestServer(t)
+func TestRecordCatchupMalicious_ChargesAgainAfterWindow(t *testing.T) {
+	// High threshold so two charges accumulate observably without tripping the
+	// ban (which would remove the PeerInfo and hide BanScore). This test pins
+	// only that the throttle releases once the window has elapsed - a distinct
+	// offense is charged again rather than collapsed. It deliberately does not
+	// model the registry's decay clock (it ages only the throttle map), so the
+	// two clean +50 charges here are not a production strike count: with real
+	// decay a ban takes three charges over 20+ minutes, pinned in blockchain's
+	// TestCatchupMaliciousPointsOutrunWindowDecay.
+	cfg := blockchain.DefaultBanConfig()
+	cfg.Threshold = 1000
+	s, reg, pid := freshTestServerWithBanConfig(t, cfg)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
 
 	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 
-	// Age the recorded charge past the throttle window to simulate a second,
-	// distinct offense. Note this skips the score decay the registry applies
-	// between real charges: with 1 pt/min decay and the 10-minute throttle,
-	// production runs 50, 90, then 130 (ban on the third charge). Here the
-	// decay clock is not aged, so the ban lands on the second charge; the
-	// test asserts escalation to a ban, not the strike count.
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int32(50), got.BanScore)
+
 	s.catchupMaliciousChargeMu.Lock()
 	s.catchupMaliciousLastCharge[pid.String()] = time.Now().Add(-catchupMaliciousChargeWindow)
 	s.catchupMaliciousChargeMu.Unlock()
@@ -300,14 +330,36 @@ func TestRecordCatchupMalicious_RepeatedOffensesBanPeer(t *testing.T) {
 	_, err = s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 
-	banned, err := s.peerRegistry.IsPeerBanned(context.Background(), pid.String())
-	require.NoError(t, err)
-	require.True(t, banned)
+	got, ok = reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int32(100), got.BanScore, "second charge applied after the window released the throttle")
+}
 
-	resp, err := s.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
-	require.NoError(t, err)
-	require.True(t, resp.IsMalicious)
-	require.Equal(t, "peer is banned", resp.Reason)
+func TestRecordCatchupMalicious_FailedChargeReleasesThrottle(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	// Wrap the real registry so the malicious record still lands but the
+	// ban-score charge fails.
+	s.peerRegistry = &failingAddBanScoreRegistry{
+		PeerRegistryClientI: s.peerRegistry,
+		err:                 errors.NewServiceError("registry unavailable"),
+	}
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err, "a failed charge must not fail the RPC")
+
+	// The malicious record still landed.
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int64(1), got.MaliciousCount)
+
+	// The throttle stamp was rolled back, so the next report is free to retry
+	// rather than being suppressed for a full window.
+	s.catchupMaliciousChargeMu.Lock()
+	_, throttled := s.catchupMaliciousLastCharge[pid.String()]
+	s.catchupMaliciousChargeMu.Unlock()
+	require.False(t, throttled, "a failed charge must release the throttle so the next report retries")
 }
 
 func TestUpdateCatchupError_StoresMessageAndTime(t *testing.T) {
