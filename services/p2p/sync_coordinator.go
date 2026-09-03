@@ -960,9 +960,15 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 		// peer (unlike the no-progress eviction, it did nothing wrong). Keying
 		// on progress age rather than claim age keeps a level peer that is
 		// actively delivering blocks in the slot, matching evaluateSyncPeer's
-		// keep-while-caught-up policy for active peers.
+		// keep-while-caught-up policy for active peers. Level is tested with
+		// chainWorkGreater directly rather than peerAheadByValidatedWork: a
+		// peer inside a full-storage penalty window can be ahead by raw
+		// chainwork yet read as "not ahead" through the penalty demotion, and
+		// such a peer (credited header work it failed to back with a block
+		// body) has not finished anything — leave it to the no-progress
+		// deadline, which also benches it.
 		if localWorkOK && peerHasValidatedWork(peerInfo) &&
-			!peerAheadByValidatedWork(peerInfo, localChainWork) &&
+			!chainWorkGreater(peerInfo.ValidatedChainWork, localChainWork) &&
 			progressAge > sc.preemptionProgressGuard() {
 			sc.logger.Infof("[SyncCoordinator] Releasing sync slot held by %s; level by validated work with no delivery for %v",
 				currentPeer, progressAge.Round(time.Second))
@@ -998,17 +1004,27 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 	}
 
 	sc.pendingCompletionPeer = ""
-	return sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork)
+	return sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork, false)
 }
 
 // settleSyncCompletion applies the completed/failed verdict for a sync whose
 // catchup has finished: still ahead by validated work means the sync fell short
 // (clear and re-select), level or behind means success (reset backoff, clear and
-// re-select). It requires decisionMu to be held by the caller.
-func (sc *SyncCoordinator) settleSyncCompletion(currentPeer string, peerInfo *blockchain.PeerInfo, localChainWork []byte) bool {
+// re-select). reportedSuccess distinguishes the origin for the still-ahead log
+// line: block validation legitimately reports success with the peer still ahead
+// (the header fetch truncates at its accumulated cap on a node far behind), and
+// logging that as "considered failed" would contradict the success block
+// validation just logged for the same catchup. It requires decisionMu to be
+// held by the caller.
+func (sc *SyncCoordinator) settleSyncCompletion(currentPeer string, peerInfo *blockchain.PeerInfo, localChainWork []byte, reportedSuccess bool) bool {
 	if peerAheadByValidatedWork(peerInfo, localChainWork) {
-		sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed; peer still has higher validated work",
-			currentPeer)
+		if reportedSuccess {
+			sc.logger.Infof("[SyncCoordinator] Catchup with peer %s completed but peer is still ahead by validated work; re-selecting",
+				currentPeer)
+		} else {
+			sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed; peer still has higher validated work",
+				currentPeer)
+		}
 		sc.clearSyncPeerIfCurrent("")
 		_ = sc.triggerSyncLocked()
 		return true
@@ -1078,7 +1094,7 @@ func (sc *SyncCoordinator) HandleCatchupSuccess(peerID string, catchupDuration t
 		sc.logger.Debugf("[SyncCoordinator] Deferring catchup-success evaluation for %s until validated chainwork is available", currentPeer)
 		return
 	}
-	sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork)
+	sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork, true)
 }
 
 // handleRunningState handles the FSM RUNNING state logic.

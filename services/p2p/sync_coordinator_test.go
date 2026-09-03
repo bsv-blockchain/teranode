@@ -1925,7 +1925,12 @@ func TestSyncCoordinator_HandleCatchupSuccess_IgnoresNonSyncPeer(t *testing.T) {
 
 // If HandleCatchupSuccess settles a completion and the retrigger claims a new
 // peer, the FSM completion edge observed afterwards must not evict that peer.
-func TestSyncCoordinator_HandleCatchupSuccess_ConsumesEdgeSoFreshSlotSurvives(t *testing.T) {
+// What decides the outcome here is the causality guard: the trailing RUNNING
+// tick re-arms the edge for the fresh holder, and the guard consumes it because
+// the claim postdates fsmCatchingSince. (The pending-edge consumption inside
+// HandleCatchupSuccess itself is pinned separately by
+// TestSyncCoordinator_HandleCatchupSuccess_ConsumesDeferredEdge.)
+func TestSyncCoordinator_HandleCatchupSuccess_CausalityGuardProtectsFreshSlotAfterSettle(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
 	registerSyncTestPeer(t, reg, "done", 200, []byte{0x04})
@@ -2126,4 +2131,81 @@ func TestSyncCoordinator_ConsiderReputationRecoveryThrottled_SamplesAtInterval(t
 	stale := sc.lastReputationRecovery
 	sc.considerReputationRecoveryThrottled()
 	require.NotEqual(t, stale, sc.lastReputationRecovery, "call past the interval must run")
+}
+
+// HandleCatchupSuccess consumes a pending (deferred) completion edge even when
+// its own verdict defers for missing validated work: the authoritative signal
+// owns that completion, so a credit arriving later must not settle the stale
+// edge against the slot holder.
+func TestSyncCoordinator_HandleCatchupSuccess_ConsumesDeferredEdge(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 1_000, nil) // no validated work yet
+	claimSyncTestPeer(sc, "current", 2*time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&catching))
+	require.False(t, sc.handleFSMTransition(&running), "edge must defer while validated chainwork is unavailable")
+	require.Equal(t, "current", sc.pendingCompletionPeer, "deferred edge must stay armed")
+
+	// The success report also defers (still no validated work) but consumes the
+	// pending edge on the way.
+	sc.HandleCatchupSuccess("current", time.Minute)
+	require.Empty(t, sc.pendingCompletionPeer, "success signal must consume the deferred edge")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	// Validated work arriving later must not settle the consumed edge.
+	require.NoError(t, reg.RecordValidatedPeerProgress("current", 1_000, syncCoordinatorTestHash(t), []byte{0x04}))
+	require.False(t, sc.handleFSMTransition(&running), "consumed edge must not settle after the fact")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+}
+
+// A completion edge deferred for missing validated work expires after
+// pendingCompletionExpiry: a credit landing much later must not settle the
+// long-dead edge.
+func TestSyncCoordinator_HandleFSMTransition_DeferredCompletionExpires(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 1_000, nil) // no validated work yet
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&catching))
+	require.False(t, sc.handleFSMTransition(&running))
+	require.Equal(t, "current", sc.pendingCompletionPeer, "deferred edge must stay armed inside the expiry")
+
+	sc.pendingCompletionSince = time.Now().Add(-pendingCompletionExpiry - time.Second)
+	require.False(t, sc.handleFSMTransition(&running), "expired edge must be dropped, not settled")
+	require.Empty(t, sc.pendingCompletionPeer, "expired edge must be disarmed")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "expiry must leave the slot alone")
+
+	require.NoError(t, reg.RecordValidatedPeerProgress("current", 1_000, syncCoordinatorTestHash(t), []byte{0x04}))
+	require.False(t, sc.handleFSMTransition(&running), "late credit must not settle the expired edge")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+}
+
+// A peer that is ahead by raw chainwork but demoted by an active full-storage
+// penalty (it served header work it failed to back with a block body) reads as
+// "not ahead" through peerAheadByValidatedWork; the fallback must not release it
+// as a finished sync — it is left to the no-progress deadline, which benches it.
+func TestSyncCoordinator_HandleFSMTransition_FallbackDoesNotReleasePenalizedAheadPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	hash := syncCoordinatorTestHash(t)
+	reg.Register(&blockchain.PeerInfo{
+		ID:                      "current",
+		DataHubURL:              "http://current",
+		Height:                  200,
+		BlockHash:               hash,
+		ValidatedBlockHash:      hash,
+		ValidatedChainWork:      []byte{0x03}, // ahead by raw chainwork
+		FullStoragePenaltyUntil: time.Now().Add(time.Hour),
+	})
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "penalized ahead peer must not be released as level")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
 }
