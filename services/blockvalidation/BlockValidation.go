@@ -167,11 +167,15 @@ type revalidateBlockData struct {
 	disableOptimisticMining bool
 	isCatchupMode           bool
 
-	// optimisticallyAdded is true only when this block was optimistically AddBlock'd (added to the
-	// chain before block.Valid) and is being requeued after an InvalidateBlock failure on a corrupt
-	// verdict (bitcoin-sv/teranode#4692). It is the ONLY condition under which a corrupt revalidation
-	// verdict may invalidate the block: an already-accepted block re-validated to corrupt (e.g. a bad
-	// local subtree read) must never be poisoned. Defaults false on every ordinary retry/worker path.
+	// optimisticallyAdded is true when this block was optimistically AddBlock'd (added to the chain
+	// before block.Valid) and is being requeued from one of the optimistic goroutine's PRE-COMPLETION
+	// failure paths — where block.Valid failed or never ran, so the on-chain body is unvalidated: a
+	// GetBlockHeaderIDs failure, an ErrBlockInvalid or caught-up-floater verdict whose markBlockAsInvalid
+	// failed, a transient storage/processing error, or a corrupt verdict whose InvalidateBlock failed
+	// (bitcoin-sv/teranode#4692). It is the only condition under which a corrupt revalidation verdict may
+	// invalidate the block, so it is NEVER set after block.Valid has already succeeded (a later bad local
+	// read must not poison an already-validated block) nor on any ordinary retry/worker path — both
+	// default it false.
 	optimisticallyAdded bool
 }
 
@@ -1865,6 +1869,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if !opts.IsRevalidation {
 					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "corrupt subtree body during subtree validation")
 				}
+				// Drop the unvalidated peer-supplied subtree blobs this attempt left behind so a retry
+				// re-fetches instead of re-reading the body that just failed subtree validation
+				// (bitcoin-sv/teranode#4692). A delete failure only logs — it must not downgrade the
+				// corrupt classification (mirrors the block.Valid corrupt branch below and the catchup path).
+				if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block); delErr != nil {
+					u.logger.Warnf("[ValidateBlock][%s] failed to clear failed subtree blobs: %v", block.Hash().String(), delErr)
+				}
 				return err
 			}
 
@@ -1976,7 +1987,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %v", block.String(), err)
 
-					u.ReValidateBlock(block, baseURL)
+					u.reValidateOptimisticallyAddedBlock(block, baseURL)
 
 					return
 				}
@@ -2012,12 +2023,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						if _, invErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invErr != nil {
 							// Invalidation failed → the block is still on-chain. Do NOT return silently.
 							// Re-queue revalidation to converge on invalidation once the store recovers.
-							// This is the ONLY site that flags the requeue optimisticallyAdded: the body
-							// was AddBlock'd before block.Valid, so a repeat corrupt verdict here MAY
-							// invalidate (bitcoin-sv/teranode#4692). Every other revalidation caller leaves
-							// the flag false so an already-accepted block is never poisoned on a corrupt read.
+							// Flags the requeue optimisticallyAdded, like the other pre-completion
+							// re-queues on this optimistic path (block.Valid failed or never ran, so the
+							// body was AddBlock'd before it validated): a repeat corrupt verdict here MAY
+							// invalidate (bitcoin-sv/teranode#4692). Revalidation callers outside this
+							// pre-completion path leave the flag false so an already-accepted block that
+							// passed block.Valid is never poisoned on a later corrupt read.
 							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added and InvalidateBlock FAILED; re-queuing revalidation to avoid a silently-accepted corrupt tip: %v", block.String(), invErr)
-							u.enqueueRevalidation(revalidateBlockData{block: block, baseURL: baseURL, optimisticallyAdded: true})
+							u.reValidateOptimisticallyAddedBlock(block, baseURL)
 						} else {
 							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added; invalidated (invalidate route, not silently accepted) — opt-in optimistic peer mining until the block.Valid integrity-floor split lands", block.String())
 						}
@@ -2030,7 +2043,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						if err = u.markBlockAsInvalid(decoupledCtx, block, reason, opts.PeerID, baseURL); err != nil {
 							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 							// we should try again to re-validate the block, as we failed to mark it as invalid
-							u.ReValidateBlock(block, baseURL)
+							u.reValidateOptimisticallyAddedBlock(block, baseURL)
 						}
 					} else if errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(decoupledCtx) {
 						// RUNNING: a not-in-block parent with empty/absent BlockIDs is a floater that
@@ -2041,12 +2054,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						reason := p2pconstants.ReasonInvalidBlock.String()
 						if mErr := u.markBlockAsInvalid(decoupledCtx, block, reason, opts.PeerID, baseURL); mErr != nil {
 							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate floater block: %v", block.String(), mErr)
-							u.ReValidateBlock(block, baseURL)
+							u.reValidateOptimisticallyAddedBlock(block, baseURL)
 						}
 					} else {
 						// storage or processing error, or transient incomplete state during catchup;
 						// block is not really invalid, but we need to re-validate
-						u.ReValidateBlock(block, baseURL)
+						u.reValidateOptimisticallyAddedBlock(block, baseURL)
 					}
 
 					return
@@ -2709,6 +2722,17 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	// optimisticallyAdded stays false and a corrupt verdict here can never invalidate the
 	// block (bitcoin-sv/teranode#4692).
 	u.enqueueRevalidation(revalidateBlockData{block: block, baseURL: baseURL})
+}
+
+// reValidateOptimisticallyAddedBlock re-queues a block that was already optimistically
+// AddBlock'd (so it is on-chain) but has NOT successfully completed block.Valid, for
+// revalidation. Unlike ReValidateBlock it carries optimisticallyAdded=true, so a corrupt
+// verdict on the retry invalidates the on-chain body rather than leaving a
+// silently-accepted corrupt tip (bitcoin-sv/teranode#4692). Use ONLY on the pre-completion
+// failure paths — never after block.Valid has already succeeded, where a later corrupt
+// local read would wrongly poison a block that genuinely passed validation.
+func (u *BlockValidation) reValidateOptimisticallyAddedBlock(block *model.Block, baseURL string) {
+	u.enqueueRevalidation(revalidateBlockData{block: block, baseURL: baseURL, optimisticallyAdded: true})
 }
 
 func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {

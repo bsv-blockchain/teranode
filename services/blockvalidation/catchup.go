@@ -1759,8 +1759,10 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 				// can only fail to delete something, never delete the wrong thing, so it never
 				// destroys another block's promoted data; every blob left behind was written
 				// with a finite DAH, so it self-expires; and a stale leftover re-fails the same
-				// merkle/shape check on retry rather than being trusted blindly, bounded by the
-				// existing per-(hash, peerID) corrupt-attempt cap like every other corrupt path.
+				// merkle/shape check on retry rather than being trusted blindly, bounded on this
+				// catchup path by CatchupMaxAttemptsPerBlock per cycle (recorded via
+				// recordCatchupAttemptUnlessProgress) — not the corrupt-attempt cap, which gates
+				// only the processBlockFound and legacy-manager paths, not catchup.
 				// The corrupt classification below is unaffected either way.
 				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
 					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
