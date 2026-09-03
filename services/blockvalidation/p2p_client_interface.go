@@ -30,9 +30,6 @@ type P2PClientI interface {
 	// UpdateCatchupError stores the last catchup error for a peer.
 	UpdateCatchupError(ctx context.Context, peerID string, errorMsg string) error
 
-	// UpdateCatchupReputation updates the reputation score for a peer.
-	UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error
-
 	// GetPeersForCatchup returns peers suitable for catchup operations.
 	// Returns a slice of PeerInfo sorted by reputation (highest first).
 	GetPeersForCatchup(ctx context.Context) ([]*p2p.PeerInfo, error)

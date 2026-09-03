@@ -137,15 +137,6 @@ message AddBanScoreRequest {
     bool ok = 1;
   }
 
-  message UpdateCatchupReputationRequest {
-    string peer_id = 1;
-    double score = 2; // Score between 0-100
-  }
-
-  message UpdateCatchupReputationResponse {
-    bool ok = 1;
-  }
-
   message UpdateCatchupErrorRequest {
     string peer_id = 1;
     string error_msg = 2;
@@ -327,7 +318,11 @@ message AddBanScoreRequest {
     rpc RecordCatchupSuccess(RecordCatchupSuccessRequest) returns (RecordCatchupSuccessResponse) {}
     rpc RecordCatchupFailure(RecordCatchupFailureRequest) returns (RecordCatchupFailureResponse) {}
     rpc RecordCatchupMalicious(RecordCatchupMaliciousRequest) returns (RecordCatchupMaliciousResponse) {}
-    rpc UpdateCatchupReputation(UpdateCatchupReputationRequest) returns (UpdateCatchupReputationResponse) {}
+    // UpdateCatchupReputation was removed: it had become a no-op, and reputation
+    // is computed by the registry from interaction outcomes. protobuf has no
+    // "reserved" for RPC names, so this note stands in for one - do not reuse the
+    // name for anything with different semantics, or a mixed-version client would
+    // silently bind to it.
     rpc UpdateCatchupError(UpdateCatchupErrorRequest) returns (UpdateCatchupErrorResponse) {}
     rpc ResetReputation(ResetReputationRequest) returns (ResetReputationResponse) {}
     rpc GetPeersForCatchup(GetPeersForCatchupRequest) returns (GetPeersForCatchupResponse) {}

@@ -170,10 +170,19 @@ helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/helm/teran
 #### Create the Teranode Secret
 
 Sensitive settings (`blockchain_store` and `utxostore` — they contain database
-credentials and connection strings) are **not** stored in the ConfigMap. They are
-supplied through a Kubernetes Secret named `teranode-operator-secrets`, which the
-Cluster CR references via `spec.envFrom`. This Secret is intentionally not committed
-to the repository — you must create it yourself.
+credentials and connection strings — plus `grpc_admin_api_key`) are **not** stored in
+the ConfigMap. They are supplied through a Kubernetes Secret named
+`teranode-operator-secrets`, which the Cluster CR references via `spec.envFrom`. This
+Secret is intentionally not committed to the repository — you must create it yourself.
+
+`grpc_admin_api_key` is **required** for a working node. It authenticates every
+state-mutating P2P `PeerService` RPC, including the peer-reputation and
+validated-chain-progress reports that decide which peer this node syncs from, and the
+`operator` context binds that gRPC port on all interfaces. It is deliberately not
+committed to this repository, and well-known placeholders such as `testkey` are
+rejected and ignored — the server then uses a random key, so every protected RPC,
+including the internal reporters, fails with `Unauthenticated`. Generate a strong
+random value, for example `openssl rand -hex 32`.
 
 Create it with a manifest (replace the example values with your own credentials):
 
@@ -188,6 +197,9 @@ type: Opaque
 stringData:
   blockchain_store: "postgres://POSTGRES_EXAMPLE_URI_CHANGE_ME"
   utxostore: "aerospike://AEROSPIKE_EXAMPLE_URI_CHANGE_ME"
+  # Required. Authenticates the state-mutating P2P PeerService RPCs.
+  # Generate with: openssl rand -hex 32
+  grpc_admin_api_key: "GRPC_ADMIN_API_KEY_CHANGE_ME"
 ```
 
 ```bash

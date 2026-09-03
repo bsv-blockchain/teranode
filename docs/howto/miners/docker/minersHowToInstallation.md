@@ -49,6 +49,30 @@ Read the quickstart network notes before choosing a network:
 less docs/NETWORKS.md
 ```
 
+### Set the gRPC admin API key
+
+The Docker deployment runs `peer`, `blockvalidation` and `subtreevalidation` as
+separate containers, so their gRPC calls cross the auth interceptor. Set
+`grpc_admin_api_key` in `settings_local.conf` to the **same** strong random value
+for every service:
+
+```bash
+openssl rand -hex 32
+```
+
+```conf
+# settings_local.conf
+grpc_admin_api_key.docker.m = <the generated value>
+```
+
+This is required for a working node, not only for admin operations. Besides the
+admin RPCs (ban/unban, connect/disconnect peer, reset reputation), the key gates
+the P2P reporters that block and subtree validation use to record validated chain
+progress and block delivery. Leave it unset and those reports are rejected: no
+peer ever becomes a proven sync candidate, catchup stays in the budget-gated probe
+tier, and the node never settles on a good sync peer. The service logs this at
+`ERROR` on startup. Never commit the value.
+
 ## Start
 
 Start the stack from the quickstart repository root:
