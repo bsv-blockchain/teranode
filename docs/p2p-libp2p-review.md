@@ -137,7 +137,7 @@ Already covered above:
 
 ### Nice-to-have
 
-10. ~~Tighter per-topic size limits (`node_status` does not need 10MB).~~ Done (`services/p2p/Server.go` constants).
+10. ~~Tighter per-topic size limits (`node_status` does not need more than a few KB).~~ Done (`services/p2p/Server.go` constants, all at or under the 10KB `maxGossipMessageSize` ceiling).
 11. Per-message origin signature so we can stop trusting `peer.FromID` once the network is open.
 12. Re-enable the disabled malicious-peer detection in `sync_coordinator.go:390-405`.
 13. Optional parallel sync from multiple peers, with the existing single-peer mode kept as the default.

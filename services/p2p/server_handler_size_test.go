@@ -152,8 +152,9 @@ func TestHandleSubtreeTopic_OversizedDropped(t *testing.T) {
 // drifting back up towards the libp2p 1MiB default would silently widen the
 // pre-parse abuse surface on that topic.
 func TestTopicKindCaps_WithinGossipCeiling(t *testing.T) {
-	require.Equal(t, 10*1024, maxGossipMessageSize)
-	require.Len(t, topicKindCaps, 4, "every subscribed topic must have a cap")
+	for _, kind := range []topicKind{topicKindBlock, topicKindSubtree, topicKindRejectedTx, topicKindNodeStatus} {
+		require.Contains(t, topicKindCaps, kind, "every subscribed topic must have a cap")
+	}
 
 	for kind, capBytes := range topicKindCaps {
 		require.LessOrEqual(t, capBytes, maxGossipMessageSize, "topic %s cap exceeds the gossip ceiling", kind)

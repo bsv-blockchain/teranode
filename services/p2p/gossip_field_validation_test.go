@@ -629,13 +629,14 @@ func TestHandleRejectedTxTopic_OwnInvalidMessageDroppedWithoutSelfBan(t *testing
 
 // The property the tightened caps rest on: a legitimate message with every
 // string field populated to exactly its bound still marshals under the topic
-// cap. Coinbase stays empty — no Teranode version populates it, and the block
-// cap's extra headroom exists precisely for it.
+// cap. Coinbase stays empty: no Teranode version populates it, and the block
+// cap deliberately carries no headroom for it.
 func TestFullyPopulatedMessagesFitUnderCaps(t *testing.T) {
 	display := strings.Repeat("d", maxPeerDisplayStringLen)
 	hexHash := strings.Repeat("0", maxGossipHashLen)
 	url := "http://example.com/" + strings.Repeat("u", maxGossipURLLen-19)
 	pid := strings.Repeat("p", maxGossipPeerIDLen)
+	maxFee := 1e300
 
 	nodeStatus, err := json.Marshal(NodeStatusMessage{
 		PeerID: pid, ClientName: display, Type: "node_status", BaseURL: url,
@@ -646,6 +647,13 @@ func TestFullyPopulatedMessagesFitUnderCaps(t *testing.T) {
 		ChainWork: hexHash, SyncPeerID: pid, SyncPeerHeight: ^uint32(0),
 		SyncPeerBlockHash: hexHash, SyncConnectedAt: 1<<63 - 1,
 		ConnectedPeersCount: 1 << 31, Storage: "pruned",
+		MinMiningTxFee: &maxFee,
+		FeePolicy: &FeePolicy{
+			MiningFee:               FeeAmount{Satoshis: ^uint64(0), Bytes: ^uint64(0)},
+			MaxScriptSizePolicy:     ^uint64(0),
+			MaxTxSizePolicy:         ^uint64(0),
+			MaxTxSigopsCountsPolicy: ^uint64(0),
+		},
 	})
 	require.NoError(t, err)
 	require.Less(t, len(nodeStatus), maxNodeStatusMessageSize, "fully populated node_status must fit under its cap")
