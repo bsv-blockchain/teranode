@@ -1,11 +1,11 @@
 package settings
 
 import (
-	"fmt"
 	"net"
 	"strconv"
 	"strings"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -20,17 +20,17 @@ import (
 // prefix, optionally followed by /tcp/<p2p_port>.
 func ValidateP2PListenAddresses(addrs []string, port int) error {
 	if len(addrs) == 0 {
-		return fmt.Errorf("p2p_listen_addresses not set in config")
+		return errors.NewConfigurationError("p2p_listen_addresses not set in config")
 	}
 
 	for _, raw := range addrs {
 		addr := strings.TrimSpace(raw)
 		if addr == "" {
-			return fmt.Errorf("p2p_listen_addresses contains an empty entry")
+			return errors.NewConfigurationError("p2p_listen_addresses contains an empty entry")
 		}
 
 		if err := validateListenAddress(addr, port); err != nil {
-			return fmt.Errorf("p2p_listen_addresses entry %q is not supported: %w (libp2p always binds 0.0.0.0 and :: on p2p_port %d; use p2p_advertise_addresses or a firewall to control reachability)", addr, err, port)
+			return errors.NewConfigurationError("p2p_listen_addresses entry %q is not supported (libp2p always binds 0.0.0.0 and :: on p2p_port %d; use p2p_advertise_addresses or a firewall to control reachability)", addr, port, err)
 		}
 	}
 
@@ -41,17 +41,17 @@ func validateListenAddress(addr string, port int) error {
 	if !strings.HasPrefix(addr, "/") {
 		ip := net.ParseIP(addr)
 		if ip == nil {
-			return fmt.Errorf("not an IP address or multiaddr")
+			return errors.NewConfigurationError("not an IP address or multiaddr")
 		}
 		if !ip.IsUnspecified() {
-			return fmt.Errorf("binding a specific interface is not supported")
+			return errors.NewConfigurationError("binding a specific interface is not supported")
 		}
 		return nil
 	}
 
 	ma, err := multiaddr.NewMultiaddr(addr)
 	if err != nil {
-		return fmt.Errorf("invalid multiaddr: %w", err)
+		return errors.NewConfigurationError("invalid multiaddr", err)
 	}
 
 	// Walk the components rather than calling ValueForProtocol, which only
@@ -64,27 +64,27 @@ func validateListenAddress(addr string, port int) error {
 		case multiaddr.P_IP4, multiaddr.P_IP6:
 			ip := net.ParseIP(c.Value())
 			if ip == nil || !ip.IsUnspecified() {
-				return fmt.Errorf("binding a specific interface is not supported")
+				return errors.NewConfigurationError("binding a specific interface is not supported")
 			}
 			if sawIP {
-				return fmt.Errorf("multiaddr has more than one IP component")
+				return errors.NewConfigurationError("multiaddr has more than one IP component")
 			}
 			sawIP = true
 		case multiaddr.P_TCP:
 			if c.Value() != strconv.Itoa(port) {
-				return fmt.Errorf("port %s does not match p2p_port %d", c.Value(), port)
+				return errors.NewConfigurationError("port %s does not match p2p_port %d", c.Value(), port)
 			}
 			if sawPort {
-				return fmt.Errorf("multiaddr has more than one /tcp component")
+				return errors.NewConfigurationError("multiaddr has more than one /tcp component")
 			}
 			sawPort = true
 		default:
-			return fmt.Errorf("unsupported multiaddr component /%s", c.Protocol().Name)
+			return errors.NewConfigurationError("unsupported multiaddr component /%s", c.Protocol().Name)
 		}
 	}
 
 	if !sawIP {
-		return fmt.Errorf("multiaddr has no /ip4 or /ip6 component")
+		return errors.NewConfigurationError("multiaddr has no /ip4 or /ip6 component")
 	}
 
 	return nil
