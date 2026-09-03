@@ -275,6 +275,11 @@ message QueueStatsMessage {
   // settings contexts are independent processes, and a mismatch would otherwise
   // either pause ingest forever or disable the control entirely, silently.
   int64 doubleSpendWindowMillis = 3;
+  // The enforced (normalized) item ceiling this producer applies, or <= 0 when
+  // the queue is unbounded. Reported rather than read from the reader's own
+  // settings for the same reason as doubleSpendWindowMillis: the two settings
+  // contexts are independent processes.
+  int64 queueMaxItems = 4;
 }
 
 // Response containing the difficulty required for the next block (not the

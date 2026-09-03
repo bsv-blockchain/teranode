@@ -57,6 +57,8 @@ type fakeReader struct {
 	mu           sync.Mutex
 	ageMillis    int64
 	windowMillis int64
+	count        int64
+	maxItems     int64
 	err          error
 }
 
@@ -76,6 +78,17 @@ func (f *fakeReader) setWithWindow(ageMillis, windowMillis int64, err error) {
 	f.mu.Unlock()
 }
 
+// setFill sets the reported depth, the reported item cap and the reported head age
+// together — the three terms the fill predicate and the age predicate share.
+func (f *fakeReader) setFill(count, maxItems, ageMillis int64) {
+	f.mu.Lock()
+	f.count = count
+	f.maxItems = maxItems
+	f.ageMillis = ageMillis
+	f.err = nil
+	f.mu.Unlock()
+}
+
 func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (blockassembly.QueueStats, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -85,6 +98,8 @@ func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (blockassembl
 	}
 
 	return blockassembly.QueueStats{
+		Count:             f.count,
+		MaxItems:          f.maxItems,
 		HeadAge:           time.Duration(f.ageMillis) * time.Millisecond,
 		DoubleSpendWindow: time.Duration(f.windowMillis) * time.Millisecond,
 	}, nil
@@ -106,6 +121,18 @@ func testBackpressureConfig() settings.ValidatorKafkaBackpressureSettings {
 func newTestController(reader queueStatsReader, consumer pausableConsumer) *kafkaBackpressureController {
 	initPrometheusMetrics()
 	return newKafkaBackpressureController(ulogger.TestLogger{}, testBackpressureConfig(), 0, reader, consumer)
+}
+
+// newFillController is newTestController with the fill predicate armed at
+// fillPercent. The base config leaves it at 0, so every other test in this file
+// exercises age-only behaviour.
+func newFillController(reader queueStatsReader, consumer pausableConsumer, fillPercent int) *kafkaBackpressureController {
+	initPrometheusMetrics()
+
+	cfg := testBackpressureConfig()
+	cfg.PauseQueueFillPercent = fillPercent
+
+	return newKafkaBackpressureController(ulogger.TestLogger{}, cfg, 0, reader, consumer)
 }
 
 // TestBackpressure_HysteresisPauseThenResume covers the core watermark logic
@@ -852,4 +879,229 @@ func TestBackpressure_ShutdownResumes(t *testing.T) {
 
 	require.False(t, c.paused.Load(), "consumer must be resumed on shutdown")
 	require.GreaterOrEqual(t, consumer.resumeCount(), 1)
+}
+
+// Age-only control is blind in exactly the regime the hard shed occupies: a burst
+// whose arrival rate exceeds the drain rate pins the queue at its cap while each
+// batch still waits only until the next drain pass, so the head age stays an
+// order of magnitude below the pause watermark while every ingest call sheds.
+// Kafka's durable log is the thing that should absorb that, and without a fill
+// predicate it never gets used.
+func TestBackpressure_PausesOnQueueFillWithYoungHead(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	// 95% full, head age 10ms against a 500ms pause watermark.
+	reader.setFill(950, 1000, 10)
+	c.tick(ctx)
+
+	require.Equal(t, 1, consumer.pauseCount(), "a queue pinned at its cap must pause even with a young head")
+	require.True(t, c.paused.Load())
+
+	// And it does not flap: a second identical read changes nothing.
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+}
+
+// The property that makes the fill predicate safe to ship enabled: with the
+// default blockassembly_maxQueueItems=0 the producer reports no cap, there is no
+// denominator, and the controller must behave exactly as it did before.
+func TestBackpressure_FillPredicateInertWhenQueueUnbounded(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setFill(10_000_000, 0, 10)
+	c.tick(ctx)
+
+	require.Equal(t, 0, consumer.pauseCount(), "no reported cap means no fill signal, whatever the depth")
+	require.False(t, c.paused.Load())
+}
+
+// Resuming takes BOTH predicates. Without that, a fill-triggered pause resumes on
+// the very next tick — the head is young by construction in this regime, which is
+// why the fill predicate exists — and the pause achieves nothing.
+func TestBackpressure_FillResumeRequiresBothAgeAndFill(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setFill(950, 1000, 10)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	// Age is already at the resume watermark, but the queue is still nearly full.
+	reader.setFill(900, 1000, 10)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "a young head alone must not resume a fill-triggered pause")
+	require.True(t, c.paused.Load())
+
+	// Fill falls to half the pause threshold (450 items) and the age is still low.
+	reader.setFill(400, 1000, 10)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "both predicates cool: resume")
+	require.False(t, c.paused.Load())
+}
+
+// Zero percent is the explicit opt-out and must restore age-only behaviour even on
+// a completely full bounded queue.
+func TestBackpressure_FillDisabledByZeroPercent(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 0)
+
+	reader.setFill(1000, 1000, 10)
+	c.tick(ctx)
+
+	require.Equal(t, 0, consumer.pauseCount(), "the fill predicate is off, and the head is young")
+	require.False(t, c.paused.Load())
+}
+
+// A fail-open cooldown must survive the fill regime. The cooldown's early-clear
+// test used to be age-only, and in the regime the fill predicate exists for the
+// head age is young BY CONSTRUCTION — so the very first tick inside the cooldown
+// satisfied it, cleared the latch, and the fill predicate re-paused on that same
+// tick. That is the busy-toggle the cooldown exists to prevent, reintroduced
+// through the new predicate.
+func TestBackpressure_FillHotDoesNotClearFailOpenCooldown(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(3000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	// Pinned at 95% with a 10ms head age: a fill-triggered pause, age nowhere near
+	// its 500ms watermark.
+	reader.setFill(950, 1000, 10)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+	require.True(t, c.paused.Load())
+
+	// Held hot past MaxPause → max-pause fail-open resume, cooldown armed.
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+	require.False(t, c.paused.Load())
+	require.Equal(t, 1, consumer.resumeCount())
+	require.Equal(t, time.Second, c.failOpenCooldown, "31s/4 capped by MaxFailOpenCooldown")
+
+	// Inside the cooldown, still hot by fill, head still young. The age is at or
+	// below the resume watermark, so an age-only early clear would fire here.
+	now = base.Add(31*time.Second + 100*time.Millisecond)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount(),
+		"a young head must not clear the cooldown while the queue is still hot by fill")
+	require.False(t, c.failOpenResumeAt.IsZero(), "the latch must still be armed")
+
+	// Once the cooldown elapses, re-pausing on fill is allowed again — the
+	// suppression is bounded, not permanent.
+	now = base.Add(32 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 2, consumer.pauseCount(), "re-pause allowed once the cooldown expires")
+}
+
+// The other half of C1's fix: requiring both predicates must not turn the early
+// clear into "never clear early". A genuine drain — cool age AND cool fill — still
+// releases the latch before the cooldown expires, which is what stops an
+// already-recovered node from sitting unprotected for the rest of the window.
+func TestBackpressure_GenuineDrainStillClearsFailOpenCooldownEarly(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(4000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setFill(950, 1000, 10)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+	require.False(t, c.paused.Load())
+	require.Equal(t, time.Second, c.failOpenCooldown)
+
+	// Well inside the cooldown, but genuinely drained: 400 items is below the 450
+	// resume threshold and the head age is below its watermark.
+	now = base.Add(31*time.Second + 100*time.Millisecond)
+	reader.setFill(400, 1000, 10)
+	c.tick(ctx)
+	require.True(t, c.failOpenResumeAt.IsZero(), "a genuine drain clears the latch early")
+	require.Equal(t, 1, consumer.pauseCount(), "clearing the latch is not itself a pause")
+
+	// With the latch cleared, protection is back immediately rather than at cooldown
+	// expiry: the next hot read pauses.
+	reader.setFill(950, 1000, 10)
+	c.tick(ctx)
+	require.Equal(t, 2, consumer.pauseCount(), "protection is restored as soon as the latch cleared")
+}
+
+// fillThresholds must always leave a hysteresis gap. The pause threshold is
+// floored at 1 item so a percentage that truncates to 0 cannot pause an empty
+// queue; the resume threshold is not floored, because at a pause threshold of 1
+// item the only value that leaves a gap is 0 — drain to empty. Flooring resume at 1
+// too would make a one-item pause resumable at one item.
+func TestBackpressure_FillThresholdsAlwaysLeaveAHysteresisGap(t *testing.T) {
+	cases := []struct {
+		name                  string
+		maxItems              int64
+		percent               int
+		wantPause, wantResume int64
+	}{
+		{"unbounded queue is inert", 0, 90, 0, 0},
+		{"zero percent is inert", 1000, 0, 0, 0},
+		{"ordinary sizing", 1000, 90, 900, 450},
+		{"percentage truncates to zero items", 64, 1, 1, 0},
+		{"tiny cap", 2, 50, 1, 0},
+		{"full cap", 1000, 100, 1000, 500},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFillController(&fakeReader{}, &fakeConsumer{}, tc.percent)
+			c.queueMaxItems = tc.maxItems
+
+			pause, resume := c.fillThresholds()
+			require.Equal(t, tc.wantPause, pause)
+			require.Equal(t, tc.wantResume, resume)
+
+			if pause > 0 {
+				require.Less(t, resume, pause, "pause and resume must never coincide, or there is no hysteresis")
+			}
+		})
+	}
+}
+
+// The degenerate sizing end to end: with a pause threshold of one item, a single
+// queued item pauses and the queue must drain to empty before fill reads cool.
+func TestBackpressure_OneItemPauseThresholdRequiresDrainToEmpty(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 1)
+
+	// 64 x 1% truncates to 0 items, floored to a pause threshold of 1.
+	reader.setFill(1, 64, 10)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount(), "one item is at the floored pause threshold")
+
+	// Still one item: must NOT resume, or the pause was pointless.
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "pause and resume must not coincide at one item")
+	require.True(t, c.paused.Load())
+
+	// Drained to empty → resumes.
+	reader.setFill(0, 64, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "an empty queue is cool by fill")
+	require.False(t, c.paused.Load())
 }

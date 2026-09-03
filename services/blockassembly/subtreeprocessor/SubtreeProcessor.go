@@ -2638,6 +2638,10 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 // queueLength >= published-outstanding invariant; callers needing the bound must
 // use AddBatchIfRoom.
 //
+// Its only non-test caller is the teranodecli subtree benchmark, which drives the
+// processor directly and wants no cap. The ingest handlers must use AddBatchIfRoom:
+// this method is what the queue bound exists to keep them away from.
+//
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node

@@ -22,6 +22,7 @@ func TestValidatorKafkaBackpressureSettings_Defaults(t *testing.T) {
 	require.Equal(t, 30*time.Second, kbp.MaxPause)
 	require.Equal(t, time.Second, kbp.MaxFailOpenCooldown)
 	require.Equal(t, 3, kbp.StaleErrorLimit)
+	require.Equal(t, 90, kbp.PauseQueueFillPercent)
 }
 
 // TestValidatorKafkaBackpressureSettings_LoaderReadsKeys guards against the
@@ -36,6 +37,7 @@ func TestValidatorKafkaBackpressureSettings_LoaderReadsKeys(t *testing.T) {
 	t.Setenv("validator_kafkaBackpressureMaxPause", "45s")
 	t.Setenv("validator_kafkaBackpressureMaxFailOpenCooldown", "2s")
 	t.Setenv("validator_kafkaBackpressureStaleErrorLimit", "5")
+	t.Setenv("validator_kafkaBackpressurePauseFillPercent", "75")
 
 	kbp := NewSettings().Validator.KafkaBackpressure
 
@@ -47,6 +49,63 @@ func TestValidatorKafkaBackpressureSettings_LoaderReadsKeys(t *testing.T) {
 	require.Equal(t, 45*time.Second, kbp.MaxPause)
 	require.Equal(t, 2*time.Second, kbp.MaxFailOpenCooldown)
 	require.Equal(t, 5, kbp.StaleErrorLimit)
+	require.Equal(t, 75, kbp.PauseQueueFillPercent)
+}
+
+// A percentage outside 0..100 cannot express a fill fraction. Negative must become
+// 0 — the predicate off, age-only behaviour — rather than being read as "always
+// hot", and anything above 100 must become 100. Both report, because a silent
+// clamp on a control input is how a controller ends up doing something the
+// operator did not ask for.
+func TestValidatorKafkaBackpressureSettings_PauseFillPercentClamps(t *testing.T) {
+	base := func() ValidatorKafkaBackpressureSettings {
+		return ValidatorKafkaBackpressureSettings{
+			Enabled:             true,
+			PauseQueueAge:       500 * time.Millisecond,
+			ResumeQueueAge:      100 * time.Millisecond,
+			PollInterval:        50 * time.Millisecond,
+			ReadTimeout:         100 * time.Millisecond,
+			MaxPause:            30 * time.Second,
+			MaxFailOpenCooldown: time.Second,
+			StaleErrorLimit:     3,
+		}
+	}
+
+	t.Run("negative clamps to zero and reports", func(t *testing.T) {
+		cfg := base()
+		cfg.PauseQueueFillPercent = -5
+
+		got, warnings := cfg.validated()
+
+		require.Len(t, warnings, 1, "only the fill clamp fires: every other knob is coherent")
+		require.Contains(t, warnings[0], "pauseFillPercent")
+		require.Equal(t, 0, got.PauseQueueFillPercent)
+		require.True(t, got.Enabled, "a clampable fill watermark keeps the controller enabled")
+	})
+
+	t.Run("above 100 clamps to 100 and reports", func(t *testing.T) {
+		cfg := base()
+		cfg.PauseQueueFillPercent = 140
+
+		got, warnings := cfg.validated()
+
+		require.Len(t, warnings, 1)
+		require.Contains(t, warnings[0], "pauseFillPercent")
+		require.Equal(t, 100, got.PauseQueueFillPercent)
+		require.True(t, got.Enabled)
+	})
+
+	t.Run("zero and 100 are both legal and silent", func(t *testing.T) {
+		for _, pct := range []int{0, 100} {
+			cfg := base()
+			cfg.PauseQueueFillPercent = pct
+
+			got, warnings := cfg.validated()
+
+			require.Empty(t, warnings)
+			require.Equal(t, pct, got.PauseQueueFillPercent)
+		}
+	})
 }
 
 // TestValidatorKafkaBackpressureSettings_MaxFailOpenCooldownFloor verifies the cap

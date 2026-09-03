@@ -81,6 +81,14 @@ type kafkaBackpressureController struct {
 	// only by tick and read only by evaluate, both on the single run goroutine.
 	reportedWindow time.Duration
 
+	// queueCount and queueMaxItems carry the depth and the enforced item cap from
+	// the most recent successful read — the two terms of the fill predicate. Like
+	// reportedWindow the cap is the value the PRODUCER reports, never this process's
+	// own setting: the two settings contexts are independent processes. Written only
+	// by tick and read only by evaluate, both on the single run goroutine.
+	queueCount    int64
+	queueMaxItems int64
+
 	// lastReportedWindow and windowMismatchLogged bound the mismatch warning to
 	// one line per distinct reported value, so a persistent misconfiguration
 	// cannot spam at the poll cadence.
@@ -212,6 +220,8 @@ func (c *kafkaBackpressureController) tick(ctx context.Context) {
 	prometheusKafkaBackpressureReadErrors.Set(0)
 
 	c.reportedWindow = c.observeReportedWindow(stats.DoubleSpendWindow)
+	c.queueCount = stats.Count
+	c.queueMaxItems = stats.MaxItems
 
 	c.evaluate(stats.HeadAge)
 }
@@ -314,24 +324,80 @@ func (c *kafkaBackpressureController) armFailOpenCooldown() {
 	c.failOpenCooldown = cooldown
 }
 
-// evaluate applies the hysteresis decision to a freshly-read queue-head age.
-// The control decision is based on the effective age — the raw head age minus
-// the drain floor the PRODUCER reported (reportedWindow) — so a healthy hold-back
-// (head aged only up to the floor) does not read as a stall, and a difference
-// between the two processes' settings cannot silently invert the decision.
+// fillThresholds returns the pause and resume item counts derived from the
+// reported item cap, or 0, 0 when there is no usable fill signal.
+//
+// It returns 0, 0 — the whole predicate inert — whenever the reported cap is <= 0.
+// That is the property that makes the fill predicate safe to ship enabled: with
+// the default blockassembly_maxQueueItems=0 the block-assembly queue is unbounded,
+// there is no denominator, and the controller behaves exactly as it did before.
+// PauseQueueFillPercent=0 disables it explicitly for a bounded queue too.
+//
+// The resume threshold is derived as half the pause threshold rather than being a
+// second key, so the change adds no new cross-key relationship to validate.
+//
+// Only the PAUSE threshold is floored at 1 item: a configured percentage that
+// truncates to 0 items would otherwise pause on an empty queue. The resume
+// threshold is deliberately NOT floored. When the pause threshold is 1 item, half of
+// it is 0, and 0 is the right answer — the queue then has to drain to empty before
+// fill reads cool, which is the only value that leaves a hysteresis gap at all. A
+// floor of 1 there would make pause and resume both 1, so a pause at one item would
+// resume at one item and the gap would be gone. This cannot wedge ingest: resuming
+// also requires a cool head age, an empty queue reports a head age of 0, and the
+// MaxPause fail-open bounds any pause regardless.
+func (c *kafkaBackpressureController) fillThresholds() (pause, resume int64) {
+	if c.queueMaxItems <= 0 || c.cfg.PauseQueueFillPercent <= 0 {
+		return 0, 0
+	}
+
+	pause = c.queueMaxItems * int64(c.cfg.PauseQueueFillPercent) / 100
+	if pause < 1 {
+		pause = 1
+	}
+
+	return pause, pause / 2
+}
+
+// evaluate applies the hysteresis decision to a freshly-read queue-head age and
+// queue fill.
+//
+// The age decision is based on the effective age — the raw head age minus the drain
+// floor the PRODUCER reported (reportedWindow) — so a healthy hold-back (head aged
+// only up to the floor) does not read as a stall, and a difference between the two
+// processes' settings cannot silently invert the decision.
+//
+// Age alone is blind in one regime, which is why fill is a second predicate: a burst
+// whose arrival rate exceeds the drain rate pins the queue at its cap while each
+// batch still waits only until the next drain pass, so the head age stays well below
+// the pause watermark while the hard shed rejects on every call — exactly the regime
+// Kafka's durable log exists to absorb. Pausing takes EITHER predicate; resuming
+// takes BOTH, so a fill-triggered pause cannot resume immediately on a young head.
 func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	effectiveAge := age - c.reportedWindow
 	if effectiveAge < 0 {
 		effectiveAge = 0
 	}
 
+	fillPause, fillResume := c.fillThresholds()
+	hotByFill := fillPause > 0 && c.queueCount >= fillPause
+	coolByFill := fillPause == 0 || c.queueCount <= fillResume
+
+	// A genuine drain means BOTH predicates are cool, and it means the same thing
+	// everywhere it is used: it is what resumes a pause, and it is what clears a
+	// fail-open cooldown early. Age alone is not it. In the regime the fill predicate
+	// exists for, the head age is young by construction, so an age-only test is
+	// satisfied on the first tick after a fail-open — the latch would clear and the
+	// fill predicate would re-pause immediately, which is the exact busy-toggle the
+	// cooldown exists to prevent.
+	drained := effectiveAge <= c.cfg.ResumeQueueAge && coolByFill
+
 	if !c.paused.Load() {
 		// Within a fail-open cooldown: suppress a new pause so a persistently
 		// dark/hot signal cannot re-pause every tick. Clear the latch on a
-		// genuine drain to the resume watermark or once the armed cooldown
-		// elapses, then fall through to normal evaluation.
+		// genuine drain or once the armed cooldown elapses, then fall through to
+		// normal evaluation.
 		if !c.failOpenResumeAt.IsZero() {
-			if effectiveAge <= c.cfg.ResumeQueueAge || c.now().Sub(c.failOpenResumeAt) >= c.failOpenCooldown {
+			if drained || c.now().Sub(c.failOpenResumeAt) >= c.failOpenCooldown {
 				c.failOpenResumeAt = time.Time{}
 				c.failOpenCooldown = 0
 			} else {
@@ -339,17 +405,22 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 			}
 		}
 
-		if effectiveAge >= c.cfg.PauseQueueAge {
-			c.pause(effectiveAge)
+		hotByAge := effectiveAge >= c.cfg.PauseQueueAge
+
+		if hotByAge || hotByFill {
+			// Age takes the log line when both fired: the fill wording exists to name
+			// the regime age cannot see, and claiming it while age is also hot would
+			// be false.
+			c.pause(effectiveAge, hotByFill && !hotByAge, fillPause)
 		}
 
 		return
 	}
 
-	// Already paused: resume on the low watermark, or when the pause has run
-	// past its hard cap (fail-open) even if the queue is still hot.
-	if effectiveAge <= c.cfg.ResumeQueueAge {
-		c.resume(fmt.Sprintf("queue-head age %s fell to resume watermark %s", effectiveAge, c.cfg.ResumeQueueAge))
+	// Already paused: resume on a genuine drain (low watermark AND cool fill), or
+	// when the pause has run past its hard cap (fail-open) even if it is still hot.
+	if drained {
+		c.resume(fmt.Sprintf("queue-head age %s fell to resume watermark %s, queue fill %d at or below %d", effectiveAge, c.cfg.ResumeQueueAge, c.queueCount, fillResume))
 		return
 	}
 
@@ -362,14 +433,22 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	}
 }
 
-// pause suspends the consumer and records the pause start.
-func (c *kafkaBackpressureController) pause(age time.Duration) {
+// pause suspends the consumer and records the pause start. byFill says which
+// predicate fired, so the log names the reason an operator has to act on.
+func (c *kafkaBackpressureController) pause(age time.Duration, byFill bool, fillPause int64) {
 	c.consumer.PauseAll()
 	c.pauseStart = c.now()
 	c.paused.Store(true)
 
 	prometheusKafkaBackpressurePaused.Set(1)
 	prometheusKafkaBackpressurePauseTotal.Inc()
+
+	if byFill {
+		c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (queue fill %d/%d >= %d items, queue-head age %s still below pause watermark %s)",
+			c.queueCount, c.queueMaxItems, fillPause, age, c.cfg.PauseQueueAge)
+
+		return
+	}
 
 	c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (queue-head age %s >= pause watermark %s)",
 		age, c.cfg.PauseQueueAge)

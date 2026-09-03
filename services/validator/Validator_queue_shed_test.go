@@ -19,8 +19,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -67,10 +69,23 @@ type unlockSpy struct {
 
 	// verifyErr and verifyFailures make the first verifyFailures read-backs of
 	// deletedHash fail with verifyErr; later ones delegate. verifyReadCalls counts the
-	// read-backs actually attempted, which is how the bounded retry is observed.
+	// read-backs actually attempted, which is how the bounded retry and the number of
+	// verify ROUNDS are observed.
 	verifyErr       error
 	verifyFailures  int
 	verifyReadCalls int
+
+	// reappearAfterGoneReads models a concurrent submission of the same txid
+	// recreating the record: once this many read-backs of deletedHash have reported
+	// it gone, every later one reports it readable again. Deterministic, where
+	// racing a real create would not be. goneReads is its running count.
+	reappearAfterGoneReads int
+	goneReads              int
+
+	// verifyFailFromRead makes read-backs of deletedHash from this 1-based index
+	// onward fail with verifyErr. It is the mirror of verifyFailures, which fails the
+	// FIRST n: it is what lets the second verify round fail while the first succeeds.
+	verifyFailFromRead int
 
 	// unspendPartialErr, when set, makes Unspend delegate only the FIRST spend and
 	// then return this error — a partial failure on a multi-input transaction.
@@ -139,15 +154,34 @@ func (s *unlockSpy) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 }
 
 func (s *unlockSpy) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
-	if s.verifyErr != nil && s.deletedHash != nil && hash.IsEqual(s.deletedHash) {
-		s.verifyReadCalls++
-
-		if s.verifyReadCalls <= s.verifyFailures {
-			return s.verifyErr
-		}
+	if s.deletedHash == nil || !hash.IsEqual(s.deletedHash) {
+		return s.Store.GetMeta(ctx, hash, data)
 	}
 
-	return s.Store.GetMeta(ctx, hash, data)
+	// Scoped to the unwind's own read-backs: deletedHash is only set once Delete has
+	// run, so the ordinary GetMeta calls earlier in validation cannot be perturbed.
+	s.verifyReadCalls++
+
+	if s.verifyErr != nil && s.verifyReadCalls <= s.verifyFailures {
+		return s.verifyErr
+	}
+
+	if s.verifyErr != nil && s.verifyFailFromRead > 0 && s.verifyReadCalls >= s.verifyFailFromRead {
+		return s.verifyErr
+	}
+
+	err := s.Store.GetMeta(ctx, hash, data)
+
+	if s.reappearAfterGoneReads > 0 && errors.Is(err, errors.ErrTxNotFound) {
+		if s.goneReads >= s.reappearAfterGoneReads {
+			// Readable again: another submission owns this txid now.
+			return nil
+		}
+
+		s.goneReads++
+	}
+
+	return err
 }
 
 func (s *unlockSpy) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsLocked ...bool) error {
@@ -184,6 +218,11 @@ func (l *capturingLogger) Errorf(format string, args ...interface{}) {
 func (l *capturingLogger) Warnf(format string, args ...interface{}) {
 	l.record(format, args...)
 	l.TestLogger.Warnf(format, args...)
+}
+
+func (l *capturingLogger) Infof(format string, args ...interface{}) {
+	l.record(format, args...)
+	l.TestLogger.Infof(format, args...)
 }
 
 func (l *capturingLogger) record(format string, args ...interface{}) {
@@ -751,7 +790,8 @@ func TestValidate_ShedUnwindRetriesTransientVerifyRead(t *testing.T) {
 	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
 	require.ErrorIs(t, err, errors.ErrThresholdExceeded)
 
-	require.Equal(t, 2, spy.verifyReadCalls, "one failed read, then the retry that answered")
+	require.Equal(t, 3, spy.verifyReadCalls,
+		"round one: one failed read then the retry that answered; round two: the pre-unspend re-check")
 	require.Equal(t, unverifiedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindUnverified),
 		"a transient read failure absorbed by the retry must not be reported as unverified")
 
@@ -1745,4 +1785,302 @@ func TestHTTPStatusForTxError_ThresholdExceeded(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, httpStatusForTxError(errors.ErrThresholdExceeded))
 	require.Equal(t, http.StatusServiceUnavailable, httpStatusForTxError(errors.NewThresholdExceededError("wrapped")))
 	require.Equal(t, http.StatusInternalServerError, httpStatusForTxError(errors.NewProcessingError("other")))
+}
+
+// A block-context shed is accepted, not unwound. The unwind's own preconditions
+// assumed block-context callers never reach it because they set
+// AddTXToBlockAssembly=false; several of them do not, so a shed on a transaction
+// that arrived as part of a block used to DeleteComplete that transaction and
+// unspend its inputs, and then fail the block. The InBlock arm makes the
+// documented invariant a branch: the block is the authority and the template
+// entry is only an optimisation.
+func TestValidate_InBlockShedIsAcceptedWithoutUnwind(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_inblock_accepted")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	unwindsBefore := testutil.ToFloat64(prometheusValidatorShedUnwindTotal)
+	inBlockBefore := testutil.ToFloat64(prometheusValidatorShedInBlockDroppedTotal)
+
+	// AddTXToBlockAssembly is left at its true default, which is exactly what the
+	// unreached block-context call sites do.
+	txMeta, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err, "a block-context shed must not fail the transaction, and so must not fail the block")
+	require.NotNil(t, txMeta)
+
+	require.GreaterOrEqual(t, baStore.calls, 1, "the hand-off was still attempted")
+
+	// Fully accepted: record present, unlocked by the two-phase commit, inputs spent.
+	require.NotNil(t, metaLocked(t, realStore, childTx.TxIDChainHash()), "the record survives")
+	require.False(t, txMeta.Locked, "the two-phase commit ran, so the transaction is spendable")
+	require.Equal(t, 1, spy.unlockCalls, "the 2PC unlock ran exactly once")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the parent's output stays spent by this transaction")
+
+	require.Equal(t, 0, spy.unspendCalls, "nothing is unspent on the block-context arm")
+	require.Equal(t, unwindsBefore, testutil.ToFloat64(prometheusValidatorShedUnwindTotal),
+		"the unwind must not even be attempted for a block-context transaction")
+	require.Equal(t, inBlockBefore+1, testutil.ToFloat64(prometheusValidatorShedInBlockDroppedTotal),
+		"the missing template entry is the accepted residual, so it has to be observable")
+}
+
+// The ordering item, made concrete. A same-block descendant can spend a Locked
+// parent's outputs, because the block-context spend paths pass IgnoreLocked. If a
+// shed then deleted the parent, the descendant's spends of those outputs went with
+// its UTXO map: child accepted without parent.
+func TestValidate_InBlockShedDoesNotDeleteAParentADescendantSpent(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_inblock_ordering")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	// The parent of the pair under test is childTx: it is validated here (so a shed
+	// can act on it) and then spent by a grandchild below.
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err)
+
+	priv, pub := bec.PrivateKeyFromBytes([]byte("QUEUE_SHED_RECOVERY_TESTKEY_1234"))
+
+	grandchildTx := transactions.Create(t,
+		transactions.WithPrivateKey(priv),
+		transactions.WithInput(childTx, 0, priv),
+		transactions.WithP2PKHOutputs(1, 80_000, pub),
+	)
+
+	// The descendant's spend is driven at the store, with the same option the
+	// block-context paths thread through (Validate's WithIgnoreLocked becomes
+	// utxo.WithIgnoreLocked on this call). Driving it through Validate instead is not
+	// possible against a shed parent: consensus rejects an in-block transaction whose
+	// input is unconfirmed (bad-txns-unconfirmed-input-in-block) and a shed parent is
+	// by definition unmined, so the option set the item is about cannot be assembled
+	// above the store. The store call is where the harm lands anyway — a deleted
+	// parent takes its UTXO map, and with it the descendant's recorded spends.
+	_, _, err = realStore.SpendAndCreate(ctx, grandchildTx, 100, utxostore.WithIgnoreLocked(true))
+	require.NoError(t, err, "the descendant must be able to spend its shed parent's outputs")
+
+	require.NotNil(t, metaLocked(t, realStore, childTx.TxIDChainHash()),
+		"the parent a descendant spent must still exist")
+	require.True(t, outpointSpent(t, realStore, childTx, 0),
+		"the descendant's spend of the parent's output must survive")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx))
+}
+
+// The unwind aborts when the record is back immediately before the unspend. The
+// delete writes no tombstone and nothing serialises the unwind against a
+// concurrent submission of the same txid, so a resubmission can recreate the
+// record and take ownership of spends that are byte-identical to this call's own
+// (SpendingData is {txid, vin}). Clearing them would free the inputs of a live,
+// possibly-mined transaction. One verify taken before the cascade's child passes,
+// the blob deletes and the bounded verify retries is not a basis for that.
+func TestValidate_ShedUnwindAbortsWhenRecordReappearedBeforeUnspend(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_unwind_reappeared", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	// The first read-back reports gone (the delete really ran); the pre-unspend
+	// re-check finds it readable again.
+	spy.reappearAfterGoneReads = 1
+
+	initPrometheusMetrics()
+
+	reappearedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindReappeared)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	require.Equal(t, 0, spy.unspendCalls, "fail closed: the inputs belong to whoever owns the record now")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the parent's output stays spent")
+
+	require.Equal(t, reappearedBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindReappeared))
+
+	require.Contains(t, logger.joined(), childTx.TxID(), "the abort names the transaction")
+	require.Contains(t, logger.joined(), outpointOf(parentTx, 0), "and the outpoints left spent")
+}
+
+// The negative: with no reappearance the re-check must not become an
+// unconditional abort. Two verify rounds run and the unspend still happens.
+func TestValidate_ShedUnwindStillUnspendsWhenRecordStaysGone(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_unwind_stays_gone")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	reappearedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindReappeared)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded)
+
+	require.Equal(t, 2, spy.verifyReadCalls,
+		"two verify rounds: the post-delete check and the pre-unspend re-check")
+	require.Equal(t, 1, spy.unspendCalls, "the unwind completed")
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the inputs were freed as intended")
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+
+	require.Equal(t, reappearedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindReappeared))
+}
+
+// newForStartupCheck builds a validator purely to exercise New's startup checks,
+// returning the logger that captured them. mutate shapes the settings the checks
+// read.
+func newForStartupCheck(t *testing.T, mutate func(*settings.Settings)) *capturingLogger {
+	t.Helper()
+
+	logger := &capturingLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	mutate(tSettings)
+
+	nullStore, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	_, err = New(context.Background(), logger, tSettings, nullStore, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	return logger
+}
+
+// The hand-off floor models the batcher's first-item flush wait but cannot model
+// the wait for a dispatch slot: that is (producers queued ahead / limit) x
+// per-send latency and neither factor is configured, so any number a guard
+// computed would be fabricated. Startup must therefore disclose the omission
+// rather than report on a set of timing keys that silently excludes the one that
+// matters — a hand-off that overruns the floor lands in the arm that leaves the
+// transaction locked.
+func TestNew_ReportsSendBatchMaxConcurrentOutsideTheHandoffFloor(t *testing.T) {
+	t.Run("discloses when batching with a concurrency limit", func(t *testing.T) {
+		logged := newForStartupCheck(t, func(s *settings.Settings) {
+			s.BlockAssembly.SendBatchSize = 100
+			s.BatcherDrainMode = false
+			s.BlockAssembly.SendBatchMaxConcurrent = 3
+		}).joined()
+
+		require.Contains(t, logged, "blockassembly_sendBatchMaxConcurrent",
+			"the line must name the key whose wait is unmodelled")
+		require.Contains(t, logged, "teranode_validator_handoff_deadline_total",
+			"and the counter that shows the consequence")
+	})
+
+	t.Run("silent with no concurrency limit", func(t *testing.T) {
+		logged := newForStartupCheck(t, func(s *settings.Settings) {
+			s.BlockAssembly.SendBatchSize = 100
+			s.BatcherDrainMode = false
+			s.BlockAssembly.SendBatchMaxConcurrent = 0
+		}).joined()
+
+		require.NotContains(t, logged, "blockassembly_sendBatchMaxConcurrent")
+	})
+
+	t.Run("silent when nothing is batched", func(t *testing.T) {
+		// Nothing is batched, so nothing blocks for a dispatch slot.
+		logged := newForStartupCheck(t, func(s *settings.Settings) {
+			s.BlockAssembly.SendBatchSize = 0
+			s.BlockAssembly.SendBatchMaxConcurrent = 3
+		}).joined()
+
+		require.NotContains(t, logged, "blockassembly_sendBatchMaxConcurrent")
+	})
+}
+
+// A shed's in-place retry holds the parent Locked for the whole window while a
+// child spending it gets only the TX_LOCKED backoff budget, and nothing in the
+// settings relates the two. At the shipped defaults the window is ~20x the
+// budget, so children are lost silently — BSV has no mempool to hold them.
+// Startup is the only place that arithmetic can be named before it costs
+// transactions.
+func TestNew_WarnsWhenShedRetryWindowOutrunsChildLockBudget(t *testing.T) {
+	t.Run("shipped defaults with a positive cap", func(t *testing.T) {
+		logged := newForStartupCheck(t, func(s *settings.Settings) {
+			s.BlockAssembly.MaxQueueItems = 1
+		}).joined()
+
+		require.Contains(t, logged, "validator_blockAssemblyShedRetryTimeout")
+		require.Contains(t, logged, "validator_txlocked_maxRetries")
+		require.Contains(t, logged, "teranode_validator_parent_commit_exhausted")
+	})
+
+	t.Run("silent with no queue cap", func(t *testing.T) {
+		// No cap, no shed, so the two budgets never meet.
+		logged := newForStartupCheck(t, func(s *settings.Settings) {
+			s.BlockAssembly.MaxQueueItems = 0
+		}).joined()
+
+		require.NotContains(t, logged, "child TX_LOCKED budget")
+	})
+
+	t.Run("silent when the two budgets are coupled", func(t *testing.T) {
+		// A 100ms window (700ms retry timeout minus the 600ms shipped floor) against
+		// a 5-retry child budget of 310ms.
+		logged := newForStartupCheck(t, func(s *settings.Settings) {
+			s.BlockAssembly.MaxQueueItems = 1
+			s.Validator.BlockAssemblyShedRetryTimeout = 700 * time.Millisecond
+			s.Validator.TxLockedMaxRetries = 5
+		}).joined()
+
+		require.NotContains(t, logged, "child TX_LOCKED budget")
+	})
+}
+
+// childLockBudget must mirror the retry loop's own arithmetic, including its
+// clamps, or the startup warning above compares against a number the loop does
+// not use.
+func TestChildLockBudget(t *testing.T) {
+	require.Equal(t, time.Duration(0), childLockBudget(0), "no retries, no budget")
+	require.Equal(t, 10*time.Millisecond, childLockBudget(1))
+	require.Equal(t, 70*time.Millisecond, childLockBudget(3), "10+20+40 at the shipped default")
+	require.Equal(t, 310*time.Millisecond, childLockBudget(5))
+	require.Equal(t, time.Duration(0), childLockBudget(-1), "clamped like the loop clamps")
+	require.Equal(t, childLockBudget(txLockedMaxSafeRetries), childLockBudget(txLockedMaxSafeRetries+7),
+		"the loop's safe-retry clamp applies here too")
+}
+
+// The pre-unspend re-check has two distinct abort causes and must not conflate
+// them. verifyRecordDeleted reports "not gone" both for a record that is
+// conclusively readable and for a read that kept failing, and only the first is a
+// competing submission. Counting an unreliable store as a reappearance would make
+// shed_unwind_reappeared_total useless as the signal that per-txid serialisation is
+// actually needed, and the log would tell an operator a transaction came back when
+// nothing established that.
+func TestValidate_ShedUnwindSecondVerifyReadFailureIsNotAReappearance(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_unwind_second_verify_fails", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	// Read 1 (the post-delete verify) answers "gone"; every read from the second on
+	// — the pre-unspend round and its bounded retries — fails.
+	spy.verifyErr = errors.NewStorageError("utxo store read unavailable")
+	spy.verifyFailFromRead = 2
+
+	initPrometheusMetrics()
+
+	reappearedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindReappeared)
+	unverifiedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindUnverified)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	// Still fails closed: an inconclusive read is no basis for freeing the inputs.
+	require.Equal(t, 0, spy.unspendCalls, "an unconfirmable re-check must not unspend")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the inputs stay spent")
+
+	require.Equal(t, reappearedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindReappeared),
+		"a failing read establishes nothing, so it is NOT a reappearance")
+	require.Equal(t, unverifiedBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindUnverified),
+		"it is the unverified condition, the same one the post-delete round reports")
+
+	logged := logger.joined()
+	require.NotContains(t, logged, "present again",
+		"the log must not claim the record came back when the read never said so")
+	require.Contains(t, logged, outpointOf(parentTx, 0),
+		"and it must still name the outpoints an operator has to reconcile")
+
+	// The bounded retry ran on the second round too: read 1 plus shedUnwindVerifyAttempts.
+	require.Equal(t, 1+shedUnwindVerifyAttempts, spy.verifyReadCalls)
 }

@@ -1111,7 +1111,6 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "AddTx",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
-		tracing.WithCounter(prometheusBlockAssemblyAddTxCounter),
 		tracing.WithTag("txid", util.ReverseAndHexEncodeSlice(req.Txid)),
 		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", util.ReverseAndHexEncodeSlice(req.Txid)),
 	)
@@ -1145,6 +1144,12 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		); err != nil {
 			return nil, err
 		}
+
+		// Counted after the enqueue, never before: a queue-full shed returns above,
+		// and a counter that moved anyway would make the add rate irreconcilable
+		// against queue_shed_total. The handler histogram still measures the shed,
+		// which is the right thing to measure there.
+		prometheusBlockAssemblyAddTxCounter.Inc()
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -1341,13 +1346,15 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
-
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
 		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
 			return nil, err
 		}
+
+		// Counted after the enqueue, never before: a shed returns above, so the add
+		// rate stays reconcilable against queue_shed_total.
+		prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 	}
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
@@ -1523,11 +1530,13 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
-
 	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
 		return nil, err
 	}
+
+	// Counted after the enqueue, never before, as on the other two ingest handlers.
+	// Unreachable on a disabled node, which returns early above.
+	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
 }
@@ -2374,13 +2383,14 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 //   - _: Empty message request (unused)
 //
 // Returns:
-//   - *blockassembly_api.QueueStatsMessage: Queue depth, head-batch age and the applied double-spend window
+//   - *blockassembly_api.QueueStatsMessage: Queue depth, head-batch age, the applied double-spend window and the enforced item cap
 //   - error: Always nil; both queue values are atomic loads that cannot fail
 func (ba *BlockAssembly) GetBlockAssemblyQueueStats(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.QueueStatsMessage, error) {
 	return &blockassembly_api.QueueStatsMessage{
 		QueueCount:              ba.blockAssembler.QueueLength(),
 		QueueHeadAgeMillis:      ba.blockAssembler.QueueHeadAge().Milliseconds(),
 		DoubleSpendWindowMillis: ba.settings.BlockAssembly.DoubleSpendWindow.Milliseconds(),
+		QueueMaxItems:           ba.blockAssembler.QueueMaxItems(),
 	}, nil
 }
 

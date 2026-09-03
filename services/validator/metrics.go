@@ -169,9 +169,10 @@ var (
 
 	// prometheusValidatorShedUnwindUnverified counts unwinds abandoned because the
 	// record's absence could not be CONFIRMED after the bounded retry — a read that
-	// kept failing, rather than a record that was still there. The inputs are left
-	// spent by a record whose deletion is unconfirmed; the error log carries the txid
-	// and the outpoints to reconcile from.
+	// kept failing, rather than a record that was still there. It covers both
+	// read-back rounds, the one after the delete and the one before the unspend. The
+	// inputs are left spent by a record whose deletion is unconfirmed; the error log
+	// carries the txid and the outpoints to reconcile from.
 	prometheusValidatorShedUnwindUnverified prometheus.Counter
 
 	// prometheusValidatorShedUnwindResidue counts unwinds whose complete delete
@@ -186,6 +187,22 @@ var (
 	// already returned success to the submitter by then, so these drops are silent
 	// from the client's point of view — this is the counter to alert on.
 	prometheusValidatorShedDroppedTotal prometheus.Counter
+
+	// prometheusValidatorShedInBlockDroppedTotal counts block-context transactions
+	// accepted without a block-assembly template entry because the ingest queue was
+	// full. The transaction is valid, unlocked and spendable; it is simply not
+	// mineable by this node until the next unmined reload, which nothing schedules,
+	// so a rising value is the signal that a block-assembly reset would recover
+	// template entries this node is otherwise missing.
+	prometheusValidatorShedInBlockDroppedTotal prometheus.Counter
+
+	// prometheusValidatorShedUnwindReappeared counts shed unwinds aborted because the
+	// record was CONCLUSIVELY readable again immediately before the unspend: another
+	// submission of the same txid now owns those spends, and clearing them would free
+	// the inputs of a live transaction. A pre-unspend read that merely kept failing is
+	// shed_unwind_unverified_total instead, so this counter stays a clean signal that
+	// concurrent same-txid submissions are real in this deployment.
+	prometheusValidatorShedUnwindReappeared prometheus.Counter
 
 	// prometheusValidatorHandoffDeadlineTotal counts block-assembly handoffs that hit
 	// the validator's own handoff deadline instead of returning a shed or a success. A
@@ -508,6 +525,24 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "shed_dropped_total",
 			Help:      "Number of transactions dropped after the bounded block assembly handoff retry on the Kafka ingest path, whose submitter was already told the transaction was accepted",
+		},
+	)
+
+	prometheusValidatorShedInBlockDroppedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_inblock_dropped_total",
+			Help:      "Number of block-context transactions accepted without a block-assembly template entry because the ingest queue was full",
+		},
+	)
+
+	prometheusValidatorShedUnwindReappeared = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_reappeared_total",
+			Help:      "Number of shed unwinds aborted because the record was present again immediately before the unspend, so another submission owns those spends",
 		},
 	)
 

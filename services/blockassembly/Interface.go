@@ -28,14 +28,22 @@ import (
 type QueueStats struct {
 	// Count is the current ingest-queue depth in items.
 	//
-	// It is reported for operators reading GetBlockAssemblyQueueStats directly —
-	// depth is what distinguishes "one old batch sitting behind the drain floor" from
-	// "a full queue" — and it is deliberately NOT a control input. The backpressure
-	// controller decides on HeadAge because depth alone cannot tell a queue that is
-	// draining from one that is stalled: a large but falling depth needs no
-	// intervention, a small but static one does. Block assembly exports its own depth
-	// gauge for alerting.
+	// Depth alone is not a usable control input: it cannot tell a queue that is
+	// draining from one that is stalled, since a large but falling depth needs no
+	// intervention while a small but static one does. Depth as a FRACTION of MaxItems
+	// is, and that is how the backpressure controller uses it — alongside HeadAge,
+	// which stays blind to the regime where a queue is pinned at its ceiling while
+	// each batch still waits only until the next drain pass.
 	Count int64
+
+	// MaxItems is the enforced (normalized) item ceiling the reporting process
+	// applies, or <= 0 when its queue is unbounded. It is the denominator for Count
+	// and, like DoubleSpendWindow, is reported rather than read from the reader's own
+	// settings: the two live in independent settings contexts and cannot be assumed
+	// equal. A reported value <= 0 makes any fill-based decision meaningless, so
+	// readers must treat it as "no fill signal available" rather than as zero
+	// capacity.
+	MaxItems int64
 
 	// HeadAge is how long the oldest queued batch has waited (0 when empty).
 	// It is the raw age, hold-back included.

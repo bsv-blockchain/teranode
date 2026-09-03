@@ -386,3 +386,61 @@ func Test_normalizeMaxQueueItems(t *testing.T) {
 		require.Equal(t, int64(16_777_216), normalizeMaxQueueItems(logger, 16_777_216, sendBatchSize))
 	})
 }
+
+// A batch larger than the whole cap can never satisfy a reservation, on any queue
+// state, so refusing it was permanent rather than transient: that producer never
+// made progress. It is reachable by cross-process skew, because the batch size is
+// chosen by the client from its own settings context while the cap's clamp floor
+// is derived from this pod's.
+func Test_enqueueBatchIfRoom_oversizeBatchAdmittedOnEmptyQueue(t *testing.T) {
+	q := NewLockFreeQueueWithLimit(10)
+
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)),
+		"a batch bigger than the whole cap must be admitted alone rather than wedge forever")
+	require.Equal(t, int64(25), q.length(), "the ceiling is transiently exceeded by exactly this batch")
+
+	// The overshoot is bounded to one batch: the queue is no longer empty.
+	require.False(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)))
+	require.Equal(t, int64(25), q.length(), "the refused batch's reservation was rolled back")
+
+	// Once drained, the next over-size batch is admitted again.
+	batch, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Equal(t, 25, len(batch.nodes))
+	require.Equal(t, int64(0), q.length())
+
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)),
+		"an empty queue admits the next over-size batch, so the producer keeps making progress")
+}
+
+// The carve-out is conditioned on the queue being empty: it buys liveness for a
+// producer that could never make progress, not a licence to pile over-size
+// batches on top of a queue that is already over its ceiling.
+func Test_enqueueBatchIfRoom_oversizeBatchRefusedWhenQueueNotEmpty(t *testing.T) {
+	q := NewLockFreeQueueWithLimit(10)
+
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(5), mkInpoints(5)))
+
+	require.False(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)))
+	require.Equal(t, int64(5), q.length(), "the rollback is complete: only the fitting batch is accounted")
+
+	// And nothing beyond the fitting batch was published.
+	batch, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Equal(t, 5, len(batch.nodes))
+
+	_, found = q.dequeueBatch(0)
+	require.False(t, found)
+}
+
+// The n > maxItems guard is what keeps the carve-out from becoming a general
+// "an empty queue admits anything" rule: an ordinary over-cap batch is still
+// refused and still relies on the bounded wait and the shed.
+func Test_enqueueBatchIfRoom_normalOverflowStillRefused(t *testing.T) {
+	q := NewLockFreeQueueWithLimit(10)
+
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(6), mkInpoints(6)))
+	require.False(t, q.enqueueBatchIfRoom(mkNodes(6), mkInpoints(6)),
+		"a batch that fits the cap but not the remaining room is still refused")
+	require.Equal(t, int64(6), q.length())
+}

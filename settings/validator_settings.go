@@ -76,7 +76,11 @@ type ValidatorKafkaBackpressureSettings struct {
 	// resume, not a floor: it is the longest backpressure will stay suppressed
 	// after the controller resumed without observing a drain.
 	MaxFailOpenCooldown time.Duration `key:"validator_kafkaBackpressureMaxFailOpenCooldown" desc:"Upper bound on how long backpressure stays suppressed after a fail-open resume" default:"1s" category:"Validator" usage:"Caps the unprotected window that follows a fail-open resume" type:"duration" longdesc:"### Purpose\nA resume that was NOT a genuine drain to the low watermark — the max-pause forced resume, or the stale-signal resume — arms a cooldown during which no new pause may start. This setting is the upper bound on that cooldown.\n\n### How It Works\nThe armed cooldown is the preceding pause divided by 4, then clamped: capped by this value, and floored (in code, not configurable) at twice the poll interval.\n\n### Both halves of the clamp matter\n- The **cap** bounds how long the block-assembly queue grows unprotected after a fail-open. Without it, suppression lasted a full max-pause window (30s by default): with a positive blockassembly_maxQueueItems that is 30s of hard shedding, and with the default unbounded queue it is 30s of growth toward the very OOM the feature exists to prevent.\n- The **floor** of 2x the poll interval bounds the paused duty cycle from the other side, so a flapping stats endpoint cannot busy-toggle pause and resume on consecutive ticks.\n\n### Constraints\nFloored at 2x pollInterval at load.\n\n### Recommendations\n- **1s** (default) - short enough that an overloaded node regains protection quickly, long enough to break a re-pause-on-the-next-tick cycle."`
-	StaleErrorLimit     int           `key:"validator_kafkaBackpressureStaleErrorLimit" desc:"Consecutive read errors tolerated before fail-open resume" default:"3" category:"Validator" usage:"Resume if the queue signal is unavailable this many polls in a row" type:"int" longdesc:"### Purpose\nNumber of consecutive queue-stats read errors (or timeouts) after which the controller fails open and resumes a paused consumer (the Nth consecutive failure triggers the resume). A successful read resets the counter.\n\n### Constraints\nClamped to a minimum of 1 at load: a non-positive value is meaningless. The default of 3 rides out brief transient read failures before failing open."`
+	// PauseQueueFillPercent is the fill high-watermark, as a percentage of the item
+	// cap the block-assembly process REPORTS. The resume threshold is derived in code
+	// as half of it, so the predicate adds one key and no new cross-key relationship.
+	PauseQueueFillPercent int `key:"validator_kafkaBackpressurePauseFillPercent" desc:"Queue fill high-watermark, as a percentage of the reported item cap" default:"90" category:"Validator" usage:"Pause the tx consumer when the ingest queue is at least this full" type:"int" longdesc:"### Purpose\nHigh-watermark on ingest-queue FILL, as a percentage of the item cap the block-assembly process reports. It exists because the age watermarks are blind in one regime: a burst can pin the queue at its ceiling while each batch still waits only until the next drain pass, so the head age stays an order of magnitude below pauseQueueAge while the hard shed rejects on every call.\n\n### How It Works\nEach poll reads the queue depth and the enforced (normalized) item cap from the same queue-stats RPC. The controller pauses when the effective head age reaches pauseQueueAge **or** the fill reaches this percentage. Once paused it resumes only when the age is back at or below resumeQueueAge **and** the fill has fallen to at most half this percentage - requiring both is what stops a fill-triggered pause resuming immediately on a young head.\n\n### When it does nothing\nThe predicate is inert whenever the reported cap is <= 0, i.e. whenever the block-assembly queue is unbounded (blockassembly_maxQueueItems=0, the shipped default). Fill has no meaning without a denominator, and the reported cap is used rather than this process's own setting because the two settings contexts are independent processes.\n\n### Constraints\n0 disables the fill predicate and restores age-only behaviour. A negative value is clamped to 0 and a value above 100 to 100, both with a warning naming the key.\n\n### Recommendations\n- **90** (default) - late enough that ordinary bursts ride the age watermarks, early enough to pause before the queue starts shedding."`
+	StaleErrorLimit       int `key:"validator_kafkaBackpressureStaleErrorLimit" desc:"Consecutive read errors tolerated before fail-open resume" default:"3" category:"Validator" usage:"Resume if the queue signal is unavailable this many polls in a row" type:"int" longdesc:"### Purpose\nNumber of consecutive queue-stats read errors (or timeouts) after which the controller fails open and resumes a paused consumer (the Nth consecutive failure triggers the resume). A successful read resets the counter.\n\n### Constraints\nClamped to a minimum of 1 at load: a non-positive value is meaningless. The default of 3 rides out brief transient read failures before failing open."`
 }
 
 // loadValidatorKafkaBackpressureSettings reads the backpressure keys and returns
@@ -84,18 +88,19 @@ type ValidatorKafkaBackpressureSettings struct {
 // knobs (non-positive pause watermark, poll interval, read timeout or max-pause)
 // force the controller off; a resume watermark not strictly below the pause
 // watermark is clamped to half the pause watermark; a negative resume watermark
-// is clamped to 0; the stale-error limit is floored at 1. Violations warn on
-// stderr while the process still has no logger.
+// is clamped to 0; the fill watermark is clamped into 0..100; the stale-error limit
+// is floored at 1. Violations warn on stderr while the process still has no logger.
 func loadValidatorKafkaBackpressureSettings(alternativeContext ...string) ValidatorKafkaBackpressureSettings {
 	s := ValidatorKafkaBackpressureSettings{
-		Enabled:             getBool("validator_kafkaBackpressureEnabled", false, alternativeContext...),
-		PauseQueueAge:       getDuration("validator_kafkaBackpressurePauseQueueAge", 500*time.Millisecond, alternativeContext...),
-		ResumeQueueAge:      getDuration("validator_kafkaBackpressureResumeQueueAge", 100*time.Millisecond, alternativeContext...),
-		PollInterval:        getDuration("validator_kafkaBackpressurePollInterval", 50*time.Millisecond, alternativeContext...),
-		ReadTimeout:         getDuration("validator_kafkaBackpressureReadTimeout", 100*time.Millisecond, alternativeContext...),
-		MaxPause:            getDuration("validator_kafkaBackpressureMaxPause", 30*time.Second, alternativeContext...),
-		MaxFailOpenCooldown: getDuration("validator_kafkaBackpressureMaxFailOpenCooldown", time.Second, alternativeContext...),
-		StaleErrorLimit:     getInt("validator_kafkaBackpressureStaleErrorLimit", 3, alternativeContext...),
+		Enabled:               getBool("validator_kafkaBackpressureEnabled", false, alternativeContext...),
+		PauseQueueAge:         getDuration("validator_kafkaBackpressurePauseQueueAge", 500*time.Millisecond, alternativeContext...),
+		ResumeQueueAge:        getDuration("validator_kafkaBackpressureResumeQueueAge", 100*time.Millisecond, alternativeContext...),
+		PollInterval:          getDuration("validator_kafkaBackpressurePollInterval", 50*time.Millisecond, alternativeContext...),
+		ReadTimeout:           getDuration("validator_kafkaBackpressureReadTimeout", 100*time.Millisecond, alternativeContext...),
+		MaxPause:              getDuration("validator_kafkaBackpressureMaxPause", 30*time.Second, alternativeContext...),
+		MaxFailOpenCooldown:   getDuration("validator_kafkaBackpressureMaxFailOpenCooldown", time.Second, alternativeContext...),
+		PauseQueueFillPercent: getInt("validator_kafkaBackpressurePauseFillPercent", 90, alternativeContext...),
+		StaleErrorLimit:       getInt("validator_kafkaBackpressureStaleErrorLimit", 3, alternativeContext...),
 	}
 
 	cfg, warnings := s.validated()
@@ -183,6 +188,20 @@ func (s ValidatorKafkaBackpressureSettings) validated() (ValidatorKafkaBackpress
 		warn("maxFailOpenCooldown=%s must be >= 2 x pollInterval=%s; clamping to %s", s.MaxFailOpenCooldown, s.PollInterval, floor)
 
 		s.MaxFailOpenCooldown = floor
+	}
+
+	// A percentage outside 0..100 cannot express a fill fraction. Negative becomes 0
+	// (predicate off, age-only behaviour) rather than being treated as "always hot".
+	if s.PauseQueueFillPercent < 0 {
+		warn("pauseFillPercent=%d must be >= 0; clamping to 0 (fill predicate disabled)", s.PauseQueueFillPercent)
+
+		s.PauseQueueFillPercent = 0
+	}
+
+	if s.PauseQueueFillPercent > 100 {
+		warn("pauseFillPercent=%d must be <= 100; clamping to 100", s.PauseQueueFillPercent)
+
+		s.PauseQueueFillPercent = 100
 	}
 
 	// A non-positive limit is meaningless (the streak is compared with >=); floor
