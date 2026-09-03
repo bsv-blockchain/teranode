@@ -46,7 +46,7 @@ These defaults are sensible for networks up to ~10K nodes. Latency is `O(log N)`
 
 ### Seen-message dedup
 - libp2p's pubsub maintains a `seenMessages` time-cache keyed by message ID (`go-libp2p-pubsub/pubsub.go:536, 1399, 1416`). Duplicate messages by ID are dropped before being forwarded. Default TTL is 2 minutes.
-- Teranode adds an application-layer 10MB size guard (`Server.go:66, 913-914`) before JSON unmarshal.
+- Teranode adds application-layer per-topic size guards (10KB ceiling, `maxGossipMessageSize` in `services/p2p/Server.go`) in the topic handlers before JSON unmarshal. The former 10MB `maxP2PMessageSize` constant was never wired to anything and has been removed.
 - A peer publishing many *different* malformed messages would still propagate them, since the dedup is by message ID, not by content. See "Validators" below.
 
 ### Validators / rate limiting
@@ -73,7 +73,7 @@ Four topics — block, subtree, node_status, rejected_tx (`Server.go:608-611`). 
 Already covered above:
 
 - **No validators at gossipsub layer** — schema and rate are not enforced before relay. **Application-layer parsing happens after the message has been forwarded to the mesh**, so garbage propagates one hop further than it needs to. Closing this gap requires the library to expose `RegisterTopicValidator`; teranode can't reach the underlying `pubsub.PubSub` directly today.
-- Per-topic size limits are now enforced (see "Validators / rate limiting" above). The global 10 MB safety net remains, with tighter caps per topic so a 5 MB blob on `node_status` is rejected before JSON parsing.
+- Per-topic size limits are now enforced (see "Validators / rate limiting" above), all at or under a 10KB ceiling, so a 5 MB blob on `node_status` is rejected before JSON parsing. There is no wider Teranode-side safety net: the only pre-relay size check is libp2p's 1MiB default, because `go-p2p-message-bus` does not expose `pubsub.WithMaxMessageSize`.
 - No message signing / origin authentication. Today the network trusts `peer.FromID`. Acceptable while bootstrap peers are curated; risky once the network is open.
 
 ## 4. Reputation, ban management, peer-map

@@ -84,30 +84,36 @@ const (
 	// producer flushes later in Server.Stop still get usable time.
 	syncCoordinatorStopTimeout = 10 * time.Second
 
-	// maxP2PMessageSize is the absolute upper bound on a pubsub message payload.
-	// Anything larger is dropped before parsing. Per-topic limits below should
-	// always be tighter than this; this is the safety net.
-	maxP2PMessageSize = 10 * 1024 * 1024 // 10MB
+	// maxGossipMessageSize is the ceiling every per-topic cap below must stay
+	// at or under (guarded by TestTopicKindCaps_WithinGossipCeiling). Teranode
+	// gossip payloads are small JSON announcements, realistically ~1KB, so
+	// nothing legitimate comes near 10KB.
+	//
+	// This ceiling is NOT enforced on the wire. go-p2p-message-bus exposes
+	// neither pubsub.WithMaxMessageSize nor RegisterTopicValidator, so the
+	// libp2p default (1MiB) is the only pre-relay check and the per-topic caps
+	// below run in the subscription handlers, after gossipsub has already
+	// forwarded the message to the mesh. See docs/p2p-libp2p-review.md.
+	maxGossipMessageSize = 10 * 1024 // 10KB
 
 	// Per-topic size limits. Each topic's payload is well-bounded, so these are
 	// kept tight to drop obvious abuse (e.g. multi-MB blobs) before JSON parsing
 	// and to give us a clear ceiling per message type.
 	//
 	// Block / subtree messages carry: hash (64 chars), height, DataHub URL,
-	// peer ID, 80B block header, client name. Realistic size is < 1KB.
-	// Block keeps extra headroom for the optional hex-encoded coinbase tx.
-	maxBlockMessageSize   = 32 * 1024 // 32KB
-	maxSubtreeMessageSize = 8 * 1024  // 8KB
-	// node_status messages are NodeStatusMessage JSON, realistically ~1KB.
-	// (The old 64KB cap was headroom for a connected-peers list that never
-	// existed — ConnectedPeersCount has always been an int.) The per-field
-	// bounds cap the raw string bytes at ~5KB, but json.Marshal HTML-escapes
-	// some printable characters to six bytes each, so the marshalled form of a
-	// pathological-yet-valid message can exceed the raw sum; publishToNetwork
-	// therefore enforces these caps on every outbound payload (topicKindCaps),
-	// so a local config that would be dropped by peers fails loudly here
-	// instead.
-	maxNodeStatusMessageSize = 16 * 1024 // 16KB
+	// peer ID, 80B block header, client name. Realistic size is < 1KB. The
+	// optional Coinbase field has never been populated by any Teranode version
+	// and nothing consumes it, so block gets no extra headroom for it.
+	maxBlockMessageSize   = maxGossipMessageSize
+	maxSubtreeMessageSize = 8 * 1024 // 8KB
+	// node_status messages are NodeStatusMessage JSON, realistically ~1KB. The
+	// per-field bounds cap the raw string bytes at ~5KB, but json.Marshal
+	// HTML-escapes some printable characters to six bytes each, so the
+	// marshalled form of a pathological-yet-valid message can exceed the raw
+	// sum; publishToNetwork therefore enforces these caps on every outbound
+	// payload (topicKindCaps), so a local config that would be dropped by
+	// peers fails loudly here instead.
+	maxNodeStatusMessageSize = maxGossipMessageSize
 	// rejected_tx messages carry: tx hash, reason string, peer ID. Our egress
 	// truncates the reason to maxGossipReasonLen, but un-upgraded peers publish
 	// the untruncated validator error chain, so keep headroom for those during
