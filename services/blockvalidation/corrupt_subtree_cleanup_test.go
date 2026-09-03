@@ -2,15 +2,20 @@ package blockvalidation
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -207,4 +212,79 @@ func TestValidateBlockWithOptions_RunningCorruptBody_CleansUpOnlySubtreeToCheck(
 		require.NoError(t, existsErr)
 		require.True(t, still, "%s must be preserved by the RUNNING corrupt cleanup", ft)
 	}
+}
+
+// TestValidateBlockWithOptions_SubtreeValidationCorruptBody_CleansUpSubtreeToCheck pins the cleanup on
+// the SUBTREE-VALIDATION corrupt branch (bitcoin-sv/teranode#4692) — the sibling of the block.Valid
+// merkle branch covered by TestValidateBlockWithOptions_RunningCorruptBody_CleansUpOnlySubtreeToCheck.
+// When validateBlockSubtrees (CheckBlockSubtrees) is the first detector of a body-derived corruption —
+// e.g. a CVE-2012-2459 duplicate that is root-preserving so the fetch-side root check passed and the
+// peer bytes are already on disk under FileTypeSubtreeToCheck — the branch must strike the serving peer
+// and drop that unvalidated marker, so a retry (even from an honest re-announcer) re-fetches instead of
+// re-reading the poisoned body and re-failing forever.
+//
+// The blockchain store is a real sqlitememory store; CheckBlockSubtrees is the only mocked collaborator,
+// because it is the subtree-validation service (not the blockchain) and returning ERR_BLOCK_CORRUPT from
+// it is the only way to make subtree validation — rather than the later block.Valid merkle check — the
+// first detector. DisableOptimisticMining keeps validation synchronous.
+func TestValidateBlockWithOptions_SubtreeValidationCorruptBody_CleansUpSubtreeToCheck(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	subtreeVal := &subtreevalidation.MockSubtreeValidation{}
+	subtreeVal.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(errors.NewBlockCorruptError("corrupt subtree body during subtree validation"))
+
+	// A coinbase-only subtree whose peer-supplied bytes are on disk under FileTypeSubtreeToCheck — the
+	// artifact the corrupt branch must delete. block.Valid never runs (the corrupt verdict comes from
+	// subtree validation), so the body need not be otherwise valid; only the header must meet its own
+	// target to clear the difficulty gate before subtree validation.
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	subtreeHash := subtree.RootHash()
+	require.NoError(t, subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes))
+
+	coinbaseTx := coinbaseAtHeight(t, 1)
+	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, &chainhash.Hash{})
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtreeHash},
+		uint64(subtree.Length()), uint64(coinbaseTx.Size()), 1, 0) //nolint:gosec
+	require.NoError(t, err)
+
+	present, err := subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	require.NoError(t, err)
+	require.True(t, present, "FileTypeSubtreeToCheck must exist before the corrupt verdict")
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeVal)
+	rec := &banScoreRecorder{}
+	bv.p2pClient = rec
+
+	valErr := bv.ValidateBlockWithOptions(ctx, block, "http://peer",
+		&ValidateBlockOptions{PeerID: "peer-corrupt", DisableOptimisticMining: true})
+	require.Error(t, valErr)
+	require.True(t, errors.IsBlockCorrupt(valErr), "a corrupt subtree body must surface as corrupt, got: %v", valErr)
+	require.False(t, errors.Is(valErr, errors.ErrBlockInvalid), "a corrupt body must never be poisoned invalid")
+
+	require.Equal(t, []string{"peer-corrupt"}, rec.struck(),
+		"the serving peer must be struck once for the corrupt subtree body")
+
+	// The fix: the subtree-validation corrupt branch must delete the unvalidated peer-supplied marker
+	// so a retry re-fetches instead of re-reading the body that just failed subtree validation.
+	gone, err := subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	require.NoError(t, err)
+	require.False(t, gone, "the subtree-validation corrupt branch must delete FileTypeSubtreeToCheck so a retry re-fetches")
 }
