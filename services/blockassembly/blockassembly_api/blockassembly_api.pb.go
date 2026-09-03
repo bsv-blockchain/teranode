@@ -889,8 +889,13 @@ type QueueStatsMessage struct {
 	// settings contexts are independent processes, and a mismatch would otherwise
 	// either pause ingest forever or disable the control entirely, silently.
 	DoubleSpendWindowMillis int64 `protobuf:"varint,3,opt,name=doubleSpendWindowMillis,proto3" json:"doubleSpendWindowMillis,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// The enforced (normalized) item ceiling this producer applies, or <= 0 when
+	// the queue is unbounded. Reported rather than read from the reader's own
+	// settings for the same reason as doubleSpendWindowMillis: the two settings
+	// contexts are independent processes.
+	QueueMaxItems int64 `protobuf:"varint,4,opt,name=queueMaxItems,proto3" json:"queueMaxItems,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *QueueStatsMessage) Reset() {
@@ -940,6 +945,13 @@ func (x *QueueStatsMessage) GetQueueHeadAgeMillis() int64 {
 func (x *QueueStatsMessage) GetDoubleSpendWindowMillis() int64 {
 	if x != nil {
 		return x.DoubleSpendWindowMillis
+	}
+	return 0
+}
+
+func (x *QueueStatsMessage) GetQueueMaxItems() int64 {
+	if x != nil {
+		return x.QueueMaxItems
 	}
 	return 0
 }
@@ -1342,13 +1354,14 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x0eremoveMapCount\x18\t \x01(\rR\x0eremoveMapCount\x12\x1a\n" +
 	"\bsubtrees\x18\n" +
 	" \x03(\tR\bsubtrees\x12.\n" +
-	"\x12queueHeadAgeMillis\x18\v \x01(\x03R\x12queueHeadAgeMillis\"\x9d\x01\n" +
+	"\x12queueHeadAgeMillis\x18\v \x01(\x03R\x12queueHeadAgeMillis\"\xc3\x01\n" +
 	"\x11QueueStatsMessage\x12\x1e\n" +
 	"\n" +
 	"queueCount\x18\x01 \x01(\x03R\n" +
 	"queueCount\x12.\n" +
 	"\x12queueHeadAgeMillis\x18\x02 \x01(\x03R\x12queueHeadAgeMillis\x128\n" +
-	"\x17doubleSpendWindowMillis\x18\x03 \x01(\x03R\x17doubleSpendWindowMillis\"\\\n" +
+	"\x17doubleSpendWindowMillis\x18\x03 \x01(\x03R\x17doubleSpendWindowMillis\x12$\n" +
+	"\rqueueMaxItems\x18\x04 \x01(\x03R\rqueueMaxItems\"\\\n" +
 	"\x1cGetCurrentDifficultyResponse\x12\x1e\n" +
 	"\n" +
 	"difficulty\x18\x01 \x01(\x01R\n" +

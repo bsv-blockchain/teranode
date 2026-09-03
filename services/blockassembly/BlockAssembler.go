@@ -1537,18 +1537,11 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return info.Header, info.Height
 }
 
-// AddTxBatch adds a batch of transactions to the block assembler.
-//
-// Parameters:
-//   - nodes: Transaction nodes to add
-//   - txInpoints: Parent transaction references for each node
-func (b *BlockAssembler) AddTxBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
-	b.subtreeProcessor.AddBatch(nodes, txInpoints)
-}
-
 // AddTxBatchIfRoom adds a batch of transactions to the block assembler only if
 // the configured queue bound would not be exceeded, reporting whether it did.
-// When no bound is configured it never refuses, behaving as AddTxBatch.
+// When no bound is configured it never refuses, so it is the only batch entry
+// point this type offers: an unbounded variant alongside it is a cap bypass
+// waiting for the next caller to reach for the shorter name.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add

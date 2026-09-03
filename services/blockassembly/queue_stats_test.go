@@ -58,6 +58,7 @@ func TestGetBlockAssemblyQueueStats(t *testing.T) {
 	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
 	mockStp.On("QueueLength").Return(int64(7))
 	mockStp.On("QueueHeadAge").Return(750 * time.Millisecond)
+	mockStp.On("QueueMaxItems").Return(int64(0))
 	// Registered but must NOT be called by the slim RPC. If the handler ever
 	// touched it, this would block far longer than the assertion below tolerates.
 	mockStp.On("GetSubtreeHashes", mock.Anything).Run(func(mock.Arguments) {
@@ -96,6 +97,7 @@ func TestGetBlockAssemblyQueueStats_ReportsDoubleSpendWindow(t *testing.T) {
 	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
 	mockStp.On("QueueLength").Return(int64(2))
 	mockStp.On("QueueHeadAge").Return(1500 * time.Millisecond)
+	mockStp.On("QueueMaxItems").Return(int64(0))
 
 	ba := newQueueStatsTestServer(t, mockStp)
 	ba.settings.BlockAssembly.DoubleSpendWindow = 750 * time.Millisecond
@@ -114,6 +116,46 @@ func TestGetBlockAssemblyQueueStats_ReportsDoubleSpendWindow(t *testing.T) {
 	resp, err = ba.GetBlockAssemblyQueueStats(context.Background(), &blockassembly_api.EmptyMessage{})
 	require.NoError(t, err)
 	require.Equal(t, int64(0), resp.DoubleSpendWindowMillis)
+}
+
+// The reported item cap must come from the ENFORCED (normalized) accessor, never
+// from this process's raw MaxQueueItems setting.
+//
+// It is the denominator for the reported depth, and the reader that divides the two
+// lives in a different settings context, so a raw value would hand it a fraction
+// that does not match the cap the queue actually applies — the queue clamps a cap
+// below one full drain pass upward, so the raw and enforced values genuinely differ
+// in ordinary configurations. A cap of 0 must be reported as 0 rather than omitted,
+// because that is the "unbounded, no fill signal" case a reader has to recognise.
+func TestGetBlockAssemblyQueueStats_ReportsEnforcedQueueMaxItems(t *testing.T) {
+	initPrometheusMetrics()
+
+	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+	mockStp.On("QueueLength").Return(int64(64))
+	mockStp.On("QueueHeadAge").Return(time.Duration(0))
+	// The enforced cap after the clamp, deliberately different from the raw setting
+	// below: a cap of 1 is clamped up to one full drain pass.
+	mockStp.On("QueueMaxItems").Return(int64(6400))
+
+	ba := newQueueStatsTestServer(t, mockStp)
+	ba.settings.BlockAssembly.MaxQueueItems = 1
+
+	resp, err := ba.GetBlockAssemblyQueueStats(context.Background(), &blockassembly_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.Equal(t, int64(6400), resp.QueueMaxItems,
+		"the reported denominator is the enforced cap, not the configured one")
+	require.NotEqual(t, ba.settings.BlockAssembly.MaxQueueItems, resp.QueueMaxItems)
+
+	// Unbounded reports zero explicitly.
+	mockStpUnbounded := &subtreeprocessor.MockSubtreeProcessor{}
+	mockStpUnbounded.On("QueueLength").Return(int64(5))
+	mockStpUnbounded.On("QueueHeadAge").Return(time.Duration(0))
+	mockStpUnbounded.On("QueueMaxItems").Return(int64(0))
+
+	resp, err = newQueueStatsTestServer(t, mockStpUnbounded).
+		GetBlockAssemblyQueueStats(context.Background(), &blockassembly_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), resp.QueueMaxItems, "an unbounded queue reports no fill signal")
 }
 
 // TestGetBlockAssemblyState_QueueHeadAge verifies the head-batch age is now

@@ -35,6 +35,13 @@ var (
 	prometheusSubtreeProcessorDiskMapEntries               prometheus.Gauge
 	prometheusSubtreeProcessorDiskMapFilterRAM             prometheus.Gauge
 	prometheusSubtreeProcessorDiskMapDiskWritten           prometheus.Gauge
+
+	// prometheusSubtreeProcessorOversizeBatchAdmitted counts batches larger than the
+	// whole item cap admitted alone onto an otherwise empty ingest queue. Such a batch
+	// can never satisfy a reservation, so refusing it would wedge that producer
+	// permanently; admitting it lets the cap be transiently exceeded by one batch. A
+	// non-zero value means a client's batch size is above this pod's normalized cap.
+	prometheusSubtreeProcessorOversizeBatchAdmitted prometheus.Counter
 )
 
 var (
@@ -239,6 +246,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreeprocessor",
 			Name:      "diskmap_disk_written_bytes",
 			Help:      "Data bytes written to disk for disk-backed transaction map",
+		},
+	)
+
+	prometheusSubtreeProcessorOversizeBatchAdmitted = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "oversize_batch_admitted_total",
+			Help:      "Number of batches larger than the whole item cap admitted alone onto an empty ingest queue",
 		},
 	)
 }

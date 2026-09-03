@@ -774,7 +774,7 @@ func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.
 //   - ctx: Context for cancellation
 //
 // Returns:
-//   - QueueStats: Queue depth, head-batch age and the reported double-spend window
+//   - QueueStats: Queue depth, head-batch age, the reported double-spend window and the reported item cap
 //   - error: Any error encountered during retrieval
 func (s *Client) GetBlockAssemblyQueueStats(ctx context.Context) (QueueStats, error) {
 	stats, err := s.client.GetBlockAssemblyQueueStats(ctx, &blockassembly_api.EmptyMessage{})
@@ -786,6 +786,7 @@ func (s *Client) GetBlockAssemblyQueueStats(ctx context.Context) (QueueStats, er
 		Count:             stats.QueueCount,
 		HeadAge:           time.Duration(stats.QueueHeadAgeMillis) * time.Millisecond,
 		DoubleSpendWindow: time.Duration(stats.DoubleSpendWindowMillis) * time.Millisecond,
+		MaxItems:          stats.QueueMaxItems,
 	}, nil
 }
 

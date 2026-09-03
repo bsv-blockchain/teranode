@@ -228,6 +228,24 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 //
 // When maxItems <= 0 the queue is unbounded and this degrades to enqueueBatch.
 //
+// # A batch larger than the whole cap is admitted alone onto an empty queue
+//
+// Such a batch can never satisfy a reservation, on any queue state, so refusing it
+// is permanent rather than transient: that producer never makes progress and its
+// bounded wait plus the hard shed simply run forever. The batch size is chosen by
+// the client from its own settings context, so this is reachable by cross-process
+// configuration skew and not only by a local mistake. Admitting it when the
+// reservation found the queue otherwise empty trades a transient one-batch overshoot
+// of the ceiling for liveness, which is the same trade enqueueBatch already makes.
+//
+// The overshoot is bounded to ONE batch: the emptiness test reads after-n from the
+// same atomic Add that made the reservation, not from a separate load, so of any
+// number of concurrent over-size producers exactly one can observe 0.
+//
+// The n > maxItems guard keeps this from becoming a general "an empty queue admits
+// anything" carve-out: an ordinary over-cap batch is still refused and still relies
+// on the bounded wait and the shed.
+//
 // Parameters:
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
@@ -242,14 +260,28 @@ func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*s
 		return true
 	}
 
-	if q.queueLength.Add(n) > q.maxItems { // reserve
-		q.queueLength.Add(-n) // roll back
-		return false
+	after := q.queueLength.Add(n) // reserve
+	if after <= q.maxItems {
+		q.publish(nodes, txInpoints) // reservation already accounted
+
+		return true
 	}
 
-	q.publish(nodes, txInpoints) // reservation already accounted
+	if n > q.maxItems && after-n == 0 {
+		// Nil-guarded because NewLockFreeQueue* is constructed directly by unit
+		// tests, which never run this package's metric registration.
+		if prometheusSubtreeProcessorOversizeBatchAdmitted != nil {
+			prometheusSubtreeProcessorOversizeBatchAdmitted.Inc()
+		}
 
-	return true
+		q.publish(nodes, txInpoints)
+
+		return true
+	}
+
+	q.queueLength.Add(-n) // roll back
+
+	return false
 }
 
 // dequeueBatch removes and returns the next batch from the queue.

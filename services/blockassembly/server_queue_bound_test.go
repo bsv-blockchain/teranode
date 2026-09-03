@@ -191,13 +191,20 @@ func TestAddTxBatch_UnboundedNeverRefuses(t *testing.T) {
 // newBoundedRealServer builds a fully-initialized BlockAssembly server with the
 // queue bound set, backed by in-memory stores. The subtree processor is not
 // started, so the queue does not drain on its own.
-func newBoundedRealServer(t *testing.T, maxItems int64, wait time.Duration) *BlockAssembly {
+func newBoundedRealServer(t *testing.T, maxItems int64, wait time.Duration, sendBatchSize ...int) *BlockAssembly {
 	t.Helper()
 
 	common := testutil.NewCommonTestSetup(t)
 	common.Settings.BlockAssembly.MaxQueueItems = maxItems
 	common.Settings.BlockAssembly.QueueFullWaitTimeout = wait
 	common.Settings.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+
+	// The queue clamps a cap below one full drain pass (maxBatchesPerIteration x
+	// sendBatchSize) upward, so a test wanting a small enforced cap has to shrink the
+	// batch size too.
+	if len(sendBatchSize) == 1 {
+		common.Settings.BlockAssembly.SendBatchSize = sendBatchSize[0]
+	}
 
 	subtreeStore := testutil.NewMemoryBlobStore()
 
@@ -221,4 +228,69 @@ func newBoundedRealServer(t *testing.T, maxItems int64, wait time.Duration) *Blo
 	})
 
 	return s
+}
+
+// A shed must not be counted as an add. Every ingest handler used to increment
+// teranode_blockassembly_add_tx before attempting the enqueue, so a transaction
+// the queue refused was counted as added and the shed rate could not be
+// reconciled against the add rate — the one reconciliation an operator needs to
+// size the cap.
+//
+// Exercised through a real, undrained queue, so the shed is the queue's own
+// decision rather than a mock's. All three subtests run with BlockAssembly.Disabled
+// at its default false; the disabled short-circuit is covered separately.
+func TestIngest_ShedIsNotCountedAsAdded(t *testing.T) {
+	initPrometheusMetrics()
+
+	// Enforced cap of 64 items: 64 batches per drain pass x a sendBatchSize of 1.
+	s := newBoundedRealServer(t, 64, 0, 1)
+	require.Equal(t, int64(64), s.blockAssembler.QueueMaxItems(), "precondition: the enforced cap is what was asked for")
+
+	// Fill it exactly, so every call below is refused for room.
+	resp, err := s.AddTxBatch(context.Background(), batchReq(64))
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	requireShedNotCounted := func(t *testing.T, call func() error) {
+		t.Helper()
+
+		addsBefore := promtestutil.ToFloat64(prometheusBlockAssemblyAddTxCounter)
+		shedBefore := promtestutil.ToFloat64(prometheusBlockAssemblyQueueShed)
+
+		err := call()
+		require.Error(t, err)
+		require.Equal(t, codes.ResourceExhausted, status.Code(err), "a full queue sheds with a retryable status")
+
+		require.Equal(t, shedBefore+1, promtestutil.ToFloat64(prometheusBlockAssemblyQueueShed),
+			"the shed is counted")
+		require.Equal(t, addsBefore, promtestutil.ToFloat64(prometheusBlockAssemblyAddTxCounter),
+			"and must NOT also be counted as an add")
+	}
+
+	t.Run("AddTx", func(t *testing.T) {
+		requireShedNotCounted(t, func() error {
+			txid := make([]byte, 32)
+			txid[0] = 0xAA
+
+			_, err := s.AddTx(context.Background(), &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100})
+
+			return err
+		})
+	})
+
+	t.Run("AddTxBatch", func(t *testing.T) {
+		requireShedNotCounted(t, func() error {
+			_, err := s.AddTxBatch(context.Background(), batchReq(5))
+
+			return err
+		})
+	})
+
+	t.Run("AddTxBatchColumnar", func(t *testing.T) {
+		requireShedNotCounted(t, func() error {
+			_, err := s.AddTxBatchColumnar(context.Background(), columnarReq(5))
+
+			return err
+		})
+	})
 }

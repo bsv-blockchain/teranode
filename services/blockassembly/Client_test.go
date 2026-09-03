@@ -1069,9 +1069,10 @@ func TestNewClientWithAddress_ConfigErrors(t *testing.T) {
 	// Note: Connection might not fail immediately in test environment, so we don't assert.Error
 }
 
-// TestClient_GetBlockAssemblyQueueStats_RoundTrip pins that all three queue-stats
-// fields survive the client's protobuf-to-native conversion, including the
-// double-spend window that makes the signal self-describing.
+// TestClient_GetBlockAssemblyQueueStats_RoundTrip pins that every queue-stats
+// field survives the client's protobuf-to-native conversion, including the two
+// that make the signal self-describing: the double-spend window the head age is
+// measured against, and the item cap the depth is a fraction of.
 //
 // The struct return is deliberate: HeadAge and DoubleSpendWindow are both durations
 // with entirely different meanings, so as adjacent positional returns they would be
@@ -1082,13 +1083,14 @@ func TestClient_GetBlockAssemblyQueueStats_RoundTrip(t *testing.T) {
 	mockClient := &mockBlockAssemblyAPIClient{}
 	client := createTestClient(mockClient, 0)
 
-	t.Run("all three fields survive the conversion", func(t *testing.T) {
+	t.Run("every field survives the conversion", func(t *testing.T) {
 		mockClient.ExpectedCalls = nil
 		mockClient.On("GetBlockAssemblyQueueStats", mock.Anything, mock.Anything, mock.Anything).
 			Return(&blockassembly_api.QueueStatsMessage{
 				QueueCount:              42,
 				QueueHeadAgeMillis:      1500,
 				DoubleSpendWindowMillis: 750,
+				QueueMaxItems:           6400,
 			}, nil)
 
 		stats, err := client.GetBlockAssemblyQueueStats(ctx)
@@ -1096,10 +1098,11 @@ func TestClient_GetBlockAssemblyQueueStats_RoundTrip(t *testing.T) {
 		require.Equal(t, int64(42), stats.Count)
 		require.Equal(t, 1500*time.Millisecond, stats.HeadAge)
 		require.Equal(t, 750*time.Millisecond, stats.DoubleSpendWindow)
+		require.Equal(t, int64(6400), stats.MaxItems)
 		mockClient.AssertExpectations(t)
 	})
 
-	t.Run("a zero window is carried through as zero", func(t *testing.T) {
+	t.Run("a zero window and a zero cap are carried through as zero", func(t *testing.T) {
 		mockClient.ExpectedCalls = nil
 		mockClient.On("GetBlockAssemblyQueueStats", mock.Anything, mock.Anything, mock.Anything).
 			Return(&blockassembly_api.QueueStatsMessage{QueueCount: 1, QueueHeadAgeMillis: 10}, nil)
@@ -1108,6 +1111,7 @@ func TestClient_GetBlockAssemblyQueueStats_RoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, time.Duration(0), stats.DoubleSpendWindow)
 		require.Equal(t, 10*time.Millisecond, stats.HeadAge)
+		require.Equal(t, int64(0), stats.MaxItems, "an unbounded producer reports no fill signal")
 	})
 
 	t.Run("an RPC error yields a zero snapshot and the unwrapped error", func(t *testing.T) {
