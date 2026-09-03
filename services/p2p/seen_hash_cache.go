@@ -150,11 +150,12 @@ type seenHashNode struct {
 }
 
 // recordGranteeLocked notes that peerID took a publish grant in the current
-// window, so the next window's rollover retry grant can be refused to it. The
-// set is bounded (same bound as the announcer tracking): under repeated
-// PublishFailed cycles many peers can be granted in one window, and past the
-// bound the newest grantees simply go unrecorded — the denial then errs toward
-// allowing a retry, never toward suppressing one.
+// window, so the next window's rollover retry grant can be refused to it.
+// PublishFailed withdraws the record along with the budget, so on the handler
+// path the set tracks published and stays within the publisher budget; the
+// bound below is not the primary limit but a cheap defence for a grant and
+// its return straddling a window rollover, and it errs toward allowing a
+// retry rather than suppressing one.
 func (n *seenHashNode) recordGranteeLocked(peerID string, bound int) {
 	if n.grantees == nil {
 		n.grantees = make(map[string]struct{}, seenHashMaxPublishersPerHash)
@@ -315,6 +316,14 @@ func (c *seenHashCache) Check(hash, peerID string, now time.Time) (publish bool,
 // window's grantee" and cost it the rollover retry grant this method exists
 // to re-enable. The announcer counts are deliberately kept: a backlogged
 // broker must not reset the repeat accounting.
+//
+// Accepted micro-race: a concurrent Check can roll the publish window between
+// the grant and this return, in which case the grantee record has already
+// moved to prevGrantees (costing the peer one window's retry grant) and the
+// decrement lands on the new window's budget (freeing one extra grant there).
+// The two calls sit microseconds apart in one handler invocation against a
+// 15-second window, and both effects are bounded to a single grant for a
+// single window.
 func (c *seenHashCache) PublishFailed(hash, peerID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

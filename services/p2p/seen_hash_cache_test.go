@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -293,6 +295,33 @@ func TestSeenHashCache_ConcurrentChecks(t *testing.T) {
 
 	require.Equal(t, int64(seenHashMaxPublishersPerHash), granted.Load(),
 		"exactly the publisher budget may be granted across concurrent distinct announcers")
+}
+
+// Guards the settings→cache path end to end: the three p2p_seen_hash_* keys
+// were once declared with struct tags but never read by the loader, leaving
+// the caches silently on their package defaults.
+func TestApplyPeerMapLimits_ConfiguresSeenHashCaches(t *testing.T) {
+	s := &Server{logger: ulogger.TestLogger{}}
+	s.applyPeerMapLimits(&settings.Settings{P2P: settings.P2PSettings{
+		SeenHashMaxSize:       5,
+		SeenHashMaxPublishers: 1,
+		SeenHashTTL:           time.Minute,
+	}})
+
+	now := time.Now()
+
+	publish, _ := s.blockSeenHashes.Check("hash-a", "peer-1", now)
+	require.True(t, publish)
+	publish, _ = s.blockSeenHashes.Check("hash-a", "peer-2", now)
+	require.False(t, publish, "the configured publisher budget must be in force on the block cache")
+
+	for i := 0; i < 8; i++ {
+		s.subtreeSeenHashes.Check(fmt.Sprintf("hash-%d", i), "peer-1", now)
+	}
+	require.Equal(t, 5, s.subtreeSeenHashes.Len(), "the configured size cap must be in force on the subtree cache")
+
+	publish, _ = s.blockSeenHashes.Check("hash-a", "peer-1", now.Add(time.Minute))
+	require.True(t, publish, "the configured TTL must be in force: the entry expired after one minute")
 }
 
 func TestSeenHashCache_DeleteExpired(t *testing.T) {

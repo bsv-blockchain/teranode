@@ -174,6 +174,7 @@ type Server struct {
 	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
 	lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
 	lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
+	connectedPeersProbe               atomic.Pointer[peersProbe]     // Briefly cached "any peer connected" answer for the sender guards; GetPeers walks every connection and subtrees announce constantly
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -1218,7 +1219,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
-		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+		if _, err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
 		}
 
@@ -1533,6 +1534,33 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	}
 }
 
+// connectedPeersProbeTTL bounds how often the sender-side duplicate guards may
+// walk the connection list: GetPeers does per-peer work (connection lookup and
+// multiaddr formatting) and handleSubtreeNotification runs once per subtree.
+// The staleness cost is one guard decision made on a peer set up to this old —
+// at worst a briefly missed suppression or a marker armed moments before the
+// last peer left, both self-healing on the next probe.
+const connectedPeersProbeTTL = 2 * time.Second
+
+// peersProbe is one cached "any peer connected" answer.
+type peersProbe struct {
+	nonEmpty  bool
+	checkedAt time.Time
+}
+
+// hasConnectedPeers reports whether any peer is currently connected, cached
+// for connectedPeersProbeTTL.
+func (s *Server) hasConnectedPeers() bool {
+	if v := s.connectedPeersProbe.Load(); v != nil && time.Since(v.checkedAt) < connectedPeersProbeTTL {
+		return v.nonEmpty
+	}
+
+	nonEmpty := s.P2PClient != nil && len(s.P2PClient.GetPeers()) > 0
+	s.connectedPeersProbe.Store(&peersProbe{nonEmpty: nonEmpty, checkedAt: time.Now()})
+
+	return nonEmpty
+}
+
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
@@ -1600,15 +1628,18 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
-	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
+	sent, err := s.publishToNetwork(ctx, s.blockTopicName, msgBytes)
+	if err != nil {
 		return errors.NewError("blockMessage - publish error", err)
 	}
 
-	// Record the tip only when the publish had someone to reach: a GossipSub
-	// publish into an empty mesh succeeds silently, and recording it would
-	// suppress the re-announcement a later-connecting peer needs. The
-	// connected-peer set is a proxy for the topic mesh.
-	if len(s.P2PClient.GetPeers()) > 0 {
+	// Record the tip only when the publish gate actually sent it AND there was
+	// someone to reach: the gate drops block publishes in degraded FSM states
+	// (returning nil), and a GossipSub publish into an empty mesh succeeds
+	// silently — recording either would suppress the re-announcement a
+	// later-connecting or recovering peer needs. The connected-peer set is a
+	// proxy for the topic mesh.
+	if sent && s.hasConnectedPeers() {
 		s.lastAnnouncedBlockHash.Store(hash)
 	}
 
@@ -2134,7 +2165,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
-	if err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
+	if _, err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
@@ -2192,13 +2223,14 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
-	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {
+	sent, err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes)
+	if err != nil {
 		return errors.NewError("subtreeMessage - publish error", err)
 	}
 
-	// Same empty-mesh gate as handleBlockNotification: a publish nobody heard
-	// must not suppress the re-announcement.
-	if len(s.P2PClient.GetPeers()) > 0 {
+	// Same sent-and-non-empty-mesh gate as handleBlockNotification: a publish
+	// nobody heard must not suppress the re-announcement.
+	if sent && s.hasConnectedPeers() {
 		s.lastAnnouncedSubtreeHash.Store(hash)
 	}
 

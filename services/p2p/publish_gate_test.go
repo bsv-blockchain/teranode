@@ -107,7 +107,7 @@ func TestPublishToNetworkPerState(t *testing.T) {
 		t.Run(tc.state.String()+"/"+tc.topic, func(t *testing.T) {
 			server, p2pClient := newGateTestServer(t, mockBlockchainInState(tc.state))
 
-			err := server.publishToNetwork(context.Background(), tc.topic, []byte("msg"))
+			_, err := server.publishToNetwork(context.Background(), tc.topic, []byte("msg"))
 			require.NoError(t, err)
 
 			if tc.published {
@@ -130,7 +130,8 @@ func TestPublishToNetworkIncrementsBlockedCounter(t *testing.T) {
 	chokepointBefore := testutil.ToFloat64(chokepoint)
 	precheckBefore := testutil.ToFloat64(precheck)
 
-	require.NoError(t, server.publishToNetwork(context.Background(), "test-block", []byte("msg")))
+	_, blockedErr := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
+	require.NoError(t, blockedErr)
 	require.Equal(t, chokepointBefore+1, testutil.ToFloat64(chokepoint))
 
 	require.False(t, server.canSendToNetwork(context.Background(), topicKindBlock))
@@ -143,7 +144,7 @@ func TestPublishToNetworkIncrementsBlockedCounter(t *testing.T) {
 func TestPublishToNetworkUnknownTopicFailsClosed(t *testing.T) {
 	server, p2pClient := newGateTestServer(t, mockBlockchainInState(blockchain_api.FSMStateType_RUNNING))
 
-	err := server.publishToNetwork(context.Background(), "test-bogus", []byte("msg"))
+	_, err := server.publishToNetwork(context.Background(), "test-bogus", []byte("msg"))
 	require.NoError(t, err)
 	require.Empty(t, p2pClient.Calls)
 }
@@ -154,10 +155,14 @@ func TestPublishToNetworkUnknownTopicFailsClosed(t *testing.T) {
 func TestPublishToNetworkUnknownFSMStateFallsBackToNodeStatusOnly(t *testing.T) {
 	server, p2pClient := newGateTestServer(t, mockBlockchainInState(blockchain_api.FSMStateType(99)))
 
-	require.NoError(t, server.publishToNetwork(context.Background(), "test-block", []byte("msg")))
+	sent, err := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
+	require.NoError(t, err)
+	require.False(t, sent, "a dropped block publish must report not sent")
 	require.Empty(t, p2pClient.Calls)
 
-	require.NoError(t, server.publishToNetwork(context.Background(), "test-node_status", []byte("msg")))
+	sent, err = server.publishToNetwork(context.Background(), "test-node_status", []byte("msg"))
+	require.NoError(t, err)
+	require.True(t, sent)
 	p2pClient.AssertCalled(t, "Publish", mock.Anything, "test-node_status", []byte("msg"))
 }
 
@@ -182,7 +187,9 @@ func TestPublishToNetworkListenMode(t *testing.T) {
 			server, p2pClient := newGateTestServer(t, mockBlockchainInState(blockchain_api.FSMStateType_RUNNING))
 			server.settings = &settings.Settings{P2P: settings.P2PSettings{ListenMode: tc.mode}}
 
-			require.NoError(t, server.publishToNetwork(context.Background(), tc.topic, []byte("msg")))
+			sent, err := server.publishToNetwork(context.Background(), tc.topic, []byte("msg"))
+			require.NoError(t, err)
+			require.Equal(t, tc.published, sent, "sent must mirror whether the gate forwarded the publish")
 
 			if tc.published {
 				p2pClient.AssertCalled(t, "Publish", mock.Anything, tc.topic, []byte("msg"))
@@ -201,7 +208,7 @@ func TestPublishToNetworkFailsOpenOnStateError(t *testing.T) {
 
 	server, p2pClient := newGateTestServer(t, client)
 
-	err := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
+	_, err := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
 	require.NoError(t, err)
 	p2pClient.AssertCalled(t, "Publish", mock.Anything, "test-block", []byte("msg"))
 }
@@ -211,7 +218,7 @@ func TestPublishToNetworkFailsOpenOnStateError(t *testing.T) {
 func TestPublishToNetworkNilBlockchainClient(t *testing.T) {
 	server, p2pClient := newGateTestServer(t, nil)
 
-	err := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
+	_, err := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
 	require.NoError(t, err)
 	p2pClient.AssertCalled(t, "Publish", mock.Anything, "test-block", []byte("msg"))
 }
@@ -224,7 +231,7 @@ func TestPublishToNetworkWithLocalBlockchainClient(t *testing.T) {
 
 	server, p2pClient := newGateTestServer(t, setup.Client)
 
-	err := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
+	_, err := server.publishToNetwork(context.Background(), "test-block", []byte("msg"))
 	require.NoError(t, err)
 	p2pClient.AssertCalled(t, "Publish", mock.Anything, "test-block", []byte("msg"))
 }

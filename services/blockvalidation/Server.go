@@ -202,10 +202,11 @@ type Server struct {
 	// in tests that don't wire it get uncached lookups.
 	peerMaliciousCache *ttlcache.Cache[string, bool]
 
-	// peerMaliciousCacheStarted records that Init started the cache's eviction
-	// loop, so Stop only calls ttlcache.Stop - a blocking send to that loop -
-	// when there is a receiver for it.
-	peerMaliciousCacheStarted atomic.Bool
+	// ttlCachesStarted records that Init reached the point where it starts the
+	// ttlcache eviction loops (processBlockNotify, catchupAlternatives,
+	// blockCatchupAttempts, peerMaliciousCache), so Stop only calls
+	// ttlcache.Stop - a blocking send to that loop - when a receiver exists.
+	ttlCachesStarted atomic.Bool
 
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
@@ -682,6 +683,13 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
 	}
 
+	// Record that the ttlcache eviction loops start here, BEFORE the go
+	// statements: ttlcache.Stop is an unbuffered send whose only receiver
+	// lives inside Start, so Stop must skip every cache whose loop never ran
+	// (a Server whose Init never reached this point, including its early
+	// returns above) or it hangs forever.
+	u.ttlCachesStarted.Store(true)
+
 	go u.processBlockNotify.Start()
 	go u.catchupAlternatives.Start()
 	// nil-guarded: this cache is newer than some Server-literal test fixtures that
@@ -691,7 +699,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if u.peerMaliciousCache != nil {
-		u.peerMaliciousCacheStarted.Store(true)
 		go u.peerMaliciousCache.Start()
 	}
 
@@ -993,6 +1000,13 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		if !parentExists {
 			if u.isPeerMalicious(ctx, blockFound.peerID) {
 				u.logger.Warnf("[processBlockFoundChannel][%s] peer %s is malicious, skipping catchup for block with missing parent", blockFound.hash.String(), blockFound.peerID)
+
+				// A WaitToComplete caller blocks on an unbuffered errCh; every
+				// return path must answer it or that caller hangs forever.
+				if blockFound.errCh != nil {
+					blockFound.errCh <- errors.NewProcessingError("peer %s is marked as malicious, skipping catchup", blockFound.peerID)
+				}
+
 				return nil
 			}
 			u.logger.Infof("[processBlockFoundChannel] Parent block %s doesn't exist for block %s, using catchup",
@@ -1154,20 +1168,21 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //
 // Returns an error if shutdown encounters issues, though typically returns nil
 func (u *Server) Stop(ctx context.Context) error {
-	u.processBlockNotify.Stop()
-	u.catchupAlternatives.Stop()
-	// nil-guarded: this cache is newer than some Server-literal test fixtures that
-	// don't initialise it (NewServer always does). Matches the nil-safe helpers.
-	if u.blockCatchupAttempts != nil {
-		u.blockCatchupAttempts.Stop()
-	}
-
-	// Stop only if Init actually started the eviction loop: ttlcache.Stop is
-	// an unbuffered send whose only receiver lives inside Start, so stopping a
-	// never-started cache (a Server from NewServer whose Init never ran) hangs
-	// forever.
-	if u.peerMaliciousCache != nil && u.peerMaliciousCacheStarted.Load() {
-		u.peerMaliciousCache.Stop()
+	// Stop the ttlcache eviction loops only if Init actually started them:
+	// ttlcache.Stop is an unbuffered send whose only receiver lives inside
+	// Start, so stopping a never-started cache (a Server from NewServer whose
+	// Init never ran or returned early) hangs forever. One flag covers all
+	// four caches — they start together in Init. Nil guards retained for
+	// Server-literal test fixtures that wire only some of them.
+	if u.ttlCachesStarted.Load() {
+		u.processBlockNotify.Stop()
+		u.catchupAlternatives.Stop()
+		if u.blockCatchupAttempts != nil {
+			u.blockCatchupAttempts.Stop()
+		}
+		if u.peerMaliciousCache != nil {
+			u.peerMaliciousCache.Stop()
+		}
 	}
 
 	// Wait for all background tasks in BlockValidation to complete, bounded by the

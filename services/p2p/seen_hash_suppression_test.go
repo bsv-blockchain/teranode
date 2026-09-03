@@ -329,8 +329,10 @@ func TestHandleBlockNotification_EmptyMeshDoesNotArmSuppression(t *testing.T) {
 	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
 	require.Equal(t, 2, countBlockPublishes(), "a publish nobody heard must not suppress the re-announcement")
 
-	// A peer connects: the next announcement is recorded, later replays suppressed.
+	// A peer connects: the next announcement is recorded, later replays
+	// suppressed. Reset the cached probe so the connection is seen at once.
 	p2pClient.peers = []p2pMessageBus.PeerInfo{{ID: "connected-peer"}}
+	s.connectedPeersProbe.Store(nil)
 	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
 	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
 	require.Equal(t, 3, countBlockPublishes(), "suppression engages once the mesh is non-empty")

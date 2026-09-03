@@ -906,11 +906,12 @@ func TestHandleSubtreeNotification_LocalhostURLWarnsButPublishes(t *testing.T) {
 func TestPublishToNetwork_EnforcesTopicCap(t *testing.T) {
 	s, published := capturePublishServer(t)
 
-	err := s.publishToNetwork(context.Background(), "test-subtree", make([]byte, maxSubtreeMessageSize+1))
+	_, err := s.publishToNetwork(context.Background(), "test-subtree", make([]byte, maxSubtreeMessageSize+1))
 	require.Error(t, err, "an oversized payload must fail loudly")
 	require.Nil(t, published["test-subtree"], "an oversized payload must not be published")
 
-	require.NoError(t, s.publishToNetwork(context.Background(), "test-subtree", []byte("{}")))
+	_, err = s.publishToNetwork(context.Background(), "test-subtree", []byte("{}"))
+	require.NoError(t, err)
 	require.NotNil(t, published["test-subtree"])
 }
 
