@@ -29,6 +29,7 @@ const (
 	SubscriberPruner            = "Pruner"
 	SubscriberAssetService      = "AssetService"
 	SubscriberUTXOPersister     = "utxo-persister"
+	SubscriberSVP2P             = "svp2p"
 )
 
 // ClientI defines the interface for blockchain client operations.

@@ -351,10 +351,25 @@ func (mcg *InMemoryConsumerGroup) Close() error {
 
 	mcg.closeOnce.Do(func() {
 		mcg.mu.Lock()
-		if mcg.cancelConsume != nil {
-			mcg.cancelConsume()
+		cancelFn := mcg.cancelConsume
+		mcg.mu.Unlock()
+
+		if cancelFn != nil {
+			cancelFn()
 		}
+
+		// wg.Wait() must NOT run with mcg.mu held: the goroutine it is
+		// waiting on (Consume, via Messages' isPausedFunc closure) takes
+		// mcg.mu itself on every message it forwards, paused or not. Before
+		// wg was wired up (see Consume's own wg.Add/Done, added alongside
+		// this fix) Wait() returned instantly regardless, so this was a
+		// latent deadlock that never had time to fire; now that Wait()
+		// genuinely blocks until Consume returns, holding mu across it
+		// would deadlock the moment Consume's goroutine tried to take mu
+		// for its own pause check while Close held it here.
 		mcg.wg.Wait()
+
+		mcg.mu.Lock()
 		close(mcg.errors)
 		close(mcg.closed)
 		mcg.isRunning = false
@@ -375,6 +390,16 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 	mcg.isRunning = true
 	internalCtx, cancel := context.WithCancel(ctx)
 	mcg.cancelConsume = cancel
+	// Tracks this call's lifetime so Close's wg.Wait() genuinely blocks
+	// until this method returns, instead of racing ahead on an empty
+	// WaitGroup nothing ever added to. Done is a SEPARATE defer below (not
+	// folded into the mu-guarded cleanup defer) so it can fire without
+	// depending on mu at all: Close() deliberately does NOT hold mu across
+	// its own wg.Wait() (see Close's own comment) — this goroutine's
+	// isPausedFunc closure takes mu on every message it forwards, paused or
+	// not, and Close holding mu across a genuinely-blocking Wait() would
+	// deadlock against that the moment isPausedFunc ran concurrently.
+	mcg.wg.Add(1)
 	mcg.mu.Unlock()
 
 	defer func() {
@@ -386,6 +411,7 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 		mcg.cancelConsume = nil
 		mcg.mu.Unlock()
 	}()
+	defer mcg.wg.Done()
 
 	if len(topics) != 1 {
 		return errors.NewConfigurationError("in-memory consumer group mock only supports exactly one topic")
@@ -438,6 +464,7 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 		topic:     topicToConsume,
 		partition: 0,
 		messages:  ch,
+		ctx:       internalCtx,
 		isPausedFunc: func() bool {
 			mcg.mu.Lock()
 			defer mcg.mu.Unlock()
@@ -521,6 +548,18 @@ type InMemoryConsumerGroupClaim struct {
 	partition    int32
 	messages     <-chan *Message
 	isPausedFunc func() bool
+
+	// ctx is Consume's internalCtx, threaded through so Messages can stop
+	// forwarding as soon as it is cancelled instead of only when the
+	// broker-side messages channel closes. Without this, an idle claim
+	// (nothing ever produced to the topic) blocks forever in `for msg :=
+	// range c.messages` and no cancellation of ctx can ever unblock it —
+	// Consume never returns, and Close's wg.Wait() (see the wg field on
+	// InMemoryConsumerGroup) would wait forever too. nil in the one direct
+	// test construction that predates this field (in_memory_kafka_test.go
+	// TestConsumerGroupClaimMethods): doneCh treats nil the same as "never
+	// done", matching the old unconditional-range behaviour for that case.
+	ctx context.Context
 }
 
 func (c *InMemoryConsumerGroupClaim) Topic() string        { return c.topic }
@@ -532,15 +571,64 @@ func (c *InMemoryConsumerGroupClaim) HighWaterMarkOffset() int64 {
 func (c *InMemoryConsumerGroupClaim) Messages() <-chan *Message {
 	// Create a filtered channel that respects pause state
 	filtered := make(chan *Message, 100)
+	done := c.doneCh()
+
 	go func() {
 		defer close(filtered)
-		for msg := range c.messages {
-			// Wait while paused
-			for c.isPausedFunc != nil && c.isPausedFunc() {
-				time.Sleep(10 * time.Millisecond)
+
+		for {
+			// Receive BEFORE checking pause, same order the original
+			// unconditional `for msg := range c.messages` used: a message
+			// already dequeued while unpaused is held (not dropped) across
+			// a pause that starts before it is delivered. Checking pause
+			// first instead (tried during this fix, reverted) delivers any
+			// message that arrives after PauseAll while this goroutine is
+			// parked in the receive select, since nothing re-checks pause
+			// between the receive and the send — TestConsumerGroupPauseResumeBehavior
+			// catches exactly that regression.
+			var msg *Message
+
+			select {
+			case <-done:
+				return
+			case m, ok := <-c.messages:
+				if !ok {
+					// Broker-side channel closed (Consume's own teardown).
+					return
+				}
+
+				msg = m
 			}
-			filtered <- msg
+
+			// Wait while paused, but stop waiting the moment ctx is done —
+			// otherwise a claim paused at shutdown blocks here forever too.
+			for c.isPausedFunc != nil && c.isPausedFunc() {
+				select {
+				case <-done:
+					return
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+
+			select {
+			case filtered <- msg:
+			case <-done:
+				return
+			}
 		}
 	}()
+
 	return filtered
+}
+
+// doneCh returns c.ctx.Done(), or nil when ctx was never set. A nil channel
+// is never selectable, so a select against it blocks exactly like the old
+// unconditional `for range c.messages` did — the pre-ctx behaviour is
+// preserved for the one direct construction that has no ctx to give.
+func (c *InMemoryConsumerGroupClaim) doneCh() <-chan struct{} {
+	if c.ctx == nil {
+		return nil
+	}
+
+	return c.ctx.Done()
 }

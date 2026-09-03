@@ -1684,7 +1684,10 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	}
 
 	var legacyConnections *peer_api.GetPeersResponse
-	if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
+	// svp2p serves the same peer_api surface as the legacy service (the two
+	// are mutually exclusive) but subscribes under its own source name, so
+	// this gate must accept either.
+	if s.legacyP2PClient != nil && (isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) || isSubscriberActive(ctx, s, blockchain.SubscriberSVP2P)) {
 		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
 

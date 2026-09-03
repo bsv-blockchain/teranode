@@ -12,6 +12,11 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// defaultCompactBlocksRecentTxs is the fallback capacity for
+// legacy_compactBlocksRecentTxs, applied both when the key is unset and when
+// it is set to a non-positive value.
+const defaultCompactBlocksRecentTxs = 5000000
+
 func NewSettings(alternativeContext ...string) *Settings {
 	settingsContext := gocore.Config().GetContext()
 	if len(alternativeContext) > 0 {
@@ -696,6 +701,50 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
 			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),
 			BlockPrefetchBufferBytes:         getInt64("legacy_blockPrefetchBufferBytes", 256*1024*1024, alternativeContext...),
+			// The three DetectStalling percentages, defaults as SVNode's
+			// validation.h:177-185. See svp2p protocol.CheckStall for why this
+			// timeout is the one an operator may need to widen.
+			BlockDownloadTimeoutBasePercent:    getInt64("legacy_blockDownloadTimeoutBasePercent", 100, alternativeContext...),
+			BlockDownloadTimeoutBaseIBDPercent: getInt64("legacy_blockDownloadTimeoutBaseIBDPercent", 600, alternativeContext...),
+			BlockDownloadTimeoutPerPeerPercent: getInt64("legacy_blockDownloadTimeoutPerPeerPercent", 50, alternativeContext...),
+			// The parallel-fetch fuse and cap, defaults as SVNode's net.h:161
+			// and net.h:163.
+			BlockDownloadSlowFetchTimeout: getDuration("legacy_blockDownloadSlowFetchTimeout", 30*time.Second, alternativeContext...),
+			BlockDownloadMaxParallelFetch: getInt("legacy_blockDownloadMaxParallelFetch", 3, alternativeContext...),
+			// The outbound connection target, default as SVNode's net.h:96
+			// DEFAULT_MAX_OUTBOUND_CONNECTIONS. Zero turns the svp2p
+			// addrman-driven dialer off; legacy_connect_peers overrides it.
+			TargetOutboundPeers: getInt("legacy_targetOutboundPeers", 8, alternativeContext...),
+			// The sync-peer rotation rate floor, default as legacy's own
+			// defaultMinSyncPeerNetworkSpeed (services/legacy/config.go:48).
+			// 0 disables the floor, which is legacy's semantics and not this
+			// port's invention: services/legacy/netsync/manager.go:266
+			// compares the tick's byte delta against the floor with unsigned
+			// operands, so nothing is ever below a floor of 0.
+			//
+			// OPERATOR TRAP: this key steers the svp2p bridge ONLY. The
+			// legacy service reads the SAME rule from
+			// `legacy_config_MinSyncPeerNetworkSpeed` through its reflective
+			// loader (config.go:773 over config.go:154). Setting one does
+			// nothing to the other, and cutover must reconcile the two.
+			MinSyncPeerNetworkSpeed: getUint64WithFallback("legacy_minSyncPeerNetworkSpeed", "legacy_config_MinSyncPeerNetworkSpeed", 51200, alternativeContext...),
+			// `legacy_disableBanning` is svp2p's own key for the bsvd --nobanning
+			// switch. The legacy service reads `legacy_config_DisableBanning`
+			// through its reflective loader (services/legacy/config.go
+			// setConfigValuesFromSettings), a namespace deleted with that
+			// service at cutover (spec §10 item 6). Until then an operator who set
+			// only the old key keeps the behaviour, with a deprecation warning.
+			DisableDNSSeed: getBoolWithFallback("legacy_disableDNSSeed", "legacy_config_DisableDNSSeed", false, alternativeContext...),
+			DisableBanning: getBoolWithFallback("legacy_disableBanning", "legacy_config_DisableBanning", false, alternativeContext...),
+			CompactBlocks:  getBool("legacy_compactBlocks", false, alternativeContext...),
+			CompactBlocksRecentTxs: func() int {
+				n := getInt("legacy_compactBlocksRecentTxs", defaultCompactBlocksRecentTxs, alternativeContext...)
+				if n <= 0 {
+					return defaultCompactBlocksRecentTxs
+				}
+
+				return n
+			}(),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:         getString("ipv6_addresses", "", alternativeContext...),
@@ -745,7 +794,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			WriteBufferSize:          getInt("grpc_write_buffer_size", 0, alternativeContext...),
 			KeepaliveTime:            getInt("grpc_keepalive_time_seconds", 30, alternativeContext...),
 			KeepaliveTimeout:         getInt("grpc_keepalive_timeout_seconds", 20, alternativeContext...),
-			ServerMinPingTime:        getInt("grpc_server_min_ping_time_seconds", 30, alternativeContext...),
+			ServerMinPingTime:        getInt("grpc_server_min_ping_time_seconds", 20, alternativeContext...), // strictly below grpc_keepalive_time_seconds: equal values race at the boundary and the server answers GOAWAY too_many_pings
 			PermitWithoutStream:      getBool("grpc_permit_without_stream", true, alternativeContext...),
 			MaxConnectionIdleSeconds: getInt("grpc_max_connection_idle_seconds", 300, alternativeContext...),
 		},

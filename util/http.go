@@ -404,6 +404,53 @@ func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]b
 	}, nil
 }
 
+// trustedHTTPClient is for URLs the OPERATOR configured, never a peer: today the node's
+// own asset service (asset_httpAddress), which svp2p and legacy read blocks from to
+// serve getdata. Its default is http://localhost, and the SSRF dial policy on httpClient
+// exists to stop a PEER steering us at loopback — applying it here made every
+// single-process node unable to serve a block. This client keeps the same pool sizing
+// and redirect bound but dials without the address policy. ValidateURL still runs in
+// executeHTTPRequestWith, so the scheme check is unchanged.
+var trustedHTTPClient = &http.Client{
+	Transport: func() *http.Transport {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.MaxIdleConns = 1000
+		t.MaxIdleConnsPerHost = 100
+		t.MaxConnsPerHost = 200
+		return t
+	}(),
+	CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= maxSSRFRedirects {
+			return errors.NewServiceError("stopped after %d redirects", maxSSRFRedirects)
+		}
+
+		return nil
+	},
+}
+
+// DoTrustedHTTPRequestBodyReader is DoHTTPRequestBodyReader for an operator-configured
+// URL (see trustedHTTPClient). Do NOT pass a URL that a peer had any hand in building.
+func DoTrustedHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
+	cancelFn := func() {
+		// noop
+	}
+
+	if _, ok := ctx.Deadline(); !ok {
+		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond)
+	}
+
+	bodyReaderCloser, cancelFn, err := executeHTTPRequestWith(trustedHTTPClient, ctx, cancelFn, url, requestBody...)
+	if err != nil {
+		cancelFn()
+		return nil, err
+	}
+
+	return &readCloserWithCancel{
+		ReadCloser: bodyReaderCloser,
+		cancelFn:   cancelFn,
+	}, nil
+}
+
 func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
 	cancelFn := func() {
 		// noop
@@ -520,6 +567,12 @@ func isBlockedIP(ip net.IP) bool {
 
 // executeHTTPRequest performs the actual HTTP request with the given context.
 func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+	return executeHTTPRequestWith(httpClient, ctx, cancelFn, rawURL, requestBody...)
+}
+
+// executeHTTPRequestWith is executeHTTPRequest with the client chosen by the caller: the
+// peer-facing httpClient, or trustedHTTPClient for operator-configured addresses.
+func executeHTTPRequestWith(client *http.Client, ctx context.Context, cancelFn context.CancelFunc, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
 	if err := ValidateURL(rawURL); err != nil {
 		return nil, cancelFn, err
 	}
@@ -548,7 +601,7 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	}
 
 	var resp *http.Response
-	resp, err = httpClient.Do(req)
+	resp, err = client.Do(req)
 	if err != nil {
 		return nil, cancelFn, errors.NewServiceError("failed to do http request", err)
 	}
