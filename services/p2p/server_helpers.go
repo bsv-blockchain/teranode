@@ -308,7 +308,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 // addProtocolViolation records a protocol violation against a peer.
 func (s *Server) addProtocolViolation(peerID string) {
-	s.applyBanScore(peerID, ReasonProtocolViolation)
+	_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
 // isBlacklistedBaseURL checks the given baseURL against the operator-configured

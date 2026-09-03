@@ -1504,7 +1504,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	if err := nodeStatusMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
 		if !isSelf {
-			s.applyBanScore(peerID, ReasonProtocolViolation)
+			_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 		}
 		return
 	}
@@ -1522,7 +1522,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
-		s.applyBanScore(peerID, ReasonProtocolViolation)
+		_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 		return
 	}
 
@@ -1530,7 +1530,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		// Validate BaseURL to prevent SSRF attacks
 		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
-			s.applyBanScore(peerID, ReasonProtocolViolation)
+			_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 			return
 		}
 
