@@ -402,6 +402,15 @@ func checkRPCConfig(s *settings.Settings) []ConfigResult {
 func checkP2PConfig(s *settings.Settings) []ConfigResult {
 	var results []ConfigResult
 
+	if s.P2P.Port == 0 {
+		results = append(results, ConfigResult{
+			Severity:    SeverityERROR,
+			Check:       "P2P port",
+			Value:       "0",
+			Recommended: "Set p2p_port (e.g. 9905); the P2P service refuses to start without it",
+		})
+	}
+
 	// Mirror the startup check in the P2P service: the bus always binds every
 	// interface on p2p_port, so a narrowed value is refused rather than ignored.
 	if err := settings.ValidateP2PListenAddresses(s.P2P.ListenAddresses, s.P2P.Port); err != nil {

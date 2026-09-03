@@ -76,14 +76,12 @@ p2p_enable_relay = true
 
 ### Option 5: Share Private Addresses (Development Only)
 
-For local development or private networks:
-
 ```conf
 # In settings_local.conf
 p2p_share_private_addresses = true
 ```
 
-⚠️ **Warning**: Only use this in controlled environments where peers can actually reach private IPs.
+ℹ️ With the current go-p2p-message-bus this setting has no effect on what is announced: when `p2p_advertise_addresses` is empty, libp2p advertises every bound interface address, private ones included, regardless of this value. Local peers on the same network can therefore already dial each other. To publish only a public address, set `p2p_advertise_addresses` explicitly.
 
 ## How the Observed Address Mechanism Works
 

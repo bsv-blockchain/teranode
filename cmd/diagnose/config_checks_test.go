@@ -84,4 +84,12 @@ func TestCheckP2PConfigListenAddresses(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("zero port is an error", func(t *testing.T) {
+		s := &settings.Settings{}
+		s.P2P.ListenAddresses = []string{"0.0.0.0"}
+
+		res := findResult(t, checkP2PConfig(s), "P2P port")
+		require.Equal(t, SeverityERROR, res.Severity)
+	})
 }

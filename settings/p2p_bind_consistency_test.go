@@ -97,6 +97,22 @@ func (c settingsConf) resolve(key, settingsContext string) (string, bool) {
 	return v, ok
 }
 
+var placeholderRE = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)\}`)
+
+// expandPlaceholders replaces ${VAR} references with the value settings.conf
+// itself defines for VAR in the given context, mirroring gocore's own
+// variable substitution. Unknown placeholders are left untouched.
+func (c settingsConf) expandPlaceholders(value, settingsContext string) string {
+	return placeholderRE.ReplaceAllStringFunc(value, func(ph string) string {
+		key := placeholderRE.FindStringSubmatch(ph)[1]
+		if v, ok := c.resolve(key, settingsContext); ok {
+			return v
+		}
+
+		return ph
+	})
+}
+
 var settingsLineRE = regexp.MustCompile(`^([A-Za-z0-9_.]+)\s*=\s*(.*)$`)
 
 // readCommittedSettingsConf parses the repository's settings.conf. Values keep

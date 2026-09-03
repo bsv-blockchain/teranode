@@ -26,26 +26,26 @@ func TestResolveAdvertiseAddresses(t *testing.T) {
 
 	t.Run("silent mode suppresses explicit advertise addresses", func(t *testing.T) {
 		s := build(settings.ListenModeSilent, explicit, false)
-		require.Empty(t, resolveAdvertiseAddresses(ulogger.TestLogger{}, s, s.P2P.ListenMode))
+		require.Empty(t, resolveAdvertiseAddresses(ulogger.TestLogger{}, s))
 	})
 
 	t.Run("silent mode suppresses private address sharing", func(t *testing.T) {
 		s := build(settings.ListenModeSilent, nil, true)
-		require.Empty(t, resolveAdvertiseAddresses(ulogger.TestLogger{}, s, s.P2P.ListenMode))
+		require.Empty(t, resolveAdvertiseAddresses(ulogger.TestLogger{}, s))
 	})
 
 	t.Run("explicit advertise addresses win over private sharing", func(t *testing.T) {
 		s := build(settings.ListenModeFull, explicit, true)
-		require.Equal(t, explicit, resolveAdvertiseAddresses(ulogger.TestLogger{}, s, s.P2P.ListenMode))
+		require.Equal(t, explicit, resolveAdvertiseAddresses(ulogger.TestLogger{}, s))
 	})
 
 	t.Run("private sharing leaves announcement to libp2p, never the wildcard bind", func(t *testing.T) {
 		s := build(settings.ListenModeFull, nil, true)
-		require.Empty(t, resolveAdvertiseAddresses(ulogger.TestLogger{}, s, s.P2P.ListenMode))
+		require.Empty(t, resolveAdvertiseAddresses(ulogger.TestLogger{}, s))
 	})
 
 	t.Run("no sharing and no explicit addresses leaves announcement to libp2p", func(t *testing.T) {
 		s := build(settings.ListenModeFull, nil, false)
-		require.Empty(t, resolveAdvertiseAddresses(ulogger.TestLogger{}, s, s.P2P.ListenMode))
+		require.Empty(t, resolveAdvertiseAddresses(ulogger.TestLogger{}, s))
 	})
 }

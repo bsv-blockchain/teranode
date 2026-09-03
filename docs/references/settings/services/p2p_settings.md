@@ -26,7 +26,7 @@
 | BanThreshold | int | 100 | p2p_ban_threshold | Peer banning threshold |
 | BanDuration | time.Duration | 24h | p2p_ban_duration | Ban duration |
 | ForceSyncPeer | string | "" | p2p_force_sync_peer | **CRITICAL** - Forced sync peer override |
-| SharePrivateAddresses | bool | true | p2p_share_private_addresses | Private address advertisement |
+| SharePrivateAddresses | bool | true | p2p_share_private_addresses | Currently no effect: libp2p advertises bound interface addresses (private included) whenever AdvertiseAddresses is empty |
 | AllowPrunedNodeFallback | bool | true | p2p_allow_pruned_node_fallback | **CRITICAL** - Pruned node fallback behavior |
 | DHTMode | string | "server" (Code default; settings.conf ships with "off") | p2p_dht_mode | DHT operation mode ("server", "client", or "off") |
 | DHTCleanupInterval | time.Duration | 24h | p2p_dht_cleanup_interval | DHT provider record cleanup interval |

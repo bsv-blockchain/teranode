@@ -1,6 +1,8 @@
 package settings
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -45,6 +47,11 @@ func TestValidateP2PListenAddresses(t *testing.T) {
 		{"garbage", []string{"not-an-address"}, "not an IP address or multiaddr"},
 		{"bad multiaddr", []string{"/ip4/999.0.0.1"}, "invalid multiaddr"},
 		{"one bad among good", []string{"0.0.0.0", "192.168.1.10"}, "192.168.1.10"},
+		{"second ip hidden behind wildcard", []string{"/ip4/0.0.0.0/tcp/9905/ip4/127.0.0.1/tcp/9905"}, "specific interface"},
+		{"two wildcard ips", []string{"/ip4/0.0.0.0/ip6/::/tcp/9905"}, "more than one IP"},
+		{"second tcp hidden behind good one", []string{"/ip4/0.0.0.0/tcp/9905/tcp/9906"}, "does not match p2p_port"},
+		{"duplicate tcp", []string{"/ip4/0.0.0.0/tcp/9905/tcp/9905"}, "more than one /tcp"},
+		{"peer id suffix", []string{"/ip4/0.0.0.0/tcp/9905/p2p/12D3KooWAFXWuxgdJoRsaA4J4RRRr8yu6WCrAPf8FaS7UfZg3ceG"}, "unsupported multiaddr component"},
 	}
 	for _, tc := range rejected {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,8 +63,33 @@ func TestValidateP2PListenAddresses(t *testing.T) {
 }
 
 // TestCommittedP2PListenAddressesAreValid guards the committed settings.conf: the
-// value it ships for the current SETTINGS_CONTEXT must pass the startup check.
+// value it ships for every shipped context must pass the startup check. It reads
+// the file directly rather than through NewSettings so a developer's gitignored
+// settings_local.conf can neither fail it nor mask a regression (see
+// TestP2PGRPCBindMatchesClientAddress). A narrowed override such as the former
+// p2p_listen_addresses.dev = 127.0.0.1 would fail here.
 func TestCommittedP2PListenAddressesAreValid(t *testing.T) {
-	s := NewSettings()
-	require.NoError(t, ValidateP2PListenAddresses(s.P2P.ListenAddresses, s.P2P.Port))
+	conf := readCommittedSettingsConf(t)
+
+	for _, settingsContext := range shippedP2PContexts {
+		name := settingsContext
+		if name == "" {
+			name = "default"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			portStr, ok := conf.resolve("p2p_port", settingsContext)
+			require.True(t, ok, "p2p_port must be set in settings.conf")
+			portStr = conf.expandPlaceholders(portStr, settingsContext)
+
+			port, err := strconv.Atoi(portStr)
+			require.NoError(t, err, "p2p_port %q must resolve to a number", portStr)
+
+			listen, ok := conf.resolve("p2p_listen_addresses", settingsContext)
+			require.True(t, ok, "p2p_listen_addresses must be set in settings.conf")
+			listen = conf.expandPlaceholders(listen, settingsContext)
+
+			require.NoError(t, ValidateP2PListenAddresses(strings.Split(listen, "|"), port))
+		})
+	}
 }

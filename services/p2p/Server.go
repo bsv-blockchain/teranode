@@ -376,21 +376,21 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 // public address peers observe via Identify.
 //
 // The listen addresses are deliberately never announced: the bus only supports
-// wildcard binds, and a wildcard is not a dialable address.
-func resolveAdvertiseAddresses(logger ulogger.Logger, tSettings *settings.Settings, listenMode string) []string {
+// wildcard binds, and a wildcard is not a dialable address. That also means
+// SharePrivateAddresses currently has no effect on what is announced; the bus
+// offers no address filter short of a full AnnounceAddrs override.
+func resolveAdvertiseAddresses(logger ulogger.Logger, tSettings *settings.Settings) []string {
 	switch {
-	case listenMode == settings.ListenModeSilent:
-		// Silent mode: never advertise any addresses so the node remains undiscoverable
-		logger.Infof("[silent mode] Address advertisement suppressed - node will not be discoverable")
+	case tSettings.P2P.ListenMode == settings.ListenModeSilent:
+		// Silent mode: no explicit announce addresses. Discoverability is
+		// removed by disabling the DHT (see NewServer), not by this branch.
+		logger.Infof("[silent mode] No advertise addresses configured")
 		return nil
 	case len(tSettings.P2P.AdvertiseAddresses) > 0:
 		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses)
 		return tSettings.P2P.AdvertiseAddresses
-	case tSettings.P2P.SharePrivateAddresses:
-		logger.Infof("Private address sharing enabled - libp2p will advertise every bound interface address, private ones included")
-		return nil
 	default:
-		logger.Infof("Private address sharing disabled - libp2p will advertise the bound interface addresses and the public address observed by peers")
+		logger.Infof("No advertise addresses configured - libp2p will advertise every bound interface address (private ones included) and the public address observed by peers; p2p_share_private_addresses=%v has no effect on this", tSettings.P2P.SharePrivateAddresses)
 		return nil
 	}
 }
@@ -555,7 +555,7 @@ func NewServer(
 		}
 	}
 
-	advertiseAddresses := resolveAdvertiseAddresses(logger, tSettings, listenMode)
+	advertiseAddresses := resolveAdvertiseAddresses(logger, tSettings)
 
 	// Construct the full Bitcoin protocol ID with version and network topic prefix
 	// This ensures we only connect to peers on the same network (e.g. mainnet/testnet)

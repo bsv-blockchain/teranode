@@ -54,41 +54,37 @@ func validateListenAddress(addr string, port int) error {
 		return fmt.Errorf("invalid multiaddr: %w", err)
 	}
 
-	var (
-		sawIP   bool
-		portStr string
-	)
-	for _, c := range ma.Protocols() {
-		switch c.Code {
+	// Walk the components rather than calling ValueForProtocol, which only
+	// returns the first match and would let /ip4/0.0.0.0/tcp/9905/ip4/10.0.0.1
+	// slip through on the strength of its leading wildcard.
+	var sawIP, sawPort bool
+
+	for _, c := range ma {
+		switch c.Protocol().Code {
 		case multiaddr.P_IP4, multiaddr.P_IP6:
-			v, err := ma.ValueForProtocol(c.Code)
-			if err != nil {
-				return fmt.Errorf("invalid multiaddr: %w", err)
-			}
-			ip := net.ParseIP(v)
+			ip := net.ParseIP(c.Value())
 			if ip == nil || !ip.IsUnspecified() {
 				return fmt.Errorf("binding a specific interface is not supported")
 			}
+			if sawIP {
+				return fmt.Errorf("multiaddr has more than one IP component")
+			}
 			sawIP = true
 		case multiaddr.P_TCP:
-			portStr, err = ma.ValueForProtocol(c.Code)
-			if err != nil {
-				return fmt.Errorf("invalid multiaddr: %w", err)
+			if c.Value() != strconv.Itoa(port) {
+				return fmt.Errorf("port %s does not match p2p_port %d", c.Value(), port)
 			}
+			if sawPort {
+				return fmt.Errorf("multiaddr has more than one /tcp component")
+			}
+			sawPort = true
 		default:
-			return fmt.Errorf("unsupported multiaddr component /%s", c.Name)
+			return fmt.Errorf("unsupported multiaddr component /%s", c.Protocol().Name)
 		}
 	}
 
 	if !sawIP {
 		return fmt.Errorf("multiaddr has no /ip4 or /ip6 component")
-	}
-
-	if portStr != "" {
-		p, err := strconv.Atoi(portStr)
-		if err != nil || p != port {
-			return fmt.Errorf("port %s does not match p2p_port %d", portStr, port)
-		}
 	}
 
 	return nil

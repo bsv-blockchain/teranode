@@ -600,7 +600,7 @@ The following settings can be configured for the p2p service:
 ### Network Configuration
 
 - `p2p_listen_addresses`: **REQUIRED** - Declares the libp2p bind. The message bus always binds `0.0.0.0` and `::` on `p2p_port`, so only the wildcard forms (`0.0.0.0`, `::`, `/ip4/0.0.0.0/tcp/<p2p_port>`, `/ip6/::/tcp/<p2p_port>`) are accepted; a narrower value fails startup instead of being silently ignored. Restrict exposure with a firewall on `p2p_port`.
-- `p2p_advertise_addresses`: Addresses to advertise to other peers in the network. Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`). When a port is not specified, the system will use the value from `p2p_port` as the default. Both IP addresses and domain names are supported. Format examples: `192.168.1.1`, `example.com:9906`, `node.local:8001`.
+- `p2p_advertise_addresses`: Multiaddrs to advertise to other peers, pipe-separated (e.g. `/ip4/203.0.113.5/tcp/9905` or `/dns4/node.example.com/tcp/9905`). They are passed to libp2p verbatim, so each entry must be a complete multiaddr including the port; a bare `host:port` is rejected and the P2P service fails to start. When empty, libp2p advertises the interface addresses it bound and the public address peers observe via the Identify protocol.
 - `p2p_port`: **REQUIRED** - Defines the port number on which libp2p listens. It is always bound, whether or not `p2p_advertise_addresses` is set, so firewall rules and port mappings can rely on it.
 - `p2p_block_topic`: **REQUIRED** - The topic name used for block-related messages in the P2P network.
 - `p2p_subtree_topic`: **REQUIRED** - Specifies the topic for subtree-related messages within the P2P network.
