@@ -409,6 +409,123 @@ func (h *PauseTestHandler) ConsumeClaim(session ConsumerGroupSession, claim Cons
 	}
 }
 
+// TestConsumerGroupCloseStopsIdleConsumeGoroutine is the E4 regression this
+// fix targets (task-13-brief.md controller addendum E4, booked residual B6):
+// against the ORIGINAL code, Close() on a consumer group whose topic never
+// received a single message could not stop the underlying Consume goroutine
+// at all — ConsumeClaim's `for message := range claim.Messages()` blocks on
+// a channel nothing ever closes until Consume itself returns, and nothing
+// inside that idle loop ever checked ctx. Close()'s own wg.Wait() was also a
+// no-op, since nothing ever called wg.Add. So Close() returning proved
+// nothing about whether the goroutine backing this consumer had exited.
+//
+// This test proves Consume itself observably returns after Close, on a
+// topic with zero messages ever produced — the exact idle case the residual
+// describes — by having Consume signal a channel when it returns and
+// asserting that channel closes soon after Close() does.
+func TestConsumerGroupCloseStopsIdleConsumeGoroutine(t *testing.T) {
+	broker := NewInMemoryBroker()
+	cg := NewInMemoryConsumerGroup(broker, "idle-topic", "idle-group")
+
+	// rangeOnlyHandler mirrors the SHAPE of the production handler this
+	// fake actually backs: util/kafka's inMemoryConsumerHandler.ConsumeClaim
+	// is a plain `for message := range claim.Messages()`, with no select on
+	// session.Context() of its own. Using a ctx-aware handler here (like
+	// this file's own PauseTestHandler) would let the HANDLER's own select
+	// mask a still-broken Messages() — this handler has no such escape
+	// hatch, so it can only return if Messages() itself reacts to
+	// cancellation.
+	handler := &rangeOnlyHandler{}
+
+	consumeReturned := make(chan struct{})
+
+	go func() {
+		_ = cg.Consume(context.Background(), []string{"idle-topic"}, handler)
+		close(consumeReturned)
+	}()
+
+	// Give Consume a chance to actually register its consumer channel on the
+	// broker and enter ConsumeClaim's idle read before Close races it.
+	require.Eventually(t, func() bool {
+		return broker.HasConsumer("idle-topic")
+	}, time.Second, 5*time.Millisecond)
+
+	require.NoError(t, cg.Close())
+
+	select {
+	case <-consumeReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Consume did not return after Close on an idle topic — the idle consume goroutine is still blocked")
+	}
+}
+
+// TestConsumerGroupCloseDoesNotDeadlockWithAMessageInFlight is the second
+// bug this fix's own Wait()-becoming-real exposed: Close() originally held
+// mcg.mu across mcg.wg.Wait(), which was harmless only because Wait() on an
+// empty WaitGroup returns instantly. Once wg.Add/Done made Wait() genuinely
+// block until Consume returns, that same lock became a real deadlock risk —
+// Consume's own forwarding goroutine (Messages) takes mcg.mu on every
+// message via its isPausedFunc closure, paused or not, so Close blocking in
+// Wait() while holding mcg.mu could never let that goroutine finish, and
+// Close could never return. Fixed by releasing mcg.mu before Wait().
+//
+// Reproduced directly (not via a timing race in a slower end-to-end test)
+// by producing a message and calling Close immediately after: with the
+// message already past the receive branch of Messages' select and heading
+// toward its isPausedFunc check, Close's mu-guarded Wait() and that check
+// contend for the same lock on every run.
+func TestConsumerGroupCloseDoesNotDeadlockWithAMessageInFlight(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		broker := NewInMemoryBroker()
+		topic := "message-in-flight-topic"
+		cg := NewInMemoryConsumerGroup(broker, topic, "test-group")
+
+		consumeReturned := make(chan struct{})
+
+		go func() {
+			_ = cg.Consume(context.Background(), []string{topic}, &rangeOnlyHandler{})
+			close(consumeReturned)
+		}()
+
+		require.Eventually(t, func() bool {
+			return broker.HasConsumer(topic)
+		}, time.Second, time.Millisecond)
+
+		require.NoError(t, broker.Produce(context.Background(), topic, nil, []byte("x")))
+
+		closeReturned := make(chan error, 1)
+
+		go func() { closeReturned <- cg.Close() }()
+
+		select {
+		case err := <-closeReturned:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: Close deadlocked with a message in flight", i)
+		}
+
+		select {
+		case <-consumeReturned:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: Consume never returned after Close", i)
+		}
+	}
+}
+
+// rangeOnlyHandler is the minimal handler shape this fake's real production
+// caller (util/kafka's inMemoryConsumerHandler) actually uses: it drains
+// Messages() with a plain range and never selects on the session's context.
+type rangeOnlyHandler struct{}
+
+func (rangeOnlyHandler) Setup(ConsumerGroupSession) error   { return nil }
+func (rangeOnlyHandler) Cleanup(ConsumerGroupSession) error { return nil }
+func (rangeOnlyHandler) ConsumeClaim(_ ConsumerGroupSession, claim ConsumerGroupClaim) error {
+	for range claim.Messages() { //nolint:revive // draining only, mirrors inMemoryConsumerHandler
+	}
+
+	return nil
+}
+
 func TestConsumerGroupCloseNotRunning(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")

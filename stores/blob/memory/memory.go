@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -45,7 +46,7 @@ type Memory struct {
 	options            *options.Options
 	Counters           map[string]int
 	countersMu         sync.Mutex
-	currentBlockHeight uint32
+	currentBlockHeight atomic.Uint32
 	stopCleaner        context.CancelFunc
 }
 
@@ -85,7 +86,7 @@ func New(opts ...options.StoreOption) *Memory {
 // Parameters:
 //   - blockHeight: The current blockchain height
 func (m *Memory) SetBlockHeight(blockHeight uint32) {
-	m.currentBlockHeight = blockHeight
+	m.currentBlockHeight.Store(blockHeight)
 }
 
 // ttlCleaner runs a periodic cleanup process to remove expired blobs.
@@ -101,7 +102,7 @@ func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
-			cleanExpiredFiles(m, m.currentBlockHeight)
+			cleanExpiredFiles(m, m.blockHeight())
 		}
 	}
 }
@@ -222,7 +223,7 @@ func (m *Memory) Set(ctx context.Context, key []byte, fileType fileformat.FileTy
 	dah := merged.DAH
 
 	if dah == 0 && merged.BlockHeightRetention > 0 {
-		dah = m.currentBlockHeight + merged.BlockHeightRetention
+		dah = m.blockHeight() + merged.BlockHeightRetention
 	}
 
 	var data []byte
@@ -344,5 +345,9 @@ func (m *Memory) ListKeys() [][]byte {
 }
 
 func (m *Memory) SetCurrentBlockHeight(height uint32) {
-	m.currentBlockHeight = height
+	m.currentBlockHeight.Store(height)
+}
+
+func (m *Memory) blockHeight() uint32 {
+	return m.currentBlockHeight.Load()
 }
