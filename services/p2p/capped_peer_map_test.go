@@ -489,10 +489,13 @@ func TestCappedPeerMapUpdateAndDelete(t *testing.T) {
 	m.Store("a", peerMapEntry{peerID: "p1", timestamp: now})
 	m.Store("b", peerMapEntry{peerID: "p1", timestamp: now})
 
-	// Update 'a': no eviction, and 'a' becomes the most recent.
+	// Update 'a': no eviction, and 'a' becomes the most recent. The peer also
+	// changes, which must move the node between per-peer lists — the fair-share
+	// accounting reads their lengths.
 	m.Store("a", peerMapEntry{peerID: "p2", timestamp: now})
 	require.Equal(t, 2, m.Len())
 	require.Equal(t, int64(0), m.EvictionsSinceLastRead().total, "updating an existing key must not evict")
+	requireMapConsistent(t, &m)
 
 	entry, ok := m.Load("a")
 	require.True(t, ok)
@@ -507,6 +510,14 @@ func TestCappedPeerMapUpdateAndDelete(t *testing.T) {
 
 	m.Delete("a")
 	require.Equal(t, 1, m.Len())
+	requireMapConsistent(t, &m)
+
+	// 'a' was p2's only entry, so its per-peer list must be gone: a lingering
+	// empty list would inflate the fair-share denominator forever.
+	m.mu.Lock()
+	_, p2Listed := m.perPeer["p2"]
+	m.mu.Unlock()
+	require.False(t, p2Listed, "a peer's list must be dropped with its last entry")
 }
 
 // TestCappedPeerMapZeroValueIsBounded pins that the control fails CLOSED. The
@@ -565,11 +576,12 @@ func TestCappedPeerMapConvergesWhenOverCap(t *testing.T) {
 	requireMapConsistent(t, &m)
 }
 
-// requireMapConsistent asserts the map and its insertion-order list describe
-// the same set of entries. They are two structures kept in step by hand, so a
-// path that updates one and not the other would leak: entries orphaned in the
-// list are invisible to Len() yet still hold memory, which is the very failure
-// issue 1409 is about.
+// requireMapConsistent asserts the map, its insertion-order list, and the
+// per-peer lists all describe the same set of entries. They are three
+// structures kept in step by hand, so a path that updates one and not the
+// others would leak: entries orphaned in a list are invisible to Len() yet
+// still hold memory, which is the very failure issue 1409 is about — and a
+// per-peer list out of step miscounts a peer's fair share (issue 1503).
 func requireMapConsistent(t *testing.T, m *cappedPeerMap) {
 	t.Helper()
 
@@ -578,17 +590,32 @@ func requireMapConsistent(t *testing.T, m *cappedPeerMap) {
 
 	if m.order == nil {
 		require.Empty(t, m.entries, "map must be empty when the order list is unset")
+		require.Empty(t, m.perPeer, "per-peer lists must be empty when the order list is unset")
 		return
 	}
 
 	require.Equal(t, len(m.entries), m.order.Len(), "order list and map must hold the same number of entries")
+
+	perPeerTotal := 0
+	for peerID, pl := range m.perPeer {
+		require.Positive(t, pl.Len(), "peer %q has an empty per-peer list; it should have been dropped", peerID)
+		perPeerTotal += pl.Len()
+
+		for element := pl.Front(); element != nil; element = element.Next() {
+			node := element.Value.(*peerMapNode)
+			require.Equal(t, peerID, node.entry.peerID, "entry %q threaded onto peer %q's list", node.hash, peerID)
+			require.Same(t, element, node.peerElem, "entry %q disagrees with its per-peer element", node.hash)
+		}
+	}
+	require.Equal(t, len(m.entries), perPeerTotal, "per-peer lists and map must hold the same number of entries")
 
 	for element := m.order.Front(); element != nil; element = element.Next() {
 		node := element.Value.(*peerMapNode)
 
 		stored, ok := m.entries[node.hash]
 		require.True(t, ok, "order list holds %q but the map does not", node.hash)
-		require.Same(t, element, stored, "map and order list disagree about %q", node.hash)
+		require.Same(t, node, stored, "map and order list disagree about %q", node.hash)
+		require.Same(t, element, node.globalElem, "entry %q disagrees with its order-list element", node.hash)
 	}
 }
 
@@ -946,4 +973,121 @@ func TestAnnouncePeerMapLimits(t *testing.T) {
 		require.Empty(t, logger.warnsContaining("p2p_peer_map_max_size"),
 			"a coerced cap is not also an exceeds-the-default warning")
 	})
+}
+
+// TestCappedPeerMapFloodEvictsFlooderNotVictim pins the fair-share rule (issue
+// 1503) against the exploit it closes: an attacker who announces an invalid
+// block and then floods distinct hashes to age its victims' — or every other
+// peer's — attribution out of the shared map before validation reports. With
+// the fair-share rule the flooder is over its share of the map almost
+// immediately, so its pressure cannibalizes its own junk and the honest
+// entries survive the entire flood.
+func TestCappedPeerMapFloodEvictsFlooderNotVictim(t *testing.T) {
+	var m cappedPeerMap
+
+	m.setMaxSize(100)
+
+	now := time.Now()
+
+	// Honest announcements land first — the entries the flood used to wash out.
+	for i := 0; i < 10; i++ {
+		m.Store(fmt.Sprintf("honest-%d", i), peerMapEntry{peerID: fmt.Sprintf("honest-peer-%d", i), timestamp: now})
+	}
+
+	// A flood orders of magnitude past the cap.
+	for i := 0; i < 5000; i++ {
+		m.Store(fmt.Sprintf("junk-%d", i), peerMapEntry{peerID: "attacker", timestamp: now})
+	}
+
+	require.Equal(t, 100, m.Len())
+
+	for i := 0; i < 10; i++ {
+		entry, ok := m.Load(fmt.Sprintf("honest-%d", i))
+		require.True(t, ok, "honest attribution %d must survive a flood by another peer", i)
+		require.Equal(t, fmt.Sprintf("honest-peer-%d", i), entry.peerID)
+	}
+
+	// The junk the flooder holds is its newest: everything older self-evicted.
+	_, ok := m.Load("junk-0")
+	require.False(t, ok, "the flooder's own oldest entries are the ones evicted")
+
+	evictions := m.EvictionsSinceLastRead()
+	require.Equal(t, "attacker", evictions.topPeer, "the flood must be attributed to the flooder")
+	requireMapConsistent(t, &m)
+}
+
+// TestCappedPeerMapFairShareAdapts pins the denominator of the fair share: it
+// is the peers actually holding entries, not a fixed quota. Two peers filling
+// the map split it evenly, and each one's further inserts displace its own
+// oldest entry, never the other's.
+func TestCappedPeerMapFairShareAdapts(t *testing.T) {
+	var m cappedPeerMap
+
+	m.setMaxSize(10)
+
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		m.Store(fmt.Sprintf("a-%d", i), peerMapEntry{peerID: "peer-a", timestamp: now})
+		m.Store(fmt.Sprintf("b-%d", i), peerMapEntry{peerID: "peer-b", timestamp: now})
+	}
+
+	require.Equal(t, 10, m.Len())
+
+	// peer-a holds exactly its share (10/2 = 5): its next insert must evict its
+	// own oldest, leaving all of peer-b's entries intact.
+	m.Store("a-next", peerMapEntry{peerID: "peer-a", timestamp: now})
+
+	_, ok := m.Load("a-0")
+	require.False(t, ok, "a peer at its fair share evicts its own oldest entry")
+
+	for i := 0; i < 5; i++ {
+		_, ok := m.Load(fmt.Sprintf("b-%d", i))
+		require.True(t, ok, "the other peer's entries must be untouched")
+	}
+
+	// A peer with no entries yet is below any share: its insert takes the
+	// global oldest instead. The stores interleaved a-0, b-0, a-1, …, and a-0
+	// is already gone, so the global oldest is b-0.
+	m.Store("c-0", peerMapEntry{peerID: "peer-c", timestamp: now})
+
+	_, ok = m.Load("b-0")
+	require.False(t, ok, "a peer below its share displaces the global oldest")
+	requireMapConsistent(t, &m)
+}
+
+// TestStorePeerMapEntryFloodCannotWashOutAttribution drives the exploit from
+// the original finding end-to-end through the production helpers: attacker
+// announces invalid block B, floods far more distinct hashes than the map
+// holds, and the ban path must still resolve B to the attacker.
+func TestStorePeerMapEntryFloodCannotWashOutAttribution(t *testing.T) {
+	s := &Server{logger: ulogger.TestLogger{}}
+	s.blockPeerMap.setMaxSize(100)
+
+	now := time.Now()
+
+	invalidBlockHash := fmt.Sprintf("%064d", 424242)
+	s.storePeerMapEntry(&s.blockPeerMap, invalidBlockHash, "attacker", now)
+
+	for i := 0; i < 10000; i++ {
+		s.storePeerMapEntry(&s.blockPeerMap, fmt.Sprintf("%064d", i), "attacker", now)
+	}
+
+	// Self-eviction is the residual (issue 1433): the flooder CAN drop its own
+	// oldest entry, so the map alone cannot pin its own invalid block...
+	_, err := s.getPeerFromMap(&s.blockPeerMap, invalidBlockHash, "block")
+	require.Error(t, err, "a flooder can still age out its own attribution from the map")
+
+	// ...but it cannot touch anyone else's: an honest announcement made before
+	// the flood must still resolve.
+	s.blockPeerMap.Clear()
+	honestHash := fmt.Sprintf("%064d", 777777)
+	s.storePeerMapEntry(&s.blockPeerMap, honestHash, "honest-peer", now)
+
+	for i := 0; i < 10000; i++ {
+		s.storePeerMapEntry(&s.blockPeerMap, fmt.Sprintf("%064d", i), "attacker", now)
+	}
+
+	peerID, err := s.getPeerFromMap(&s.blockPeerMap, honestHash, "block")
+	require.NoError(t, err, "a flood must not evict another peer's attribution")
+	require.Equal(t, "honest-peer", peerID)
 }
