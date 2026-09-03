@@ -402,12 +402,19 @@ func checkRPCConfig(s *settings.Settings) []ConfigResult {
 func checkP2PConfig(s *settings.Settings) []ConfigResult {
 	var results []ConfigResult
 
-	if len(s.P2P.ListenAddresses) == 0 {
+	// Mirror the startup check in the P2P service: the bus always binds every
+	// interface on p2p_port, so a narrowed value is refused rather than ignored.
+	if err := settings.ValidateP2PListenAddresses(s.P2P.ListenAddresses, s.P2P.Port); err != nil {
+		value := strings.Join(s.P2P.ListenAddresses, ", ")
+		if value == "" {
+			value = valueEmpty
+		}
+
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       "P2P listen addresses",
-			Value:       valueEmpty,
-			Recommended: "Set p2p_listen_addresses (e.g. /ip4/0.0.0.0/tcp/9905)",
+			Value:       value,
+			Recommended: fmt.Sprintf("%v. Set p2p_listen_addresses to 0.0.0.0 or /ip4/0.0.0.0/tcp/%d", err, s.P2P.Port),
 		})
 	} else {
 		results = append(results, ConfigResult{

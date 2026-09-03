@@ -48,3 +48,40 @@ func TestCheckSecurityAdminAPIKey(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckP2PConfigListenAddresses pins that diagnose refuses the same listen
+// addresses the P2P service refuses at startup. It used to report a narrowed,
+// silently ignored value as OK.
+func TestCheckP2PConfigListenAddresses(t *testing.T) {
+	tests := []struct {
+		name     string
+		addrs    []string
+		severity Severity
+		value    string
+	}{
+		{name: "empty is an error", addrs: nil, severity: SeverityERROR, value: valueEmpty},
+		{name: "wildcard is ok", addrs: []string{"0.0.0.0"}, severity: SeverityOK, value: "0.0.0.0"},
+		{name: "dual-stack multiaddr is ok", addrs: []string{"/ip4/0.0.0.0/tcp/9905", "/ip6/::/tcp/9905"}, severity: SeverityOK},
+		{name: "narrowed interface is an error", addrs: []string{"10.0.1.5"}, severity: SeverityERROR, value: "10.0.1.5"},
+		{name: "port mismatch is an error", addrs: []string{"/ip4/0.0.0.0/tcp/9906"}, severity: SeverityERROR},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &settings.Settings{}
+			s.P2P.Port = 9905
+			s.P2P.ListenAddresses = tt.addrs
+
+			res := findResult(t, checkP2PConfig(s), "P2P listen addresses")
+			require.Equal(t, tt.severity, res.Severity)
+
+			if tt.value != "" {
+				require.Equal(t, tt.value, res.Value)
+			}
+
+			if tt.severity == SeverityERROR {
+				require.Contains(t, res.Recommended, "p2p_listen_addresses")
+			}
+		})
+	}
+}
