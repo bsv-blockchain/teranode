@@ -1371,7 +1371,9 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		// check whether we got already mined errors and mark the block as invalid
 		if errors.Is(err, errors.ErrBlockInvalid) {
 			// mark the block as invalid in the blockchain
-			return u.markBlockAsInvalid(ctx, block, "contains transactions already on our chain: "+err.Error())
+			// setTxMined no longer knows which peer supplied the block, so no
+			// provenance is attached; the p2p consumer falls back to its peer map.
+			return u.markBlockAsInvalid(ctx, block, "contains transactions already on our chain: "+err.Error(), "", "")
 		} else if errors.Is(err, errors.ErrBlockParentNotMined) {
 			u.logger.Warnf("[setTxMined][%s] skipping, already in progress of setMined for block", block.Hash().String())
 			return nil
@@ -1614,7 +1616,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			if block.SizeInBytes > excessiveBlockSizeUint64 {
 				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, fmt.Sprintf("block size %d exceeds excessiveblocksize %d", block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize))
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("block size %d exceeds excessiveblocksize %d", block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize))
 				}
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
@@ -1640,7 +1642,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// check the coinbase length
 		if len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(u.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
 			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, "bad coinbase length")
+				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, "bad coinbase length")
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
@@ -1659,7 +1661,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// non-checkpoint heights — the fork-depth rule — is a separate, broader change.)
 		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
 			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, err.Error())
+				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, err.Error())
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
@@ -1696,7 +1698,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 			if u.checkParentInvalid(parentMeta) {
 				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
 				}
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
 			}
@@ -1727,7 +1729,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 			if u.checkParentInvalid(parentMeta) {
 				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
 				}
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
 			}
@@ -1772,7 +1774,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
 			}
 			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
@@ -1803,7 +1805,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if expectedNBits != nil && block.Header.Bits != *expectedNBits {
 				reason := fmt.Sprintf("incorrect difficulty bits: got %v, expected %v", block.Header.Bits, *expectedNBits)
 				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
 				}
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
@@ -1820,7 +1822,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
 				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
 				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
 				}
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
 			}
@@ -1868,7 +1870,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if err = block.CheckHeaderContextual(blockHeaders, u.settings, ctxLogger); err != nil {
 				if errors.Is(err, errors.ErrBlockInvalid) {
 					if !opts.IsRevalidation {
-						u.storeInvalidBlock(ctx, block, opts.PeerID, err.Error())
+						u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, err.Error())
 					}
 
 					return errors.NewBlockInvalidError("[ValidateBlock][%s] block header failed contextual validation", block.Header.Hash().String(), err)
@@ -1944,7 +1946,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 					if errors.Is(err, errors.ErrBlockInvalid) {
 						reason := p2pconstants.ReasonInvalidBlock.String()
-						if err = u.markBlockAsInvalid(decoupledCtx, block, reason); err != nil {
+						if err = u.markBlockAsInvalid(decoupledCtx, block, reason, opts.PeerID, baseURL); err != nil {
 							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 							// we should try again to re-validate the block, as we failed to mark it as invalid
 							u.ReValidateBlock(block, baseURL)
@@ -1956,7 +1958,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						// Consensus-invalid -> roll back the optimistically-added block. In sync states
 						// isCaughtUp is false, so this stays the #1031 retry path below.
 						reason := p2pconstants.ReasonInvalidBlock.String()
-						if mErr := u.markBlockAsInvalid(decoupledCtx, block, reason); mErr != nil {
+						if mErr := u.markBlockAsInvalid(decoupledCtx, block, reason, opts.PeerID, baseURL); mErr != nil {
 							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate floater block: %v", block.String(), mErr)
 							u.ReValidateBlock(block, baseURL)
 						}
@@ -2074,7 +2076,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if errors.Is(err, errors.ErrBlockIncomplete) {
 					if u.isCaughtUp(ctx) {
 						if !opts.IsRevalidation {
-							u.storeInvalidBlock(ctx, block, opts.PeerID, "floater: parent not in block and not on chain: "+err.Error())
+							u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, "floater: parent not in block and not on chain: "+err.Error())
 						}
 
 						return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains a floater (unconfirmed parent not in block): %s", block.Hash().String(), err)
@@ -2087,7 +2089,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 
 				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
 				}
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
@@ -2099,7 +2101,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				if errors.Is(iterationError, errors.ErrBlockInvalid) && !opts.IsRevalidation {
 					reason := iterationError.Error()
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
 				}
 
 				return iterationError
@@ -2222,12 +2224,12 @@ func (u *BlockValidation) isCaughtUp(ctx context.Context) bool {
 	return *st == blockchain.FSMStateRUNNING
 }
 
-func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.Block, reason string) error {
+func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.Block, reason string, peerID string, peerURL string) error {
 	// Log the invalidation event - this is the key entry point for automatic invalidation
 	u.logger.Warnf("[ValidateBlock] Marking block %s as invalid - Reason: %s", block.Hash().String(), reason)
 
 	// Only use Kafka for reporting invalid blocks
-	u.kafkaNotifyBlockInvalid(block, reason)
+	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
 
 	if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); invalidateBlockErr != nil {
 		return errors.NewProcessingError("[ValidateBlock][%s] Failed to invalidate block: %v", block.String(), invalidateBlockErr)
@@ -2241,7 +2243,7 @@ func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.B
 // NOTE: This must NOT be called during block revalidation, as the block already
 // exists in the database. Calling AddBlock (INSERT) for an existing block will
 // fail with a duplicate key constraint violation.
-func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Block, peerID string, reason string) {
+func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Block, peerID string, peerURL string, reason string) {
 	u.logger.Warnf("[ValidateBlock][%s] storing block as invalid: %s", block.Hash().String(), reason)
 
 	// Store the block marked as invalid so we have a record of it
@@ -2254,7 +2256,7 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 		}
 	}
 
-	u.kafkaNotifyBlockInvalid(block, reason)
+	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
 }
 
 // checkParentInvalid checks if the parent block is invalid. This is an optimization
@@ -2402,12 +2404,29 @@ func (u *BlockValidation) walkParentChain(ctx context.Context, startHash *chainh
 	return headers, metas, nil
 }
 
-func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason string) {
+// kafkaNotifyBlockInvalid publishes the invalid-block event that drives peer
+// banning in the p2p service. peerID and peerURL carry the block's provenance
+// when the caller knows it: the p2p consumer's only other attribution source
+// is its gossip peer map, whose entries are evicted under announcement
+// pressure, so a flood (or the offending peer itself) can erase the map entry
+// before validation reports. Either field may be empty (e.g. the setTxMined
+// path, where the block's origin is no longer known); the consumer then falls
+// back to its peer map.
+func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason string, peerID string, peerURL string) {
+	// "legacy" is a routing sentinel, not a fetchable URL: the p2p consumer
+	// resolves peer_url by exact match against registry DataHub URLs, so the
+	// sentinel could never match and would only pollute the field.
+	if peerURL == "legacy" {
+		peerURL = ""
+	}
+
 	if u.invalidBlockKafkaProducer != nil {
 		u.logger.Infof("[ValidateBlock][%s] publishing invalid block to Kafka in background", block.Hash().String())
 		msg := &kafkamessage.KafkaInvalidBlockTopicMessage{
 			BlockHash: block.Hash().String(),
 			Reason:    reason,
+			PeerId:    peerID,
+			PeerUrl:   peerURL,
 		}
 
 		msgBytes, err := proto.Marshal(msg)

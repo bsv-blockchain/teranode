@@ -310,22 +310,6 @@ func TestRecordCatchupMalicious_RepeatedOffensesBanPeer(t *testing.T) {
 	require.Equal(t, "peer is banned", resp.Reason)
 }
 
-func TestUpdateCatchupReputation_NoOp(t *testing.T) {
-	s, reg, pid := freshTestServer(t)
-	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
-	r1, _ := reg.Get(pid.String())
-
-	resp, err := s.UpdateCatchupReputation(context.Background(), &p2p_api.UpdateCatchupReputationRequest{
-		PeerId: pid.String(),
-		Score:  99.9,
-	})
-	require.NoError(t, err)
-	require.True(t, resp.Ok)
-
-	r2, _ := reg.Get(pid.String())
-	require.Equal(t, r1.ReputationScore, r2.ReputationScore, "manual reputation override is a no-op now")
-}
-
 func TestUpdateCatchupError_StoresMessageAndTime(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})

@@ -18,16 +18,21 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
+// FooterSize is the number of bytes in the trailing footer that every writer
+// in this package (UTXOSet.CreateUTXOSet, cmd/bitcointoutxoset) appends
+// immediately after the last record: two little-endian uint64 values
+// (txCount, utxoCount), with no marker byte in front of them.
+const FooterSize = 16
+
 // GetFooter retrieves the transaction and UTXO counts from the footer of a UTXO file.
 // It reads the footer metadata located at the end of the file, which contains statistical
 // information about the file contents. This function requires a seekable reader (os.File)
 // to efficiently access the footer without reading the entire file.
 //
-// The footer format consists of:
-// - Last 16 bytes of the file contain two uint64 values in little-endian format
+// The footer format consists of the last FooterSize (16) bytes of the file,
+// two uint64 values in little-endian format, with nothing else following them:
 // - Bytes -16 to -9: Transaction count (8 bytes)
 // - Bytes -8 to -1: UTXO count (8 bytes)
-// - This follows after a 32-byte EOF marker
 //
 // Parameters:
 //   - r: io.Reader that must be an *os.File to support seeking operations
@@ -45,16 +50,30 @@ func GetFooter(r io.Reader) (uint64, uint64, error) {
 		return 0, 0, errors.NewProcessingError("seek is not supported")
 	}
 
-	// The end of the file should have the EOF marker at the end (32 bytes)
-	// and the txCount uint64 and the utxoCount uint64 (each 8 bytes)
-	_, err := f.Seek(-16, io.SeekEnd)
+	// The end of the file should have the txCount uint64 and the utxoCount
+	// uint64 (each 8 bytes) as the very last bytes.
+	_, err := f.Seek(-FooterSize, io.SeekEnd)
 	if err != nil {
-		return 0, 0, errors.NewProcessingError("error seeking to EOF marker", err)
+		return 0, 0, errors.NewProcessingError("error seeking to footer", err)
 	}
 
-	b := make([]byte, 16)
+	b := make([]byte, FooterSize)
 	if _, err := io.ReadFull(f, b); err != nil {
-		return 0, 0, errors.NewProcessingError("error reading EOF marker", err)
+		return 0, 0, errors.NewProcessingError("error reading footer", err)
+	}
+
+	return DecodeFooter(b)
+}
+
+// DecodeFooter decodes a FooterSize-byte buffer into (txCount, utxoCount).
+// Use this when the footer bytes were obtained without seeking - for
+// example, via the ErrRecordBoundary sentinel that FromReader /
+// NewUTXOWrapperFromReader returns when a read of the next record's TxID
+// comes up exactly FooterSize bytes short at the end of a stream that does
+// not support seeking (such as a blob-store reader).
+func DecodeFooter(b []byte) (uint64, uint64, error) {
+	if len(b) != FooterSize {
+		return 0, 0, errors.NewProcessingError("footer must be exactly %d bytes, got %d", FooterSize, len(b))
 	}
 
 	txCount := binary.LittleEndian.Uint64(b[0:8])

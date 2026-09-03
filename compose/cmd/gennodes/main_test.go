@@ -142,6 +142,7 @@ func TestGenSplitTopology(t *testing.T) {
 			"validator_grpcAddress.docker.teranode" + nodeStr + "              = teranode" + nodeStr + "-validator:${VALIDATOR_GRPC_PORT}",
 			"propagation_grpcAddresses.docker.teranode" + nodeStr + "          = teranode" + nodeStr + "-propagation:${PROPAGATION_GRPC_PORT}",
 			"p2p_grpcAddress.docker.teranode" + nodeStr + "                    = teranode" + nodeStr + "-p2p:${P2P_GRPC_PORT}",
+			"p2p_grpcListenAddress.docker.teranode" + nodeStr + "              = :${P2P_GRPC_PORT}",
 		} {
 			if !strings.Contains(settings, want) {
 				t.Errorf("split settings missing line:\n  %q\nfull settings:\n%s", want, settings)
