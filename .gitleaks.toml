@@ -50,6 +50,9 @@ regexes = [
   '''1d6a9c8963fdbb86eabc4d10cb1efdf418197cfc3f9779e3c8229663411ae5c8''',
   # Dev test wallet key for the docker blaster stacks (overridden per-deploy).
   '''COINBASE_WALLET_PRIVATE_KEY''',
+  # A client-name literal in an svp2p bridge test; gitleaks 8.18's
+  # generic-api-key rule reads the `ClientName = "..."` assignment as a credential.
+  '''svp2p-test-alwayson''',
 ]
 paths = [
   # Generated dev libp2p peer keys for local multi-node docker setups, and the

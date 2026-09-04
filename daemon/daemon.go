@@ -94,6 +94,8 @@ const (
 	serviceHelp                    = "help"
 	serviceLegacy                  = "legacy"
 	serviceLegacyFormal            = "Legacy"
+	serviceSvp2p                   = "svp2p"
+	serviceSvp2pFormal             = "Svp2p"
 	serviceNameDaemon              = "Daemon"
 	serviceNameP2P                 = "p2p"
 	serviceNameP2PFormal           = "P2P"
@@ -632,6 +634,9 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("    -legacy=<1|0>")
 	fmt.Println("          whether to start the legacy service")
+	fmt.Println("")
+	fmt.Println("    -svp2p=<1|0>")
+	fmt.Println("          whether to start the svp2p service (rewrite of legacy; mutually exclusive with -legacy)")
 	fmt.Println("")
 	fmt.Println("    -rpc=<1|0>")
 	fmt.Println("          whether to start the RPC service")
