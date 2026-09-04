@@ -174,10 +174,27 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 	go install gotest.tools/gotestsum@latest
 
+# TEST_PKGS: space-separated Go package patterns (e.g. ./services/propagation/...).
+# When set, runs only those packages — used by CI for service-scoped PRs to skip
+# unrelated test compilation. Coverage is still written to coverage.out, but
+# -coverpkg is narrowed to the same scoped set: the downstream Sonar pipeline
+# requires coverage.out to exist on every run, while instrumenting ./... is what
+# drives the ~110GB peak on full runs. The scoped set is the reverse-dependency
+# closure, so it contains every changed production package Sonar reports on.
+# When unset (default), runs the full unit suite with coverage over all non-test
+# packages.
 .PHONY: test
+# TEST_PKGS is read from the recipe ENVIRONMENT ($$TEST_PKGS), not interpolated
+# by make into the shell text, so a tool-produced package list can never be
+# parsed as shell. `export` guarantees the recipe sees it however it was set.
+export TEST_PKGS
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+ifdef TEST_PKGS
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg="$$(echo "$$TEST_PKGS" | tr ' ' ',')" $$TEST_PKGS
+else
 	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+endif
 
 # run tests in the test/longtest directory
 .PHONY: longtest
@@ -190,7 +207,13 @@ longtest:
 #   TEST_RETRY_COUNT - Number of retry attempts for failed tests (default: 3)
 #   TEST_RETRY_DELAY - Delay between retries in seconds (default: 2)
 # Example: make sequentialtest TEST_RETRY_COUNT=5 TEST_RETRY_DELAY=3
+# SEQ_PKGS: space-separated sequential package dirs to restrict the run to (e.g.
+# "test/sequentialtest/double_spend"). Empty (default) runs all packages. Used by
+# CI scoping; the runner reads it from the environment.
 .PHONY: sequentialtest
+# Exported (not make-interpolated) for the same reason as TEST_PKGS above: the
+# runner reads SEQ_PKGS straight from its environment.
+export SEQ_PKGS
 sequentialtest:
 	@mkdir -p /tmp/teranode-test-results
 	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt

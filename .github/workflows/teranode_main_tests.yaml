@@ -140,6 +140,140 @@ jobs:
           path: /tmp/teranode-test-results/prunertest-results.txt
           retention-days: 2
 
+  sequential:
+    name: sequential
+    # Safety net for PR-scoped sequential runs: merge-to-main always runs the
+    # FULL sequential suite (no SEQ_PKGS), so anything the closure mis-scoped on
+    # a PR is caught here. Sharded across 7 like the PR workflow.
+    #
+    # Deliberately NOT continue-on-error: this job is the gate the scoping design
+    # rests on, and an advisory job that leaves the workflow green catches
+    # nothing unless someone reads the logs. Retries absorb the flakiness that
+    # would otherwise argue for advisory mode.
+    runs-on: teranode-runner-8-core
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
+      - name: Run sequential shard
+        run: make sequentialtest-shard SHARD=${{ matrix.shard }} TOTAL=7
+        env:
+          # Set explicitly, NOT via env.SETTINGS_CONTEXT_DEFAULT: that variable is
+          # referenced by the pre-existing smoketest/prunertest jobs but never
+          # defined in this workflow (only in teranode_pr_smoketests.yaml), so it
+          # expands to empty. "test" is the value the PR workflow runs these same
+          # make targets under. The pre-existing empty references are left alone
+          # deliberately - changing them would alter jobs this PR is not about.
+          settings_context: test
+
+      - name: Upload sequential shard results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sequentialtest-shard-${{ matrix.shard }}-results
+          path: /tmp/teranode-test-results/sequentialtest-shard-${{ matrix.shard }}-results.txt
+          retention-days: 2
+
+  # Merge-to-main backstop for the two suites the PR workflow scope-gates. The
+  # scoping design rests on "the full suite on merge to main is the real gate",
+  # and these were the only PR-gated suites with no such gate: `make smoketest`
+  # -skips every TestLegacySync*, and neither this workflow nor
+  # teranode_main_build.yaml ran test/e2e/chainintegrity (nightly runs the
+  # separate binary-based chainintegrity.run, not this go-test suite). Without
+  # these, a closure mis-scope for either suite would never be caught anywhere.
+  legacy-sync:
+    name: legacy-sync
+    runs-on: teranode-runner-8-core
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
+      - name: Run Legacy Sync tests
+        run: make legacy-sync
+        env:
+          # Explicit for the reason documented on the `sequential` job above.
+          settings_context: test
+
+      - name: Upload legacy-sync results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: legacy-sync-results
+          path: /tmp/teranode-test-results/legacy-sync-results.txt
+          retention-days: 2
+
+  chainintegrity:
+    name: chainintegrity
+    # arm64: no SV-node; images all arm64-capable (teranode multi-arch,
+    # aerospike-server:8.1 arm64, postgres + redpanda arm64).
+    runs-on: teranode-runner-8-core-arm
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
+      - name: Run Chain Integrity tests
+        run: make chainintegrity
+        env:
+          # Explicit for the reason documented on the `sequential` job above.
+          settings_context: test
+
+      - name: Upload chainintegrity results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainintegrity-results
+          path: /tmp/teranode-test-results/chainintegrity-results.txt
+          retention-days: 2
+
   sonarqube:
     name: Sonarqube
     runs-on: teranode-runner-8-core

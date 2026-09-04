@@ -1,0 +1,112 @@
+name: 'Compute test scope'
+description: >
+  Compute which tests a pull request needs to run, via the reverse-dependency
+  closure of its changed files (see plans/ci-test-scoping.md and
+  test/scripts/affected). Emits per-suite outputs that gate the unit, smoke,
+  chainintegrity, and sequential jobs. When force-full is 'true' (the ci-full
+  label), every suite is signalled to run.
+
+inputs:
+  go-version:
+    description: Go version for `go run`/`go list`.
+    required: true
+  force-full:
+    description: "'true' to force the full suite regardless of the diff (ci-full label)."
+    default: 'false'
+
+outputs:
+  full:
+    description: Run the complete suite; ignore the scoped lists.
+    value: ${{ steps.scope.outputs.full }}
+  any_go:
+    description: Any .go file changed (diagnostic only; linters always run).
+    value: ${{ steps.scope.outputs.any_go }}
+  run_unit:
+    description: Run scoped unit tests.
+    value: ${{ steps.scope.outputs.run_unit }}
+  unit_pkgs:
+    description: Space-separated import paths for `make test TEST_PKGS=...`.
+    value: ${{ steps.scope.outputs.unit_pkgs }}
+  run_smoke:
+    description: Closure touches test/e2e/daemon/ready (smoke/pruner/legacy).
+    value: ${{ steps.scope.outputs.run_smoke }}
+  run_chainintegrity:
+    description: Closure touches test/e2e/chainintegrity.
+    value: ${{ steps.scope.outputs.run_chainintegrity }}
+  run_seq:
+    description: Run scoped sequential tests.
+    value: ${{ steps.scope.outputs.run_seq }}
+  seq_pkgs:
+    description: Space-separated dirs for run_tests_sequentially.sh --packages.
+    value: ${{ steps.scope.outputs.seq_pkgs }}
+
+runs:
+  using: 'composite'
+  # NOTE: the calling job MUST run actions/checkout before invoking this action -
+  # GitHub resolves local `./.github/actions/...` references from the checked-out
+  # workspace, and `go run`/`go list` need the source tree present.
+  steps:
+    - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+
+    # Module cache only - we just `go run`/`go list`, no -race build.
+    - name: Restore Go caches
+      uses: ./.github/actions/go-cache
+      with:
+        build_cache: 'false'
+
+    - name: Compute scope
+      id: scope
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        FORCE_FULL: ${{ inputs.force-full }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -uo pipefail
+
+        # Scoping is an OPTIMIZATION, never a gate: any failure here must fall
+        # back to the full suite (fail-open), not skip every test job. A scope
+        # job that exits non-zero - or emits a partial/empty output set - would
+        # leave every downstream `if: needs.scope.outputs.* == 'true'` false, so
+        # all test/lint/smoke/sequential jobs would be SKIPPED, producing a green
+        # PR with zero tests run. So on any error we write a complete full=true
+        # output set and exit 0.
+        emit_full() {
+          {
+            echo "full=true"; echo "any_go=true"
+            echo "reason=$1"
+            echo "run_unit=false"; echo "unit_pkgs="
+            echo "run_smoke=false"; echo "run_chainintegrity=false"
+            echo "run_seq=false"; echo "seq_pkgs="
+          } >> "$GITHUB_OUTPUT"
+          echo "$1"
+        }
+
+        if [ "$FORCE_FULL" = "true" ]; then
+          emit_full "ci-full label set - forcing full suite"
+          exit 0
+        fi
+
+        # Changed-file list via the API (no deep git history needed).
+        if ! gh pr diff "$PR_NUMBER" --name-only > /tmp/changed-files.txt; then
+          echo "::warning::scope: gh pr diff failed - running full suite"
+          emit_full "scope error (gh pr diff failed) - running full suite"
+          exit 0
+        fi
+        echo "::group::Changed files"; cat /tmp/changed-files.txt; echo "::endgroup::"
+
+        # Machine-readable set: stage to a temp file so a tool failure or short
+        # write falls back to full, never appends a partial set to $GITHUB_OUTPUT.
+        # Run ONCE - `go list` over the whole module with the union tag set is the
+        # expensive part, so the log below echoes the staged output rather than
+        # re-running the tool in -json mode just to print a decision.
+        if go run ./test/scripts/affected < /tmp/changed-files.txt > /tmp/scope-output.txt; then
+          echo "::group::Scope decision"; cat /tmp/scope-output.txt; echo "::endgroup::"
+          cat /tmp/scope-output.txt >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::scope: affected tool failed - running full suite"
+          emit_full "scope error (affected tool failed) - running full suite"
+        fi
