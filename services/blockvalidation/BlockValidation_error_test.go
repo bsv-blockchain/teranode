@@ -302,7 +302,12 @@ func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
 	return mockBlockchain
 }
 
-func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
+// TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic drives the DEFAULT production
+// (non-optimistic) path with a corrupt-body fixture (zeroed merkle root). This is the true
+// "corrupt is re-downloaded, not poisoned" thesis on the path production runs by default
+// (bitcoin-sv/teranode#4692): the body is never AddBlock'd, so it is neither persisted invalid nor
+// invalidated, and ValidateBlock returns a corrupt error for the caller to re-download.
+func TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic(t *testing.T) {
 	initPrometheusMetrics()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -360,16 +365,10 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 		block.Header.Nonce++
 	}
 
-	// Create a channel to signal when InvalidateBlock is called
-	invalidateBlockCalled := make(chan struct{})
-
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
-	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil).Run(func(args mock.Arguments) {
-		// Signal that InvalidateBlock was called
-		close(invalidateBlockCalled)
-	})
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	subChan := make(chan *blockchain_api.Notification, 1)
@@ -398,7 +397,9 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tSettings.BlockValidation.OptimisticMining = true
+	// Default production path is non-optimistic (bitcoin-sv/teranode#4692): the corrupt body must be
+	// caught by block.Valid BEFORE any AddBlock, so it is never added and never invalidated.
+	tSettings.BlockValidation.OptimisticMining = false
 	tSettings.Kafka.InvalidBlocks = "test-invalid-blocks" // Enable Kafka publishing
 
 	bv := &testBlockValidation{
@@ -421,19 +422,21 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	err = bv.ValidateBlock(ctx, block, "test", false)
-	require.NoError(t, err)
+	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), which
+	// is a tier-2 CORRUPT body — not consensus-invalid. On the non-optimistic default path the body
+	// is never AddBlock'd, so block.Valid returns corrupt and ValidateBlock surfaces it to the
+	// caller for re-download. The body must NEVER be persisted invalid=true (the honest body for
+	// this hash may still arrive from another peer) and must NOT be invalidated or published.
+	err = bv.ValidateBlock(ctx, block, "test", true)
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "a zeroed-merkle body is corrupt, not invalid")
 
-	// Wait for the goroutine to call InvalidateBlock
-	select {
-	case <-invalidateBlockCalled:
-		// Successfully received signal that InvalidateBlock was called
-	case <-time.After(2 * time.Second):
-		t.Fatal("InvalidateBlock should be called in background goroutine")
-	}
+	// A corrupt body on the non-optimistic path is never invalidated (no AddBlock happened, so
+	// there is nothing to roll back). ValidateBlock is synchronous here — it has already returned —
+	// so assert deterministically that InvalidateBlock was never called, with no timer/sleep race.
+	mockBlockchain.AssertNotCalled(t, "InvalidateBlock", mock.Anything, block.Header.Hash())
 
-	// Verify that Publish was called on the Kafka producer
-	require.True(t, mockKafka.IsPublishCalled(), "Kafka Publish should be called for invalid block")
+	require.False(t, mockKafka.IsPublishCalled(), "corrupt block body must not be published as invalid")
 }
 
 func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {

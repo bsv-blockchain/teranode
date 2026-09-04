@@ -360,6 +360,21 @@ func TestGetErrorCategory(t *testing.T) {
 			expected: "block",
 		},
 		{
+			// ERR_BLOCK_CORRUPT is inside the block range, but its rendered code name contains
+			// "corrupt", which the substring fallback in IsMaliciousResponseError matches — so
+			// without the dedicated early-out it would be attributed to "malicious" telemetry.
+			name:     "corrupt block body is categorised as block, not malicious",
+			err:      NewBlockCorruptError("corrupt body"),
+			expected: "block",
+		},
+		{
+			// The early-out must not over-reach: a genuinely malicious error still categorises
+			// as malicious.
+			name:     "network peer malicious error stays malicious",
+			err:      NewNetworkPeerMaliciousError("peer served junk"),
+			expected: "malicious",
+		},
+		{
 			name:     "transaction error",
 			err:      NewTxNotFoundError("tx missing"),
 			expected: "transaction",

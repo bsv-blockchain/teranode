@@ -102,7 +102,9 @@ func TestUnifiedRouteDedup_DuplicateTxRejected(t *testing.T) {
 
 	var terr *errors.Error
 	require.ErrorAs(t, err, &terr, "error must be a teranode *Error")
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "error kind must be BlockInvalid")
+	// bitcoin-sv/teranode#4692: body-derived corruption → corrupt (re-download), not invalid (poison).
+	require.True(t, errors.IsBlockCorrupt(err), "error kind must be BlockCorrupt")
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 }
 
 // TestUnifiedRouteDedup_CVE2012_DuplicateLastWhenOdd simulates the specific
@@ -126,7 +128,8 @@ func TestUnifiedRouteDedup_CVE2012_DuplicateLastWhenOdd(t *testing.T) {
 
 	err := model.CheckSubtreeSlicesForDuplicateTxs(slices)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	require.True(t, errors.IsBlockCorrupt(err))
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 }
 
 // TestHandleBlockDirect_UnifiedRoute_DeduplicatesViaPreparedSlices is a
@@ -153,7 +156,8 @@ func TestHandleBlockDirect_UnifiedRoute_DeduplicatesViaPreparedSlices(t *testing
 	// This is the guard now present in HandleBlockDirect:
 	err := model.CheckSubtreeSlicesForDuplicateTxs(preparedSubtreeSlices)
 	require.Error(t, err, "HandleBlockDirect must reject the block at the dedup guard, before ProcessBlock")
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+	require.True(t, errors.IsBlockCorrupt(err))
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 
 	// If the guard did not exist, `preparedSubtreeSlices` would have been
 	// forwarded to ProcessBlock and eventually to createAndSpendUTXOsForBatch,

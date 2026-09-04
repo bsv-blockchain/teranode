@@ -327,6 +327,12 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		assert.False(t, valid)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no coinbase tx")
+		// bitcoin-sv/teranode#4692: a missing coinbase in an unbound received body is a body-integrity
+		// failure classified CORRUPT (re-download + strike), not Incomplete (which poisoned as a
+		// false "floater" when caught up). Corrupt matches neither ErrBlockInvalid nor
+		// ErrBlockIncomplete, so it is never persisted invalid.
+		require.True(t, errors.IsBlockCorrupt(err), "nil coinbase must be classified corrupt, not incomplete/invalid")
+		require.False(t, errors.Is(err, errors.ErrBlockIncomplete), "nil coinbase must no longer be ErrBlockIncomplete")
 	})
 
 	t.Run("block with median timestamp validation", func(t *testing.T) {
@@ -444,22 +450,18 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 // TestBlock_Valid_CoinbaseScriptSigLength pins the coinbase scriptSig length check in Block.Valid.
 // Parity with bitcoin-sv CheckCoinbase (bad-cb-length): valid iff 2 <= size <= MaxCoinbaseScriptSigSize,
 // inclusive. See GitHub issue #1141.
+//
+// It also pins the check's CLASSIFICATION (bitcoin-sv/teranode#4692): the check
+// runs after the merkle binding, so on a bound body a bad length is genuine consensus invalidity
+// (condemn once), while on an unbound body it stays corrupt (re-download, never poison).
 func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	maxLen := int(tSettings.ChainCfgParams.MaxCoinbaseScriptSigSize)
 
-	// buildBlock returns a coinbase-only, otherwise-valid block whose coinbase scriptSig is
-	// either a controlled byte length (setNil == false) or a nil UnlockingScript (setNil == true).
-	// Height 0 skips BIP-34 and the reward/fee checks; nil subtreeStore/txMetaStore skip the
-	// subtree and order/blessed checks; empty currentChain skips the median-time-past check.
-	buildBlock := func(t *testing.T, n int, setNil bool) *Block {
+	// buildCoinbase returns the shared coinbase fixture whose scriptSig is either a controlled byte
+	// length (setNil == false) or a nil UnlockingScript (setNil == true).
+	buildCoinbase := func(t *testing.T, n int, setNil bool) *bt.Tx {
 		t.Helper()
-
-		blockHeaderBytes, err := hex.DecodeString(block1Header)
-		require.NoError(t, err)
-
-		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
-		require.NoError(t, err)
 
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
@@ -470,10 +472,39 @@ func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 			coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes(make([]byte, n))
 		}
 
-		// The swapped coinbase must still be recognised as a coinbase for step 4b to fire.
+		// The swapped coinbase must still be recognised as a coinbase for the check to fire.
 		require.True(t, coinbase.IsCoinbase())
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		return coinbase
+	}
+
+	// buildBoundBlock returns a coinbase-only, otherwise-valid block whose header merkle root is the
+	// coinbase txid — the identity that holds for a single-transaction block — so the body is BOUND.
+	// Height 0 skips BIP-34 and the reward/fee checks; nil subtreeStore/txMetaStore skip the subtree
+	// and order/blessed checks; empty currentChain skips the median-time-past check. The header is
+	// mined against the coinbase because changing the scriptSig changes the coinbase txid.
+	buildBoundBlock := func(t *testing.T, n int, setNil bool) *Block {
+		t.Helper()
+
+		coinbase := buildCoinbase(t, n, setNil)
+
+		block, err := NewBlock(minedHeaderVersion(t, 1, coinbase.TxIDChainHash()), coinbase,
+			[]*chainhash.Hash{}, 1, 123, 0, 0)
+		require.NoError(t, err)
+
+		return block
+	}
+
+	// buildUnboundBlock returns a block that declares subtrees but is validated with no subtree
+	// store, so CheckMerkleRoot never runs and the body is never bound to the header.
+	buildUnboundBlock := func(t *testing.T, n int) *Block {
+		t.Helper()
+
+		coinbase := buildCoinbase(t, n, false)
+		subtreeHash := chainhash.Hash{0x01}
+
+		block, err := NewBlock(minedHeaderVersion(t, 1, coinbase.TxIDChainHash()), coinbase,
+			[]*chainhash.Hash{&subtreeHash}, 2, 123, 0, 0)
 		require.NoError(t, err)
 
 		return block
@@ -487,39 +518,53 @@ func TestBlock_Valid_CoinbaseScriptSigLength(t *testing.T) {
 	}
 
 	t.Run("too short (length 1) is rejected", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, 1, false))
+		valid, err := callValid(t, buildBoundBlock(t, 1, false))
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
+		// A bound body's coinbase IS the miner's committed coinbase, so a bad length on it is
+		// genuine consensus invalidity, condemnable once.
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.False(t, errors.IsBlockCorrupt(err))
 	})
 
 	t.Run("too long (length Max+1) is rejected", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, maxLen+1, false))
+		valid, err := callValid(t, buildBoundBlock(t, maxLen+1, false))
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.False(t, errors.IsBlockCorrupt(err))
 	})
 
 	t.Run("boundary low (length exactly 2) passes", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, 2, false))
+		valid, err := callValid(t, buildBoundBlock(t, 2, false))
 		require.NoError(t, err)
 		require.True(t, valid)
 	})
 
 	t.Run("boundary high (length exactly Max) passes", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, maxLen, false))
+		valid, err := callValid(t, buildBoundBlock(t, maxLen, false))
 		require.NoError(t, err)
 		require.True(t, valid)
 	})
 
 	t.Run("nil unlocking script is rejected", func(t *testing.T) {
-		valid, err := callValid(t, buildBlock(t, 0, true))
+		valid, err := callValid(t, buildBoundBlock(t, 0, true))
 		require.False(t, valid)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad coinbase length")
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.False(t, errors.IsBlockCorrupt(err))
+	})
+
+	t.Run("unbound body with a bad length stays corrupt (never poisoned)", func(t *testing.T) {
+		valid, err := callValid(t, buildUnboundBlock(t, 1))
+		require.False(t, valid)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad coinbase length")
+		require.True(t, errors.IsBlockCorrupt(err), "an unbound bad-cb-length body must be corrupt, got: %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "an unbound body must never be poisoned")
 	})
 }
 
@@ -1334,12 +1379,16 @@ func TestMedianTimestamp(t *testing.T) {
 }
 
 func TestBlock_ValidWithOneTransaction(t *testing.T) {
-	blockHeaderBytes, _ := hex.DecodeString(block1Header)
-	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
-	require.NoError(t, err)
-
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
+
+	// A one-transaction block's merkle root IS its coinbase txid, so the header must be built
+	// against this coinbase for the body to be the coinbase-only block this test claims to
+	// validate. Block.Valid checks that identity and rejects a mismatched pair as corrupt.
+	// Anchor on the regtest genesis so the header satisfies BOTH constraints: its merkle root
+	// is the coinbase txid (the coinbase-only binding rule) and its parent is the regtest
+	// genesis the contextual-window check requires (issue 1467).
+	blockHeader := minedHeaderOnParent(t, 1, coinbase.TxIDChainHash(), regtestGenesisHeader(t).Hash())
 
 	b, err := NewBlock(
 		blockHeader,
@@ -1620,7 +1669,9 @@ func TestBlock_Valid_DupTxDetected_NilSubtreeStore(t *testing.T) {
 	valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 	require.False(t, valid)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+	// bitcoin-sv/teranode#4692: duplicate tx is body-derived corruption → corrupt, not invalid.
+	require.True(t, errors.IsBlockCorrupt(err), "expected ErrBlockCorrupt, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "duplicate transaction")
 }
 
@@ -2218,7 +2269,7 @@ func TestBlock_CheckBlockRewardAndFees(t *testing.T) {
 		// and the below-checkpoint skip does not fire — this genuinely exercises the reward
 		// arithmetic: the height-1 coinbase claims exactly the 50 BTC subsidy, so it is valid.
 		params := &chaincfg.Params{SubsidyReductionInterval: 210000}
-		err = block.checkBlockRewardAndFees(params, true, true)
+		err = block.checkBlockRewardAndFees(params, true, true, true)
 		require.NoError(t, err)
 	})
 
@@ -2242,7 +2293,7 @@ func TestBlock_CheckBlockRewardAndFees(t *testing.T) {
 		}
 
 		params := &chaincfg.Params{SubsidyReductionInterval: 210000}
-		err = block.checkBlockRewardAndFees(params, true, true)
+		err = block.checkBlockRewardAndFees(params, true, true, true)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "overflow")
 	})
@@ -2344,12 +2395,12 @@ func TestCheckBlockRewardAndFees_SkipsBelowHardcodedCheckpoint(t *testing.T) {
 	}
 
 	bBelow := buildInflatedBlock(300) // below highest checkpoint (500)
-	require.NoError(t, bBelow.checkBlockRewardAndFees(params, true, true), "below checkpoint, fast-path store, confirmed checkpoint ancestor: fee check must be skipped")
-	require.Error(t, bBelow.checkBlockRewardAndFees(params, false, true), "below checkpoint but store lacks fast-path support: no-inflation must still be enforced")
-	require.Error(t, bBelow.checkBlockRewardAndFees(params, true, false), "below checkpoint, fast-path store, but NOT a confirmed checkpoint ancestor (forward-sync / detached fork): no-inflation must still be enforced")
+	require.NoError(t, bBelow.checkBlockRewardAndFees(params, true, true, true), "below checkpoint, fast-path store, confirmed checkpoint ancestor: fee check must be skipped")
+	require.Error(t, bBelow.checkBlockRewardAndFees(params, false, true, true), "below checkpoint but store lacks fast-path support: no-inflation must still be enforced")
+	require.Error(t, bBelow.checkBlockRewardAndFees(params, true, false, true), "below checkpoint, fast-path store, but NOT a confirmed checkpoint ancestor (forward-sync / detached fork): no-inflation must still be enforced")
 
 	bAbove := buildInflatedBlock(501) // above highest checkpoint (500)
-	require.Error(t, bAbove.checkBlockRewardAndFees(params, true, true), "above checkpoint: fee check must still be enforced regardless of store support / ancestry")
+	require.Error(t, bAbove.checkBlockRewardAndFees(params, true, true, true), "above checkpoint: fee check must still be enforced regardless of store support / ancestry")
 }
 
 // TestCheckBlockRewardAndFees_BoundaryMatchesHighestCheckpointHeight pins the real
@@ -2401,11 +2452,11 @@ func TestCheckBlockRewardAndFees_BoundaryMatchesHighestCheckpointHeight(t *testi
 	}
 
 	// Exactly at the boundary (height == hc), fast-path store, confirmed ancestor: skipped.
-	require.NoError(t, buildInflatedBlock(hc).checkBlockRewardAndFees(params, true, true),
+	require.NoError(t, buildInflatedBlock(hc).checkBlockRewardAndFees(params, true, true, true),
 		"at height == HighestCheckpointHeight the check must be skipped (fast-path store, confirmed ancestor)")
 
 	// One above the boundary: enforced (inflated coinbase → error).
-	require.Error(t, buildInflatedBlock(hc+1).checkBlockRewardAndFees(params, true, true),
+	require.Error(t, buildInflatedBlock(hc+1).checkBlockRewardAndFees(params, true, true, true),
 		"at height == HighestCheckpointHeight+1 the check must be enforced")
 }
 
@@ -2815,7 +2866,9 @@ func TestBlock_CheckMerkleRoot_DuplicateSubtreeRoots(t *testing.T) {
 
 	err = block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	// bitcoin-sv/teranode#4692: duplicate subtree root is body-derived corruption → corrupt.
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "duplicate")
 	require.Contains(t, err.Error(), rootHash1.String())
 }
@@ -2858,7 +2911,7 @@ func TestBlock_CheckRewardAndFees_WithHeight(t *testing.T) {
 
 		// Test with a height that triggers the reward calculation logic
 		// This should error because coinbase output is too high
-		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams, true, true)
+		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams, true, true, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "coinbase output")
 	})
@@ -3204,7 +3257,10 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 
 	t.Run("Valid function path coverage", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		// A coinbase-only body is bound against the header by the coinbase-txid identity, so the
+		// header must be built from this coinbase for the block to validate.
+		block, err := NewBlock(minedHeaderVersion(t, 1, coinbase.TxIDChainHash()), coinbase,
+			[]*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
@@ -5658,7 +5714,9 @@ func TestBlock_Valid_DupTxDetected_DiskMapDirs(t *testing.T) {
 			valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 			require.False(t, valid)
 			require.Error(t, err)
-			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+			// bitcoin-sv/teranode#4692: duplicate tx is body-derived corruption → corrupt, not invalid.
+			require.True(t, errors.IsBlockCorrupt(err), "expected ErrBlockCorrupt, got %v", err)
+			require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 			require.Contains(t, err.Error(), "duplicate transaction")
 		})
 	}
@@ -5969,7 +6027,9 @@ func TestCheckMerkleRoot_RejectsMidStreamIncompleteSubtree(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	// bitcoin-sv/teranode#4692: subtree-shape check is body-derived → corrupt, not invalid.
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "only the final subtree may be incomplete")
 }
 
@@ -5983,7 +6043,8 @@ func TestCheckMerkleRoot_RejectsFinalSubtreeLargerThanFirst(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "final subtree exceeds first subtree size")
 }
 
@@ -6016,7 +6077,8 @@ func TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "first subtree leaf count is not a power of two")
 }
 

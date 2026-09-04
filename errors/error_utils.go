@@ -151,7 +151,15 @@ func IsMaliciousResponseError(err error) bool {
 		}
 	}
 
-	// Check for patterns that might indicate malicious behavior
+	// Check for patterns that might indicate malicious behavior.
+	//
+	// CAUTION: this is substring matching over the RENDERED error text, and Teranode renders each
+	// error's code name into its own message (see Error.Error). Any error code whose name contains
+	// one of these ordinary English words therefore matches here — e.g. ERR_BLOCK_CORRUPT renders
+	// "BLOCK_CORRUPT" and matches "corrupt". Callers that must distinguish such a code (e.g. the
+	// corrupt-body re-download recovery, bitcoin-sv/teranode#4692) MUST test the specific classifier
+	// (errors.IsBlockCorrupt) BEFORE calling IsMaliciousResponseError, or their branch is dead.
+	// Prefer a specific code check over adding words here.
 	errStr := strings.ToLower(err.Error())
 	maliciousStrings := []string{
 		"invalid header",
@@ -285,6 +293,15 @@ func GetErrorCategory(err error) string {
 		return "context"
 	}
 
+	// ERR_BLOCK_CORRUPT renders "BLOCK_CORRUPT" into its own message, which the substring fallback in
+	// IsMaliciousResponseError matches on "corrupt" — so without this early-out every corrupt-body
+	// error is attributed to "malicious" in telemetry instead of "block" (its code is inside the
+	// block range). Same ordering rule the routing sites follow: test the specific classifier first
+	// (bitcoin-sv/teranode#4692).
+	if IsBlockCorrupt(err) {
+		return "block"
+	}
+
 	if IsMaliciousResponseError(err) {
 		return "malicious"
 	}
@@ -330,6 +347,11 @@ func errorCodeCategory(code ERR) string {
 		return "state"
 	case code >= 110 && code <= 119:
 		return "network"
+	// The original block decade (10-19) is full, so further block errors are numbered
+	// from 120 and must map to the same category — otherwise a block error would fall
+	// through to the empty default and be mis-bucketed.
+	case code >= 120 && code <= 129:
+		return "block"
 	default:
 		return ""
 	}

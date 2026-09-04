@@ -64,6 +64,7 @@ type CatchupContext struct {
 	highestCheckpointHeight uint32 // Highest checkpoint height hash-verified in THIS catchup run (not the highest configured checkpoint)
 	catchupError            error  // Any error encountered during catchup
 	incompleteBlockHash     string // Block hash reported when a peer serves an incomplete block
+	corruptBlockHash        string // Block hash reported when a peer serves a corrupt block body
 
 	// failedPeers records the peers that actually failed to serve data during this
 	// catchup cycle, deduplicated by peer ID (last error message wins). Written from
@@ -381,9 +382,11 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 		reportMalicious       bool
 		reportPeerErr         bool
 		reportIncompleteBlock bool
+		reportCorruptBlock    bool
 		peerID                string
 		errorMsg              string
 		incompleteBlockHash   string
+		corruptBlockHash      string
 		failedPeers           map[string]string
 	)
 
@@ -474,6 +477,22 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// processing errors here would stop charging peers that deserve it.
 			errorType = "local_header_context_error"
 			isPeerError = false
+		case errors.IsBlockCorrupt(*err):
+			// Corrupt block body (bitcoin-sv/teranode#4692): classify for the dashboard but do NOT flag
+			// the peer malicious and do NOT open a generic peer-error window here. The serving
+			// peer was already struck via AddBanScore at the corrupt site, and the block is
+			// re-downloaded; double-charging here would penalize a possibly-sole-source peer
+			// twice. Must precede the ErrBlockInvalid case (corrupt uses a dedicated sentinel,
+			// so it would not match it anyway).
+			//
+			// Peer selection still needs a genuine signal, distinct from the cosmetic UI string
+			// isPeerError=false leaves this with: report the dedicated corrupt_block_body failure
+			// kind below, mirroring the incomplete-block case, so catch-up peer selection can stop
+			// re-picking a peer that keeps serving corrupt bodies (bitcoin-sv/teranode#4692).
+			errorType = "corrupt_block_body"
+			isPeerError = false
+			reportCorruptBlock = true
+			corruptBlockHash = ctx.corruptBlockHash
 		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
 			// Gated on the same predicate validateBlocksOnChannel and
 			// processCatchupChItem use, rather than on the case ordering above it.
@@ -486,6 +505,16 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			errorType = "validation_failure"
 			// Mark peer as malicious for validation failure (reported after unlock)
 			reportMalicious = true
+		case errors.Is(*err, errors.ErrBlockError):
+			// A bare ERR_BLOCK_ERROR on the catchup path is a LOCAL block-level decision, not the
+			// serving peer's fault: an oversized-block policy decline (excessiveblocksize) or the
+			// "given up waiting on previous blocks" ordering timeout. Peer-attributable failures use
+			// dedicated sentinels (corrupt / invalid / incomplete) handled above, so the generic
+			// ERR_BLOCK_ERROR code that survives to here cannot be one of them. Do not charge the
+			// peer — it may be the sole source ahead (bitcoin-sv/teranode#4692). Must follow the
+			// corrupt and invalid cases so it never shadows a peer-attributable verdict.
+			errorType = "local_block_policy_or_wait"
+			isPeerError = false
 		case errors.Is(*err, errors.ErrExternal):
 			// Every peer attempt failed to fetch subtree data. The individual failures
 			// were already attributed to the peers that produced them
@@ -577,7 +606,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	// Make the fire-and-forget reputation gRPC calls outside the lock with a bounded
 	// context, so a stalled P2P service can neither hold activeCatchupCtxMu nor outlive
 	// shutdown. These are best-effort; failures are logged inside the helpers.
-	if reportMalicious || reportPeerErr || reportIncompleteBlock || len(failedPeers) > 0 {
+	if reportMalicious || reportPeerErr || reportIncompleteBlock || reportCorruptBlock || len(failedPeers) > 0 {
 		rpcCtx, cancel := context.WithTimeout(context.Background(), catchupReputationReportTimeout)
 		defer cancel()
 
@@ -648,6 +677,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		if reportIncompleteBlock {
 			u.reportCatchupFailureWithKind(rpcCtx, peerID, catchupFailureKindBlockIncomplete, incompleteBlockHash)
+		}
+
+		if reportCorruptBlock {
+			u.reportCatchupFailureWithKind(rpcCtx, peerID, catchupFailureKindCorruptBlockBody, corruptBlockHash)
 		}
 	}
 
@@ -1214,11 +1247,43 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 
 	// Wait for both operations to complete
 	err := errorGroup.Wait()
+
+	// Release any wait barrier still blocked on a job no worker will ever receive
+	// (bitcoin-sv/teranode#4692). A job is only ever Done()'d by a worker that actually receives it,
+	// so when the pool tears down on a cancelled context — an external shutdown, or any
+	// subtreeWriteWorker's own Serialize/Set failure cancelling gCtx for the whole group — the jobs
+	// left in the buffer are never counted down. tryQuickValidation's select on ctx.Done() stops the
+	// CALLER hanging; it does not release the helper goroutine it spawned, which stays blocked in
+	// wg.Wait() for the life of the process holding the WaitGroup and the closure. Draining here
+	// counts every stranded job down exactly once, which is what lets that goroutine finish.
+	//
+	// This terminates: close(writeJobsChan) is deferred inside the goroutine the errgroup waits on
+	// above, so the channel is always already closed by the time Wait returns.
+	drainWriteJobs(writeJobsChan)
+
 	if err != nil {
 		catchupCtx.catchupError = err
 	}
 
 	return err
+}
+
+// drainWriteJobs receives every subtree write job left in ch and counts it down, so a caller blocked
+// in wg.Wait() for a job no worker will ever receive is released (bitcoin-sv/teranode#4692).
+//
+// Only safe to call once the producing errgroup has settled, because it relies on the channel being
+// closed to terminate. Nil-safe on both axes: ch is nil when quick validation is disabled (no worker
+// pool, no channel), and job.Done is nil for a job constructed without a barrier.
+func drainWriteJobs(ch <-chan *SubtreeWriteJob) {
+	if ch == nil {
+		return
+	}
+
+	for job := range ch {
+		if job != nil && job.Done != nil {
+			job.Done.Done()
+		}
+	}
 }
 
 // cleanup cleans up resources after catchup.
@@ -1479,7 +1544,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 			cachedHeaders, _ := u.headerChainCache.GetValidationHeaders(block.Hash())
 
 			// Try quick validation if applicable
-			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan)
+			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan, item.freshlyWritten)
 			if err != nil {
 				return err
 			}
@@ -1488,9 +1553,11 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 				// Standard validation path for blocks not verified by checkpoints
 				// Create validation options with cached headers
 				opts := &ValidateBlockOptions{
-					CachedHeaders:           cachedHeaders,
-					IsCatchupMode:           true,
-					DisableOptimisticMining: true,
+					CachedHeaders: cachedHeaders,
+					IsCatchupMode: true,
+					// bitcoin-sv/teranode#4692: non-optimistic unless the operator opts in via BOTH
+					// blockvalidation_optimistic_mining and blockvalidation_optimistic_mining_peer_blocks.
+					DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings),
 					PeerID:                  peerID,
 				}
 
@@ -1505,6 +1572,27 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					if errors.Is(err, errors.ErrBlockIncomplete) {
 						catchupCtx.incompleteBlockHash = block.Hash().String()
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+					} else if errors.IsBlockCorrupt(err) {
+						// Corrupt block body (bitcoin-sv/teranode#4692): the serving peer was already struck via
+						// AddBanScore inside ValidateBlockWithOptions and the block was NOT stored
+						// invalid. Do NOT report the peer malicious — an honest relay can forward a
+						// corrupted body. Abort so the shared dispatch re-downloads a fresh body from
+						// another peer (releaseCatchupLock classifies it as corrupt_block_body).
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s has a corrupt body, aborting for re-download", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+						// Capture the hash so releaseCatchupLock can feed catch-up peer selection with
+						// a dedicated corrupt_block_body failure kind (bitcoin-sv/teranode#4692).
+						catchupCtx.corruptBlockHash = block.Hash().String()
+
+						// Delete the peer-supplied .subtree blobs that just failed their integrity check.
+						// fetchAndStoreSubtree wrote them under FileTypeSubtreeToCheck without confirming
+						// they hash to the requested subtree, and findLocalSubtreeFile short-circuits on
+						// retry, so the bogus blob would be re-read from any peer until retention lapses.
+						// The fresh re-download re-writes them, so removal is safe. On a delete failure,
+						// preserve the corrupt classification (see the quick path) — never downgrade it.
+						if delErr := u.removeCatchupSubtreeFiles(gCtx, item.freshlyWritten); delErr != nil {
+							u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] block %s: failed to remove corrupt .subtree files: %v", blockUpTo.Hash().String(), block.Hash().String(), delErr)
+						}
 					} else if shouldReportConsensusMalicious(err) {
 						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
@@ -1550,9 +1638,14 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 	return nil
 }
 
-// tryQuickValidation attempts quick validation for checkpointed blocks
+// tryQuickValidation attempts quick validation for checkpointed blocks.
+// fetchFreshlyWritten is the fetch phase's own freshness set for this block (get_blocks.go,
+// carried on blockForValidation.freshlyWritten) — the (hash, fileType) pairs the earlier
+// fetchSubtreeDataForBlock call itself wrote for FileTypeSubtreeToCheck/FileTypeSubtreeData,
+// before this block ever reached quick validation. It is merged into the corrupt-cleanup set
+// below but never mutated here (bitcoin-sv/teranode#4692).
 // Returns true if normal validation should be tried, false if quick validation succeeded
-func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (bool, error) {
+func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob, fetchFreshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}) (bool, error) {
 	// Determine if this specific block can use quick validation
 	// A block can use quick validation if it's at or below the highest verified checkpoint height
 	canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
@@ -1578,8 +1671,14 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		return true, nil // Fall back to normal validation
 	}
 
-	// Quick validation: create UTXOs for the block and validate transactions in parallel
-	if err := u.blockValidation.quickValidateBlockAsync(ctx, block, peerID, baseURL, writeJobsChan); err != nil {
+	// Quick validation: create UTXOs for the block and validate transactions in parallel.
+	// wg tracks every write job THIS block queued to the shared async subtree writer;
+	// freshlyWritten records exactly which (hash, FileTypeSubtree) pairs quick validation's own
+	// build phase wrote. Both are populated even on a failure return, since subtree processing
+	// runs to completion (or to its own failure point) before quickValidateBlockAsync ever
+	// returns (bitcoin-sv/teranode#4692).
+	wg, freshlyWritten, err := u.blockValidation.quickValidateBlockAsync(ctx, block, peerID, baseURL, writeJobsChan)
+	if err != nil {
 		// As in validateBlocksOnChannel: do not charge a local fault to the peer,
 		// even in telemetry, and use the same predicate the other two sites use.
 		if prometheusCatchupErrors != nil && !isLocalCatchupFault(err) {
@@ -1597,18 +1696,104 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			return false, err
 		}
 
+		// wg.Wait() must never be a bare wait, or this can hang: once a job has been Add(1)'d and
+		// handed to the channel, it is only ever Done()'d by a worker actually receiving and
+		// processing it. If the SHARED catch-up context (ctx here IS gCtx, the errgroup context
+		// created around the write-worker pool) is cancelled before that happens — an external
+		// shutdown, or any SIBLING subtreeWriteWorker returning its own Serialize/Set error, which
+		// cancels gCtx for the whole pool — every worker can exit via ctx.Done() without ever
+		// draining this block's remaining jobs, stranding them un-counted-down forever. So wait on
+		// wg and ctx together, never on wg alone (bitcoin-sv/teranode#4692).
+		waitDone := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(waitDone)
+		}()
+
+		if errors.IsBlockCorrupt(err) {
+			// Corrupt body on the quick path (bitcoin-sv/teranode#4692). This path bypasses
+			// ValidateBlockWithOptions, so strike the serving peer here, then abort for a
+			// FRESH re-download from another peer — do NOT re-run normal validation on the SAME
+			// corrupt body (it would just re-fail).
+			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "quick validation: corrupt block body")
+			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s has a corrupt body, aborting for re-download",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			// Capture the hash so releaseCatchupLock can feed catch-up peer selection with a
+			// dedicated corrupt_block_body failure kind (bitcoin-sv/teranode#4692).
+			catchupCtx.corruptBlockHash = block.Hash().String()
+
+			select {
+			case <-waitDone:
+				// Every write job this block queued has been fully handled (written or
+				// skipped) by a worker. Safe to clean up: delete the (hash, fileType) pairs
+				// THIS attempt itself freshly wrote across BOTH producers, merged into a new
+				// map (bitcoin-sv/teranode#4692) — quick validation's own FileTypeSubtree writes
+				// (freshlyWritten) AND the earlier fetch phase's FileTypeSubtreeToCheck /
+				// FileTypeSubtreeData writes (fetchFreshlyWritten, carried on
+				// blockForValidation.freshlyWritten). A corrupt verdict taints the WHOLE body
+				// this attempt assembled, not just the part quick validation itself built, so
+				// leaving the fetched blobs behind would let findLocalSubtreeFile reuse them on
+				// retry — the same reuse bug this cleanup exists to close, just for the fetched
+				// types instead of the built one. Merging never mutates fetchFreshlyWritten:
+				// validateBlocksOnChannel's item still owns it for the rest of this loop
+				// iteration. The fresh re-download re-writes everything deleted here, so removal
+				// is safe.
+				merged := mergeFreshlyWritten(freshlyWritten, fetchFreshlyWritten)
+				if delErr := u.removeCatchupSubtreeFiles(ctx, merged); delErr != nil {
+					// A failed cleanup must not downgrade the corrupt classification to a local
+					// ProcessingError: returning delErr here would make the caller retry the SAME
+					// corrupt body as a transient local failure instead of re-downloading a fresh one.
+					// Log the cleanup failure and preserve the corrupt error.
+					u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: failed to remove corrupt .subtree files: %v",
+						catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), delErr)
+				}
+			case <-ctx.Done():
+				// The shared catch-up context was cancelled — either a genuine external
+				// shutdown/abort, or a sibling write-worker's own failure elsewhere in the
+				// pool cancelling gCtx via the errgroup. Either way this catch-up run is
+				// already tearing down: some of this block's own queued jobs may now never
+				// be received by any worker (they all exited on ctx.Done() too), so
+				// continuing to wait on wg could hang forever. Skip cleanup — do NOT call
+				// removeCatchupSubtreeFiles — and fall through. This is safe: skipping cleanup
+				// can only fail to delete something, never delete the wrong thing, so it never
+				// destroys another block's promoted data; every blob left behind was written
+				// with a finite DAH, so it self-expires; and a stale leftover re-fails the same
+				// merkle/shape check on retry rather than being trusted blindly, bounded on this
+				// catchup path by CatchupMaxAttemptsPerBlock per cycle (recorded via
+				// recordCatchupAttemptUnlessProgress) — not the corrupt-attempt cap, which gates
+				// only the processBlockFound and legacy-manager paths, not catchup.
+				// The corrupt classification below is unaffected either way.
+				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
+					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
+			}
+
+			return false, err
+		}
+
 		u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v",
 			catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
 
-		// since the quick validation failed, we will have to remove the .subtree files, which will trigger
-		// the normal validation to re-create the UTXOs and validate the transactions
-		for _, subtreeHash := range block.Subtrees {
-			if err = u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtree); err != nil {
-				if !errors.Is(err, errors.ErrNotFound) {
-					return false, errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to remove subtree file %s",
-						catchupCtx.blockUpTo.Hash().String(), subtreeHash.String(), err)
-				}
+		// Since the quick validation failed for a LOCAL reason (not corrupt, not incomplete —
+		// e.g. a UTXO-store hiccup or block-ID assignment failure), the peer-supplied body
+		// itself is not implicated: only quick validation's own build output is stale.
+		// Deliberately do NOT merge in fetchFreshlyWritten here (bitcoin-sv/teranode#4692):
+		// normal validation, which this falls through to, is meant to REUSE the already-fetched
+		// FileTypeSubtreeToCheck/FileTypeSubtreeData rather than re-fetch them from a peer —
+		// that reuse is the whole point of catch-up's prefetch phase. Deleting them on a purely
+		// local failure would force a needless re-fetch for a body nothing has accused of being
+		// bad. Clearing quick validation's own FileTypeSubtree is still correct: normal
+		// validation rebuilds it fresh via its own path regardless.
+		select {
+		case <-waitDone:
+			if delErr := u.removeCatchupSubtreeFiles(ctx, freshlyWritten); delErr != nil {
+				return false, delErr
 			}
+		case <-ctx.Done():
+			// See the corrupt-branch comment above: skip cleanup rather than risk hanging.
+			// Normal validation re-creates whatever this attempt left behind.
+			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
 		}
 		// Quick validation failed, try normal validation
 		return true, nil
@@ -1616,6 +1801,137 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// Quick validation succeeded, skip normal validation
 	return false, nil
+}
+
+// subtreeFreshness tracks, for a single block's single fetch/validation attempt, exactly which
+// (hash, fileType) pairs THIS attempt itself freshly wrote — as opposed to found already present
+// locally. Only these pairs are ever safe for removeCatchupSubtreeFiles to delete on a corrupt
+// verdict: provenance is genuinely per-(hash, fileType), not per-hash (bitcoin-sv/teranode#4692) — a
+// peer can name an already-persisted, permanently-promoted hash in a doctored body, and a per-hash
+// design would delete every type for it, including siblings this attempt never touched. Scoped to
+// one attempt (constructed fresh, discarded once that attempt's outcome is known): a hash fetched
+// fresh for one block can be promoted by the time a later block or run names the same hash, so a
+// longer-lived map would accumulate entries that are no longer safe to act on. Mutex-protected
+// because the subtrees making up one block are fetched/built concurrently.
+type subtreeFreshness struct {
+	mu   sync.Mutex
+	data map[chainhash.Hash]map[fileformat.FileType]struct{}
+}
+
+func newSubtreeFreshness() *subtreeFreshness {
+	return &subtreeFreshness{data: make(map[chainhash.Hash]map[fileformat.FileType]struct{})}
+}
+
+// markFresh records that this attempt itself just wrote (hash, fileType). Nil-safe: a nil tracker
+// (e.g. the optimistic catch-up path, which skips fetching entirely) records nothing — which is
+// exactly correct, since nothing was proven fresh.
+func (f *subtreeFreshness) markFresh(hash chainhash.Hash, fileType fileformat.FileType) {
+	if f == nil {
+		return
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.data[hash] == nil {
+		f.data[hash] = make(map[fileformat.FileType]struct{})
+	}
+
+	f.data[hash][fileType] = struct{}{}
+}
+
+// snapshot returns the tracked set for removeCatchupSubtreeFiles. Only called once every producer
+// for this attempt has already finished (this package always calls it after the producing
+// errgroup's Wait()), so no further concurrent markFresh calls race with the read.
+func (f *subtreeFreshness) snapshot() map[chainhash.Hash]map[fileformat.FileType]struct{} {
+	if f == nil {
+		return nil
+	}
+
+	return f.data
+}
+
+// mergeFreshlyWritten combines every (hash, fileType) pair from sets into one new map, without
+// mutating any of them (bitcoin-sv/teranode#4692). This block's catch-up producers run in two
+// separate phases — the fetch phase (get_blocks.go, carried on blockForValidation.freshlyWritten)
+// and quick validation's own build phase (quickValidateBlockAsync) — each with its own
+// attempt-scoped subtreeFreshness, so a corrupt verdict that must purge everything THIS attempt
+// touched needs both. Building a fresh map (rather than writing into one of the inputs) matters
+// because the fetch-phase set is still owned by validateBlocksOnChannel's item for the rest of
+// this loop iteration, including the tryNormalValidation fall-through, which must see it
+// unmodified.
+func mergeFreshlyWritten(sets ...map[chainhash.Hash]map[fileformat.FileType]struct{}) map[chainhash.Hash]map[fileformat.FileType]struct{} {
+	merged := make(map[chainhash.Hash]map[fileformat.FileType]struct{})
+
+	for _, set := range sets {
+		for hash, types := range set {
+			dst := merged[hash]
+			if dst == nil {
+				dst = make(map[fileformat.FileType]struct{}, len(types))
+				merged[hash] = dst
+			}
+
+			for fileType := range types {
+				dst[fileType] = struct{}{}
+			}
+		}
+	}
+
+	return merged
+}
+
+// removeCatchupSubtreeFiles deletes exactly the peer-supplied subtree blobs THIS attempt itself
+// wrote, type by type, for the block (bitcoin-sv/teranode#4692). Used on BOTH the plain
+// quick-validation failure (before falling back to normal validation, which re-creates the files)
+// and the corrupt-body path (which aborts for a fresh re-download from another peer) — on both the
+// full-validation and quick-validation branches, not just a failed quick validation.
+//
+// freshlyWritten restricts deletion to the (hash, fileType) pairs this attempt is known to have
+// freshly written; a hash absent from the map, or present with only some of its types marked
+// fresh, is handled correctly by this per-type check with no special-casing needed. A doctored
+// body naming a hash that was ALREADY on disk when this attempt started therefore can never
+// trigger deletion of any of that hash's promoted blobs, even when a sibling type for the same
+// hash happens to be freshly written for an unrelated reason: both producers mark a pair fresh
+// only after their own Set succeeds, on the branch that ran because the blob was not present.
+//
+// KNOWN LIMITATION, deliberately not closed here: freshness is scoped to ONE attempt, and the
+// catch-up fetch pool runs blockvalidation_fetch_num_workers blocks concurrently. Two in-flight
+// blocks naming the same subtree hash can both pass the not-present check before either writes,
+// so both record it as freshly written; if the later one turns out corrupt, this helper deletes a
+// hash the earlier, already-committed block depends on. Closing it needs a RUN-scoped set of
+// no-longer-deletable pairs on CatchupContext, which in turn needs quick validation's own
+// freshness map threaded out of tryQuickValidation to the commit site (today it is consumed
+// inside) and the set made reachable from fetchSubtreeDataForBlock's per-block tracker. Tracked as
+// follow-up in the pull request rather than bundled here. Do not "fix" it by widening or narrowing
+// the type list instead: narrowing to SubtreeToCheck alone would leave quick validation's own
+// FileTypeSubtree — built from the corrupt body — on disk for findLocalSubtreeFile to reuse on
+// retry, which is the on-disk poison this tracker exists to remove safely.
+//
+// FileTypeSubtreeMeta is deliberately excluded from the type list entirely — this is a behaviour
+// change from the wide, unconditional delete this helper used to perform. No producer in this
+// package ever proves FileTypeSubtreeMeta fresh (quick validation explicitly skips writing it for
+// performance; the full-validation fetch path never writes it either — it is only written by
+// downstream full subtree validation), so this helper can never safely conclude it was written by
+// this attempt. Leaving an untouched, non-fresh SubtreeMeta blob behind is bounded by its own
+// existing retention/DAH policy, exactly like any other non-fresh blob under this design.
+func (u *Server) removeCatchupSubtreeFiles(ctx context.Context, freshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}) error {
+	for subtreeHash, freshTypes := range freshlyWritten {
+		for fileType := range freshTypes {
+			if fileType == fileformat.FileTypeSubtreeMeta {
+				// No producer ever marks this fresh, but guard explicitly in case that
+				// ever changes: SubtreeMeta is never eligible for deletion here.
+				continue
+			}
+
+			if err := u.subtreeStore.Del(ctx, subtreeHash[:], fileType); err != nil {
+				if !errors.Is(err, errors.ErrNotFound) {
+					return errors.NewProcessingError("[catchup] failed to remove %s file %s", fileType, subtreeHash.String(), err)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // getLowestCheckpointHeight returns the height of the lowest checkpoint

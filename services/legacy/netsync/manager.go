@@ -437,6 +437,25 @@ type blockFailureState struct {
 	nextRetry time.Time
 }
 
+// corruptAttemptState is the per-(hash, peerID) corrupt re-download counter and its fixed cooldown
+// window (bitcoin-sv/teranode#4692). windowExpiry is set once from the first corrupt delivery and
+// preserved across subsequent deliveries so the window is not extended by re-delivery; once it
+// lapses the counter resets and an honest body is admitted again.
+type corruptAttemptState struct {
+	count        int
+	windowExpiry time.Time
+}
+
+// legacyCorruptAttemptKey keys the legacy corrupt re-download cap on (block hash, serving peer
+// address) (bitcoin-sv/teranode#4692). Keying on the pair — not the hash alone — stops one peer's
+// corruption consuming the budget for a hash an honest peer can still serve: each serving identity
+// is capped independently, so an honest sync-peer rotation is never wedged. A peer with no address
+// degrades to a single shared (hash, "") bucket — the hard per-hash bound for that deployment.
+type legacyCorruptAttemptKey struct {
+	hash   chainhash.Hash
+	peerID string
+}
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -496,6 +515,20 @@ type SyncManager struct {
 	// deleted on successful (re)process. A skipped descendant records its own hash
 	// too, so the whole descendant chain is suppressed transitively.
 	recentlyFailedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	// blockCorruptAttempts bounds corrupt-body (bitcoin-sv/teranode#4692) re-downloads per
+	// (block hash, serving peer address), independently of the ban score. Once a (hash, peerID)
+	// reaches MaxCorruptAttemptsPerBlock corrupt deliveries within a fixed cooldown window, that
+	// peer's next delivery of the hash is dropped BEFORE the expensive HandleBlockDirect/decorate —
+	// without rejecting-to-peer, without poisoning (invalid is never set), and without setting
+	// recentlyFailedBlocks (so the recentlyFailedBlocks no-NOT_FOUND-cascade property is preserved).
+	// Keying on (hash, peerID) means an honest sync-peer keeps a fresh budget for the same hash, so
+	// a bad peer can never wedge the honest tip; the residual aggregate per-hash work is bounded by
+	// the number of distinct serving peers (MaxPeers) times the cap per window. Unlike
+	// blockFailureBackoff (serviceError-gated, disjoint from corrupt) this is keyed only on corrupt
+	// failures. The window is fixed from the first corrupt delivery (stored in the value, not the map
+	// TTL), so re-delivery cannot extend it and once it lapses an honest body is admitted again
+	// (self-healing). Cleared on successful store.
+	blockCorruptAttempts *expiringmap.ExpiringMap[legacyCorruptAttemptKey, *corruptAttemptState]
 	syncPeerMu           sync.RWMutex // protects syncPeer and syncPeerState
 	syncPeer             *peerpkg.Peer
 	syncPeerState        *syncPeerState
@@ -1472,6 +1505,77 @@ func (sm *SyncManager) recordBlockFailureBackoff(blockHash chainhash.Hash) {
 	})
 }
 
+// legacyCorruptAttemptCooldown returns the fixed cooldown window for the per-block corrupt
+// re-download cap (bitcoin-sv/teranode#4692), falling back to settings.DefaultCorruptAttemptCooldown
+// when settings are nil or the setting is unset or non-positive. Mirrors corruptAttemptCooldown in
+// services/blockvalidation; both share the one fallback constant so the two caches can never drift
+// apart.
+func legacyCorruptAttemptCooldown(s *settings.Settings) time.Duration {
+	if s != nil {
+		if d := s.BlockValidation.CorruptAttemptCooldown; d > 0 {
+			return d
+		}
+	}
+
+	return settings.DefaultCorruptAttemptCooldown
+}
+
+// recordCorruptBlockAttempt increments and returns the per-(hash, peerID) corrupt-body failure count
+// within a fixed cooldown window (bitcoin-sv/teranode#4692). The window is set once from the first
+// corrupt delivery and preserved across subsequent deliveries (not extended), so once it lapses the
+// counter resets and an honest body is admitted again. Called ONLY on an actual corrupt failure.
+// Nil-safe (SyncManager struct-literal test fixtures that bypass New()): a nil map or nil settings
+// is a no-op returning 0, so the cap simply does not accrue rather than panicking.
+func (sm *SyncManager) recordCorruptBlockAttempt(blockHash chainhash.Hash, peerID string) int {
+	if sm.blockCorruptAttempts == nil || sm.settings == nil {
+		return 0
+	}
+
+	key := legacyCorruptAttemptKey{hash: blockHash, peerID: peerID}
+
+	now := time.Now()
+	if st, ok := sm.blockCorruptAttempts.Get(key); ok && now.Before(st.windowExpiry) {
+		// Preserve the LOGICAL window (windowExpiry) so re-delivery cannot extend the cooldown;
+		// the Set re-extends only the map's retention TTL. A new struct avoids mutating shared state.
+		next := &corruptAttemptState{count: st.count + 1, windowExpiry: st.windowExpiry}
+		sm.blockCorruptAttempts.Set(key, next)
+
+		return next.count
+	}
+
+	sm.blockCorruptAttempts.Set(key, &corruptAttemptState{count: 1, windowExpiry: now.Add(legacyCorruptAttemptCooldown(sm.settings))})
+
+	return 1
+}
+
+// corruptBlockAttemptsExhausted reports whether a (hash, peerID) has reached the corrupt
+// re-download cap and is within its cooldown window (bitcoin-sv/teranode#4692). A cap of <= 0
+// disables the bound (re-opens the corrupt-body bandwidth DoS). Nil-safe: a nil settings or nil map
+// (SyncManager struct-literal test fixtures that bypass New()) behaves as CAP DISABLED — it returns
+// false (never "exhausted"), so a missing config can never silently drop honest blocks.
+func (sm *SyncManager) corruptBlockAttemptsExhausted(blockHash chainhash.Hash, peerID string) bool {
+	if sm.settings == nil || sm.blockCorruptAttempts == nil {
+		return false
+	}
+
+	maxAttempts := sm.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	st, ok := sm.blockCorruptAttempts.Get(legacyCorruptAttemptKey{hash: blockHash, peerID: peerID})
+
+	return ok && st.count >= maxAttempts && time.Now().Before(st.windowExpiry)
+}
+
+// clearCorruptBlockAttempts drops a (hash, peerID)'s corrupt counter on successful store so an
+// honest body after the window never inherits a stale count (bitcoin-sv/teranode#4692). Nil-safe.
+func (sm *SyncManager) clearCorruptBlockAttempts(blockHash chainhash.Hash, peerID string) {
+	if sm.blockCorruptAttempts != nil {
+		sm.blockCorruptAttempts.Delete(legacyCorruptAttemptKey{hash: blockHash, peerID: peerID})
+	}
+}
+
 // peerStateResolvingPrimary returns the sync state for peer, resolving a stream
 // sub-peer (e.g. a BlockPriority DATA1 stream, not itself registered in
 // peerStates) to its association's primary peer. It returns the resolved peer
@@ -1523,6 +1627,40 @@ func (sm *SyncManager) requestMissingBlocks(peer *peerpkg.Peer, blockHash chainh
 	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
 		sm.logger.Errorf("Failed to send getblocks message: %v", err)
 	}
+}
+
+// requestBlockDirect re-requests a single block by hash with a getdata sent straight to the peer,
+// bypassing inv handling entirely (bitcoin-sv/teranode#4692).
+//
+// requestMissingBlocks cannot recover a block during headers-first sync: it sends a getblocks, the
+// peer answers with an inv, and processInvMsg returns while headersFirstMode is set — before the
+// hash reaches state.requestQueue, which is the only queue the getdata loop in handleInvMsg drains.
+// The header-block pipeline does not cover it either: fetchHeaderBlocks walks forward from
+// sm.startHeader, and a dropped block's header node has already been removed from headerList with
+// startHeader ahead of the front, so that walk can never reach it.
+//
+// Both request maps are re-armed before the message goes out. handleBlockMsg disconnects a peer
+// that delivers a block it has no record of requesting, and BlockRequested gates the prefetch
+// ingestion on the same per-peer map; the corrupt branch has already deleted this hash from both.
+// The inv route repopulates them as a side effect of its own getdata loop — a direct getdata has to
+// do it itself. Both maps are expiring, so an entry for a block that never arrives self-evicts.
+//
+// Setting sm.requestedBlocks also de-duplicates against the inv route: that loop skips a hash
+// already present there, so a getblocks issued alongside this call cannot request the same block a
+// second time.
+func (sm *SyncManager) requestBlockDirect(peer *peerpkg.Peer, state *peerSyncState, blockHash chainhash.Hash) {
+	getDataMessage := wire.NewMsgGetDataSizeHint(1)
+	if err := getDataMessage.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash)); err != nil {
+		sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
+		return
+	}
+
+	sm.requestedBlocks.Set(blockHash, struct{}{})
+	state.requestedBlocks.Set(blockHash, struct{}{})
+
+	sm.logger.Debugf("[requestBlockDirect][%s] re-requesting dropped block from %s", blockHash, peer)
+
+	peer.QueueMessage(getDataMessage, nil)
 }
 
 func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
@@ -1671,6 +1809,34 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
+	// Per-(hash, peerID) corrupt re-download cap (bitcoin-sv/teranode#4692): if THIS serving peer has
+	// already failed with a corrupt body for this hash MaxCorruptAttemptsPerBlock times within the
+	// cooldown window, drop this delivery BEFORE the expensive HandleBlockDirect/decorate. This is the
+	// ban-score-independent bound on corrupt re-download amplification PER SERVING IDENTITY (keyed on
+	// (hash, peerID), not the hash alone, so a bad peer never wedges the honest tip — an honest peer
+	// keeps a fresh budget for the same hash; the residual aggregate per-hash work scales with the
+	// number of distinct serving peers). Drop quietly: do NOT reject the block to the peer, do NOT
+	// mark it failed (recentlyFailedBlocks) — preserving the recentlyFailedBlocks no-NOT_FOUND-cascade
+	// property — and do NOT poison. The peer's stall timer is deliberately NOT refreshed, so if a peer
+	// keeps serving the same corrupt hash the stall detector can rotate to one with an honest body.
+	// Once the fixed window lapses the counter resets and the honest body is admitted.
+	if sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
+		sm.logger.Warnf("[handleBlockMsg][%s] corrupt re-download cap reached for peer %s; dropping delivery until the cooldown window expires (not rejected, not stored invalid)", bmsg.blockHash, bmsg.peer)
+
+		// Headers-first: refill before returning, for the same reason the corrupt branch below does
+		// (see refillHeaderBlockPipeline) — this gate has already consumed the headerList entry and
+		// the requestedBlocks slot above, so without a refill every capped delivery drains one
+		// in-flight slot and recovery waits on the stall timer (bitcoin-sv/teranode#4692). Pipeline maintenance only: no accepted-block bookkeeping runs on
+		// a dropped delivery.
+		if sm.headersFirstMode.Load() {
+			if refillErr := sm.refillHeaderBlockPipeline(peer, state); refillErr != nil {
+				sm.logger.Warnf("[handleBlockMsg][%s] header-block pipeline refill after corrupt-cap drop failed: %v", bmsg.blockHash, refillErr)
+			}
+		}
+
+		return nil
+	}
+
 	// Hand sole ownership of the decoded block to HandleBlockDirect. The
 	// blockHandler goroutine keeps *bmsg alive until the reply is sent, so
 	// leaving the field set would pin the multi-GB wire block (and its decode
@@ -1752,6 +1918,57 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				return nil
 			}
 
+			// Corrupt block body (bitcoin-sv/teranode#4692): a body-derived failure (merkle mismatch, CVE
+			// duplicate) that is not bound to the header, so it cannot condemn the hash and is not
+			// a clear peer fault (a body can be corrupted in transit). Drop it WITHOUT rejecting the
+			// block to the peer, WITHOUT marking it failed (which would suppress its descendants),
+			// and WITHOUT disconnecting (see shouldDisconnectOnBlockErr) — re-request is left free so
+			// an honest copy can arrive on the next delivery / sync-peer rotation. Never poison.
+			if errors.IsBlockCorrupt(err) {
+				// Count this corrupt failure toward the per-(hash, peerID) cap (bitcoin-sv/teranode#4692).
+				// Once this serving peer's count for the hash reaches MaxCorruptAttemptsPerBlock the gate
+				// above drops that peer's further deliveries until the fixed window lapses. Recorded ONLY
+				// on an actual corrupt failure, so a below-cap corrupt is still re-downloaded as today.
+				attempts := sm.recordCorruptBlockAttempt(bmsg.blockHash, bmsg.peer.Addr())
+				sm.logger.Warnf("[handleBlockMsg][%s] corrupt block body from peer %s (attempt %d), dropping for re-download (not rejected, not stored invalid): %v", bmsg.blockHash, bmsg.peer, attempts, err)
+
+				// Headers-first: refill the download pipeline before returning so a corrupt drop does
+				// not stall headers-first sync for ~180s (bitcoin-sv/teranode#4692). Pipeline maintenance
+				// ONLY — the corrupt branch must NOT run any accepted-block bookkeeping (rejected-tx
+				// clear, peer-height update, FSM RUN, fee-filter reset), so it calls the extracted refill
+				// rather than falling through the acceptance footer.
+				if sm.headersFirstMode.Load() {
+					if refillErr := sm.refillHeaderBlockPipeline(peer, state); refillErr != nil {
+						sm.logger.Warnf("[handleBlockMsg][%s] header-block pipeline refill after corrupt body failed: %v", bmsg.blockHash, refillErr)
+					}
+				}
+
+				// Unlike the orphan-continuation branch above, this is a headers-first pull sync with
+				// no other mechanism to recover a dropped block: actively re-request the same hash
+				// instead of only waiting for a spontaneous re-announcement (bitcoin-sv/teranode#4692).
+				//
+				// The re-request is a DIRECT getdata, not a getblocks. A getblocks is answered with an
+				// inv, and processInvMsg discards invs while headersFirstMode is set, so it would never
+				// become a getdata and the dropped block would be lost for the rest of the session —
+				// descendants failing their parent lookup until the stall detector rotates the sync
+				// peer. requestBlockDirect also puts the hash back into both request maps, which this
+				// branch cleared above and which handleBlockMsg's unrequested-block guard reads.
+				//
+				// Issued in both modes: outside headers-first it is redundant with the getblocks below
+				// but harmless, because the inv route's getdata loop skips a hash already present in
+				// sm.requestedBlocks, which this has just set. Re-requesting from the SAME peer is
+				// deliberate — a body can be corrupted in transit by an honest relay — and is bounded
+				// by the per-(hash, peerID) corrupt cap above, after which that peer's deliveries are
+				// dropped for the cooldown window and recovery falls back to sync-peer rotation.
+				sm.requestBlockDirect(peer, state, bmsg.blockHash)
+
+				// Keep the getblocks as well: in the legacy sync protocol it doubles as the
+				// batch-continuation signal (see requestMissingBlocks), which a getdata does not carry.
+				sm.requestMissingBlocks(peer, bmsg.blockHash)
+
+				return err
+			}
+
 			// Remember this block failed to store/validate so its already-queued
 			// descendants are short-circuited above rather than each failing their
 			// parent lookup and logging a misleading "previous block NOT_FOUND"
@@ -1795,6 +2012,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	if sm.blockFailureBackoff != nil {
 		sm.blockFailureBackoff.Delete(bmsg.blockHash)
 	}
+
+	// Also clear the per-(hash, peerID) corrupt counter (bitcoin-sv/teranode#4692) so an honest body
+	// after the window never inherits a stale corrupt count.
+	sm.clearCorruptBlockAttempts(bmsg.blockHash, bmsg.peer.Addr())
 
 	// Also clear any cascade-suppression marker (#1333): this hash now stores, so
 	// its descendants must no longer be short-circuited as children of a failure.
@@ -1876,21 +2097,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// request more blocks using the header list to maintain the pipeline
 	// at the dynamic max limit (adjusts based on block size).
 	if !isCheckpointBlock {
-		dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
-		if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
-			sm.fetchHeaderBlocks()
-		} else if !sm.current() && state.requestedBlocks.Len() == 0 {
-			sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
-
-			latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
-			if err != nil {
-				return errors.NewServiceError("Failed to get best block header", err)
-			}
-
-			locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
-			if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
-				return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
-			}
+		if err = sm.refillHeaderBlockPipeline(peer, state); err != nil {
+			return err
 		}
 
 		return nil
@@ -1934,6 +2142,34 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	locator := blockchain.BlockLocator([]*chainhash.Hash{&bmsg.blockHash})
 	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
 		return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
+	}
+
+	return nil
+}
+
+// refillHeaderBlockPipeline tops up the headers-first download pipeline so it stays at the dynamic
+// in-flight limit, requesting the next batch of block downloads (bitcoin-sv/teranode#4692). It does
+// ONLY pipeline maintenance — no accepted-block bookkeeping (no rejected-tx clear, no peer-height
+// update, no FSM RUN, no fee-filter reset) — so it is safe to call on a FAILED delivery too. On the
+// corrupt-body drop it is called before returning: without it a headers-first corrupt drop never
+// refills, the in-flight blocks drain each failing on their missing parent, and recovery waits ~180s
+// for the stall timer (bitcoin-sv/teranode#4692). Returns an error only if the getblocks fallback fails.
+func (sm *SyncManager) refillHeaderBlockPipeline(peer *peerpkg.Peer, state *peerSyncState) error {
+	dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
+	if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
+		sm.fetchHeaderBlocks()
+	} else if !sm.current() && state.requestedBlocks.Len() == 0 {
+		sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
+
+		latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+		if err != nil {
+			return errors.NewServiceError("Failed to get best block header", err)
+		}
+
+		locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
+		if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
+			return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
+		}
 	}
 
 	return nil
@@ -3062,6 +3298,10 @@ func (sm *SyncManager) Stop() error {
 		sm.recentlyFailedBlocks.Stop()
 	}
 
+	if sm.blockCorruptAttempts != nil {
+		sm.blockCorruptAttempts.Stop()
+	}
+
 	// DC15 / review C1: quiesce Put then drain the tx-announce batcher before
 	// tearing down transports.
 	sm.closeTxAnnounceBatcher()
@@ -3268,6 +3508,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// (#1333). Like blockFailureBackoff this starts a background eviction goroutine
 	// stopped only via Stop(), so build it after the last fallible step above.
 	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL).WithMaxSize(blockFailureBackoffMaxTracked)
+
+	// Per-(hash, peerID) corrupt re-download cap (bitcoin-sv/teranode#4692), keyed on the serving peer
+	// so a bad peer never wedges an honest tip. The map's retention equals the cooldown window so an
+	// entry survives its own window even with no further deliveries; the LOGICAL fixed window lives in
+	// corruptAttemptState.windowExpiry (Set re-extends map retention but never the logical window).
+	// Like the maps above, started here after the last fallible step.
+	sm.blockCorruptAttempts = expiringmap.New[legacyCorruptAttemptKey, *corruptAttemptState](legacyCorruptAttemptCooldown(tSettings)).WithMaxSize(blockFailureBackoffMaxTracked)
 
 	if !config.DisableCheckpoints {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)

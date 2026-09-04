@@ -11,6 +11,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -191,7 +192,11 @@ func DefaultBanConfig() BanConfig {
 			"protocol_violation": 20,
 			"spam":               50,
 			"invalid_block":      10,
-			"catchup_failure":    30,
+			// Corrupt block body (bitcoin-sv/teranode#4692): scored like invalid_block (a DoS-scoring
+			// event) but without the block-index poison — the block is re-downloaded. Keyed off the
+			// shared constant so a rename cannot silently zero the score.
+			p2pconstants.ReasonCorruptBlockBody.String(): 10,
+			"catchup_failure": 30,
 		},
 	}
 }

@@ -26,7 +26,10 @@
 | ValidateBlockSubtreesConcurrency | int | max(4, CPU/2) | blockvalidation_validateBlockSubtreesConcurrency | Block subtree validation concurrency |
 | ValidationMaxRetries | int | 3 | blockvalidation_validation_max_retries | Validation retry attempts |
 | ValidationRetrySleep | time.Duration | 5s | blockvalidation_validation_retry_sleep | Validation retry delay |
-| OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior |
+| OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior (global; peer/catch-up paths also require OptimisticMiningPeerBlocks) |
+| OptimisticMiningPeerBlocks | bool | false | blockvalidation_optimistic_mining_peer_blocks | Opt in to optimistic mining on peer-served and catch-up paths (accepts the invalidate-route tradeoff) |
+| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap (0 disables, re-opening the DoS) |
+| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for both caps |
 | IsParentMinedRetryMaxRetry | int | 45 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
 | IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Parent mining retry backoff multiplier |
 | IsParentMinedRetryBackoffDuration | time.Duration | 20ms | blockvalidation_isParentMined_retry_backoff_duration | Parent mining retry backoff base duration |
@@ -86,10 +89,38 @@
 
 ### Optimistic Mining
 
-- `OptimisticMining = true`: Enables background validation for performance
-- Block validation proceeds while subtree validation runs in background
-- Can be overridden per-validation via DisableOptimisticMining option
-- Disabled during catchup mode for better performance
+- `OptimisticMining = true`: enables background validation for performance on paths that opt in
+- Block validation proceeds while subtree validation runs in the background
+- Can be overridden per-validation via the `DisableOptimisticMining` option
+- **On the peer-served and catch-up validation paths optimistic mining is OFF unless BOTH
+  `blockvalidation_optimistic_mining` AND `blockvalidation_optimistic_mining_peer_blocks` are set**
+  (default `(true, false)` = off). The global flag being false always wins, so the peer-blocks flag
+  can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block is always
+  non-optimistic regardless of these flags.
+- **Opt-in tradeoff:** with both flags set, a corrupt body on the optimistic-background path is
+  already added before background validation runs, so it takes the *invalidate route* (it is
+  invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split lands
+  and removes that path. With the default (peer-blocks off) a corrupt body is never added and is
+  re-downloaded, not poisoned.
+
+### Corrupt-body re-download cap
+
+- Independently of the per-peer ban score, corrupt-body re-downloads are bounded per
+  (block hash, serving peerID) on the RUNNING and legacy netsync paths by
+  `MaxCorruptAttemptsPerBlock` (default 3) within a fixed `CorruptAttemptCooldown` window
+  (default 10m), then dropped before the expensive download/validate work until the window lapses
+  (bitcoin-sv/teranode#4692). Keying on the pair rather than the hash alone is deliberate: one peer's
+  corruption can never consume the budget for a hash an honest peer can still serve, so a bad peer
+  cannot wedge the honest tip. The residual aggregate per-hash bound is therefore
+  (concurrent distinct serving peers) × this cap per window.
+- The cap never poisons a hash: once the window lapses an honest body is admitted again, and the
+  counter is cleared by a successful validation. Setting `MaxCorruptAttemptsPerBlock` to 0 disables
+  the cap and re-opens the corrupt-body bandwidth DoS, so it is strongly discouraged.
+- A separate per-(hash, peerID) counter, sized by the same two settings, bounds repeat deliveries of
+  a block this node declines on local `excessiveblocksize` policy, so an oversized block is not
+  re-fetched from the same peer indefinitely. A policy decline is not a corrupt body: it never
+  strikes the peer, never marks the hash invalid, and spends a budget of its own rather than the
+  corrupt one.
 
 ### Quick Validation Pipeline
 

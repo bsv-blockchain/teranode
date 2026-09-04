@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
@@ -246,16 +247,47 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	if preparedSubtreeSlices != nil {
 		teranodeBlock.SubtreeSlices = preparedSubtreeSlices
 		if err = teranodeBlock.CheckMerkleRoot(ctx); err != nil {
-			return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] merkle root mismatch on unified route", blockHashStr, blockHeight, err)
+			// CheckMerkleRoot returns BOTH body-derived corrupt verdicts AND local storage/processing
+			// errors (bitcoin-sv/teranode#4692). Only a genuinely corrupt (body-derived) result may be
+			// classified corrupt — then the locally-built subtrees do not hash to the header's merkle
+			// root, so the wire body is not bound to the header and cannot condemn the hash; the caller
+			// drops it and allows a re-request, never invalid=true. A local storage/processing error is
+			// OUR failure, not the peer's: return it UNWRAPPED so it keeps its own classification and
+			// the caller neither strikes the serving peer nor skips the transient-failure backoff.
+			// Mirrors the sibling gate in quick_validate.go's validateSubtrees.
+			if errors.IsBlockCorrupt(err) {
+				return errors.NewBlockCorruptError("[HandleBlockDirect][%s %d] merkle root mismatch on unified route", blockHashStr, blockHeight, err)
+			}
+
+			return err
 		}
 		if err = model.CheckSubtreeSlicesForDuplicateTxs(preparedSubtreeSlices); err != nil {
-			return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] duplicate transaction on unified route", blockHashStr, blockHeight, err)
+			// CVE-2012-2459 duplicate in the received tx set — body-derived, classify corrupt
+			// (bitcoin-sv/teranode#4692).
+			return errors.NewBlockCorruptError("[HandleBlockDirect][%s %d] duplicate transaction on unified route", blockHashStr, blockHeight, err)
 		}
 		teranodeBlock.SubtreeSlices = nil
 	}
 
+	// Derive the serving peer identity for the block-validation corrupt cap. The two caps'
+	// keys intentionally differ only by the LegacyPeerIDPrefix namespace below: netsync's own
+	// cap (recordCorruptBlockAttempt) keys on the bare peer.Addr(), while this value threaded
+	// into blockValidation.ProcessBlock carries the prefix — both are still derived from the
+	// identical peer.Addr() call, so they still bound the same serving connection. The
+	// divergence exists solely so nothing downstream of blockvalidation can mistake this value
+	// for a libp2p peer ID: isLegacyPeerID (services/blockvalidation/peer_metrics_helpers.go)
+	// makes isPeerMalicious and penalizeCorruptBlockPeer treat any LegacyPeerIDPrefix-prefixed value
+	// the same as an empty peerID, so it never reaches p2pClient.AddBanScore/IsPeerMalicious and
+	// therefore never reaches the centralized peer registry at all (bitcoin-sv/teranode#4692).
+	// Peer.Addr() dereferences the peer with no nil-receiver guard, so guard here: a nil peer
+	// degrades to the empty-peerID no-cap defence rather than panicking.
+	peerID := ""
+	if peer != nil {
+		peerID = blockvalidation.LegacyPeerIDPrefix + peer.Addr()
+	}
+
 	// call the process block wrapper, which will add tracing and logging
-	err = sm.ProcessBlock(ctx, teranodeBlock)
+	err = sm.ProcessBlock(ctx, teranodeBlock, peerID)
 	if err != nil {
 		return err
 	}
@@ -306,7 +338,7 @@ func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockH
 	return err
 }
 
-func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block) (err error) {
+func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block, peerID string) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "SyncManager:processBlock",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -325,7 +357,7 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 	// teranodeBlock.ID was set by model.NewBlock from the pre-assigned ID returned by prepareSubtrees.
 	// Read it from the struct here — avoids duplicating it as a parameter. It still has to travel as
 	// a separate proto field in the gRPC request because block.Bytes() does not serialize ID.
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy", teranodeBlock.ID); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, peerID, "legacy", teranodeBlock.ID); err != nil {
 		if errors.Is(err, errors.ErrBlockExists) {
 			sm.logger.Infof("[SyncManager:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
 			return nil
@@ -482,7 +514,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	// duplicate-last-when-odd rule, so CheckMerkleRoot alone would pass — this is
 	// the only thing that catches it.
 	if err = model.CheckSubtreeSlicesForDuplicateTxs(slices); err != nil {
-		return nil, nil, 0, errors.NewBlockInvalidError("[prepareSubtrees][%s %d] duplicate transaction in block (CVE-2012-2459)", bi.hash.String(), bi.height, err)
+		// Body-derived (CVE-2012-2459 duplicate in the received tx set): classify corrupt so
+		// the caller drops it and allows a re-request, never invalid=true (bitcoin-sv/teranode#4692).
+		return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees][%s %d] duplicate transaction in block (CVE-2012-2459)", bi.hash.String(), bi.height, err)
 	}
 
 	// Quick validation is safe whenever the block sits at/below the highest hard-coded

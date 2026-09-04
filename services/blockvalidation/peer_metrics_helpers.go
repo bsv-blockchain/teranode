@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -10,7 +11,37 @@ import (
 const (
 	catchupFailureKindGeneric         = "generic"
 	catchupFailureKindBlockIncomplete = "block_incomplete"
+	// catchupFailureKindCorruptBlockBody feeds catch-up peer selection a genuine reputation
+	// signal for a corrupt body, mirroring catchupFailureKindBlockIncomplete: without a
+	// dedicated kind, a corrupt-serving peer left isPeerError=false (the cosmetic UI-string
+	// suppression is still correct — it is not the malicious/AddBanScore path, which already
+	// strikes separately) got zero signal toward future peer selection, so selection could
+	// keep re-picking the same peer (bitcoin-sv/teranode#4692).
+	catchupFailureKindCorruptBlockBody = "corrupt_block_body"
+
+	// LegacyPeerIDPrefix marks a peerID as originating from the legacy netsync path, rather than a
+	// libp2p peer ID. The prefix guarantees the value can never collide with or be mistaken for a
+	// real libp2p peer ID anywhere downstream (logs, caches, metrics) — defence in depth alongside
+	// the isLegacyPeerID gates below, which are what actually stop it reaching the centralized peer
+	// registry (bitcoin-sv/teranode#4692).
+	//
+	// Exported deliberately: the value that has to match it is BUILT in another package
+	// (services/legacy/netsync/handle_block.go), so a second literal there could drift from this one
+	// silently and put legacy TCP addresses straight back into the centralized registry. The
+	// producer imports this const, so the two sides cannot be separated. services/legacy/netsync
+	// already imports this package; nothing here imports services/legacy, so there is no cycle.
+	LegacyPeerIDPrefix = "legacy:"
 )
+
+// isLegacyPeerID reports whether peerID was namespaced by the legacy netsync path rather than
+// being a real p2p identity. isPeerMalicious and penalizeCorruptBlockPeer treat it the same as an
+// empty peerID (bitcoin-sv/teranode#4692): legacy attribution already happens exclusively in
+// services/legacy/peer_server.go's own +10 strike, so routing this value into the centralized
+// peer registry as well would add an extra gRPC round-trip, create a phantom registry entry no
+// p2p code path can see or clear on disconnect, and double-charge the peer for one corrupt body.
+func isLegacyPeerID(peerID string) bool {
+	return strings.HasPrefix(peerID, LegacyPeerIDPrefix)
+}
 
 // reportCatchupAttempt reports a catchup attempt to the P2P service.
 // Falls back to local metrics if P2P client is unavailable.
@@ -300,7 +331,7 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 // Returns:
 //   - bool: True if peer is malicious
 func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
-	if peerID == "" {
+	if peerID == "" || isLegacyPeerID(peerID) {
 		return false
 	}
 

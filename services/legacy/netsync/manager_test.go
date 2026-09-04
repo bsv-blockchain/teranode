@@ -1020,15 +1020,26 @@ func TestHandleBlockMsg_OrphanDuringCatchup(t *testing.T) {
 	blockchainClient.AssertCalled(t, "GetBlockLocator", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// newBackoffTestManager builds the minimal SyncManager + peer state used by the
-// block-failure backoff tests (#1187). It mirrors TestHandleBlockMsg_OrphanDuringCatchup:
-// the struct literal bypasses New(), so blockFailureBackoff is initialised explicitly.
+// newBackoffTestManager builds a SyncManager around an unconnected inbound peer. Messages queued to
+// that peer are dropped by QueueMessage, which is fine for tests that assert on manager state
+// rather than on what reaches the wire — the per-block transient-failure backoff tests (#1187) it
+// was originally written for. A test that must observe what actually reaches the wire wants
+// newBackoffTestManagerForPeer with a connected pair instead.
 func newBackoffTestManager(t *testing.T, blockchainClient *blockchain2.Mock, blockHash chainhash.Hash) (*SyncManager, *peer.Peer) {
 	t.Helper()
 
-	tSettings := test.CreateBaseTestSettings(t)
+	p := peer.NewInboundPeer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), &peer.Config{})
 
-	p := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	return newBackoffTestManagerForPeer(t, blockchainClient, blockHash, p), p
+}
+
+// newBackoffTestManagerForPeer is the same wiring around a caller-supplied peer, so a test that
+// needs to observe what is actually SENT can pass a connected one — QueueMessage is a no-op on a
+// peer with no connection.
+func newBackoffTestManagerForPeer(t *testing.T, blockchainClient *blockchain2.Mock, blockHash chainhash.Hash, p *peer.Peer) *SyncManager {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
 
 	state := &peerSyncState{
 		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
@@ -1052,7 +1063,7 @@ func newBackoffTestManager(t *testing.T, blockchainClient *blockchain2.Mock, blo
 	sm.peerStates.Set(p, state)
 	sm.requestedBlocks.Set(blockHash, struct{}{})
 
-	return sm, p
+	return sm
 }
 
 // TestNewBlockFailureBackoffMap verifies the per-block backoff map is built only

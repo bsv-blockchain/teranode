@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +113,19 @@ func TestBanAddBanScore_ConfigReasonLookup(t *testing.T) {
 	r2 := NewCentralizedPeerRegistry(DefaultBanConfig())
 	score, _ = r2.AddBanScore("peer-2", "unknown_reason", 42)
 	require.Equal(t, int32(42), score)
+}
+
+// TestBanAddBanScore_CorruptBlockBodyPinnedToConstant pins the corrupt-block-body ban score to the
+// shared constant end to end (bitcoin-sv/teranode#4692): scoring under
+// p2pconstants.ReasonCorruptBlockBody.String() must resolve to the configured 10 points, not the
+// caller-supplied default. This binds the points-table key to the constant so a rename of the
+// constant that is not mirrored in the table can no longer silently zero the strike.
+func TestBanAddBanScore_CorruptBlockBodyPinnedToConstant(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Pass a bogus default; the table value keyed off the constant must win.
+	score, _ := r.AddBanScore("peer-1", p2pconstants.ReasonCorruptBlockBody.String(), 9999)
+	require.Equal(t, int32(10), score)
 }
 
 func TestBanAddBanScore_ReasonHistoryCappedAt20(t *testing.T) {

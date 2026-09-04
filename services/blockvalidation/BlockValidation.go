@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -167,6 +166,17 @@ type revalidateBlockData struct {
 	// setting, which defaults to on.
 	disableOptimisticMining bool
 	isCatchupMode           bool
+
+	// optimisticallyAdded is true when this block was optimistically AddBlock'd (added to the chain
+	// before block.Valid) and is being requeued from one of the optimistic goroutine's PRE-COMPLETION
+	// failure paths — where block.Valid failed or never ran, so the on-chain body is unvalidated: a
+	// GetBlockHeaderIDs failure, an ErrBlockInvalid or caught-up-floater verdict whose markBlockAsInvalid
+	// failed, a transient storage/processing error, or a corrupt verdict whose InvalidateBlock failed
+	// (bitcoin-sv/teranode#4692). It is the only condition under which a corrupt revalidation verdict may
+	// invalidate the block, so it is NEVER set after block.Valid has already succeeded (a later bad local
+	// read must not poison an already-validated block) nor on any ordinary retry/worker path — both
+	// default it false.
+	optimisticallyAdded bool
 }
 
 // BlockValidation handles the core validation logic for blocks in Teranode.
@@ -198,6 +208,12 @@ type BlockValidation struct {
 
 	// subtreeValidationClient manages subtree validation processes
 	subtreeValidationClient subtreevalidation.Interface
+
+	// p2pClient reports peer reputation events (e.g. striking a peer that served a
+	// corrupt block body, bitcoin-sv/teranode#4692). Optional and may be nil when BlockValidation
+	// runs without a P2P service; all uses are nil-guarded. Wired through NewBlockValidation's
+	// variadic opts before any goroutine starts, so it is never written post-construction.
+	p2pClient P2PClientI
 
 	// lastValidatedBlocks caches recently validated blocks for 2 minutes
 	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
@@ -370,6 +386,9 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 	txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, opts ...interface{},
 ) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
+	if tSettings.BlockValidation.OptimisticMining && !tSettings.BlockValidation.OptimisticMiningPeerBlocks {
+		logger.Warnf("optimistic mining is enabled but disabled on peer-served and catch-up blocks; set blockvalidation_optimistic_mining_peer_blocks to restore it (bitcoin-sv/teranode#4692)")
+	}
 	// Initialize Kafka producer for invalid blocks if configured
 	var invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
 
@@ -420,6 +439,16 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		revalidateWorkerStopped:       make(chan struct{}),
 		stats:                         gocore.NewStat("blockvalidation"),
 		mmapDir:                       tSettings.BlockValidation.SubtreeMmapDir,
+	}
+
+	// Wire the optional peer-reputation client from the variadic opts BEFORE any goroutine
+	// (stats ticker, blockchain subscription, revalidate worker) launches, so no worker can
+	// observe a half-initialised field. Callers that run without a P2P service pass none and
+	// bv.p2pClient stays nil (all uses are nil-guarded).
+	for _, o := range opts {
+		if c, ok := o.(P2PClientI); ok {
+			bv.p2pClient = c
+		}
 	}
 
 	go func() {
@@ -1606,21 +1635,23 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			ctxLogger.Infof("[ValidateBlock][%s] revalidating invalid block", block.Header.Hash().String())
 		}
 
-		// check the size of the block
-		// 0 is unlimited so don't check the size
-		if u.settings.Policy.ExcessiveBlockSize > 0 {
-			excessiveBlockSizeUint64, err := safeconversion.IntToUint64(u.settings.Policy.ExcessiveBlockSize)
-			if err != nil {
-				return err
-			}
-
-			if block.SizeInBytes > excessiveBlockSizeUint64 {
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("block size %d exceeds excessiveblocksize %d", block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize))
-				}
-
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
-			}
+		// check the size of the block; 0 is unlimited so the shared predicate skips the check.
+		//
+		// excessiveblocksize is a local POLICY knob (settings/policy_settings.go), not a consensus
+		// rule: a block other miners have legitimately mined and proven with real work may still
+		// exceed THIS node's limit. So this is a plain policy decline, not evidence about the block
+		// or the peer (bitcoin-sv/teranode#4692): NO peer strike (the peer served the honest chain),
+		// NOT corrupt (no re-download — a fresh copy is the same size and is not counted toward the
+		// corrupt cap), and NOT invalid=true (never poison the hash). It also does not condemn the
+		// block: the size judged here is still the peer-supplied block.SizeInBytes; the authoritative
+		// size is recomputed post-subtree-load (model.Block, from the loaded body).
+		//
+		// This is the authoritative decline for every caller (catchup, revalidation, the direct
+		// ValidateBlock RPC). The RUNNING peer path additionally declines earlier in
+		// processBlockFound, where it owns an attempt counter that bounds repeat deliveries; both
+		// sites read the same predicate so they cannot drift.
+		if excessiveBlockSizeDeclined(u.settings, block) {
+			return errors.NewBlockError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d (local policy)", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 		}
 
 		// NOTE on block-version (BIP34/66/65) enforcement and error ordering:
@@ -1630,23 +1661,32 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// bad-version in ContextualCheckBlockHeader ahead of the body/coinbase checks; teranode does not
 		// replicate that exact error ordering at this outer stage. A complete below-floor block is
 		// rejected by block.Valid with the bad-version token; a below-floor block that ALSO fails the
-		// outer coinbase prechecks below returns earlier with the documented non-parity reason
-		// (block-incomplete or bad-coinbase-length) instead. Either way the block is rejected.
+		// outer nil-coinbase precheck below returns earlier with the documented non-parity reason
+		// (block-incomplete) instead. Either way the block is rejected.
 		if block.CoinbaseTx == nil || block.CoinbaseTx.Inputs == nil || len(block.CoinbaseTx.Inputs) == 0 {
 			// Use BlockIncomplete rather than BlockInvalid — a missing coinbase likely means the peer
 			// doesn't have full block data (e.g. seeded peer). Don't store as invalid so we can
 			// accept the valid version from another peer later.
+			//
+			// This is the ABSENT-DATA ErrBlockIncomplete, distinct from the FLOATER ErrBlockIncomplete
+			// that the caught-up handlers poison (bitcoin-sv/teranode#4692). This return is an outer
+			// pre-check that fires BEFORE block.Valid runs, so it never reaches the isCaughtUp->poison
+			// sites below (those live in the block.Valid result handler, which this early return
+			// bypasses); its callers treat it as re-fetch/retry (no invalid=true, no peer strike). So
+			// the "ErrBlockIncomplete means only a floater at the block.Valid handlers" invariant reads
+			// honestly: this absent-coinbase case is a separate, gentler path.
 			return errors.NewBlockIncompleteError("[ValidateBlock][%s] coinbase tx is nil or empty", block.Header.Hash().String())
 		}
 
-		// check the coinbase length
-		if len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(u.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
-			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, "bad coinbase length")
-			}
-
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
-		}
+		// The bad-coinbase-length check used to also run here, on the unbound body, before
+		// block.Valid ever ran — but that intercepted every bad-length body, including a
+		// merkle-bound one whose coinbase is the miner's own committed (and thus genuinely
+		// invalid) coinbase, before step 4b's binding-aware classification (model.Block.Valid,
+		// bindClassifiedError) could ever run. It has been removed so every body flows into
+		// block.Valid: an unbound body still returns corrupt (re-download, strike, never
+		// persisted) exactly as before, and a bound body with a bad coinbase length is now
+		// correctly condemned as invalid instead of being indefinitely re-downloaded under the
+		// corrupt-attempt cap (bitcoin-sv/teranode#4692).
 
 		// Checkpoint enforcement (defense-in-depth): a block whose height matches a hardcoded
 		// checkpoint MUST match the checkpoint hash, mirroring the catchup header pipeline.
@@ -1817,6 +1857,28 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 
 		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
+			// Corrupt subtree body (bitcoin-sv/teranode#4692): a body-derived failure surfaced during subtree
+			// validation (e.g. a CVE-2012-2459 duplicate tx in the received subtree, subtreevalidation
+			// ValidateSubtreeInternal) — not bound to the header, so it cannot condemn the hash.
+			// Checked FIRST so it never reaches the ErrTxInvalid storeInvalidBlock below: strike the
+			// serving peer and return corrupt for re-download; never persist invalid=true. The corrupt
+			// code survives the CheckBlockSubtrees gRPC boundary via WrapGRPC (IsBlockCorrupt unwraps it).
+			if errors.IsBlockCorrupt(err) {
+				// Skip the strike on revalidation (stale announcing-peer ID, bitcoin-sv/teranode#4692);
+				// mirrors the neighbouring storeInvalidBlock gating on the ErrTxInvalid branch below.
+				if !opts.IsRevalidation {
+					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "corrupt subtree body during subtree validation")
+				}
+				// Drop the unvalidated peer-supplied subtree blobs this attempt left behind so a retry
+				// re-fetches instead of re-reading the body that just failed subtree validation
+				// (bitcoin-sv/teranode#4692). A delete failure only logs — it must not downgrade the
+				// corrupt classification (mirrors the block.Valid corrupt branch below and the catchup path).
+				if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block); delErr != nil {
+					u.logger.Warnf("[ValidateBlock][%s] failed to clear failed subtree blobs: %v", block.Hash().String(), delErr)
+				}
+				return err
+			}
+
 			// Genuine consensus violation — a transaction in the block is invalid. Persist invalid.
 			if errors.Is(err, errors.ErrTxInvalid) {
 				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
@@ -1925,7 +1987,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %v", block.String(), err)
 
-					u.ReValidateBlock(block, baseURL)
+					u.reValidateOptimisticallyAddedBlock(block, baseURL)
 
 					return
 				}
@@ -1944,12 +2006,44 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					// return pooled []Node slices before re-validation or invalidation.
 					releaseBlockNodes(block)
 
+					// Corrupt body (bitcoin-sv/teranode#4692): checked FIRST. This is the optimistic
+					// path, where the body was already AddBlock'd BEFORE block.Valid ran. Unlike the
+					// non-optimistic path (which never AddBlock'd, so it can simply strike + return
+					// corrupt for re-download), here the corrupt body is already accepted and there is
+					// no non-poisoning removal primitive. Leaving it accepted would be a silently
+					// accepted corrupt tip — worse than poisoning — so on this one opt-in path the
+					// corrupt body takes the INVALIDATE ROUTE (poison-loudly, never silently accept)
+					// until the block.Valid integrity-floor split lands and removes this path.
+					// InvalidateBlock is called directly (not markBlockAsInvalid) so no second,
+					// mis-attributed Kafka strike lands on the announcing peer — the serving peer is
+					// already struck above by penalizeCorruptBlockPeer.
+					if errors.IsBlockCorrupt(err) {
+						u.penalizeCorruptBlockPeer(decoupledCtx, opts.PeerID, block, err.Error())
+
+						if _, invErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invErr != nil {
+							// Invalidation failed → the block is still on-chain. Do NOT return silently.
+							// Re-queue revalidation to converge on invalidation once the store recovers.
+							// Flags the requeue optimisticallyAdded, like the other pre-completion
+							// re-queues on this optimistic path (block.Valid failed or never ran, so the
+							// body was AddBlock'd before it validated): a repeat corrupt verdict here MAY
+							// invalidate (bitcoin-sv/teranode#4692). Revalidation callers outside this
+							// pre-completion path leave the flag false so an already-accepted block that
+							// passed block.Valid is never poisoned on a later corrupt read.
+							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added and InvalidateBlock FAILED; re-queuing revalidation to avoid a silently-accepted corrupt tip: %v", block.String(), invErr)
+							u.reValidateOptimisticallyAddedBlock(block, baseURL)
+						} else {
+							u.logger.Errorf("[ValidateBlock][%s] corrupt body optimistically added; invalidated (invalidate route, not silently accepted) — opt-in optimistic peer mining until the block.Valid integrity-floor split lands", block.String())
+						}
+
+						return
+					}
+
 					if errors.Is(err, errors.ErrBlockInvalid) {
 						reason := p2pconstants.ReasonInvalidBlock.String()
 						if err = u.markBlockAsInvalid(decoupledCtx, block, reason, opts.PeerID, baseURL); err != nil {
 							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 							// we should try again to re-validate the block, as we failed to mark it as invalid
-							u.ReValidateBlock(block, baseURL)
+							u.reValidateOptimisticallyAddedBlock(block, baseURL)
 						}
 					} else if errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(decoupledCtx) {
 						// RUNNING: a not-in-block parent with empty/absent BlockIDs is a floater that
@@ -1960,12 +2054,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						reason := p2pconstants.ReasonInvalidBlock.String()
 						if mErr := u.markBlockAsInvalid(decoupledCtx, block, reason, opts.PeerID, baseURL); mErr != nil {
 							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate floater block: %v", block.String(), mErr)
-							u.ReValidateBlock(block, baseURL)
+							u.reValidateOptimisticallyAddedBlock(block, baseURL)
 						}
 					} else {
 						// storage or processing error, or transient incomplete state during catchup;
 						// block is not really invalid, but we need to re-validate
-						u.ReValidateBlock(block, baseURL)
+						u.reValidateOptimisticallyAddedBlock(block, baseURL)
 					}
 
 					return
@@ -2045,6 +2139,28 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// Block will not be cached — return pooled []Node slices now so
 				// the next block can reuse the same backing storage.
 				releaseBlockNodes(block)
+
+				// Corrupt body (bitcoin-sv/teranode#4692): checked FIRST so a body-derived failure never
+				// reaches the storeInvalidBlock catch-all below. The received body is not bound
+				// to the header, so it cannot condemn the hash — do NOT persist invalid=true.
+				// Strike the serving peer and return corrupt so the caller re-downloads from
+				// another peer (block was never AddBlock'd on this non-optimistic path, and
+				// SetBlockExists was never set). Restores checkParentInvalid's cascade invariant.
+				if errors.IsBlockCorrupt(err) {
+					// Skip the strike on revalidation (stale announcing-peer ID, bitcoin-sv/teranode#4692);
+					// mirrors the neighbouring storeInvalidBlock gating below.
+					if !opts.IsRevalidation {
+						u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, reason)
+					}
+					// Drop the unvalidated peer-supplied subtree blobs this attempt left behind so a
+					// retry re-fetches instead of re-reading the body that just failed the block-level
+					// merkle check (bitcoin-sv/teranode#4692). A delete failure only logs — it must not
+					// downgrade the corrupt classification (mirrors the catchup corrupt path).
+					if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block); delErr != nil {
+						u.logger.Warnf("[ValidateBlock][%s] failed to clear failed subtree blobs: %v", block.Hash().String(), delErr)
+					}
+					return err
+				}
 
 				// Check if we had an infrastructure error (storage, service, or processing);
 				// if so do not mark the block as invalid - these are transient issues
@@ -2259,16 +2375,82 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
 }
 
+// penalizeCorruptBlockPeer strikes the peer that served a corrupt block body for a
+// valid block hash (bitcoin-sv/teranode#4692), attributing the penalty to the serving peerID.
+// Unlike storeInvalidBlock it NEVER persists invalid=true and NEVER calls AddBlock:
+// the body is not bound to the header, so the hash is not condemned — only the
+// connection is scored (ReasonCorruptBlockBody) and the body re-downloaded. This
+// mirrors svnode's CorruptionOrDoS stance (bitcoin-sv/src/consensus/validation.h) of
+// punishing the connection without failing the header. Nil-safe: a nil p2pClient or
+// empty peerID is a no-op, so single-peer / in-process deployments still function.
+func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID string, block *model.Block, reason string) {
+	u.logger.Warnf("[ValidateBlock][%s] corrupt block body from peer %s: %s", block.Hash().String(), peerID, reason)
+
+	// A "legacy:"-namespaced peerID is gated the same as an empty one (bitcoin-sv/teranode#4692):
+	// the legacy netsync path already strikes the serving connection directly in
+	// services/legacy/peer_server.go (strikeIfCorruptBlockBody's own +10), so routing it into
+	// AddBanScore here as well would create a phantom centralized-registry entry (no p2p code
+	// path can see or clear it on disconnect) and double-charge the peer for one corrupt body.
+	if u.p2pClient == nil || peerID == "" || isLegacyPeerID(peerID) {
+		return
+	}
+
+	if err := u.p2pClient.AddBanScore(ctx, peerID, p2pconstants.ReasonCorruptBlockBody.String()); err != nil {
+		u.logger.Warnf("[ValidateBlock][%s] failed to add ban score to peer %s for corrupt block body: %v", block.Hash().String(), peerID, err)
+	}
+}
+
+// removePeerSuppliedSubtreeToCheck deletes ONLY the unvalidated FileTypeSubtreeToCheck blobs for the
+// block's subtrees after a corrupt-body verdict on the RUNNING validation path
+// (bitcoin-sv/teranode#4692). CheckBlockSubtrees writes each peer-supplied subtree under
+// FileTypeSubtreeToCheck before block.Valid runs the block-level merkle check; a body whose subtrees
+// each hash correctly but whose roots do not combine to the header merkle root leaves those blobs on
+// disk, and findLocalSubtreeFile short-circuits to them on every retry. Deleting them forces a
+// re-fetch instead.
+//
+// It deliberately does NOT touch FileTypeSubtreeData, FileTypeSubtree or FileTypeSubtreeMeta. Unlike
+// the peer-supplied SubtreeToCheck marker (only ever written WithDeleteAt, never promoted), those
+// three can hold live, promoted-permanent data: block persistence promotes FileTypeSubtreeData with
+// SetDAH(…, 0) and the asset service serves it, and FileTypeSubtree/FileTypeSubtreeMeta are validated
+// content. Deleting any of them by subtree hash on a RUNNING corrupt verdict could destroy permanent
+// data of an already-persisted block or data being served. This is why it is narrower than the
+// catchup helper, where a fresh re-download re-creates everything.
+//
+// A missing file is not an error.
+func (u *BlockValidation) removePeerSuppliedSubtreeToCheck(ctx context.Context, block *model.Block) error {
+	for _, subtreeHash := range block.Subtrees {
+		if err := u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck); err != nil {
+			if !errors.Is(err, errors.ErrNotFound) {
+				return errors.NewProcessingError("[ValidateBlock] failed to remove %s file %s", fileformat.FileTypeSubtreeToCheck, subtreeHash.String(), err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // checkParentInvalid checks if the parent block is invalid. This is an optimization
 // to skip expensive validation when the parent is already invalid.
 //
-// NOTE (#1031): this deliberately cascades on the bare Invalid flag without inspecting
-// WHY the parent is invalid. That is correct because transient catchup-state errors no
-// longer persist invalid=true (see the validateBlockSubtrees and block.Valid handlers and
-// model.getParentTxMetaBlockIDs) — a parent marked invalid is invalid for a genuine
-// consensus reason, so a child built on it is genuinely invalid too. Reason-based
-// classification is not possible here anyway: BlockHeaderMeta carries no invalid-reason
-// field. Do not "fix" this to suppress cascades without first re-checking that invariant.
+// NOTE (#1031, bitcoin-sv/teranode#4692): this deliberately cascades on the bare Invalid flag without
+// inspecting WHY the parent is invalid. That is correct because neither transient
+// catchup-state errors (#1031) nor corrupt-body failures (bitcoin-sv/teranode#4692) persist
+// invalid=true any longer (see the validateBlockSubtrees and block.Valid handlers,
+// model.getParentTxMetaBlockIDs, and the ERR_BLOCK_CORRUPT reclassification) — a parent
+// marked invalid is invalid for a genuine consensus reason, so a child built on it is
+// genuinely invalid too. This restores the cascade invariant: a merely corrupt body can no
+// longer become an invalid parent, so it can never trigger a false descendant cascade.
+// Reason-based classification is not possible here anyway: BlockHeaderMeta carries no
+// invalid-reason field. Do not "fix" this to suppress cascades without first re-checking
+// that invariant.
+//
+// EXCEPTION (bitcoin-sv/teranode#4692): the invariant "a corrupt body never becomes an invalid
+// parent" holds on every default path but NOT on the opt-in optimistic peer/catch-up route. When
+// the operator sets blockvalidation_optimistic_mining_peer_blocks, a corrupt body found by the
+// background block.Valid AFTER the optimistic AddBlock takes the invalidate route (InvalidateBlock),
+// so it CAN become an invalid parent and legitimately cascade to descendants. That tradeoff is
+// documented on the setting's longdesc; it is deliberate and disabled by default. It disappears once
+// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
 //
 // Parameters:
 //   - parentMeta: Metadata of the parent block (can be nil)
@@ -2536,7 +2718,21 @@ func (u *BlockValidation) ReValidateBlockFromScratch(block *model.Block, baseURL
 }
 
 func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
+	// Public entry point: an ordinary revalidation was NOT optimistically added, so
+	// optimisticallyAdded stays false and a corrupt verdict here can never invalidate the
+	// block (bitcoin-sv/teranode#4692).
 	u.enqueueRevalidation(revalidateBlockData{block: block, baseURL: baseURL})
+}
+
+// reValidateOptimisticallyAddedBlock re-queues a block that was already optimistically
+// AddBlock'd (so it is on-chain) but has NOT successfully completed block.Valid, for
+// revalidation. Unlike ReValidateBlock it carries optimisticallyAdded=true, so a corrupt
+// verdict on the retry invalidates the on-chain body rather than leaving a
+// silently-accepted corrupt tip (bitcoin-sv/teranode#4692). Use ONLY on the pre-completion
+// failure paths — never after block.Valid has already succeeded, where a later corrupt
+// local read would wrongly poison a block that genuinely passed validation.
+func (u *BlockValidation) reValidateOptimisticallyAddedBlock(block *model.Block, baseURL string) {
+	u.enqueueRevalidation(revalidateBlockData{block: block, baseURL: baseURL, optimisticallyAdded: true})
 }
 
 func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
@@ -2710,12 +2906,23 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
+		// A corrupt error normally means "nothing was added, re-download" — invalidating would poison a
+		// hash we hold no bound evidence against. The one exception is the opt-in optimistic peer path,
+		// where the body was AddBlock'd before block.Valid ran and a failed InvalidateBlock re-queued us
+		// here with optimisticallyAdded set: there the block IS on-chain, so returning without
+		// invalidating leaves a silently accepted corrupt tip, which is what the re-queue exists to
+		// prevent. Gate on that explicit requeue flag — NOT on GetBlockExists, which any already-accepted
+		// block re-validated to a corrupt verdict (e.g. a bad local subtree read) would satisfy and be
+		// wrongly poisoned (bitcoin-sv/teranode#4692). When the flag is false a corrupt verdict returns
+		// unwrapped without invalidating: the direction that never poisons an honest hash.
+		invalidateCorruptOnChain := errors.IsBlockCorrupt(err) && blockData.optimisticallyAdded
+
 		// ErrBlockIncomplete in a caught-up state is a floater (see isCaughtUp /
 		// the ValidateBlock handlers): invalidate so the revalidate worker
 		// converges to rollback in RUNNING instead of silently exhausting its
 		// bounded retries with the block left optimistically accepted. In sync
 		// states isCaughtUp is false, so it stays the #1031 retry/exhaust path.
-		if errors.Is(err, errors.ErrBlockInvalid) || (errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(ctx)) {
+		if errors.Is(err, errors.ErrBlockInvalid) || (errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(ctx)) || invalidateCorruptOnChain {
 			if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
 				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), invalidateBlockErr)
 			}

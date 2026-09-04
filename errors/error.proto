@@ -26,7 +26,9 @@ enum ERR {
   CONTEXT_CANCELED = 7;
   EXTERNAL = 8;
   ERROR = 9;
-  // Block errors 10-19
+  // Block errors 10-19 (FULL: 10-19 are all assigned; 19 is the range terminator.
+  // Further block errors continue at 120-129 below, and errorCodeCategory maps that
+  // range to "block" as well.)
   BLOCK_NOT_FOUND=10;
   BLOCK_INVALID=11;
   BLOCK_EXISTS=12;
@@ -37,6 +39,9 @@ enum ERR {
   BLOCK_INCOMPLETE=17;
   BLOCK_HEADER_CONTEXT=18;
   BLOCK_ERROR=19;
+  // Block errors 10-19 range is now FULL. A new block error code must widen this range (and the
+  // matching bound in errorCodeCategory in error_utils.go) before it can be added here; otherwise
+  // it falls outside 10-19 and is mis-bucketed.
   // Subtree errors 20-29
   SUBTREE_NOT_FOUND=20;
   SUBTREE_INVALID=21;
@@ -97,4 +102,7 @@ enum ERR {
   NETWORK_CONNECTION_REFUSED=114;
   NETWORK_INVALID_RESPONSE=115;
   NETWORK_PEER_MALICIOUS=116;
+  // Block errors continued 120-129. The original 10-19 decade is full (see above);
+  // errorCodeCategory maps this range to "block" too, so the category stays correct.
+  BLOCK_CORRUPT=120;
 }
