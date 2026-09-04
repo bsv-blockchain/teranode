@@ -32,11 +32,13 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -160,7 +162,8 @@ type Server struct {
 	nodeStatusTopicName               string                         // pubsub topic for node status messages
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
 	blockPeerMap                      cappedPeerMap                  // Which peer sent each block (canonical hash -> peerMapEntry); insert-capped, issue 1409
-	subtreePeerMap                    cappedPeerMap                  // Which peer sent each subtree (canonical hash -> peerMapEntry); insert-capped, issue 1409
+	subtreePeerMap                    cappedPeerMap                  // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical hash -> peerMapEntry); insert-capped, issue 1409
+	reportedInvalidBlocks             cappedPeerMap                  // Invalid blocks already scored (canonical hash -> scoring record); dedupes at-least-once Kafka redelivery so one invalid block is scored once per TTL, not once per delivery
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -734,6 +737,7 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 
 	s.blockPeerMap.setMaxSize(maxSize)
 	s.subtreePeerMap.setMaxSize(maxSize)
+	s.reportedInvalidBlocks.setMaxSize(maxSize)
 }
 
 // announcePeerMapLimits logs the two ways a configured value differs from what
@@ -1028,27 +1032,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Start node status publisher
 	go s.publishNodeStatus(ctx)
 
-	apiKey := s.settings.GRPCAdminAPIKey
-	if util.ValidateAdminAPIKey(s.logger, "P2P", apiKey, s.settings.P2P.GRPCListenAddress, s.settings.SecurityLevelGRPC) {
-		// Configured key is a well-known placeholder; ignore it and fall back to
-		// the random-key path below rather than trusting a world-readable value.
-		apiKey = ""
-	}
-
-	if apiKey == "" {
-		// Generate a random API key if not provided
-		apiKey, err = generateRandomKey()
-		if err != nil {
-			return errors.NewServiceError("error generating random API key", err)
-		}
-
-		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban, clear bans, ban score, reputation reset, connect/disconnect peer) are unreachable until a key is configured")
-	}
-
-	// Create auth options
-	authOptions := &util.AuthOptions{
-		APIKey:           apiKey,
-		ProtectedMethods: adminProtectedMethods(),
+	authOptions, err := s.grpcAuthOptions()
+	if err != nil {
+		return err
 	}
 
 	// this will block
@@ -1126,10 +1112,10 @@ func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.Kafk
 			return err
 		}
 
-		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: hash=%s, peerUrl=%s, reason=%s", m.SubtreeHash, m.PeerUrl, m.Reason)
+		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: hash=%s, peerUrl=%s, peerId=%s, reason=%s", m.SubtreeHash, m.PeerUrl, m.PeerId, m.Reason)
 
 		// Use the existing ReportInvalidSubtree method to handle the invalid subtree
-		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.Reason)
+		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.PeerId, m.Reason)
 		if err != nil {
 			// Don't return error here, as we want to continue processing messages
 			s.logger.Errorf("[invalidSubtreeHandler] Failed to report invalid subtree from Kafka: %v", err)
@@ -1215,15 +1201,140 @@ func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 	s.disconnectPeersOnBanList(ctx, "banned before startup")
 }
 
-// adminProtectedMethods returns the full gRPC method paths of every
-// state-mutating admin RPC on the PeerService; the auth interceptor requires
-// the admin API key for these. Read-only queries and internal data-plane
-// reporting RPCs (catchup metrics, valid block/subtree reports, bytes
-// downloaded) stay unauthenticated because other services call them without
-// admin credentials. Any new mutating admin RPC must be added here; the
-// classification is enforced by TestAdminProtectedMethodsCoverAllRPCs.
-func adminProtectedMethods() map[string]bool {
+// grpcAuthOptions builds the auth configuration for the PeerService listener.
+// Placeholder handling lives in util.ValidateAdminAPIKey, shared with the legacy
+// service: a placeholder is ignored so the random-key path below applies.
+//
+// Two policies are layered on top of that shared behaviour, because on this
+// service the key does more than guard admin RPCs - it also gates the ten
+// data-plane reporters that block and subtree validation call, and those set the
+// validated-work and delivery signals sync-peer selection runs on:
+//
+//   - A weak-but-real key is fatal on a network-reachable listener. The shared
+//     helper only warns, but a short key is accepted as genuine, so guessing it
+//     yields exactly the capability this authentication exists to deny.
+//   - No usable key at all is logged at Error, not Warn. It is fail-closed and
+//     therefore safe, but it silently strands sync-peer selection, so it must not
+//     look like routine startup noise.
+func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
+	listenAddress := s.settings.P2P.GRPCListenAddress
+
+	apiKey := s.settings.GRPCAdminAPIKey
+	if err := s.rejectWeakAdminAPIKey(listenAddress, apiKey); err != nil {
+		return nil, err
+	}
+
+	if util.ValidateAdminAPIKey(s.logger, "P2P", apiKey, listenAddress, s.settings.SecurityLevelGRPC) {
+		// Configured key is a well-known placeholder; ignore it and fall back to
+		// the random-key path below rather than trusting a world-readable value.
+		apiKey = ""
+	}
+
+	s.warnIfUnreachableBind(listenAddress, s.settings.P2P.GRPCAddress)
+
+	if apiKey == "" {
+		var err error
+
+		apiKey, err = generateRandomKey()
+		if err != nil {
+			return nil, errors.NewServiceError("error generating random API key", err)
+		}
+
+		s.logger.Errorf("[P2P] grpc_admin_api_key is not set or is a placeholder, so a random key was generated and every state-mutating PeerService RPC will reject callers: block and subtree validation cannot report validated chain progress or block delivery, so no peer ever becomes a proven sync candidate and catchup stays in the budget-gated probe tier - set a strong key (%d+ chars) on every service in this deployment", util.MinAdminAPIKeyLength())
+	}
+
+	return &util.AuthOptions{
+		APIKey:           apiKey,
+		ProtectedMethods: authProtectedMethods(),
+	}, nil
+}
+
+// rejectWeakAdminAPIKey refuses to start when a real but short key guards a
+// listener something other than this host can reach without verified transport
+// security. A placeholder is handled elsewhere (ignored, so it fails closed); a
+// short key is worse, because it is accepted as the real key, so brute-forcing it
+// grants the ability to forge validated chain progress for a Sybil peer and flag
+// honest peers malicious.
+//
+// regtest is exempt so local, CI and docker development stacks keep working.
+func (s *Server) rejectWeakAdminAPIKey(listenAddress, apiKey string) error {
+	if !util.IsWeakAdminAPIKey(apiKey) || addressIsLoopbackOnly(listenAddress) {
+		return nil
+	}
+
+	// Only regtest is exempt, and only when the network is positively identified:
+	// an unset ChainCfgParams is an unknown network, and a security guard that
+	// treats "unknown" as "development" fails open. Verified TLS would keep the
+	// key off the wire, but it would still be guessable, so it earns no exemption
+	// either.
+	network := "unknown network (chain parameters unset)"
+	if s.settings.ChainCfgParams != nil {
+		if s.settings.ChainCfgParams.Name == chaincfg.RegressionNetParams.Name {
+			s.logger.Warnf("[P2P] grpc_admin_api_key is shorter than %d characters on a non-loopback listener (%s); this is tolerated on regtest only", util.MinAdminAPIKeyLength(), listenAddress)
+
+			return nil
+		}
+
+		network = s.settings.ChainCfgParams.Name
+	}
+
+	return errors.NewConfigurationError("[P2P] refusing to start on %s: grpc_admin_api_key is shorter than %d characters while the gRPC listener (%s) is reachable beyond loopback, so it can be brute-forced to forge peer reputation and validated chain progress - use a strong random secret (32+ chars), or bind p2p_grpcListenAddress to loopback", network, util.MinAdminAPIKeyLength(), listenAddress)
+}
+
+// warnIfUnreachableBind flags the mirror-image misconfiguration: other services
+// are told to dial a routable address while the listener only accepts loopback,
+// so every call fails with connection-refused. That matters because the failure
+// is otherwise silent - selectBestPeersForCatchup and the reporters only warn,
+// and no health check covers the p2p client, so the node simply stops finding
+// catchup peers while its port healthcheck stays green.
+//
+// This one warns rather than refusing to start: a sidecar-mesh topology can
+// legitimately present a routable service address while the app itself listens
+// on loopback, so a hard failure here could break a valid deployment.
+func (s *Server) warnIfUnreachableBind(listenAddress, clientAddress string) {
+	if clientAddress == "" || !addressIsLoopbackOnly(listenAddress) || addressIsLoopbackOnly(clientAddress) {
+		return
+	}
+
+	s.logger.Errorf("[P2P] p2p_grpcAddress (%s) is routable but p2p_grpcListenAddress (%s) only accepts loopback, so block and subtree validation cannot reach this service: widen the bind, or point the client address at loopback", clientAddress, listenAddress)
+}
+
+// addressIsLoopbackOnly reports whether an address can only be reached from the
+// local host. Anything it cannot parse as host:port is treated as routable, so
+// the check never fires on an address shape it does not understand.
+func addressIsLoopbackOnly(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
+}
+
+// authProtectedMethods returns the full gRPC method paths of every
+// state-mutating RPC on the PeerService; the auth interceptor requires the API
+// key for these. Only read-only queries stay unauthenticated.
+//
+// The data-plane reporters are in here too, not just the operator-facing admin
+// RPCs. They mutate peer reputation and validated-chain-progress state from a
+// caller-supplied peer ID, and a peer ID is cheap to mint offline, so leaving
+// them open let anyone who could reach the gRPC port forge chain progress for a
+// Sybil and flag every honest peer malicious - which decides sync-peer
+// selection. They are called by block/subtree validation inside the deployment,
+// which already presents grpc_admin_api_key via p2p.NewClient, so protecting
+// them costs those callers nothing.
+//
+// Any new mutating RPC must be added here; the classification is enforced by
+// TestAuthProtectedMethodsCoverAllRPCs and TestPublicRPCsDoNotMutateRegistry.
+func authProtectedMethods() map[string]bool {
 	return map[string]bool{
+		// Operator-facing admin RPCs.
 		"/p2p_api.PeerService/BanPeer":         true,
 		"/p2p_api.PeerService/UnbanPeer":       true,
 		"/p2p_api.PeerService/ClearBanned":     true,
@@ -1231,6 +1342,18 @@ func adminProtectedMethods() map[string]bool {
 		"/p2p_api.PeerService/ResetReputation": true,
 		"/p2p_api.PeerService/ConnectPeer":     true,
 		"/p2p_api.PeerService/DisconnectPeer":  true,
+
+		// Internal data-plane reporters (block/subtree validation).
+		"/p2p_api.PeerService/RecordCatchupAttempt":         true,
+		"/p2p_api.PeerService/RecordCatchupSuccess":         true,
+		"/p2p_api.PeerService/RecordCatchupFailure":         true,
+		"/p2p_api.PeerService/RecordCatchupMalicious":       true,
+		"/p2p_api.PeerService/UpdateCatchupError":           true,
+		"/p2p_api.PeerService/ReportValidSubtree":           true,
+		"/p2p_api.PeerService/ReportValidBlock":             true,
+		"/p2p_api.PeerService/ReportValidBlockHeaders":      true,
+		"/p2p_api.PeerService/ReportValidatedChainProgress": true,
+		"/p2p_api.PeerService/RecordBytesDownloaded":        true,
 	}
 }
 
@@ -1452,31 +1575,32 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Send to notification channel for WebSocket clients
 	select {
 	case s.notificationCh <- &notificationMsg{
-		Timestamp:           time.Now().UTC().Format(isoFormat),
-		Type:                "node_status",
-		BaseURL:             nodeStatusMessage.BaseURL,
-		PeerID:              nodeStatusMessage.PeerID,
-		Version:             nodeStatusMessage.Version,
-		CommitHash:          nodeStatusMessage.CommitHash,
-		BestBlockHash:       notificationBestBlockHash,
-		BestHeight:          notificationBestHeight,
-		TxCount:             nodeStatusMessage.TxCount,
-		SubtreeCount:        nodeStatusMessage.SubtreeCount,
-		FSMState:            nodeStatusMessage.FSMState,
-		StartTime:           nodeStatusMessage.StartTime,
-		Uptime:              nodeStatusMessage.Uptime,
-		ClientName:          nodeStatusMessage.ClientName,
-		MinerName:           nodeStatusMessage.MinerName,
-		ListenMode:          nodeStatusMessage.ListenMode,
-		ChainWork:           nodeStatusMessage.ChainWork,
-		SyncPeerID:          nodeStatusMessage.SyncPeerID,
-		SyncPeerHeight:      nodeStatusMessage.SyncPeerHeight,
-		SyncPeerBlockHash:   nodeStatusMessage.SyncPeerBlockHash,
-		SyncConnectedAt:     nodeStatusMessage.SyncConnectedAt,
-		MinMiningTxFee:      nodeStatusMessage.MinMiningTxFee,
-		FeePolicy:           nodeStatusMessage.FeePolicy,
-		ConnectedPeersCount: nodeStatusMessage.ConnectedPeersCount,
-		Storage:             nodeStatusMessage.Storage,
+		Timestamp:                 time.Now().UTC().Format(isoFormat),
+		Type:                      "node_status",
+		BaseURL:                   nodeStatusMessage.BaseURL,
+		PeerID:                    nodeStatusMessage.PeerID,
+		Version:                   nodeStatusMessage.Version,
+		CommitHash:                nodeStatusMessage.CommitHash,
+		BestBlockHash:             notificationBestBlockHash,
+		BestHeight:                notificationBestHeight,
+		TxCount:                   nodeStatusMessage.TxCount,
+		SubtreeCount:              nodeStatusMessage.SubtreeCount,
+		FSMState:                  nodeStatusMessage.FSMState,
+		StartTime:                 nodeStatusMessage.StartTime,
+		Uptime:                    nodeStatusMessage.Uptime,
+		ClientName:                nodeStatusMessage.ClientName,
+		MinerName:                 nodeStatusMessage.MinerName,
+		ListenMode:                nodeStatusMessage.ListenMode,
+		ChainWork:                 nodeStatusMessage.ChainWork,
+		SyncPeerID:                nodeStatusMessage.SyncPeerID,
+		SyncPeerHeight:            nodeStatusMessage.SyncPeerHeight,
+		SyncPeerBlockHash:         nodeStatusMessage.SyncPeerBlockHash,
+		SyncConnectedAt:           nodeStatusMessage.SyncConnectedAt,
+		MinMiningTxFee:            nodeStatusMessage.MinMiningTxFee,
+		FeePolicy:                 nodeStatusMessage.FeePolicy,
+		ConnectedPeersCount:       nodeStatusMessage.ConnectedPeersCount,
+		LegacyConnectedPeersCount: nodeStatusMessage.LegacyConnectedPeersCount,
+		Storage:                   nodeStatusMessage.Storage,
 	}:
 	default:
 		notificationDropped("node_status")
@@ -1842,7 +1966,12 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// invisible until its first message. A flag can lag reality by up to
 	// reputationCacheTTL after a connect and by up to one cleanup interval
 	// after a disconnect.
+	// The two transports are counted separately: ConnectedPeersCount keeps
+	// its established libp2p-only meaning for every node already consuming
+	// this gossip message, and legacy peers get their own figure.
 	connectedPeersCount := 0
+	legacyConnectedPeersCount := 0
+
 	if s.peerRegistry != nil {
 		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
 		if listErr != nil {
@@ -1850,12 +1979,20 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 			if cached != nil {
 				connectedPeersCount = cached.ConnectedPeersCount
+				legacyConnectedPeersCount = cached.LegacyConnectedPeersCount
 			}
 		} else {
 			for _, p := range allPeers {
-				if p.IsConnected {
-					connectedPeersCount++
+				if !p.IsConnected {
+					continue
 				}
+
+				if p.TransportType == blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL {
+					legacyConnectedPeersCount++
+					continue
+				}
+
+				connectedPeersCount++
 			}
 		}
 	}
@@ -1912,32 +2049,33 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		storage, blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
 
 	msg := &notificationMsg{
-		Timestamp:           time.Now().UTC().Format(isoFormat),
-		Type:                "node_status",
-		BaseURL:             baseURL,
-		PropagationURL:      propagationURL,
-		PeerID:              peerID,
-		Version:             version,
-		CommitHash:          commit,
-		BestBlockHash:       blockHashStr,
-		BestHeight:          height,
-		TxCount:             txCount,
-		SubtreeCount:        subtreeCount,
-		FSMState:            fsmState,
-		StartTime:           startTime,
-		Uptime:              uptime,
-		ClientName:          clientName,
-		MinerName:           minerName,
-		ListenMode:          listenMode,
-		ChainWork:           chainWorkStr,
-		SyncPeerID:          syncPeerID,
-		SyncPeerHeight:      syncPeerHeight,
-		SyncPeerBlockHash:   syncPeerBlockHash,
-		SyncConnectedAt:     syncConnectedAt,
-		MinMiningTxFee:      minMiningTxFee,
-		FeePolicy:           feePolicy,
-		ConnectedPeersCount: connectedPeersCount,
-		Storage:             storage,
+		Timestamp:                 time.Now().UTC().Format(isoFormat),
+		Type:                      "node_status",
+		BaseURL:                   baseURL,
+		PropagationURL:            propagationURL,
+		PeerID:                    peerID,
+		Version:                   version,
+		CommitHash:                commit,
+		BestBlockHash:             blockHashStr,
+		BestHeight:                height,
+		TxCount:                   txCount,
+		SubtreeCount:              subtreeCount,
+		FSMState:                  fsmState,
+		StartTime:                 startTime,
+		Uptime:                    uptime,
+		ClientName:                clientName,
+		MinerName:                 minerName,
+		ListenMode:                listenMode,
+		ChainWork:                 chainWorkStr,
+		SyncPeerID:                syncPeerID,
+		SyncPeerHeight:            syncPeerHeight,
+		SyncPeerBlockHash:         syncPeerBlockHash,
+		SyncConnectedAt:           syncConnectedAt,
+		MinMiningTxFee:            minMiningTxFee,
+		FeePolicy:                 feePolicy,
+		ConnectedPeersCount:       connectedPeersCount,
+		LegacyConnectedPeersCount: legacyConnectedPeersCount,
+		Storage:                   storage,
 	}
 
 	// Cache the status so sendInitialNodeStatuses can serve new websocket
@@ -2018,31 +2156,32 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 	// Create the NodeStatusMessage for P2P publishing
 	nodeStatusMessage := NodeStatusMessage{
-		Type:                "node_status",
-		BaseURL:             msg.BaseURL,
-		PropagationURL:      msg.PropagationURL,
-		PeerID:              msg.PeerID,
-		Version:             msg.Version,
-		CommitHash:          msg.CommitHash,
-		BestBlockHash:       msg.BestBlockHash,
-		BestHeight:          msg.BestHeight,
-		TxCount:             msg.TxCount,
-		SubtreeCount:        msg.SubtreeCount,
-		FSMState:            msg.FSMState,
-		StartTime:           msg.StartTime,
-		Uptime:              msg.Uptime,
-		ClientName:          msg.ClientName,
-		MinerName:           msg.MinerName,
-		ListenMode:          msg.ListenMode,
-		ChainWork:           msg.ChainWork,
-		SyncPeerID:          msg.SyncPeerID,
-		SyncPeerHeight:      msg.SyncPeerHeight,
-		SyncPeerBlockHash:   msg.SyncPeerBlockHash,
-		SyncConnectedAt:     msg.SyncConnectedAt,
-		MinMiningTxFee:      msg.MinMiningTxFee,
-		FeePolicy:           msg.FeePolicy,
-		ConnectedPeersCount: msg.ConnectedPeersCount,
-		Storage:             msg.Storage,
+		Type:                      "node_status",
+		BaseURL:                   msg.BaseURL,
+		PropagationURL:            msg.PropagationURL,
+		PeerID:                    msg.PeerID,
+		Version:                   msg.Version,
+		CommitHash:                msg.CommitHash,
+		BestBlockHash:             msg.BestBlockHash,
+		BestHeight:                msg.BestHeight,
+		TxCount:                   msg.TxCount,
+		SubtreeCount:              msg.SubtreeCount,
+		FSMState:                  msg.FSMState,
+		StartTime:                 msg.StartTime,
+		Uptime:                    msg.Uptime,
+		ClientName:                msg.ClientName,
+		MinerName:                 msg.MinerName,
+		ListenMode:                msg.ListenMode,
+		ChainWork:                 msg.ChainWork,
+		SyncPeerID:                msg.SyncPeerID,
+		SyncPeerHeight:            msg.SyncPeerHeight,
+		SyncPeerBlockHash:         msg.SyncPeerBlockHash,
+		SyncConnectedAt:           msg.SyncConnectedAt,
+		MinMiningTxFee:            msg.MinMiningTxFee,
+		FeePolicy:                 msg.FeePolicy,
+		ConnectedPeersCount:       msg.ConnectedPeersCount,
+		LegacyConnectedPeersCount: msg.LegacyConnectedPeersCount,
+		Storage:                   msg.Storage,
 	}
 
 	// Self-check against the bounds we enforce on ingress, so a local
@@ -2391,6 +2530,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	// Clear the peer maps to free memory
 	s.blockPeerMap.Clear()
 	s.subtreePeerMap.Clear()
+	s.reportedInvalidBlocks.Clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
 	if len(errs) > 0 {
@@ -2408,7 +2548,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 
 	// If the centralized peer registry is available, use it as it has richer data.
 	if s.peerRegistry != nil {
-		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+		allPeers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 		if err != nil {
 			return nil, errors.WrapGRPCPublic(errors.NewServiceError("list peers", err))
 		}
@@ -2712,14 +2852,24 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 // Parameters:
 //   - ctx: Context for the operation
 //   - blockHash: Hash of the invalid block
+//   - peerURL: DataHub URL the block was fetched from, used as attribution
+//     fallback when the peer map entry has been evicted; may be empty
 //   - reason: Reason for the block being invalid
 //
 // Returns an error if the peer cannot be found or the ban score cannot be added.
-func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error {
-	// Look up the peer ID that sent this block
+func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, peerURL string, reason string) error {
+	// Look up the peer ID that sent this block. The map is bounded and its
+	// entries evictable under announcement pressure, so fall back to resolving
+	// the DataHub URL, mirroring ReportInvalidSubtree — without it a washed-out
+	// entry silently voids the ban.
 	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
 	if err != nil {
-		return err
+		if peerURL != "" {
+			peerID = s.getPeerIDFromDataHubURL(peerURL)
+		}
+		if peerID == "" {
+			return err
+		}
 	}
 
 	// Add ban score to the peer
@@ -2749,28 +2899,59 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 	return nil
 }
 
-// ReportInvalidSubtree handles invalid subtree reports with explicit peer URL
-func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, reason string) error {
-	var peerID string
+// ReportInvalidSubtree handles invalid subtree reports, charging the peer that
+// served the invalid bytes. Attribution order: the reporter's explicit peer ID
+// (the peer whose DataHub URL was fetched), then the registry owner of peerURL,
+// and the gossip announcer recorded in subtreePeerMap only when no URL was
+// supplied at all — with a URL present, an unresolvable URL means no charge.
+// The map holds whoever ANNOUNCED the hash, which routinely differs from the
+// host the bytes were fetched from, so it must never override the URL-derived
+// identity.
+func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, servingPeerID string, reason string) error {
+	// Single snapshot of the announcer entry: reused for the no-URL fallback and
+	// the discrepancy log below, then consumed regardless of outcome — a leftover
+	// entry would only misattribute a later report and count against the map cap.
+	announcer, announcerFound := s.subtreePeerMap.Load(subtreeHash)
+	s.subtreePeerMap.Delete(subtreeHash)
 
-	// First try to get peer ID from the subtreePeerMap (for subtrees received via P2P)
-	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, subtreeHash, "subtree")
-	if err != nil && peerURL != "" {
-		// If not found in map and we have a peer URL, look up the peer ID from the URL
+	peerID := servingPeerID
+
+	if peerID == "" && peerURL != "" {
+		// No explicit peer ID from the reporter — resolve the owner of the URL
+		// the bytes were actually fetched from.
 		peerID = s.getPeerIDFromDataHubURL(peerURL)
-		if peerID == "" {
-			s.logger.Warnf("[ReportInvalidSubtree] could not find peer ID for URL %s, subtree %s, reason: %s",
-				peerURL, subtreeHash, reason)
-			return nil // Don't return error, just log and continue
+		if peerID != "" {
+			s.logger.Debugf("[ReportInvalidSubtree] found peer %s from URL %s for subtree %s",
+				peerID, peerURL, subtreeHash)
 		}
-		s.logger.Debugf("[ReportInvalidSubtree] found peer %s from URL %s for subtree %s",
-			peerID, peerURL, subtreeHash)
+	} else if peerID != "" && peerURL != "" {
+		// Producers pair the peer ID with the DataHub URL it owns; make that
+		// invariant self-enforcing by surfacing any drift.
+		if urlOwner := s.getPeerIDFromDataHubURL(peerURL); urlOwner != "" && urlOwner != peerID {
+			s.logger.Warnf("[ReportInvalidSubtree] reported peer %s does not own URL %s (registry owner %s) for subtree %s",
+				peerID, peerURL, urlOwner, subtreeHash)
+		}
+	}
+
+	// Fall back to the gossip announcer only when no URL was supplied at all.
+	// With a URL present, an unresolvable URL means no charge rather than
+	// charging a peer that merely announced the hash.
+	if peerID == "" && peerURL == "" && announcerFound {
+		peerID = announcer.peerID
 	}
 
 	if peerID == "" {
-		s.logger.Warnf("[ReportInvalidSubtree] could not determine peer for subtree %s, reason: %s",
-			subtreeHash, reason)
-		return nil
+		s.logger.Warnf("[ReportInvalidSubtree] could not determine serving peer for subtree %s, url %s, reason: %s",
+			subtreeHash, peerURL, reason)
+		return nil // Don't return error, just log and continue
+	}
+
+	// The announcer and the serving peer are routinely different (subtrees are
+	// announced by the miner that built them but fetched from whichever peer's
+	// DataHub the block came from); surface the discrepancy for observability.
+	if announcerFound && announcer.peerID != peerID {
+		s.logger.Infof("[ReportInvalidSubtree] subtree %s was announced by peer %s but served invalid by peer %s (url %s)",
+			subtreeHash, announcer.peerID, peerID, peerURL)
 	}
 
 	s.logger.Infof("[ReportInvalidSubtree] invalid subtree report for peer %s, subtree %s: %s",
@@ -2786,9 +2967,6 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 			s.logger.Warnf("[ReportInvalidSubtree] UpdatePeerMetrics %s failed: %v", peerID, err)
 		}
 	}
-
-	// Remove the subtree from the map to avoid memory leaks
-	s.subtreePeerMap.Delete(subtreeHash)
 
 	return nil
 }
@@ -2851,7 +3029,7 @@ func (s *Server) GetPeerRegistry(ctx context.Context, _ *emptypb.Empty) (*p2p_ap
 		}, nil
 	}
 
-	allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	allPeers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("list peers", err))
 	}

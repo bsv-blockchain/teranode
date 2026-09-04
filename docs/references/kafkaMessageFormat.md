@@ -252,6 +252,8 @@ The invalid block message is defined in protobuf as `KafkaInvalidBlockTopicMessa
 message KafkaInvalidBlockTopicMessage {
   string blockHash = 1;
   string reason = 2;
+  string peer_id = 3;
+  string peer_url = 4;
 }
 ```
 
@@ -272,12 +274,26 @@ message KafkaInvalidBlockTopicMessage {
 - Required: Yes
 - Example: `"Block contains invalid transaction"`
 
+#### peer_id
+
+- Type: string
+- Description: P2P identity of the peer that announced the block, when block validation knows it. This is the primary ban attribution: unlike the P2P service's bounded peer map, it cannot be evicted by announcement floods.
+- Required: No (empty when the block's provenance is unknown, e.g. blocks invalidated during mined-status updates)
+
+#### peer_url
+
+- Type: string
+- Description: DataHub URL the block was fetched from, used as a last-resort attribution fallback (resolved to a peer via the peer registry).
+- Required: No
+
 ### Example
 
 ```json
 {
   "blockHash": "00000000000000000007abd8d2a16a69c1c45a1c3b0d1a6b2e0c8b4e8f9a1b2c3",
-  "reason": "Block contains invalid transaction"
+  "reason": "Block contains invalid transaction",
+  "peer_id": "12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp",
+  "peer_url": "http://198.51.100.7:8090"
 }
 ```
 
@@ -286,10 +302,13 @@ message KafkaInvalidBlockTopicMessage {
 #### Sending Messages
 
 ```go
-// Create invalid block message
+// Create invalid block message. Include the block's provenance when known:
+// PeerId is the primary ban attribution, PeerUrl the last-resort fallback.
 invalidBlockMessage := &kafkamessage.KafkaInvalidBlockTopicMessage{
     BlockHash: blockHash.String(),
     Reason:    "Block validation failed: invalid merkle root",
+    PeerId:    announcingPeerID, // may be empty when provenance is unknown
+    PeerUrl:   dataHubURL,       // may be empty
 }
 
 // Serialize to protobuf
@@ -327,8 +346,14 @@ func handleInvalidBlockMessage(msg *kafka.Message) error {
     blockHash := invalidBlockMessage.BlockHash
     reason := invalidBlockMessage.Reason
 
+    // Resolve ban attribution, strongest source first: the peer ID carried in
+    // the message, then any locally stored announcement record, then the
+    // DataHub URL resolved via the peer registry.
+    peerID := invalidBlockMessage.GetPeerId()
+    peerURL := invalidBlockMessage.GetPeerUrl()
+
     // Process the invalid block notification...
-    log.Printf("Block %s marked as invalid: %s", blockHash, reason)
+    log.Printf("Block %s marked as invalid: %s (peer %q, url %q)", blockHash, reason, peerID, peerURL)
     return nil
 }
 ```
@@ -473,6 +498,7 @@ message KafkaInvalidSubtreeTopicMessage {
   string subtreeHash = 1;
   string peerUrl = 2;
   string reason = 3;
+  string peer_id = 4;  // ID of the peer whose DataHub served the invalid bytes (authoritative attribution)
 }
 ```
 
@@ -501,13 +527,21 @@ message KafkaInvalidSubtreeTopicMessage {
 - Required: Yes
 - Example: `"Subtree contains invalid transaction merkle proof"`
 
+#### peer_id
+
+- Type: string
+- Description: P2P peer ID of the peer whose DataHub (peerUrl) served the invalid bytes. Used by the P2P service as the authoritative identity to charge for the failure; when empty, the peer is resolved from peerUrl instead
+- Required: No (may be empty when the reporter only knows the URL)
+- Example: `"12D3KooWEyoppNCUx8Yx4gzbGGgLo1UhpGzs9udWvsFsyrzrPwLf"`
+
 ### Example
 
 ```json
 {
   "subtreeHash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
   "peerUrl": "http://peer1.example.com:8080",
-  "reason": "Subtree contains invalid transaction merkle proof"
+  "reason": "Subtree contains invalid transaction merkle proof",
+  "peer_id": "12D3KooWEyoppNCUx8Yx4gzbGGgLo1UhpGzs9udWvsFsyrzrPwLf"
 }
 ```
 
@@ -520,6 +554,7 @@ message KafkaInvalidSubtreeTopicMessage {
 invalidSubtreeMessage := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
     SubtreeHash: subtreeHash.String(),
     PeerUrl:     "http://peer1.example.com:8080",
+    PeerId:      "12D3KooWEyoppNCUx8Yx4gzbGGgLo1UhpGzs9udWvsFsyrzrPwLf",
     Reason:      "Subtree validation failed: invalid merkle proof",
 }
 
@@ -557,10 +592,11 @@ func handleInvalidSubtreeMessage(msg *kafka.Message) error {
 
     subtreeHash := invalidSubtreeMessage.SubtreeHash
     peerUrl := invalidSubtreeMessage.PeerUrl
+    peerId := invalidSubtreeMessage.PeerId
     reason := invalidSubtreeMessage.Reason
 
     // Process the invalid subtree notification...
-    log.Printf("Subtree %s from peer %s marked as invalid: %s", subtreeHash, peerUrl, reason)
+    log.Printf("Subtree %s served by peer %s (url %s) marked as invalid: %s", subtreeHash, peerId, peerUrl, reason)
     return nil
 }
 ```
@@ -571,6 +607,7 @@ func handleInvalidSubtreeMessage(msg *kafka.Message) error {
 - Empty or malformed subtreeHash: Hash is not a valid hexadecimal string representation of a subtree hash
 - Invalid peerUrl: URL is empty or not properly formatted
 - Empty reason: Reason field is empty or not provided
+- No serving identity: at least one of peer_id or peerUrl must identify the serving peer; otherwise the P2P consumer logs the report and drops it without charging anyone
 
 ---
 

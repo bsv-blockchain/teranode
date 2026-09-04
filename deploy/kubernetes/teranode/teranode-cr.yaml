@@ -79,7 +79,7 @@ spec:
     enabled: false
     spec: {}
   configMapName: teranode-operator-config
-  # Secret holding sensitive settings (blockchain_store, utxostore).
+  # Secret holding sensitive settings (blockchain_store, utxostore, grpc_admin_api_key).
   # Create it before applying this CR — see the installation docs.
   envFrom:
     - secretRef:

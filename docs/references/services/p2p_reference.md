@@ -39,7 +39,7 @@ type Server struct {
     nodeStatusTopicName               string             // pubsub topic for node status messages
     topicPrefix                       string             // Chain identifier prefix for topic validation
     blockPeerMap                      cappedPeerMap      // Which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
-    subtreePeerMap                    cappedPeerMap      // Which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
+    subtreePeerMap                    cappedPeerMap      // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Peer selection logic (+ SSRF-safe client for availability probes)
@@ -333,17 +333,6 @@ Marks a peer as malicious after detecting invalid data during catchup. This seve
 **Parameters**:
 
 - `peer_id` (string): The peer identifier
-
-```go
-func (s *Server) UpdateCatchupReputation(ctx context.Context, req *p2p_api.UpdateCatchupReputationRequest) (*p2p_api.UpdateCatchupReputationResponse, error)
-```
-
-Directly sets a peer's reputation score. Use sparingly as this bypasses the normal reputation calculation algorithm.
-
-**Parameters**:
-
-- `peer_id` (string): The peer identifier
-- `score` (double): Reputation score value (0-100 range)
 
 ```go
 func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error)
@@ -656,6 +645,22 @@ The server uses goroutines for handling concurrent operations, such as message p
 ## Security
 
 The server supports both HTTP and HTTPS configurations based on the `securityLevelHTTP` setting. When using HTTPS, it requires certificate and key files to be specified in the configuration.
+
+### gRPC authentication
+
+Every state-mutating `PeerService` RPC requires the `grpc_admin_api_key` value in the `x-api-key` metadata header. That covers the operator-facing admin calls (`BanPeer`, `UnbanPeer`, `ClearBanned`, `AddBanScore`, `ResetReputation`, `ConnectPeer`, `DisconnectPeer`) *and* the internal data-plane reporters called by block and subtree validation (`RecordCatchupAttempt`, `RecordCatchupSuccess`, `RecordCatchupFailure`, `RecordCatchupMalicious`, `UpdateCatchupError`, `ReportValidSubtree`, `ReportValidBlock`, `ReportValidBlockHeaders`, `ReportValidatedChainProgress`, `RecordBytesDownloaded`).
+
+The reporters are authenticated because they write peer reputation and validated chain progress against a caller-supplied peer ID, and peer IDs are cheap to mint offline. `ReportValidatedChainProgress` in particular feeds sync-peer selection, so an unauthenticated caller could nominate a Sybil as sync peer and flag every honest peer malicious. Internal callers construct their client through `p2p.NewClient`, which attaches the key automatically, so they need no special handling.
+
+Only read-only queries (`GetPeers`, `GetPeer`, `GetPeerRegistry`, `GetPeersForCatchup`, `IsBanned`, `ListBanned`, `IsPeerMalicious`, `IsPeerUnhealthy`) are reachable without the key. The classification is enforced by tests that parse the handler sources, so an RPC that gains a write can no longer stay on the public list.
+
+`p2p_grpcListenAddress` binds to loopback by default; widen it only when the service is reached from another container or pod, and set a strong `grpc_admin_api_key` when you do. The shipped `docker.m`, `docker.ss` and `operator` contexts widen it because those topologies run P2P in its own container or pod.
+
+`grpc_admin_api_key` is deliberately not committed, and `util.ValidateAdminAPIKey` (shared with the legacy and RPC services) rejects well-known placeholders: a placeholder is logged as an error and then **ignored**, so the server falls back to a randomly generated key. That fails closed — every protected RPC rejects all callers, including the internal reporters — rather than accepting a value anyone can read from this repository. Supply a strong secret (32+ characters) via an environment variable or secret store.
+
+The mirror-image misconfiguration is logged as an error at startup: a routable `p2p_grpcAddress` meeting a loopback `p2p_grpcListenAddress` means block and subtree validation get connection-refused on every call. That failure is otherwise silent — the reporters and `selectBestPeersForCatchup` only warn, and no health check covers the p2p client — so the node would simply stop finding catchup peers while its port healthcheck stayed green.
+
+Note that the read-only RPCs are still a reconnaissance surface: `GetPeerRegistry` and `GetPeersForCatchup` return the full peer set including peer IDs, DataHub URLs, heights, reputation and ban state. Where the bind is widened - in particular the `operator` context, which fronts the peer gRPC port with an ingress - keep the port reachable only from inside the cluster.
 
 ## Related Documents
 

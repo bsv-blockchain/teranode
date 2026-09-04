@@ -32,6 +32,8 @@
 | MaxFeelerPeers | int | 1 | legacy_maxFeelerPeers | Peer slots reserved for short-lived feeler probes (0 disables feelers and the reservation together) |
 | FeelerInterval | time.Duration | 120s | legacy_feelerInterval | Mean of the randomised gap between feeler probes (not a disable lever; a non-positive value falls back to the default) |
 | FeelerHandshakeTimeout | time.Duration | 25s | legacy_feelerHandshakeTimeout | How long a feeler waits for a version message; must stay under the 30s peer negotiate timeout |
+| PeerRegistryEnabled | bool | true | legacy_peerRegistryEnabled | Mirror connected legacy peers into the centralized peer registry so the dashboard can show them (false is a kill switch) |
+| PeerRegistrySyncInterval | time.Duration | 10s | legacy_peerRegistrySyncInterval | How often the mirror reconciles connected legacy peers into the registry |
 
 ## Configuration Dependencies
 
@@ -94,6 +96,40 @@
 
 - `BlockPrefetchBufferBytes` bounds the bytes of received-but-not-yet-processed blocks so download overlaps validation during sync; `0` disables prefetch (synchronous ingestion).
 - Big-block era: a block at least as large as the whole budget is admitted alone (weight clamped), giving zero overlap — identical to pre-prefetch behaviour. To get overlap on large blocks, set the budget to at least ~2× the typical block size.
+
+### Peer Registry Mirror
+
+**PeerRegistryEnabled** and **PeerRegistrySyncInterval** control the mirror that
+makes legacy peers visible in the dashboard beside libp2p peers.
+
+The mirror is a read-only visibility path. It feeds no sync, catchup or
+peer-selection decision, and the legacy service's own sync engine
+(`services/legacy/netsync`) is unaffected by it either way.
+
+- Each tick snapshots the connected legacy peers and pushes only what changed,
+  so an idle peer costs no RPC.
+- Entries are registered with the wire-protocol transport type and keyed
+  `legacy:host:port`, which keeps them distinguishable from libp2p peers at
+  every layer.
+- A peer that disappears is marked disconnected once, then left for the
+  registry TTL to reap.
+- Each registry call is bounded independently, so an unresponsive blockchain
+  service delays a tick rather than stalling the mirror.
+
+**Requirements**
+
+- The blockchain service must be reachable, since it hosts the registry. When
+  the registry client is unavailable the mirror does not start and the legacy
+  service runs normally without dashboard peer visibility.
+
+**Recommendations**
+
+- Keep **PeerRegistryEnabled** at true for operator visibility. Set it to false
+  only if the extra registry traffic is unwelcome on a node carrying very many
+  legacy connections.
+- The default 10s interval sits well below the legacy two-minute ping interval.
+  Values under one second are pointless, because the underlying peer statistics
+  do not change that fast.
 
 ## Service Dependencies
 

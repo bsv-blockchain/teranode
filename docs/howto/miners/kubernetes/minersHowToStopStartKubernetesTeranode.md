@@ -22,7 +22,7 @@ Before proceeding, ensure you have all components installed as described in the 
 
 ### 1. Deploy Teranode Configuration
 
-> **Note:** The Cluster CR references the Secret `teranode-operator-secrets` (it holds `blockchain_store` and `utxostore`). A normal stop/start leaves it in place, but after a full teardown you must recreate it first — see [Create the Teranode Secret](minersHowToInstallation.md#create-the-teranode-secret).
+> **Note:** The Cluster CR references the Secret `teranode-operator-secrets` (it holds `blockchain_store`, `utxostore` and `grpc_admin_api_key`). A normal stop/start leaves it in place, but after a full teardown you must recreate it first — see [Create the Teranode Secret](minersHowToInstallation.md#create-the-teranode-secret).
 
 ```bash
 # Apply the Teranode configuration and custom resources

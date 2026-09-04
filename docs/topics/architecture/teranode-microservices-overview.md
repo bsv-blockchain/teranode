@@ -537,6 +537,10 @@ Kafka serves as the messaging middleware for inter-service communication in Tera
 - `kafka_blocksConfig`: Used for propagating new blocks from P2P to Block Validation
 - `kafka_subtreesConfig`: Used for sending new subtrees from P2P to Subtree Validation
 - `kafka_blocksFinalConfig`: Used for sending finalized blocks from Blockchain to Block Persister
+- `kafka_invalidBlocksConfig`: Used for notifying P2P about blocks that failed validation, for peer reputation management
+- `kafka_invalidSubtreesConfig`: Used for notifying P2P about subtrees that failed validation, for peer quality tracking
+- `kafka_txPolicyRejectedConfig`: Used for sending consensus-valid but policy-rejected transactions from Validator to Subtree Validation
+- `kafka_legacyInvConfig`: Used by the Legacy Sync Manager to bridge legacy Bitcoin wire protocol inventory messages to and from Kafka
 
 **Key Features:**
 

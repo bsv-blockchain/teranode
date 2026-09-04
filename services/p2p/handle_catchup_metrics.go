@@ -177,16 +177,6 @@ func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.Record
 	return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
 }
 
-// UpdateCatchupReputation is preserved for API compatibility but no longer
-// applies a manual reputation override; the centralized registry computes
-// reputation deterministically from interaction outcomes. The RPC remains so
-// existing consumers (legacy service) compile without changes. Remove once
-// legacy consumers are migrated to blockchain.PeerRegistryClientI in a
-// follow-up PR.
-func (s *Server) UpdateCatchupReputation(_ context.Context, _ *p2p_api.UpdateCatchupReputationRequest) (*p2p_api.UpdateCatchupReputationResponse, error) {
-	return &p2p_api.UpdateCatchupReputationResponse{Ok: true}, nil
-}
-
 // UpdateCatchupError records the most recent catchup error reported against a peer.
 func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error) {
 	if s.peerRegistry == nil {
@@ -211,7 +201,7 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 		return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
-	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, true, true)
+	peers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, true, true)
 	if err != nil {
 		return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, errors.WrapGRPC(errors.NewServiceError("list peers", err))
 	}

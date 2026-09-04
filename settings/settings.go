@@ -511,7 +511,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockTopic:         getString("p2p_block_topic", "", alternativeContext...),
 			SubtreeTopic:       getString("p2p_subtree_topic", "", alternativeContext...),
 			GRPCAddress:        getString("p2p_grpcAddress", "", alternativeContext...),
-			GRPCListenAddress:  getString("p2p_grpcListenAddress", ":9906", alternativeContext...),
+			GRPCListenAddress:  getString("p2p_grpcListenAddress", "localhost:9906", alternativeContext...),
 			HTTPAddress:        getString("p2p_httpAddress", "localhost:9906", alternativeContext...),
 			HTTPListenAddress:  getString("p2p_httpListenAddress", "", alternativeContext...),
 			ListenAddresses:    getMultiString("p2p_listen_addresses", "|", []string{}, alternativeContext...),
@@ -696,6 +696,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
 			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),
 			BlockPrefetchBufferBytes:         getInt64("legacy_blockPrefetchBufferBytes", 256*1024*1024, alternativeContext...),
+			PeerRegistryEnabled:              getBool("legacy_peerRegistryEnabled", true, alternativeContext...),
+			PeerRegistrySyncInterval:         getDuration("legacy_peerRegistrySyncInterval", 10*time.Second, alternativeContext...),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:         getString("ipv6_addresses", "", alternativeContext...),
