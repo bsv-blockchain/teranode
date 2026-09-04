@@ -6085,6 +6085,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#peer-registry-mirror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Registry Mirror
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6943,6 +6954,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#peer-registry-mirror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Registry Mirror
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7320,6 +7342,20 @@
 <td>legacy_feelerHandshakeTimeout</td>
 <td>How long a feeler waits for a version message; must stay under the 30s peer negotiate timeout</td>
 </tr>
+<tr>
+<td>PeerRegistryEnabled</td>
+<td>bool</td>
+<td>true</td>
+<td>legacy_peerRegistryEnabled</td>
+<td>Mirror connected legacy peers into the centralized peer registry so the dashboard can show them (false is a kill switch)</td>
+</tr>
+<tr>
+<td>PeerRegistrySyncInterval</td>
+<td>time.Duration</td>
+<td>10s</td>
+<td>legacy_peerRegistrySyncInterval</td>
+<td>How often the mirror reconciles connected legacy peers into the registry</td>
+</tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
@@ -7382,6 +7418,38 @@
 <ul>
 <li><code>BlockPrefetchBufferBytes</code> bounds the bytes of received-but-not-yet-processed blocks so download overlaps validation during sync; <code>0</code> disables prefetch (synchronous ingestion).</li>
 <li>Big-block era: a block at least as large as the whole budget is admitted alone (weight clamped), giving zero overlap — identical to pre-prefetch behaviour. To get overlap on large blocks, set the budget to at least ~2× the typical block size.</li>
+</ul>
+<h3 id="peer-registry-mirror">Peer Registry Mirror<a class="headerlink" href="#peer-registry-mirror" title="Permanent link">&para;</a></h3>
+<p><strong>PeerRegistryEnabled</strong> and <strong>PeerRegistrySyncInterval</strong> control the mirror that
+makes legacy peers visible in the dashboard beside libp2p peers.</p>
+<p>The mirror is a read-only visibility path. It feeds no sync, catchup or
+peer-selection decision, and the legacy service's own sync engine
+(<code>services/legacy/netsync</code>) is unaffected by it either way.</p>
+<ul>
+<li>Each tick snapshots the connected legacy peers and pushes only what changed,
+  so an idle peer costs no RPC.</li>
+<li>Entries are registered with the wire-protocol transport type and keyed
+  <code>legacy:host:port</code>, which keeps them distinguishable from libp2p peers at
+  every layer.</li>
+<li>A peer that disappears is marked disconnected once, then left for the
+  registry TTL to reap.</li>
+<li>Each registry call is bounded independently, so an unresponsive blockchain
+  service delays a tick rather than stalling the mirror.</li>
+</ul>
+<p><strong>Requirements</strong></p>
+<ul>
+<li>The blockchain service must be reachable, since it hosts the registry. When
+  the registry client is unavailable the mirror does not start and the legacy
+  service runs normally without dashboard peer visibility.</li>
+</ul>
+<p><strong>Recommendations</strong></p>
+<ul>
+<li>Keep <strong>PeerRegistryEnabled</strong> at true for operator visibility. Set it to false
+  only if the extra registry traffic is unwelcome on a node carrying very many
+  legacy connections.</li>
+<li>The default 10s interval sits well below the legacy two-minute ping interval.
+  Values under one second are pointless, because the underlying peer statistics
+  do not change that fast.</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies<a class="headerlink" href="#service-dependencies" title="Permanent link">&para;</a></h2>
 <table>
