@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
@@ -326,9 +327,9 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			// Check if error indicates malicious behavior
 			if errors.IsMaliciousResponseError(parseErr) {
 				// Report malicious behavior to P2P service
-				u.reportCatchupMalicious(ctx, identifier, "malicious response during header parsing")
+				u.reportCatchupMaliciousAndBan(ctx, identifier, "malicious response during header parsing", p2p.ReasonProtocolViolation)
 
-				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - should be banned (banning not yet implemented)", chainTipHash.String(), baseURL)
+				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - ban score applied", chainTipHash.String(), baseURL)
 
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
@@ -368,7 +369,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		if err = u.validateBatchHeaders(ctx, blockHeaders); err != nil {
 			if errors.IsMaliciousResponseError(err) {
 				// Report malicious behavior for checkpoint violation to P2P service
-				u.reportCatchupMalicious(ctx, identifier, "checkpoint violation during header validation")
+				u.reportCatchupMaliciousAndBan(ctx, identifier, "checkpoint violation during header validation", p2p.ReasonProtocolViolation)
 
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,

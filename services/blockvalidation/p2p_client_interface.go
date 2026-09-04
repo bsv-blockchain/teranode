@@ -27,6 +27,12 @@ type P2PClientI interface {
 	// RecordCatchupMalicious records malicious behavior detected during catchup.
 	RecordCatchupMalicious(ctx context.Context, peerID string) error
 
+	// AddBanScore escalates confirmed peer misbehaviour to the ban-score system,
+	// which eventually bans and disconnects the peer. Unlike
+	// RecordCatchupMalicious (a soft reputation penalty that automatic reputation
+	// recovery can undo), ban score decays only with time.
+	AddBanScore(ctx context.Context, peerID string, reason string) error
+
 	// UpdateCatchupError stores the last catchup error for a peer.
 	UpdateCatchupError(ctx context.Context, peerID string, errorMsg string) error
 

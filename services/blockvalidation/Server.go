@@ -32,6 +32,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -1966,7 +1967,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			// Mark peer as malicious only for a genuinely invalid (consensus-failing)
 			// block. Transient catchup-state errors fall through to alternative-peer
 			// retry, same as ErrBlockIncomplete. See issue #1031.
-			u.reportCatchupMalicious(ctx, c.peerID, "invalid_block")
+			u.reportCatchupMaliciousAndBan(ctx, c.peerID, "invalid_block", p2p.ReasonInvalidBlock)
 
 			// Clean up the processing notification for this block
 			u.processBlockNotify.Delete(*c.block.Hash())

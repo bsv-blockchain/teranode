@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
@@ -1508,7 +1509,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					} else if shouldReportConsensusMalicious(err) {
 						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
-						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
+						u.reportCatchupMaliciousAndBan(gCtx, peerID, "invalid_block_validation", p2p.ReasonInvalidBlock)
 					}
 
 					// Record metric for validation failure. A local fault is not the

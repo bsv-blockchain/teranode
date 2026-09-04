@@ -56,6 +56,9 @@ func (m *maliciousAbortP2PClient) RecordCatchupFailureWithKind(_ context.Context
 func (m *maliciousAbortP2PClient) RecordCatchupMalicious(_ context.Context, _ string) error {
 	return nil
 }
+func (m *maliciousAbortP2PClient) AddBanScore(_ context.Context, _ string, _ string) error {
+	return nil
+}
 func (m *maliciousAbortP2PClient) UpdateCatchupError(_ context.Context, _ string, _ string) error {
 	return nil
 }

@@ -290,6 +290,41 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 	// Fallback: No local metrics needed since we're using P2P service for all peer tracking
 }
 
+// reportCatchupMaliciousAndBan records malicious catchup behaviour AND escalates it
+// to the ban-score system. Use this only for confirmed misbehaviour (a block that
+// failed consensus validation, a checkpoint violation, a malformed/malicious
+// response) — never for transient or ambiguous failures.
+//
+// The reputation penalty alone is insufficient: ReconsiderBadPeers can restore a
+// low-reputation peer, so a peer alternating valid and consensus-invalid responses
+// would otherwise remain a sync candidate indefinitely (see issue #1161). Ban score
+// accumulates across offences and decays only with time.
+//
+// Parameters:
+//   - ctx: Context for the gRPC calls
+//   - peerID: Peer identifier
+//   - reason: Description of the malicious behaviour (for logging)
+//   - banReason: Ban reason key understood by the peer registry's ban config
+//     (see p2p.Reason* constants)
+func (u *Server) reportCatchupMaliciousAndBan(ctx context.Context, peerID string, reason string, banReason string) {
+	if peerID == "" {
+		return
+	}
+
+	u.reportCatchupMalicious(ctx, peerID, reason)
+
+	if u.p2pClient == nil {
+		return
+	}
+
+	if err := u.p2pClient.AddBanScore(ctx, peerID, banReason); err != nil {
+		u.logger.Warnf("[peer_metrics] Failed to add ban score %q for peer %s: %v", banReason, peerID, err)
+		return
+	}
+
+	u.logger.Warnf("[peer_metrics] Added ban score %q for peer %s (%s)", banReason, peerID, reason)
+}
+
 // isPeerMalicious checks if a peer is marked as malicious.
 // Queries the P2P service for the peer's status.
 //
