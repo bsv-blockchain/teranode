@@ -347,7 +347,62 @@ func TestSyncCoordinator_SelectNewSyncPeer_PrefersFullNode(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, "full", sc.selectNewSyncPeer())
+	require.Equal(t, "full", sc.selectNewSyncPeer(false))
+}
+
+// Hysteresis through the real coordinator path: an incumbent sync peer that is
+// still merit-tied with its rivals keeps the slot cycle after cycle (no A<->B
+// oscillation and no fresh Kafka catchup trigger per switch), while an actual
+// failure signal rotates it off.
+func TestSyncCoordinator_SelectNewSyncPeer_KeepsIncumbentUntilChallengerMateriallyBetter(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	registerPeer := func(id string) {
+		reg.Register(&blockchain.PeerInfo{
+			ID:                 id,
+			DataHubURL:         "http://" + id,
+			Height:             200,
+			BlockHash:          syncCoordinatorTestHash(t),
+			Storage:            "full",
+			ValidatedHeight:    150,
+			ValidatedBlockHash: syncCoordinatorTestHash(t),
+			ValidatedChainWork: []byte{0x03},
+		})
+	}
+	registerPeer("peer-a")
+	registerPeer("peer-b")
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "peer-a"
+	sc.mu.Unlock()
+
+	// Activation records a sync attempt on the incumbent; the retry cooldown must
+	// not then exclude it from its own re-selection.
+	reg.RecordSyncAttempt("peer-a")
+
+	for range 20 {
+		require.Equal(t, "peer-a", sc.selectNewSyncPeer(false),
+			"a merit-tied incumbent must keep the sync slot")
+	}
+
+	require.Equal(t, "peer-b", sc.selectNewSyncPeer(true),
+		"a failed incumbent must be replaced")
+
+	// A materially better challenger (higher validated work) takes the slot even
+	// without a failure.
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "peer-c",
+		DataHubURL:         "http://peer-c",
+		Height:             300,
+		BlockHash:          syncCoordinatorTestHash(t),
+		Storage:            "full",
+		ValidatedHeight:    250,
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x09},
+	})
+	require.Equal(t, "peer-c", sc.selectNewSyncPeer(false),
+		"a materially better challenger must take the slot from the incumbent")
 }
 
 func TestSyncCoordinator_SelectNewSyncPeer_MeritTiedSybilCannotCapture(t *testing.T) {
@@ -378,7 +433,7 @@ func TestSyncCoordinator_SelectNewSyncPeer_MeritTiedSybilCannotCapture(t *testin
 
 	wins := map[string]int{}
 	for range 100 {
-		got := sc.selectNewSyncPeer()
+		got := sc.selectNewSyncPeer(false)
 		require.Contains(t, ids, got)
 		wins[got]++
 	}
@@ -1116,7 +1171,7 @@ func TestSyncCoordinator_MaxUnvalidatedAdvertisedHeightLead_AllowsProbeAtTenThou
 	})
 
 	require.False(t, sc.isCaughtUp())
-	require.Equal(t, "bounded", sc.selectNewSyncPeer())
+	require.Equal(t, "bounded", sc.selectNewSyncPeer(false))
 }
 
 func TestSyncCoordinator_SendSyncTriggerToKafka_NilProducerNoOp(t *testing.T) {

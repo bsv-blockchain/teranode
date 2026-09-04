@@ -109,7 +109,8 @@ The `PeerSelector` implements the peer selection algorithm. It takes a list of p
 type SelectionCriteria struct {
     LocalHeight         int32         // Current local blockchain height
     ForcedPeerID        peer.ID       // Force selection of specific peer
-    PreviousPeer        peer.ID       // Previously selected peer (for rotation)
+    PreviousPeer        peer.ID       // Previously selected peer (kept unless a challenger is materially better)
+    PreviousPeerFailed  bool          // PreviousPeer failed (catchup failure / no-progress stall): rotate it off
     SyncAttemptCooldown time.Duration // Cooldown before retrying a peer
 }
 ```
@@ -226,22 +227,35 @@ The peer selector uses a two-phase approach for optimal selection:
    - Average response time (lowest first, peers with measurements first) - **quaternary**
    - Ban score (lowest first) - **quinary**
    - Validated block height (highest first) - **senary**
-3. Exclude the previously selected peer when any alternative exists
-4. Select uniformly at random among the top-ranked candidates that tie on
-   every criterion above
+3. Exclude the previously selected peer only when the coordinator reports it
+   failed (catchup failure or no-progress stall) and an alternative exists
+4. Form the **top band**: the highest-ranked candidate plus every following
+   candidate that is *near-equal* to it. Proven-delivery tier, validated chain
+   work and validated height must match exactly; reputation (±5), average
+   response time (±25 ms or ±25%) and ban score (±5) are compared with
+   equivalence margins
+5. If the previous peer is in the band and has not failed, keep it
+   (**hysteresis**); otherwise select uniformly at random from the band
+
+Hysteresis exists because unconditional rotation makes two near-equal peers
+ping-pong the sync slot every evaluation cycle, and each switch re-triggers
+catchup over Kafka and splits the download stream. The slot therefore only moves
+when a challenger is materially better, or when the incumbent actually fails.
 
 There is deliberately no peer-ID tiebreak: peer IDs are attacker-grindable
 (cheap libp2p keypair generation), so a deterministic ID ordering would let a
 Sybil attacker mint an ID that always wins selection among otherwise equal
 candidates. Random selection within the top band caps a Sybil set's capture
-probability at its proportional share of that band.
+probability at its proportional share of that band, and — because the band spans
+near-equal peers, not only exact ties — independent nodes spread their sync load
+over the whole band instead of herding onto one marginally-best peer.
 
 #### Phase 2: Pruned Node Fallback
 
 If no full nodes are available and fallback is enabled:
 
 1. Filter for peers not in "full" mode but meeting other criteria
-2. Rank and select using the same criteria and random tiebreak as Phase 1
+2. Rank and select using the same criteria, hysteresis and random band draw as Phase 1
 
 ### 5.3. Fallback to Pruned Nodes
 

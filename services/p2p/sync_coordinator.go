@@ -706,20 +706,33 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 
 // selectNewSyncPeer selects a new sync peer based on current criteria.
 // The returned ID is a canonical libp2p ID string.
-func (sc *SyncCoordinator) selectNewSyncPeer() string {
+//
+// previousPeerFailed states whether the incumbent sync peer has demonstrably
+// failed (a no-progress stall). When it has, the incumbent is excluded from the
+// candidate set so the call returns a genuine replacement. When it has not, the
+// incumbent stays in the candidate set and the selector's hysteresis re-selects
+// it unless a challenger is materially better — so an opportunistic evaluation
+// returns the incumbent (meaning "stay put") instead of rotating the slot onto a
+// near-equal peer and re-triggering catchup every cycle.
+func (sc *SyncCoordinator) selectNewSyncPeer(previousPeerFailed bool) string {
 	localHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
 	previousPeer := sc.currentSyncPeerLocked()
 
+	excludedPeer := ""
+	if previousPeerFailed {
+		excludedPeer = previousPeer
+	}
+
 	peers := sc.listAllPeers()
-	eligiblePeers := sc.filterEligiblePeersWithTip(peers, previousPeer, localHeight, localChainWork, localWorkOK)
+	eligiblePeers := sc.filterEligiblePeersWithTip(peers, excludedPeer, localHeight, localChainWork, localWorkOK)
 	if sc.settings != nil && sc.settings.P2P.ForceSyncPeer != "" {
 		eligiblePeers = peers
 	}
 
-	return sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, previousPeer)
+	return sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, previousPeer, previousPeerFailed)
 }
 
-func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork []byte, previousPeer string) SelectionCriteria {
+func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork []byte, previousPeer string, previousPeerFailed bool) SelectionCriteria {
 	unprovenProbeBudgetRemaining := sc.unprovenProbeBudgetRemainingValue()
 	criteria := SelectionCriteria{
 		LocalHeight:                  int32(localHeight),
@@ -728,6 +741,7 @@ func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork 
 		UnprovenProbeBudgetRemaining: unprovenProbeBudgetRemaining,
 		FullDeliveryFreshnessWindow:  sc.fullDeliveryFreshnessWindow(),
 		PreviousPeer:                 previousPeer,
+		PreviousPeerFailed:           previousPeerFailed,
 		SyncAttemptCooldown:          1 * time.Minute, // Don't retry peers for at least 1 minute
 	}
 	// Check for forced peer
@@ -745,8 +759,8 @@ func (sc *SyncCoordinator) selectionCriteria(localHeight uint32, localChainWork 
 	return criteria
 }
 
-func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, localChainWork []byte, previousPeer string) string {
-	criteria := sc.selectionCriteria(localHeight, localChainWork, previousPeer)
+func (sc *SyncCoordinator) selectSyncPeerFromCandidates(peers []*blockchain.PeerInfo, localHeight uint32, localChainWork []byte, previousPeer string, previousPeerFailed bool) string {
+	criteria := sc.selectionCriteria(localHeight, localChainWork, previousPeer, previousPeerFailed)
 	return sc.selector.SelectSyncPeer(sc.ctx, peers, criteria)
 }
 
@@ -947,7 +961,9 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 	}
 
 	// Select from eligible peers
-	newSyncPeer := sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, oldPeer)
+	// oldPeer is always empty here (the guard above returns early otherwise), so
+	// there is no incumbent to keep or rotate off.
+	newSyncPeer := sc.selectSyncPeerFromCandidates(eligiblePeers, localHeight, localChainWork, oldPeer, false)
 	if newSyncPeer == "" {
 		sc.logger.Warnf("[SyncCoordinator] No suitable new sync peer found (different from %s)", oldPeer)
 		sc.logCandidateList(eligiblePeers)
@@ -1168,7 +1184,10 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	if !peerAheadByValidatedWork(peerInfo, localChainWork) {
 		sc.logger.Infof("[SyncCoordinator] Caught up to sync peer %s by validated work", currentPeer)
 		// Don't clear peer yet, but look for better peer.
-		if betterPeer := sc.selectNewSyncPeer(); betterPeer != currentPeer && betterPeer != "" {
+		// The incumbent has not failed — we simply caught up to it — so it stays in
+		// the candidate set and selector hysteresis returns it unless a challenger is
+		// materially better. Only a different peer causes a switch.
+		if betterPeer := sc.selectNewSyncPeer(false); betterPeer != currentPeer && betterPeer != "" {
 			sc.logger.Infof("[SyncCoordinator] Found better sync peer %s", betterPeer)
 			sc.clearSyncPeerIfCurrent("")
 			_ = sc.triggerSyncLocked()
@@ -1192,7 +1211,11 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	if progressAge <= sc.preemptionProgressGuard() {
 		return
 	}
-	candidate := sc.selectNewSyncPeer()
+	// The incumbent has gone longer than preemptionProgressGuard() without
+	// delivering a validated block: that is an actual failure signal, so it is
+	// excluded from the candidate set and this call returns a real replacement
+	// rather than the (sticky) incumbent.
+	candidate := sc.selectNewSyncPeer(true)
 	if candidate == "" || candidate == currentPeer {
 		return
 	}

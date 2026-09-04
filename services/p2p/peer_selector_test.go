@@ -122,7 +122,9 @@ func TestPeerSelector_SelectSyncPeer_ForcedPeerNotConnected(t *testing.T) {
 	require.Empty(t, got, "missing forced peer means no selection, not fallback")
 }
 
-func TestPeerSelector_SelectSyncPeer_PreviousPeerSecondChoiceWhenTopMatches(t *testing.T) {
+// A failed previous peer is rotated off even when it still ranks top, so the
+// coordinator gets a genuine replacement.
+func TestPeerSelector_SelectSyncPeer_FailedPreviousPeerRotatedOffWhenTopMatches(t *testing.T) {
 	ps := newSelectorForTest()
 
 	peers := []*blockchain.PeerInfo{
@@ -132,8 +134,139 @@ func TestPeerSelector_SelectSyncPeer_PreviousPeerSecondChoiceWhenTopMatches(t *t
 
 	criteria := advertisedProbeCriteria(50)
 	criteria.PreviousPeer = "a"
+	criteria.PreviousPeerFailed = true
 	got := ps.SelectSyncPeer(context.Background(), peers, criteria)
-	require.Equal(t, "b", got, "rotate off the previous peer if it would be top again")
+	require.Equal(t, "b", got, "a failed previous peer must be rotated off even if it would be top again")
+}
+
+// Hysteresis: a previous peer that is still top-ranked is kept, so a healthy
+// sync peer is not swapped out (and catchup re-triggered) for no gain.
+func TestPeerSelector_SelectSyncPeer_PreviousPeerKeptWhenStillTop(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
+		newPeer("a", 100, "full", 90, 0),
+		newPeer("b", 100, "full", 80, 0),
+	}
+
+	criteria := advertisedProbeCriteria(50)
+	criteria.PreviousPeer = "a"
+	require.Equal(t, "a", ps.SelectSyncPeer(context.Background(), peers, criteria))
+}
+
+// Hysteresis must not pin a materially worse incumbent: a challenger outside the
+// incumbent's band still wins.
+func TestPeerSelector_SelectSyncPeer_MateriallyBetterChallengerBeatsPreviousPeer(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
+		newPeer("weak-incumbent", 100, "full", 40, 0),
+		newPeer("strong", 100, "full", 95, 0),
+	}
+
+	criteria := advertisedProbeCriteria(50)
+	criteria.PreviousPeer = "weak-incumbent"
+	require.Equal(t, "strong", ps.SelectSyncPeer(context.Background(), peers, criteria),
+		"a materially better challenger must take the slot from the incumbent")
+}
+
+// Two peers that are equal on every criterion must not alternate the sync slot
+// cycle after cycle (issue: deterministic selection oscillates A<->B).
+func TestPeerSelector_SelectSyncPeer_EqualCandidatesDoNotOscillate(t *testing.T) {
+	ps := newSelectorForTest()
+
+	criteria := advertisedProbeCriteria(50)
+	first := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{
+		newPeer("a", 100, "full", 80, 0),
+		newPeer("b", 100, "full", 80, 0),
+	}, criteria)
+	require.Contains(t, []string{"a", "b"}, first)
+
+	for range 20 {
+		criteria.PreviousPeer = first
+		got := ps.SelectSyncPeer(context.Background(), []*blockchain.PeerInfo{
+			newPeer("a", 100, "full", 80, 0),
+			newPeer("b", 100, "full", 80, 0),
+		}, criteria)
+		require.Equal(t, first, got, "equal candidates must not alternate the sync slot absent a failure")
+	}
+}
+
+// Near-equal (not exactly tied) candidates are also non-oscillating and share
+// the load: no single peer wins every fresh selection.
+func TestPeerSelector_SelectSyncPeer_NearEqualCandidatesShareLoad(t *testing.T) {
+	ps := newSelectorForTest()
+
+	newNearEqualPeers := func() []*blockchain.PeerInfo {
+		// Reputation spread of 4 and response times within 25ms / 25% keep all
+		// three inside one band even though none is an exact tie.
+		a := newPeer("near-a", 100, "full", 80, 0)
+		a.AvgResponseTimeMs = 100
+		b := newPeer("near-b", 100, "full", 82, 1)
+		b.AvgResponseTimeMs = 110
+		c := newPeer("near-c", 100, "full", 84, 2)
+		c.AvgResponseTimeMs = 120
+		return []*blockchain.PeerInfo{a, b, c}
+	}
+
+	// Fresh nodes (no previous peer) must spread over the whole band instead of
+	// herding onto the single highest-reputation peer.
+	// P(some band member never wins in 100 rounds) <= 3 * (2/3)^100 ~ 7e-18.
+	wins := map[string]int{}
+	for range 100 {
+		wins[ps.SelectSyncPeer(context.Background(), newNearEqualPeers(), advertisedProbeCriteria(50))]++
+	}
+	require.Len(t, wins, 3, "every near-equal peer must win at least once, got %v", wins)
+
+	// An established node keeps its incumbent even though it is not the
+	// nominally best peer in the band.
+	criteria := advertisedProbeCriteria(50)
+	criteria.PreviousPeer = "near-a"
+	for range 20 {
+		require.Equal(t, "near-a", ps.SelectSyncPeer(context.Background(), newNearEqualPeers(), criteria))
+	}
+}
+
+func TestPeerSelector_PeersNearEqual(t *testing.T) {
+	ps := newSelectorForTest()
+	now := time.Now()
+	window := 24 * time.Hour
+
+	base := newPeer("base", 100, "full", 80, 0)
+	base.AvgResponseTimeMs = 100
+
+	withResponse := func(p *blockchain.PeerInfo, ms int64) *blockchain.PeerInfo {
+		p.AvgResponseTimeMs = ms
+		return p
+	}
+
+	tests := []struct {
+		name  string
+		other *blockchain.PeerInfo
+		want  bool
+	}{
+		{"identical", withResponse(newPeer("x", 100, "full", 80, 0), 100), true},
+		{"reputation within margin", withResponse(newPeer("x", 100, "full", 85, 0), 100), true},
+		{"reputation beyond margin", withResponse(newPeer("x", 100, "full", 86, 0), 100), false},
+		{"ban score within margin", withResponse(newPeer("x", 100, "full", 80, 5), 100), true},
+		{"ban score beyond margin", withResponse(newPeer("x", 100, "full", 80, 6), 100), false},
+		{"response time within absolute margin", withResponse(newPeer("x", 100, "full", 80, 0), 124), true},
+		{"response time within relative margin", withResponse(newPeer("x", 100, "full", 80, 0), 125), true},
+		{"response time beyond both margins", withResponse(newPeer("x", 100, "full", 80, 0), 126), false},
+		{"unmeasured response time", newPeer("x", 100, "full", 80, 0), false},
+		{"different validated work", withResponse(withValidatedWork(newPeer("x", 100, "full", 80, 0), 100, []byte{0x05}), 100), false},
+		{"different validated height", withResponse(withValidatedWork(newPeer("x", 100, "full", 80, 0), 101, nil), 100), false},
+		{"proven delivery differs", withResponse(withRecentFullBlockDelivery(newPeer("x", 100, "full", 80, 0)), 100), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ps.peersNearEqual(base, tt.other, now, window))
+			require.Equal(t, tt.want, ps.peersNearEqual(tt.other, base, now, window), "must be symmetric")
+		})
+	}
+
+	require.True(t, ps.peersNearEqual(base, base, now, window), "must be reflexive")
 }
 
 func TestPeerSelector_SelectSyncPeer_SkipsLowReputation(t *testing.T) {
@@ -179,6 +312,29 @@ func TestPeerSelector_SelectSyncPeer_SyncCooldownExcludesRecentlyAttempted(t *te
 	criteria.SyncAttemptCooldown = time.Minute
 	got := ps.SelectSyncPeer(context.Background(), peers, criteria)
 	require.Equal(t, "fresh", got, "peer within cooldown must be skipped")
+}
+
+// The retry cooldown must not evict the incumbent from its own selection: every
+// activation records a sync attempt, so applying the cooldown to the incumbent
+// would rotate the slot on each evaluation inside the cooldown window.
+func TestPeerSelector_SelectSyncPeer_SyncCooldownExemptsHealthyIncumbent(t *testing.T) {
+	ps := newSelectorForTest()
+
+	newPeers := func() []*blockchain.PeerInfo {
+		incumbent := newPeer("incumbent", 100, "full", 80, 0)
+		incumbent.LastSyncAttempt = time.Now().Add(-30 * time.Second)
+		return []*blockchain.PeerInfo{incumbent, newPeer("fresh", 100, "full", 80, 0)}
+	}
+
+	criteria := advertisedProbeCriteria(50)
+	criteria.SyncAttemptCooldown = time.Minute
+	criteria.PreviousPeer = "incumbent"
+	require.Equal(t, "incumbent", ps.SelectSyncPeer(context.Background(), newPeers(), criteria),
+		"a healthy incumbent must not be excluded by its own sync-attempt cooldown")
+
+	criteria.PreviousPeerFailed = true
+	require.Equal(t, "fresh", ps.SelectSyncPeer(context.Background(), newPeers(), criteria),
+		"a failed incumbent stays subject to the cooldown")
 }
 
 func TestPeerSelector_SelectSyncPeer_PrunedFallbackDisabled(t *testing.T) {
@@ -321,11 +477,12 @@ func TestPeerSelector_SelectSyncPeer_GrindableIDCannotCaptureSelection(t *testin
 	require.Less(t, wins[ids[0]], rounds, "attacker with lexicographically smallest ID must not win every selection")
 }
 
-func TestPeerSelector_SelectSyncPeer_PreviousPeerExcludedFromTiedTopBand(t *testing.T) {
+func TestPeerSelector_SelectSyncPeer_FailedPreviousPeerExcludedFromTiedTopBand(t *testing.T) {
 	ps := newSelectorForTest()
 
-	// Previous peer ties with two other candidates, so after it is excluded
-	// the random draw still runs over a band of two; it must never be re-drawn.
+	// Failed previous peer ties with two other candidates, so after it is
+	// excluded the random draw still runs over a band of two; it must never be
+	// re-drawn.
 	for range 50 {
 		peers := []*blockchain.PeerInfo{
 			newPeer("prev", 100, "full", 80, 0),
@@ -334,6 +491,7 @@ func TestPeerSelector_SelectSyncPeer_PreviousPeerExcludedFromTiedTopBand(t *test
 		}
 		criteria := advertisedProbeCriteria(50)
 		criteria.PreviousPeer = "prev"
+		criteria.PreviousPeerFailed = true
 		got := ps.SelectSyncPeer(context.Background(), peers, criteria)
 		require.Contains(t, []string{"other-a", "other-b"}, got)
 	}
@@ -376,7 +534,8 @@ func TestPeerSelector_SelectSyncPeer_PreviousPeerKeptWhenOnlyCandidate(t *testin
 	peers := []*blockchain.PeerInfo{newPeer("prev", 100, "full", 80, 0)}
 	criteria := advertisedProbeCriteria(50)
 	criteria.PreviousPeer = "prev"
-	require.Equal(t, "prev", ps.SelectSyncPeer(context.Background(), peers, criteria), "sole candidate is selected even if it was the previous peer")
+	criteria.PreviousPeerFailed = true
+	require.Equal(t, "prev", ps.SelectSyncPeer(context.Background(), peers, criteria), "sole candidate is selected even if it was the failed previous peer")
 }
 
 func TestPeerSelector_SelectSyncPeer_UnprovenProbeBudgetBoundsHeaderOnlyPeers(t *testing.T) {
