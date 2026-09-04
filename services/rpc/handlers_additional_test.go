@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -425,7 +426,55 @@ func TestHandleGetRawTransactionEdgeCases(t *testing.T) {
 
 		_, err := handleGetRawTransaction(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "404")
+
+		// Assert on what a caller actually receives, not on the handler's bare
+		// error. The previous version checked err.Error() for "404" and passed
+		// while the reply on the wire was -32603 "internal error", because the
+		// handler is called directly here and never reaches createMarshalledReply,
+		// which is where the trimming happens.
+		reply, mErr := s.createMarshalledReply(1, nil, err)
+		require.NoError(t, mErr)
+
+		var parsed bsvjson.Response
+		require.NoError(t, json.Unmarshal(reply, &parsed))
+		require.NotNil(t, parsed.Error)
+
+		require.Equal(t, bsvjson.ErrRPCInvalidAddressOrKey, parsed.Error.Code,
+			"an unknown txid is -5, matching bitcoind, not an internal error")
+		require.Equal(t, txNotFoundMessage, parsed.Error.Message)
+	})
+
+	t.Run("a txid containing a newline cannot forge a log line", func(t *testing.T) {
+		// c.Txid is unvalidated on this path. The 404 branch logs, and the error it
+		// builds is rendered into a log line too - so escaping only the Warnf left
+		// the same value reaching the log four lines later by another route.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		assetURL, _ := url.Parse(server.URL)
+		logger := newCapturingLogger()
+		s := &RPCServer{logger: logger, assetHTTPURL: assetURL}
+
+		verboseLevel := 0
+		cmd := &bsvjson.GetRawTransactionCmd{
+			Txid:    "deadbeef\nFORGED ERROR LINE",
+			Verbose: &verboseLevel,
+		}
+
+		_, err := handleGetRawTransaction(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+
+		// Every line the handler logs, both the Warnf and the Debugf logAndBuild
+		// emits for the error it returns.
+		for _, line := range append(append([]string{}, logger.errorf...), append(logger.warnf, logger.debugf...)...) {
+			require.NotContains(t, line, "\n",
+				"a caller-supplied newline must not split a log entry: %q", line)
+		}
+
+		require.Contains(t, logger.all(), `\n`,
+			"the newline is escaped rather than dropped, so the txid stays diagnosable")
 	})
 }
 
@@ -1272,7 +1321,14 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 
 		_, err := handleGetBlock(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "blockchain error")
+
+		// getblock names a block, so it goes through rpcLookupError. This
+		// failure is not a not-found, so it keeps the internal code - and the
+		// internal text stays in the log rather than on the wire.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "blockchain error")
 	})
 
 	t.Run("block not on main chain should return -1 confirmations", func(t *testing.T) {
@@ -1457,7 +1513,11 @@ func TestHandleGetBlockByHeightComprehensive(t *testing.T) {
 
 		_, err := handleGetBlockByHeight(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "block not found at height")
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "block not found at height")
 	})
 }
 
@@ -1580,7 +1640,11 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 
 		_, err := handleGetBlockHeader(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "header not found")
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "header not found")
 	})
 
 	t.Run("successful block header retrieval with verbose=false", func(t *testing.T) {
@@ -2487,7 +2551,9 @@ func TestHandleGetRawMempoolComprehensive(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Error retrieving raw mempool")
-		assert.Contains(t, rpcErr.Message, "failed to get tx hashes")
+		// The site's context stays; the internal cause does not. It could be a
+		// gRPC dial target or the storage layer's own text. See rpc_errors.go.
+		assert.NotContains(t, rpcErr.Message, "failed to get tx hashes")
 	})
 
 	t.Run("verbose mode - get mining candidate error", func(t *testing.T) {
@@ -2522,7 +2588,7 @@ func TestHandleGetRawMempoolComprehensive(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Error retrieving mining candidate")
-		assert.Contains(t, rpcErr.Message, "failed to get mining candidate")
+		assert.NotContains(t, rpcErr.Message, "failed to get mining candidate")
 	})
 
 	t.Run("requires block assembly client", func(t *testing.T) {
@@ -2718,7 +2784,14 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		assert.Equal(t, expectedError, err)
+
+		// invalidateblock names a block, so it goes through rpcLookupError:
+		// the caller gets a typed RPC error, and an internal failure that is
+		// not a not-found keeps the internal code without the internal text.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "blockchain service unavailable")
 	})
 
 	t.Run("nil blockchain client", func(t *testing.T) {
@@ -2767,7 +2840,11 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		assert.Equal(t, context.Canceled, err)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.Equal(t, context.Canceled.Error(), rpcErr.Message)
 	})
 
 	t.Run("zero block hash", func(t *testing.T) {
