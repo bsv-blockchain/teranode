@@ -7401,9 +7401,9 @@ such, the node should see no activity for as long as the FSM stays in <code>Idle
 <p>The Block Assembler will only mine blocks when the node is in the <code>Running</code> state. The Block Assembler will never mine blocks under any other node state.</p>
 <h4 id="333-fsm-catching-blocks-state">3.3.3. FSM: Catching Blocks State<a class="headerlink" href="#333-fsm-catching-blocks-state" title="Permanent link">&para;</a></h4>
 <p>The <code>CatchingBlocks</code> state represents the node catching up on blocks. It is entered
-either by BlockValidation, when a running node finds it has fallen behind the
-network, or at startup, because a fresh node with no persisted state boots
-straight into it (see section 3.1). In this state:</p>
+by BlockValidation when a running node finds it has fallen behind the network; at
+startup, because a fresh node with no persisted state boots straight into it (see
+section 3.1); or through an explicit CATCHUPBLOCKS event from <code>Idle</code>. In this state:</p>
 <p>Allowed Operations in Catching Blocks State:</p>
 <ul>
 <li>✅ Process external transactions</li>
