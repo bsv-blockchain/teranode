@@ -1549,5 +1549,10 @@ func NewTestServer(t *testing.T) (*legacy.Server, error) {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
 
-	return legacy.New(logger, tSettings, blockchainClient, nil, memStore, memStore, utxoStore, nil, nil, nil), nil
+	return legacy.New(logger, tSettings, legacy.Dependencies{
+		BlockchainClient: blockchainClient,
+		SubtreeStore:     memStore,
+		TempStore:        memStore,
+		UtxoStore:        utxoStore,
+	}), nil
 }
