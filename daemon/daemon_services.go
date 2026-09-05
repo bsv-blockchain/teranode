@@ -990,13 +990,16 @@ func (d *Daemon) startValidatorService(
 		return err
 	}
 
-	var policyRejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
-
-	policyRejectedTxKafkaProducerClient, err = getKafkaTxPolicyRejectedAsyncProducer(
+	policyRejectedProducer, err := getKafkaTxPolicyRejectedAsyncProducer(
 		ctx, createLogger("kafka-producer-policy-rejected-tx"), appSettings,
 	)
 	if err != nil {
 		return err
+	}
+	// Keep the interface nil when the optional producer is not configured.
+	var policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+	if policyRejectedProducer != nil {
+		policyRejectedTxKafkaProducerClient = policyRejectedProducer
 	}
 
 	// Create the BlockAssembly client for the Validator service
