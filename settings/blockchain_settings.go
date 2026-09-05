@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// DefaultBlockchainStoreDBTimeoutMillis supplies both the configured database
+// timeout default and the FSM fallback for non-positive configuration.
+const DefaultBlockchainStoreDBTimeoutMillis = 5000
+
 // BlockChainSettings configures the blockchain state management service.
 type BlockChainSettings struct {
 	GRPCAddress           string            `key:"blockchain_grpcAddress" desc:"gRPC address for Blockchain service" default:"localhost:8087" category:"BlockChain" usage:"Address for inter-service communication" type:"string" longdesc:"### Purpose\nSpecifies the client connection address for the Blockchain gRPC service.\n\n### How It Works\nOther services connect to this address to query blockchain state, headers, and chain information.\n\n### Used By\n- **Block Validation** - Get headers, check chain\n- **Block Assembly** - Get best block\n- **Asset Server** - Query blocks\n- **RPC** - getblock, getblockheader\n\n### Format\n**host:port** - Where host is a hostname, IP address, or DNS name.\n\n### Examples\n- **localhost:8087** - Local development (default)\n- **blockchain.internal:8087** - Internal DNS\n- **10.0.1.50:8087** - Direct IP address\n\n### Recommendations\n- Use internal DNS or service mesh addresses in production\n- Use localhost only for local development"`

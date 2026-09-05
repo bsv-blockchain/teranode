@@ -511,6 +511,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 
 		// Mock CatchUpBlocks and GetFSMCurrentState for the honest peer attempt
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Once()
+		mockBlockchainClient.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 		runningState := blockchain.FSMStateRUNNING
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 
@@ -802,6 +803,7 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 
 		// Mock CatchUpBlocks and GetFSMCurrentState for the catchup attempt
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 		runningState := blockchain.FSMStateRUNNING
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 
@@ -887,6 +889,7 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 
 		// Mock CatchUpBlocks and GetFSMCurrentState for the catchup attempt
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 		runningState := blockchain.FSMStateRUNNING
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 

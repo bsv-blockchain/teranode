@@ -73,6 +73,8 @@ func NewCatchupTestSuiteWithConfig(t *testing.T, config *testhelpers.CatchupServ
 // setupMocks initializes all mock objects
 func (s *CatchupTestSuite) setupMocks() {
 	s.MockBlockchain = &blockchain.Mock{}
+	s.MockBlockchain.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+	s.MockBlockchain.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 	s.MockUTXOStore = &utxo.MockUtxostore{}
 	s.MockValidator = &validator.MockValidator{UtxoStore: s.MockUTXOStore}
 	s.HttpMock = testhelpers.NewHTTPMockSetup(s.T)

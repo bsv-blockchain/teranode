@@ -2002,19 +2002,9 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 
 // Run sends a run FSM event to the blockchain service.
 func (c *Client) Run(ctx context.Context, source string) error {
-	currentState := ""
-
-	state, _ := c.GetFSMCurrentState(ctx)
-	if state != nil {
-		// check whether the current state is the same as the target state
-		if *state == FSMStateRUNNING {
-			return nil
-		}
-
-		currentState = state.String()
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending Run event %s (%s => Run)", source, currentState)
+	// The authority serializes this request with operator STOP. A cached state
+	// cannot establish that the node is still running or authorize a transition.
+	c.logger.Infof("[Blockchain Client] Sending Run event (%s)", source)
 
 	_, err := c.client.Run(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -2037,14 +2027,12 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // - Maintaining consensus with the BSV Blockchain network
 // - Coordinating synchronization across distributed Teranode components
 //
-// The method first checks if the FSM is already in the CATCHING_BLOCKS state
-// to avoid unnecessary state transitions. If not already catching up, it sends
-// the appropriate FSM event to trigger the synchronization process.
+// Every call reaches the blockchain authority, which serializes transitions with
+// operator STOP. Use AdmitCatchupWork for state-neutral work admission.
 //
 // This operation is typically used during:
 // - Service startup when the local chain may be behind
 // - Recovery from network partitions or connectivity issues
-// - Manual synchronization requests from operators
 // - Automated catch-up processes in distributed deployments
 //
 // The method communicates with the blockchain service via gRPC to send the
@@ -2056,21 +2044,26 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // Returns:
 //   - error: Any error encountered during the FSM event transmission
 func (c *Client) CatchUpBlocks(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateCATCHINGBLOCKS {
-			return nil
-		}
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
+	c.logger.Debugf("[Blockchain Client] Requesting CATCHINGBLOCKS transition")
 
 	_, err := c.client.CatchUpBlocks(ctx, &emptypb.Empty{})
 	if err != nil {
 		return errors.UnwrapGRPC(err)
 	}
 
+	return nil
+}
+
+// AdmitCatchupWork obtains a state-neutral snapshot serialized with STOP at the
+// authority. Bypass fmsState: either IDLE or CATCHINGBLOCKS there can be stale.
+func (c *Client) AdmitCatchupWork(ctx context.Context) error {
+	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+	if state == nil || (state.State != FSMStateRUNNING && state.State != FSMStateCATCHINGBLOCKS) {
+		return errors.NewStateError("catchup work is not admitted while the blockchain service is idle or unavailable")
+	}
 	return nil
 }
 
@@ -2116,14 +2109,7 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 // Returns:
 //   - error: Any error encountered during the FSM event transmission
 func (c *Client) Idle(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateIDLE {
-			return nil
-		}
-	}
-
+	// A cached IDLE may be synthetic or stale; only the authority can confirm STOP.
 	c.logger.Infof("[Blockchain Client] Sending IDLE event")
 
 	_, err := c.client.Idle(ctx, &emptypb.Empty{})

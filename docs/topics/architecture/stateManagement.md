@@ -49,13 +49,13 @@ The FSM responds to the following **events**:
 
 The diagram below represents the relationships between the states and events in the FSM (as defined in `services/blockchain/fsm.go`):
 
-![Finite state machine diagram](img/fsmDiagram.svg){ width="500" }
+![Finite state machine diagram](img/fsmDiagram.svg){ width="700" }
 
 The FSM handles the following state **transitions**:
 
 - **Run**: Transitions to _Running_ from _Idle_ or _CatchingBlocks_
 - **CatchupBlocks**: Transitions to _CatchingBlocks_ from _Running_ or _Idle_
-- **Stop**: Transitions to _Idle_ from _Running_
+- **Stop**: Transitions to _Idle_ from _Running_ or _CatchingBlocks_
 
 Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command `go run services/blockchain/fsm_visualizer/main.go`. The generated `docs/state-machine.diagram.md` can be visualized using <https://mermaid.live/>.
 
@@ -97,41 +97,37 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 
 - **GetFSMCurrentState** - Returns the current state of the FSM
 - **SendFSMEvent** - Sends an event to the FSM to trigger a state transition
-- **Run** - Transitions the FSM to the Running state (delegates on the SendFSMEvent method)
-- **CatchUpBlocks** - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method)
+- **Run** - Automatic transition to Running; rejects IDLE and enforces the checkpoint gate
+- **CatchUpBlocks** - Automatic transition to CatchingBlocks; rejects IDLE. Operators resume with SendFSMEvent(CATCHUPBLOCKS)
 - **Idle** - Transitions the FSM to the Idle state by sending the STOP event (delegates on the SendFSMEvent method)
 
 ### 3.3. State Machine States
 
 #### 3.3.1. FSM: Idle State
 
-A node reaches `Idle` either by being stopped from `Running`, or by having
-persisted `Idle` before a restart. A fresh node no longer starts here — it starts
-in `CatchingBlocks` (see section 3.1). In this state:
+`Idle` records durable operator pause intent. STOP can reach it from `Running`
+or `CatchingBlocks`, and restart restores persisted IDLE. Automatic `Run` and
+`CatchUpBlocks` calls cannot leave it. Resume catchup through the explicit
+operator `CATCHUPBLOCKS` event:
 
-- No operations are permitted
-- All services are inactive
-- The node is not participating in the network in any way
-- Must be manually triggered to transition to another state
+```bash
+teranode-cli setfsmstate --fsmstate catchingblocks
+```
 
-Allowed Operations in Idle State:
+Each catchup work unit uses an uncached active-state snapshot taken by the
+blockchain authority under the same transition lock as STOP. The native client
+method `AdmitCatchupWork` obtains this snapshot through the existing
+`GetFSMCurrentState` RPC without changing the operating state. A unit admitted
+before STOP may finish, including its
+asynchronous writes; later units wait. Paused workers retain pending items and
+progress markers. Synthetic client-cache IDLE from heartbeat/subscription failure
+cannot authorize or cancel work. After restart, catchup is reconstructed from
+durable chain progress rather than replaying an exact in-memory queue.
 
-- ❌ Process external transactions
-- ❌ Legacy relay transactions
-- ❌ Queue subtrees
-- ❌ Process subtrees
-- ❌ Queue blocks
-- ❌ Process blocks
-- ❌ Relay blocks
-- ❌ Speedy process blocks
-- ❌ Create subtrees (or propagate them)
-- ❌ Create blocks (mine candidates)
-
-Services wait for the FSM to leave `Idle` before starting their operations — any
-non-Idle state, including `CatchingBlocks`, releases them (see section 3.5). As
-such, the node should see no activity for as long as the FSM stays in `Idle`.
-
-The node can also return back to the `Idle` state from `Running`, however this can only be triggered by a manual / external request.
+IDLE does not stop every service or establish live-store quiescence. Background
+recovery and already admitted work may continue. Rewind requires verified
+shutdown of Teranode services. A maintenance barrier acknowledging every
+service's quiescence is a separate feature.
 
 #### 3.3.2. FSM: Running State
 
@@ -208,21 +204,23 @@ Key points about error handling:
 
 #### 3.4.1. FSM Event: Run
 
-The gRPC `Run` method triggers the FSM to transition to the `Running` state. This event is used to indicate that the node is ready to start participating in the network and processing transactions and blocks.
+The automatic gRPC `Run` method can promote `CatchingBlocks` to `Running`; it cannot leave operator IDLE. Explicit operator RUN remains checkpoint-gated. This event is used to indicate that the node is ready to start participating in the network and processing transactions and blocks.
 
 ![fsm_run.svg](img/plantuml/fsm_run.svg)
 
 #### 3.4.2. FSM Event: Catch up Blocks
 
-The gRPC `CatchUpBlocks` method triggers the FSM to transition to the `CatchingBlocks` state. This event is used to indicate that the node is catching up on blocks and needs to process the latest blocks before resuming full operations.
+The automatic gRPC `CatchUpBlocks` method transitions an active node into catchup; it cannot leave IDLE. Explicit operator `SendFSMEvent(CATCHUPBLOCKS)` resumes paused catchup. This event is used to indicate that the node is catching up on blocks and needs to process the latest blocks before resuming full operations.
 
 ![fsm_catchup_blocks.svg](img/plantuml/fsm_catchup_blocks.svg)
 
 #### 3.4.3. FSM Event: Stop
 
-The gRPC `Idle` method sends a `Stop` event to the FSM, which triggers a transition to the `Idle` state. This event is used to stop the node from participating in the network and halt all operations.
-
-This method is not currently used.
+The gRPC `Idle` method sends STOP from Running or CatchingBlocks. The destination
+is persisted before the in-memory transition and notification. A failed write
+returns an error without publishing successful pause; retry the failed event to
+converge after an ambiguous store error. Success does not wait for admitted work
+or all services to drain. Rewind still requires verified service shutdown.
 
 ### 3.5. Waiting on State Machine Transitions
 

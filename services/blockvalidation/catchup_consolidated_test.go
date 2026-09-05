@@ -9,7 +9,6 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -388,10 +387,6 @@ func TestCatchup_FSMStateManagement(t *testing.T) {
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).
 			Return(nil).Once()
 
-		catchingState := blockchain.FSMStateCATCHINGBLOCKS
-		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
-			Return(&catchingState, nil).Once()
-
 		mockBlockchainClient.On("Run", mock.Anything, "blockvalidation/Server").
 			Return(nil).Once()
 
@@ -407,7 +402,7 @@ func TestCatchup_FSMStateManagement(t *testing.T) {
 		mockBlockchainClient.AssertExpectations(t)
 	})
 
-	t.Run("HandleFSMStateQueryError", func(t *testing.T) {
+	t.Run("CompletionDoesNotDependOnCachedState", func(t *testing.T) {
 		ctx := context.Background()
 		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
@@ -420,15 +415,10 @@ func TestCatchup_FSMStateManagement(t *testing.T) {
 			},
 		}
 
-		// Mock FSM state query failure
-		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
-			Return(nil, assert.AnError).Once()
-
-		// Should handle error gracefully
 		server.restoreFSMState(ctx, catchupCtx)
 
-		// Should not attempt to change state if query fails
-		mockBlockchainClient.AssertNotCalled(t, "Run", mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "GetFSMCurrentState", mock.Anything)
+		mockBlockchainClient.AssertCalled(t, "Run", mock.Anything, "blockvalidation/Server")
 	})
 }
 

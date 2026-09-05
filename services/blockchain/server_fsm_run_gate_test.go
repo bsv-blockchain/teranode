@@ -363,37 +363,22 @@ func TestSendFSMEvent_RunFromIdle_NoCheckpoints(t *testing.T) {
 	store.AssertNotCalled(t, "GetBestBlockHeader", mock.Anything)
 }
 
-// TestRunFromIdle_BelowCheckpointRejectsAndPreservesIdle protects the Run RPC
-// contract: a nil error means the node reached RUNNING. A below-checkpoint node
-// must therefore reject RUN and remain durably parked in IDLE rather than
-// silently entering the irreversible CATCHINGBLOCKS state.
-func TestRunFromIdle_BelowCheckpointRejectsAndPreservesIdle(t *testing.T) {
+// Automatic RUN cannot leave operator IDLE, even before checkpoint admission.
+func TestRunFromIdle_RejectsBeforeCheckpointRead(t *testing.T) {
 	ctx := context.Background()
-	highest := HighestCheckpointHeight(chaincfg.MainNetParams.Checkpoints)
-	require.Greater(t, highest, uint32(0))
-
-	store := &fsmGateStore{}
-	hdr := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
-	store.On("GetBestBlockHeader", mock.Anything).Return(hdr, &model.BlockHeaderMeta{Height: 0}, nil)
-
-	b := newTestBlockchainForGate(t, &chaincfg.MainNetParams, store)
-	b.settings.BlockChain.FSMStateChangeDelay = 0
-	b.finiteStateMachine = b.NewFiniteStateMachine()
-	b.finiteStateMachine.SetState(blockchain_api.FSMStateType_IDLE.String())
-	require.NoError(t, store.SetFSMState(ctx, blockchain_api.FSMStateType_IDLE.String()))
-
+	b := newFSMHardeningBlockchain(t)
+	b.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1}}
+	b.store = &fsmHardeningReadStore{Store: b.store, read: func(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+		t.Fatal("automatic IDLE rejection must precede the checkpoint read")
+		return nil, nil, nil
+	}}
 	_, err := b.Run(ctx, nil)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "below highest checkpoint")
+	require.ErrorContains(t, err, "automatic FSM transition refused while IDLE")
 	require.ErrorContains(t, err, "setfsmstate --fsmstate catchingblocks")
 	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), b.finiteStateMachine.Current())
-
-	persisted, perr := store.GetFSMState(ctx)
-	require.NoError(t, perr)
-	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), persisted,
-		"rejected RUN must not change the persisted state")
-
-	store.AssertExpectations(t)
+	persisted, err := b.store.GetFSMState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), persisted)
 }
 
 // TestSendFSMEvent_InvalidRunSkipsCheckpointRead protects error ordering for

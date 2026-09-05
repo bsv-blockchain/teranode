@@ -473,6 +473,11 @@ func (c *LocalClient) CatchUpBlocks(ctx context.Context) error {
 	return nil
 }
 
+// LocalClient has no FSM; like its transition methods, admission is unrestricted.
+func (c *LocalClient) AdmitCatchupWork(ctx context.Context) error {
+	return ctx.Err()
+}
+
 func (c *LocalClient) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
 	return nil
 }

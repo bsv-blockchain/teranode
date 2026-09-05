@@ -176,6 +176,8 @@ func TestProcessCatchupChItem(t *testing.T) {
 		tSettings.BlockValidation.CatchupMaxAttemptsPerBlock = maxAttempts
 
 		mockBC := &blockchain.Mock{}
+		mockBC.On("CatchUpBlocks", mock.Anything).Return(nil)
+		mockBC.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 		mockBC.On("ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		calls := 0
@@ -489,6 +491,8 @@ func TestCatchupCap_BoundsReentry(t *testing.T) {
 		tSettings.BlockValidation.CatchupMaxAttemptsPerBlock = maxAttempts
 
 		mockBC := &blockchain.Mock{}
+		mockBC.On("CatchUpBlocks", mock.Anything).Return(nil)
+		mockBC.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 		mockBC.On("ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		calls := 0

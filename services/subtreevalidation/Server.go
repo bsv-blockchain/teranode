@@ -913,11 +913,11 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			return false, errors.NewProcessingError("[CheckSubtree] Failed to get FSM current state", err)
 		}
 
-		// While catching up blocks, disable adding transactions to block
-		// assembly: bulk-history txs do not belong in our template. In
-		// RUNNING, assembly stays enabled so txs from a legacy-bridge tip
-		// block survive in the mempool if the block loses a reorg.
-		if *currentState == blockchain.FSMStateCATCHINGBLOCKS {
+		// Only known RUNNING state permits feeding block assembly. Admitted
+		// catchup writes may finish in IDLE; their bulk-history transactions
+		// must not enter the template. RUNNING retains reorg resilience for
+		// transactions from legacy-bridge tip blocks.
+		if currentState == nil || *currentState != blockchain.FSMStateRUNNING {
 			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
 		}
 

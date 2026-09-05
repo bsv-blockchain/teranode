@@ -137,14 +137,16 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 
 **Environment Variable**: `pruner_skipDuringCatchup`
 
-**Description**: Skip pruning during blockchain catchup
+**Description**: Only prune in RUNNING when the catchup guard is enabled
 
-When enabled, the pruner checks FSM state and skips all deletion operations during catchup. This prevents race conditions where block validation marks transactions as mined faster than the pruner can preserve their parents.
+When enabled, the pruner starts a cycle only when the blockchain FSM is known to be `RUNNING`. `CATCHINGBLOCKS`, `IDLE`, unknown or missing states, and FSM read errors suppress preservation, expiry, transaction deletion, and blob-deletion scheduling for that cycle. Catchup writes already in progress may finish after STOP enters IDLE, so IDLE must not authorize new pruning.
+
+This admission check does not interrupt a pruning cycle or blob-deletion work already in progress. It does not make IDLE an offline maintenance barrier.
 
 **Values:**
 
 - `false` (default): Normal pruning during catchup (safe with retention >= 288 blocks)
-- `true`: Skip all pruning during catchup state
+- `true`: Start pruning only in RUNNING; skip new cycles during catchup, IDLE, or unavailable FSM state
 
 ### pruner_blockAssemblyWaitTimeout
 

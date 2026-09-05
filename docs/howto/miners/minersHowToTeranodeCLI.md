@@ -346,10 +346,10 @@ not fully enforce — the node stopped, the FSM state in the blockchain DB readi
 reports the tip, target, and block count without mutating anything, but it
 returns before the subtree store is touched, so it cannot confirm that last one.
 
-Note that `IDLE` is only reachable from `RUNNING`: the FSM has no
-`CATCHINGBLOCKS` → `IDLE` transition, so on a node stuck catching blocks
-`setfsmstate --fsmstate=idle` fails and the state has to be moved via `running`
-first.
+`teranode-cli setfsmstate --fsmstate idle` pauses directly from `RUNNING` or
+`CATCHINGBLOCKS`. Success records durable pause intent; already admitted work
+may still finish. Verify that Teranode services are stopped before rewind.
+Resume catchup explicitly with `teranode-cli setfsmstate --fsmstate catchingblocks`.
 
 A step-by-step operator runbook is not published yet. Until it is, do not run
 this against a production node without working through those preconditions

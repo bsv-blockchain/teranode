@@ -528,6 +528,11 @@ func (m *Mock) CatchUpBlocks(ctx context.Context) error {
 	return args.Error(0)
 }
 
+func (m *Mock) AdmitCatchupWork(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 // ReportPeerFailure mocks the ReportPeerFailure method
 func (m *Mock) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
 	args := m.Called(ctx, hash, peerID, failureType, reason)

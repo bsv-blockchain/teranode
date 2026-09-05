@@ -870,10 +870,10 @@ type ClientI interface {
 	// - Error if the readiness check fails
 	IsFullyReady(ctx context.Context) (bool, error)
 
-	// Run initiates the normal operation of the blockchain service.
+	// Run requests an automatic, checkpoint-gated transition to normal operation.
 	//
-	// This method starts the blockchain service in its standard operational mode,
-	// processing blocks, validating transactions, and maintaining the blockchain state.
+	// It cannot leave operator IDLE. Operators use SendFSMEvent for explicit
+	// transitions; automatic callers must not override a persisted pause.
 	//
 	// Parameters:
 	// - ctx: Context for the operation with timeout and cancellation support
@@ -883,10 +883,11 @@ type ClientI interface {
 	// - Error if the service fails to start or encounters a critical issue
 	Run(ctx context.Context, source string) error
 
-	// CatchUpBlocks synchronizes the blockchain with peer nodes.
+	// CatchUpBlocks requests an automatic transition to CATCHINGBLOCKS.
 	//
-	// This method initiates a process to catch up with the latest blocks from the network,
-	// downloading and validating any blocks that are missing from the local blockchain.
+	// Every call reaches the authority and is serialized with STOP. IDLE rejects
+	// automatic transitions; operators resume through SendFSMEvent(CATCHUPBLOCKS).
+	// Use AdmitCatchupWork for state-neutral work admission.
 	//
 	// Parameters:
 	// - ctx: Context for the operation with timeout and cancellation support
@@ -894,6 +895,10 @@ type ClientI interface {
 	// Returns:
 	// - Error if the catch-up process fails
 	CatchUpBlocks(ctx context.Context) error
+
+	// AdmitCatchupWork obtains a serialized, uncached active-state snapshot.
+	// It admits one catchup unit without changing RUNNING/CATCHINGBLOCKS state.
+	AdmitCatchupWork(ctx context.Context) error
 
 	// ReportPeerFailure notifies the blockchain service about peer download failures.
 	//

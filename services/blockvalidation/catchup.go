@@ -16,7 +16,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
@@ -231,6 +230,10 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		} else {
 			var clearErrors, notifyErrors int
 			for _, header := range headers {
+				// Clearing mined state and notifying its repair form one admitted unit.
+				if err := u.waitForCatchupAdmission(ctx); err != nil {
+					return err
+				}
 				if err := u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()); err != nil {
 					clearErrors++
 				} else {
@@ -1173,8 +1176,8 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	var writeJobsChan chan *SubtreeWriteJob
 
 	// Transition FSM to CATCHINGBLOCKS for all catchup (chain-extending and fork blocks).
-	// If the FSM rejects the transition, the error propagates
-	// up to the catchupCh handler which handles it gracefully without penalizing the peer.
+	// A paused or unavailable authority holds the session here, preserving the
+	// target and peer budget until admission succeeds or the service shuts down.
 	if err := u.setFSMCatchingBlocks(ctx, catchupCtx, &size); err != nil {
 		return err
 	}
@@ -1402,33 +1405,29 @@ func (u *Server) recordMaliciousAttempt(peerID string, reason string) {
 func (u *Server) setFSMCatchingBlocks(ctx context.Context, catchupCtx *CatchupContext, size *atomic.Int64) error {
 	u.logger.Infof("[catchup][%s] Setting node to CATCHINGBLOCKS state for %d blocks", catchupCtx.blockUpTo.Hash().String(), size.Load())
 
-	if err := u.blockchainClient.CatchUpBlocks(ctx); err != nil {
-		if errors.Is(err, errors.ErrStateError) {
-			return errors.NewStateError("[catchup][%s] FSM rejected CATCHUPBLOCKS transition", catchupCtx.blockUpTo.Hash().String(), err)
-		}
-		return errors.NewServiceError("[catchup][%s] failed to transition FSM to CATCHINGBLOCKS", catchupCtx.blockUpTo.Hash().String(), err)
+	if err := waitForCatchupAdmission(ctx, u.blockchainClient.CatchUpBlocks, catchupAdmissionTimeout, catchupAdmissionRetryInterval); err != nil {
+		return err
 	}
 
 	return nil
 }
 
 // restoreFSMState restores the FSM state after catchup.
-// Returns the node to RUN state if it was in CATCHINGBLOCKS state.
+// Requests RUN through the authority, which applies checkpoint and STOP gates.
 //
 // Parameters:
 //   - ctx: Context for cancellation
 //   - catchupCtx: Catchup context for logging
 func (u *Server) restoreFSMState(ctx context.Context, catchupCtx *CatchupContext) {
-	state, err := u.blockchainClient.GetFSMCurrentState(ctx)
-	if err != nil {
-		u.logger.Errorf("[catchup] failed to get FSM current state: %v", err)
-		return
-	}
-
-	if state != nil && *state == blockchain.FSMStateCATCHINGBLOCKS {
-		u.logger.Infof("[catchup][%s] Restoring FSM to RUN state", catchupCtx.blockUpTo.Hash().String())
-
-		if err = u.blockchainClient.Run(ctx, "blockvalidation/Server"); err != nil {
+	// Completion is an automatic request: the authority rejects it if STOP won.
+	// A cached IDLE may instead mean a broken subscription, so do not use it to
+	// suppress a legitimate completion request.
+	rpcCtx, cancel := context.WithTimeout(ctx, catchupAdmissionTimeout)
+	defer cancel()
+	if err := u.blockchainClient.Run(rpcCtx, "blockvalidation/Server"); err != nil {
+		if errors.Is(err, errors.ErrStateError) {
+			u.logger.Infof("[catchup][%s] Automatic RUN deferred by FSM authority: %v", catchupCtx.blockUpTo.Hash().String(), err)
+		} else {
 			u.logger.Errorf("[catchup][%s] failed to send RUN event: %v", catchupCtx.blockUpTo.Hash().String(), err)
 		}
 	}
@@ -1473,6 +1472,12 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 			// Wait for block assembly to be ready if needed
 			if err := blockassemblyutil.WaitForBlockAssemblyReady(gCtx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 				return errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to wait for block assembly for block %s: %v", blockUpTo.Hash().String(), block.Hash().String(), err)
+			}
+
+			// Admit after the potentially long block-assembly wait. Preserve this
+			// item while paused; admitted validation and its async writes may drain.
+			if err := u.waitForCatchupAdmission(gCtx); err != nil {
+				return err
 			}
 
 			// Get cached headers for validation

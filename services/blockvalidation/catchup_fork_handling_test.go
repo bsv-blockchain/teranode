@@ -96,6 +96,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		currentState := blockchain.FSMStateRUNNING
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Maybe()
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 		mockBlockchainClient.On("Run", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		// Mock block processing methods
@@ -891,6 +892,7 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		currentState := blockchain.FSMStateRUNNING
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Maybe()
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 		mockBlockchainClient.On("Run", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		// Mock block processing methods

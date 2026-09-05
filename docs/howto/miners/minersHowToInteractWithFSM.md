@@ -93,15 +93,18 @@ The following states are valid for all environments:
 
 ### When a transition is refused
 
-Two rules constrain which transitions are accepted, and both surface as errors
-rather than silent no-ops:
+Checkpoint safety and durable operator pause constrain transitions:
 
-- **Only RUN may leave CATCHINGBLOCKS.** A node that is catching up cannot be
-  moved to IDLE; it must finish catching up first.
+- **STOP pauses CATCHINGBLOCKS directly.** Use `teranode-cli setfsmstate --fsmstate idle`.
+  Success means IDLE has been persisted. Already admitted catchup work may finish;
+  subsequent units wait for explicit resume with
+  `teranode-cli setfsmstate --fsmstate catchingblocks`. Automatic service calls
+  cannot resume an IDLE node.
 - **RUN is refused while the chain tip is below the network's highest hard-coded
   checkpoint.** Mainnet and testnet both have checkpoints; regtest has none. The
   error names both your tip height and the checkpoint it must reach. From IDLE,
-  the node remains parked so you can inspect or rewind it; use
+  the node remains parked for inspection; rewind additionally requires stopping
+  Teranode services and verifying shutdown. Use
   `setfsmstate --fsmstate catchingblocks` when you deliberately want to start
   synchronization.
   A node already in CATCHINGBLOCKS remains there and will move to RUNNING once it
@@ -128,8 +131,11 @@ relay tx invs that post-Genesis peers ban on sight
 > an override to force a below-checkpoint node into RUNNING, it no longer exists
 > — that was the hole this rule closes. Let the node catch up.
 >
-> **Getting back to IDLE:** there is no `CATCHINGBLOCKS -> IDLE` transition. Once
-> a node is catching up, the only way out is RUN.
+> **Getting back to IDLE:** STOP works directly from CATCHINGBLOCKS or RUNNING.
+> IDLE records operator intent; it does not establish live-store quiescence.
+> Stop Teranode services before rewind. A pause preserves pending catchup work
+> while the process stays alive; after restart, synchronization is reconstructed
+> from durable chain progress after explicit resume.
 
 ## Validation
 

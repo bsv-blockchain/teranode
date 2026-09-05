@@ -234,6 +234,11 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 			if optimistic {
 				contributingPeers, err = nil, nil
 			} else {
+				// Prefetch writes blob storage. One block of subtree fetches is
+				// admitted together and may drain; the next block must wait.
+				if err := u.waitForCatchupAdmission(ctx); err != nil {
+					return err
+				}
 				fetchFn := u.fetchSubtreeDataForBlockFn
 				if fetchFn == nil {
 					fetchFn = u.fetchSubtreeDataForBlock

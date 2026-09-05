@@ -1732,6 +1732,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		currentState := blockchain.FSMStateRUNNING
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Maybe()
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+		mockBlockchainClient.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 		mockBlockchainClient.On("Run", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		// findCommonAncestor resolves block 17 as the common ancestor (height 1017),
@@ -3338,6 +3339,7 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
 	// Mock CatchUpBlocks and Run for FSM transitions during catchup
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+	mockBlockchainClient.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 	mockBlockchainClient.On("Run", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
@@ -3453,6 +3455,7 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
 	// Mock CatchUpBlocks and Run for FSM transitions during catchup
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+	mockBlockchainClient.On("AdmitCatchupWork", mock.Anything).Return(nil).Maybe()
 	mockBlockchainClient.On("Run", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
@@ -4693,7 +4696,9 @@ func TestCatchup_ReportsValidatedHeaderChainWorkAfterHeaderValidation(t *testing
 		errors.NewBlockNotFoundError("block not found"),
 	).Maybe()
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
-	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop after validated progress report"))
+	ctx, cancelAdmission := context.WithCancel(ctx)
+	defer cancelAdmission()
+	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Run(func(mock.Arguments) { cancelAdmission() }).Return(errors.NewStateError("stop after validated progress report"))
 
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
@@ -4709,7 +4714,7 @@ func TestCatchup_ReportsValidatedHeaderChainWorkAfterHeaderValidation(t *testing
 
 	err := server.catchup(ctx, targetBlock, "header-serving-peer", "http://test-peer")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "stop after validated progress report")
+	require.ErrorIs(t, err, context.Canceled)
 
 	reports := recorder.snapshotValidatedReports()
 	require.Len(t, reports, 1)
@@ -4947,15 +4952,16 @@ func expectedValidatedHeaderWork(commonAncestorWork *big.Int, headers []*model.B
 	return totalWork.Bytes()
 }
 
-func TestFetchAndValidateBlocks_FSMRejectsWhenNotRunning(t *testing.T) {
-	ctx := context.Background()
+func TestFetchAndValidateBlocks_WaitsForAdmissionUntilCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
 	defer cleanup()
 
 	// Override the permissive CatchUpBlocks mock to simulate FSM rejection
 	// from an invalid source state (so CATCHUPBLOCKS event is invalid)
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
-	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("event CATCHUPBLOCKS inappropriate in current state IDLE"))
+	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Run(func(mock.Arguments) { cancel() }).Return(errors.NewStateError("event CATCHUPBLOCKS inappropriate in current state IDLE"))
 
 	blocks := testhelpers.CreateTestBlockChain(t, 3)
 	catchupCtx := &CatchupContext{
@@ -4968,8 +4974,7 @@ func TestFetchAndValidateBlocks_FSMRejectsWhenNotRunning(t *testing.T) {
 
 	err := server.fetchAndValidateBlocks(ctx, catchupCtx)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errors.ErrStateError))
-	assert.Contains(t, err.Error(), "FSM rejected CATCHUPBLOCKS")
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // filterMockCalls removes mock expectations matching the given method name.

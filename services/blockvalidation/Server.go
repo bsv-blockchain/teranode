@@ -81,6 +81,8 @@ type processBlockFound struct {
 // processBlockCatchup contains information needed to process a block during chain catchup
 // operations when the node has fallen behind the current chain tip.
 type processBlockCatchup struct {
+	// owner identifies this particular enqueue generation.
+	owner *catchupQueueOwner
 	// block contains the full block data to be validated, including header,
 	// transactions, and subtrees
 	block *model.Block
@@ -150,7 +152,10 @@ type Server struct {
 
 	// catchupCh handles blocks that need processing during chain catchup operations.
 	// This channel is used when the node falls behind the chain tip.
-	catchupCh chan processBlockCatchup
+	catchupCh           chan processBlockCatchup
+	catchupQueueMu      sync.Mutex
+	catchupQueued       map[chainhash.Hash]processBlockCatchup
+	catchupQueueStopped bool
 
 	// catchupFunc performs a catchup for one block; it defaults to u.catchup and is
 	// a field only so processCatchupChItem's error-branching can be unit-tested with
@@ -372,10 +377,9 @@ func New(
 		blockClassifier:     NewBlockClassifier(logger, nearForkThreshold, blockchainClient),
 		forkManager:         fm,
 		catchupCh:           make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
-		// 10m TTL is a safety net: entries are normally removed by explicit Delete
-		// when catchup completes or fails, but a missed Delete on any error/early-return
-		// branch would otherwise leak the entry permanently. Mirrors catchupAlternatives,
-		// the sibling cache for the same in-flight block.
+		// Queued/active ownership pins these advisory entries with NoTTL so
+		// STOP cannot expire a pending target. Release restores the 10m safety
+		// net for any entries not removed by explicit success/error cleanup.
 		processBlockNotify: ttlcache.New[chainhash.Hash, bool](
 			ttlcache.WithTTL[chainhash.Hash, bool](10*time.Minute),
 			// Do not extend the window on reads, for the same reason as
@@ -950,14 +954,13 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 				block.Header.HashPrevBlock.String(), blockFound.hash.String())
 
 			// Send to catchup channel (non-blocking)
-			select {
-			case u.catchupCh <- processBlockCatchup{
+			if u.enqueueCatchup(processBlockCatchup{
 				block:   block,
 				baseURL: blockFound.baseURL,
 				peerID:  blockFound.peerID,
-			}:
+			}) {
 				u.logger.Debugf("[processBlockFoundChannel] Sent block %s to catchup channel", block.Hash().String())
-			default:
+			} else {
 				u.logger.Warnf("[processBlockFoundChannel] Catchup channel full, dropping block %s", block.Hash().String())
 			}
 
@@ -982,14 +985,13 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 				queueSize, len(u.blockFoundCh), blockFound.hash.String())
 
 			// Send to catchup channel (non-blocking)
-			select {
-			case u.catchupCh <- processBlockCatchup{
+			if u.enqueueCatchup(processBlockCatchup{
 				block:   block,
 				baseURL: blockFound.baseURL,
 				peerID:  blockFound.peerID,
-			}:
+			}) {
 				u.logger.Debugf("[processBlockFoundChannel] Sent block %s to catchup channel", block.Hash().String())
-			default:
+			} else {
 				u.logger.Warnf("[processBlockFoundChannel] Catchup channel full, dropping block %s", block.Hash().String())
 			}
 
@@ -1105,6 +1107,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //
 // Returns an error if shutdown encounters issues, though typically returns nil
 func (u *Server) Stop(ctx context.Context) error {
+	u.stopCatchupQueue()
 	u.processBlockNotify.Stop()
 	u.catchupAlternatives.Stop()
 	// nil-guarded: this cache is newer than some Server-literal test fixtures that
@@ -1513,14 +1516,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
 			u.logger.Debugf("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
-			select {
-			case u.catchupCh <- processBlockCatchup{
+			if u.enqueueCatchup(processBlockCatchup{
 				block:   block,
 				baseURL: baseURL,
 				peerID:  peerID,
-			}:
+			}) {
 				u.logger.Debugf("[processBlockFound] Sent block %s to catchup channel", hash.String())
-			default:
+			} else {
 				u.logger.Warnf("[processBlockFound] Catchup channel full, dropping block %s from peer %s", hash.String(), peerID)
 			}
 		}()
@@ -1808,6 +1810,13 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 // item. Returns to the caller (the consumer's for-loop) on every path — where the
 // inline version used `continue`.
 func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup) {
+	defer u.releaseCatchupOwnership(c)
+	// Hold this target and its markers while STOP or an unavailable authority
+	// prevents admission. Waiting must not consume the peer retry budget.
+	if err := u.waitForCatchupAdmission(ctx); err != nil {
+		return
+	}
+
 	// #1057: authoritative cap chokepoint. catchup() takes the catchup lock and
 	// re-validates, so a block no peer can complete must not be processed once it
 	// has exhausted its attempt budget — skip it (clear its guard) until the
@@ -1815,8 +1824,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 	// (addBlockToPriorityQueue, processBlockFound, processBlockFoundChannel).
 	if u.catchupAttemptsExhausted(c.block.Hash()) {
 		u.logger.Warnf("[catchup] Block %s in cooldown after exhausting catchup attempts (cap %d); skipping until window expires", c.block.Hash().String(), u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
-		u.processBlockNotify.Delete(*c.block.Hash())
-		u.catchupAlternatives.Delete(*c.block.Hash())
+		u.finishCatchupTarget(c)
 		return
 	}
 
@@ -1828,8 +1836,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
 			blockHash := c.block.Hash()
 			u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
-			u.processBlockNotify.Delete(*blockHash)
-			u.catchupAlternatives.Delete(*blockHash)
+			u.finishCatchupTarget(c)
 		}
 		return
 	}
@@ -1846,8 +1853,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		// FSM rejected the transition — not a peer issue
 		if errors.Is(err, errors.ErrStateError) {
 			u.logger.Warnf("[catchup] FSM rejected catchup for block %s (node not in RUNNING state), clearing markers", c.block.Hash().String())
-			u.processBlockNotify.Delete(*c.block.Hash())
-			u.catchupAlternatives.Delete(*c.block.Hash())
+			u.finishCatchupTarget(c)
 			return
 		}
 
@@ -1877,8 +1883,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			// re-entry via repeated P2P notifications.
 			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
 			u.logger.Warnf("[catchup] All peers failed for block %s (attempt %d/%d), clearing markers and reporting peer failure to allow retry from a different peer: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
-			u.processBlockNotify.Delete(*c.block.Hash())
-			u.catchupAlternatives.Delete(*c.block.Hash())
+			u.finishCatchupTarget(c)
 
 			// Peers that actually failed were charged individually at the point of
 			// failure (recordCatchupPeerFailure / markCatchupFailureReported). Charging
@@ -1941,8 +1946,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			// unbounded re-entry.
 			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
 			u.logger.Warnf("[catchup] Local service/storage error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
-			u.processBlockNotify.Delete(*c.block.Hash())
-			u.catchupAlternatives.Delete(*c.block.Hash())
+			u.finishCatchupTarget(c)
 			return
 		}
 
@@ -2010,8 +2014,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 				if altErr := u.catchupFunc(ctx, alt.block, alt.peerID, alt.baseURL); altErr == nil {
 					u.logger.Infof("[catchup] Successfully processed block %s from alternative peer %s", blockHash.String(), alt.peerID)
 					// Clear processing marker, alternatives, and the attempt counter.
-					u.processBlockNotify.Delete(*blockHash)
-					u.catchupAlternatives.Delete(*blockHash)
+					u.finishCatchupTarget(c)
 					u.clearCatchupAttempts(blockHash)
 					catchupSucceeded = true
 					break
@@ -2036,16 +2039,13 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			}
 
 			// Clear processing marker and alternatives to allow retries
-			u.processBlockNotify.Delete(*blockHash)
-			u.catchupAlternatives.Delete(*blockHash)
+			u.finishCatchupTarget(c)
 		}
 	} else {
 		// Success - clear alternatives for this block; reset the attempt counter so a
 		// later unrelated catchup for this hash starts fresh.
 		u.clearCatchupAttempts(c.block.Hash())
-		u.catchupAlternatives.Delete(*c.block.Hash())
-		// Clear the processing marker
-		u.processBlockNotify.Delete(*c.block.Hash())
+		u.finishCatchupTarget(c)
 	}
 }
 
@@ -2201,57 +2201,11 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 			return
 		}
 
-		// Check if we're already processing this block in catchup
-		if u.processBlockNotify.Get(*blockFound.hash) != nil {
-			u.logger.Infof("[addBlockToPriorityQueue] Block %s already being processed in catchup, adding as alternative source", blockFound.hash.String())
-
-			// Add to alternative sources for potential failover
-			catchupBlock := processBlockCatchup{
-				block:   block,
-				baseURL: blockFound.baseURL,
-				peerID:  blockFound.peerID,
-			}
-
-			// Get existing alternatives or create new list
-			alternatives := u.catchupAlternatives.Get(*blockFound.hash)
-			if alternatives == nil || alternatives.Value() == nil {
-				u.catchupAlternatives.Set(*blockFound.hash, []processBlockCatchup{catchupBlock}, ttlcache.DefaultTTL)
-			} else {
-				// Append to existing alternatives
-				altList := alternatives.Value()
-				altList = append(altList, catchupBlock)
-				u.catchupAlternatives.Set(*blockFound.hash, altList, ttlcache.DefaultTTL)
-			}
-
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
-			return
+		// The queue owns its target and alternative peers until processing ends,
+		// including arbitrarily long STOP waits. Enqueue never blocks.
+		if !u.enqueueCatchup(processBlockCatchup{block: block, baseURL: blockFound.baseURL, peerID: blockFound.peerID}) {
+			u.logger.Warnf("[addBlockToPriorityQueue] Catchup channel full (%d/%d), dropping block %s from peer %s", len(u.catchupCh), cap(u.catchupCh), blockFound.hash.String(), blockFound.peerID)
 		}
-
-		// Mark as being processed (use TTL to auto-cleanup)
-		u.processBlockNotify.Set(*blockFound.hash, true, ttlcache.DefaultTTL)
-
-		// Send directly to catchup channel (non-blocking)
-		go func() {
-			u.logger.Infof("[addBlockToPriorityQueue] Attempting to send block %s to catchup channel (queue size: %d/%d)",
-				blockFound.hash.String(), len(u.catchupCh), cap(u.catchupCh))
-
-			select {
-			case u.catchupCh <- processBlockCatchup{
-				block:   block,
-				baseURL: blockFound.baseURL,
-				peerID:  blockFound.peerID,
-			}:
-				u.logger.Infof("[addBlockToPriorityQueue] Successfully sent block %s to catchup channel", blockFound.hash.String())
-			default:
-				// Channel is full, log warning but don't block
-				u.logger.Warnf("[addBlockToPriorityQueue] Catchup channel full (%d/%d), dropping block %s from peer %s",
-					len(u.catchupCh), cap(u.catchupCh), blockFound.hash.String(), blockFound.peerID)
-				// Clear the processing marker so it can be retried later
-				u.processBlockNotify.Delete(*blockFound.hash)
-			}
-		}()
 
 		if blockFound.errCh != nil {
 			blockFound.errCh <- nil
