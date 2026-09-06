@@ -193,6 +193,40 @@ type Validator struct {
 	// goroutines start, and per-tx readers only contend with each other on the read lock.
 	mtpMu    sync.RWMutex
 	mtpStore []uint32
+
+	// batchStoreOverride is a test seam used by validate_batch_native_test.go
+	// to substitute the UTXO store with a stub batchUtxoStore. nil in
+	// production.
+	batchStoreOverride batchUtxoStore
+
+	// cpuOverride is a test seam that, when non-nil, replaces the real
+	// TxValidator CPU-validation calls inside runCPUValidation. nil in
+	// production.
+	cpuOverride func(*bt.Tx) error
+
+	// blockAssemblySubmitOverride is a test seam that, when non-nil, replaces
+	// the real submitToBlockAssemblyBatch implementation. Allows unit tests to
+	// control per-tx BA accept/reject without a live BlockAssembly service.
+	// nil in production.
+	blockAssemblySubmitOverride func(ctx context.Context, txs []*bt.Tx) map[chainhash.Hash]error
+
+	// txMetaPublishOverride is a test seam that, when non-nil, replaces the
+	// real sendTxMetaToKafka call inside Phase F of ValidateBatch.
+	// Allows unit tests to capture which txs are published without a live
+	// Kafka producer. nil in production.
+	txMetaPublishOverride func(tx *bt.Tx, m *meta.Data)
+
+	// blockStateOverride is a test seam that, when non-nil, replaces the value
+	// returned by GetBlockState. It lets unit tests supply a ready block state
+	// (non-zero MedianTime) without standing up a fully-initialised chain, so
+	// the finality/readiness checks behave as they would on a live node. nil in
+	// production.
+	blockStateOverride *utxo.BlockState
+
+	// phaseMetrics tracks atomic per-phase counters for ValidateBatch's
+	// six-phase pipeline. The zero value is ready to use; no explicit init
+	// required. External diagnostic tools access counters via PhaseSnapshot.
+	phaseMetrics phaseMetrics
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -375,6 +409,10 @@ func (v *Validator) GetMedianBlockTime() uint32 {
 // together with SetBlockState, which is the production path; the single-field
 // setters update one field at a time and carry the other forward.
 func (v *Validator) GetBlockState() utxo.BlockState {
+	if v.blockStateOverride != nil {
+		return *v.blockStateOverride
+	}
+
 	return v.utxoStore.GetBlockState()
 }
 

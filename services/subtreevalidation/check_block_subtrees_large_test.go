@@ -189,6 +189,18 @@ func (v *TopologicalOrderValidator) EnsureMTPLoaded(_ context.Context, _ uint32)
 	return nil
 }
 
+// ValidateBatch implements validator.Interface by delegating per-tx to Validate.
+func (v *TopologicalOrderValidator) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...validator.Option) ([]validator.ValidationResult, error) {
+	results := make([]validator.ValidationResult, len(txs))
+	for i, tx := range txs {
+		results[i].TxHash = *tx.TxIDChainHash()
+		m, err := v.Validate(ctx, tx, blockHeight, opts...)
+		results[i].Meta = m
+		results[i].Err = err
+	}
+	return results, nil
+}
+
 // TestCheckBlockSubtreesLevelBasedLargeBlock benchmarks CheckBlockSubtrees with level-based processor
 // using 10 million transactions across 10 subtrees.
 func TestCheckBlockSubtreesLevelBasedLargeBlock(t *testing.T) {

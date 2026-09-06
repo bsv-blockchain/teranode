@@ -88,6 +88,13 @@ type Interface interface {
 	//   - error: Validation errors if transaction violates consensus rules or policy constraints
 	ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error)
 
+	// ValidateBatch validates a batch of transactions in a single pass.
+	// The returned slice is dense and positionally indexed against txs:
+	// results[i] always corresponds to txs[i]. The function returns
+	// err != nil only on a whole-batch failure (context cancelled, store
+	// unreachable). Per-tx failures are surfaced as results[i].Err.
+	ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...Option) ([]ValidationResult, error)
+
 	// GetBlockHeight returns the current block height known to the validator service.
 	// This height is used for validation context and consensus rule application, and should
 	// reflect the latest confirmed block in the blockchain.
