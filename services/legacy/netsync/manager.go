@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"net"
 	"net/url"
@@ -847,23 +848,98 @@ func (sm *SyncManager) startSync() {
 	})
 }
 
+// policyFeeFilterSatoshisPerKB is the feefilter this node advertises to legacy
+// peers whenever it is not catching up: minminingtxfee, converted from the
+// BSV/kB it is configured in to the satoshis/kB the wire message carries.
+//
+// The conversion rounds rather than truncates. Many decimal rates sit just
+// below their integer number of satoshis in IEEE-754 (0.00000003 BSV/kB is
+// 2.9999999999999996 satoshis/kB, which truncates to 2), and before this
+// conversion existed the raw BSV/kB float was truncated, which is 0 for every
+// real configuration. newScriptVerifierGoBDK pushes the same rounded value into
+// BDK.
+//
+// A non-finite rate advertises 0, the accept-everything filter: settings
+// parsing accepts "NaN" and "Inf" without error, and casting such a value is
+// platform-dependent (int64 of +Inf is MaxInt64 on arm64, which would silently
+// stop every peer relaying anything, and MinInt64 on amd64). A finite rate
+// beyond the int64 range is clamped to MaxInt64, the only representation of
+// "reject everything" the message has. A negative rate, rejected at validator
+// startup but reachable in a process that runs legacy without a validator,
+// advertises 0 rather than a wrapped value.
+//
+// What the filter means is a deliberate choice (PR 1659 review). BIP133 says a
+// peer will not relay transactions paying less than the filter, and
+// minminingtxfee is the rate below which this node's validator rejects a
+// transaction outright (BDK's fee floor), so the filter states what the node
+// accepts. The one exception is a free consolidation (isFreeConsolidationTxn in
+// the validator), which this node accepts with no fee and which a filtering
+// peer will therefore not relay to it; such transactions still arrive by
+// direct submission and from peers that do not filter. svnode derives its
+// filter from the mempool's rolling minimum instead, but svnode admits
+// sub-floor transactions to its mempool and only declines to mine them, so its
+// relay floor and its mining floor are different numbers; Teranode has no
+// mempool of that kind and no lower floor to advertise.
+func (sm *SyncManager) policyFeeFilterSatoshisPerKB() int64 {
+	rate := sm.settings.Policy.MinMiningTxFee
+	if math.IsNaN(rate) || math.IsInf(rate, 0) {
+		sm.logger.Warnf("[policyFeeFilter] minminingtxfee %v is not a finite number, advertising a feefilter of 0", rate)
+
+		return 0
+	}
+
+	satoshisPerKB := math.Round(rate * bsvutil.SatoshiPerBitcoin)
+	if satoshisPerKB < 0 {
+		return 0
+	}
+
+	// float64(math.MaxInt64) is 2^63 exactly, one above the largest int64, so
+	// anything at or above it does not fit.
+	if satoshisPerKB >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+
+	return int64(satoshisPerKB)
+}
+
+// resetFeeFilterToDefault tells every connected legacy peer the policy fee
+// filter, once per change of the advertised value. It is called on reaching
+// current from more than one goroutine (the block-queue consumer in
+// handleBlockMsg and the message handler in blockHandler), and it races the
+// catch-up raise handleNewPeerMsg stores for a peer that connects while the
+// node is still catching up. The marker is therefore claimed with a
+// compare-and-swap BEFORE the broadcast: two resets broadcast once, and a raise
+// stored after the claim is not overwritten unseen but leaves the marker
+// raised, so the next reset lowers that peer too. (Storing the marker after the
+// broadcast, as this used to, could bury such a raise under the policy value
+// and leave the peer filtered at 1 BSV/kB for good.)
 func (sm *SyncManager) resetFeeFilterToDefault() {
-	if sm.currentFeeFilter.Load() != uint64(bsvutil.SatoshiPerBitcoin*sm.settings.Policy.MinMiningTxFee) {
-		feeFilter := wire.NewMsgFeeFilter(int64(sm.settings.Policy.MinMiningTxFee)) // nolint:gosec
+	satoshisPerKB := sm.policyFeeFilterSatoshisPerKB()
+	want := uint64(satoshisPerKB) //nolint:gosec // never negative, see policyFeeFilterSatoshisPerKB
 
-		for p := range sm.peerStates.Range() {
-			if p == nil {
-				continue
-			}
-
-			if !p.Connected() {
-				continue
-			}
-
-			p.QueueMessage(feeFilter, nil)
+	for {
+		old := sm.currentFeeFilter.Load()
+		if old == want {
+			return
 		}
 
-		sm.currentFeeFilter.Store(uint64(bsvutil.SatoshiPerBitcoin * sm.settings.Policy.MinMiningTxFee))
+		if sm.currentFeeFilter.CompareAndSwap(old, want) {
+			break
+		}
+	}
+
+	feeFilter := wire.NewMsgFeeFilter(satoshisPerKB)
+
+	for p := range sm.peerStates.Range() {
+		if p == nil {
+			continue
+		}
+
+		if !p.Connected() {
+			continue
+		}
+
+		p.QueueMessage(feeFilter, nil)
 	}
 }
 
@@ -964,26 +1040,38 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	// Initialize the peer state
 	isSyncCandidate := sm.isSyncCandidate(peer)
 
-	// While catching up, ask every newly-connected peer to hold back
-	// transaction announcements to reduce load during sync. The raise is queued
-	// per-peer; the global currentFeeFilter is only the marker the reset path
-	// (resetFeeFilterToDefault) checks, so it must NOT gate the per-peer queue —
-	// otherwise only the first peer to connect during catch-up would be told.
-	// The filter is restored to the policy default once we reach RUNNING.
-	if state, ferr := sm.blockchainClient.GetFSMCurrentState(sm.ctx); ferr != nil {
-		sm.logger.Errorf("[handleNewPeerMsg] failed to get current FSM state: %v", ferr)
-	} else if state != nil && *state == teranodeblockchain.FSMStateCATCHINGBLOCKS {
-		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
-		peer.QueueMessage(feeFilter, nil)
-		sm.currentFeeFilter.Store(bsvutil.SatoshiPerBitcoin)
-	}
-
+	// Register the peer BEFORE deciding on its feefilter, so a
+	// resetFeeFilterToDefault running concurrently on another goroutine finds
+	// it in peerStates and lowers whatever is queued for it below.
 	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate:   isSyncCandidate,
 		requestQueue:    txmap.NewSyncedSlice[wire.InvVect](maxRequestedBlocks),
 		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
 		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
 	})
+
+	// While catching up, ask every newly-connected peer to hold back
+	// transaction announcements to reduce load during sync. The raise is queued
+	// per-peer; the global currentFeeFilter is only the marker the reset path
+	// (resetFeeFilterToDefault) checks, so it must NOT gate the per-peer queue,
+	// otherwise only the first peer to connect during catch-up would be told.
+	// The filter is restored to the policy default once we reach RUNNING.
+	//
+	// Otherwise tell the peer the policy fee filter now. The reset path only
+	// runs on the transition to RUNNING, so before this a peer connecting to a
+	// node that had been running for a while was never told anything and kept
+	// relaying every transaction (PR 1659 review). The marker is left alone:
+	// it records what the reset path last broadcast, and this is a per-peer
+	// message.
+	if state, ferr := sm.blockchainClient.GetFSMCurrentState(sm.ctx); ferr != nil {
+		sm.logger.Errorf("[handleNewPeerMsg] failed to get current FSM state: %v", ferr)
+	} else if state != nil && *state == teranodeblockchain.FSMStateCATCHINGBLOCKS {
+		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
+		peer.QueueMessage(feeFilter, nil)
+		sm.currentFeeFilter.Store(bsvutil.SatoshiPerBitcoin)
+	} else {
+		peer.QueueMessage(wire.NewMsgFeeFilter(sm.policyFeeFilterSatoshisPerKB()), nil)
+	}
 
 	// Start syncing by choosing the best candidate if needed.
 	if isSyncCandidate && sm.loadSyncPeer() == nil {

@@ -204,9 +204,10 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 	se.SetPermitBareMultisig(po.PermitBareMultisig)
 
 	// Convert MinMiningTxFee from float BSV/kB to integer satoshis/kB.
-	// math.Round (not truncation) because IEEE-754 decimal representations can
-	// drop one satoshi otherwise — e.g. 0.00000250 stores as 0.0000024999…,
-	// truncating yields 249 instead of 250.
+	// math.Round (not truncation) because many decimal rates sit just below
+	// their integer number of satoshis in IEEE-754: 0.00000003 BSV/kB is
+	// 2.9999999999999996 satoshis/kB, which truncates to 2. (0.00000250 is not
+	// such a rate; it stores just above 250 and truncates correctly.)
 	//
 	// panic() not l.Fatalf() so the stop guarantee doesn't depend on the logger
 	// implementation — TestLogger.Fatalf only logs, leaving an invalid policy
