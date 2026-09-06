@@ -240,7 +240,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MinedCacheMaxMB:                       getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
 			CheckDuplicateTransactionsConcurrency: getInt("block_checkDuplicateTransactionsConcurrency", -1, alternativeContext...),
 			GetAndValidateSubtreesConcurrency:     getInt("block_getAndValidateSubtreesConcurrency", -1, alternativeContext...),
-			KafkaWorkers:                          getInt("block_kafkaWorkers", 0, alternativeContext...),
 			ValidOrderAndBlessedConcurrency:       getInt("block_validOrderAndBlessedConcurrency", -1, alternativeContext...),
 			MaxSize:                               getInt("blockmaxsize", 4294967296, alternativeContext...),
 			BlockStore:                            getURL("blockstore", "file://./data/blockstore", alternativeContext...),
@@ -336,7 +335,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			RetrySleep:                                getDuration("blockValidationRetrySleep", 1*time.Second, alternativeContext...),
 			GRPCAddress:                               getString("blockvalidation_grpcAddress", "localhost:8088", alternativeContext...),
 			GRPCListenAddress:                         getString("blockvalidation_grpcListenAddress", ":8088", alternativeContext...),
-			KafkaWorkers:                              getInt("blockvalidation_kafkaWorkers", 0, alternativeContext...),
 			LocalSetTxMinedConcurrency:                getInt("blockvalidation_localSetTxMinedConcurrency", 8, alternativeContext...),
 			MaxPreviousBlockHeadersToCheck:            getUint64("blockvalidation_maxPreviousBlockHeadersToCheck", 100, alternativeContext...),
 			MissingTransactionsBatchSize:              getInt("blockvalidation_missingTransactionsBatchSize", 5000, alternativeContext...),
@@ -414,7 +412,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Validator: ValidatorSettings{
 			GRPCAddress:                          getString("validator_grpcAddress", "localhost:8081", alternativeContext...),
 			GRPCListenAddress:                    getString("validator_grpcListenAddress", ":8081", alternativeContext...),
-			KafkaWorkers:                         getInt("validator_kafkaWorkers", 0, alternativeContext...),
 			SendBatchSize:                        getInt("validator_sendBatchSize", 100, alternativeContext...),
 			SendBatchTimeout:                     getInt("validator_sendBatchTimeout", 2, alternativeContext...),
 			SendBatchTickerIntervalMillis:        getInt("validator_sendBatchTickerIntervalMillis", 0, alternativeContext...),

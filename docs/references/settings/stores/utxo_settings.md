@@ -7,9 +7,9 @@
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | UtxoStore | *url.URL | "" | utxostore | **CRITICAL** - UTXO store backend URL |
-| BlockHeightRetention | uint32 | globalBlockHeightRetention | utxostore_blockHeightRetention | Block height retention period |
-| UnminedTxRetention | uint32 | globalBlockHeightRetention/2 | utxostore_unminedTxRetention | Unmined transaction retention |
-| ParentPreservationBlocks | uint32 | blocksInADayOnAverage*10 | utxostore_parentPreservationBlocks | Parent preservation period |
+| BlockHeightRetention | uint32 | 288 (globalBlockHeightRetention) | utxostore_blockHeightRetention | Block height retention period |
+| UnminedTxRetention | uint32 | 144 (globalBlockHeightRetention/2) | utxostore_unminedTxRetention | Unmined transaction retention |
+| ParentPreservationBlocks | uint32 | 1440 (blocksInADayOnAverage*10) | utxostore_parentPreservationBlocks | Parent preservation period |
 | OutpointBatcherSize | int | 100 | utxostore_outpointBatcherSize | Outpoint operation batch size |
 | OutpointBatcherDurationMillis | int | 10 | utxostore_outpointBatcherDurationMillis | Outpoint batch duration |
 | SpendBatcherDurationMillis | int | 100 | utxostore_spendBatcherDurationMillis | Spend batch duration |
@@ -45,12 +45,25 @@
 | MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
 | BlockHeightRetentionAdjustment | int32 | 0 | utxostore_blockHeightRetentionAdjustment | **CRITICAL** - Retention adjustment |
 | DisableDAHCleaner | bool | false | utxostore_disableDAHCleaner | **CRITICAL** - DAH cleaner process control |
-| PrunerParentUpdateBatcherSize | int | 2000 | utxostore_prunerParentUpdateBatcherSize | Pruner parent update batch size |
-| PrunerParentUpdateBatcherDurationMillis | int | 100 | utxostore_prunerParentUpdateBatcherDurationMillis | Pruner parent update batch duration |
-| PrunerDeleteBatcherSize | int | 5000 | utxostore_prunerDeleteBatcherSize | Pruner delete batch size |
-**Note**: PostgreSQL connection pool settings (MaxOpenConns, MaxIdleConns, ConnMaxLifetime, ConnMaxIdleTime) are now configured globally via `PostgresSettings`. See [Global Settings](../global_settings.md) for details.
-| PrunerDeleteBatcherDurationMillis | int | 100 | utxostore_prunerDeleteBatcherDurationMillis | Pruner delete batch duration |
-| PrunerMaxConcurrentOperations | int | 0 | utxostore_prunerMaxConcurrentOperations | Pruner max concurrent operations (0=use queue size) |
+
+### PostgreSQL Connection Pool (PostgresPool)
+
+These settings override the [global Postgres pool settings](../global_settings.md#postgresql-connection-pool)
+for the UTXO store only. Each is read directly (not through `PostgresPool`'s own struct tags, which only
+describe the opaque `utxostore_postgres_pool` field as a whole) via `getPostgresPoolSettings("utxostore",
+...)`, and all default to the zero value: if none of the seven are set, `PostgresPool` stays `nil` and the
+UTXO store falls back to the global settings below. There is no per-service override for the circuit
+breaker settings - those are global only.
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| MaxOpenConns | int | 0 (falls back to global if unset) | utxostore_postgres_maxOpenConns | Maximum concurrent database connections |
+| MaxIdleConns | int | 0 (falls back to global if unset) | utxostore_postgres_maxIdleConns | Maximum idle connections in pool |
+| ConnMaxLifetime | time.Duration | 0 (falls back to global if unset) | utxostore_postgres_connMaxLifetime | Maximum connection reuse duration |
+| ConnMaxIdleTime | time.Duration | 0 (falls back to global if unset) | utxostore_postgres_connMaxIdleTime | Maximum idle time before closing |
+| RetryEnabled | bool | false (falls back to global if unset) | utxostore_postgres_retryEnabled | Enable retries for transient errors |
+| RetryMaxAttempts | int | 0 (falls back to global if unset) | utxostore_postgres_retryMaxAttempts | Maximum retry attempts |
+| RetryBaseDelay | time.Duration | 0 (falls back to global if unset) | utxostore_postgres_retryBaseDelay | Base delay for retry backoff |
 
 ## URL Query Parameters
 
@@ -129,7 +142,7 @@ Anything else — including unknown / non-aerospike errors — is treated as non
 
 ```text
 utxostore = "postgres://user:pass@host:5432/db?logging=true"
-utxostore_dbTimeout = "60s"
+utxostore_dbTimeoutDuration = "60s"
 ```
 
 ### Aerospike Store

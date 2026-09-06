@@ -1,7 +1,9 @@
 package settings
 
 import (
+	"fmt"
 	"net/url"
+	"reflect"
 	"testing"
 	"time"
 
@@ -190,6 +192,116 @@ func TestExportMetadata_SecretRedaction(t *testing.T) {
 	// Verify non-sensitive keys are NOT redacted
 	logLevel := settingsMap["logLevel"]
 	require.NotEqual(t, redactedValue, logLevel.CurrentValue)
+}
+
+// keyTagCollisionCategory distinguishes why a `key:` tag collision is
+// exempted, so a future reader (and the test failure message) can tell
+// instantly whether they're looking at a bug being tracked for removal or a
+// deliberate design choice that is expected to persist.
+type keyTagCollisionCategory string
+
+const (
+	// categoryAccidentalBug marks a collision where two fields have
+	// different semantics/defaults and one masks the other in
+	// ExportMetadata()'s flat key->default map - a genuine bug, exempted
+	// here only until the underlying duplicate field is deleted.
+	categoryAccidentalBug keyTagCollisionCategory = "accidental collision (bug, temporary exemption)"
+	// categoryIntentionalSharing marks a collision where two fields are
+	// deliberately wired to the same config key because two independent
+	// services each need their own settings.<Service>.Field accessor for
+	// the same value - they never diverge, so the masking in
+	// ExportMetadata()'s flat map is harmless. This exemption is permanent
+	// unless someone collapses the fields (see AdaptiveFetch precedent
+	// below).
+	categoryIntentionalSharing keyTagCollisionCategory = "intentional cross-service sharing (permanent exemption)"
+)
+
+// keyTagCollisionExemption documents one specific, named collision that the
+// uniqueness check below is allowed to pass over. Each entry must name
+// precisely one known collision and both colliding field paths - never a
+// broad escape hatch.
+type keyTagCollisionExemption struct {
+	fieldPaths []string
+	category   keyTagCollisionCategory
+	reason     string
+}
+
+var keyTagCollisionExemptions = map[string]keyTagCollisionExemption{
+	"blockmaxsize": {
+		fieldPaths: []string{"PolicySettings.BlockMaxSize", "BlockSettings.MaxSize"},
+		category:   categoryAccidentalBug,
+		reason: "PolicySettings.BlockMaxSize (default 0, controls what this node mines) and " +
+			"BlockSettings.MaxSize (default 4294967296, controls what it accepts) are different settings " +
+			"that accidentally share key:\"blockmaxsize\" (see settings_doc_test.go's docDefaultsExemptions " +
+			"entry for the same key, which documents the fallout in ExportMetadata()'s flat key->default map). " +
+			"BlockSettings.MaxSize is removed by the pending fix/remove-dead-block-maxsize-setting change; " +
+			"delete this exemption once that lands.",
+	},
+	"blockvalidation_processTxMetaUsingStore_BatchSize": {
+		fieldPaths: []string{"BlockSettings.ProcessTxMetaUsingStoreBatchSize", "BlockValidationSettings.ProcessTxMetaUsingStoreBatchSize"},
+		category:   categoryIntentionalSharing,
+		reason: "BlockSettings.ProcessTxMetaUsingStoreBatchSize is read by blockpersister " +
+			"(processTxMetaUsingStore.go:54, streaming_process_subtree.go:122); " +
+			"BlockValidationSettings.ProcessTxMetaUsingStoreBatchSize is read by subtreevalidation and asset " +
+			"(check_block_subtrees.go:1341, processTxMetaUsingStore.go:83, GetLegacyBlock.go:583). Both fields " +
+			"are populated from the same getInt(\"blockvalidation_processTxMetaUsingStore_BatchSize\", 1024, ...) " +
+			"call in settings.go, so they never diverge, and the sharing is already documented as **SHARED** at " +
+			"docs/references/settings/services/blockpersister_settings.md:23. This is a deliberate choice, not a " +
+			"bug: each service gets its own settings.<Service>.Field accessor for the same underlying value. The " +
+			"AdaptiveFetch precedent (settings/interface.go, hoisted to the root of Settings for exactly this " +
+			"cross-service-sharing reason) is the alternative if anyone later wants to collapse these two fields " +
+			"into one - until then, this exemption stays.",
+	},
+}
+
+// collectKeyTagFieldPaths walks typ recursively, recording the dotted
+// TypeName.FieldName path of every field carrying a non-empty `key:` tag,
+// keyed by that tag value.
+func collectKeyTagFieldPaths(typ reflect.Type, paths map[string][]string) {
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		fieldType := field.Type
+
+		key := field.Tag.Get("key")
+		if key == "" {
+			if fieldType.Kind() == reflect.Pointer && fieldType.Elem().Kind() == reflect.Struct {
+				collectKeyTagFieldPaths(fieldType.Elem(), paths)
+			} else if fieldType.Kind() == reflect.Struct {
+				collectKeyTagFieldPaths(fieldType, paths)
+			}
+			continue
+		}
+
+		fieldPath := fmt.Sprintf("%s.%s", typ.Name(), field.Name)
+		paths[key] = append(paths[key], fieldPath)
+	}
+}
+
+// TestSettingsKeyTagsAreUnique guards against the exact failure mode caused
+// by the "blockmaxsize" collision: two struct fields sharing the same `key:`
+// tag silently overwrite each other's entry in ExportMetadata()'s flat map,
+// so the settings portal ends up publishing one of the two fields' metadata
+// under both fields' identity. Every `key:` tag on Settings must therefore
+// be unique, except for the narrowly-scoped, explicitly named exemptions
+// above.
+func TestSettingsKeyTagsAreUnique(t *testing.T) {
+	paths := make(map[string][]string)
+	collectKeyTagFieldPaths(reflect.TypeOf(Settings{}), paths)
+
+	for key, fieldPaths := range paths {
+		if len(fieldPaths) <= 1 {
+			continue
+		}
+
+		if exempt, ok := keyTagCollisionExemptions[key]; ok {
+			require.ElementsMatch(t, exempt.fieldPaths, fieldPaths,
+				"exemption for key %q (%s) lists %v but the actual colliding fields are %v - update the exemption",
+				key, exempt.category, exempt.fieldPaths, fieldPaths)
+			continue
+		}
+
+		t.Errorf("duplicate key tag %q is used by %d struct fields: %v", key, len(fieldPaths), fieldPaths)
+	}
 }
 
 func mustParseURL(rawURL string) *url.URL {

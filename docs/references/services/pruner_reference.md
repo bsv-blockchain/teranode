@@ -360,16 +360,6 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 - Increase for high-throughput nodes with fast storage
 - Limited by Aerospike connection pool size
 
-### Operation Timeout
-
-- Default: 10 minutes (`pruner_jobTimeout`)
-- On timeout: Operation continues in background
-- Adjust based on:
-
-    - Database size
-    - Network latency
-    - Chunk configuration
-
 ### Channel Buffering
 
 - Buffer size: 1 (non-blocking)

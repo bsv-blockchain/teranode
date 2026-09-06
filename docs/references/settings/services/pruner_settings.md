@@ -1,419 +1,186 @@
-# Pruner Service Settings Reference
+# Pruner Service Settings
 
-## Overview
+**Related Topic**: [Pruner Service](../../../topics/services/pruner.md)
 
-This document provides comprehensive reference for all Pruner service configuration settings in Teranode.
+## Configuration Settings
 
-## Service Control Settings
+Settings are organized under the `Pruner` struct in `settings.Settings`.
 
-### startPruner
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| GRPCListenAddress | string | ":8096" | pruner_grpcListenAddress | **CRITICAL** - gRPC server bind address |
+| GRPCAddress | string | "localhost:8096" | pruner_grpcAddress | gRPC client address other services dial |
+| SkipDuringCatchup | bool | false | pruner_skipDuringCatchup | Skip all pruning while the FSM is catching up (see "Settings not wired to configuration" below) |
+| BlockAssemblyWaitTimeout | time.Duration | 10m | pruner_blockAssemblyWaitTimeout | Maximum wait for Block Assembly to be ready before pruning |
+| ConnectionPoolWarningThreshold | float64 | 0.7 | pruner_connectionPoolWarningThreshold | Aerospike connection pool utilization (0.0-1.0) above which the chunk group limit is auto-reduced |
+| BlockTrigger | string | "OnBlockPersisted" | pruner_block_trigger | What triggers a pruning cycle ("OnBlockPersisted" or "OnBlockMined") |
+| ForceIgnoreBlockPersisterHeight | bool | false | pruner_force_ignore_block_persister_height | Use Block notifications with mined_set=true instead of the Block Persister height (see "Settings not wired to configuration" below) |
+| UTXODefensiveEnabled | bool | false | pruner_utxoDefensiveEnabled | Verify every spending child is mined and stable before deleting a parent |
+| UTXODefensiveBatchReadSize | int | 10000 (Go default; settings.conf ships 1024) | pruner_utxoDefensiveBatchReadSize | Children verified per Aerospike BatchGet in defensive mode |
+| UTXOChunkSize | int | 1000 (Go default; settings.conf ships 1024) | pruner_utxoChunkSize | Records accumulated per parallel chunk |
+| UTXOChunkGroupLimit | int | 10 (Go default; settings.conf ships 1) | pruner_utxoChunkGroupLimit | Maximum chunks processed in parallel per worker |
+| UTXOProgressLogInterval | time.Duration | 30s | pruner_utxoProgressLogInterval | Progress-log interval during long pruning runs (0 disables) |
+| UTXOPartitionQueries | int | 0 (auto-detect from CPU cores) | pruner_utxoPartitionQueries | Parallel Aerospike partition-scan workers, capped at 4096 |
+| UTXOSetTTL | bool | false | pruner_utxoSetTTL | Set a 1-second record TTL instead of hard deleting |
+| RelaxRemovalCommitLevel | bool | true | pruner_relaxRemovalCommitLevel | COMMIT_MASTER for the pruner's own removals and TTL touches |
+| SkipBlobDeletion | bool | false | pruner_skipBlobDeletion | Skip scheduled blob-store deletions |
+| BlobDeletionSafetyWindow | uint32 | 10 | pruner_blobDeletionSafetyWindow | Blocks behind the triggering height before a blob may be deleted |
+| BlobDeletionBatchSize | int | 1000 | pruner_blobDeletionBatchSize | Maximum blob deletions per pruning trigger |
+| BlobDeletionMaxRetries | int | 3 | pruner_blobDeletionMaxRetries | Retry attempts for a failed blob deletion |
+| SkipPreserveParents | bool | false | pruner_skipPreserveParents | Skip Phase 1 - parent preservation for unmined transactions |
+| SkipProcessExpiredPreservations | bool | false | pruner_skipProcessExpiredPreservations | Skip Phase 1b - expiry of old parent preservations (see "Settings not wired to configuration" below) |
+| MinBlockHeight | uint32 | 0 | pruner_min_block_height | Skip all pruning until block height exceeds this value |
+| SkipDeletions | bool | false | pruner_skipDeletions | Skip deletion operations during pruning |
+| UTXOPrunedSetMaxEntries | int | 10000000 | pruner_utxoPrunedSetMaxEntries | Soft cap on the in-memory pruned-TX set (0 = built-in 2B default, not unlimited) |
 
-**Type**: Boolean
+### Service Control
 
-**Default**: `true`
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| startPruner | bool | false (no code default - `gocore.Config().GetBool` with no fallback; settings.conf ships `true`, and `false` for the `docker.m` and `operator` contexts) | startPruner | **CRITICAL** - Enable or disable the Pruner service |
 
-**Description**: Enable or disable the Pruner service
+`startPruner` is read directly by `daemon.shouldStart()`, one per service, and is not part of the
+settings package - it has no struct tag and does not appear in `ExportMetadata()`.
 
-**Context-Specific Values:**
+### Aerospike Index
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| IndexName | string | "pruner_dah_index" | pruner_IndexName | Aerospike secondary index on `DeleteAtHeight` used by Phase 2 |
+
+`IndexName` is a package-level `var` in `stores/utxo/aerospike/pruner/pruner_service.go` read via
+`gocore.Config().Get`, not a settings-package key.
+
+### Related Settings (from UTXOStore struct)
+
+These control pruning behaviour at the UTXO store level. Full reference:
+[UTXO Store Settings](../stores/utxo_settings.md).
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| UnminedTxRetention | uint32 | 144 (globalBlockHeightRetention/2, with the default global retention of 288) | utxostore_unminedTxRetention | Blocks an unmined transaction is retained before its parents are considered for preservation |
+| ParentPreservationBlocks | uint32 | 1440 (blocksInADayOnAverage*10) | utxostore_parentPreservationBlocks | Blocks a preserved parent of an old unmined transaction is kept |
+| DisableDAHCleaner | bool | false | utxostore_disableDAHCleaner | **CRITICAL** - Disable Delete-At-Height pruning (Phase 2) |
+
+## Settings not wired to configuration
+
+`SkipDuringCatchup`, `ForceIgnoreBlockPersisterHeight` and `SkipProcessExpiredPreservations` carry
+`key` struct tags and are read by `services/pruner`, but `settings.NewSettings()` never populates
+them - they always hold the Go zero value `false`. Setting `pruner_skipDuringCatchup`,
+`pruner_force_ignore_block_persister_height` or `pruner_skipProcessExpiredPreservations` in
+settings.conf or the environment therefore has no effect today. The documented defaults above match
+the effective behaviour; the keys are documented because the fields exist and are consumed.
+
+## Configuration Dependencies
+
+### Network Addressing
+
+`settings.conf` builds every pruner address from the `${PRUNER_GRPC_PORT}` template variable, so a
+port change only needs to happen in one place:
 
 ```conf
-# Global default
-startPruner = true
+PRUNER_GRPC_PORT = 8096
 
-# Disable for specific nodes in multi-node docker setup
-startPruner.docker.host.teranode1.coinbase = false
-startPruner.docker.host.teranode2.coinbase = false
-startPruner.docker.host.teranode3.coinbase = false
+pruner_grpcAddress              = localhost:${PRUNER_GRPC_PORT}
+pruner_grpcAddress.docker.m     = pruner:${PRUNER_GRPC_PORT}
+pruner_grpcAddress.docker       = ${clientName}:${PRUNER_GRPC_PORT}
+pruner_grpcAddress.operator     = k8s:///pruner.${clientName}.svc.cluster.local:${PRUNER_GRPC_PORT}
 
-# Development
-startPruner.dev = true
-
-# Operator/Kubernetes
-startPruner.operator = true
+pruner_grpcListenAddress        = :${PRUNER_GRPC_PORT}
+pruner_grpcListenAddress.dev    = localhost:${PRUNER_GRPC_PORT}
 ```
 
-**Impact:**
+That is the complete set of pruner address overrides in `settings.conf`; every other context falls
+back to the base values.
+
+`PRUNER_GRPC_PORT` is not a settings-package key - it is an operator-defined gocore config value
+resolved by generic `${VAR}` substitution, so it can be named anything as long as both address
+settings reference the same variable.
+
+Bind address forms for `pruner_grpcListenAddress`:
+
+- `:8096` - all interfaces
+- `localhost:8096` - localhost only (more secure)
+- `0.0.0.0:8096` - explicitly all IPv4 interfaces
+
+### Service Control
 
 - `true`: Pruner service starts and performs UTXO pruning
 - `false`: Pruner service disabled, UTXO database will grow unbounded
 
-**When to Disable:**
+Disable only temporarily - for testing scenarios requiring full UTXO history, debugging transaction
+issues, or as a workaround for pruning errors.
 
-- Testing scenarios requiring full UTXO history
-- Debugging transaction issues
-- Temporary workaround for pruning errors
+**Warning**: Disabling pruning will cause the UTXO database to grow continuously.
 
-**Warning**: Disabling pruning will cause the UTXO database to grow continuously. Only disable temporarily.
+### Pruning Triggers
 
-## Network Settings
+- `OnBlockPersisted` (default): triggers on BlockPersisted notifications, coordinated with the Block
+  Persister
+- `OnBlockMined`: triggers on Block notifications with mined_set=true
 
-### pruner_grpcPort
+`ForceIgnoreBlockPersisterHeight` selects the same Block-notification source for the safe prune
+height instead of the Block Persister's height tracking - useful when the Block Persister is not
+deployed or its height tracking is unreliable.
 
-**Type**: Integer
+`MinBlockHeight` gates everything: while the chain height is at or below it, all operations (parent
+preservation, DAH deletion, blob deletion) are skipped. Useful when bootstrapping a fresh
+environment where the initial blocks must stay available for cross-node validation.
 
-**Default**: `8096`
+### Catchup Safety
 
-**Description**: gRPC server port for Pruner service
+When `SkipDuringCatchup` is enabled the pruner checks FSM state and skips all deletion operations
+during catchup. That prevents the race where block validation marks transactions as mined faster
+than the pruner can preserve their parents. Leaving it off is only safe with a retention of at
+least 288 blocks.
 
-**Example:**
+### Block Assembly Coordination
 
-```conf
-PRUNER_GRPC_PORT = 8096
-```
+`BlockAssemblyWaitTimeout` caps how long the pruner waits for Block Assembly to reach the running
+state before proceeding. If Block Assembly is temporarily reorging or resetting, the pruner retries
+the state check until the timeout, which prevents pruning data that could still be needed for block
+construction.
 
-**Port Conflicts:**
+### Removal Commit Level
 
-If port 8096 is already in use, change to an available port:
-
-```conf
-PRUNER_GRPC_PORT = 8097
-pruner_grpcAddress = localhost:8097
-pruner_grpcListenAddress = :8097
-```
-
-### pruner_grpcAddress
-
-**Type**: String
-
-**Default**: `localhost:8096`
-
-**Description**: gRPC client address for connecting to Pruner service
-
-**Context-Specific Values:**
-
-```conf
-# Development (default)
-pruner_grpcAddress = localhost:${PRUNER_GRPC_PORT}
-
-# Docker multi-node (single machine)
-pruner_grpcAddress.docker.m = pruner:${PRUNER_GRPC_PORT}
-
-# Docker (per-service containers)
-pruner_grpcAddress.docker = ${clientName}:${PRUNER_GRPC_PORT}
-
-# Docker host access
-pruner_grpcAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_PORT}
-
-# Kubernetes/Operator
-pruner_grpcAddress.operator = k8s:///pruner.${clientName}.svc.cluster.local:${PRUNER_GRPC_PORT}
-```
-
-**Usage**: Other services use this address to connect to Pruner's gRPC API
-
-### pruner_grpcListenAddress
-
-**Type**: String
-
-**Default**: `:8096`
-
-**Description**: gRPC server listen address (bind address)
-
-**Context-Specific Values:**
-
-```conf
-# Default (all interfaces)
-pruner_grpcListenAddress = :${PRUNER_GRPC_PORT}
-
-# Development (localhost only)
-pruner_grpcListenAddress.dev = localhost:${PRUNER_GRPC_PORT}
-
-# Docker host (localhost with port prefix)
-pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_PORT}
-```
-
-**Bind Addresses:**
-
-- `:8096` - Listen on all interfaces
-- `localhost:8096` - Listen only on localhost (more secure)
-- `0.0.0.0:8096` - Explicitly listen on all IPv4 interfaces
-
-## Behavior Control Settings
-
-### pruner_skipDuringCatchup
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_skipDuringCatchup`
-
-**Description**: Skip pruning during blockchain catchup
-
-When enabled, the pruner checks FSM state and skips all deletion operations during catchup. This prevents race conditions where block validation marks transactions as mined faster than the pruner can preserve their parents.
-
-**Values:**
-
-- `false` (default): Normal pruning during catchup (safe with retention >= 288 blocks)
-- `true`: Skip all pruning during catchup state
-
-### pruner_blockAssemblyWaitTimeout
-
-**Type**: Duration
-
-**Default**: `10m`
-
-**Environment Variable**: `pruner_blockAssemblyWaitTimeout`
-
-**Description**: Maximum wait for Block Assembly service to be ready before pruning
-
-Sets the maximum time to wait for Block Assembly to be ready before proceeding with pruning operations. Prevents pruning data that could be needed for block construction.
-
-### pruner_connectionPoolWarningThreshold
-
-**Type**: Float64
-
-**Default**: `0.7`
-
-**Environment Variable**: `pruner_connectionPoolWarningThreshold`
-
-**Description**: Connection pool utilization warning threshold (0.0-1.0)
-
-When Aerospike connection pool utilization exceeds this threshold, the pruner auto-reduces chunk group limit to prevent pool exhaustion.
-
-### pruner_block_trigger
-
-**Type**: String
-
-**Default**: `OnBlockPersisted`
-
-**Environment Variable**: `pruner_block_trigger`
-
-**Description**: When to trigger pruning operations
-
-**Values:**
-
-- `OnBlockPersisted` (default): Triggers on BlockPersisted notifications (coordinated with Block Persister)
-- `OnBlockMined`: Triggers on Block notifications with mined_set=true
-
-### pruner_force_ignore_block_persister_height
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_force_ignore_block_persister_height`
-
-**Description**: Force ignore block persister height tracking
-
-When enabled, uses Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height.
-
-### pruner_utxoSetTTL
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_utxoSetTTL`
-
-**Description**: Use TTL expiration instead of hard delete for UTXO records
-
-When enabled, sets Aerospike record TTL to 1 second instead of hard deleting. This produces optimized tombstones and reduces write amplification.
-
-### pruner_relaxRemovalCommitLevel
-
-**Type**: Boolean
-
-**Default**: `true`
-
-**Environment Variable**: `pruner_relaxRemovalCommitLevel`
-
-**Description**: Acknowledge the pruner's own record removals from the master replica only
-
-Controls the Aerospike commit level for the pruner's record removals — hard deletes, and
-the 1-second TTL touches used when `pruner_utxoSetTTL` is enabled.
+`RelaxRemovalCommitLevel` controls the Aerospike commit level for the pruner's record removals -
+hard deletes, and the 1-second TTL touches used when `UTXOSetTTL` is enabled.
 
 | Value | Behaviour |
 |-------|-----------|
-| `true` (default) | `COMMIT_MASTER` — the call returns once the master replica has the removal; replicas catch up asynchronously. |
-| `false` | `COMMIT_ALL` — wait for every replica, the same as every other Teranode write. |
-
-Relaxing is safe here because pruning is idempotent and self-healing: the pruner only
-removes records that are already provably safe to drop, and a replica that misses a
-removal is re-found by the `delete_at_height` partition scan on the next session and
-re-pruned. Waiting for a full-replication ACK buys no correctness, only latency in the
-per-block removal burst.
-
-**Scope** — record removal only:
-
-- Pruner **parent updates** (the `deletedChildren` map writes and the `addDeletedChildren`
-  UDF) mutate records that survive the prune and always use `COMMIT_ALL`.
-- Every write **outside** the pruner always uses `COMMIT_ALL`. There is no cluster-wide
-  commit-level setting: UTXO record creation, the transaction-creation lock, the conflict
-  WAL, setMined, unspend and the preserve / delete-at-height writes are none of them
-  self-healing, so relaxing them would trade a resync for throughput.
-- Only has an effect on namespaces with `replication-factor` > 1. On a single-copy
-  namespace both values behave identically.
-
-**When to set `false`**: only to rule the relaxation out while diagnosing missing-record
-or replication issues.
-
-### pruner_skipBlobDeletion
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_skipBlobDeletion`
-
-**Description**: Skip blob deletion scheduling
-
-When enabled, skips scheduled deletion of blob store data (transactions and subtrees) based on Delete-At-Height values.
-
-### pruner_blobDeletionSafetyWindow
-
-**Type**: uint32
-
-**Default**: `10`
-
-**Environment Variable**: `pruner_blobDeletionSafetyWindow`
-
-**Description**: Number of blocks behind the triggering block height (mined or persisted, depending on `pruner_block_trigger`) before deleting blobs
-
-Provides a safety margin by only deleting blobs whose delete-at-height is at least this many blocks behind the triggering block height. When the triggering height has not yet exceeded the safety window, all blob deletions are skipped. Prevents deletion of data that might be needed during reorg scenarios.
-
-### pruner_blobDeletionBatchSize
-
-**Type**: Integer
-
-**Default**: `1000`
-
-**Environment Variable**: `pruner_blobDeletionBatchSize`
-
-**Description**: Maximum number of blob deletions to process per pruning trigger
-
-Limits deletions per cycle to prevent overwhelming the blob store. Remaining deletions are processed in subsequent triggers.
-
-### pruner_blobDeletionMaxRetries
-
-**Type**: Integer
-
-**Default**: `3`
-
-**Environment Variable**: `pruner_blobDeletionMaxRetries`
-
-**Description**: Maximum retry attempts for failed blob deletions
-
-### pruner_skipPreserveParents
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_skipPreserveParents`
-
-**Description**: Skip Phase 1 - preserve parents of unmined transactions
-
-When enabled, parent transactions will not be protected from deletion even if they have unmined children.
-
-### pruner_skipProcessExpiredPreservations
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_skipProcessExpiredPreservations`
-
-**Description**: Skip Phase 1b - expire old parent preservations
-
-When disabled (default), each pruner cycle clears expired PreserveUntil markers and re-stamps DeleteAtHeight on preserved parents that have become safe to prune (mined, on the longest chain, and fully spent, or conflicting). When enabled, preserved parents keep PreserveUntil set and DeleteAtHeight cleared indefinitely and are never pruned. Intended as an emergency kill-switch only.
-
-### pruner_skipDeletions
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_skipDeletions`
-
-**Description**: Skip deletion operations during pruning
-
-## Operation Timeout Settings
-
-### pruner_jobTimeout
-
-**Type**: Duration
-
-**Default**: `10m` (10 minutes)
-
-**Description**: Timeout for overall pruning operation completion
-
-**Format**: Duration string (e.g., `5m`, `30s`, `1h`)
-
-**Example:**
-
-```conf
-pruner_jobTimeout = 10m
-```
-
-**Behavior:**
-
-- Pruning operation runs synchronously up to this timeout
-- On timeout: Operation is logged as timed out but continues in background
-
-**Tuning Guidelines:**
-
-- **Small databases**: `5m` may be sufficient
-- **Large databases**: Increase to `15m` or `20m`
-- **Slow storage**: Increase timeout accordingly
-- **High latency networks**: Add buffer for network delays
-
-**Impact:**
-
-- Too short: Frequent timeouts logged
-- Too long: Blocks other operations unnecessarily
-
-**Metrics**: Monitor `pruner_duration_seconds` to determine appropriate timeout
-
-## UTXO Store Settings
-
-These settings control the pruning behavior at the UTXO store level.
-
-### utxostore_unminedTxRetention
-
-**Type**: `uint32` (block height)
-
-**Default**: `globalBlockHeightRetention / 2`
-
-**Typical Value**: ~7200 blocks (≈50 days)
-
-**Description**: Number of blocks to retain unmined transactions before considering them for parent preservation
-
-**Calculation:**
-
-```conf
-globalBlockHeightRetention = 14400  # ~100 days
-utxostore_unminedTxRetention = 7200  # 50 days
-```
-
-**Purpose:**
-
-Unmined transactions older than this are considered "old" and their parent transactions are marked for preservation during Phase 1 pruning.
-
-**Tuning:**
-
-- **Increase**: Retain unmined transactions longer, slower pruning
-- **Decrease**: Prune unmined transactions sooner, faster pruning, higher risk
-
-**Warning**: Setting too low may cause valid resubmitted transactions to fail if their parent UTXOs were already pruned.
-
-### utxostore_parentPreservationBlocks
-
-**Type**: `uint32` (block height)
-
-**Default**: `blocksInADayOnAverage * 10`
-
-**Typical Value**: ~14400 blocks (≈100 days, assuming 144 blocks/day)
-
-**Description**: Number of blocks to preserve parent transactions of old unmined transactions
-
-**Calculation:**
-
-```conf
-blocksInADayOnAverage = 144  # Typical Bitcoin block time
-utxostore_parentPreservationBlocks = 1440  # 10 days
-```
-
-**Purpose:**
+| `true` (default) | `COMMIT_MASTER` - the call returns once the master replica has the removal; replicas catch up asynchronously. |
+| `false` | `COMMIT_ALL` - wait for every replica, the same as every other Teranode write. |
+
+Relaxing is safe here because pruning is idempotent and self-healing: the pruner only removes
+records that are already provably safe to drop, and a replica that misses a removal is re-found by
+the `delete_at_height` partition scan on the next session and re-pruned. Waiting for a
+full-replication ACK buys no correctness, only latency in the per-block removal burst.
+
+**Scope** - record removal only:
+
+- Pruner **parent updates** (the `deletedChildren` map writes and the `addDeletedChildren` UDF)
+  mutate records that survive the prune and always use `COMMIT_ALL`.
+- Every write **outside** the pruner always uses `COMMIT_ALL`. There is no cluster-wide commit-level
+  setting: UTXO record creation, the transaction-creation lock, the conflict WAL, setMined, unspend
+  and the preserve / delete-at-height writes are none of them self-healing, so relaxing them would
+  trade a resync for throughput.
+- Only has an effect on namespaces with `replication-factor` > 1. On a single-copy namespace both
+  values behave identically.
+
+**When to set `false`**: only to rule the relaxation out while diagnosing missing-record or
+replication issues.
+
+### Blob Deletion
+
+`BlobDeletionSafetyWindow` provides a safety margin by only deleting blobs whose delete-at-height is
+at least that many blocks behind the triggering block height (mined or persisted, depending on
+`BlockTrigger`). While the triggering height has not yet exceeded the safety window, all blob
+deletions are skipped. This prevents deletion of data that might be needed during a reorg.
+
+`BlobDeletionBatchSize` limits deletions per cycle so the blob store is not overwhelmed; the
+remainder is processed on subsequent triggers.
+
+### Parent Preservation
 
 When Phase 1 preservation runs, parent transactions get their `PreserveUntil` flag set to:
 
@@ -421,119 +188,49 @@ When Phase 1 preservation runs, parent transactions get their `PreserveUntil` fl
 PreserveUntil = currentHeight + parentPreservationBlocks
 ```
 
-This prevents parent UTXOs from being deleted for the specified number of blocks, ensuring resubmitted transactions can validate.
-
-**Tuning:**
-
-- **Increase**: Preserve parents longer, safer for resubmissions, slower pruning
-- **Decrease**: Prune parents sooner, faster pruning, higher risk for resubmissions
-
-**Recommendation**: Keep default value unless specific use case requires change.
-
-### utxostore_prunerMaxConcurrentOperations
-
-**Type**: Integer
-
-**Default**: UTXO store connection pool size
-
-**Description**: Maximum number of concurrent pruning operations for Aerospike
-
-**Applies To**: Aerospike store only (SQL uses fixed worker count)
-
-**Example:**
+This prevents parent UTXOs from being deleted for that many blocks, so resubmitted transactions can
+still validate. `blocksInADayOnAverage` (144, ~1 day at a 10-minute block target) is a fixed
+constant in settings.go, not a configurable key - the `ParentPreservationBlocks` default is derived
+from it, not read from settings.conf. Likewise `UnminedTxRetention` defaults to half of
+`global_blockHeightRetention`, so raising the global retention raises it too:
 
 ```conf
-utxostore_prunerMaxConcurrentOperations = 8
+global_blockHeightRetention = 14400
+utxostore_unminedTxRetention = 7200
 ```
 
-**Impact:**
+Tuning both: increasing retains transactions and parents longer, which is safer for resubmissions
+but prunes more slowly; decreasing prunes sooner at higher risk. Setting `UnminedTxRetention` too
+low may cause valid resubmitted transactions to fail because their parent UTXOs were already pruned.
 
-- **Higher values**: Faster pruning, higher load on database
-- **Lower values**: Slower pruning, lower load on database
+When `SkipProcessExpiredPreservations` is off (the default), each pruner cycle clears expired
+`PreserveUntil` markers and re-stamps `DeleteAtHeight` on preserved parents that have become safe to
+prune (mined, on the longest chain, and fully spent, or conflicting). When on, preserved parents
+keep `PreserveUntil` set and `DeleteAtHeight` cleared indefinitely and are never pruned - an
+emergency kill-switch only.
 
-**Tuning Guidelines:**
+### DAH Cleaner (Phase 2)
 
-- **Small databases**: 4-8 workers sufficient
-- **Large databases**: 8-16 workers for faster pruning
-- **Limited resources**: Reduce to 2-4 workers
-- **High throughput nodes**: Increase to 16-32 workers
+- `DisableDAHCleaner` false: normal operation, Phase 2 pruning runs
+- `DisableDAHCleaner` true: Phase 2 disabled, only Phase 1 (parent preservation) runs
 
-**Constraint**: Limited by Aerospike connection pool size. Exceeding pool size causes contention.
+**Warning**: enabling it prevents UTXO record deletion and causes database growth. Testing and
+debugging only.
 
-**Aerospike Worker Count:**
-
-Default: 4 workers (hardcoded in `/stores/utxo/aerospike/pruner/pruner_service.go`)
-
-To change, modify code:
-
-```go
-// In pruner_service.go
-workerCount := 4  // Change this value
-```
-
-### utxostore_disableDAHCleaner
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Description**: Disable Delete-At-Height (DAH) pruning (Phase 2)
-
-**Example:**
-
-```conf
-utxostore_disableDAHCleaner = true
-```
-
-**Impact:**
-
-- `false`: Normal operation, Phase 2 pruning runs
-- `true`: Phase 2 disabled, only Phase 1 (parent preservation) runs
-
-**When to Enable:**
-
-- **Testing**: Debugging pruning issues
-- **Investigation**: Analyzing DAH pruning behavior
-- **Temporary workaround**: If Phase 2 causing issues
-
-**Warning**: Enabling this setting prevents UTXO record deletion, causing database growth. Only for testing/debugging.
-
-## Aerospike-Specific Settings
-
-### pruner_IndexName
-
-**Type**: String
-
-**Default**: `pruner_dah_index`
-
-**Description**: Name of the Aerospike secondary index on `DeleteAtHeight` field
-
-**Example:**
-
-```conf
-pruner_IndexName = pruner_dah_index
-```
-
-**Purpose:**
-
-DAH pruning (Phase 2) queries Aerospike using this secondary index for efficient record filtering:
+Phase 2 queries Aerospike through the `IndexName` secondary index for efficient record filtering:
 
 ```sql
 SELECT * FROM utxos WHERE deleteAtHeight <= safeHeight
 ```
 
-**Index Creation:**
-
-- **Automatic**: Created on service start via index waiter
-- **Wait Time**: Service waits for index to be ready before starting pruning
-
-**Manual Index Creation (if needed):**
+The index is created automatically on service start via the index waiter, and the service waits for
+it to be ready before pruning. Manual creation, if needed:
 
 ```bash
 asadm -e "asinfo -v 'sindex-create:ns=teranode;set=utxos;indexname=pruner_dah_index;indextype=NUMERIC;binname=deleteAtHeight'"
 ```
 
-**Index Verification:**
+Verification:
 
 ```bash
 asadm -e "show indexes"
@@ -546,161 +243,51 @@ Namespace   Set     Index Name        Bin Name          Type
 teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
 ```
 
-## Chunk Processing Settings
-
-These settings control parallel processing during UTXO pruning operations.
-
-### pruner_utxoChunkSize
-
-**Type**: Integer
-
-**Default**: `1000`
-
-**Description**: Number of records to process in each parallel chunk during pruning
-
-Controls the granularity of parallel processing. Records are accumulated into chunks of this size, then processed in parallel.
-
-**Example:**
-
-```conf
-pruner_utxoChunkSize = 1000
-```
-
-**Tuning:**
-
-- **Higher values**: Fewer chunks, less parallelism overhead, more memory per chunk
-- **Lower values**: More chunks, better parallelism, more overhead
-
-**Recommendation**: Default value works well for most deployments.
-
-### pruner_utxoChunkGroupLimit
-
-**Type**: Integer
-
-**Default**: `10`
-
-**Description**: Maximum number of chunks to process in parallel
-
-Limits concurrent chunk processing to prevent overwhelming Aerospike or exhausting system resources.
-
-**Example:**
-
-```conf
-pruner_utxoChunkGroupLimit = 10
-```
-
-**Tuning:**
-
-- **Higher values**: More parallelism, faster pruning, higher resource usage
-- **Lower values**: Less parallelism, slower pruning, lower resource usage
-
-**Constraint**: Limited by Aerospike connection pool size. Setting too high causes connection contention.
-
-### pruner_utxoProgressLogInterval
-
-**Type**: Duration
-
-**Default**: `30s`
-
-**Description**: Interval for logging progress during long-running pruning operations
-
-When set, the pruner logs periodic progress updates showing records pruned and elapsed time.
-
-**Example:**
-
-```conf
-pruner_utxoProgressLogInterval = 30s
-```
-
-**Values:**
-
-- `0`: Disable progress logging
-- `30s`: Log every 30 seconds (default)
-- `1m`: Log every minute
-
-**Use Case**: Monitor progress during large pruning operations or troubleshoot slow pruning.
-
-### pruner_utxoPartitionQueries
-
-**Type**: Integer
-
-**Default**: `0` (auto-detect based on CPU cores)
-
-**Environment Variable**: `pruner_utxoPartitionQueries`
-
-**Description**: Number of parallel Aerospike partition queries for scanning prunable records
-
-Aerospike's keyspace is divided into 4096 partitions. This setting controls how many workers scan partitions in parallel. Each worker processes a range of partitions independently, achieving up to 100x performance improvement over sequential queries.
-
-**Values:**
-
-- `0` (default): Auto-detect based on CPU cores and Aerospike query-threads-limit
-- `N > 0`: Fixed number of partition workers (capped at 4096)
-
-**Tuning:**
-
-- **Higher values**: Faster scanning, more Aerospike load and connections
-- **Lower values**: Reduced cluster pressure, slower pruning
-
-**Recommendation**: Use default (`0`) for automatic scaling. Set explicitly to match your Aerospike cluster's capacity.
-
-## Defensive Mode Settings
-
-These settings control the defensive pruning mode, which adds safety checks before deleting parent transactions.
-
-### pruner_utxoDefensiveEnabled
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Description**: Enable defensive child verification before parent deletion
-
-When enabled, the pruner verifies that ALL spending children of a parent transaction are mined and stable (for at least `blockHeightRetention` blocks) before deleting the parent. This prevents orphaning children during chain reorganizations.
-
-**Example:**
-
-```conf
-pruner_utxoDefensiveEnabled = true
-```
-
-**Impact:**
-
-- `true`: Safer pruning with child verification, slightly slower due to batch verification
-- `false`: Faster pruning, relies on retention period alone for safety
-
-**When to Enable:**
-
-- Production environments with high transaction resubmission rates
-- Environments experiencing frequent chain reorganizations
-- When data integrity is critical
-
-**Trade-off**: Enabling adds Aerospike batch read operations to verify children, which increases pruning time but provides stronger safety guarantees.
-
-### pruner_utxoDefensiveBatchReadSize
-
-**Type**: Integer
-
-**Default**: `10000`
-
-**Description**: Batch size for defensive child verification queries
-
-Controls how many child transactions are verified in a single Aerospike BatchGet call when defensive mode is enabled.
-
-**Example:**
-
-```conf
-pruner_utxoDefensiveBatchReadSize = 10000
-```
-
-**Tuning:**
-
-- **Higher values**: Fewer Aerospike round trips, more memory per batch
-- **Lower values**: More round trips, less memory per batch
-
-**Applies To**: Only used when `pruner_utxoDefensiveEnabled = true`
+### Chunk Processing
+
+Aerospike's keyspace is divided into 4096 partitions. `UTXOPartitionQueries` controls how many
+workers scan partitions in parallel; each processes a range independently, achieving up to 100x
+improvement over sequential queries. `0` auto-detects from CPU cores and Aerospike's
+query-threads-limit; a value above 0 fixes the worker count (capped at 4096).
+
+Records scanned for deletion are accumulated into chunks of `UTXOChunkSize` and processed in
+parallel, at most `UTXOChunkGroupLimit` chunks at a time. Higher chunk sizes mean fewer chunks, less
+parallelism overhead and more memory per chunk; higher group limits mean more parallelism, faster
+pruning and higher resource usage.
+
+`UTXOChunkGroupLimit` is bounded by the Aerospike connection pool. On startup the pruner validates
+`(workers × chunkGroupLimit) + workers` against `ConnectionQueueSize × ConnectionPoolWarningThreshold`
+and reduces the group limit if it would exceed the threshold. `settings.conf` deliberately ships a
+group limit of 1: at scale, parallel chunk processing can starve transaction throughput.
+
+### Pruned-TX Set
+
+`UTXOPrunedSetMaxEntries` caps the in-memory `PrunedTxSet`, which tracks TXIDs pruned across
+sessions so wasteful Aerospike parent updates can be skipped pre-flight. It is held on the service
+struct and reused across prune sessions within a process, never persisted across restarts. The set
+is a sharded two-generation cuckoo filter: when the current generation fills it rotates into the
+previous slot and a fresh one is allocated, so `Add` keeps succeeding and old entries age out. A
+high `utxo_pruner_pruned_set_rotations` rate is the signal that the cap is too small.
+
+The cap is the total entry budget across both generations of all shards, so memory is roughly one
+byte per entry: 10M ≈ 10 MiB, 100M ≈ 100 MiB, and `0` selects the built-in 2B default ≈ 2 GiB. The
+optimisation is disabled automatically when `UTXODefensiveEnabled` is true.
+
+### Defensive Mode
+
+When `UTXODefensiveEnabled` is true the pruner verifies that ALL spending children of a parent are
+mined and stable (for at least `blockHeightRetention` blocks) before deleting the parent, which
+prevents orphaning children during chain reorganizations. It adds Aerospike batch reads, so pruning
+takes longer in exchange for a stronger safety guarantee. `UTXODefensiveBatchReadSize` controls how
+many children are verified per BatchGet, and only applies while defensive mode is on.
+
+Enable it for production environments with high transaction resubmission rates, environments with
+frequent reorgs, or wherever data integrity outweighs pruning speed.
 
 ## Context-Specific Configuration
+
+The values below are what `settings.conf` ships. Note that `startPruner` is off in `docker.m` and
+`operator`.
 
 ### Development Context
 
@@ -709,17 +296,16 @@ pruner_utxoDefensiveBatchReadSize = 10000
 startPruner = true
 pruner_grpcAddress = localhost:8096
 pruner_grpcListenAddress = localhost:8096
-pruner_jobTimeout = 10m
 ```
 
 ### Docker Context (Single Machine, Multi-Node)
 
 ```conf
 [docker.m]
-startPruner = true
+startPruner = false
 pruner_grpcAddress = pruner:8096
 pruner_grpcListenAddress = :8096
-pruner_jobTimeout = 10m
+pruner_utxoPartitionQueries = 8
 ```
 
 ### Docker Context (Per-Service Containers)
@@ -729,17 +315,16 @@ pruner_jobTimeout = 10m
 startPruner = true
 pruner_grpcAddress = ${clientName}:8096
 pruner_grpcListenAddress = :8096
-pruner_jobTimeout = 10m
 ```
 
 ### Docker Host Context (Access from Host)
 
+`settings.conf` ships no pruner overrides for `docker.host`, so the base values apply. To reach a
+port-prefixed container from the host, and to keep the pruner off specific nodes:
+
 ```conf
 [docker.host]
-startPruner = true
 pruner_grpcAddress = localhost:${PORT_PREFIX}8096
-pruner_grpcListenAddress = localhost:${PORT_PREFIX}8096
-pruner_jobTimeout = 10m
 
 # Disable pruner for specific nodes
 startPruner.teranode1.coinbase = false
@@ -750,10 +335,9 @@ startPruner.teranode2.coinbase = false
 
 ```conf
 [operator]
-startPruner = true
+startPruner = false
 pruner_grpcAddress = k8s:///pruner.${clientName}.svc.cluster.local:8096
 pruner_grpcListenAddress = :8096
-pruner_jobTimeout = 15m  # Increase for distributed environments
 ```
 
 ## Configuration Examples
@@ -772,25 +356,24 @@ All other settings use defaults.
 ```conf
 # settings.conf
 startPruner = true
-pruner_jobTimeout = 5m  # Shorter timeout
-pruner_utxoChunkSize = 2000  # Larger chunks
-pruner_utxoChunkGroupLimit = 20  # More parallel chunks
-utxostore_unminedTxRetention = 5000  # Prune sooner
-utxostore_parentPreservationBlocks = 10000  # Shorter preservation
+pruner_utxoChunkSize = 2000
+pruner_utxoChunkGroupLimit = 20
+utxostore_unminedTxRetention = 5000
+utxostore_parentPreservationBlocks = 10000
 ```
 
-**Use Case**: High-throughput nodes with fast storage
+**Use Case**: High-throughput nodes with fast storage. Raising the chunk group limit trades
+transaction throughput for pruning speed - watch tx ingest when you do.
 
 ### Conservative Configuration
 
 ```conf
 # settings.conf
 startPruner = true
-pruner_jobTimeout = 20m  # Longer timeout
-pruner_utxoChunkGroupLimit = 5  # Fewer parallel chunks
-pruner_utxoDefensiveEnabled = true  # Enable safety checks
-utxostore_unminedTxRetention = 10000  # Retain longer
-utxostore_parentPreservationBlocks = 20000  # Longer preservation
+pruner_utxoChunkGroupLimit = 5
+pruner_utxoDefensiveEnabled = true
+utxostore_unminedTxRetention = 10000
+utxostore_parentPreservationBlocks = 20000
 ```
 
 **Use Case**: Production nodes prioritizing data safety over performance
@@ -799,7 +382,7 @@ utxostore_parentPreservationBlocks = 20000  # Longer preservation
 
 ```conf
 # settings_local.conf
-startPruner = false  # Disable pruning for testing
+startPruner = false
 ```
 
 **Use Case**: Local testing requiring full UTXO history
@@ -820,33 +403,39 @@ startPruner.docker.host.teranode3 = true
 
 **Use Case**: Multi-node setup where only certain nodes perform pruning
 
+### Aerospike Index Name Override
+
+```conf
+pruner_IndexName = pruner_dah_index
+```
+
 ## Environment Variable Overrides
 
-Settings can be overridden via environment variables using uppercase names with underscores:
+Settings can be overridden via environment variables using the exact key name (case-sensitive, no
+automatic uppercasing):
 
 ```bash
 # Override pruner enable/disable
-export STARTPRUNER=false
+export startPruner=false
 
-# Override gRPC port
-export PRUNER_GRPCPORT=8097
-
-# Override job timeout
-export PRUNER_JOBTIMEOUT=15m
+# Override gRPC port (via the settings.conf ${PRUNER_GRPC_PORT} template variable used above)
+export PRUNER_GRPC_PORT=8097
 
 # Override UTXO settings
-export UTXOSTORE_UNMINEDTXRETENTION=10000
-export UTXOSTORE_PARENTPRESERVATIONBLOCKS=20000
+export utxostore_unminedTxRetention=10000
+export utxostore_parentPreservationBlocks=20000
 ```
 
-## Monitoring Settings
+## Monitoring
 
 While not configuration settings, these Prometheus metrics should be monitored:
 
-- `pruner_duration_seconds`: Adjust `jobTimeout` if consistently near timeout
-- `pruner_skipped_total{reason="not_running"}`: Indicates Block Assembly issues
-- `pruner_errors_total`: Indicates database or connectivity issues
-- `utxo_cleanup_batch_duration_seconds`: Indicates Aerospike performance
+- `pruner_duration_seconds`: watch for a rising trend, which may indicate the chunk/concurrency
+  settings need tuning
+- `pruner_skipped_total{reason="not_running"}`: indicates Block Assembly issues
+- `pruner_errors_total`: indicates database or connectivity issues
+- `utxo_cleanup_batch_duration_seconds`: indicates Aerospike performance
+- `utxo_pruner_pruned_set_rotations`: high rate means `pruner_utxoPrunedSetMaxEntries` is too small
 
 ## Troubleshooting Configuration Issues
 
@@ -854,7 +443,7 @@ While not configuration settings, these Prometheus metrics should be monitored:
 
 **Check:**
 
-1. Verify `startPruner = true`
+1. Verify `startPruner = true` for the active settings context
 2. Check port 8096 availability: `lsof -i :8096`
 3. Review logs: `grep "\[Pruner\]" teranode.log`
 
@@ -868,16 +457,6 @@ pruner_grpcAddress = localhost:8097
 pruner_grpcListenAddress = :8097
 ```
 
-### Frequent Timeouts
-
-**Symptoms**: `WARN [Pruner] Job timeout reached`
-
-**Solution**: Increase `pruner_jobTimeout`:
-
-```conf
-pruner_jobTimeout = 20m  # or higher
-```
-
 ### Slow Pruning
 
 **Symptoms**: High `pruner_duration_seconds` values
@@ -887,8 +466,8 @@ pruner_jobTimeout = 20m  # or higher
 1. Increase parallel chunk processing:
 
     ```conf
-    pruner_utxoChunkGroupLimit = 20  # Process more chunks in parallel
-    pruner_utxoChunkSize = 2000  # Larger chunks
+    pruner_utxoChunkGroupLimit = 20
+    pruner_utxoChunkSize = 2000
     ```
 
 2. Verify Aerospike index exists:
@@ -902,7 +481,7 @@ pruner_jobTimeout = 20m  # or higher
 4. If defensive mode is enabled and slowing pruning:
 
     ```conf
-    pruner_utxoDefensiveEnabled = false  # Disable if safety checks not needed
+    pruner_utxoDefensiveEnabled = false
     ```
 
 ### Database Growth
@@ -924,6 +503,8 @@ pruner_jobTimeout = 20m  # or higher
     ```
 
 3. Verify Block Assembly in RUNNING state
+
+4. Verify `pruner_min_block_height` is not still gating the chain height
 
 ## Related Documentation
 
