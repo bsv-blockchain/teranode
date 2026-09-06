@@ -146,15 +146,32 @@ then start normally:
 
 Do not restore data from one network into a configuration for another network.
 
-## FSM State
+## Verify a Seed Before Catch-up
 
-`./start.sh` performs the normal FSM transition. If a startup race leaves the
-node in `INIT`, set the state manually:
+The quickstart stack uses the `docker.m` settings context. A fresh blockchain
+store therefore starts in `IDLE`, including the first start after `./seed.sh`:
+the seeder writes chain data and the Block Assembler checkpoint, but no FSM
+state. While the node is parked, confirm that the seeded tip and network match
+the snapshot you intended to load and that every service can reach its store.
 
 ```bash
-./cli.sh setfsmstate --fsmstate RUNNING
-./cli.sh getfsmstate
+./start.sh
+./status.sh
+./cli.sh getfsmstate                        # expect IDLE
 ```
+
+After verification, start synchronization explicitly:
+
+```bash
+./cli.sh setfsmstate --fsmstate catchingblocks
+./cli.sh getfsmstate                        # expect CATCHINGBLOCKS
+```
+
+Catch-up promotes the node to `RUNNING` after it reaches the active network's
+highest checkpoint. There is no transition from `CATCHINGBLOCKS` back to
+`IDLE`, so verify the seed first. To skip this window on an unattended node,
+set `blockchain_initializeNodeInState.docker.m = CATCHINGBLOCKS` in
+`settings_local.conf` before the first start.
 
 ## Troubleshooting Sync
 

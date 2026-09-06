@@ -77,7 +77,13 @@ Provides health check information via gRPC, exposing the readiness health check 
 func (b *Blockchain) Init(ctx context.Context) error
 ```
 
-Initializes the blockchain service, setting up the finite state machine (FSM) that governs the service's operational states. It handles three initialization scenarios: test mode, new deployment, and normal operation where it restores the previously persisted state from storage.
+Initializes the blockchain service and its finite state machine (FSM). The
+test-only local override takes precedence; a fresh store uses
+`blockchain_initializeNodeInState` (empty means `CATCHINGBLOCKS`); and a restart
+normally restores its persisted state. Invalid configured states and storage
+failures abort startup. Fresh or persisted `RUNNING` is also checked against the
+active network's highest checkpoint; an unsafe configured `RUNNING` fails, while
+an unsafe persisted `RUNNING` safely resumes as `CATCHINGBLOCKS`.
 
 ### Start
 

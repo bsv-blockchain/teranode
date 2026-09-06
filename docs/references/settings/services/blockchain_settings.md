@@ -15,7 +15,7 @@
 | FSMStateRestore | bool | false | fsm_state_restore | **UNUSED** - Previously triggered FSM restore via RPC service, implementation is currently disabled |
 | FSMStateChangeDelay | time.Duration | 0 | fsm_state_change_delay | **TESTING ONLY** - Delays FSM state transitions |
 | StoreDBTimeoutMillis | int | 5000 | blockchain_store_dbTimeoutMillis | Database operation timeout (store-level) |
-| InitializeNodeInState | string | "" | blockchain_initializeNodeInState | **UNUSED** - Defined but not referenced in code |
+| InitializeNodeInState | string | "" (`IDLE` for `operator`/`docker.m`) | blockchain_initializeNodeInState | Fresh-node FSM state: IDLE, CATCHINGBLOCKS, or RUNNING. Empty means CATCHINGBLOCKS; persisted state takes precedence; invalid values fail startup |
 | PostgresPool | *PostgresSettings | (see below) | blockchain_postgres_pool | PostgreSQL connection pool settings |
 
 ### PostgreSQL Connection Pool (PostgresPool)

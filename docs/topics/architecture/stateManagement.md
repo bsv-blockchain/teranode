@@ -63,7 +63,16 @@ Teranode provides a visualizer tool to generate and visualize the state machine 
 
 ### 3.1. State Machine Initialization
 
-As part of its own initialization, the Blockchain service restores the FSM to the state it last persisted. A node with no persisted state (a fresh node) starts in **CatchingBlocks** so that it begins downloading blocks immediately rather than waiting to be moved out of **Idle**; it is promoted to **Running** only once catch-up completes above the network's highest checkpoint.
+As part of initialization, the Blockchain service normally restores the FSM
+state it last persisted. A node with no persisted state uses
+`blockchain_initializeNodeInState`: an empty value means **CatchingBlocks**,
+while production `operator` and `docker.m` contexts default it to **Idle** so a
+seed can be inspected before catch-up. Invalid values abort startup.
+
+The test-only local start-state override takes precedence. Otherwise, a
+configured fresh-node **Running** state must pass the active network's checkpoint
+gate. A persisted **Running** state that no longer passes that gate is persisted
+and resumed as **CatchingBlocks** instead.
 
 ### 3.2. Accessing the State Machine
 
@@ -105,9 +114,9 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 
 #### 3.3.1. FSM: Idle State
 
-A node reaches `Idle` either by being stopped from `Running`, or by having
-persisted `Idle` before a restart. A fresh node no longer starts here — it starts
-in `CatchingBlocks` (see section 3.1). In this state:
+A node reaches `Idle` by being stopped from `Running`, by restoring persisted
+`Idle`, or by starting fresh under a context configured to park there (production
+deployments do; see section 3.1). In this state:
 
 - No operations are permitted
 - All services are inactive
@@ -158,8 +167,9 @@ The Block Assembler will only mine blocks when the node is in the `Running` stat
 
 The `CatchingBlocks` state represents the node catching up on blocks. It is entered
 by BlockValidation when a running node finds it has fallen behind the network; at
-startup, because a fresh node with no persisted state boots straight into it (see
-section 3.1); or through an explicit CATCHUPBLOCKS event from `Idle`. In this state:
+startup when selected as the fresh-node boot state (see section 3.1); when an
+unsafe persisted `Running` state is recovered; or through an explicit
+CATCHUPBLOCKS event from `Idle`. In this state:
 
 Allowed Operations in Catching Blocks State:
 

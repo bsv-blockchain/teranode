@@ -1,6 +1,21 @@
 # How to Manage Teranode States
 
-This guide explains how to change and monitor Teranode's state. Note that a fresh Teranode instance starts in CATCHINGBLOCKS state and begins catching up on its own; it reaches RUNNING once catch-up completes above the network's highest checkpoint. A restarted instance resumes whatever state it last persisted.
+This guide explains how to change and monitor Teranode's state. Fresh production
+deployments (`operator` and `docker.m` settings contexts) start in `IDLE`, giving
+an operator a safe inspection window. Other contexts keep the automatic
+`CATCHINGBLOCKS` default. Configure this with
+`blockchain_initializeNodeInState`; it accepts `IDLE`, `CATCHINGBLOCKS`, or
+`RUNNING`, and invalid values fail startup.
+
+After inspecting a fresh production deployment, start synchronization from
+`IDLE` with `teranode-cli setfsmstate --fsmstate catchingblocks`. A direct
+`RUNNING` request is refused below the highest checkpoint; catch-up promotes the
+node automatically once it reaches that checkpoint.
+
+The setting applies only when no FSM state is persisted. Restarts normally
+restore the persisted state. A persisted `RUNNING` state that no longer passes
+the active network's checkpoint gate is safely persisted and resumed as
+`CATCHINGBLOCKS` instead.
 
 ## Prerequisites
 
@@ -183,12 +198,12 @@ kubectl port-forward -n teranode-operator service/blockchain 18087:18087
 grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.GetFSMCurrentState
 ```
 
-Expected output (a fresh node reports `CATCHINGBLOCKS`; a restarted node reports
-whatever state it last persisted):
+Expected output for a fresh Kubernetes operator deployment (a restarted node
+normally reports its persisted state):
 
 ```json
 {
-  "state": "CATCHINGBLOCKS"
+  "state": "IDLE"
 }
 ```
 
