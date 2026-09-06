@@ -27,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
@@ -145,6 +146,18 @@ type BlockAssembler struct {
 	// Protected by stateChangeMu to prevent race conditions
 	stateChangeMu sync.RWMutex
 	stateChangeCh chan BestBlockInfo
+
+	// heartbeat records that the main select loop is still being serviced, so
+	// the liveness probe can distinguish a wedged assembler from an idle one
+	// (issue 1447)
+	heartbeat health.Heartbeat
+
+	// heartbeatInterval is how often the main loop's idle tick fires. It only
+	// needs to be comfortably shorter than any liveness timeout an operator
+	// would configure. Held per-assembler rather than as a package variable so
+	// a test that shrinks it cannot race another test's running loop.
+	// Set by NewBlockAssembler; read once when the loop starts.
+	heartbeatInterval time.Duration
 
 	// currentChainMap maps block hashes to their heights
 	currentChainMap map[chainhash.Hash]uint32
@@ -268,6 +281,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		resetCh:             make(chan resetRequest, 2),
 		reconcileCh:         make(chan struct{}, 1),
 		currentRunningState: atomic.Value{},
+		heartbeatInterval:   defaultHeartbeatInterval,
 	}
 
 	b.setCurrentRunningState(StateStarting)
@@ -349,11 +363,43 @@ func (b *BlockAssembler) GetChainedSubtreesTotalSize() uint64 {
 	return b.subtreeProcessor.GetChainedSubtreesTotalSize()
 }
 
+// defaultHeartbeatInterval is the idle-tick period every assembler starts with.
+// Tests shrink the per-assembler field instead, so waiting several tick
+// intervals costs milliseconds rather than tens of seconds.
+const defaultHeartbeatInterval = 5 * time.Second
+
+// effectiveHeartbeatInterval is the idle tick the listener goroutine will
+// actually use. NewBlockAssembler always sets a positive interval, but the
+// package builds &BlockAssembler{} literals in a lot of tests, and
+// time.NewTicker panics on a non-positive interval from inside a goroutine,
+// which takes the process down rather than failing a test.
+func effectiveHeartbeatInterval(configured time.Duration) time.Duration {
+	if configured <= 0 {
+		return defaultHeartbeatInterval
+	}
+
+	return configured
+}
+
+// livenessTimeoutTooTight reports whether a configured liveness stall timeout
+// sits close enough to the idle tick that it cannot tell an idle loop from a
+// wedged one. Split out from the warning it drives so the rule can be tested
+// without capturing log output. Zero or less means the check is disabled, which
+// is never too tight.
+func livenessTimeoutTooTight(stallTimeout, heartbeatInterval time.Duration) bool {
+	return stallTimeout > 0 && stallTimeout <= 2*heartbeatInterval
+}
+
 // startChannelListeners initializes and starts all channel listeners for block assembly operations.
 // It handles blockchain notifications, mining candidate requests, and reset operations.
+// The listener goroutine also owns the liveness heartbeat, beating on every pass
+// of its select so a wedged loop can be told apart from an idle one.
 //
 // Parameters:
 //   - ctx: Context for cancellation
+//
+// Returns:
+//   - error: Any error encountered subscribing to blockchain notifications
 func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) {
 	// start a subscription for the best block header and the FSM state
 	// this will be used to reset the subtree processor when a new block is mined
@@ -369,19 +415,48 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 	// node it returns early when hashes match.
 	b.triggerReconcile()
 
+	heartbeatInterval := effectiveHeartbeatInterval(b.heartbeatInterval)
+
+	// A liveness timeout at or below the idle tick cannot tell an idle loop from
+	// a wedged one, so it would restart a healthy node. Warn rather than clamp:
+	// the operator chose the value and silently overriding it would hide the
+	// mistake (issue 1447).
+	if stallTimeout := b.settings.BlockAssembly.LivenessStallTimeout; livenessTimeoutTooTight(stallTimeout, heartbeatInterval) {
+		b.logger.Warnf("[BlockAssembler] blockassembly_livenessStallTimeout %s is not comfortably longer than the %s heartbeat interval: a healthy idle node may be reported as wedged and restarted", stallTimeout, heartbeatInterval)
+	}
+
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
 		// variables are defined here to prevent unnecessary allocations
 		b.setCurrentRunningState(StateRunning)
 
+		// Beat on every pass of the select, including the idle tick below: this
+		// records that the loop can still be SERVICED, not that work arrived.
+		// A node with no blocks is healthy — on mainnet the gap between blocks
+		// is routinely tens of minutes — but a deadlocked loop cannot service
+		// the tick either, which is the freeze the liveness probe must catch.
+		heartbeatTicker := time.NewTicker(heartbeatInterval)
+		defer heartbeatTicker.Stop()
+
+		// First beat happens HERE, not at construction: everything before this
+		// point is startup work that is legitimately unbounded (waiting on
+		// pending block validation, reloading a large unmined set), and the
+		// heartbeat must not age through it.
+		b.heartbeat.Beat()
+
 		for {
+			b.heartbeat.Beat()
+
 			select {
 			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
 				// Note: We don't close blockchainSubscriptionCh here because we don't own it -
 				// it's created by the blockchain client's Subscribe method
 				return
+
+			case <-heartbeatTicker.C:
+				// Idle tick: proves the loop is alive without requiring work.
 
 			case resetReq := <-b.resetCh:
 				b.setCurrentRunningState(StateResetting)
@@ -2189,6 +2264,20 @@ func (b *BlockAssembler) validateParentChain(
 
 	// Process transactions in batches for performance
 	for i := 0; i < len(unminedTxs); i += batchSize {
+		// Beat once per batch: when this runs from the reset path it is inside a
+		// select case, so without it a large-but-progressing validation looks
+		// identical to a wedge. The beat sits at the top of the batch, which for
+		// every batch after the first is proof the previous one finished, so it
+		// tracks FORWARD PROGRESS: a run that stops progressing gets no further
+		// beats and still goes stale (issue 1447).
+		//
+		// BeatIfStarted, not Beat: this same code also runs from Start, before
+		// the main loop owns the heartbeat, and the rest of that startup path
+		// (bulk-loading the unmined set into the subtree processor) is
+		// legitimately unbounded. A plain Beat here would start the clock
+		// mid-startup and let the probe report a still-starting node as wedged.
+		b.heartbeat.BeatIfStarted()
+
 		// Check for context cancellation at start of each batch
 		select {
 		case <-ctx.Done():
