@@ -323,6 +323,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 |--------------------------------------------|-----------|-------------------------------------------------------------------------|
 | `teranode_validator_health`                | Counter   | Number of calls to the health endpoint                                  |
 | `teranode_validator_invalid_transactions`  | Counter   | Number of transactions found invalid by the validator service           |
+| `teranode_validator_script_tiered_fee_rejections` | Counter | Transactions rejected by the per-script fee tiers (minminingtxfeebyscriptsize, minminingtxfeebyscriptops) |
+| `teranode_validator_script_tiered_fee_consolidation_exemptions` | Counter | Underpaying transactions accepted as free consolidations by the per-script fee tiers |
 | `teranode_validator_transactions_validate_total` | Histogram | Histogram of total transaction validation                               |
 | `teranode_validator_transactions_validate` | Histogram | Histogram of transaction validation                                     |
 | `teranode_validator_transactions_extend`   | Histogram | Histogram of transaction extension operations                           |

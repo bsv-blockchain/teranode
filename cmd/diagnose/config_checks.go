@@ -650,6 +650,40 @@ func checkPolicy(s *settings.Settings) []ConfigResult {
 		Value:    fmt.Sprintf("%.8f", s.Policy.MinMiningTxFee),
 	})
 
+	// Per-script fee tiers (optional; empty means disabled). Each pairs with
+	// the cap on the same metric: a cap at or below the first tier threshold
+	// rejects scripts before they ever reach a fee tier.
+	checkFeeTiers := func(check string, tiers []settings.FeeTier, unit string, capName string, capValue int64) {
+		if len(tiers) == 0 {
+			return
+		}
+
+		formatted := make([]string, 0, len(tiers))
+		for _, tier := range tiers {
+			formatted = append(formatted, fmt.Sprintf("%d:%d", tier.Threshold, tier.SatoshisPerK))
+		}
+
+		if capValue > 0 && uint64(capValue) <= tiers[0].Threshold {
+			results = append(results, ConfigResult{
+				Severity:    SeverityWARN,
+				Check:       check,
+				Value:       strings.Join(formatted, "|"),
+				Recommended: fmt.Sprintf("%s (%d) rejects scripts before they reach the first fee tier (%d); raise the cap or lower the tier", capName, capValue, tiers[0].Threshold),
+			})
+		} else {
+			results = append(results, ConfigResult{
+				Severity: SeverityINFO,
+				Check:    check,
+				Value:    strings.Join(formatted, "|") + " (" + unit + ", marginal)",
+			})
+		}
+	}
+
+	checkFeeTiers("Script-size fee tiers", s.Policy.MinMiningTxFeeByScriptSize,
+		"scriptSizeBytes:satoshisPerKB", "maxscriptsizepolicy", int64(s.Policy.MaxScriptSizePolicy))
+	checkFeeTiers("Script-ops fee tiers", s.Policy.MinMiningTxFeeByScriptOps,
+		"opsThreshold:satoshisPerKOps", "maxopsperscriptpolicy", s.Policy.MaxOpsPerScriptPolicy)
+
 	return results
 }
 

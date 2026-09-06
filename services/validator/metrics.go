@@ -59,6 +59,21 @@ var (
 	// holding it, so the increment marks a transaction the node lost.
 	prometheusValidatorParentCommitExhausted *prometheus.CounterVec
 
+	// prometheusValidatorScriptTieredFeeRejections counts transactions rejected by the
+	// per-script fee-tier policies (checkScriptTieredFees). Always zero when the settings are
+	// empty. A rising rate means submitters are underpaying for large or op-dense scripts
+	// relative to this node's tier schedules; if that is unexpected, compare the schedule
+	// with what wallets are being quoted, since the ARC-format policy endpoint only
+	// advertises the minminingtxfee floor.
+	prometheusValidatorScriptTieredFeeRejections prometheus.Counter
+
+	// prometheusValidatorScriptTieredFeeConsolidationExemptions counts transactions that
+	// were under the tiered fee requirement but accepted because they qualify as
+	// free consolidations (isFreeConsolidationTxn), mirroring BDK's exemption from the
+	// fee floor. A sudden surge relative to rejections is worth a look: consolidation
+	// shape is the one way to legitimately pay below the tier schedule.
+	prometheusValidatorScriptTieredFeeConsolidationExemptions prometheus.Counter
+
 	// prometheusTransactionValidateTotal measures the complete end-to-end validation time for transactions.
 	// This histogram tracks the total time spent validating a transaction from initial receipt through
 	// final validation completion, including all validation steps and database operations. Units: seconds.
@@ -289,6 +304,25 @@ func _initPrometheusMetrics() {
 			Help:      "Transactions rejected because the parent-commit retry budget ran out, by condition",
 		},
 		[]string{"condition"},
+	)
+
+	// Per-script fee-tier policy counters
+	prometheusValidatorScriptTieredFeeRejections = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "script_tiered_fee_rejections",
+			Help:      "Transactions rejected by the per-script fee-tier policies",
+		},
+	)
+
+	prometheusValidatorScriptTieredFeeConsolidationExemptions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "script_tiered_fee_consolidation_exemptions",
+			Help:      "Underpaying transactions accepted by the per-script fee-tier policies because they qualify as free consolidations",
+		},
 	)
 
 	// Block assembly operations histogram
