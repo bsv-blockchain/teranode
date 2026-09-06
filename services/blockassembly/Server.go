@@ -1826,8 +1826,32 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		TransactionCount: transactionCount,
 		SizeInBytes:      blockSize,
 		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
-		SubtreeSlices:    job.Subtrees,
-		CoinbaseBUMP:     coinbaseBUMP,
+		// Aliases the subtree processor's live slice rather than copying it, so
+		// this block shares both the backing array and the *Subtree values with
+		// whatever else holds the job. Block.Valid must therefore not mutate
+		// either: model.Block.closeMmapSubtreesLocked is the release on that
+		// path, and it never writes to the array — a cross-package dependency
+		// worth naming, because a release that reached further would corrupt the
+		// processor's state from inside block validation.
+		//
+		// It does Close mmap-backed entries, and these CAN be mmap-backed: with
+		// blockassembly_subtreeMmapDir set, the processor builds its chained
+		// subtrees with SubtreeProcessor.newSubtree, which returns
+		// NewTreeByLeafCountMmap. What keeps that harmless is only that the
+		// release never runs on this path — GetAndValidateSubtrees takes its
+		// "already loaded" early exit, because len(jobSubtreeHashes) always
+		// equals len(job.Subtrees) and every job subtree carries nodes. Tighten
+		// that loaded-check, or hand this block a subtree it cannot account for,
+		// and block validation would unmap and delete the live processor's
+		// backing files.
+		//
+		// Copying the slice would not buy anything either, because Close acts on
+		// the *Subtree and not on the array: a clone holds the same pointers.
+		// Anything that stops relying on the early exit has to give the block
+		// subtrees of its own, or tell the release the entries are not its to
+		// close.
+		SubtreeSlices: job.Subtrees,
+		CoinbaseBUMP:  coinbaseBUMP,
 	}
 
 	// check fully valid, including whether difficulty in header is low enough

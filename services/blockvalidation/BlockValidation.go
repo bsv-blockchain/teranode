@@ -400,13 +400,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		validatorClient:             validatorClient,
 		subtreeValidationClient:     subtreeValidationClient,
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute).
-			WithEvictionFunction(func(_ chainhash.Hash, block *model.Block) bool {
-				// Pools heap-backed []Node slices, Closes mmap-backed subtrees
-				// (unmap + backing-file removal), and nils the entries — all
-				// under the block's subtree mutex.
-				releaseBlockNodes(block)
-				return true // allow eviction
-			}),
+			WithEvictionFunction(evictLastValidatedBlock),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 		invalidBlockKafkaProducer:     invalidBlockKafkaProducer,
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute), // we keep this for 10 minutes
@@ -1234,6 +1228,40 @@ func (u *BlockValidation) tryClaimBlockForSetMined(blockHash *chainhash.Hash) bo
 	return true
 }
 
+// reloadSubtreesForInvalidBlock reloads an invalid block's subtrees from the
+// store, best-effort: a subtree that cannot be read or parsed is left nil,
+// because an invalid block legitimately may not have all of them.
+func (u *BlockValidation) reloadSubtreesForInvalidBlock(ctx context.Context, block *model.Block) {
+	reloaded := make([]*subtreepkg.Subtree, len(block.Subtrees))
+
+	for subtreeIdx, subtreeHash := range block.Subtrees {
+		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+		if err != nil {
+			subtreeBytes, err = u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+			if err != nil {
+				u.logger.Warnf("[setTxMined][%s] failed to get subtree %d/%s from store: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
+				continue
+			}
+		}
+
+		subtree, err := u.newSubtreeFromBytes(subtreeBytes)
+		if err != nil {
+			u.logger.Warnf("[setTxMined][%s] failed to parse subtree %d/%s: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
+			continue
+		}
+
+		reloaded[subtreeIdx] = subtree
+
+		u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store", block.Hash().String(), subtreeIdx, subtreeHash.String())
+	}
+
+	// Built locally and swapped in under the block's mutex. The store reads above
+	// deliberately stay outside it: holding the block's subtree mutex across
+	// store I/O is what makes an eviction of the same block stall the whole
+	// lastValidatedBlocks cache.
+	block.ReplaceSubtreeSlices(reloaded)
+}
+
 // setTxMinedStatus marks all transactions within a block as mined in the blockchain system.
 //
 // This function updates the mining status of all transactions contained within the specified
@@ -1307,33 +1335,19 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		// still loaded. Overwriting SubtreeSlices below drops the only reference
 		// to them, and an mmap-backed subtree has no finalizer — its mapping and
 		// its temp backing file would survive until process exit. Release first.
+		//
+		// A full release, unlike the reload in model.GetAndValidateSubtrees which
+		// closes only mmap-backed subtrees. The difference is ownership, not
+		// oversight: this block is exclusively ours. It reached the cache only
+		// after its validation finished, so the SubtreeWriteJobs that shared
+		// quick_validate's subtrees have all been drained, and blockassembly's
+		// blocks never enter this cache. Gutting the heap-backed nodes here is
+		// the point — it returns the memory of a block being discarded.
 		if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
 			u.logger.Warnf("[setTxMined][%s] failed closing subtrees before unset-mined reload: %v", block.Hash().String(), releaseErr)
 		}
 
-		block.SubtreeSlices = make([]*subtreepkg.Subtree, len(block.Subtrees))
-
-		// when the block is invalid, we might not have all the subtrees
-		for subtreeIdx, subtreeHash := range block.Subtrees {
-			subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
-			if err != nil {
-				subtreeBytes, err = u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-				if err != nil {
-					u.logger.Warnf("[setTxMined][%s] failed to get subtree %d/%s from store: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-					continue
-				}
-			}
-
-			subtree, err := u.newSubtreeFromBytes(subtreeBytes)
-			if err != nil {
-				u.logger.Warnf("[setTxMined][%s] failed to parse subtree %d/%s: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-				continue
-			}
-
-			block.SubtreeSlices[subtreeIdx] = subtree
-
-			u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store", block.Hash().String(), subtreeIdx, subtreeHash.String())
-		}
+		u.reloadSubtreesForInvalidBlock(ctx, block)
 	} else {
 		// All subtrees should already be available for fully processed blocks
 		_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, u.settings.Block.GetAndValidateSubtreesConcurrency)

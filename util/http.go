@@ -446,6 +446,14 @@ func SetSSRFProtection(enabled bool) {
 	ssrfProtectionEnabled.Store(enabled)
 }
 
+// SSRFProtectionEnabled reports whether SSRF URL validation is currently active.
+// Tests that disable it should restore this value rather than assuming the
+// default, so a nested or subsequent test cannot be silently left unprotected —
+// or protected when its caller had deliberately turned it off.
+func SSRFProtectionEnabled() bool {
+	return ssrfProtectionEnabled.Load()
+}
+
 // ValidateURL checks that the given URL is safe to request, rejecting non-HTTP schemes
 // and URLs containing link-local IP addresses to prevent SSRF attacks against cloud
 // metadata endpoints (e.g. AWS 169.254.169.254).

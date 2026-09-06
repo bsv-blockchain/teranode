@@ -39,7 +39,7 @@
 | BatchMissingTransactions | bool | false | blockvalidation_batch_missing_transactions | Missing transaction batching |
 | CheckSubtreeFromBlockTimeout | time.Duration | 5m | blockvalidation_check_subtree_from_block_timeout | Subtree validation timeout |
 | SubtreeDataFetchTimeout | time.Duration | 10m | blockvalidation_subtree_data_fetch_timeout | Bound on one detached subtree_data fetch (download + parse + store) |
-| SubtreeMetaPeerFetchTimeout | time.Duration | 30s | blockvalidation_subtree_meta_peer_fetch_timeout | Whole-peer budget for one subtree meta regeneration fetch (all 503 retries + body stream) |
+| SubtreeMetaPeerFetchTimeout | time.Duration | 10m | blockvalidation_subtree_meta_peer_fetch_timeout | Per-fetch budget for a subtree meta regeneration subtree_data fetch (all 503 retries + body stream); a cache-busting retry gets a fresh budget |
 | CheckSubtreeFromBlockRetries | int | 5 | blockvalidation_check_subtree_from_block_retries | Subtree validation retries |
 | CheckSubtreeFromBlockRetryBackoffDuration | time.Duration | 30s | blockvalidation_check_subtree_from_block_retry_backoff_duration | Subtree retry backoff |
 | SecretMiningThreshold | uint32 | 99 | blockvalidation_secret_mining_threshold | **CRITICAL** - Secret mining detection |
