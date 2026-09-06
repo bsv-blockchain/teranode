@@ -82,6 +82,10 @@ const (
 	PreserveUntil FieldName = "preserveUntil"
 	// DeletedChildren map of child records that have been deleted
 	DeletedChildren FieldName = "deletedChildren"
+	// Cohort is the wall-clock second the transaction record was created in, the
+	// label used by the cohort-based mined-state design (issue 556).
+	// When 0, no cohort was recorded for this transaction.
+	Cohort FieldName = "cohort"
 )
 
 // String returns the string representation of the FieldName.

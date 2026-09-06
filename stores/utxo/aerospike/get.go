@@ -59,6 +59,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"math"
 	"slices"
 	"sync/atomic"
 
@@ -1068,6 +1069,42 @@ NEXT_BATCH_RECORD:
 					case int64:
 						items[idx].Data.CreatedAt = t
 					}
+				}
+
+			case fields.Cohort:
+				// The cohort bin (issue 556) is only written when a cohort was
+				// stamped, so an absent bin is the normal case and leaves
+				// Data.Cohort at zero (cohort.Unset). The aerospike client
+				// returns an integer bin as int or int64, so both are accepted,
+				// exactly as the CreatedAt case immediately above does.
+				//
+				// A bin that is neither, or whose value cannot be a cohort ID,
+				// is logged and left at Unset rather than failing the read.
+				// CreatedAt above ignores an unexpected type in the same way,
+				// and nothing consumes the cohort yet, so aborting a
+				// BatchDecorate that block validation depends on would trade a
+				// cosmetic problem for a real one.
+				if v := bins[key.String()]; v != nil {
+					var raw int64
+
+					switch t := v.(type) {
+					case int:
+						raw = int64(t)
+					case int64:
+						raw = t
+					default:
+						s.logger.Warnf("[BatchDecorate][%s] ignoring cohort bin of unexpected type %T", items[idx].Hash, v)
+
+						continue
+					}
+
+					if raw < 0 || raw > math.MaxUint32 {
+						s.logger.Warnf("[BatchDecorate][%s] ignoring cohort %d outside the uint32 range", items[idx].Hash, raw)
+
+						continue
+					}
+
+					items[idx].Data.Cohort = uint32(raw)
 				}
 			}
 		}

@@ -134,6 +134,10 @@ func (m *NullStore) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opt
 		txMetaData.Locked = true
 	}
 
+	// Cohort label for the cohort-based mined-state design (issue 556). Zero
+	// (cohort.Unset) when the caller did not pass WithCohort.
+	txMetaData.Cohort = uint32(options.Cohort)
+
 	return txMetaData, nil
 }
 

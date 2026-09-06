@@ -255,22 +255,27 @@ func SetupCreatePostgresSchemaSuccessMocks(mockDB *MockDB) {
 		return strings.Contains(query, "DO $$") && strings.Contains(query, "preserve_until") && strings.Contains(query, "ADD COLUMN")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// Step 12: Ensure CASCADE FK on block_ids (combined DROP if non-CASCADE + ADD if missing)
+	// Step 12: ADD COLUMN cohort to transactions (DO $$ block)
+	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
+		return strings.Contains(query, "DO $$") && strings.Contains(query, "cohort") && strings.Contains(query, "ADD COLUMN")
+	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
+
+	// Step 13: Ensure CASCADE FK on block_ids (combined DROP if non-CASCADE + ADD if missing)
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "DO $$") && strings.Contains(query, "block_ids_transaction_id_fkey") && strings.Contains(query, "confdeltype")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// Step 13: CREATE TABLE IF NOT EXISTS conflicting_children
+	// Step 14: CREATE TABLE IF NOT EXISTS conflicting_children
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "CREATE TABLE IF NOT EXISTS conflicting_children")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// Step 14: CREATE INDEX px_outputs_unspent_by_parent
+	// Step 15: CREATE INDEX px_outputs_unspent_by_parent
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "CREATE INDEX IF NOT EXISTS px_outputs_unspent_by_parent")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// Step 15: CREATE TABLE IF NOT EXISTS conflict_intents
+	// Step 16: CREATE TABLE IF NOT EXISTS conflict_intents
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "CREATE TABLE IF NOT EXISTS conflict_intents")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
@@ -302,6 +307,7 @@ func SetupCreatePostgresSchemaErrorMocks(mockDB *MockDB, errorAtStep int) {
 		func(q string) bool { return strings.Contains(q, "block_height") && strings.Contains(q, "ADD COLUMN") },
 		func(q string) bool { return strings.Contains(q, "unmined_since") && strings.Contains(q, "ADD COLUMN") },
 		func(q string) bool { return strings.Contains(q, "preserve_until") && strings.Contains(q, "ADD COLUMN") },
+		func(q string) bool { return strings.Contains(q, "cohort") && strings.Contains(q, "ADD COLUMN") },
 		func(q string) bool {
 			return strings.Contains(q, "block_ids_transaction_id_fkey") && strings.Contains(q, "confdeltype")
 		},

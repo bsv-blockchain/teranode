@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
 )
@@ -1284,12 +1285,26 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 			sIdx := globalSubtreeIdx
 			createG.Go(func() error {
-				_, _, err := u.utxoStore.SpendAndCreate(createCtx, tx, block.Height, utxo.WithCreateOnly(),
+				createOpts := []utxo.CreateOption{
+					utxo.WithCreateOnly(),
 					utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
 						BlockID:     block.ID,
 						BlockHeight: block.Height,
 						SubtreeIdx:  sIdx,
-					}), utxo.WithLocked(lockUTXOs), utxo.WithSkipExtendedInputs(outpointOnly))
+					}),
+					utxo.WithLocked(lockUTXOs),
+					utxo.WithSkipExtendedInputs(outpointOnly),
+				}
+
+				// These transactions are created as part of a block, so they are
+				// mined at the moment they are created and their cohort is never
+				// consulted: they get the born-mined sentinel rather than a
+				// wall-clock label. (issue 556)
+				if u.settings.UtxoStore.CohortStamping {
+					createOpts = append(createOpts, utxo.WithCohort(cohort.BornMined))
+				}
+
+				_, _, err := u.utxoStore.SpendAndCreate(createCtx, tx, block.Height, createOpts...)
 				if err != nil {
 					if errors.Is(err, errors.ErrTxExists) {
 						// Transaction already exists - collect it for mined info update

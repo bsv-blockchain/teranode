@@ -51,6 +51,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -464,7 +465,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		workerID := i
 
 		g.Go(func() error {
-			return worker(gCtx, logger, utxoStore, workerID, utxoWrapperCh, coinbaseTxs)
+			return worker(gCtx, logger, utxoStore, workerID, utxoWrapperCh, coinbaseTxs, appSettings.UtxoStore.CohortStamping)
 		})
 	}
 
@@ -614,8 +615,9 @@ OUTER:
 }
 
 // worker processes UTXOWrapper messages from the channel and stores them in the UTXO store.
+// cohortStamping is passed straight through to processUTXO.
 func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
-	id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx) error {
+	id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx, cohortStamping bool) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -628,7 +630,7 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 				return nil
 			}
 
-			if err := processUTXO(ctx, store, utxoWrapper, coinbaseTxs); err != nil {
+			if err := processUTXO(ctx, store, utxoWrapper, coinbaseTxs, cohortStamping); err != nil {
 				logger.Errorf("Worker %d failed to process UTXO: %v", id, err)
 				return err
 			}
@@ -639,7 +641,9 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 // processUTXO processes a single UTXOWrapper and stores it in the UTXO store.
 // coinbaseTxs maps coinbase txid to the authoritative coinbase transaction
 // recovered from the V2 utxo-headers file; it may be empty.
-func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx) error {
+// cohortStamping carries UtxoStore.CohortStamping: when false no cohort label is
+// stamped at all, so the stored label stays at cohort.Unset.
+func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx, cohortStamping bool) error {
 	if utxoWrapper == nil {
 		return nil
 	}
@@ -671,14 +675,24 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		return nil
 	}
 
-	if _, _, err := store.SpendAndCreate(
-		ctx,
-		tx,
-		utxoWrapper.Height,
+	createOpts := []utxo.CreateOption{
 		utxo.WithCreateOnly(),
 		utxo.WithTXID(&utxoWrapper.TxID),
 		utxo.WithSetCoinbase(utxoWrapper.Coinbase),
 		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 0, BlockHeight: utxoWrapper.Height, SubtreeIdx: 0}),
+	}
+
+	// Snapshot imports are born mined and their real creation time is unknown, so
+	// they carry the historical sentinel rather than a wall-clock label. (issue 556)
+	if cohortStamping {
+		createOpts = append(createOpts, utxo.WithCohort(cohort.Historical))
+	}
+
+	if _, _, err := store.SpendAndCreate(
+		ctx,
+		tx,
+		utxoWrapper.Height,
+		createOpts...,
 	); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			return nil

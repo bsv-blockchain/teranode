@@ -63,6 +63,22 @@ type Data struct {
 	// When 0, it indicates the transaction has been mined on the longest chain.
 	UnminedSince uint32 `json:"unminedSince"`
 
+	// Cohort is the wall-clock second the record was created in, used by the
+	// cohort-based mined-state design (issue 556). Zero means no cohort was
+	// recorded: the record predates the feature, or the feature flag was off.
+	// The full value space is documented in util/cohort.
+	//
+	// Deliberately NOT carried in any of the four binary encodings on this type
+	// (Bytes, NewDataFromBytes, MetaBytes/MetaBytesInto, NewMetaDataFromBytes).
+	// Bytes ends with an unlengthed, unversioned run of 4-byte block IDs and
+	// NewDataFromBytes reads the whole remainder after the transaction as
+	// exactly that, to EOF, so appending four bytes there would not fail to
+	// parse — it would decode as an extra block ID, which is mined-state
+	// corruption on the consensus path. The Meta pair has a fixed 17-byte header
+	// with no version field and the same problem. Carrying the cohort through
+	// those encodings needs a versioned format, which is not part of this change.
+	Cohort uint32 `json:"cohort,omitempty"`
+
 	// CreatedAt is the wall-clock time (Unix milliseconds) when the tx record was
 	// first inserted into the UTXO store. Set once at Create and never updated.
 	// Used by ReverseProcessConflicting as the "first-seen mempool spender" hint

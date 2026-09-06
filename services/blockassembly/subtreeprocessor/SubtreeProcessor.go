@@ -43,6 +43,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
@@ -5183,10 +5184,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	stp.logger.Debugf("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s blockID %d", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String(), block.ID)
 	// we pass in the block height we are working on here, since the utxo store will recognize the tx as
 	// a coinbase and add the correct spending height, which should be + 99
-	if _, _, err = stp.utxoStore.SpendAndCreate(
-		ctx,
-		block.CoinbaseTx,
-		blockHeight,
+	createOpts := []utxostore.CreateOption{
 		utxostore.WithCreateOnly(),
 		utxostore.WithMinedBlockInfo(
 			utxostore.MinedBlockInfo{
@@ -5194,6 +5192,20 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 				BlockHeight: blockHeight,
 				SubtreeIdx:  0, // Coinbase is always the first transaction in the first subtree
 			}),
+	}
+
+	// The coinbase is created as part of a block, so it is mined at the moment it
+	// is created and its cohort is never consulted: it gets the born-mined
+	// sentinel rather than a wall-clock label. (issue 556)
+	if stp.settings.UtxoStore.CohortStamping {
+		createOpts = append(createOpts, utxostore.WithCohort(cohort.BornMined))
+	}
+
+	if _, _, err = stp.utxoStore.SpendAndCreate(
+		ctx,
+		block.CoinbaseTx,
+		blockHeight,
+		createOpts...,
 	); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// This will also be called for the 2 coinbase transactions that are duplicated on the network

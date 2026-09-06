@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
@@ -1153,6 +1154,13 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	var baseOpts []utxo.CreateOption
 	if outpointOnly {
 		baseOpts = append(baseOpts, utxo.WithSkipExtendedInputs(true))
+	}
+
+	// These transactions are created as part of a block, so they are mined at the
+	// moment they are created and their cohort is never consulted: they get the
+	// born-mined sentinel rather than a wall-clock label. (issue 556)
+	if sm.settings.UtxoStore.CohortStamping {
+		baseOpts = append(baseOpts, utxo.WithCohort(cohort.BornMined))
 	}
 
 	// Track txs that already exist in the store so we can merge our blockID into their

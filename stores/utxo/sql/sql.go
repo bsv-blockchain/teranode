@@ -47,6 +47,7 @@ import (
 	"database/sql/driver"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -464,6 +465,10 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		txMeta.Locked = true
 	}
 
+	// Cohort label for the cohort-based mined-state design (issue 556). Zero
+	// (cohort.Unset) when the caller did not pass WithCohort.
+	txMeta.Cohort = uint32(options.Cohort)
+
 	var unminedSince interface{} = nil // Use nil for mined transactions
 	if len(options.MinedBlockInfos) == 0 {
 		unminedSince = blockHeight // Set UnminedSince only for unmined transactions
@@ -507,6 +512,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		,locked
 		,unmined_since
 		,delete_at_height
+		,cohort
 	  ) VALUES (
 		 $1
 		,$2
@@ -519,6 +525,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		,$9
 		,$10
 		,$11
+		,$12
 		)
 		RETURNING id
 	`
@@ -549,6 +556,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		options.Locked,
 		unminedSince,
 		deleteAtHeight,
+		txMeta.Cohort,
 	).Scan(&transactionID)
 	if err != nil {
 		if pgErr := asPgUniqueViolation(err); pgErr != nil {
@@ -773,11 +781,12 @@ func (s *Store) createBlockIDsBatched(ctx context.Context, txn *sql.Tx, transact
 // createCTESQL is the single CTE statement that inserts a transaction + all its inputs,
 // outputs, and block_ids in one round-trip. UNNEST with array parameters means the SQL
 // string is always identical regardless of transaction size — perfect for statement caching.
-// Parameters: $1-$10 = transaction scalars, $11-$17 = input arrays, $18-$22 = output arrays, $23-$25 = block_id arrays.
+// Parameters: $1-$10 = transaction scalars, $11-$17 = input arrays, $18-$22 = output arrays,
+// $23-$25 = block_id arrays, $26 = delete_at_height, $27 = cohort.
 const createCTESQL = `
 WITH new_tx AS (
-	INSERT INTO transactions (hash,version,lock_time,fee,size_in_bytes,coinbase,frozen,conflicting,locked,unmined_since,delete_at_height)
-	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$26)
+	INSERT INTO transactions (hash,version,lock_time,fee,size_in_bytes,coinbase,frozen,conflicting,locked,unmined_since,delete_at_height,cohort)
+	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$26,$27)
 	ON CONFLICT (hash) DO NOTHING
 	RETURNING id
 ), ins_inputs AS (
@@ -836,6 +845,8 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 			blkArrs.blockID, blkArrs.blockHeight, blkArrs.subtreeIdx,
 			// $26: delete_at_height for a mined tx with no spendable outputs
 			s.unspendableMinedTxDAH(btTx, blockHeight, options),
+			// $27: cohort label (issue 556); 0 when the caller passed no WithCohort
+			txMeta.Cohort,
 		)
 		if execErr != nil {
 			return execErr
@@ -1065,6 +1076,10 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 			txMeta.Locked = true
 		}
 
+		// Cohort label for the cohort-based mined-state design (issue 556). Zero
+		// (cohort.Unset) when the caller did not pass WithCohort.
+		txMeta.Cohort = uint32(item.options.Cohort)
+
 		var unminedSince interface{}
 		if len(item.options.MinedBlockInfos) == 0 {
 			unminedSince = item.blockHeight
@@ -1148,6 +1163,8 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 				p.blkArrs.subtreeIdx,
 				// $26: delete_at_height for a mined tx with no spendable outputs
 				s.unspendableMinedTxDAH(item.tx, item.blockHeight, item.options),
+				// $27: cohort label (issue 556); 0 when the caller passed no WithCohort
+				p.txMeta.Cohort,
 			)
 		}
 
@@ -1536,6 +1553,7 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		,conflicting
 		,locked
 		,unmined_since
+		,cohort
 		,inserted_at
 		FROM transactions
 		WHERE hash = $1
@@ -1549,13 +1567,14 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		lockTime          uint32
 		spendingDataBytes []byte
 		unminedSince      sql.NullInt64
+		cohort            sql.NullInt64
 		// inserted_at is TIMESTAMPTZ on postgres but TEXT on sqlite (see schema
 		// in transactions table init). Postgres driver returns time.Time;
 		// sqlite returns string. Scan into interface{} and branch on type.
 		insertedAt any
 	)
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &cohort, &insertedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
@@ -1571,6 +1590,10 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 			data.UnminedSince = uint32(unminedSince.Int64)
 		}
 	}
+
+	// Cohort label (issue 556). The column is NOT NULL DEFAULT 0, but it is read
+	// as nullable so a database whose rows predate the ALTER cannot fail the scan.
+	data.Cohort = cohortFromNullInt64(cohort)
 
 	// CreatedAt mirrors the aerospike bin: Unix milliseconds, set once at insert.
 	// Always populate so callers like selectCountersForDemotedTx have it without
@@ -1785,6 +1808,18 @@ func needsBlockIDsQuery(bins []fields.FieldName) bool {
 	return contains(bins, fields.BlockIDs) ||
 		contains(bins, fields.BlockHeights) ||
 		contains(bins, fields.SubtreeIdxs)
+}
+
+// cohortFromNullInt64 converts the cohort column value into the uint32 stored on
+// meta.Data. The column is declared NOT NULL DEFAULT 0, so a NULL only reaches
+// here from a row written before the column existed; that and any value outside
+// the uint32 range both mean "no cohort recorded", which is cohort.Unset (0).
+func cohortFromNullInt64(v sql.NullInt64) uint32 {
+	if !v.Valid || v.Int64 < 0 || v.Int64 > math.MaxUint32 {
+		return 0
+	}
+
+	return uint32(v.Int64)
 }
 
 // parseInsertedAtMillis converts the inserted_at column value into Unix
@@ -3638,7 +3673,7 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	// Query 1: Bulk fetch from transactions table
 	inClause, inArgs := buildINClause(hashes, 1)
 
-	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, inserted_at FROM transactions WHERE hash IN ` + inClause
+	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, cohort, inserted_at FROM transactions WHERE hash IN ` + inClause
 
 	rows, err := s.db.QueryContext(ctx, q, inArgs...)
 	if err != nil {
@@ -3654,11 +3689,12 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 		var (
 			hashBytes    []byte
 			unminedSince sql.NullInt64
+			cohort       sql.NullInt64
 			insertedAt   any
 		)
 
 		row := &batchDecorateTxRow{data: &meta.Data{}}
-		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt); err != nil {
+		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &cohort, &insertedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -3671,6 +3707,8 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 				row.data.UnminedSince = uint32(unminedSince.Int64)
 			}
 		}
+
+		row.data.Cohort = cohortFromNullInt64(cohort)
 
 		row.data.CreatedAt = parseInsertedAtMillis(insertedAt)
 
@@ -4778,6 +4816,7 @@ func createPostgresSchemaImpl(db DBExecutor) error {
         ,delete_at_height BIGINT
         ,unmined_since    BIGINT
         ,preserve_until   BIGINT
+        ,cohort           BIGINT NOT NULL DEFAULT 0
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -4927,6 +4966,21 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
 	}
 
+	// Add cohort column to transactions table if it doesn't exist. The cohort is
+	// the label used by the cohort-based mined-state design (issue 556); 0 means
+	// no cohort was recorded, which is what every pre-existing row gets.
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'transactions'::regclass AND attname = 'cohort' AND NOT attisdropped) THEN
+				ALTER TABLE transactions ADD COLUMN cohort BIGINT NOT NULL DEFAULT 0;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add cohort column to transactions table - [%+v]", err)
+	}
+
 	// Ensure block_ids FK has ON DELETE CASCADE — only drop+recreate if it exists without CASCADE
 	if _, err := db.Exec(`
 		DO $$
@@ -5010,6 +5064,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,delete_at_height BIGINT
         ,unmined_since    BIGINT
         ,preserve_until   BIGINT
+        ,cohort           BIGINT NOT NULL DEFAULT 0
         ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -5285,6 +5340,39 @@ func createSqliteSchema(db *usql.DB) error {
 		`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
+		}
+	}
+
+	// Check if we need to add the cohort column to transactions table
+	rows, err = db.Query(`
+		SELECT COUNT(*)
+		FROM pragma_table_info('transactions')
+		WHERE name = 'cohort'
+	`)
+	if err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check transactions table for cohort column - [%+v]", err)
+	}
+
+	var cohortColumnCount int
+
+	if rows.Next() {
+		if err := rows.Scan(&cohortColumnCount); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not scan cohort column count - [%+v]", err)
+		}
+	}
+
+	rows.Close()
+
+	// Add cohort column if it doesn't exist. 0 means no cohort was recorded,
+	// which is what every pre-existing row gets.
+	if cohortColumnCount == 0 {
+		if _, err := db.Exec(`
+			ALTER TABLE transactions ADD COLUMN cohort BIGINT NOT NULL DEFAULT 0;
+		`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not add cohort column to transactions table - [%+v]", err)
 		}
 	}
 

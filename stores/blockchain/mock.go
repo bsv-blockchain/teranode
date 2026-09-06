@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -46,6 +47,11 @@ type MockStore struct {
 	// blockIDReservations holds reserved block IDs for hashes not yet committed,
 	// so that repeated calls to AssignBlockID for the same hash return the same id.
 	blockIDReservations map[chainhash.Hash]uint64
+	// CohortMap maps a cohort to the rows recorded for it by RecordCohortMap
+	CohortMap map[cohort.ID][]CohortMapRow
+	// SplitAllocations maps a "source cohort/block hash" key to the synthetic
+	// cohort handed out for that split by AllocateSplitCohort
+	SplitAllocations map[string]cohort.ID
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
 	// MainChainFastPathDisabled, when true, makes MainChainBlockHashesByHeights
@@ -68,6 +74,8 @@ func NewMockStore() *MockStore {
 		BlockChainWork:      map[chainhash.Hash][]byte{},
 		BlockIsMined:        map[chainhash.Hash]bool{},
 		blockIDReservations: map[chainhash.Hash]uint64{},
+		CohortMap:           map[cohort.ID][]CohortMapRow{},
+		SplitAllocations:    map[string]cohort.ID{},
 		state:               "IDLE",
 	}
 }
@@ -797,4 +805,103 @@ func (m *MockStore) GetFSMState(ctx context.Context) (string, error) {
 	defer m.mu.RUnlock()
 
 	return m.state, nil
+}
+
+// RecordCohortMap records cohort->block rows in the mock's in-memory map,
+// insert-only: a pair that is already present is left exactly as it is.
+func (m *MockStore) RecordCohortMap(_ context.Context, rows []CohortMapRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.CohortMap == nil {
+		m.CohortMap = map[cohort.ID][]CohortMapRow{}
+	}
+
+	for _, row := range rows {
+		existing := m.CohortMap[row.Cohort]
+
+		found := false
+
+		for _, have := range existing {
+			if have.BlockID == row.BlockID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			m.CohortMap[row.Cohort] = append(existing, row)
+		}
+	}
+
+	return nil
+}
+
+// CohortBlocks returns the blocks each requested cohort maps to. Height and hash
+// come from the mock's Blocks map when the block is known there; a cohort with no
+// rows is absent from the result.
+//
+// model.Block carries no chain-state flags, so the mock has nothing to derive
+// them from: a block present in Blocks is reported as OnMainChain with Invalid
+// false, and a block absent from Blocks keeps both at their zero value. Tests
+// that need a real reorg answer must use the SQL store, not this mock.
+func (m *MockStore) CohortBlocks(_ context.Context, cohorts []cohort.ID) (map[cohort.ID][]CohortBlock, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[cohort.ID][]CohortBlock)
+
+	for _, id := range cohorts {
+		for _, row := range m.CohortMap[id] {
+			block := CohortBlock{
+				BlockID:     row.BlockID,
+				MemberCount: row.MemberCount,
+				Verified:    row.Verified,
+			}
+
+			for hash, stored := range m.Blocks {
+				if stored != nil && stored.ID == row.BlockID {
+					h := hash
+					block.Hash = &h
+					block.Height = stored.Height
+					block.OnMainChain = true
+
+					break
+				}
+			}
+
+			result[id] = append(result[id], block)
+		}
+	}
+
+	return result, nil
+}
+
+// AllocateSplitCohort hands out a synthetic cohort number for a (source cohort,
+// block hash) pair, returning the same number on every later call for that pair.
+func (m *MockStore) AllocateSplitCohort(_ context.Context, sourceCohort cohort.ID, blockHash *chainhash.Hash) (cohort.ID, error) {
+	if blockHash == nil {
+		return cohort.Unset, errors.NewInvalidArgumentError("block hash cannot be nil")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.SplitAllocations == nil {
+		m.SplitAllocations = map[string]cohort.ID{}
+	}
+
+	key := sourceCohort.String() + "/" + blockHash.String()
+	if allocated, ok := m.SplitAllocations[key]; ok {
+		return allocated, nil
+	}
+
+	next := cohort.FirstSynthetic + cohort.ID(len(m.SplitAllocations))
+	if next > cohort.LastSynthetic {
+		return cohort.Unset, errors.NewStorageError("synthetic cohort range is exhausted")
+	}
+
+	m.SplitAllocations[key] = next
+
+	return next, nil
 }
