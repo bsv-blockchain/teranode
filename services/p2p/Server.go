@@ -242,6 +242,15 @@ type Server struct {
 	// localHeightCache is a short-lived cache of the local best height used by
 	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
 	localHeightCache atomic.Pointer[localHeightCacheEntry]
+	// catchupMaliciousLastCharge throttles the ban-score charge applied by
+	// RecordCatchupMalicious to one per peer per catchupMaliciousChargeWindow.
+	// A single misbehaving block is reported through several catchup paths in
+	// the same cycle; without the throttle one offense would accumulate points
+	// from each path and cross the ban threshold on its own. Guarded by
+	// catchupMaliciousChargeMu; lazily initialized so tests that construct
+	// Server directly work.
+	catchupMaliciousChargeMu   sync.Mutex
+	catchupMaliciousLastCharge map[string]time.Time
 }
 
 // privateIPColocationWhitelist returns local-network ranges for exemption from the
@@ -1516,7 +1525,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	if err := nodeStatusMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
 		if !isSelf {
-			s.applyBanScore(peerID, ReasonProtocolViolation)
+			_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 		}
 		return
 	}
@@ -1534,7 +1543,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
-		s.applyBanScore(peerID, ReasonProtocolViolation)
+		_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 		return
 	}
 
@@ -1542,7 +1551,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		// Validate BaseURL to prevent SSRF attacks
 		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
-			s.applyBanScore(peerID, ReasonProtocolViolation)
+			_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 			return
 		}
 
@@ -2795,7 +2804,7 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
 	reason := req.Reason
 	switch reason {
-	case "invalid_subtree", "protocol_violation", "spam", "invalid_block":
+	case "invalid_subtree", "protocol_violation", "spam", "invalid_block", "catchup_malicious":
 		// known reason; pass through to the registry which has matching weights
 	default:
 		if reason == "" {
@@ -2819,19 +2828,24 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 }
 
 // applyBanScore is a fire-and-forget helper used from internal codepaths that
-// can't usefully propagate an error (libp2p notifiees, gossip handlers).
-func (s *Server) applyBanScore(peerID, reason string) {
+// can't usefully propagate an error (libp2p notifiees, gossip handlers). It
+// returns the AddBanScore error (nil on success, or when no registry is wired)
+// for the rare caller that needs to know whether the charge actually landed;
+// statement-context callers ignore it and keep their fire-and-forget shape.
+func (s *Server) applyBanScore(peerID, reason string) error {
 	if s.peerRegistry == nil {
-		return
+		return nil
 	}
-	_, banned, err := s.peerRegistry.AddBanScore(s.gCtx, peerID, reason, 0)
+	score, banned, err := s.peerRegistry.AddBanScore(s.gCtx, peerID, reason, 0)
 	if err != nil {
 		s.logger.Warnf("[applyBanScore] AddBanScore %s/%s failed: %v", peerID, reason, err)
-		return
+		return err
 	}
+	s.logger.Infof("[applyBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t", peerID, reason, score, banned)
 	if banned {
 		s.onPeerBanned(peerID, reason)
 	}
+	return nil
 }
 
 // onPeerBanned reacts to a NEW ban transition (score crossed threshold this

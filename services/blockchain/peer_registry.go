@@ -192,6 +192,7 @@ func DefaultBanConfig() BanConfig {
 			"spam":               50,
 			"invalid_block":      10,
 			"catchup_failure":    30,
+			"catchup_malicious":  50,
 		},
 	}
 }
@@ -438,6 +439,13 @@ func (r *CentralizedPeerRegistry) UpdateMetrics(
 	info.LastSeen = now
 
 	if recordMalicious {
+		// Setting LastInteractionFailure here and the 5.0 reputation pin in
+		// calculateAndUpdateReputation are both load-bearing for recovery:
+		// ReconsiderBadPeers only clears MaliciousCount for peers with
+		// ReputationScore < 20 and a non-zero last failure, and that sweep is
+		// the sole automatic path that stops IsPeerMalicious excluding the
+		// peer. Removing either turns a malicious record into a permanent
+		// exclusion.
 		info.MaliciousCount++
 		info.InteractionAttempts++
 		info.InteractionFailures++

@@ -328,7 +328,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				// Report malicious behavior to P2P service
 				u.reportCatchupMalicious(ctx, identifier, "malicious response during header parsing")
 
-				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - should be banned (banning not yet implemented)", chainTipHash.String(), baseURL)
+				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - reported as malicious for ban scoring", chainTipHash.String(), baseURL)
 
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,

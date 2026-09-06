@@ -204,7 +204,8 @@ type ClientI interface {
 	ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error
 
 	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
-	// A peer is considered malicious if they are banned or have a very low reputation score.
+	// A peer is considered malicious if it is banned or has malicious behavior recorded
+	// against it (e.g. via RecordCatchupMalicious).
 	IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error)
 
 	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
