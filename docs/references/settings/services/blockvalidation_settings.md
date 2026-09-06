@@ -17,8 +17,8 @@
 | ProcessTxMetaUsingCacheBatchSize | int | 1024 | blockvalidation_processTxMetaUsingCache_BatchSize | Cache processing batch size |
 | ProcessTxMetaUsingCacheConcurrency | int | 32 | blockvalidation_processTxMetaUsingCache_Concurrency | Cache processing concurrency |
 | ProcessTxMetaUsingCacheMissingTxThreshold | int | 1 | blockvalidation_processTxMetaUsingCache_MissingTxThreshold | Cache miss threshold |
-| ProcessTxMetaUsingStoreBatchSize | int | max(4, CPU/2) | blockvalidation_processTxMetaUsingStore_BatchSize | Store processing batch size |
-| ProcessTxMetaUsingStoreConcurrency | int | 32 | blockvalidation_processTxMetaUsingStore_Concurrency | Store processing concurrency |
+| ProcessTxMetaUsingStoreBatchSize | int | 1024 | blockvalidation_processTxMetaUsingStore_BatchSize | Store processing batch size |
+| ProcessTxMetaUsingStoreConcurrency | int | max(4, CPU/2) | blockvalidation_processTxMetaUsingStore_Concurrency | Store processing concurrency |
 | ProcessTxMetaUsingStoreMissingTxThreshold | int | 1 | blockvalidation_processTxMetaUsingStore_MissingTxThreshold | Store miss threshold |
 | SkipCheckParentMined | bool | false | blockvalidation_skipCheckParentMined | Parent block mining validation |
 | SubtreeFoundChConcurrency | int | 1 | blockvalidation_subtreeFoundChConcurrency | Subtree processing concurrency |
@@ -86,10 +86,22 @@
 
 ### Optimistic Mining
 
-- `OptimisticMining = true`: Enables background validation for performance
-- Block validation proceeds while subtree validation runs in background
-- Can be overridden per-validation via DisableOptimisticMining option
-- Disabled during catchup mode for better performance
+- `OptimisticMining` defaults to `true` (enabled): once the block's subtrees have been validated
+  (transaction and script checks), the block is added to the chain and mining can start on it,
+  before the remaining block-level checks have run
+- Block-level validation continues in the background - merkle root, coinbase and BIP34 checks,
+  duplicate transactions, transaction ordering and parent-spend checks, and the old-block-ID
+  double-spend scan
+- If a background check proves the block invalid it is invalidated and its UTXO effects are
+  rolled back; a transient storage or processing failure instead schedules a re-validation and
+  leaves the block on the chain in the meantime
+- Trade-off: competitive mining latency (seconds down to milliseconds) versus the risk of wasted
+  hashpower if the block later proves invalid
+- Can be overridden per-validation via the `DisableOptimisticMining` option
+- Disabled during catchup mode for better reliability, and also for legacy-sourced blocks and
+  operator-triggered block revalidation
+- Checkpoint-verified blocks take the quick-validation pipeline instead, which does not consult
+  this setting
 
 ### Quick Validation Pipeline
 
@@ -157,7 +169,7 @@ blockvalidation_useCatchupWhenBehind=false
 
 ```bash
 blockvalidation_validateBlockSubtreesConcurrency=16
-blockvalidation_processTxMetaUsingStoreBatchSize=2048
+blockvalidation_processTxMetaUsingStore_BatchSize=2048
 blockvalidation_catchupConcurrency=8
 blockvalidation_fetch_num_workers=32
 blockvalidation_subtree_batch_size=32
