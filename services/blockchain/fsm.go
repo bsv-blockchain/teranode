@@ -104,8 +104,15 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 // CheckFSM creates a health check function for the blockchain FSM.
 // Returns a function that checks the current FSM state and returns appropriate
 // HTTP status codes:
-//   - StatusOK (200): For CATCHINGBLOCKS, RUNNING states
-//   - StatusServiceUnavailable (503): For IDLE state
+//   - StatusOK (200): For IDLE, RUNNING, CATCHINGBLOCKS states — an idle node is
+//     healthy but not yet processing, not unavailable.
+//   - StatusServiceUnavailable (503): For any unknown/unlisted state, or if the
+//     FSM state query itself fails.
+//
+// checkLiveness is accepted only to satisfy the shared health.Check signature; this
+// check ignores it because it is registered as a readiness check and callers never
+// invoke it on the liveness path (liveness handlers return before building the check
+// list).
 func CheckFSM(blockchainClient ClientI) func(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
 		state, err := blockchainClient.GetFSMCurrentState(ctx)
