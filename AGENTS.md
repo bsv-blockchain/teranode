@@ -140,17 +140,7 @@ npm test && npm run lint && npm run check && npm run build
 
 ## Specialized Agents
 
-Domain-specific agents in `.claude/agents/`, invoked via the Agent tool:
-
-- **bitcoin-expert** — BSV protocol, consensus, cryptography, BSV-specific features
-- **test-writer-fixer** — writes/fixes tests after code changes
-- **api-tester** — API load testing and contract validation
-- **backend-architect** — system design and architecture decisions
-- **document-reviewer** — documentation quality and accuracy
-
-Vendored from [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents):
-**golang-pro** (concurrency, perf, idiomatic Go), **code-reviewer** (language-agnostic
-review), **security-auditor** (consensus/UTXO/crypto), **qa-expert** (coverage,
-race/fuzz, CI gates), **performance-engineer** (hot-path, locks, throughput),
-**typescript-pro**, **frontend-developer** (`ui/dashboard` Svelte), **security-engineer**
-(infra/CI/supply-chain), **penetration-tester** (DoS vectors, panic chains).
+Domain-specific agents live in `.claude/agents/`, one Markdown file per agent, each
+with its own description. Claude Code loads them automatically — read the directory
+for the current roster rather than a list duplicated here. Some are vendored from
+[VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents).
