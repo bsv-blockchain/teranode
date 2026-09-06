@@ -233,19 +233,29 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// the row is now flagged true on a fork. Clear it defensively, with
 		// mainChainRebuilding bracketing so concurrent readers fall back to
 		// the CTE for the brief inconsistency window.
+		//
+		// The bracket has to run to the end of the call, not just around the
+		// UPDATE, because it also has to cover the off-chain-set rebuild below.
+		// updateMaxBlockID admits this fork's id to the id<=maxBlockID range
+		// before rebuildOffChainSet puts it in the forked set, and in that gap
+		// CheckBlockIsInCurrentChain's in-memory route reads "not forked" as
+		// "on the main chain" and answers true for a block that is not on it.
+		// The !onMainChain branch above already holds the guard for the whole
+		// call for exactly this reason; this branch is the one that did not.
 		if onMainChain {
 			s.mainChainRebuilding.Add(1)
+			defer s.mainChainRebuilding.Add(-1)
+
 			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
 				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
 			}
-			s.mainChainRebuilding.Add(-1)
 		}
 		if s.useInMemoryChainCheck {
 			s.blockTimestampCache.Clear()
 			s.updateMaxBlockID(newBlockID)
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 			defer rebuildCancel()
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
@@ -271,7 +281,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.logger.Errorf("StoreBlock: reconcileOnMainChain: %v", reconcileErr)
 		}
 		if s.useInMemoryChainCheck {
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())

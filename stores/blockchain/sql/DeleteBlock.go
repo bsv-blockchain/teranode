@@ -58,7 +58,7 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 		s.resetChainWalkCache()
 		rebuildCtx, rebuildCancel := context.WithTimeout(ctx, rebuildOffChainSetTimeout)
 		defer rebuildCancel()
-		if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+		if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 			s.logger.Errorf("DeleteBlock: %v", rebuildErr)
 		} else {
 			s.lastSuccessfulRebuild.Store(time.Now().Unix())

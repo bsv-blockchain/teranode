@@ -3024,13 +3024,19 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 // absent from the off-chain set yet has no on_main_chain row, so a
 // useInMemoryChainCheck=on node ACCEPTED a dangling id the authoritative store
 // route (and an off node) REJECTS: a chain-split. The off-chain (negative) set
-// can never prove on-chain membership, so it cannot drive a sound local accept.
+// cannot drive a sound accept HERE, in this service, because a prefetched copy
+// of it is a snapshot with no guard over it.
 //
-// CheckBlockIsInCurrentChain is the single authority: it applies the store's
-// in-memory off-chain set + maxBlockID as a fast negative filter AND confirms
-// survivors against the on_main_chain flag in one self-consistent snapshot
-// (stores/blockchain/sql/CheckBlockIsInCurrentChain.go), so it cannot diverge
-// from the always-SQL route. Deferring every decision to it — rather than
+// CheckBlockIsInCurrentChain is the single authority. Note what that does and
+// does not buy: the store applies the same absence-means-on-chain rule, but it
+// applies it against a set and a maxBlockID from one self-consistent snapshot,
+// under mainChainRebuilding, and with the shadow comparison available to measure
+// it (stores/blockchain/sql/CheckBlockIsInCurrentChain.go). So the two routes CAN
+// still diverge on a gap id, an id at or below maxBlockID with no committed row.
+// That divergence is documented and measured at
+// TestCheckBlockIsInCurrentChain_GapIDDivergesBetweenRoutes; read that before
+// concluding anything about it. What deferring to the store removes is this
+// service holding a stale copy, not the underlying rule. Deferring every decision to it — rather than
 // caching a prefetched set in this service and deciding locally — also avoids
 // the snapshot-skew window a local decision would carry across a concurrent
 // reorg (a stale "off-chain" classification could wrongly reject, the more
