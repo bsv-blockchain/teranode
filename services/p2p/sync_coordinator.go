@@ -51,24 +51,17 @@ type SyncCoordinator struct {
 	// FSM completion-edge latch. Guarded by decisionMu: only touched by
 	// handleFSMTransition and HandleCatchupSuccess, which both run under
 	// decisionMu. lastObservedFSMState latches the FSM state seen by the
-	// previous checkFSMState tick so the completed/failed sync evaluation runs
-	// only on a real CATCHINGBLOCKS -> RUNNING completion edge instead of on
-	// every RUNNING tick. pendingCompletionPeer names the slot holder a
-	// completion edge was observed for while the evaluation is deferred
-	// (validated chainwork not yet available), with pendingCompletionSince
-	// bounding how long the deferral may carry; fsmCatchingSince records when
-	// the current CATCHINGBLOCKS excursion was first observed, so a slot
-	// claimed after that excursion began is not judged by its completion (the
-	// running catchup belongs to an earlier trigger; note this is keyed on the
-	// excursion, not the individual catchup, so on a node resident in
-	// CATCHINGBLOCKS all edge verdicts are deliberately suppressed and the
-	// slot is policed by the success signal, the level-peer fallback settle,
-	// the periodic evaluation and the no-progress deadline instead).
+	// previous checkFSMState tick so a CATCHINGBLOCKS -> RUNNING completion
+	// edge can be detected. The edge never issues a verdict — it says a catchup
+	// finished, not whose (the header phase runs in RUNNING and the slot may
+	// have changed hands during it); verdicts come solely from
+	// HandleCatchupSuccess, which names the peer. The edge arms
+	// pendingCompletionPeer/pendingCompletionSince, a bounded window that holds
+	// the fallback release off while the authoritative report is in flight.
 	lastObservedFSMState    blockchain_api.FSMStateType
 	lastObservedFSMStateSet bool
 	pendingCompletionPeer   string
 	pendingCompletionSince  time.Time
-	fsmCatchingSince        time.Time
 	// lastReputationRecovery throttles considerReputationRecovery on the
 	// monitor tick (see considerReputationRecoveryThrottled). Guarded by
 	// decisionMu like the latch fields above.
@@ -162,10 +155,11 @@ const (
 	// sampling interval loses nothing.
 	reputationRecoveryMinInterval = 30 * time.Second
 
-	// pendingCompletionExpiry bounds how long a completion edge observed without
-	// validated chainwork may stay armed awaiting the data. Registry/tip reads
-	// recover within a tick or two; without the bound, a credit arriving much
-	// later would settle a long-dead edge.
+	// pendingCompletionExpiry bounds how long an armed completion edge may hold
+	// the fallback release off while waiting for the authoritative catchup
+	// report. A report that never arrives (a lost RPC, or an older
+	// blockvalidation that does not flag completed catchups) must not suppress
+	// the release indefinitely.
 	pendingCompletionExpiry = 30 * time.Second
 
 	// syncPeerPreemptionGuardDivisor sets the opportunistic-preemption anti-flap
@@ -869,39 +863,40 @@ func (sc *SyncCoordinator) checkFSMState() {
 	}
 }
 
-// handleFSMTransition checks for FSM state transitions and handles them.
-// It requires decisionMu to be held by the caller.
+// handleFSMTransition runs the per-tick sync-slot policing and maintains the
+// FSM completion-edge latch. It requires decisionMu to be held by the caller.
 //
 // Per-tick housekeeping (registry existence, block-progress recording and the
-// no-progress deadline) runs on every RUNNING tick, but the completed/failed
-// sync evaluation is latched to an actual CATCHINGBLOCKS -> RUNNING completion
-// edge. Without the latch it fired on every 2s RUNNING tick: block validation
-// runs the whole header phase of a catchup in RUNNING (the FSM only moves to
-// CATCHINGBLOCKS once block bodies start), and a peer credited with validated
-// header work by a previous run would be declared failed (or completed) ~2s
-// after activation, recycling the slot, burning every peer's sync-attempt
-// cooldown within seconds and resetting the no-progress clock on each re-claim.
+// no-progress deadline) runs on every RUNNING tick. The FSM edge itself never
+// issues a completed/failed verdict: a CATCHINGBLOCKS -> RUNNING edge says a
+// catchup finished, not whose — the whole header phase runs in RUNNING (the
+// FSM only moves to CATCHINGBLOCKS once block bodies start), so a slot that
+// changed hands during another peer's header phase would be judged by that
+// peer's outcome, and the coordinator has no way to attribute an excursion
+// (catchups are also enqueued by gossip, not only by the coordinator's
+// trigger). Verdicts are issued solely by HandleCatchupSuccess, which names
+// the peer and carries the catchup duration. The edge instead arms a bounded
+// window (pendingCompletionPeer/-Since) that holds the fallback release off
+// while the authoritative report is in flight, so the report can settle the
+// completion — and de-escalate backoff — before the fallback quietly releases
+// the slot. Without the latch, main re-judged the in-flight sync on every 2s
+// RUNNING tick, recycling the slot and burning every peer's sync-attempt
+// cooldown within seconds.
 func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMStateType) bool {
 	completionEdge := sc.lastObservedFSMStateSet &&
 		sc.lastObservedFSMState == blockchain_api.FSMStateType_CATCHINGBLOCKS &&
 		*currentState == blockchain_api.FSMStateType_RUNNING
-	if *currentState == blockchain_api.FSMStateType_CATCHINGBLOCKS &&
-		(!sc.lastObservedFSMStateSet || sc.lastObservedFSMState != blockchain_api.FSMStateType_CATCHINGBLOCKS) {
-		sc.fsmCatchingSince = time.Now()
-	}
 	sc.lastObservedFSMState = *currentState
 	sc.lastObservedFSMStateSet = true
 
 	if *currentState != blockchain_api.FSMStateType_RUNNING {
-		// Any excursion out of RUNNING supersedes a completion evaluation that
-		// was still deferred waiting for validated chainwork.
+		// A new excursion out of RUNNING supersedes any armed completion window.
 		sc.pendingCompletionPeer = ""
 		return false
 	}
 
 	sc.mu.RLock()
 	currentPeer := sc.currentSyncPeer
-	syncStart := sc.syncStartTime
 	sc.mu.RUnlock()
 
 	if currentPeer == "" {
@@ -913,8 +908,8 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 		sc.pendingCompletionPeer = currentPeer
 		sc.pendingCompletionSince = time.Now()
 	} else if sc.pendingCompletionPeer != "" && sc.pendingCompletionPeer != currentPeer {
-		// The slot moved to a different peer while an evaluation was deferred;
-		// the completed catchup's outcome says nothing about the new holder.
+		// The slot moved to a different peer while a window was armed; the
+		// completed catchup's report says nothing about the new holder.
 		sc.pendingCompletionPeer = ""
 	}
 
@@ -945,86 +940,65 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 		return sc.clearNoProgressSyncPeer(currentPeer, progressAge)
 	}
 
-	if sc.pendingCompletionPeer != currentPeer {
-		// Steady RUNNING: no completion edge to judge this peer by. Fallback
-		// release: some completions emit no signal at all — a trigger rejected
-		// by block validation's single-flight guard, or an already-synced
-		// short-circuit on an older blockvalidation — which would otherwise pin
-		// a finished sync (and the fast monitor tick) until the no-progress
-		// deadline. A holder that is level or behind by validated work AND has
-		// gone the preemption guard (half the no-progress timeout) without
-		// delivering a validated block is quietly released: no completion
-		// verdict is fabricated (this is an inferred completion, so no
-		// resetBackoff / probe-budget refill — de-escalation is reserved for
-		// the observed signals) and no sync attempt is recorded against the
-		// peer (unlike the no-progress eviction, it did nothing wrong). Keying
-		// on progress age rather than claim age keeps a level peer that is
-		// actively delivering blocks in the slot, matching evaluateSyncPeer's
-		// keep-while-caught-up policy for active peers. Level is tested with
-		// chainWorkGreater directly rather than peerAheadByValidatedWork: a
-		// peer inside a full-storage penalty window can be ahead by raw
-		// chainwork yet read as "not ahead" through the penalty demotion, and
-		// such a peer (credited header work it failed to back with a block
-		// body) has not finished anything — leave it to the no-progress
-		// deadline, which also benches it.
-		if localWorkOK && peerHasValidatedWork(peerInfo) &&
-			!chainWorkGreater(peerInfo.ValidatedChainWork, localChainWork) &&
-			progressAge > sc.preemptionProgressGuard() {
-			sc.logger.Infof("[SyncCoordinator] Releasing sync slot held by %s; level by validated work with no delivery for %v",
-				currentPeer, progressAge.Round(time.Second))
-			sc.clearSyncPeerIfCurrent("")
-			_ = sc.triggerSyncLocked()
-			return true
-		}
-		return false
-	}
-
-	if syncStart.After(sc.fsmCatchingSince) {
-		// The slot was claimed after the just-completed catchup entered its
-		// block phase, so that catchup was running for an earlier trigger and
-		// its outcome is not this peer's. Consume the edge without a verdict
-		// and leave the slot alone; the no-progress deadline and the periodic
-		// evaluation still police the holder.
-		sc.logger.Debugf("[SyncCoordinator] Ignoring catchup completion edge for %s; slot was claimed after that catchup started", currentPeer)
-		sc.pendingCompletionPeer = ""
-		return false
-	}
-
-	if !localWorkOK || !peerHasValidatedWork(peerInfo) {
+	if sc.pendingCompletionPeer == currentPeer {
+		// A completion window is armed for this holder: a catchup just finished,
+		// but only HandleCatchupSuccess can say whose. Hold the fallback release
+		// off while the report is in flight, bounded so a report that never
+		// arrives (a lost RPC, or an older blockvalidation that does not flag
+		// completed catchups) cannot suppress the release indefinitely.
 		if now.Sub(sc.pendingCompletionSince) > pendingCompletionExpiry {
-			// Validated chainwork never arrived for this edge; a credit landing
-			// much later (e.g. from a second catchup for the same peer) must not
-			// settle a long-dead completion against a peer actively serving.
 			sc.pendingCompletionPeer = ""
-			return false
 		}
-		// Keep the pending completion so the evaluation retries next tick.
-		sc.logger.Debugf("[SyncCoordinator] Deferring sync-peer transition for %s until validated chainwork is available", currentPeer)
 		return false
 	}
 
-	sc.pendingCompletionPeer = ""
-	return sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork, false)
+	// No completion window armed. Fallback release: several completions emit no
+	// signal at all — a trigger rejected by block validation's single-flight
+	// guard, or catchup's already-synced short-circuits (doCatchup returns nil
+	// without reporting success when the header fetch yields no headers, or
+	// when filtering leaves none and the target block is already known
+	// locally). At steady-state block spacing that makes this release an
+	// ordinary outcome, not an escape hatch: without it a finished sync would
+	// pin the slot (and the fast monitor tick) until the no-progress deadline.
+	// A holder that is level or behind by validated work AND has gone the
+	// preemption guard (half the no-progress timeout) without delivering a
+	// validated block is quietly released: no completion verdict is fabricated
+	// (this is an inferred completion, so no resetBackoff / probe-budget
+	// refill — de-escalation is reserved for the authoritative report) and no
+	// sync attempt is recorded against the peer (unlike the no-progress
+	// eviction, it did nothing wrong). Keying on progress age rather than
+	// claim age keeps a level peer that is actively delivering blocks in the
+	// slot, matching evaluateSyncPeer's keep-while-caught-up policy for active
+	// peers. Level is tested with chainWorkGreater directly rather than
+	// peerAheadByValidatedWork: a peer inside a full-storage penalty window
+	// can be ahead by raw chainwork yet read as "not ahead" through the
+	// penalty demotion, and such a peer (credited header work it failed to
+	// back with a block body) has not finished anything — leave it to the
+	// no-progress deadline, which also benches it.
+	if localWorkOK && peerHasValidatedWork(peerInfo) &&
+		!chainWorkGreater(peerInfo.ValidatedChainWork, localChainWork) &&
+		progressAge > sc.preemptionProgressGuard() {
+		sc.logger.Infof("[SyncCoordinator] Releasing sync slot held by %s; level by validated work with no delivery for %v",
+			currentPeer, progressAge.Round(time.Second))
+		sc.clearSyncPeerIfCurrent("")
+		_ = sc.triggerSyncLocked()
+		return true
+	}
+	return false
 }
 
-// settleSyncCompletion applies the completed/failed verdict for a sync whose
-// catchup has finished: still ahead by validated work means the sync fell short
-// (clear and re-select), level or behind means success (reset backoff, clear and
-// re-select). reportedSuccess distinguishes the origin for the still-ahead log
-// line: block validation legitimately reports success with the peer still ahead
-// (the header fetch truncates at its accumulated cap on a node far behind), and
-// logging that as "considered failed" would contradict the success block
-// validation just logged for the same catchup. It requires decisionMu to be
-// held by the caller.
-func (sc *SyncCoordinator) settleSyncCompletion(currentPeer string, peerInfo *blockchain.PeerInfo, localChainWork []byte, reportedSuccess bool) bool {
+// settleSyncCompletion applies the verdict for a catchup that block validation
+// reported as complete: still ahead by validated work means there is more chain
+// to fetch (clear and re-select — the header fetch legitimately truncates at
+// its accumulated cap on a node far behind, so this is a designed outcome, not
+// a failure), level or behind means the sync succeeded (reset backoff, clear
+// and re-select). Only HandleCatchupSuccess calls this: the FSM edge cannot
+// attribute a completion to a peer, so it never issues verdicts. It requires
+// decisionMu to be held by the caller.
+func (sc *SyncCoordinator) settleSyncCompletion(currentPeer string, peerInfo *blockchain.PeerInfo, localChainWork []byte) bool {
 	if peerAheadByValidatedWork(peerInfo, localChainWork) {
-		if reportedSuccess {
-			sc.logger.Infof("[SyncCoordinator] Catchup with peer %s completed but peer is still ahead by validated work; re-selecting",
-				currentPeer)
-		} else {
-			sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed; peer still has higher validated work",
-				currentPeer)
-		}
+		sc.logger.Infof("[SyncCoordinator] Catchup with peer %s completed but peer is still ahead by validated work; re-selecting",
+			currentPeer)
 		sc.clearSyncPeerIfCurrent("")
 		_ = sc.triggerSyncLocked()
 		return true
@@ -1039,10 +1013,12 @@ func (sc *SyncCoordinator) settleSyncCompletion(currentPeer string, peerInfo *bl
 
 // HandleCatchupSuccess handles block validation reporting a completed catchup
 // for peerID (canonical libp2p ID string); catchupDuration is how long that
-// catchup ran (zero when unknown). It runs the same completed/failed evaluation
-// as the FSM completion edge, keyed on the authoritative success signal, which
-// also covers catchups whose FSM excursion the monitor tick never observes and
-// catchups completing while the node is resident in CATCHINGBLOCKS.
+// catchup ran (zero when unknown). It is the ONLY path that settles a completed
+// sync with a verdict: unlike the FSM completion edge, the report names the
+// peer and carries the catchup duration, so the verdict cannot be misattributed
+// after a slot handover. It also covers catchups whose FSM excursion the
+// monitor tick never observes and catchups completing while the node is
+// resident in CATCHINGBLOCKS.
 func (sc *SyncCoordinator) HandleCatchupSuccess(peerID string, catchupDuration time.Duration) {
 	select {
 	case <-sc.stopCh:
@@ -1069,8 +1045,8 @@ func (sc *SyncCoordinator) HandleCatchupSuccess(peerID string, catchupDuration t
 		sc.logger.Debugf("[SyncCoordinator] Ignoring stale catchup success for %s; slot was claimed after that catchup started", currentPeer)
 		return
 	}
-	// The authoritative signal settles (or forgoes) this completion; make sure a
-	// deferred FSM-edge evaluation cannot settle it a second time.
+	// The report owns this completion: disarm the edge window so it stops
+	// holding the fallback release off.
 	sc.pendingCompletionPeer = ""
 
 	_, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
@@ -1094,7 +1070,7 @@ func (sc *SyncCoordinator) HandleCatchupSuccess(peerID string, catchupDuration t
 		sc.logger.Debugf("[SyncCoordinator] Deferring catchup-success evaluation for %s until validated chainwork is available", currentPeer)
 		return
 	}
-	sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork, true)
+	sc.settleSyncCompletion(currentPeer, peerInfo, localChainWork)
 }
 
 // handleRunningState handles the FSM RUNNING state logic.
