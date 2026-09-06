@@ -15,6 +15,48 @@ type MockOptions = {
 
 const EMPTY_OK = { ok: true, data: [] }
 
+// The peers fixture carries absolute timestamps. The dashboard filters peers on
+// recency, so serving them as-is renders an empty table however good the
+// fixture is. Rebase every non-zero stamp so the newest one lands on now and
+// the relative ages in the fixture are preserved. A zero stays zero: the UI
+// reads it as "Never", which is a case worth keeping.
+const FIXTURE_NEWEST = 1750000500
+
+const PEER_TIME_FIELDS = [
+  'connected_at',
+  'last_block_time',
+  'last_message_time',
+  'catchup_last_attempt',
+  'catchup_last_success',
+  'catchup_last_failure',
+  'last_catchup_error_time',
+] as const
+
+function rebasePeerTimes(payload: typeof peers) {
+  const shift = Math.floor(Date.now() / 1000) - FIXTURE_NEWEST
+
+  return {
+    ...payload,
+    peers: (payload.peers ?? []).map((peer) => {
+      const shifted: Record<string, unknown> = { ...peer }
+
+      for (const field of PEER_TIME_FIELDS) {
+        const value = (peer as Record<string, unknown>)[field]
+        if (typeof value === 'number' && value > 0) {
+          shifted[field] = value + shift
+        }
+      }
+
+      const legacy = (peer as Record<string, unknown>).legacy as Record<string, unknown> | undefined
+      if (legacy && typeof legacy.time_connected === 'number' && legacy.time_connected > 0) {
+        shifted.legacy = { ...legacy, time_connected: legacy.time_connected + shift }
+      }
+
+      return shifted
+    }),
+  }
+}
+
 export async function installApiMocks(page: Page, opts: MockOptions = {}): Promise<void> {
   const authenticated = opts.authenticated ?? true
 
@@ -37,24 +79,48 @@ export async function installApiMocks(page: Page, opts: MockOptions = {}): Promi
   // mounted at /api/<path>. We anchor with /api/ to avoid matching the SPA's
   // own page routes (e.g. /peers, /settings) and use a wildcard segment for v1.
   await page.route('**/api/**/blockchain/info', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(blockchainInfo) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(blockchainInfo),
+    }),
   )
   await page.route('**/api/blockchain/info', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(blockchainInfo) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(blockchainInfo),
+    }),
   )
 
   await page.route('**/api/**/blockstats**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(blockstats) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(blockstats),
+    }),
   )
   await page.route('**/api/blockstats**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(blockstats) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(blockstats),
+    }),
   )
 
   await page.route('**/api/**/peers**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(peers) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(rebasePeerTimes(peers)),
+    }),
   )
   await page.route('**/api/peers**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(peers) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(rebasePeerTimes(peers)),
+    }),
   )
 
   await page.route('**/api/**/settings**', (route: Route) =>
@@ -100,19 +166,27 @@ export async function installApiMocks(page: Page, opts: MockOptions = {}): Promi
 
   // /viewer/block detail page fetches three endpoints. Return the same block
   // body for /block/<hash>/json and /header/<hash>/json (the page merges them).
-  await page.route(/\/api\/(?:[^/?#]+\/)?(?:block|header)\/[a-fA-F0-9]+\/json(?:\?|$)/, (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(blockDetail) }),
+  await page.route(
+    /\/api\/(?:[^/?#]+\/)?(?:block|header)\/[a-fA-F0-9]+\/json(?:\?|$)/,
+    (route: Route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(blockDetail),
+      }),
   )
 
   // /viewer/block subtrees pagination — empty list, valid pagination shape.
   // Note: server response is unwrapped; the api client wraps it as
   // `{ok: true, data: <body>}` before handing back to the caller.
-  await page.route(/\/api\/(?:[^/?#]+\/)?block\/[a-fA-F0-9]+\/subtrees\/json(?:\?|$)/, (route: Route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ data: [], pagination: { limit: 20, offset: 0, totalRecords: 0 } }),
-    }),
+  await page.route(
+    /\/api\/(?:[^/?#]+\/)?block\/[a-fA-F0-9]+\/subtrees\/json(?:\?|$)/,
+    (route: Route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: [], pagination: { limit: 20, offset: 0, totalRecords: 0 } }),
+      }),
   )
 
   // /viewer/block "latest block" lookup. Returns a raw array — client wraps it.
@@ -129,14 +203,20 @@ export async function installApiMocks(page: Page, opts: MockOptions = {}): Promi
   // disjoint (…/json vs …/txs/json), so registration order between them is
   // irrelevant. Both return a raw body the client wraps in {ok, data}.
   await page.route(/\/api\/(?:[^/?#]+\/)?subtree\/[a-fA-F0-9]+\/json(?:\?|$)/, (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(subtreeDetail) }),
-  )
-  await page.route(/\/api\/(?:[^/?#]+\/)?subtree\/[a-fA-F0-9]+\/txs\/json(?:\?|$)/, (route: Route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ data: [], pagination: { limit: 20, offset: 0, totalRecords: 0 } }),
+      body: JSON.stringify(subtreeDetail),
     }),
+  )
+  await page.route(
+    /\/api\/(?:[^/?#]+\/)?subtree\/[a-fA-F0-9]+\/txs\/json(?:\?|$)/,
+    (route: Route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: [], pagination: { limit: 20, offset: 0, totalRecords: 0 } }),
+      }),
   )
 
   // /viewer/tx detail composes /tx/<hash>/json (getItemData tx) and
@@ -146,6 +226,10 @@ export async function installApiMocks(page: Page, opts: MockOptions = {}): Promi
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(txDetail) }),
   )
   await page.route(/\/api\/(?:[^/?#]+\/)?txmeta\/[a-fA-F0-9]+\/json(?:\?|$)/, (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(txmetaDetail) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(txmetaDetail),
+    }),
   )
 }

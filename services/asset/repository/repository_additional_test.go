@@ -40,7 +40,7 @@ func TestRepository_Health_Readiness_NilStores(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
 
-	repo, err := repository.NewRepository(logger, settings, nil, nil, nil, nil, nil, nil, nil)
+	repo, err := repository.NewRepository(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	status, message, err := repo.Health(context.Background(), false)
@@ -78,7 +78,7 @@ func TestRepository_Health_Readiness_Unhealthy(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	repo, err := repository.NewRepository(logger, settings, utxoStore, unhealthyStore, blockchainClient, nil, nil, nil, nil)
+	repo, err := repository.NewRepository(logger, settings, utxoStore, unhealthyStore, blockchainClient, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	status, message, err := repo.Health(ctx, false)
@@ -363,7 +363,7 @@ func TestRepository_GetSubtreeBytes_CloseError(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	repo, err := repository.NewRepository(logger, settings, utxoStore, nil, blockchainClient, nil, mockStore, nil, nil)
+	repo, err := repository.NewRepository(logger, settings, utxoStore, nil, blockchainClient, nil, mockStore, nil, nil, nil)
 	require.NoError(t, err)
 
 	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -393,7 +393,7 @@ func TestRepository_GetSubtreeHead_ShortRead(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	repo, err := repository.NewRepository(logger, settings, utxoStore, nil, blockchainClient, nil, mockStore, nil, nil)
+	repo, err := repository.NewRepository(logger, settings, utxoStore, nil, blockchainClient, nil, mockStore, nil, nil, nil)
 	require.NoError(t, err)
 
 	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -506,7 +506,7 @@ func TestRepository_GetTransaction_TxStoreSuccess(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
+	repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil, nil)
 	require.NoError(t, err)
 
 	// Should succeed using TxStore data (UTXO store will fail, fallback to TxStore)
@@ -660,7 +660,7 @@ func createTestRepository(t *testing.T) *repository.Repository {
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
+	repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil, nil)
 	require.NoError(t, err)
 
 	return repo
@@ -694,7 +694,7 @@ func createTestRepositoryWithSubtreeData(t *testing.T, subtreeHash *chainhash.Ha
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
+	repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil, nil)
 	require.NoError(t, err)
 
 	return repo
@@ -728,7 +728,7 @@ func createTestRepositoryWithSubtreeDataToCheck(t *testing.T, subtreeHash *chain
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
+	repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil, nil)
 	require.NoError(t, err)
 
 	return repo

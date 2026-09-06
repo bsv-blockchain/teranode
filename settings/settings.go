@@ -533,6 +533,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerMapMaxSize:         getInt("p2p_peer_map_max_size", 10000, alternativeContext...),
 			PeerMapTTL:             getDuration("p2p_peer_map_ttl", 10*time.Minute, alternativeContext...),
 			PeerMapCleanupInterval: getDuration("p2p_peer_map_cleanup_interval", time.Minute, alternativeContext...),
+			SeenHashMaxSize:        getInt("p2p_seen_hash_max_size", 10000, alternativeContext...),
+			SeenHashTTL:            getDuration("p2p_seen_hash_ttl", 2*time.Minute, alternativeContext...),
+			SeenHashMaxPublishers:  getInt("p2p_seen_hash_max_publishers", 3, alternativeContext...),
 			// Sync manager configuration
 			ForceSyncPeer:                         getString("p2p_force_sync_peer", "", alternativeContext...),
 			NodeStatusTopic:                       getString("p2p_node_status_topic", "", alternativeContext...),
@@ -696,6 +699,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
 			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),
 			BlockPrefetchBufferBytes:         getInt64("legacy_blockPrefetchBufferBytes", 256*1024*1024, alternativeContext...),
+			PeerRegistryEnabled:              getBool("legacy_peerRegistryEnabled", true, alternativeContext...),
+			PeerRegistrySyncInterval:         getDuration("legacy_peerRegistrySyncInterval", 10*time.Second, alternativeContext...),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:         getString("ipv6_addresses", "", alternativeContext...),

@@ -532,7 +532,7 @@ Sends an event to the finite state machine.
 func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 ```
 
-Transitions the FSM to the RUNNING state.
+Transitions the FSM to the RUNNING state. On a network with checkpoints, a node whose chain tip is below the highest checkpoint receives an error and remains in its current state. An operator in `IDLE` can explicitly enter `CATCHINGBLOCKS` to start synchronization.
 
 ### CatchUpBlocks
 

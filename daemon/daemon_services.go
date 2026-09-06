@@ -451,6 +451,14 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockAssemblyClient = nil
 	}
 
+	assetPeerRegistryClient, err := d.daemonStores.GetPeerRegistryClient(ctx, createLogger(serviceAsset), appSettings, "")
+	if err != nil {
+		// Non-fatal: /api/v1/peers returns 503 until the registry is reachable.
+		createLogger(serviceAsset).Warnf("[Asset] peer registry client unavailable: %v", err)
+
+		assetPeerRegistryClient = nil
+	}
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -463,6 +471,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockvalidationClient,
 		p2pClient,
 		banList,
+		assetPeerRegistryClient,
 		blockAssemblyClient,
 	))
 }
@@ -1158,18 +1167,29 @@ func (d *Daemon) startLegacyService(
 
 	d.daemonStores.retainClient(blockassemblyClient)
 
+	peerRegistryClient, err := d.daemonStores.GetPeerRegistryClient(ctx, createLogger(serviceLegacy), appSettings, "")
+	if err != nil {
+		// Non-fatal: the legacy service runs without dashboard peer visibility.
+		createLogger(serviceLegacy).Warnf("[Legacy] peer registry client unavailable: %v", err)
+
+		peerRegistryClient = nil
+	}
+
 	// Add the Legacy service to the ServiceManager
 	return d.ServiceManager.AddService(serviceLegacyFormal, legacy.New(
 		createLogger(serviceLegacy),
 		appSettings,
-		blockchainClient,
-		validatorClient,
-		subtreeStore,
-		tempStore,
-		utxoStore,
-		subtreeValidationClient,
-		blockValidationClient,
-		blockassemblyClient,
+		legacy.Dependencies{
+			BlockchainClient:    blockchainClient,
+			ValidationClient:    validatorClient,
+			SubtreeStore:        subtreeStore,
+			TempStore:           tempStore,
+			UtxoStore:           utxoStore,
+			SubtreeValidation:   subtreeValidationClient,
+			BlockValidation:     blockValidationClient,
+			BlockAssemblyClient: blockassemblyClient,
+			PeerRegistry:        peerRegistryClient,
+		},
 	))
 }
 
