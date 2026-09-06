@@ -1056,11 +1056,16 @@ func (x *RecordCatchupAttemptResponse) GetOk() bool {
 }
 
 type RecordCatchupSuccessRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PeerId        string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
-	DurationMs    int64                  `protobuf:"varint,2,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"` // Duration in milliseconds
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PeerId     string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	DurationMs int64                  `protobuf:"varint,2,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"` // Duration in milliseconds
+	// True when the report covers a whole completed catchup operation. Gates
+	// sync-slot settling on the receiver: older blockvalidation versions used
+	// this RPC to credit individual header batches, which must not settle the
+	// in-flight sync.
+	CatchupCompleted bool `protobuf:"varint,3,opt,name=catchup_completed,json=catchupCompleted,proto3" json:"catchup_completed,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RecordCatchupSuccessRequest) Reset() {
@@ -1105,6 +1110,13 @@ func (x *RecordCatchupSuccessRequest) GetDurationMs() int64 {
 		return x.DurationMs
 	}
 	return 0
+}
+
+func (x *RecordCatchupSuccessRequest) GetCatchupCompleted() bool {
+	if x != nil {
+		return x.CatchupCompleted
+	}
+	return false
 }
 
 type RecordCatchupSuccessResponse struct {
@@ -2924,11 +2936,12 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x1bRecordCatchupAttemptRequest\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\".\n" +
 	"\x1cRecordCatchupAttemptResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"W\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x84\x01\n" +
 	"\x1bRecordCatchupSuccessRequest\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12\x1f\n" +
 	"\vduration_ms\x18\x02 \x01(\x03R\n" +
-	"durationMs\".\n" +
+	"durationMs\x12+\n" +
+	"\x11catchup_completed\x18\x03 \x01(\bR\x10catchupCompleted\".\n" +
 	"\x1cRecordCatchupSuccessResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"x\n" +
 	"\x1bRecordCatchupFailureRequest\x12\x17\n" +

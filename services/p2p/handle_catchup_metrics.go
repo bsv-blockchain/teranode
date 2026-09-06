@@ -57,12 +57,27 @@ func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCa
 		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
-	if _, err := peer.Decode(req.PeerId); err != nil {
+	decodedPeer, err := peer.Decode(req.PeerId)
+	if err != nil {
 		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewProcessingError(errInvalidPeerIDFormat, err))
 	}
 
+	// The registry call keeps the raw req.PeerId, matching the sibling handlers
+	// in this file; the coordinator call below needs the canonical form because
+	// currentSyncPeer is stored canonically.
 	if err := s.peerRegistry.RecordCatchupSuccess(ctx, req.PeerId, req.DurationMs); err != nil {
 		return &p2p_api.RecordCatchupSuccessResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup success", err))
+	}
+
+	// Let the sync coordinator settle the completed sync (mirrors the catchup
+	// FSM completion edge; this is the authoritative signal for catchups whose
+	// FSM excursion the monitor tick never observes). Only for reports flagged
+	// as whole completed catchups: older blockvalidation versions used this RPC
+	// to credit individual header batches, which must not settle the sync. Run
+	// asynchronously: settling may select and health-check a new peer, which
+	// must not block this RPC.
+	if req.CatchupCompleted && s.syncCoordinator != nil {
+		go s.syncCoordinator.HandleCatchupSuccess(decodedPeer.String(), time.Duration(req.DurationMs)*time.Millisecond)
 	}
 
 	return &p2p_api.RecordCatchupSuccessResponse{Ok: true}, nil

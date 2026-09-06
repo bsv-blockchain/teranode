@@ -690,3 +690,78 @@ func TestIsPeerUnhealthy_HealthyPeer(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resp.IsUnhealthy)
 }
+
+// A success report flagged as a whole completed catchup settles the sync slot
+// through the coordinator (asynchronously); an unflagged report — the shape old
+// blockvalidation versions sent per header batch — must not touch the slot.
+func TestRecordCatchupSuccess_SettlesSyncSlotOnlyWhenCatchupCompleted(t *testing.T) {
+	newServerWithSyncPeer := func(t *testing.T) (*Server, peer.ID) {
+		t.Helper()
+
+		s, reg, pid := freshTestServer(t)
+		tSettings := &settings.Settings{
+			P2P: settings.P2PSettings{
+				AllowPrunedNodeFallback:                   true,
+				MaxUnvalidatedAdvertisedHeightLead:        10_000,
+				MaxUnprovenSyncProbesPerBackoffWindow:     3,
+				FullDeliveryFreshnessWindow:               24 * time.Hour,
+				SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+			},
+		}
+		sc := NewSyncCoordinator(
+			context.Background(),
+			ulogger.TestLogger{},
+			tSettings,
+			s.peerRegistry,
+			NewPeerSelector(ulogger.TestLogger{}, tSettings),
+			nil,
+			nil,
+		)
+		sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+		setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+		s.syncCoordinator = sc
+
+		hash := syncCoordinatorTestHash(t)
+		reg.Register(&blockchain.PeerInfo{
+			ID:                 pid.String(),
+			DataHubURL:         "http://peer",
+			Height:             200,
+			BlockHash:          hash,
+			Storage:            "full",
+			ValidatedBlockHash: hash,
+			ValidatedChainWork: []byte{0x03}, // level with local: a completed report settles as success
+		})
+		claimSyncTestPeer(sc, pid.String(), time.Minute, []byte{0x03})
+		return s, pid
+	}
+
+	t.Run("completed report settles the slot", func(t *testing.T) {
+		s, pid := newServerWithSyncPeer(t)
+
+		resp, err := s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{
+			PeerId:           pid.String(),
+			DurationMs:       (30 * time.Second).Milliseconds(),
+			CatchupCompleted: true,
+		})
+		require.NoError(t, err)
+		require.True(t, resp.Ok)
+
+		require.Eventually(t, func() bool {
+			return s.syncCoordinator.GetCurrentSyncPeer() == ""
+		}, 5*time.Second, 10*time.Millisecond, "completed catchup report must settle the sync slot")
+	})
+
+	t.Run("legacy header-batch report leaves the slot alone", func(t *testing.T) {
+		s, pid := newServerWithSyncPeer(t)
+
+		resp, err := s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{
+			PeerId:     pid.String(),
+			DurationMs: (30 * time.Second).Milliseconds(),
+		})
+		require.NoError(t, err)
+		require.True(t, resp.Ok)
+
+		time.Sleep(100 * time.Millisecond) // grace for a goroutine that must not exist
+		require.Equal(t, pid.String(), s.syncCoordinator.GetCurrentSyncPeer(), "unflagged report must not settle the sync slot")
+	})
+}

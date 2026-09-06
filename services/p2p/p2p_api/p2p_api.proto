@@ -113,6 +113,11 @@ message AddBanScoreRequest {
   message RecordCatchupSuccessRequest {
     string peer_id = 1;
     int64 duration_ms = 2; // Duration in milliseconds
+    // True when the report covers a whole completed catchup operation. Gates
+    // sync-slot settling on the receiver: older blockvalidation versions used
+    // this RPC to credit individual header batches, which must not settle the
+    // in-flight sync.
+    bool catchup_completed = 3;
   }
 
   message RecordCatchupSuccessResponse {
