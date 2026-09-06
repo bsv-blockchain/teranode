@@ -455,3 +455,8 @@ func TestAvailableDatabases_GlobalVariable(t *testing.T) {
 	delete(availableDatabases, "test")
 	assert.Equal(t, initialLen, len(availableDatabases))
 }
+
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockUTXOStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}

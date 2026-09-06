@@ -84,7 +84,11 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 		if err != nil {
 			return 0, errors.NewStorageError("failed to iterate unmined transactions", err)
 		}
-		if unminedBatch == nil {
+		// Length rather than nil. The interface says nil terminates, and a store that returns
+		// an empty but non-nil slice instead turns this into an infinite loop that allocates
+		// forever and reports nothing. One did, and it cost a node its entire reclaim. Testing
+		// the length terminates on both spellings, so no future store can reintroduce it here.
+		if len(unminedBatch) == 0 {
 			break
 		}
 

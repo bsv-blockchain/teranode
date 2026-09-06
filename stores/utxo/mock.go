@@ -394,3 +394,13 @@ func (m *MockConsistencyScanIterator) Close() error {
 	args := m.Called()
 	return args.Error(0)
 }
+
+// SpendsMadeBy mocks the lookup of the coins a transaction consumed.
+func (m *MockUtxostore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*Spend, error) {
+	args := m.Called(ctx, txHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*Spend), args.Error(1)
+}

@@ -1081,3 +1081,8 @@ func TestInterfaceCompliance(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, loggerStore)
 }
+
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}

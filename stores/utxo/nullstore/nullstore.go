@@ -264,3 +264,8 @@ func (m *NullStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.
 func (m *NullStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	return nil
 }
+
+// SpendsMadeBy returns nothing, in keeping with every other method here.
+func (m *NullStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}

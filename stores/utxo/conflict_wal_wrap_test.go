@@ -100,6 +100,8 @@ func TestReverseProcessConflicting_WALLifecycleOnSuccess(t *testing.T) {
 		Return(&meta.Data{Tx: counterTx, Conflicting: true}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{{TxID: &demotedHash, Vout: 0}}, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).

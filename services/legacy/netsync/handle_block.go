@@ -352,7 +352,10 @@ type TxMapWrapper struct {
 // given until the span closes: a *chainhash.Hash from block.Hash() would pin
 // the whole wrapper for the duration of the stage.
 type blockIdent struct {
-	hash      chainhash.Hash
+	hash chainhash.Hash
+	// prevBlock is the header's PrevBlock: the parent's hash, not its id. createUtxos
+	// compares this against the chain's current best header to decide whether this
+	// block extends the longest chain — see the comment there for why.
 	prevBlock chainhash.Hash
 	height    uint32
 	timestamp time.Time
@@ -1166,9 +1169,27 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 		existingTxHashes []*chainhash.Hash
 	)
 
+	// A transaction with no spendable outputs can never be spent, so below the checkpoint on a
+	// node with no block persister there is nothing to store for it: SV Node keeps no record of
+	// such a transaction at all. Its inputs are still spent in the validation phase, so the
+	// UTXO set is unaffected. The same setting already governs the quick-validation path; this
+	// is the legacy block path, which is how a mainnet node receives its blocks, and without
+	// this the setting changed nothing there. Gated on outpointOnly, which is the
+	// below-checkpoint test, and on the setting, which documents its incompatibility with a
+	// running block persister.
+	skipUnspendable := outpointOnly && sm.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup
+	genesisHeight := sm.settings.ChainCfgParams.GenesisActivationHeight
+
 	// create all the utxos first
 	for _, txHash := range txMap.Keys() {
 		txHash := txHash
+
+		if skipUnspendable {
+			if txWrapper, ok := txMap.Get(txHash); ok &&
+				utxo.HasNoSpendableOutputs(txWrapper.Tx, txWrapper.Tx.IsCoinbase(), blockHeightUint32, genesisHeight) {
+				continue // never spendable, never stored; its inputs are still spent below
+			}
+		}
 
 		g.Go(func() error {
 			txWrapper, ok := txMap.Get(txHash)
@@ -1211,11 +1232,48 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	// existing tx in the block overruns the aerospike client connection pool on fat
 	// blocks (e.g. mainnet 755880 = 2.87M txs).
 	if len(existingTxHashes) > 0 {
+		// A block the legacy path applies is not necessarily on the longest chain: during a
+		// fork this node validates and applies side-chain blocks too, and it is the
+		// blockchain service, not this path, that knows which branch won. Hard-coding
+		// OnLongestChain: true told the store that a side-chain block had settled its
+		// transactions on the main chain. On a store that keeps settled transactions in a
+		// separate membership table that is not a flag but a one-way move out of the
+		// mempool, so a wrong answer is worse than a retry — hence the error return rather
+		// than a fallback. Every backend already expects an honest flag here: it is what
+		// block validation passes on its own SetMinedMulti calls.
+		//
+		// A first fix asked CheckBlockIsInCurrentChain about the PARENT's committed id,
+		// reasoning that a block extends the current chain exactly when its parent is on
+		// it. That is not enough: after block A at height h has been applied and become the
+		// tip, a same-height sibling B sharing A's parent P arrives later. P is still on the
+		// current chain, so the parent-on-chain test answers true for B too, and B is a
+		// losing block — its transactions get moved out of the mempool table regardless.
+		// Parent-on-chain is necessary but not sufficient; it does not distinguish the
+		// winning child from a sibling.
+		//
+		// The exact test is best-header equality: a block extends the current chain iff its
+		// parent IS the current best header, not merely somewhere on it. bi.prevBlock already
+		// carries the header's PrevBlock, so comparing it against GetBestBlockHeader's hash
+		// costs one round trip and needs no committed id at all — bi.prevID is gone. This
+		// equality is exact only because this block itself has not been added yet: createUtxos
+		// runs inside ValidateTransactionsLegacyMode, which prepareSubtrees calls at the
+		// create/spend stage, and AddBlock does not happen until ProcessBlock much later. Once
+		// this block were added and became the new best header itself, the same comparison
+		// would flip (best header would equal this block's own hash, not its parent's) — this
+		// code must never run again for the same block after that point.
+		var best *model.BlockHeader
+
+		if best, _, err = sm.blockchainClient.GetBestBlockHeader(ctx); err != nil {
+			return errors.NewServiceError("[createUtxos][%s] error getting best block header", bi.hash.String(), err)
+		}
+
+		onLongestChain := best.Hash().IsEqual(&bi.prevBlock)
+
 		minedBlockInfo := utxo.MinedBlockInfo{
 			BlockID:        blockID,
 			BlockHeight:    blockHeightUint32,
 			SubtreeIdx:     0,
-			OnLongestChain: true,
+			OnLongestChain: onLongestChain,
 		}
 
 		if err = utxo.SetMinedMultiChunked(ctx, sm.logger, sm.utxoStore, existingTxHashes, minedBlockInfo,
