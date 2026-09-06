@@ -40,6 +40,10 @@ type Server struct {
     topicPrefix                       string             // Chain identifier prefix for topic validation
     blockPeerMap                      cappedPeerMap      // Which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
     subtreePeerMap                    cappedPeerMap      // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
+    blockSeenHashes                   seenHashCache      // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+    subtreeSeenHashes                 seenHashCache      // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+    lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
+    lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Peer selection logic (+ SSRF-safe client for availability probes)
@@ -470,6 +474,8 @@ Records bytes downloaded from a peer via HTTP (typically from their DataHub).
 - `processInvalidBlockMessage`: Processes notifications about invalid blocks from Kafka and bans the sending peer.
 - `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
 - `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
+
+Both announcement handlers deduplicate by hash before publishing to Kafka: per short publish window only the first few distinct announcers of a hash are forwarded (keeping block validation's alternative-source failover fed, and re-opening every few seconds so colluding announcers cannot capture a hash's fetch sources). A peer that keeps re-announcing the same hash is logged for the operator. The Kafka publish is non-blocking; announcements dropped under producer backpressure stay retryable by later announcements of the same hash.
 
 ### Message Structures
 
