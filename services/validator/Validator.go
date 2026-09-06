@@ -974,6 +974,30 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	// From this point on the tx has been durably persisted with its inputs spent and,
+	// when addToBlockAssembly is set, its own record marked Locked (the 2PC
+	// in-progress marker). Routing every return path below through one deferred
+	// cleanup keeps the release in a single place instead of only on the tail of the
+	// happy path. It does NOT unlock on error: see unlockLockedTxOnExit for why an
+	// undelivered tx must stay locked. This is deliberately separate from spend
+	// rollback: spend rollback only ever applies before persistence, and spends must
+	// stand once the tx is durably created (see spendAndCreateInUtxoStore). The
+	// argument (persistedMeta) is captured now, by value of the pointer, so a later
+	// reassignment of txMetaData (e.g. on the SkipUtxoCreation path below) does not
+	// change what the deferred call sees.
+	//
+	// delivered tracks whether the tx has actually reached block assembly, which is
+	// the fact the unlock decision must be gated on. It starts true when this tx
+	// skips block assembly entirely (nothing to deliver), and is flipped to true
+	// only after sendToBlockAssembler returns successfully below. Deliberately NOT
+	// inferred from `err == nil`: a panic between entering the addToBlockAssembly
+	// block and sendToBlockAssembler returning would leave err nil while the tx was
+	// never delivered, and unlocking on that basis would be exactly the hazard this
+	// function exists to prevent.
+	persistedMeta := txMetaData
+	delivered := !addToBlockAssembly
+	defer v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered)
+
 	if validationOptions.SkipUtxoCreation {
 		// create the tx meta needed for the block assembly
 		if validationOptions.OutpointOnlySpend {
@@ -1010,6 +1034,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			return nil, err
 		}
+
+		delivered = true
 	}
 
 	// Serialize and enqueue txmeta for the subtree validation kafka topic.
@@ -1031,17 +1057,88 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	if txMetaData.Locked {
-		if err = v.twoPhaseCommitTransaction(decoupledCtx, tx, txID); err != nil {
-			v.logger.Warnf("[Validate][%s] error during two phase commit, transaction will be marked as spendable on next block: %v", txID, err)
+	// Unlocking (if the tx is still Locked) happens in the deferred
+	// unlockLockedTxOnExit call registered above, on this and every other return
+	// path from this point in the function.
+	return txMetaData, nil
+}
 
-			return txMetaData, err
-		}
-
-		txMetaData.Locked = false
+// unlockLockedTxOnExit is the single point that releases a tx's two-phase-commit
+// Locked flag on the way out of validateInternal. It is deferred immediately
+// after the tx has been durably persisted with its inputs spent (see
+// validateInternal), so the release lives in one place rather than only on the
+// tail of the happy path.
+//
+// It releases the lock ONLY when validateInternal is returning success. The 2PC
+// invariant is that a tx is unlocked after it has reached block assembly, never
+// before (docs/topics/features/two_phase_commit.md). On the error paths between
+// persistence and the end of the function - building tx inpoints, or
+// sendToBlockAssembler failing - the tx is persisted and spent but is NOT in
+// block assembly, so unlocking it here would let a child spending it validate
+// and enter this node's mining template without its parent, producing a block
+// other implementations reject.
+//
+// Staying locked is the documented safe failure mode ("money temporarily can't
+// be spent") and it is normally self-healing, in the right order: the block
+// assembler's unmined-transaction loader adds such a tx to the subtree processor
+// and only then clears its Locked flag (see BlockAssembler.loadUnminedTransactions).
+// One exception: under the default OnRestartValidateParentChain /
+// OnRestartRemoveInvalidParentChainTxs settings, a transaction that gets filtered
+// out of the parent-chain validation during a block-assembly restart is
+// unconditionally unlocked as part of the same batch even though it was never
+// re-added - this is pre-existing block-assembly behaviour, not introduced here.
+//
+// It does not reverse the spend: spend rollback only applies before persistence
+// (see spendAndCreateInUtxoStore) - once the tx is durably created it is valid
+// and its spends must stand.
+//
+// On the success path, if the unlock itself fails, err is set to the unlock error.
+// No caller currently acts on that signal specifically - the real recovery path is
+// the same self-healing loadUnminedTransactions route described above (see
+// docs/topics/features/two_phase_commit.md), not caller-side handling of this
+// error. Setting err is mainly for observability of the failure at the point it
+// happened.
+//
+// The unlock decision is gated on delivered, not on *err being nil. delivered only
+// becomes true once sendToBlockAssembler has actually returned successfully, so it
+// stays false across a panic unwinding from anywhere in that window - unlike *err,
+// which is nil for the entire window regardless of whether delivery happened. Using
+// *err as the proxy would unlock a tx that was never delivered to block assembly if
+// something panicked in that narrow window, which is the exact state this function
+// exists to prevent.
+func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID string, txMetaData *meta.Data, err *error, delivered *bool) {
+	if txMetaData == nil || !txMetaData.Locked {
+		return
 	}
 
-	return txMetaData, nil
+	// Not delivered to block assembly - leave it locked for the unmined-transaction
+	// loader to heal. This covers both ordinary error returns and a panic unwinding
+	// through the window between entering the addToBlockAssembly block and
+	// sendToBlockAssembler returning.
+	if delivered == nil || !*delivered {
+		v.logger.Warnf("[Validate][%s] tx stays locked, it was not delivered to block assembly", txID)
+
+		return
+	}
+
+	// Defensive: delivered is true but an error was still recorded. This should not
+	// happen given the current control flow (every return path after delivery sets
+	// no error), but keep it locked rather than trust an inconsistent state.
+	if *err != nil {
+		v.logger.Warnf("[Validate][%s] tx stays locked despite being delivered, due to a later error: %v", txID, *err)
+
+		return
+	}
+
+	if unlockErr := v.twoPhaseCommitTransaction(ctx, tx, txID); unlockErr != nil {
+		v.logger.Warnf("[Validate][%s] error during two phase commit, transaction will be marked as spendable on next block: %v", txID, unlockErr)
+
+		*err = unlockErr
+
+		return
+	}
+
+	txMetaData.Locked = false
 }
 
 // getTransactionInputBlockHeights returns the block heights for each input of the transaction
