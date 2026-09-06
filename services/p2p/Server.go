@@ -38,6 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -75,6 +76,15 @@ const (
 	// defaultGossipHandlerConcurrency is the per-topic worker pool size used
 	// when p2p_gossip_handler_concurrency is unset.
 	defaultGossipHandlerConcurrency = 4
+
+	// gossipKafkaPublishBuffer sizes the block/subtree producers' publish
+	// channels. The gossip handlers use TryPublish, so a full channel is a
+	// DROPPED announcement rather than backpressure — the buffer must absorb
+	// ordinary producer latency (broker leader election, linger flush), not
+	// just smooth a burst. Sized alongside the TryPublish switch on purpose:
+	// the old 10-slot buffer was tuned for a blocking send that could only
+	// delay, never lose.
+	gossipKafkaPublishBuffer = 1000
 
 	// syncCoordinatorStopTimeout is the sync coordinator's drain sub-budget
 	// inside Server.Stop. Coordinator RPCs are bounded at defaultRPCTimeout
@@ -163,6 +173,11 @@ type Server struct {
 	blockPeerMap                      cappedPeerMap                  // Which peer sent each block (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	subtreePeerMap                    cappedPeerMap                  // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	reportedInvalidBlocks             cappedPeerMap                  // Invalid blocks already scored (canonical hash -> scoring record); dedupes at-least-once Kafka redelivery so one invalid block is scored once per TTL, not once per delivery
+	blockSeenHashes                   seenHashCache                  // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
+	lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
+	connectedPeersProbe               atomic.Pointer[peersProbe]     // Briefly cached "any peer connected" answer for the sender guards; GetPeers walks every connection and subtrees announce constantly
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -751,6 +766,12 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 	s.blockPeerMap.setMaxSize(maxSize)
 	s.subtreePeerMap.setMaxSize(maxSize)
 	s.reportedInvalidBlocks.setMaxSize(maxSize)
+
+	// The seen-hash dedup caches take their limits from the same call: their
+	// zero values fall back to the package defaults, so this too costs only
+	// configurability when skipped.
+	s.blockSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
+	s.subtreeSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
 }
 
 // announcePeerMapLimits logs the two ways a configured value differs from what
@@ -946,8 +967,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		s.invalidSubtreeKafkaConsumerClient.Start(ctx, s.invalidSubtreeHandler(ctx), kafka.WithLogErrorAndMoveOn())
 	}
 
-	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
-	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
+	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, gossipKafkaPublishBuffer))
+	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, gossipKafkaPublishBuffer))
 
 	// Warm the node-status cache before the HTTP surface (and its /p2p-ws
 	// route) comes up, so websocket clients are always served the cached status
@@ -1198,7 +1219,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
-		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+		if _, err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
 		}
 
@@ -1588,31 +1609,32 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Send to notification channel for WebSocket clients
 	select {
 	case s.notificationCh <- &notificationMsg{
-		Timestamp:           time.Now().UTC().Format(isoFormat),
-		Type:                "node_status",
-		BaseURL:             nodeStatusMessage.BaseURL,
-		PeerID:              nodeStatusMessage.PeerID,
-		Version:             nodeStatusMessage.Version,
-		CommitHash:          nodeStatusMessage.CommitHash,
-		BestBlockHash:       notificationBestBlockHash,
-		BestHeight:          notificationBestHeight,
-		TxCount:             nodeStatusMessage.TxCount,
-		SubtreeCount:        nodeStatusMessage.SubtreeCount,
-		FSMState:            nodeStatusMessage.FSMState,
-		StartTime:           nodeStatusMessage.StartTime,
-		Uptime:              nodeStatusMessage.Uptime,
-		ClientName:          nodeStatusMessage.ClientName,
-		MinerName:           nodeStatusMessage.MinerName,
-		ListenMode:          nodeStatusMessage.ListenMode,
-		ChainWork:           nodeStatusMessage.ChainWork,
-		SyncPeerID:          nodeStatusMessage.SyncPeerID,
-		SyncPeerHeight:      nodeStatusMessage.SyncPeerHeight,
-		SyncPeerBlockHash:   nodeStatusMessage.SyncPeerBlockHash,
-		SyncConnectedAt:     nodeStatusMessage.SyncConnectedAt,
-		MinMiningTxFee:      nodeStatusMessage.MinMiningTxFee,
-		FeePolicy:           nodeStatusMessage.FeePolicy,
-		ConnectedPeersCount: nodeStatusMessage.ConnectedPeersCount,
-		Storage:             nodeStatusMessage.Storage,
+		Timestamp:                 time.Now().UTC().Format(isoFormat),
+		Type:                      "node_status",
+		BaseURL:                   nodeStatusMessage.BaseURL,
+		PeerID:                    nodeStatusMessage.PeerID,
+		Version:                   nodeStatusMessage.Version,
+		CommitHash:                nodeStatusMessage.CommitHash,
+		BestBlockHash:             notificationBestBlockHash,
+		BestHeight:                notificationBestHeight,
+		TxCount:                   nodeStatusMessage.TxCount,
+		SubtreeCount:              nodeStatusMessage.SubtreeCount,
+		FSMState:                  nodeStatusMessage.FSMState,
+		StartTime:                 nodeStatusMessage.StartTime,
+		Uptime:                    nodeStatusMessage.Uptime,
+		ClientName:                nodeStatusMessage.ClientName,
+		MinerName:                 nodeStatusMessage.MinerName,
+		ListenMode:                nodeStatusMessage.ListenMode,
+		ChainWork:                 nodeStatusMessage.ChainWork,
+		SyncPeerID:                nodeStatusMessage.SyncPeerID,
+		SyncPeerHeight:            nodeStatusMessage.SyncPeerHeight,
+		SyncPeerBlockHash:         nodeStatusMessage.SyncPeerBlockHash,
+		SyncConnectedAt:           nodeStatusMessage.SyncConnectedAt,
+		MinMiningTxFee:            nodeStatusMessage.MinMiningTxFee,
+		FeePolicy:                 nodeStatusMessage.FeePolicy,
+		ConnectedPeersCount:       nodeStatusMessage.ConnectedPeersCount,
+		LegacyConnectedPeersCount: nodeStatusMessage.LegacyConnectedPeersCount,
+		Storage:                   nodeStatusMessage.Storage,
 	}:
 	default:
 		notificationDropped("node_status")
@@ -1650,12 +1672,51 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	}
 }
 
+// connectedPeersProbeTTL bounds how often the sender-side duplicate guards may
+// walk the connection list: GetPeers does per-peer work (connection lookup and
+// multiaddr formatting) and handleSubtreeNotification runs once per subtree.
+// The staleness cost is one guard decision made on a peer set up to this old —
+// at worst a briefly missed suppression or a marker armed moments before the
+// last peer left, both self-healing on the next probe.
+const connectedPeersProbeTTL = 2 * time.Second
+
+// peersProbe is one cached "any peer connected" answer.
+type peersProbe struct {
+	nonEmpty  bool
+	checkedAt time.Time
+}
+
+// hasConnectedPeers reports whether any peer is currently connected, cached
+// for connectedPeersProbeTTL.
+func (s *Server) hasConnectedPeers() bool {
+	if v := s.connectedPeersProbe.Load(); v != nil && time.Since(v.checkedAt) < connectedPeersProbeTTL {
+		return v.nonEmpty
+	}
+
+	nonEmpty := s.P2PClient != nil && len(s.P2PClient.GetPeers()) > 0
+	s.connectedPeersProbe.Store(&peersProbe{nonEmpty: nonEmpty, checkedAt: time.Now()})
+
+	return nonEmpty
+}
+
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
 	}
 
 	ctxLogger := s.logger.WithTraceContext(ctx)
+
+	// A blockchain-subscription reconnect replays the current tip notification
+	// (sendInitialNotification / the client's lastBlockNotification replay), so
+	// a flapping blockchain stream would re-gossip the same hash with a fresh
+	// seqno — a replay to peers that suppress and spam-score repeats. Suppress
+	// consecutive duplicates only: a reorg away and back changes the announced
+	// hash in between and still gets through.
+	if last := s.lastAnnouncedBlockHash.Load(); last != nil && last.IsEqual(hash) {
+		ctxLogger.Debugf("[handleBlockNotification] suppressing repeat announcement of current tip %s", hash.String())
+		return nil
+	}
+
 	var msgBytes []byte
 
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
@@ -1705,8 +1766,19 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
-	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
+	sent, err := s.publishToNetwork(ctx, s.blockTopicName, msgBytes)
+	if err != nil {
 		return errors.NewError("blockMessage - publish error", err)
+	}
+
+	// Record the tip only when the publish gate actually sent it AND there was
+	// someone to reach: the gate drops block publishes in degraded FSM states
+	// (returning nil), and a GossipSub publish into an empty mesh succeeds
+	// silently — recording either would suppress the re-announcement a
+	// later-connecting or recovering peer needs. The connected-peer set is a
+	// proxy for the topic mesh.
+	if sent && s.hasConnectedPeers() {
+		s.lastAnnouncedBlockHash.Store(hash)
 	}
 
 	// Also send a node_status update when best block changes
@@ -1978,7 +2050,12 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// invisible until its first message. A flag can lag reality by up to
 	// reputationCacheTTL after a connect and by up to one cleanup interval
 	// after a disconnect.
+	// The two transports are counted separately: ConnectedPeersCount keeps
+	// its established libp2p-only meaning for every node already consuming
+	// this gossip message, and legacy peers get their own figure.
 	connectedPeersCount := 0
+	legacyConnectedPeersCount := 0
+
 	if s.peerRegistry != nil {
 		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
 		if listErr != nil {
@@ -1986,12 +2063,20 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 			if cached != nil {
 				connectedPeersCount = cached.ConnectedPeersCount
+				legacyConnectedPeersCount = cached.LegacyConnectedPeersCount
 			}
 		} else {
 			for _, p := range allPeers {
-				if p.IsConnected {
-					connectedPeersCount++
+				if !p.IsConnected {
+					continue
 				}
+
+				if p.TransportType == blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL {
+					legacyConnectedPeersCount++
+					continue
+				}
+
+				connectedPeersCount++
 			}
 		}
 	}
@@ -2048,32 +2133,33 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		storage, blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
 
 	msg := &notificationMsg{
-		Timestamp:           time.Now().UTC().Format(isoFormat),
-		Type:                "node_status",
-		BaseURL:             baseURL,
-		PropagationURL:      propagationURL,
-		PeerID:              peerID,
-		Version:             version,
-		CommitHash:          commit,
-		BestBlockHash:       blockHashStr,
-		BestHeight:          height,
-		TxCount:             txCount,
-		SubtreeCount:        subtreeCount,
-		FSMState:            fsmState,
-		StartTime:           startTime,
-		Uptime:              uptime,
-		ClientName:          clientName,
-		MinerName:           minerName,
-		ListenMode:          listenMode,
-		ChainWork:           chainWorkStr,
-		SyncPeerID:          syncPeerID,
-		SyncPeerHeight:      syncPeerHeight,
-		SyncPeerBlockHash:   syncPeerBlockHash,
-		SyncConnectedAt:     syncConnectedAt,
-		MinMiningTxFee:      minMiningTxFee,
-		FeePolicy:           feePolicy,
-		ConnectedPeersCount: connectedPeersCount,
-		Storage:             storage,
+		Timestamp:                 time.Now().UTC().Format(isoFormat),
+		Type:                      "node_status",
+		BaseURL:                   baseURL,
+		PropagationURL:            propagationURL,
+		PeerID:                    peerID,
+		Version:                   version,
+		CommitHash:                commit,
+		BestBlockHash:             blockHashStr,
+		BestHeight:                height,
+		TxCount:                   txCount,
+		SubtreeCount:              subtreeCount,
+		FSMState:                  fsmState,
+		StartTime:                 startTime,
+		Uptime:                    uptime,
+		ClientName:                clientName,
+		MinerName:                 minerName,
+		ListenMode:                listenMode,
+		ChainWork:                 chainWorkStr,
+		SyncPeerID:                syncPeerID,
+		SyncPeerHeight:            syncPeerHeight,
+		SyncPeerBlockHash:         syncPeerBlockHash,
+		SyncConnectedAt:           syncConnectedAt,
+		MinMiningTxFee:            minMiningTxFee,
+		FeePolicy:                 feePolicy,
+		ConnectedPeersCount:       connectedPeersCount,
+		LegacyConnectedPeersCount: legacyConnectedPeersCount,
+		Storage:                   storage,
 	}
 
 	// Cache the status so sendInitialNodeStatuses can serve new websocket
@@ -2154,31 +2240,32 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 	// Create the NodeStatusMessage for P2P publishing
 	nodeStatusMessage := NodeStatusMessage{
-		Type:                "node_status",
-		BaseURL:             msg.BaseURL,
-		PropagationURL:      msg.PropagationURL,
-		PeerID:              msg.PeerID,
-		Version:             msg.Version,
-		CommitHash:          msg.CommitHash,
-		BestBlockHash:       msg.BestBlockHash,
-		BestHeight:          msg.BestHeight,
-		TxCount:             msg.TxCount,
-		SubtreeCount:        msg.SubtreeCount,
-		FSMState:            msg.FSMState,
-		StartTime:           msg.StartTime,
-		Uptime:              msg.Uptime,
-		ClientName:          msg.ClientName,
-		MinerName:           msg.MinerName,
-		ListenMode:          msg.ListenMode,
-		ChainWork:           msg.ChainWork,
-		SyncPeerID:          msg.SyncPeerID,
-		SyncPeerHeight:      msg.SyncPeerHeight,
-		SyncPeerBlockHash:   msg.SyncPeerBlockHash,
-		SyncConnectedAt:     msg.SyncConnectedAt,
-		MinMiningTxFee:      msg.MinMiningTxFee,
-		FeePolicy:           msg.FeePolicy,
-		ConnectedPeersCount: msg.ConnectedPeersCount,
-		Storage:             msg.Storage,
+		Type:                      "node_status",
+		BaseURL:                   msg.BaseURL,
+		PropagationURL:            msg.PropagationURL,
+		PeerID:                    msg.PeerID,
+		Version:                   msg.Version,
+		CommitHash:                msg.CommitHash,
+		BestBlockHash:             msg.BestBlockHash,
+		BestHeight:                msg.BestHeight,
+		TxCount:                   msg.TxCount,
+		SubtreeCount:              msg.SubtreeCount,
+		FSMState:                  msg.FSMState,
+		StartTime:                 msg.StartTime,
+		Uptime:                    msg.Uptime,
+		ClientName:                msg.ClientName,
+		MinerName:                 msg.MinerName,
+		ListenMode:                msg.ListenMode,
+		ChainWork:                 msg.ChainWork,
+		SyncPeerID:                msg.SyncPeerID,
+		SyncPeerHeight:            msg.SyncPeerHeight,
+		SyncPeerBlockHash:         msg.SyncPeerBlockHash,
+		SyncConnectedAt:           msg.SyncConnectedAt,
+		MinMiningTxFee:            msg.MinMiningTxFee,
+		FeePolicy:                 msg.FeePolicy,
+		ConnectedPeersCount:       msg.ConnectedPeersCount,
+		LegacyConnectedPeersCount: msg.LegacyConnectedPeersCount,
+		Storage:                   msg.Storage,
 	}
 
 	// Self-check against the bounds we enforce on ingress, so a local
@@ -2231,7 +2318,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
-	if err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
+	if _, err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
@@ -2242,6 +2329,16 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.Hash) error {
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		return nil
+	}
+
+	// Mirror of the consecutive-duplicate guard in handleBlockNotification: a
+	// flapping notification source must not re-gossip the same subtree hash
+	// with a fresh seqno, which reads as a replay to receivers. Distinct
+	// subtrees stream constantly, so only a replayed notification can repeat
+	// the immediately preceding hash.
+	if last := s.lastAnnouncedSubtreeHash.Load(); last != nil && last.IsEqual(hash) {
+		s.logger.Debugf("[handleSubtreeNotification] suppressing repeat announcement of subtree %s", hash.String())
 		return nil
 	}
 
@@ -2279,8 +2376,15 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
-	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {
+	sent, err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes)
+	if err != nil {
 		return errors.NewError("subtreeMessage - publish error", err)
+	}
+
+	// Same sent-and-non-empty-mesh gate as handleBlockNotification: a publish
+	// nobody heard must not suppress the re-announcement.
+	if sent && s.hasConnectedPeers() {
+		s.lastAnnouncedSubtreeHash.Store(hash)
 	}
 
 	return nil
@@ -2524,10 +2628,12 @@ func (s *Server) Stop(ctx context.Context) error {
 	// Peer registry cleanup ticker is gone — the centralized blockchain registry
 	// drives its own TTL/LRU eviction (deferred to PR2 in any case).
 
-	// Clear the peer maps to free memory
+	// Clear the peer maps and seen-hash caches to free memory
 	s.blockPeerMap.Clear()
 	s.subtreePeerMap.Clear()
 	s.reportedInvalidBlocks.Clear()
+	s.blockSeenHashes.Clear()
+	s.subtreeSeenHashes.Clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
 	if len(errs) > 0 {
@@ -2545,7 +2651,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 
 	// If the centralized peer registry is available, use it as it has richer data.
 	if s.peerRegistry != nil {
-		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+		allPeers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 		if err != nil {
 			return nil, errors.WrapGRPCPublic(errors.NewServiceError("list peers", err))
 		}
@@ -3026,7 +3132,7 @@ func (s *Server) GetPeerRegistry(ctx context.Context, _ *emptypb.Empty) (*p2p_ap
 		}, nil
 	}
 
-	allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	allPeers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("list peers", err))
 	}

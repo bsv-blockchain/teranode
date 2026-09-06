@@ -201,7 +201,7 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 		return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, errors.WrapGRPC(errors.NewServiceError(errPeerRegistryNotInitialized))
 	}
 
-	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, true, true)
+	peers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, true, true)
 	if err != nil {
 		return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, errors.WrapGRPC(errors.NewServiceError("list peers", err))
 	}

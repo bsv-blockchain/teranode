@@ -299,7 +299,11 @@ func (sc *SyncCoordinator) boundedRPCContext() (context.Context, context.CancelF
 func (sc *SyncCoordinator) registryListPeers() ([]*blockchain.PeerInfo, error) {
 	ctx, cancel := sc.boundedRPCContext()
 	defer cancel()
-	return sc.registry.ListPeers(ctx, nil, 0, 0, false, false)
+
+	// libp2p peers only. A wire-protocol peer cannot serve a DataHub, so it is
+	// never a catchup candidate; filter on transport rather than relying on an
+	// empty DataHubURL.
+	return sc.registry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 }
 
 func (sc *SyncCoordinator) registryGetPeer(peerID string) (*blockchain.PeerInfo, bool, error) {
