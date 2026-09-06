@@ -432,7 +432,7 @@ For GRPC services, certain administrative operations require additional API key 
 - **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`.
 
 !!! warning "Security Note"
-    The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer `securityLevelGRPC >= 2` (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.
+    The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer `security_level_grpc >= 2` (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.
 
 ## General Format
 

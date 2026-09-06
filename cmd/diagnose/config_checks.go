@@ -208,7 +208,7 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 			Severity:    severity,
 			Check:       "gRPC TLS",
 			Value:       "disabled (level 0)",
-			Recommended: "Set securityLevelGRPC >= 1 for production",
+			Recommended: "Set security_level_grpc >= 1 for production",
 		})
 	} else {
 		results = append(results, ConfigResult{
