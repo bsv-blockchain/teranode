@@ -11,11 +11,11 @@
 | GRPCListenAddress | string | "localhost:9906" (Go default; overridden to `localhost:9904` by `settings.conf` via `P2P_GRPC_PORT`, and widened to `:9904` in the `docker.m`, `docker.ss` and `operator` contexts, plus the generated split-mode compose contexts) | p2p_grpcListenAddress | **CRITICAL** - gRPC server binding; loopback by default |
 | HTTPAddress | string | "localhost:9906" | p2p_httpAddress | HTTP client connections |
 | HTTPListenAddress | string | "" | p2p_httpListenAddress | HTTP server binding |
-| ListenAddresses | []string | [] | p2p_listen_addresses | P2P network interfaces |
+| ListenAddresses | []string | [] | p2p_listen_addresses | **REQUIRED** - Must describe the wildcard bind the bus performs (`0.0.0.0`, `::`, or `/ip4/0.0.0.0/tcp/<p2p_port>`); narrower values fail startup |
 | AdvertiseAddresses | []string | [] | p2p_advertise_addresses | Address advertisement to peers |
-| ListenMode | string | "full" | listen_mode | Node operation mode ("full" or "listen_only") |
+| ListenMode | string | "full" | listen_mode | Node operation mode ("full", "listen_only" or "silent"; silent still binds p2p_port) |
 | PeerID | string | "" | p2p_peer_id | Peer network identifier |
-| Port | int | 9905 | p2p_port | Default P2P communication port (multiaddrs in ListenAddresses/AdvertiseAddresses are the source of truth) |
+| Port | int | 9905 | p2p_port | TCP port libp2p binds on 0.0.0.0 and :: (always, independent of AdvertiseAddresses) |
 | PrivateKey | string | "" | p2p_private_key | **CRITICAL** - Cryptographic peer identity |
 | BlockTopic | string | "" | p2p_block_topic | Block propagation topic |
 | NodeStatusTopic | string | "" | p2p_node_status_topic | Node status communication topic |
@@ -26,7 +26,7 @@
 | BanThreshold | int | 100 | p2p_ban_threshold | Peer banning threshold |
 | BanDuration | time.Duration | 24h | p2p_ban_duration | Ban duration |
 | ForceSyncPeer | string | "" | p2p_force_sync_peer | **CRITICAL** - Forced sync peer override |
-| SharePrivateAddresses | bool | true | p2p_share_private_addresses | Private address advertisement |
+| SharePrivateAddresses | bool | true | p2p_share_private_addresses | Currently no effect: libp2p advertises bound interface addresses (private included) whenever AdvertiseAddresses is empty |
 | AllowPrunedNodeFallback | bool | true | p2p_allow_pruned_node_fallback | **CRITICAL** - Pruned node fallback behavior |
 | DHTMode | string | "server" (Code default; settings.conf ships with "off") | p2p_dht_mode | DHT operation mode ("server", "client", or "off") |
 | DHTCleanupInterval | time.Duration | 24h | p2p_dht_cleanup_interval | DHT provider record cleanup interval |
@@ -60,9 +60,10 @@
 
 ### Network Address Management
 
-- `ListenAddresses` and `AdvertiseAddresses` control network presence
-- `Port` used as fallback when addresses don't specify port
-- `SharePrivateAddresses` controls address advertisement behavior
+- `Port` is the libp2p listen port; it is always bound on all interfaces
+- `ListenAddresses` can only confirm that wildcard bind (the message bus has no listen-address option); anything narrower is rejected at startup
+- `AdvertiseAddresses` overrides what libp2p announces to peers; when empty libp2p announces its bound interface addresses and the public address observed via Identify
+- `SharePrivateAddresses` no longer feeds `ListenAddresses` into the announce set (a wildcard is not dialable); announcement is left to libp2p either way
 
 ### Peer Connection Management
 
@@ -107,7 +108,7 @@
 
 | Setting | Validation | Impact | When Checked |
 |---------|------------|--------|-------------|
-| ListenMode | Must be "full" or "listen_only" | Service fails to start if invalid | During server initialization |
+| ListenMode | Must be "full", "listen_only" or "silent" | Service fails to start if invalid | During server initialization |
 | GRPCListenAddress | Used for gRPC server binding | Service communication | During server start |
 | ForceSyncPeer | Overrides automatic peer selection | Sync behavior | During sync coordinator initialization |
 | EnableNAT | Triggers network scanning on shared hosting | Security alerts | During libp2p host initialization |

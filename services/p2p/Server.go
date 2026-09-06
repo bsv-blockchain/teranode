@@ -372,12 +372,46 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 		logger.Warnf("[p2p] gossipsub peer scoring DISABLED (p2p_enable_peer_scoring=false), peer exchange %v", tSettings.P2P.EnablePeerExchange)
 	}
 
+	// The listen port is independent of what the node announces. Leaving Port
+	// zero makes the bus bind a random ephemeral port that changes on every
+	// restart, so every firewall rule and port mapping written for p2p_port
+	// points at nothing.
+	conf.Port = tSettings.P2P.Port
+
 	if len(advertiseAddresses) > 0 {
 		conf.AnnounceAddrs = advertiseAddresses
-		conf.Port = tSettings.P2P.Port
 	}
 
 	return conf, nil
+}
+
+// resolveAdvertiseAddresses decides which addresses, if any, the node announces
+// to peers. An empty result leaves announcement to libp2p, which advertises the
+// interface addresses it actually bound (private ones included) and whatever
+// public address peers observe via Identify.
+//
+// The listen addresses are deliberately never announced: the bus only supports
+// wildcard binds, and a wildcard is not a dialable address. That also means
+// SharePrivateAddresses currently has no effect on what is announced; the bus
+// offers no address filter short of a full AnnounceAddrs override.
+func resolveAdvertiseAddresses(logger ulogger.Logger, tSettings *settings.Settings) []string {
+	switch {
+	case tSettings.P2P.ListenMode == settings.ListenModeSilent:
+		// Silent mode: no explicit announce addresses. Discoverability is
+		// removed by disabling the DHT (see NewServer), not by this branch.
+		if len(tSettings.P2P.AdvertiseAddresses) > 0 {
+			logger.Infof("[silent mode] p2p_advertise_addresses %v suppressed - nothing is announced in silent mode", tSettings.P2P.AdvertiseAddresses)
+		} else {
+			logger.Infof("[silent mode] no advertise addresses announced")
+		}
+		return nil
+	case len(tSettings.P2P.AdvertiseAddresses) > 0:
+		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses)
+		return tSettings.P2P.AdvertiseAddresses
+	default:
+		logger.Infof("No advertise addresses configured - libp2p will advertise every bound interface address (private ones included) and the public address observed by peers; p2p_share_private_addresses=%v has no effect on this", tSettings.P2P.SharePrivateAddresses)
+		return nil
+	}
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -425,14 +459,17 @@ func NewServer(
 ) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
-	listenAddresses := tSettings.P2P.ListenAddresses
-	if listenAddresses == nil {
-		return nil, errors.NewConfigurationError("p2p_listen_addresses not set in config")
-	}
-
 	p2pPort := tSettings.P2P.Port
 	if p2pPort == 0 {
 		return nil, errors.NewConfigurationError("p2p_port not set in config")
+	}
+
+	// go-p2p-message-bus always binds 0.0.0.0 and :: on p2pPort. Reject any
+	// listen address that asks for something else rather than ignoring it: an
+	// operator who narrowed the bind to one interface must not be left believing
+	// it took effect.
+	if err := settings.ValidateP2PListenAddresses(tSettings.P2P.ListenAddresses, p2pPort); err != nil {
+		return nil, err
 	}
 
 	if tSettings.ChainCfgParams.TopicPrefix == "" {
@@ -537,30 +574,7 @@ func NewServer(
 		}
 	}
 
-	// Configure advertise addresses
-	// With go-p2p v1.2.1, address advertisement is handled more intelligently:
-	// - If AdvertiseAddresses is explicitly set, those addresses are used
-	// - If SharePrivateAddresses is true, we pass listen addresses to ensure local connectivity
-	// - Otherwise, go-p2p will automatically filter private IPs and detect public addresses
-	// In silent mode, address advertisement is always suppressed regardless of other settings.
-	var advertiseAddresses []string
-	if listenMode == settings.ListenModeSilent {
-		// Silent mode: never advertise any addresses so the node remains undiscoverable
-		advertiseAddresses = []string{}
-		logger.Infof("[silent mode] Address advertisement suppressed - node will not be discoverable")
-	} else if len(tSettings.P2P.AdvertiseAddresses) > 0 {
-		// Use explicitly configured advertise addresses
-		advertiseAddresses = tSettings.P2P.AdvertiseAddresses
-		logger.Infof("Using configured advertise addresses: %v", advertiseAddresses)
-	} else if tSettings.P2P.SharePrivateAddresses {
-		// Share private addresses for local/test environments
-		advertiseAddresses = listenAddresses
-		logger.Infof("Sharing private addresses for local connectivity: %v", advertiseAddresses)
-	} else {
-		// Let go-p2p auto-detect and filter private addresses
-		advertiseAddresses = []string{}
-		logger.Infof("Private address sharing disabled - go-p2p will auto-detect public addresses only")
-	}
+	advertiseAddresses := resolveAdvertiseAddresses(logger, tSettings)
 
 	// Construct the full Bitcoin protocol ID with version and network topic prefix
 	// This ensures we only connect to peers on the same network (e.g. mainnet/testnet)
@@ -597,10 +611,10 @@ func NewServer(
 	if err != nil {
 		return nil, errors.NewServiceError("failed to create p2p client", err)
 	}
-	// Log P2P node creation
-	logger.Infof("P2P node created successfully")
-	// The node will learn its external address via libp2p's Identify protocol
-	// when peers connect and tell us what address they see us from
+	// The bus logs the addresses libp2p actually bound ("Listening on: ...")
+	// through our logger. The node learns its external address via libp2p's
+	// Identify protocol when peers connect and tell us what address they see us from.
+	logger.Infof("P2P node created successfully on port %d", conf.Port)
 
 	p2pServer := &Server{
 		P2PClient:              p2pClient,
