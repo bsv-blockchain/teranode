@@ -445,6 +445,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		},
 		UtxoStore: UtxoStoreSettings{
 			UtxoStore:                               getURL("utxostore", "", alternativeContext...),
+			TeraSlabConflictWALStore:                getURL("utxostore_teraslab_conflictWalStore", "", alternativeContext...),
 			BlockHeightRetention:                    getUint32("utxostore_blockHeightRetention", globalBlockHeightRetention, alternativeContext...),
 			UnminedTxRetention:                      getUint32("utxostore_unminedTxRetention", globalBlockHeightRetention/2, alternativeContext...),
 			ParentPreservationBlocks:                getUint32("utxostore_parentPreservationBlocks", blocksInADayOnAverage*10, alternativeContext...),
