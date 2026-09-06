@@ -2007,7 +2007,17 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 			}
 
 			sm.requestedBlocks.Set(*node.hash, struct{}{})
-			peerState, _ := sm.peerStates.Get(sp)
+
+			// peerState is the one fetched and existence-checked above, deliberately not
+			// looked up again here. sp does not change across the loop, so a second lookup
+			// returned the same value on every iteration, and it discarded the existence
+			// flag. A peer that went away between the check above and this line therefore
+			// left a nil pointer that was written to immediately, which segfaulted the node
+			// on mainnet on 2026-09-02 with an invalid memory address at offset 0x18.
+			//
+			// Reusing the checked pointer is also correct when the peer HAS gone: the map it
+			// writes into is that peer's own, so a stale entry is read by nobody and the
+			// disconnect path discards the whole state.
 			peerState.requestedBlocks.Set(*node.hash, struct{}{})
 
 			numRequested++
