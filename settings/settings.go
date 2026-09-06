@@ -600,27 +600,29 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GCTarget: getInt("gc_tuning_gogc", 100, alternativeContext...),
 		},
 		Pruner: PrunerSettings{
-			GRPCAddress:                    getString("pruner_grpcAddress", "localhost:8096", alternativeContext...),
-			GRPCListenAddress:              getString("pruner_grpcListenAddress", ":8096", alternativeContext...),
-			BlockAssemblyWaitTimeout:       getDuration("pruner_blockAssemblyWaitTimeout", 10*time.Minute, alternativeContext...), // Wait up to 10 minutes for BA to be ready
-			ConnectionPoolWarningThreshold: getFloat64("pruner_connectionPoolWarningThreshold", 0.7, alternativeContext...),       // Warn/adjust when exceeding 70% of connection pool
-			BlockTrigger:                   getString("pruner_block_trigger", PrunerBlockTriggerOnBlockPersisted, alternativeContext...),
-			UTXODefensiveEnabled:           getBool("pruner_utxoDefensiveEnabled", false, alternativeContext...),                 // Defensive mode off by default (production)
-			UTXODefensiveBatchReadSize:     getInt("pruner_utxoDefensiveBatchReadSize", 10000, alternativeContext...),            // Batch size for child verification
-			UTXOChunkSize:                  getInt("pruner_utxoChunkSize", 1000, alternativeContext...),                          // Chunk size for batch operations
-			UTXOChunkGroupLimit:            getInt("pruner_utxoChunkGroupLimit", 10, alternativeContext...),                      // Process 10 chunks in parallel
-			UTXOProgressLogInterval:        getDuration("pruner_utxoProgressLogInterval", 30*time.Second, alternativeContext...), // Progress every 30s
-			UTXOPartitionQueries:           getInt("pruner_utxoPartitionQueries", 0, alternativeContext...),                      // 0 = auto-detect based on CPU cores
-			UTXOSetTTL:                     getBool("pruner_utxoSetTTL", false, alternativeContext...),                           // Use TTL instead of delete (false = hard delete)
-			RelaxRemovalCommitLevel:        getBool("pruner_relaxRemovalCommitLevel", true, alternativeContext...),               // Pruner removals ACK from the master only (idempotent, re-pruned next scan)
-			SkipBlobDeletion:               getBool("pruner_skipBlobDeletion", false, alternativeContext...),                     // Skip blob deletion disabled by default (deletion enabled)
-			BlobDeletionSafetyWindow:       getUint32("pruner_blobDeletionSafetyWindow", 10, alternativeContext...),              // Wait 10 blocks behind triggering height
-			BlobDeletionBatchSize:          getInt("pruner_blobDeletionBatchSize", 1000, alternativeContext...),                  // Process 1000 deletions per batch
-			BlobDeletionMaxRetries:         getInt("pruner_blobDeletionMaxRetries", 3, alternativeContext...),                    // Retry failed deletions up to 3 times
-			SkipPreserveParents:            getBool("pruner_skipPreserveParents", false, alternativeContext...),                  // Skip Phase 1: preserve parents
-			SkipDeletions:                  getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
-			MinBlockHeight:                 getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
-			UTXOPrunedSetMaxEntries:        getInt("pruner_utxoPrunedSetMaxEntries", 10_000_000, alternativeContext...),          // Soft cap on PrunedTxSet entries; 0 = use built-in 2B default (NOT unlimited)
+			GRPCAddress:                     getString("pruner_grpcAddress", "localhost:8096", alternativeContext...),
+			GRPCListenAddress:               getString("pruner_grpcListenAddress", ":8096", alternativeContext...),
+			BlockAssemblyWaitTimeout:        getDuration("pruner_blockAssemblyWaitTimeout", 10*time.Minute, alternativeContext...), // Wait up to 10 minutes for BA to be ready
+			ConnectionPoolWarningThreshold:  getFloat64("pruner_connectionPoolWarningThreshold", 0.7, alternativeContext...),       // Warn/adjust when exceeding 70% of connection pool
+			BlockTrigger:                    getString("pruner_block_trigger", PrunerBlockTriggerOnBlockPersisted, alternativeContext...),
+			SkipDuringCatchup:               getBool("pruner_skipDuringCatchup", false, alternativeContext...),                    // Skip pruning during catchup off by default (see longdesc trade-off)
+			UTXODefensiveEnabled:            getBool("pruner_utxoDefensiveEnabled", false, alternativeContext...),                 // Defensive mode off by default (production)
+			UTXODefensiveBatchReadSize:      getInt("pruner_utxoDefensiveBatchReadSize", 10000, alternativeContext...),            // Batch size for child verification
+			UTXOChunkSize:                   getInt("pruner_utxoChunkSize", 1000, alternativeContext...),                          // Chunk size for batch operations
+			UTXOChunkGroupLimit:             getInt("pruner_utxoChunkGroupLimit", 10, alternativeContext...),                      // Process 10 chunks in parallel
+			UTXOProgressLogInterval:         getDuration("pruner_utxoProgressLogInterval", 30*time.Second, alternativeContext...), // Progress every 30s
+			UTXOPartitionQueries:            getInt("pruner_utxoPartitionQueries", 0, alternativeContext...),                      // 0 = auto-detect based on CPU cores
+			UTXOSetTTL:                      getBool("pruner_utxoSetTTL", false, alternativeContext...),                           // Use TTL instead of delete (false = hard delete)
+			RelaxRemovalCommitLevel:         getBool("pruner_relaxRemovalCommitLevel", true, alternativeContext...),               // Pruner removals ACK from the master only (idempotent, re-pruned next scan)
+			SkipBlobDeletion:                getBool("pruner_skipBlobDeletion", false, alternativeContext...),                     // Skip blob deletion disabled by default (deletion enabled)
+			BlobDeletionSafetyWindow:        getUint32("pruner_blobDeletionSafetyWindow", 10, alternativeContext...),              // Wait 10 blocks behind triggering height
+			BlobDeletionBatchSize:           getInt("pruner_blobDeletionBatchSize", 1000, alternativeContext...),                  // Process 1000 deletions per batch
+			BlobDeletionMaxRetries:          getInt("pruner_blobDeletionMaxRetries", 3, alternativeContext...),                    // Retry failed deletions up to 3 times
+			SkipPreserveParents:             getBool("pruner_skipPreserveParents", false, alternativeContext...),                  // Skip Phase 1: preserve parents
+			SkipProcessExpiredPreservations: getBool("pruner_skipProcessExpiredPreservations", false, alternativeContext...),      // Skip Phase 1b: expire old parent preservations
+			SkipDeletions:                   getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
+			MinBlockHeight:                  getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
+			UTXOPrunedSetMaxEntries:         getInt("pruner_utxoPrunedSetMaxEntries", 10_000_000, alternativeContext...),          // Soft cap on PrunedTxSet entries; 0 = use built-in 2B default (NOT unlimited)
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second, alternativeContext...),
