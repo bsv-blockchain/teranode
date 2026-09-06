@@ -356,15 +356,71 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 	return allTransactions, batchArenas, nil
 }
 
+// wrapCheckBlockSubtreesErr prepares a CheckBlockSubtrees failure for the gRPC
+// boundary.
+//
+// It exists because teranode's *Error carries no GRPCStatus method, and the only
+// server-side interceptors util's getGRPCServer installs are tracing and
+// prometheus metrics — neither converts errors. A bare *Error returned from a
+// handler therefore crosses the wire as codes.Unknown with no status details,
+// and the caller's errors.UnwrapGRPC rebuilds a single generic ERR_ERROR holding
+// nothing but flattened message text. Every error code in the chain is lost, so
+// every errors.Is check in block validation misses — including the ones that
+// exist specifically to keep this node's own faults off an honest peer's record
+// (issues 1031 and 1368). errors.WrapGRPC serialises the whole chain into status
+// details, which is what UnwrapGRPC needs to rebuild it.
+//
+// The consensus verdicts are held back, deliberately. When the chain carries
+// ERR_TX_INVALID or ERR_BLOCK_INVALID the error is flattened into a single
+// processing error first, so those codes still do not reach the caller. Block
+// validation treats them as proof of a consensus violation: it persists the
+// block with invalid=true, which is permanent, cascades to every descendant via
+// checkParentInvalid, and reports the serving peer as malicious. That is only
+// safe if every ERR_TX_INVALID reaching here is a genuine verdict on the block,
+// and today it is not — stores/utxo/aerospike labels around two dozen of its own
+// decode and external-blob read failures ErrTxInvalid, and because errors.Is
+// walks the wrapped chain no amount of ProcessingError wrapping in between
+// reclassifies them. Letting those through would turn a local disk fault into a
+// permanently poisoned block and a banned honest peer, which is strictly worse
+// than the peer-blame this change fixes. The hold-back keeps the consensus
+// codes exactly as reachable as they are today — no more, no less — and comes
+// out in one edit once the store's error vocabulary is corrected.
+//
+// Note the asymmetry this leaves: the phase-3 ordered-retry return site further
+// down has always wrapped, so a verdict raised there does still reach block
+// validation. That inconsistency is pre-existing and is deliberately not
+// widened here.
+func wrapCheckBlockSubtreesErr(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, errors.ErrTxInvalid) || errors.Is(err, errors.ErrBlockInvalid) {
+		// Rebuilt from the rendered text rather than wrapped: a wrap would leave
+		// the consensus code in the chain, where errors.Is would still find it.
+		return errors.WrapGRPC(errors.NewProcessingError("%s", err.Error()))
+	}
+
+	return errors.WrapGRPC(err)
+}
+
 func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
-		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
+		// Names what actually failed: deserialising the block bytes carried on the
+		// request. Nothing here talks to the blockchain client, and the wrap now puts
+		// this message on the status line the caller logs, so a wrong dependency in it
+		// sends whoever reads that log at the wrong service.
+		return nil, wrapCheckBlockSubtreesErr(errors.NewProcessingError("[CheckBlockSubtrees] failed to deserialise block from request bytes", err))
 	}
 
 	if request.BaseUrl != "" {
 		if err := util.ValidateURL(request.BaseUrl); err != nil {
-			return nil, errors.NewInvalidArgumentError("[CheckBlockSubtrees] invalid BaseUrl: %v", err)
+			// No %v verb: errors.New* consumes a trailing error argument as the
+			// wrapped link before formatting, so the verb would survive literally.
+			// That was cosmetic while this site returned bare, but the wrap puts
+			// the outermost message on the status line the caller logs.
+			return nil, wrapCheckBlockSubtreesErr(errors.NewInvalidArgumentError("[CheckBlockSubtrees] invalid BaseUrl", err))
 		}
 	}
 
@@ -447,7 +503,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	}
 
 	if err := existsGroup.Wait(); err != nil {
-		return nil, err
+		return nil, wrapCheckBlockSubtreesErr(err)
 	}
 
 	missingSubtrees := make([]chainhash.Hash, 0, len(block.Subtrees))
@@ -486,7 +542,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		// hash pointer; that nil-guard lives inside fetchCandidateParentMedianTime.
 		candidateParentMedianTime, mtpErr = u.fetchCandidateParentMedianTime(ctx, block.Header.HashPrevBlock)
 		if mtpErr != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtrees] candidate-parent MTP", mtpErr)
+			return nil, wrapCheckBlockSubtreesErr(errors.NewProcessingError("[CheckBlockSubtrees] candidate-parent MTP", mtpErr))
 		}
 	}
 
@@ -498,7 +554,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// blocks, transactions must NOT be added to block assembly.
 	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get FSM current state", err))
+		return nil, wrapCheckBlockSubtreesErr(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get FSM current state", err))
 	}
 
 	addTXToBlockAssembly := *currentState != blockchain.FSMStateCATCHINGBLOCKS
@@ -506,7 +562,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
 	if err != nil {
-		return nil, errors.NewProcessingError("[CheckSubtree] Failed to get block headers from blockchain client", err)
+		return nil, wrapCheckBlockSubtreesErr(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block headers from blockchain client", err))
 	}
 
 	blockIds := make(map[uint32]bool, len(blockHeaderIDs))
@@ -603,7 +659,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		releaseArenas,
 	)
 	if err != nil {
-		return nil, err
+		return nil, wrapCheckBlockSubtreesErr(err)
 	}
 
 	u.logger.Infof("[CheckBlockSubtrees] Completed processing %d transactions across %d subtree batches", totalProcessedTxs, numBatches)
@@ -678,6 +734,15 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		)
 	}
 
+	// Deliberately errors.WrapGRPC and NOT wrapCheckBlockSubtreesErr. This site has
+	// always wrapped, so a consensus verdict raised by the phase-3 ordered retry has
+	// always reached block validation with its code intact — including the
+	// invalid=true persistence and the malicious-peer report. Routing it through the
+	// helper would hold those codes back and so remove behaviour that this change is
+	// not about; routing the newly-wrapped sites through plain errors.WrapGRPC would
+	// grant the same codes a second, wider door on the strength of a store error
+	// vocabulary that cannot yet support it. The asymmetry is the pre-existing state,
+	// kept on purpose. See wrapCheckBlockSubtreesErr for the whole argument.
 	if err := u.validateMissingSubtreesWithOrderedRetry(ctx, missingSubtrees, validateSubtree); err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
