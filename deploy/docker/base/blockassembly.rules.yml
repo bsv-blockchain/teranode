@@ -1,0 +1,74 @@
+groups:
+  - name: blockassembly
+    rules:
+      # teranode_blockassembly_current_state is a numeric gauge, so compare it
+      # against the state number (`running` is `1`) — a string comparison such
+      # as `!= "running"` is not valid PromQL.
+      #
+      # The `for` clause supplies the "sustained" semantics. Do not add a
+      # `time() - timestamp(...)` clause: timestamp() returns the sample's own
+      # timestamp, so that only measures scrape staleness (never > 30s with a
+      # 30s scrape interval) and silently prevents the alert from ever firing.
+      # See blockassembly.rules_test.yml.
+      - alert: BlockAssemblerStuckInState
+        expr: teranode_blockassembly_current_state != 1
+        for: 1m
+        annotations:
+          summary: "BlockAssembler stuck in non-running state"
+
+      # state_duration_seconds is observed only when a state is *left*
+      # (BlockAssembler.go setCurrentRunningState), and a catch-up of N blocks is
+      # one Reorg call under a single movingUp span — so this histogram gets at
+      # most one observation per block announcement, not one per block. Two
+      # consequences drive the windows below:
+      #
+      #  - the rate window must be wide enough to hold an observation across a
+      #    mainnet block interval, hence 30m rather than 5m;
+      #  - `for` must be meaningfully SHORTER than the rate window. With
+      #    `for` equal to the window, a lone observation at t0 keeps the
+      #    expression true only until t0+window, but the alert does not enter
+      #    pending until the first evaluation after t0 — so the pending timer
+      #    always expires just after the sample has aged out and the alert
+      #    resets instead of firing.
+      - alert: SlowTipAdvance
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(teranode_blockassembly_state_duration_seconds_bucket{state="movingUp"}[30m])) by (job, instance, le)
+          ) > 1
+        for: 10m
+        annotations:
+          summary: "Block assembly tip advance is slow (P95 > 1s)"
+
+      # Aggregate per target, not across the whole job: a bare sum() drops `job`
+      # and `instance`, which makes the threshold node-count dependent (three
+      # nodes at 0.04/s each sum to 0.12 and fire though none is unhealthy) and
+      # leaves the notification unable to say which node it is about.
+      - alert: FrequentReorgs
+        expr: |
+          sum(rate(teranode_blockassembly_state_transitions_total{to="reorging"}[5m])) by (job, instance) > 0.1
+        for: 5m
+        annotations:
+          summary: "Reorgs happening more than once per 10 seconds"
+
+      # Block assembly normally tracks the chain tip, so any sustained lag means
+      # the mining candidate is being built on a stale tip. This is the primary
+      # stall signal; the state-machine alerts above only catch the cases where
+      # the assembler is also parked in a non-running state.
+      - alert: BlockAssemblyBehindTip
+        expr: teranode_blockassembly_tip_lag_blocks > 0
+        for: 10m
+        annotations:
+          summary: "Block assembly is {{ $value }} block(s) behind the chain tip"
+
+      # Catch-up/reorg/move-forward failures that left the assembler behind the
+      # tip. Rate rather than absolute count, so a single transient failure that
+      # then recovers does not page anyone. Here `for` is deliberately equal to
+      # the rate window — the inverse of SlowTipAdvance above. That construction
+      # means a lone increment can never satisfy the pending timer, which is
+      # exactly the wanted semantics: only a sustained stream of failures pages.
+      - alert: BlockAssemblyProcessingStuck
+        expr: |
+          sum(rate(teranode_blockassembly_processing_stuck_total[15m])) by (job, instance, reason) > 0
+        for: 15m
+        annotations:
+          summary: "Block assembly repeatedly failing to advance (reason: {{ $labels.reason }})"

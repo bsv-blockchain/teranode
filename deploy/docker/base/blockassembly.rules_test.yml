@@ -1,0 +1,168 @@
+# Unit tests for blockassembly.rules.yml.
+#
+# Run with:
+#   promtool test rules deploy/docker/base/blockassembly.rules_test.yml
+# or, without a local promtool:
+#   docker run --rm --entrypoint promtool -v "$PWD/deploy/docker/base:/w" -w /w \
+#     prom/prometheus:v2.44.0 test rules blockassembly.rules_test.yml
+#
+# This file is deliberately not listed in prometheus.yml `rule_files`.
+rule_files:
+  - blockassembly.rules.yml
+
+# Matches `evaluation_interval` in prometheus.yml.
+evaluation_interval: 30s
+
+tests:
+  # BlockAssemblerStuckInState: fires when the assembler sits in a non-running
+  # state (5 == reorging, per StateStrings in BlockAssembler.go) across a normal
+  # 30s scrape interval.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_current_state'
+        values: '5+0x40'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: BlockAssemblerStuckInState
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: BlockAssemblerStuckInState
+        exp_alerts:
+          - exp_annotations:
+              summary: "BlockAssembler stuck in non-running state"
+
+  # BlockAssemblerStuckInState: stays silent while the assembler is running.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_current_state'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BlockAssemblerStuckInState
+        exp_alerts: []
+
+  # SlowTipAdvance: all movingUp observations land in the (1s, 2s] bucket, so
+  # the P95 is above the 1s threshold.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="1.0"}'
+        values: '0+0x40'
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="2.0"}'
+        values: '0+10x40'
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="+Inf"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SlowTipAdvance
+        exp_alerts:
+          - exp_annotations:
+              summary: "Block assembly tip advance is slow (P95 > 1s)"
+
+  # SlowTipAdvance: a SINGLE slow advance must still fire. This is the
+  # regression test for `for` >= the rate window: with `[5m]`/`for: 5m` the lone
+  # observation at t=5m aged out of the window before the pending timer expired
+  # and the alert reset instead of firing. At mainnet block times a single slow
+  # advance per window is the normal case, so that made the rule unfireable.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="1.0"}'
+        values: '0+0x80'
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="2.0"}'
+        values: '0+0x9 1+0x70'
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="+Inf"}'
+        values: '0+0x9 1+0x70'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SlowTipAdvance
+        exp_alerts:
+          - exp_annotations:
+              summary: "Block assembly tip advance is slow (P95 > 1s)"
+
+  # SlowTipAdvance: fast tip advance (everything under 1s) must not alert.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="1.0"}'
+        values: '0+10x40'
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="2.0"}'
+        values: '0+10x40'
+      - series: 'teranode_blockassembly_state_duration_seconds_bucket{state="movingUp",le="+Inf"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SlowTipAdvance
+        exp_alerts: []
+
+  # FrequentReorgs: 1 reorg transition per second is well over the 0.1/s
+  # threshold.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_state_transitions_total{from="running",to="reorging"}'
+        values: '0+30x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: FrequentReorgs
+        exp_alerts:
+          - exp_annotations:
+              summary: "Reorgs happening more than once per 10 seconds"
+
+  # FrequentReorgs: one reorg every 5 minutes (0.0033/s) must not alert.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_state_transitions_total{from="running",to="reorging"}'
+        values: '0+0x9 1+0x9 2+0x9 3+0x9'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: FrequentReorgs
+        exp_alerts: []
+
+  # BlockAssemblyBehindTip: a persistent 3-block lag fires after 10m, and not
+  # before.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_tip_lag_blocks'
+        values: '3+0x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BlockAssemblyBehindTip
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: BlockAssemblyBehindTip
+        exp_alerts:
+          - exp_annotations:
+              summary: "Block assembly is 3 block(s) behind the chain tip"
+
+  # BlockAssemblyBehindTip: a short lag spike that recovers must not alert.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_tip_lag_blocks'
+        values: '0+0x10 2 2 2 0+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BlockAssemblyBehindTip
+        exp_alerts: []
+
+  # BlockAssemblyProcessingStuck: repeated catch-up failures fire, labelled by
+  # reason.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_processing_stuck_total{reason="catchup"}'
+        values: '0+1x80'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: BlockAssemblyProcessingStuck
+        exp_alerts:
+          - exp_labels:
+              reason: catchup
+            exp_annotations:
+              summary: "Block assembly repeatedly failing to advance (reason: catchup)"
+
+  # BlockAssemblyProcessingStuck: one transient failure followed by recovery
+  # must not alert.
+  - interval: 30s
+    input_series:
+      - series: 'teranode_blockassembly_processing_stuck_total{reason="reorg"}'
+        values: '0 1+0x80'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: BlockAssemblyProcessingStuck
+        exp_alerts: []

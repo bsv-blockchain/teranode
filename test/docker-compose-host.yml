@@ -402,6 +402,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
       - ../compose/prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
+      - ../deploy/docker/base/blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
 
   prometheus-2:
     container_name: prometheus-2
@@ -413,6 +414,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
       - ../compose/prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
+      - ../deploy/docker/base/blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
 
   prometheus-3:
     container_name: prometheus-3
@@ -424,6 +426,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
       - ../compose/prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
+      - ../deploy/docker/base/blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
 
   grafana:
     container_name: grafana

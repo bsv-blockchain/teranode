@@ -471,6 +471,7 @@ services:
       - teranode-network
     volumes:
       - ./prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+      - ../deploy/docker/base/blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
 
   grafana:
     container_name: grafana
