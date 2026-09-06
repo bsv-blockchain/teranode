@@ -102,7 +102,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlock",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlock),
-		tracing.WithLogMessage(s.logger, "[handleGetBlock] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBlock] called"),
 	)
 	defer deferFn()
 
@@ -178,7 +178,7 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockByHeight",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockByHeight),
-		tracing.WithLogMessage(s.logger, "[handleGetBlockByHeight] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBlockByHeight] called"),
 	)
 	defer deferFn()
 
@@ -219,7 +219,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockHash",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockHash),
-		tracing.WithLogMessage(s.logger, "[handleGetBlockHash] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBlockHash] called"),
 	)
 	defer deferFn()
 
@@ -251,7 +251,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockHeader",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockHeader),
-		tracing.WithLogMessage(s.logger, "[handleGetBlockHeader] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBlockHeader] called"),
 	)
 	defer deferFn()
 
@@ -508,7 +508,7 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBestBlockHash",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBestBlockHash),
-		tracing.WithLogMessage(s.logger, "[handleGetBestBlockHash] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetBestBlockHash] called"),
 	)
 	defer deferFn()
 
@@ -560,7 +560,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetRawTransaction),
-		tracing.WithLogMessage(s.logger, "[handleGetRawTransaction] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetRawTransaction] called"),
 	)
 	defer deferFn()
 
@@ -680,7 +680,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleCreateRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleCreateRawTransaction),
-		tracing.WithLogMessage(s.logger, "[handleCreateRawTransaction] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleCreateRawTransaction] called"),
 	)
 	defer deferFn()
 
@@ -831,7 +831,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleSendRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleSendRawTransaction),
-		tracing.WithLogMessage(s.logger, "[handleSendRawTransaction] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleSendRawTransaction] called"),
 	)
 	defer deferFn()
 
@@ -1192,7 +1192,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetpeerinfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetpeerinfo),
-		tracing.WithLogMessage(s.logger, "[handleGetpeerinfo] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetpeerinfo] called"),
 	)
 	defer deferFn()
 
@@ -1342,7 +1342,7 @@ func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetRawMempool",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetRawmempool),
-		tracing.WithLogMessage(s.logger, "[handleGetRawMempool] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetRawMempool] called"),
 	)
 	defer deferFn()
 
@@ -1410,7 +1410,7 @@ func handleGetDifficulty(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetDifficulty",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetDifficulty),
-		tracing.WithLogMessage(s.logger, "[handleGetDifficulty] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetDifficulty] called"),
 	)
 	defer deferFn()
 
@@ -1454,7 +1454,7 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetblockchaininfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetblockchaininfo),
-		tracing.WithLogMessage(s.logger, "[handleGetblockchaininfo] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetblockchaininfo] called"),
 	)
 	defer deferFn()
 
@@ -1633,7 +1633,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetInfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetinfo),
-		tracing.WithLogMessage(s.logger, "[handleGetInfo] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetInfo] called"),
 	)
 	defer deferFn()
 
@@ -2019,7 +2019,7 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleHelp",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleHelp),
-		tracing.WithLogMessage(s.logger, "[handleHelp] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleHelp] called"),
 	)
 	defer deferFn()
 
@@ -2091,7 +2091,7 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleIsBanned",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleIsBanned),
-		tracing.WithLogMessage(s.logger, "[handleIsBanned] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleIsBanned] called"),
 	)
 	defer deferFn()
 
@@ -2171,7 +2171,7 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleListBanned",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleListBanned),
-		tracing.WithLogMessage(s.logger, "[handleListBanned] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleListBanned] called"),
 	)
 	defer deferFn()
 
@@ -2607,7 +2607,7 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetMiningInfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetMiningInfo),
-		tracing.WithLogMessage(s.logger, "[handleGetMiningInfo] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetMiningInfo] called"),
 	)
 	defer deferFn()
 
@@ -2897,7 +2897,7 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetchaintips",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetchaintips),
-		tracing.WithLogMessage(s.logger, "[handleGetchaintips] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetchaintips] called"),
 	)
 	defer deferFn()
 

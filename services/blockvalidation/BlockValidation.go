@@ -2787,6 +2787,11 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 		return errors.NewServiceError("[updateSubtreesDAH][%s] failed to set block subtrees_set", block.Hash().String(), err)
 	}
 
+	// Load-bearing INFO. With blockvalidation_optimistic_mining defaulting to
+	// true, block.Valid runs in a detached goroutine whose enclosing span has
+	// already returned, so this is the only INFO success marker for the default
+	// production block-validation path. Do not demote or remove it without
+	// providing another.
 	u.logger.Infof("[ValidateBlock][%s] set block subtrees_set", block.Hash().String())
 
 	return nil

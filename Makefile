@@ -502,9 +502,28 @@ install-lint:
 # lint will check the changed files in the current branch compared to main, including commits and unstaged/untracked changes
 # It will show new linting errors/warnings, by updating local copy of origin/main with the latest state of the remote main branch.
 .PHONY: lint
-lint:
+lint: lint-tracing-info
 	git fetch origin main
 	golangci-lint run ./... --new-from-rev origin/main --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
+
+# tracing.WithLogMessage logs at INFO on span start AND again on span end, so each
+# call site costs two INFO lines per operation. Sites on per-transaction,
+# per-subtree or per-request paths belong on tracing.WithDebugLogMessage instead.
+# This gate stops that count creeping back up unnoticed; if you add a site
+# deliberately, raise TRACING_INFO_MAX in the same commit and say why.
+TRACING_INFO_MAX := 62
+
+.PHONY: lint-tracing-info
+lint-tracing-info:
+	@count=$$(grep -rn "tracing\.WithLogMessage(" --include='*.go' . | wc -l | tr -d ' '); \
+	if [ "$$count" -gt "$(TRACING_INFO_MAX)" ]; then \
+		echo "tracing.WithLogMessage sites: $$count (max $(TRACING_INFO_MAX))"; \
+		echo "Each is two INFO lines per operation. Use tracing.WithDebugLogMessage on"; \
+		echo "per-tx/per-subtree/per-request paths, or raise TRACING_INFO_MAX deliberately."; \
+		exit 1; \
+	else \
+		echo "tracing.WithLogMessage sites: $$count (max $(TRACING_INFO_MAX)) OK"; \
+	fi
 
 # lint-new will only check only your unstaged/untracked changes (not committed changes), or fallback to check last commit if no changes in checkout
 # It is useful for quickly checking that your current, uncommitted work doesn't introduce new lint errors.
