@@ -20,6 +20,45 @@ not provide full historical transaction data unless the source explicitly
 contains it. Enable `blockpersister` before syncing if you need raw historical
 block data for an explorer, indexer, or archive.
 
+## Why Seeding Instead of Full IBD
+
+Network sync performs a full Initial Block Download (IBD): it downloads and
+validates every block and transaction back to Genesis, the same way legacy
+node implementations bootstrap. Teranode still supports this path — see
+Network Sync below — but it is not the recommended way to bring up a fresh
+node at Teranode's scale.
+
+The chain of block headers alone is enough to prove a node is following the
+correct Proof-of-Work chain; it does not require replaying the full
+transaction history to do so. Because Teranode targets substantially higher
+block sizes and throughput than legacy nodes, a full IBD from Genesis can take
+days and scales with bandwidth, CPU, and storage as the chain grows.
+
+Seeding instead loads a UTXO snapshot before startup, reconstructing current
+state in a fraction of the time of a full download. That is why seeding is the
+recommended path when a compatible snapshot is available, with Network Sync
+reserved for fresh installs that have no seed source.
+
+Note the trust boundary. The export tooling checks its own output against the
+source node's chainstate tip and writes a `.sha256` sidecar next to each
+artifact, but the seeder imports whatever it is given: it checks that each
+header links to a previously stored block, but performs no proof-of-work check
+on the imported headers, never reads the `.sha256` sidecars, and does not
+re-derive the UTXO set from the chain. A self-consistent forged chain still
+passes the linkage check, and nothing in the import path can detect a snapshot
+whose UTXO set does not match the chain, because a block header commits to the
+block's transactions, not to the resulting UTXO state. Seed only from
+artifacts you exported yourself or from an
+operator you trust, and check them against the `.sha256` files before
+importing. Network Sync is the option that requires no such trust.
+
+The block hash selects the seed files by name; it is not compared against the
+tip recorded inside them, and the headers file and the UTXO set are not
+compared against each other. Confirm both artifacts come from the same export
+before seeding. A mismatched or partially transferred pair may import without
+an error, or may fail at the final step after the whole UTXO set has already
+been written — in which case reseeding needs a forced re-run.
+
 ## Network Sync
 
 Network sync needs no seed data:

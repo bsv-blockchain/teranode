@@ -7,6 +7,7 @@ Last modified: 29-October-2025
 ## Table of Contents
 
 - [Overview](#overview)
+- [Why Seeding Instead of Full IBD](#why-seeding-instead-of-full-ibd)
 - [Synchronization Methods Comparison](#synchronization-methods-comparison)
 - [Method 1: Default Network Sync (P2P)](#method-1-default-network-sync-p2p)
 - [Method 2: Seeding from Legacy SV Node](#method-2-seeding-from-legacy-sv-node)
@@ -21,6 +22,18 @@ This guide covers the different methods available for synchronizing a Teranode i
 
 ---
 
+## Why Seeding Instead of Full IBD
+
+Legacy Bitcoin node implementations bootstrap by performing a full Initial Block Download (IBD): downloading and validating every block and every transaction back to the Genesis block. Teranode still supports this as Method 1 below, for compatibility with existing node implementations, but it does not scale as the primary bootstrap strategy for a Teranode-sized chain.
+
+The chain of block headers alone (80 bytes each) is sufficient to prove a node is following the correct Proof-of-Work chain back to Genesis; it does not require replaying every historical transaction to do so. Because Teranode targets a much higher block size and transaction throughput than legacy implementations, replaying the full transaction history from Genesis takes on the order of days (see the timeline under Method 1) and consumes proportionally more bandwidth and storage as the chain grows.
+
+Seeding instead bootstraps a node's UTXO set directly from a snapshot — exported from a Legacy SV Node or from an existing, already-synchronized Teranode instance — which reconstructs the current UTXO state in hours rather than days (see the per-method Expected Timeline tables under Methods 2 and 3). This is why Methods 2 and 3 are recommended for production deployments, while full P2P sync (Method 1) remains available for cases without an existing data source to seed from.
+
+Note the trust boundary. The export tooling checks its own output against the source node's chainstate tip and writes a `.sha256` sidecar next to each artifact, but the seeder imports whatever it is given: it checks that each header links to a previously stored block, but performs no proof-of-work check on the imported headers, never reads the `.sha256` sidecars, and does not re-derive the UTXO set from the chain. A self-consistent forged chain still passes the linkage check, and nothing in the import path can detect a snapshot whose UTXO set does not match the chain, because a block header commits to the block's transactions, not to the resulting UTXO state. Seed only from artifacts you exported yourself or from an operator you trust, and verify them against the `.sha256` files before importing. Method 1 is the option that requires no such trust.
+
+---
+
 ## Synchronization Methods Comparison
 
 Choose the synchronization method that best fits your situation:
@@ -28,8 +41,8 @@ Choose the synchronization method that best fits your situation:
 | Method | Use Case | Advantages | Disadvantages | Time Required |
 | -------- | ---------- | ------------ | --------------- | --------------- |
 | **Default Network Sync** | Fresh install, no existing data | • Simple setup<br>• No additional requirements<br>• Complete validation | • Slowest method<br>• High bandwidth usage | 5-8 days |
-| **Legacy SV Node Seeding** | Have existing BSV node | • Faster than P2P<br>• Proven data source<br>• Reduced bandwidth | • Requires SV Node setup<br>• Additional export steps | 1 Hour<br>(assumes SV node<br>already in sync) |
-| **Teranode Data Seeding** | Have existing Teranode | • Fastest method<br>• Direct data transfer<br>• Minimal processing | • Requires access to existing data<br>• Version compatibility needed | 1 Hour |
+| **Legacy SV Node Seeding** | Have existing BSV node | • Faster than P2P<br>• Proven data source<br>• Reduced bandwidth | • Requires SV Node setup<br>• Additional export steps | 6.5-12.5 hours<br>(assumes SV node<br>already in sync) |
+| **Teranode Data Seeding** | Have existing Teranode | • Fastest method<br>• Direct data transfer<br>• Minimal processing | • Requires access to existing data<br>• Version compatibility needed | 3.25-7.25 hours |
 
 ![seedingOptions.svg](../img/mermaid/seedingOptions.svg)
 
@@ -293,6 +306,11 @@ ls -la /mnt/teranode/seed/export/
 
     **How to find it:** Extract the hash from your exported filenames (the part before `.utxo-headers` or `.utxo-set`)
 
+!!! warning "The hash is not validated against file contents"
+    `-hash` only selects the two files by name. The seeder does not compare it against the tip hash recorded inside either file, and it does not compare the headers file and the UTXO set against each other. It also does not read the `.sha256` sidecars written by the export tooling.
+
+    Confirm both artifacts come from the same export, and verify them against their `.sha256` files, before running the seeder. A mismatched or partially transferred pair has two possible outcomes: it imports with no complaint, or it fails at the final step — after the entire UTXO set has been written and `lastProcessed.dat` created — in which case a re-run needs `-force`.
+
 #### Step 3: Run Seeder
 
 ```bash
@@ -369,7 +387,7 @@ kubectl get pods -n teranode-operator
 | **Export** | 2-4 hours | Extracting UTXO set from SV Node |
 | **Seeding** | 4-8 hours | Importing data into Teranode |
 | **Verification** | 30 minutes | Starting services and verifying sync |
-| **Total** | 1-12 hours | Complete process |
+| **Total** | 6.5-12.5 hours | Complete process |
 
 > **💾 Storage Note:** The seeder writes directly to Aerospike, PostgreSQL, and the filesystem. Ensure your environment variables and volume mounts are correctly configured.
 
@@ -421,6 +439,11 @@ Ensure the required UTXO files are available in your target Teranode's export di
 ### Step 3: Run Seeder
 
 Use the same seeder process as described in Method 2:
+
+!!! warning "The hash is not validated against file contents"
+    `-hash` only selects the two files by name. The seeder does not compare it against the tip hash recorded inside either file, and it does not compare the headers file and the UTXO set against each other. It also does not read the `.sha256` sidecars written by the export tooling.
+
+    Confirm both artifacts come from the same export, and verify them against their `.sha256` files, before running the seeder. A mismatched or partially transferred pair has two possible outcomes: it imports with no complaint, or it fails at the final step — after the entire UTXO set has been written and `lastProcessed.dat` created — in which case a re-run needs `-force`.
 
 ```bash
 # Scale down services
@@ -474,7 +497,7 @@ kubectl run teranode-seeder \
 | **Data Transfer** | 1-3 hours | Copying files between systems |
 | **Seeding** | 2-4 hours | Importing data into target Teranode |
 | **Verification** | 15 minutes | Starting services and verification |
-| **Total** | 1-6 hours | Complete process |
+| **Total** | 3.25-7.25 hours | Complete process |
 
 > **⚡ Speed Advantage:** This method is typically 2-3x faster than Method 2 since the data is already in Teranode's optimized format.
 
