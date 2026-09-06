@@ -40,7 +40,7 @@ const (
 	txNotFoundInTxMapMsg = "transaction %s not found in txMap"
 )
 
-func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock) (err error) {
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock, parent *inflightParent) (err error) {
 	sm.logger.Debugf("[HandleBlockDirect][%s] starting handling block", blockHash.String())
 
 	// Make sure we have the correct height for this block before continuing
@@ -73,48 +73,67 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	block := bsvutil.NewBlock(msgBlock)
 
-	// Lookup previous block height from blockchain
-	_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
-	if err != nil {
-		// A missing parent is an expected, recoverable condition: a normal orphan /
-		// out-of-order tip announce, or a descendant of a block that was rejected
-		// upstream. The caller (handleBlockMsg) answers with a getblocks and, for a
-		// known-failed ancestor, short-circuits the descendant cascade (#1333) — so
-		// logging it at ERROR here only produces misleading "previous block
-		// NOT_FOUND" spam. Genuine lookup failures (e.g. storage errors) still ERROR.
-		if errors.Is(err, errors.ErrBlockNotFound) {
-			sm.logger.Debugf("[HandleBlockDirect][%s] previous block %s not found (orphan/out-of-order; caller will request missing blocks): %v", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
-		} else {
-			sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+	if parent != nil {
+		// The dispatcher already resolved this block's parent (still in the window,
+		// so not yet queryable via the blockchain store) — use its height directly
+		// instead of looking the parent up. Skips the GetBlockHeader round-trip
+		// entirely on this route.
+		blockHeight = parent.height + 1
+
+		if block.Height() > 0 && uint32(block.Height()) != blockHeight {
+			return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, blockHeight)
 		}
 
-		return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
-	}
-
-	if block.Height() <= 0 {
-		// block height was not set in the msgBlock, set it from our lookup
-		blockHeight = previousBlockHeaderMeta.Height + 1
-
-		blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeight)
-		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to int32", err)
+		heightInt32, cerr := safeconversion.Uint32ToInt32(blockHeight)
+		if cerr != nil {
+			return errors.NewProcessingError("failed to convert block height to int32", cerr)
 		}
 
-		block.SetHeight(blockHeightInt32)
+		block.SetHeight(heightInt32)
 	} else {
-		// check whether the block height being reported is the correct block height
-		previousBlockHeightInt32, err := safeconversion.Uint32ToInt32(previousBlockHeaderMeta.Height + 1)
+		// Lookup previous block height from blockchain
+		_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
 		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to int32", err)
+			// A missing parent is an expected, recoverable condition: a normal orphan /
+			// out-of-order tip announce, or a descendant of a block that was rejected
+			// upstream. The caller (handleBlockMsg) answers with a getblocks and, for a
+			// known-failed ancestor, short-circuits the descendant cascade (#1333) — so
+			// logging it at ERROR here only produces misleading "previous block
+			// NOT_FOUND" spam. Genuine lookup failures (e.g. storage errors) still ERROR.
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				sm.logger.Debugf("[HandleBlockDirect][%s] previous block %s not found (orphan/out-of-order; caller will request missing blocks): %v", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+			} else {
+				sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+			}
+
+			return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
 		}
 
-		if block.Height() != previousBlockHeightInt32 {
-			return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, previousBlockHeaderMeta.Height+1)
-		}
+		if block.Height() <= 0 {
+			// block height was not set in the msgBlock, set it from our lookup
+			blockHeight = previousBlockHeaderMeta.Height + 1
 
-		blockHeight, err = safeconversion.Int32ToUint32(block.Height())
-		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to uint32", err)
+			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeight)
+			if err != nil {
+				return errors.NewProcessingError("failed to convert block height to int32", err)
+			}
+
+			block.SetHeight(blockHeightInt32)
+		} else {
+			// check whether the block height being reported is the correct block height
+			previousBlockHeightInt32, err := safeconversion.Uint32ToInt32(previousBlockHeaderMeta.Height + 1)
+			if err != nil {
+				return errors.NewProcessingError("failed to convert block height to int32", err)
+			}
+
+			if block.Height() != previousBlockHeightInt32 {
+				return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, previousBlockHeaderMeta.Height+1)
+			}
+
+			blockHeight, err = safeconversion.Int32ToUint32(block.Height())
+			if err != nil {
+				return errors.NewProcessingError("failed to convert block height to uint32", err)
+			}
 		}
 	}
 
@@ -140,6 +159,13 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// Wait for block assembly to be ready
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, sm.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
+		if sm.windowRoute(blockHeight) {
+			// On the window route a parked gate is a local condition: wrap so
+			// handleBlockMsg pushes no reject, awaitBlockResult keeps the peer, and
+			// the backoff throttles re-delivery instead of churning the sync peer.
+			return errors.NewServiceError("[HandleBlockDirect][%s] block assembly not ready for height %d on the window route", blockHash.String(), blockHeight, err)
+		}
+
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
@@ -252,6 +278,38 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] duplicate transaction on unified route", blockHashStr, blockHeight, err)
 		}
 		teranodeBlock.SubtreeSlices = nil
+	}
+
+	// Ordering hand-shake with an in-flight parent (window route only; parent is nil
+	// everywhere else). A child may start its own ProcessBlock RPC once the parent
+	// has started its own — from that point the parent's spends are already queued
+	// behind its own create in commit order, so a spend of a coin the parent creates
+	// can never land ahead of that create. The select needs the pre-check below
+	// because a parent that started its RPC and THEN failed must still let the
+	// child through to its own RPC (where the server-side window aborts it with the
+	// recorded error): only a parent that failed BEFORE starting its RPC — settled
+	// ready with rpcStarted still open — short-circuits here. Without the pre-check,
+	// a select between two simultaneously-ready cases picks uniformly at random, so
+	// a parent settling failed in the same instant it starts its RPC could
+	// non-deterministically take the abort branch instead.
+	if parent != nil && parent.entry != nil {
+		select {
+		case <-parent.entry.rpcStarted:
+		default:
+			select {
+			case <-parent.entry.rpcStarted:
+			case <-parent.entry.settled:
+				if parent.entry.failed.Load() {
+					return errors.NewServiceError("[HandleBlockDirect][%s] predecessor %s failed before this block started; aborting", blockHash.String(), parent.entry.hash.String())
+				}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	if own := frontierEntryFromContext(ctx); own != nil {
+		own.markRPCStarted()
 	}
 
 	// call the process block wrapper, which will add tracing and logging
@@ -611,6 +669,25 @@ func (sm *SyncManager) legacyUnified(height uint32) bool {
 		sm.legacyOutpointOnly(height)
 }
 
+// windowRouteEnabled is every conjunct of windowRoute that does not depend on the
+// block's height: the settings, the store's outpoint-only support and the chain
+// params. The dispatcher asks it before spending an RPC to resolve a block's height,
+// because with any of these off the answer to windowRoute could only be false.
+func (sm *SyncManager) windowRouteEnabled() bool {
+	return sm.settings != nil &&
+		sm.settings.BlockValidation.QuickWindowBlocks >= 1 &&
+		sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
+		sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint &&
+		sm.utxoStore != nil && sm.utxoStore.SupportsOutpointOnlySpend() &&
+		sm.chainParams != nil
+}
+
+// windowRoute reports whether blocks at height take the quick window: the unified
+// below-checkpoint route with the window setting at 1 or more.
+func (sm *SyncManager) windowRoute(height uint32) bool {
+	return sm.windowRouteEnabled() && model.BelowCheckpoint(sm.chainParams.Checkpoints, height)
+}
+
 // legacyFailClosed reports whether this block takes the fail-closed variant of the
 // non-unified legacy below-checkpoint inline path: the operator enabled
 // blockvalidation_legacy_below_checkpoint_fail_closed AND the outpoint-only gate
@@ -632,9 +709,10 @@ func (sm *SyncManager) legacyFailClosed(height uint32) bool {
 // never wait (pre-existing behaviour). On the below-checkpoint outpoint-only
 // fast path the wait is redundant three ways: (1) its documented purpose is
 // BIP68 parent-height lookup, and BIP68 is skipped below the checkpoint;
-// (2) block dispatch is serial — blockHandler in manager.go is the single
-// goroutine consuming blockQueue, so the parent's UTXOs are committed before
-// this block starts; (3) the legacy path calls AddBlock with WithMinedSet(true)
+// (2) the quick window gates every spend on the commit of the create that made
+// its coin, so a parent's outputs are never spent before the parent's create
+// has committed, see services/blockvalidation/quick_window.go; (3) the legacy
+// path calls AddBlock with WithMinedSet(true)
 // (see buildAddBlockOpts in services/blockvalidation/BlockValidation.go), so
 // GetBlockIsMined is always instantly true and only costs a gRPC round-trip
 // per block.

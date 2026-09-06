@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"bufio"
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -191,7 +193,40 @@ func blockIDToUint32(id uint64, blockHash string) (uint32, error) {
 //
 // Returns:
 //   - error: If validation fails
-func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.Block, peerID, baseURL string) error {
+//
+// entry is the block's slot in the quick window, or nil for the pre-window behaviour: with a
+// nil entry nothing here waits, registers or signals, and the block is committed inline the
+// way it always was.
+func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.Block, peerID, baseURL string, entry *windowEntry) error {
+	if entry == nil {
+		return u.quickValidateBlockInner(ctx, block, peerID, baseURL, nil)
+	}
+
+	// Leave runs only once the pipeline has returned, so no store call of this attempt can
+	// still be in flight when the entry's ids leave the window's maps: it is the drain barrier.
+	defer entry.Leave()
+
+	// The entry's own context, so an abort of a predecessor cancels this block's goroutines
+	// rather than leaving them running against a window that has already given up on them.
+	err := u.quickValidateBlockInner(entry.Context(), block, peerID, baseURL, entry)
+	if err != nil {
+		entry.Fail(err)
+
+		// Return the recorded outcome, on the CALLER's context: the inner wait runs on the
+		// entry's own context, which an abort cancels, so it hands back a generic cancellation
+		// where this one hands back the predecessor's recorded service error. That is the error
+		// legacy sync has to see to treat the failure as ours rather than the peer's.
+		if werr := entry.WaitCommitted(ctx); werr != nil {
+			return werr
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func (u *BlockValidation) quickValidateBlockInner(ctx context.Context, block *model.Block, peerID, baseURL string, entry *windowEntry) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "quickValidateBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[quickValidateBlock][%s] performing quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
@@ -224,7 +259,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	if len(block.Subtrees) > 0 {
 		// Process all subtrees in streaming fashion - creates UTXOs, spends, writes files
 		// This function waits for all processing to complete before returning, ensuring block.ID is set
-		_, err = u.processBlockSubtrees(ctx, block, outpointOnly)
+		_, err = u.processBlockSubtrees(ctx, block, outpointOnly, entry)
 		if err != nil {
 			return errors.NewProcessingError("[quickValidateBlock][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
@@ -233,7 +268,23 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		if block.ID == 0 {
 			return errors.NewProcessingError("[quickValidateBlock][%s] block ID was not assigned during subtree processing", block.Hash().String())
 		}
+
+		// Belt and braces for the one case the in-pipeline probe cannot reach: a retry that
+		// arrives with block.ID already set and whose every batch turns out to be empty never
+		// runs the probe, so nothing there signals. Without this a successor would wait on
+		// idAssigned until this block committed. IDAssigned is idempotent.
+		if entry != nil {
+			entry.IDAssigned()
+		}
 	} else {
+		// Block ids are handed out in the order they are asked for, so a successor must not
+		// ask before its predecessor has.
+		if entry != nil {
+			if err = entry.WaitPredecessorIDAssigned(ctx); err != nil {
+				return err
+			}
+		}
+
 		// No subtrees to process, assign block ID idempotently
 		id, err = u.blockchainClient.AssignBlockID(ctx, block.Hash())
 		if err != nil {
@@ -243,9 +294,31 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		if err != nil {
 			return err
 		}
+
+		if entry != nil {
+			entry.IDAssigned()
+			// A coinbase-only block registers no batches at all, so nothing else would ever
+			// close its registered channel. Without this a successor's
+			// WaitPredecessorsRegistered would fall through to the committed channel instead,
+			// which only closes once the ordered committer has run this block — collapsing the
+			// window to depth 1 for exactly the blocks early mainnet is made of.
+			entry.RegistrationComplete()
+		}
 	}
 
-	return u.commitBlock(ctx, block, peerID, "quickValidateBlock")
+	if entry == nil {
+		return u.commitBlock(ctx, block, peerID, "quickValidateBlock")
+	}
+
+	// In the window the commit is not ours to make: the committer runs it in height order, and
+	// this call returns whatever that produced for this block.
+	entry.StoreDone()
+
+	// ctx here is the ENTRY's context, which failLocked cancels. For a successor aborted by a
+	// predecessor that means this call usually returns a generic cancellation rather than the
+	// predecessor's recorded service error. The wrapper re-waits on the caller's context and
+	// that is what surfaces the real cause, so neither wait can be simplified away.
+	return entry.WaitCommitted(ctx)
 }
 
 // quickValidateBlockAsync performs optimized validation with async file writes.
@@ -325,10 +398,11 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 // locked UTXOs, update subtree DAH (which fires BlockSubtreesSet), and mark the
 // block present in cache. Extracted verbatim from quickValidateBlock /
 // quickValidateBlockAsync so both share one commit tail; it is also the per-block
-// commit unit the Step-8 parallel window's ordered committer calls in height order.
+// commit unit the quick window's committer runs in height order, see quick_window.go.
 // caller labels logs to preserve each call site's existing text.
 func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, peerID, caller string) error {
-	// add block directly to blockchain
+	start := time.Now()
+
 	if err := u.blockchainClient.AddBlock(ctx,
 		block,
 		peerID,
@@ -339,20 +413,31 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 		return errors.NewProcessingError("[%s][%s] failed to add block to blockchain", caller, block.Hash().String(), err)
 	}
 
+	prometheusBlockValidationQuickCommitAddBlock.Observe(time.Since(start).Seconds())
+	start = time.Now()
+
 	// Unlock all UTXOs - final commit point (no-op when the lock was never taken; #1103).
 	if err := u.unlockSubtreeTransactionsIfNeeded(ctx, block, caller); err != nil {
 		return err
 	}
+
+	prometheusBlockValidationQuickCommitUnlock.Observe(time.Since(start).Seconds())
+	start = time.Now()
 
 	// Update subtrees DAH and send BlockSubtreesSet notification.
 	if err := u.updateSubtreesDAH(ctx, block); err != nil {
 		return errors.NewProcessingError("[%s][%s] failed to update subtrees DAH", caller, block.Hash().String(), err)
 	}
 
+	prometheusBlockValidationQuickCommitSubtreesSet.Observe(time.Since(start).Seconds())
+	start = time.Now()
+
 	// Mark block as existing in cache.
 	if err := u.SetBlockExists(block.Hash()); err != nil {
 		u.logger.Errorf("[%s][%s] failed to set block exists cache: %s", caller, block.Hash().String(), err)
 	}
+
+	prometheusBlockValidationQuickCommitBlockExists.Observe(time.Since(start).Seconds())
 
 	return nil
 }
@@ -376,7 +461,7 @@ type subtreeResult struct {
 // Returns:
 //   - uint64: Existing BlockID if retry detected, 0 otherwise
 //   - error: If processing fails
-func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
+func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block, outpointOnly bool, entry *windowEntry) (uint64, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockSubtrees",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processBlockSubtrees][%s] processing %d subtrees in batches of %d", block.Hash().String(), len(block.Subtrees), u.settings.BlockValidation.SubtreeBatchSize),
@@ -389,14 +474,14 @@ func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model
 
 	prefetchDepth := u.settings.BlockValidation.SubtreeBatchPrefetchDepth
 	if prefetchDepth <= 0 {
-		return u.processBlockSubtreesSequential(ctx, block, outpointOnly)
+		return u.processBlockSubtreesSequential(ctx, block, outpointOnly, entry)
 	}
-	return u.processBlockSubtreesPipeline(ctx, block, prefetchDepth, outpointOnly)
+	return u.processBlockSubtreesPipeline(ctx, block, prefetchDepth, outpointOnly, entry)
 }
 
 // processBlockSubtreesSequential processes subtrees sequentially, one batch at a time.
 // This is the fallback when SubtreeBatchPrefetchDepth is 0.
-func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block, outpointOnly bool, entry *windowEntry) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 	var existingBlockID uint64
@@ -406,6 +491,19 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 
 	// Track extended transactions across batches for same-block parent resolution
 	extendedTxs := make(map[chainhash.Hash]*bt.Tx)
+
+	if entry != nil {
+		// A block that gives up before producing its last batch must not leave a successor
+		// waiting for a registration that will never come. RegistrationComplete is idempotent,
+		// so this defer and the explicit call after the loop coexist.
+		defer entry.RegistrationComplete()
+
+		// The open-gate map must be complete before the first dependency check, which is
+		// inside the first createAndSpendUTXOsForBatch call below.
+		if err := entry.WaitPredecessorsRegistered(ctx); err != nil {
+			return 0, err
+		}
+	}
 
 	// Process subtrees in batches
 	subtreeBatchSize := u.settings.BlockValidation.SubtreeBatchSize
@@ -421,6 +519,10 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 			return 0, err
 		}
 
+		if err := registerBatchWithWindow(entry, batch); err != nil {
+			return 0, err
+		}
+
 		// Phase 4: Check for retry and get block ID (only on first batch)
 		// This is specific to quick validation to handle retries gracefully.
 		// batchTxs[0] is the first non-coinbase tx; its recorded mined-in id is
@@ -433,6 +535,13 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 				block.ID = existingMeta.BlockIDs[0]
 				u.logger.Debugf("[processBlockSubtreesSequential][%s] reusing BlockID %d from retry", block.Hash().String(), existingBlockID)
 			} else if block.ID == 0 {
+				// Block ids are handed out in the order they are asked for.
+				if entry != nil {
+					if err := entry.WaitPredecessorIDAssigned(ctx); err != nil {
+						return 0, err
+					}
+				}
+
 				id, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
 				if err != nil {
 					return 0, errors.NewProcessingError("[processBlockSubtreesSequential][%s] failed to assign block ID", block.Hash().String(), err)
@@ -443,6 +552,10 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 				}
 			}
 			blockIDSet = true
+
+			if entry != nil {
+				entry.IDAssigned()
+			}
 		}
 
 		// Phase 5-6: Create and spend UTXOs (quick validation specific - bypasses service validation)
@@ -458,6 +571,16 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 
 		// Release mmap resources for completed batch
 		batch.Close()
+	}
+
+	// Registration is complete only here, after the LAST batch: unlike the pipeline variant,
+	// whose extender stage registers each batch as it produces it, this loop does its store work
+	// batch by batch on one goroutine, so a successor's WaitPredecessorsRegistered is held until
+	// the whole block has been claimed. On a multi-batch block that costs the successor its
+	// overlap. It does not bite today: legacy blocks arrive as one subtree, so this loop runs a
+	// single batch, and the pipeline variant is what a multi-batch block takes.
+	if entry != nil {
+		entry.RegistrationComplete()
 	}
 
 	return u.validateSubtrees(ctx, block, existingBlockID)
@@ -480,7 +603,7 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 //     created unlocked, so this lock-based rollback barrier does not apply; recovery instead relies on
 //     retry convergence below.
 //   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID.
-func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool) (uint64, error) {
+func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool, entry *windowEntry) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 	var existingBlockID uint64
@@ -534,12 +657,25 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 	// Stage 2: Extender - extend transactions (sequential for extendedTxs map)
 	g.Go(func() error {
 		defer close(extendedChan)
+
+		if entry != nil {
+			// The extender owns registration: a successor's dependency check is only complete
+			// once every batch of this block has claimed its ids. The defer covers the error
+			// path too, so a block that gives up never leaves a successor waiting.
+			defer entry.RegistrationComplete()
+		}
+
 		extendedTxs := make(map[chainhash.Hash]*bt.Tx)
 		for batch := range prefetchChan {
 			start := time.Now()
 			if err := u.extendBatch(gCtx, block, batch, extendedTxs); err != nil {
 				return err
 			}
+
+			if err := registerBatchWithWindow(entry, batch); err != nil {
+				return err
+			}
+
 			u.logger.Infof("[pipeline:extend][%s] batch %d-%d extended (%d txs) in %v", block.Hash().String(), batch.batchStart, batch.batchEnd, len(batch.batchTxs), time.Since(start))
 
 			select {
@@ -553,6 +689,14 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 
 	// Stage 3: Processor - UTXO create+spend AND write files in parallel (per batch)
 	g.Go(func() error {
+		if entry != nil {
+			// The open-gate map must be complete before the first dependency check, which is
+			// inside the first createAndSpendUTXOsForBatch call below.
+			if err := entry.WaitPredecessorsRegistered(gCtx); err != nil {
+				return err
+			}
+		}
+
 		for batch := range extendedChan {
 			// Block ID check (first batch only)
 			if !blockIDSet && len(batch.batchTxs) > 0 {
@@ -562,6 +706,13 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 					block.ID = existingMeta.BlockIDs[0]
 					u.logger.Debugf("[processBlockSubtreesPipeline][%s] reusing BlockID %d from retry", block.Hash().String(), existingBlockID)
 				} else if block.ID == 0 {
+					// Block ids are handed out in the order they are asked for.
+					if entry != nil {
+						if err := entry.WaitPredecessorIDAssigned(gCtx); err != nil {
+							return err
+						}
+					}
+
 					id, err := u.blockchainClient.AssignBlockID(gCtx, block.Hash())
 					if err != nil {
 						return errors.NewProcessingError("[processBlockSubtreesPipeline][%s] failed to assign block ID", block.Hash().String(), err)
@@ -572,6 +723,10 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 					}
 				}
 				blockIDSet = true
+
+				if entry != nil {
+					entry.IDAssigned()
+				}
 			}
 
 			// Run UTXO ops and file writes in parallel for this batch
@@ -622,6 +777,10 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 // Returns:
 //   - uint64: Existing BlockID if retry detected, 0 otherwise
 //   - error: If processing fails or context is cancelled
+//
+// Native catch-up is outside the quick window by design (spec section 11), and this async
+// variant is the catch-up path only, so it takes no window entry: nothing here registers,
+// waits on a predecessor or signals.
 func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob, outpointOnly bool) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
@@ -665,12 +824,14 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 	// Stage 2: Extender - extend transactions (sequential for extendedTxs map)
 	g.Go(func() error {
 		defer close(extendedChan)
+
 		extendedTxs := make(map[chainhash.Hash]*bt.Tx)
 		for batch := range prefetchChan {
 			start := time.Now()
 			if err := u.extendBatch(gCtx, block, batch, extendedTxs); err != nil {
 				return err
 			}
+
 			u.logger.Debugf("[pipeline:extend:async][%s] batch %d-%d extended (%d txs) in %v", block.Hash().String(), batch.batchStart, batch.batchEnd, len(batch.batchTxs), time.Since(start))
 
 			select {
@@ -1035,6 +1196,29 @@ type SubtreeProcessingBatch struct {
 	// batchTxs contains all transactions in this batch (excluding coinbase nil entries)
 	batchTxs []*bt.Tx
 
+	// hasInBlockParent is parallel to batchTxs: true when at least one of that transaction's
+	// inputs spends an output of another transaction of THIS block. The extend stage already
+	// walks every input against the per-block extendedTxs map to fill in parent satoshis and
+	// scripts, so the answer costs nothing extra; it is recorded here rather than recomputed.
+	//
+	// It is per batch, never per block: a block may hold a billion transactions, the batch is
+	// the bounded unit, and this slice dies with the batch.
+	//
+	// The predicate is in-BLOCK, not in-batch: the extendedTxs map it is derived from
+	// accumulates across every batch of the block, so a child whose parent landed in an
+	// EARLIER batch is classified as chained even though that parent's create has long since
+	// committed. That is conservative rather than wrong — batches are consumed strictly
+	// serially, so such a child could safely take the one-wave path — and it costs only the
+	// transactions that straddle a batch boundary. The whole argument rests on one block being
+	// applied at a time; work that overlaps blocks has to revisit it, because a parent from a
+	// concurrently-applied block would not be in this map at all.
+	//
+	// A short or nil slice means "not derived", and txIsIndependent then answers false — a
+	// transaction of unknown provenance takes the conservative two-phase path. That is what
+	// keeps a hand-built batch (tests, and any future caller that fills batchTxs directly)
+	// behaving exactly as it did before this field existed.
+	hasInBlockParent []bool
+
 	// fullSubtreeExists tracks which subtrees already have full .subtree files
 	// Populated during prefetch to avoid disk I/O during build phase
 	fullSubtreeExists []bool
@@ -1050,6 +1234,84 @@ type SubtreeProcessingBatch struct {
 	// seam). Consumers read this field so every phase — decorate, fee, create, spend —
 	// sees a single consistent decision and cannot drift. See quickValidateOutpointOnly.
 	outpointOnly bool
+
+	// window is the quick-window entry this batch belongs to, nil outside the window.
+	window *windowEntry
+
+	// gate releases spends of this batch's transactions by in-flight successor blocks. Closed
+	// once both create waves have returned (a returned store call is a committed one). nil for
+	// a batch with no transactions: nothing can ever wait on it.
+	gate *batchGate
+
+	// waitGates are predecessor gates this batch's chained spends must wait on. Derived once,
+	// in the single-goroutine partition loop of createAndSpendUTXOsForBatch.
+	waitGates []*batchGate
+}
+
+// windowOf returns the window this batch's entry belongs to, nil outside the window. Read from
+// the entry rather than from the BlockValidation so a batch can never be matched against a
+// different window than the one that issued its gate.
+func (b *SubtreeProcessingBatch) windowOf() *quickWindow {
+	if b == nil || b.window == nil {
+		return nil
+	}
+
+	return b.window.w
+}
+
+// registerBatchWithWindow claims this batch's transaction ids for entry and attaches the gate
+// that releases in-flight successors' spends of them. A batch with no transactions claims
+// nothing and gets no gate.
+func registerBatchWithWindow(entry *windowEntry, batch *SubtreeProcessingBatch) error {
+	if entry == nil {
+		return nil
+	}
+
+	batch.window = entry
+
+	if len(batch.batchTxs) == 0 {
+		return nil
+	}
+
+	txids := make([]chainhash.Hash, 0, len(batch.batchTxs))
+	for _, tx := range batch.batchTxs {
+		txids = append(txids, *tx.TxIDChainHash())
+	}
+
+	gate, err := entry.RegisterBatch(txids)
+	if err != nil {
+		return err
+	}
+
+	batch.gate = gate
+
+	return nil
+}
+
+// appendGateOnce adds gate unless it is already in gates. The list holds at most one gate per
+// in-flight predecessor batch, so the linear scan is over a handful of entries.
+func appendGateOnce(gates []*batchGate, gate *batchGate) []*batchGate {
+	for _, g := range gates {
+		if g == gate {
+			return gates
+		}
+	}
+
+	return append(gates, gate)
+}
+
+// txIsIndependent reports whether the transaction at index i of batchTxs spends no output of
+// any transaction of this block, and so can have its inputs spent and its outputs created in
+// one call: nothing in the block has to be created first for its spend to find a coin.
+//
+// Out of range, or a batch whose partition was never derived, answers false. Unknown means
+// chained, which is the path that was always taken.
+func (b *SubtreeProcessingBatch) txIsIndependent(i int) bool {
+	if i < 0 || i >= len(b.hasInBlockParent) {
+		return false
+	}
+
+	return !b.hasInBlockParent[i]
 }
 
 // Close releases mmap-backed subtree resources in this batch.
@@ -1063,13 +1325,18 @@ func (b *SubtreeProcessingBatch) Close() {
 
 // extendTxFromSameBlockParents extends tx's inputs whose parents are present in
 // parents (same-block parents already decoded in this batch), returning whether
-// any input still needs an external (store) lookup.
+// any input still needs an external (store) lookup and whether any input found
+// its parent in this block.
+//
+// The second answer is free here — the loop already asks the map about every
+// input — and it is what lets createAndSpendUTXOsForBatch apply a transaction
+// with no in-block parent in a single spend-and-create call.
 //
 // PreviousTxOutIndex comes from the untrusted child tx, so the parent's output
 // count is bounds-checked before indexing: an out-of-range reference returns an
 // error instead of panicking the node with index-out-of-range (issue 1283). This
 // mirrors the guard in services/validator/Validator.go extendTransaction.
-func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) (needsExternalLookup bool, err error) {
+func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) (needsExternalLookup, hasSameBlockParent bool, err error) {
 	for j, input := range tx.Inputs {
 		parentHash := input.PreviousTxIDChainHash()
 
@@ -1079,9 +1346,11 @@ func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) 
 			continue
 		}
 
+		hasSameBlockParent = true
+
 		vout := input.PreviousTxOutIndex
 		if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) {
-			return false, errors.NewProcessingError("tx %s input %d references non-existent output %d of same-block parent %s",
+			return false, false, errors.NewProcessingError("tx %s input %d references non-existent output %d of same-block parent %s",
 				tx.TxIDChainHash().String(), j, vout, parentHash.String())
 		}
 
@@ -1089,7 +1358,24 @@ func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) 
 		tx.Inputs[j].PreviousTxScript = parentTx.Outputs[vout].LockingScript
 	}
 
-	return needsExternalLookup, nil
+	return needsExternalLookup, hasSameBlockParent, nil
+}
+
+// hasSameBlockParentInput reports whether any of tx's inputs spends an output of a
+// transaction of this block.
+//
+// A transaction that arrives already extended never enters extendTxFromSameBlockParents, so
+// it would otherwise have no answer at all, and "no answer" means chained — the slow path,
+// taken for every transaction of a block whose subtree data was written extended. This scan
+// gives it the real answer for the price of one map lookup per input.
+func hasSameBlockParentInput(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) bool {
+	for _, input := range tx.Inputs {
+		if _, ok := parents[*input.PreviousTxIDChainHash()]; ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 // processSubtreeBatch reads and extends a batch of subtrees.
@@ -1188,17 +1474,25 @@ func (u *BlockValidation) processSubtreeBatch(
 			}
 
 			// Try to extend from same-block parents first
+			inBlockParent := false
+
 			if !tx.IsExtended() {
-				needsExternalLookup, extendErr := extendTxFromSameBlockParents(tx, extendedTxsFromPrevBatches)
+				needsExternalLookup, hasSameBlockParent, extendErr := extendTxFromSameBlockParents(tx, extendedTxsFromPrevBatches)
 				if extendErr != nil {
 					cancelReaders()
 					return nil, errors.NewProcessingError("[processSubtreeBatch][%s] same-block parent extension failed", block.Hash().String(), extendErr)
 				}
 
+				inBlockParent = hasSameBlockParent
+
 				if needsExternalLookup {
 					txsNeedingExtension = append(txsNeedingExtension, tx)
 				}
+			} else {
+				inBlockParent = hasSameBlockParentInput(tx, extendedTxsFromPrevBatches)
 			}
+
+			batch.hasInBlockParent = append(batch.hasInBlockParent, inBlockParent)
 
 			extendedTxsFromPrevBatches[*tx.TxIDChainHash()] = tx
 			tx.SetTxHash(tx.TxIDChainHash())
@@ -1219,6 +1513,38 @@ func (u *BlockValidation) processSubtreeBatch(
 
 	cancelReaders()
 	return batch, nil
+}
+
+// quickValidateCreateLimit returns the caller concurrency for each of quick
+// validation's two creating waves: the combined one-wave apply and the chained
+// create wave of createAndSpendUTXOsForBatch. Those two now run at the same
+// time, each bounded by this number, so the peak callers a batch puts on the
+// store is up to twice what this returns. The one-wave apply also spends as it
+// creates, so this is no longer a bound taken before any input is spent.
+//
+// This is a callers-in-flight limit, not a store-statements-in-flight limit:
+// each caller blocks until the batch it lands in commits, so the number of
+// statements actually in flight to the store is (callers / batch size).
+//
+// blockvalidation_quick_validate_create_concurrency, when set above 0, is used
+// directly. Otherwise the limit is derived from the UTXO store's own batcher
+// settings: StoreBatcherSize * BatcherMaxConcurrent, so every batcher worker
+// can have a full batch of callers queued behind it, floored at
+// StoreBatcherSize * 8 for a store whose BatcherMaxConcurrent is 0 (unbounded
+// workers) — the flat multiplier the derivation replaces.
+func quickValidateCreateLimit(bv *settings.BlockValidationSettings, store *settings.UtxoStoreSettings) int {
+	if bv.QuickValidateCreateConcurrency > 0 {
+		return bv.QuickValidateCreateConcurrency
+	}
+
+	derived := store.StoreBatcherSize * store.BatcherMaxConcurrent
+	floor := store.StoreBatcherSize * 8
+
+	if derived > floor {
+		return derived
+	}
+
+	return floor
 }
 
 // createAndSpendUTXOsForBatch creates and spends UTXOs for all transactions in a batch.
@@ -1254,150 +1580,515 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	lockUTXOs := !u.quickValidateSkipsUtxoLock(block)
 
-	// Phase 1: Create UTXOs in parallel, collecting any that already exist
-	createG, createCtx := errgroup.WithContext(ctx)
-	// Set concurrency to 8x StoreBatcherSize to allow sufficient parallelism while the
-	// UTXO store batches operations internally. This multiplier balances throughput with
-	// resource usage, allowing multiple batches to be in flight simultaneously.
-	util.SafeSetLimit(u.logger, createG, u.settings.UtxoStore.StoreBatcherSize*8)
+	// Partition the batch. A transaction whose inputs all come from outside this block has
+	// nothing in the block to wait for: its parents' coins are already committed, so its
+	// spends and its creates can go to the store in ONE call. A transaction that spends a
+	// sibling still needs the two waves, because that sibling's create has to commit first.
+	//
+	// A transaction whose create is skipped as unspendable also takes the two-wave path,
+	// whatever its parents: skipping the create there means a spend-only call, which the
+	// combined call is not.
+	independent := make([]txApply, 0, len(batch.batchTxs))
 
-	// Track transactions that already exist so we can update their mined info
-	var existingTxsMu sync.Mutex
-	var existingTxHashes []*chainhash.Hash
+	var (
+		chainedCreates []txApply
+		chainedSpends  []*bt.Tx
+		// chainedCount and unspendable measure different axes (parentage and
+		// spendability) and overlap: a chained tx with only unspendable outputs
+		// counts in both, so independent+chained+unspendable can exceed the batch.
+		chainedCount int
+		unspendable  int
+		// dependent counts transactions routed to the chained bucket ONLY because one of
+		// their inputs spends a coin an in-flight predecessor block is still creating.
+		dependent int
+	)
 
-	minedBlockInfo := utxo.MinedBlockInfo{
-		BlockID:     block.ID,
-		BlockHeight: block.Height,
-	}
+	// nil outside the quick window, which makes every window step below a no-op.
+	w := batch.windowOf()
 
 	batchSize := batch.batchEnd - batch.batchStart
 	for i := 0; i < batchSize; i++ {
 		globalSubtreeIdx := batch.batchStart + i
 		txRange := batch.txRanges[i]
+
 		for txIdx := txRange[0]; txIdx < txRange[1]; txIdx++ {
 			tx := batch.batchTxs[txIdx]
+			item := txApply{tx: tx, subtreeIdx: globalSubtreeIdx}
 
-			if shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
-				// Not written to the store; its inputs are still spent in Phase 2.
+			// An unspendable transaction is not written to the store at all; its inputs are
+			// still spent, so it joins the spend wave and no create wave.
+			skipCreate := shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height)
+			if skipCreate {
+				unspendable++
+			}
+
+			// Every input of every transaction is checked, chained or not: a transaction with
+			// no in-block parent can still spend a coin an in-flight PREDECESSOR block is
+			// creating, and that coin is not in the store until that block's gate closes.
+			waitsOnPredecessor := false
+
+			if w != nil {
+				for _, in := range tx.Inputs {
+					if g := w.GateFor(batch.window, in.PreviousTxIDChainHash()); g != nil {
+						waitsOnPredecessor = true
+						batch.waitGates = appendGateOnce(batch.waitGates, g)
+					}
+				}
+			}
+
+			if waitsOnPredecessor {
+				dependent++
+			}
+
+			if !batch.txIsIndependent(txIdx) {
+				chainedCount++
+			} else if !waitsOnPredecessor && !skipCreate {
+				independent = append(independent, item)
 				continue
 			}
 
-			sIdx := globalSubtreeIdx
-			createG.Go(func() error {
-				_, _, err := u.utxoStore.SpendAndCreate(createCtx, tx, block.Height, utxo.WithCreateOnly(),
-					utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-						BlockID:     block.ID,
-						BlockHeight: block.Height,
-						SubtreeIdx:  sIdx,
-					}), utxo.WithLocked(lockUTXOs), utxo.WithSkipExtendedInputs(outpointOnly))
-				if err != nil {
-					if errors.Is(err, errors.ErrTxExists) {
-						// Transaction already exists - collect it for mined info update
-						txHash := tx.TxIDChainHash()
-						existingTxsMu.Lock()
-						existingTxHashes = append(existingTxHashes, txHash)
-						existingTxsMu.Unlock()
-						return nil
-					}
-					return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to create UTXO for tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
-				}
-				return nil
-			})
+			if !skipCreate {
+				chainedCreates = append(chainedCreates, item)
+			}
+
+			chainedSpends = append(chainedSpends, tx)
 		}
 	}
 
-	if err := createG.Wait(); err != nil {
-		return err
+	// Track transactions that already exist so we can update their mined info. Both waves
+	// feed the same list, and it is stamped once, after both.
+	var (
+		existingTxsMu    sync.Mutex
+		existingTxHashes []*chainhash.Hash
+	)
+
+	collectExisting := func(tx *bt.Tx) {
+		txHash := tx.TxIDChainHash()
+
+		existingTxsMu.Lock()
+		existingTxHashes = append(existingTxHashes, txHash)
+		existingTxsMu.Unlock()
 	}
 
-	// Phase 1.5: Update mined info for transactions that already existed
-	// This handles the case where a previous attempt created UTXOs with a different
-	// block ID. Chunked via the shared helper (issue 936): on a fat-batch retry every tx
-	// in the batch already exists, and a single unchunked SetMinedMulti call would
-	// overrun the aerospike client connection pool.
+	// This limit bounds callers, not store statements: each caller blocks until the batch it
+	// lands in commits, so statements actually in flight to the store is (callers / batch size).
+	// A flat 8x StoreBatcherSize therefore capped every store at 8 statements in flight no
+	// matter how many batcher workers it runs — with a 50-row batch and 64 workers that is 8
+	// statements where the store could sustain far more. quickValidateCreateLimit derives the
+	// caller count from the store's own batcher settings instead, so every worker can have a
+	// full batch of callers queued behind it.
+	createLimit := quickValidateCreateLimit(&u.settings.BlockValidation, &u.settings.UtxoStore)
+
+	var oneWaveDuration, chainedDuration time.Duration
+
+	// Closed ONLY when the one-wave apply has succeeded. The chained spend wave waits on it
+	// as well as on its own create wave, and that is a correctness requirement, not caution:
+	// a chained transaction may spend the output of an INDEPENDENT sibling, whose create
+	// commits in the one-wave apply. Spending it before that commit would find no coin.
+	//
+	// Closing it on failure too — with a defer, say — would be a real regression. The
+	// errgroup records the error and cancels gCtx only AFTER the goroutine's function has
+	// returned, so a defer would leave a window in which both select arms are ready and the
+	// choice between them is random: the chained spend wave could run in full against a
+	// partially applied one-wave. The old two-phase code guaranteed no spend at all after a
+	// create-phase failure, and that guarantee is kept here by never releasing the barrier on
+	// a failure and by re-checking gCtx on both sides of the select.
+	//
+	// The waves still start together, so the wait costs nothing whenever the chained create
+	// wave is the slower of the two, which is the case whenever chained transactions dominate.
+	oneWaveDone := make(chan struct{})
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		start := time.Now()
+		defer func() { oneWaveDuration = time.Since(start) }()
+
+		if err := u.applyOneWave(gCtx, block, independent, lockUTXOs, outpointOnly, createLimit, batch.window, collectExisting); err != nil {
+			return err
+		}
+
+		close(oneWaveDone)
+
+		return nil
+	})
+
+	g.Go(func() error {
+		start := time.Now()
+		defer func() { chainedDuration = time.Since(start) }()
+
+		if err := u.createWave(gCtx, block, chainedCreates, lockUTXOs, outpointOnly, createLimit, w, collectExisting); err != nil {
+			return err
+		}
+
+		if err := gCtx.Err(); err != nil {
+			return err
+		}
+
+		select {
+		case <-oneWaveDone:
+		case <-gCtx.Done():
+			return gCtx.Err()
+		}
+
+		if err := gCtx.Err(); err != nil {
+			return err
+		}
+
+		// Both creating waves have returned without error, and a returned store call is a
+		// committed one, so from this point an in-flight successor may spend this batch's
+		// coins. The gate closes BEFORE this batch waits on its own predecessors, so a
+		// successor is never held up by a wait this batch is itself doing.
+		if batch.gate != nil {
+			batch.gate.Close()
+		}
+
+		// No caller slot is held here: waiting on a predecessor while holding one would let a
+		// block ahead of us starve for the budget it needs to close the very gate we want.
+		if len(batch.waitGates) > 0 {
+			gateWaitStart := time.Now()
+
+			for _, gate := range batch.waitGates {
+				if err := gate.Wait(gCtx); err != nil {
+					return err
+				}
+			}
+
+			prometheusBlockValidationQuickWindowGateWait.Observe(time.Since(gateWaitStart).Seconds())
+			prometheusBlockValidationQuickWindowGateWaits.Inc()
+		}
+
+		// Spend the chained transactions, retrying transient store errors the way the
+		// legacy path does (services/legacy/netsync PreValidateTransactions). Unlike
+		// legacy, conflicts are NOT tolerated here: legacy runs the validator with
+		// WithCreateConflicting so block assembly's ProcessConflicting later reconciles
+		// the loser, but the quick path never writes conflicting subtree nodes and has
+		// no such resolver — tolerating ErrTxConflicting would leave an output's spend
+		// permanently attributed to a non-canonical tx. Hard-fail instead (fail-closed).
+		// Dirty-restart replay does not need conflict tolerance: re-spending an output
+		// with the same spender is the store's idempotent success path.
+		return u.spendBatchWithRetry(gCtx, block, chainedSpends, outpointOnly, batch.window)
+	})
+
+	applyErr := g.Wait()
+
+	// Logged on the failure path too: when a batch fails, how long each wave ran for is the
+	// first thing anyone reading the log wants.
+	u.logger.Infof("[createAndSpendUTXOsForBatch][%s] batch %d-%d applied: independent=%d chained=%d dependent=%d unspendable=%d existing=%d (onewave=%v, chained=%v, err=%v)",
+		block.Hash().String(), batch.batchStart, batch.batchEnd, len(independent), chainedCount, dependent, unspendable, len(existingTxHashes), oneWaveDuration, chainedDuration, applyErr)
+
+	if applyErr != nil {
+		return applyErr
+	}
+
+	// Update mined info for transactions that already existed. This handles the case where a
+	// previous attempt created UTXOs with a different block ID. Chunked via the shared helper
+	// (issue 936): on a fat-batch retry every tx in the batch already exists, and a single
+	// unchunked SetMinedMulti call would overrun the aerospike client connection pool.
 	if len(existingTxHashes) > 0 {
+		minedBlockInfo := utxo.MinedBlockInfo{
+			BlockID:     block.ID,
+			BlockHeight: block.Height,
+		}
+
 		if err := utxo.SetMinedMultiChunked(ctx, u.logger, u.utxoStore, existingTxHashes, minedBlockInfo,
 			u.settings.UtxoStore.MaxMinedBatchSize, u.settings.UtxoStore.MaxMinedRoutines); err != nil {
 			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs", block.Hash().String(), len(existingTxHashes), err)
 		}
 	}
 
-	// Phase 2: Spend all transactions, retrying transient store errors the way the
-	// legacy path does (services/legacy/netsync PreValidateTransactions). Unlike
-	// legacy, conflicts are NOT tolerated here: legacy runs the validator with
-	// WithCreateConflicting so block assembly's ProcessConflicting later reconciles
-	// the loser, but the quick path never writes conflicting subtree nodes and has
-	// no such resolver — tolerating ErrTxConflicting would leave an output's spend
-	// permanently attributed to a non-canonical tx. Hard-fail instead (fail-closed).
-	// Dirty-restart replay does not need conflict tolerance: re-spending an output
-	// with the same spender is the store's idempotent success path.
-	return u.spendBatchWithRetry(ctx, block, batch.batchTxs, outpointOnly)
+	return nil
+}
+
+// txApply is one transaction a UTXO wave has to apply, carrying the subtree index its mined
+// block info records. The index belongs to the transaction, not to the goroutine, which is why
+// it travels with it rather than being closed over.
+type txApply struct {
+	tx         *bt.Tx
+	subtreeIdx int
+}
+
+// applyOneWave applies transactions that spend nothing created in this block: their inputs are
+// spent and their outputs created by ONE store call each, so the batch pays for one round of
+// statements instead of two.
+//
+// Neither WithCreateOnly nor WithSpendOnly is passed, which is what makes the call combined.
+// WithIgnoreLocked matches the spend wave it replaces, and both outpoint-only flags are passed
+// because the one call now does the work both phases used to.
+//
+// ErrTxExists is handled exactly as the create wave handles it: the transaction is collected
+// for the mined-info stamp and the call counts as done. That is safe because the store leaves
+// the spends of an existing transaction in place rather than rolling them back — verified
+// against the utxoset store, whose runSpendAndCreateBatch commits the spend phase and then
+// reports the create's ErrTxExists, and against utxo.SequentialSpendAndCreate, which returns
+// the same error with its spends still applied.
+func (u *BlockValidation) applyOneWave(ctx context.Context, block *model.Block, items []txApply,
+	lockUTXOs, outpointOnly bool, limit int, owner *windowEntry, collectExisting func(*bt.Tx)) error {
+	return u.applyTxsWithRetry(ctx, block, "applyOneWave", items, limit, owner, func(ctx context.Context, item txApply) error {
+		_, _, err := u.utxoStore.SpendAndCreate(ctx, item.tx, block.Height,
+			utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+				BlockID:     block.ID,
+				BlockHeight: block.Height,
+				SubtreeIdx:  item.subtreeIdx,
+			}),
+			utxo.WithLocked(lockUTXOs),
+			utxo.WithIgnoreLocked(true),
+			utxo.WithSkipExtendedInputs(outpointOnly),
+			utxo.WithSkipUTXOHashCheck(outpointOnly))
+		if err != nil {
+			if errors.Is(err, errors.ErrTxExists) {
+				collectExisting(item.tx)
+				return nil
+			}
+
+			if errors.IsRetryableError(err) {
+				return err
+			}
+
+			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to apply tx %s", block.Hash().String(), item.tx.TxIDChainHash().String(), err)
+		}
+
+		return nil
+	})
+}
+
+// createWave creates UTXOs in parallel for transactions that spend a sibling, collecting any
+// that already exist. This is the first of the two waves such a transaction still needs, and
+// it is unchanged from when every transaction took it.
+func (u *BlockValidation) createWave(ctx context.Context, block *model.Block, items []txApply,
+	lockUTXOs, outpointOnly bool, limit int, w *quickWindow, collectExisting func(*bt.Tx)) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	createG, createCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, createG, limit)
+
+	for _, item := range items {
+		createG.Go(func() error {
+			// The per-wave limit above is this block's ceiling; the window's budget is the
+			// ceiling shared by every block in flight, so both apply.
+			if w != nil {
+				if err := w.AcquireCaller(createCtx); err != nil {
+					return errors.NewServiceError("[createAndSpendUTXOsForBatch][%s] failed to acquire a quick-window caller slot for tx %s", block.Hash().String(), item.tx.TxIDChainHash().String(), err)
+				}
+
+				defer w.ReleaseCaller()
+			}
+
+			_, _, err := u.utxoStore.SpendAndCreate(createCtx, item.tx, block.Height, utxo.WithCreateOnly(),
+				utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+					BlockID:     block.ID,
+					BlockHeight: block.Height,
+					SubtreeIdx:  item.subtreeIdx,
+				}), utxo.WithLocked(lockUTXOs), utxo.WithSkipExtendedInputs(outpointOnly))
+			if err != nil {
+				if errors.Is(err, errors.ErrTxExists) {
+					// Transaction already exists - collect it for mined info update
+					collectExisting(item.tx)
+					return nil
+				}
+
+				return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to create UTXO for tx %s", block.Hash().String(), item.tx.TxIDChainHash().String(), err)
+			}
+
+			return nil
+		})
+	}
+
+	return createG.Wait()
 }
 
 // spendRetryBackoffDefault is the pause between spend retry attempts. Matches the
 // legacy path's retryBackoff (services/legacy/netsync PreValidateTransactions).
 const spendRetryBackoffDefault = 2 * time.Second
 
-// spendBatchWithRetry spends txs in parallel with bounded retries. Per attempt:
-// retryable errors (transient store overload) queue the tx for the next attempt;
-// anything else — including ErrTxConflicting and ErrSpent — fails hard immediately
-// (fail-closed: the quick path has no ProcessConflicting pipeline to reconcile a
-// tolerated conflict; see the phase-2 call site). Gives up early when an attempt
-// makes no progress. Retry cadence mirrors the legacy path's PreValidateTransactions
-// (maxRetries=10, 2s backoff) so both below-checkpoint implementations converge
-// identically after dirty restarts.
-func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.Block, txs []*bt.Tx, outpointOnly bool) error {
+// spentWithoutConflict reports whether err is a "utxo already spent" that names no spending
+// transaction. One that DOES name a spender is a genuine conflict and keeps its own hard-fail:
+// only the anonymous form is the shape a missed gate produces.
+//
+// Every store in this tree builds a real double spend through errors.NewUtxoSpentError with a
+// non-nil SpendingData, so "no spender named" really does exclude them: sql (sql.go, five call
+// sites, including the concurrently-spent branch that substitutes the attempted spend data when
+// the winner is unknown), aerospike (spend.go), and the shared duplicate_spend.go rejection that
+// both go through; nullstore never raises it at all. A future store that reported ErrSpent
+// with an empty SpendingData would be treated as a possible gate miss, which is the fail-closed
+// direction: a local fault and a retry rather than a peer ban.
+func spentWithoutConflict(err error) bool {
+	if !errors.Is(err, errors.ErrSpent) {
+		return false
+	}
+
+	var spent *errors.UtxoSpentErrData
+	if errors.AsData(err, &spent) && spent != nil && spent.SpendingData != nil {
+		return false
+	}
+
+	return true
+}
+
+// windowMissSuspects returns the input parents the error actually points at.
+//
+// An ErrSpent carries the outpoint in structured data (UtxoSpentErrData.Hash is the parent
+// whose output was spent), so it names exactly one. ErrTxNotFound carries nothing structured —
+// the SQL store spells it "output <txid>:<vout> not found" in the message and nothing else — so
+// the parents are picked out by looking for their txid in the error text, which any store that
+// reports the outpoint at all must contain.
+//
+// An error that names no parent this transaction spends falls back to every parent. That keeps
+// the backstop working against a store whose wording we cannot read, at the cost of the wider
+// any-registered-parent rule for those.
+func windowMissSuspects(tx *bt.Tx, err error) []*chainhash.Hash {
+	var spent *errors.UtxoSpentErrData
+	if errors.AsData(err, &spent) && spent != nil {
+		named := spent.Hash
+
+		return []*chainhash.Hash{&named}
+	}
+
+	text := err.Error()
+	named := make([]*chainhash.Hash, 0, 1)
+
+	for _, in := range tx.Inputs {
+		if parent := in.PreviousTxIDChainHash(); strings.Contains(text, parent.String()) {
+			named = append(named, parent)
+		}
+	}
+
+	if len(named) > 0 {
+		return named
+	}
+
+	all := make([]*chainhash.Hash, 0, len(tx.Inputs))
+	for _, in := range tx.Inputs {
+		all = append(all, in.PreviousTxIDChainHash())
+	}
+
+	return all
+}
+
+// windowMissError reclassifies a spend that found no coin although ANOTHER in-flight block had
+// registered the parent transaction with the window. That combination cannot be the peer's
+// fault: the parent is claimed by a block we are applying right now, so a gate should have held
+// this spend back and did not. It is counted and returned as a local service fault, so legacy
+// sync retries the delivery instead of banning the peer that made it. Every other failure is
+// returned untouched.
+//
+// owner is the calling block's own entry, and it is excluded: a parent this block registered
+// itself was never behind a gate (in-block parents take the two-phase path), so a miss on one of
+// them is this block's own hard failure. Reclassifying it would turn a genuine block failure
+// into an endless local re-request and would move the miss counter, whose ship gate is zero.
+func windowMissError(block *model.Block, w *quickWindow, owner *windowEntry, tx *bt.Tx, err error) error {
+	if w == nil || tx == nil {
+		return err
+	}
+
+	if !errors.Is(err, errors.ErrTxNotFound) && !spentWithoutConflict(err) {
+		return err
+	}
+
+	for _, parent := range windowMissSuspects(tx, err) {
+		if !w.Registered(owner, parent) {
+			continue
+		}
+
+		prometheusBlockValidationQuickWindowMissTotal.Inc()
+
+		return errors.NewServiceError("[quickWindow][%s] spend of %s found no coin although parent %s was registered by an in-flight block; gate miss, failing the block as a local fault", block.Hash().String(), tx.TxIDChainHash().String(), parent.String(), err)
+	}
+
+	return err
+}
+
+// applyTxsWithRetry applies every item in parallel, bounded by limit, with bounded retries.
+// Per attempt: an apply that returns a retryable error (transient store overload) queues its
+// item for the next attempt; anything else — including ErrTxConflicting and ErrSpent — fails
+// hard immediately (fail-closed: the quick path has no ProcessConflicting pipeline to
+// reconcile a tolerated conflict). Gives up early when an attempt makes no progress. Retry
+// cadence mirrors the legacy path's PreValidateTransactions (maxRetries=10, 2s backoff) so
+// both below-checkpoint implementations converge identically after dirty restarts.
+//
+// apply decides what a failure means: it returns the store's error unwrapped when the item
+// should be retried, and a wrapped one when the block should fail. Two waves share this loop —
+// the combined one-wave apply and the spend wave — and both need exactly this behaviour, so it
+// lives here once. stage names the caller in the log and error text.
+//
+// owner is the calling block's window entry, nil outside the window: it supplies both the
+// window whose caller budget the waves share and the identity the miss backstop excludes.
+func (u *BlockValidation) applyTxsWithRetry(ctx context.Context, block *model.Block, stage string,
+	items []txApply, limit int, owner *windowEntry, apply func(context.Context, txApply) error) error {
 	const maxRetries = 10
+
+	w := owner.windowOf()
+
+	if len(items) == 0 {
+		return nil
+	}
 
 	backoff := u.spendRetryBackoff
 	if backoff <= 0 {
 		backoff = spendRetryBackoffDefault
 	}
 
-	pending := txs
-	total := len(txs)
+	pending := items
+	total := len(items)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if ctx.Err() != nil {
-			return errors.NewProcessingError("[spendBatchWithRetry][%s] context cancelled", block.Hash().String())
+			return errors.NewProcessingError("[%s][%s] context cancelled", stage, block.Hash().String())
 		}
 
 		if attempt > 0 {
-			u.logger.Infof("[spendBatchWithRetry][%s] retry %d/%d: %d of %d transactions remaining", block.Hash().String(), attempt, maxRetries, len(pending), total)
+			u.logger.Infof("[%s][%s] retry %d/%d: %d of %d transactions remaining", stage, block.Hash().String(), attempt, maxRetries, len(pending), total)
 			time.Sleep(backoff)
 		}
 
-		spendG, spendCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(u.logger, spendG, u.settings.UtxoStore.SpendBatcherSize*u.settings.UtxoStore.SpendBatcherConcurrency*2)
+		applyG, applyCtx := errgroup.WithContext(ctx)
+		util.SafeSetLimit(u.logger, applyG, limit)
 
 		var (
 			mu        sync.Mutex
-			retryable []*bt.Tx
+			retryable []txApply
 			lastErr   error
 			hardFail  error
 		)
 
-		for _, tx := range pending {
-			tx := tx
-			spendG.Go(func() error {
-				if _, _, err := u.utxoStore.SpendAndCreate(spendCtx, tx, block.Height, utxo.WithSpendOnly(),
-					utxo.WithIgnoreLocked(true), utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
-					if errors.IsRetryableError(err) {
+		for _, item := range pending {
+			applyG.Go(func() error {
+				// The per-wave limit above is this block's ceiling; the window's budget is the
+				// ceiling shared by every block in flight, so both apply.
+				if w != nil {
+					if err := w.AcquireCaller(applyCtx); err != nil {
 						mu.Lock()
-						retryable = append(retryable, tx)
-						lastErr = err
+						hardFail = errors.NewServiceError("[%s][%s] failed to acquire a quick-window caller slot for tx %s", stage, block.Hash().String(), item.tx.TxIDChainHash().String(), err)
 						mu.Unlock()
+
 						return nil
 					}
+
+					defer w.ReleaseCaller()
+				}
+
+				if err := apply(applyCtx, item); err != nil {
+					if errors.IsRetryableError(err) {
+						mu.Lock()
+						retryable = append(retryable, item)
+						lastErr = err
+						mu.Unlock()
+
+						return nil
+					}
+
 					mu.Lock()
-					hardFail = errors.NewProcessingError("[spendBatchWithRetry][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
+					hardFail = windowMissError(block, w, owner, item.tx, err)
 					mu.Unlock()
 				}
+
 				return nil
 			})
 		}
 
-		_ = spendG.Wait()
+		_ = applyG.Wait()
 
 		if hardFail != nil {
 			return hardFail
@@ -1405,19 +2096,45 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 
 		if len(retryable) == 0 {
 			if attempt > 0 {
-				u.logger.Infof("[spendBatchWithRetry][%s] all spends succeeded after %d retries", block.Hash().String(), attempt)
+				u.logger.Infof("[%s][%s] all %d transactions applied after %d retries", stage, block.Hash().String(), total, attempt)
 			}
+
 			return nil
 		}
 
 		if attempt > 0 && len(retryable) >= len(pending) {
-			return errors.NewProcessingError("[spendBatchWithRetry][%s] %d of %d spends failed with no progress, giving up", block.Hash().String(), len(retryable), total, lastErr)
+			return errors.NewProcessingError("[%s][%s] %d of %d applies failed with no progress, giving up", stage, block.Hash().String(), len(retryable), total, lastErr)
 		}
 
 		pending = retryable
 	}
 
-	return errors.NewProcessingError("[spendBatchWithRetry][%s] %d of %d spends still failing after %d retries", block.Hash().String(), len(pending), total, maxRetries)
+	return errors.NewProcessingError("[%s][%s] %d of %d applies still failing after %d retries", stage, block.Hash().String(), len(pending), total, maxRetries)
+}
+
+// spendBatchWithRetry spends txs in parallel with bounded retries, over the shared retry loop.
+// It is the second wave for transactions that spend a sibling of the same block; transactions
+// with no in-block parent never reach it, because applyOneWave has already spent them.
+func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.Block, txs []*bt.Tx, outpointOnly bool, owner *windowEntry) error {
+	items := make([]txApply, len(txs))
+	for i, tx := range txs {
+		items[i] = txApply{tx: tx}
+	}
+
+	limit := u.settings.UtxoStore.SpendBatcherSize * u.settings.UtxoStore.SpendBatcherConcurrency * 2
+
+	return u.applyTxsWithRetry(ctx, block, "spendBatchWithRetry", items, limit, owner, func(ctx context.Context, item txApply) error {
+		if _, _, err := u.utxoStore.SpendAndCreate(ctx, item.tx, block.Height, utxo.WithSpendOnly(),
+			utxo.WithIgnoreLocked(true), utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
+			if errors.IsRetryableError(err) {
+				return err
+			}
+
+			return errors.NewProcessingError("[spendBatchWithRetry][%s] failed to spend tx %s", block.Hash().String(), item.tx.TxIDChainHash().String(), err)
+		}
+
+		return nil
+	})
 }
 
 // writeSubtreeFilesForBatch writes the full subtree files (.subtree) for a batch.
@@ -1636,16 +2353,24 @@ func (u *BlockValidation) extendBatch(
 			}
 
 			// Try to extend from same-block parents first
+			inBlockParent := false
+
 			if !tx.IsExtended() {
-				needsExternalLookup, extendErr := extendTxFromSameBlockParents(tx, extendedTxs)
+				needsExternalLookup, hasSameBlockParent, extendErr := extendTxFromSameBlockParents(tx, extendedTxs)
 				if extendErr != nil {
 					return errors.NewProcessingError("[extendBatch][%s] same-block parent extension failed", block.Hash().String(), extendErr)
 				}
 
+				inBlockParent = hasSameBlockParent
+
 				if needsExternalLookup {
 					txsNeedingExtension = append(txsNeedingExtension, tx)
 				}
+			} else {
+				inBlockParent = hasSameBlockParentInput(tx, extendedTxs)
 			}
+
+			batch.hasInBlockParent = append(batch.hasInBlockParent, inBlockParent)
 
 			extendedTxs[*tx.TxIDChainHash()] = tx
 			tx.SetTxHash(tx.TxIDChainHash())

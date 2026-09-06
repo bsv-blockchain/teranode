@@ -1575,13 +1575,54 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 
 	u.checkParentProcessingComplete(ctx, block, baseURL)
 
+	// windowRoute decides where a missing parent is looked for. It is evaluated here with the
+	// REQUEST height, which is what legacyUnifiedRoute reads: on the only route that can reach
+	// the window, Server.ProcessBlock refuses any block it cannot give a height to, so the
+	// request height is always set and always equals the settled height unless the peer lied.
+	// It is re-evaluated against the settled height below, before anything is admitted.
+	windowRoute := u.blockValidation.quickWindow.Enabled() && u.legacyUnifiedRoute(block, baseURL)
+
+	// parentEntry is the parent's in-flight slot in the quick window, nil when the parent was
+	// already stored (or when this block is not on the window route at all).
+	var parentEntry *windowEntry
+
 	// catchup if we are missing the parent block.
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
 		return errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
 
-	if !parentExists {
+	if !parentExists && windowRoute {
+		// The parent may be in flight: legacy sync hands block N+1 over as soon as N's own
+		// call has started, so wait briefly for N's admission before deciding it is missing.
+		parentEntry = u.blockValidation.quickWindow.AwaitParent(ctx, block.Header.HashPrevBlock, quickWindowParentWait)
+		if parentEntry == nil {
+			// It may have committed and left the window while we waited.
+			parentExists, err = u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
+			if err != nil {
+				return errors.NewServiceError("[processBlockFound][%s] failed to re-check parent block %s", hash.String(), block.Header.HashPrevBlock.String(), err)
+			}
+
+			if !parentExists {
+				// Never the catch-up divert for a window block: that returns nil and legacy
+				// sync would record the block as accepted. A local fault, re-delivered later.
+				return errors.NewServiceError("[processBlockFound][%s] parent %s is neither stored nor in flight", hash.String(), block.Header.HashPrevBlock.String())
+			}
+		}
+	}
+
+	// A legacy block on the unified route must never take the catch-up divert: legacy sync
+	// resolves its own orphans with a getblocks, and the divert returns nil, which legacy
+	// records as an accepted block with nothing stored. It can only get here when the two
+	// services disagree about the setting — legacy has the window on, so it handed this block
+	// over with its parent still in flight here, and this service has it off, so there is no
+	// window to find that parent in. Fail closed, naming the setting, rather than silently
+	// losing the block.
+	if !parentExists && parentEntry == nil && !windowRoute && baseURL == "legacy" && u.legacyUnifiedRoute(block, baseURL) {
+		return errors.NewServiceError("[processBlockFound] legacy block %s has no stored parent and the quick window is off on this service; check blockvalidation_quick_window_blocks matches on legacy and block validation", hash.String())
+	}
+
+	if !parentExists && parentEntry == nil {
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
 			u.logger.Debugf("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
@@ -1600,40 +1641,121 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return nil
 	}
 
-	// Settle the peer-supplied height against the on-chain parent before anything reads
-	// block.Height (block-assembly gating and the unified-route decision below, and downstream
-	// the checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
-	// See deriveBlockHeight.
-	_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
-	if err != nil {
-		return errors.NewServiceError("[processBlockFound][%s] failed to get parent header %s", hash.String(), block.Header.HashPrevBlock.String(), err)
+	// Settle the peer-supplied height against the parent before anything reads block.Height
+	// (block-assembly gating and the unified-route decision below, and downstream the
+	// checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
+	// See deriveBlockHeight. An in-flight parent carries its own settled height on its window
+	// entry, which is the authority for it: it is not in the chain store to be read back yet.
+	var parentHeight uint32
+
+	if parentEntry != nil {
+		parentHeight = parentEntry.Height()
+	} else {
+		_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+		if err != nil {
+			return errors.NewServiceError("[processBlockFound][%s] failed to get parent header %s", hash.String(), block.Header.HashPrevBlock.String(), err)
+		}
+
+		// No implementation returns a nil meta with a nil error, but the settled height is
+		// security-relevant, so fail closed rather than derive it from a nil dereference.
+		// Mirrors the guard on the sibling GetBlockHeader call in ProcessBlock.
+		if parentMeta == nil {
+			return errors.NewServiceError("[processBlockFound][%s] nil metadata for parent header %s", hash.String(), block.Header.HashPrevBlock.String())
+		}
+
+		parentHeight = parentMeta.Height
 	}
 
-	// No implementation returns a nil meta with a nil error, but the settled height is
-	// security-relevant, so fail closed rather than derive it from a nil dereference.
-	// Mirrors the guard on the sibling GetBlockHeader call in ProcessBlock.
-	if parentMeta == nil {
-		return errors.NewServiceError("[processBlockFound][%s] nil metadata for parent header %s", hash.String(), block.Header.HashPrevBlock.String())
-	}
-
-	settledHeight, err := deriveBlockHeight(block.Height, parentMeta.Height)
+	settledHeight, err := deriveBlockHeight(block.Height, parentHeight)
 	if err != nil {
 		return errors.NewBlockInvalidError("[processBlockFound][%s] rejecting block with peer-inconsistent height", hash.String(), err)
 	}
 
 	block.Height = settledHeight
 
+	// Unified below-checkpoint route: legacy blocks go through the same quick-validation
+	// machinery as native catchup (default off). Re-evaluated on the settled height, which is
+	// what every consumer downstream reads.
+	unifiedRoute := u.legacyUnifiedRoute(block, baseURL)
+
+	// The two evaluations disagree only if the checkpoint boundary moved between them, which
+	// takes a local settings or params change: deriveBlockHeight has already refused every
+	// non-zero claim that is not parent+1, and the window route is only reachable with a claim
+	// set. So the cause is ours, never the peer's, and this is a local fault. It is here so
+	// that a caller which does reach it fails closed rather than being admitted on a route it
+	// no longer belongs to.
+	if windowRoute && !unifiedRoute {
+		return errors.NewServiceError("[processBlockFound][%s] the unified route closed under this block at height %d between the request height and the settled height", hash.String(), block.Height)
+	}
+
+	// Admission comes BEFORE the block-assembly gate. The gate can park a block for as long
+	// as block assembly is behind, and a block parked outside the window holds no slot in it,
+	// so the successor legacy sync is already sending would find no parent to chain to.
+	var entry *windowEntry
+
+	if windowRoute {
+		var duplicate bool
+
+		entry, duplicate, err = u.blockValidation.quickWindow.Admit(ctx, block)
+		if err != nil {
+			// Admit's own refusals are already service errors, but a caller parked below depth
+			// hands back the bare context error, which errors.IsTransientLocalError does not
+			// recognise: legacy sync would rotate the peer over our own shutdown.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return errors.NewServiceError("[processBlockFound][%s] admission cancelled", hash.String(), err)
+			}
+
+			return err
+		}
+
+		if duplicate {
+			// Another delivery of this block is live. Its outcome is this call's outcome:
+			// starting a second attempt would race the first through the store.
+			u.logger.Infof("[processBlockFound][%s] block already in flight, waiting for that attempt", hash.String())
+			return entry.WaitCommitted(ctx)
+		}
+
+		// Safe to write here and nowhere else: the committer cannot run this entry until its
+		// owner (this call) signals StoreDone, which happens later in quickValidateBlock.
+		entry.peerID = peerID
+
+		// The parent we resolved can have left the window between AwaitParent and Admit. If it
+		// committed, it is in the store by now and an empty window is exactly what Admit means
+		// by "the caller confirmed the parent is stored". If it failed, it is not, and this
+		// block must not be committed as if it were the chain tip.
+		if parentEntry != nil && entry.parentEntry() == nil {
+			stored, cerr := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
+			if cerr != nil || !stored {
+				werr := errors.NewServiceError("[processBlockFound][%s] parent %s left the window without committing", hash.String(), block.Header.HashPrevBlock.String())
+				if cerr != nil {
+					werr = errors.NewServiceError("[processBlockFound][%s] failed to re-check parent %s after it left the window", hash.String(), block.Header.HashPrevBlock.String(), cerr)
+				}
+
+				entry.Fail(werr)
+				entry.Leave()
+
+				return werr
+			}
+		}
+	}
+
 	// Wait for block assembly to be ready before processing the block
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
+		if entry != nil {
+			// A parked gate is a local condition. Wrap so legacy sync neither rejects the block
+			// nor rotates the peer, then fail the entry so the window drains behind it.
+			err = errors.NewServiceError("[processBlockFound][%s] block assembly not ready for height %d on the window route", hash.String(), block.Height, err)
+			entry.Fail(err)
+			entry.Leave()
+		}
+
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
 
-	// Unified below-checkpoint route: legacy blocks go through the same
-	// quick-validation machinery as native catchup (default off).
-	if u.legacyUnifiedRoute(block, baseURL) {
+	if unifiedRoute {
 		u.logger.Debugf("[processBlockFound][%s] unified route: quick-validating legacy block at height %d", block.Hash().String(), block.Height)
-		return u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
+		return u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL, entry)
 	}
 
 	// validate the block

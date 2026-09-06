@@ -131,6 +131,6 @@ func Test_HandleBlockDirect(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = sm.HandleBlockDirect(context.Background(), &peer.Peer{}, *block.Hash(), nil)
+	err = sm.HandleBlockDirect(context.Background(), &peer.Peer{}, *block.Hash(), nil, nil)
 	require.NoError(t, err)
 }

@@ -82,7 +82,7 @@ func TestSpendBatchWithRetry(t *testing.T) {
 		spy := &spendRetrySpyStore{failuresLeft: map[chainhash.Hash]int{}, failErr: map[chainhash.Hash]error{}}
 		u, block, txs := newSpendRetryHarness(t, spy)
 
-		require.NoError(t, u.spendBatchWithRetry(context.Background(), block, txs, false))
+		require.NoError(t, u.spendBatchWithRetry(context.Background(), block, txs, false, nil))
 		require.Equal(t, int64(3), spy.spendCalls.Load())
 	})
 
@@ -94,7 +94,7 @@ func TestSpendBatchWithRetry(t *testing.T) {
 		spy.failuresLeft[h] = 1
 		spy.failErr[h] = errors.NewStorageError("transient device overload") // retryable class
 
-		require.NoError(t, u.spendBatchWithRetry(context.Background(), block, txs, false))
+		require.NoError(t, u.spendBatchWithRetry(context.Background(), block, txs, false, nil))
 		// 3 first-attempt + 1 retry
 		require.Equal(t, int64(4), spy.spendCalls.Load())
 	})
@@ -107,7 +107,7 @@ func TestSpendBatchWithRetry(t *testing.T) {
 		spy.failuresLeft[h] = 999
 		spy.failErr[h] = errors.NewTxConflictingError("conflicting")
 
-		err := u.spendBatchWithRetry(context.Background(), block, txs, false)
+		err := u.spendBatchWithRetry(context.Background(), block, txs, false, nil)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxConflicting) || errors.Is(err, errors.ErrProcessing), "hard fail must surface the conflict")
 		require.Equal(t, int64(3), spy.spendCalls.Load()) // first attempt only — never retried
@@ -121,7 +121,7 @@ func TestSpendBatchWithRetry(t *testing.T) {
 		spy.failuresLeft[h] = 1
 		spy.failErr[h] = errors.NewTxInvalidError("bad tx") // not retryable
 
-		require.Error(t, u.spendBatchWithRetry(context.Background(), block, txs, false))
+		require.Error(t, u.spendBatchWithRetry(context.Background(), block, txs, false, nil))
 	})
 
 	t.Run("no progress: permanently-retryable tx gives up with error", func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestSpendBatchWithRetry(t *testing.T) {
 		spy.failuresLeft[h] = 999
 		spy.failErr[h] = errors.NewStorageError("still overloaded")
 
-		err := u.spendBatchWithRetry(context.Background(), block, txs, false)
+		err := u.spendBatchWithRetry(context.Background(), block, txs, false, nil)
 		require.Error(t, err)
 		// gave up on no-progress after attempt 1 (same 1 tx failing), NOT after 10 attempts:
 		// 3 first-attempt calls + 1 retry call = 4
