@@ -32,15 +32,17 @@
 
 ## 1. Introduction
 
-Teranode is designed as a collection of microservices that work together to provide a horizontally scalable and highly efficient blockchain network. The microservices architecture enables Teranode to achieve exceptional throughput exceeding 1 million transactions per second by distributing processing across multiple machines and allowing individual services to scale independently based on demand.
+Teranode is designed as a collection of microservices that work together to provide a horizontally scalable and highly efficient blockchain network. The microservices architecture enables Teranode to achieve exceptional throughput exceeding 1 million transactions per second by distributing processing across multiple machines and allowing most services to scale independently based on demand.
 
 This architectural approach provides several key advantages:
 
 - **Horizontal Scalability**: Services can be deployed across multiple machines, enabling the system to handle increasing transaction volumes by adding more compute resources
-- **Independent Scaling**: Each service can be scaled independently based on its specific resource requirements and bottlenecks
+- **Independent Scaling**: Most services can be scaled independently based on their specific resource requirements and bottlenecks (see the caveat below)
 - **Distributed Processing**: Work is distributed across specialized services that communicate asynchronously through Kafka and synchronously via gRPC
 - **Fault Isolation**: Issues in one service are contained and don't cascade to affect the entire system
 - **Technology Flexibility**: Each service can use the most appropriate technology stack and storage backend for its specific requirements
+
+**Scaling caveat:** the first two points above do not apply to every service. Block Assembly and Blockchain run as single stateful instances, and the shipped example Cluster CRs pin every service to one replica except the Validator. See [2.6 Block Assembly Service](#26-block-assembly-service) for why.
 
 This document provides an overview of each microservice, its responsibilities, and how it interacts with other components in the system.
 
@@ -202,6 +204,12 @@ You can read more about this service in the [Block Validation Service documentat
 
 This service is responsible for creating subtrees and assembling block templates for miners.
 
+**Deployment model:** Block Assembly is not horizontally scalable. It runs as a single stateful instance — one per Teranode node, i.e. one per cluster, not one per Kubernetes worker. There is no leader election or standby: every replica that starts is fully active and will serve mining traffic.
+
+With more than one replica, a mining job exists only in the process that issued the candidate, so a solution routed to any other one is rejected with "job not found". Both replicas also write the same persisted `BlockAssembler` checkpoint, so they overwrite each other's view of the chain tip — a shared store does not fix this, it is part of the problem. How requests spread across replicas depends on how the Block Assembly service address is resolved at runtime, which makes the failure intermittent rather than immediate.
+
+Block Assembly scales vertically (CPU and memory on its single instance) and via subtree sizing — see [Dynamic Subtree Size Adjustment](../services/blockAssembly.md#231-dynamic-subtree-size-adjustment). The stateless services upstream (Propagation, Validator) scale horizontally as usual.
+
 **Key Responsibilities:**
 
 ![Block_Assembly_Service_Container_Diagram.png](../services/img/Block_Assembly_Service_Container_Diagram.png)
@@ -232,6 +240,8 @@ You can read more about this service in the [Block Assembly Service documentatio
 ### 2.7 Blockchain Service
 
 The Blockchain Service manages block updates and maintains the node's copy of the blockchain through a Finite State Machine (FSM) that coordinates blockchain state transitions.
+
+**Deployment model:** like Block Assembly, the Blockchain Service is single-instance — one per Teranode node. Both shipped example Cluster CRs pin it to one replica.
 
 ![Blockchain_Service_Container_Diagram.png](../services/img/Blockchain_Service_Container_Diagram.png)
 

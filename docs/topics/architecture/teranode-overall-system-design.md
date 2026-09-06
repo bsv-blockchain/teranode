@@ -64,7 +64,7 @@ While BTC relies on vertical scalingâ€”increasing the power of individual nodesâ
 4. **Flexibility**:
 
     - BTC: Monolithic architecture makes updates and improvements challenging.
-    - Teranode: Microservices allow independent scaling and updating of specific functions (e.g., transaction validation, block assembly).
+    - Teranode: Microservices allow independent scaling and updating of specific functions (e.g., transaction validation, transaction propagation).
 
 5. **Network Resilience**:
 
@@ -97,7 +97,7 @@ Unlike the fixed 1MB block size in the original Bitcoin implementation, Teranode
 | **Blocks**                            | Transactions are grouped into blocks. Direct transaction data is stored in the block. Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain. | In the BSV blockchain, Bitcoin blocks are stored and propagated using an abstraction using subtrees of transaction IDs. This method significantly streamlines the validation process and synchronization among miners, optimizing the overall efficiency of the network.              |
 | **Block Size**                        | Originally capped at 1MB (1 Megabyte), restricting transactions per block.                                                                                                                     | Current BSV expands to 4GB (4 Gigabytes), increasing transaction capacity. <br/><br/>Teranode removes the size limit, enabling limitless transactions per block.                                                                                                                      |
 | **Processed Transactions per second** | 3.3 to 7 transactions per second.                                                                                                                                                              | Guarantees a minimum of **1 million transactions per second** (100,000 x faster than BTC).                                                                                                                                                                                           |
-| **Scalability Approach**              | Vertical scaling: Increases processing power of individual nodes. Limited by hardware capabilities of single machines. Monolithic architecture makes updates challenging.                      | Horizontal scaling: Distributes workload across multiple machines using a microservices architecture. Allows independent scaling of specific functions (e.g., transaction validation, block assembly). More cost-effective and flexible, with higher resilience to node failures.     |
+| **Scalability Approach**              | Vertical scaling: Increases processing power of individual nodes. Limited by hardware capabilities of single machines. Monolithic architecture makes updates challenging.                      | Horizontal scaling: Distributes workload across multiple machines using a microservices architecture. Allows independent scaling of specific functions (e.g., transaction validation, transaction propagation). More cost-effective and flexible, with higher resilience to node failures.     |
 
 ## 3. System Architecture Overview
 
