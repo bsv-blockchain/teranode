@@ -248,7 +248,7 @@ func TestGetBlockByHeightRouteRegistered(t *testing.T) {
 	// GetBlockByHeight(JSON) also looks up height+1 for the "nextblock" field.
 	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(1)).Return(nil, errors.ErrNotFound)
 
-	repo, err := repository.NewRepository(logger, testSettings, nil, nil, mockBlockchainClient, nil, nil, nil, nil)
+	repo, err := repository.NewRepository(logger, testSettings, nil, nil, mockBlockchainClient, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	httpServer, err := New(logger, testSettings, repo, nil)

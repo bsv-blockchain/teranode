@@ -11,6 +11,7 @@ var (
 	prometheusP2PPublishBlocked                *prometheus.CounterVec
 	prometheusP2PWebsocketNotificationsDropped *prometheus.CounterVec
 	prometheusP2PWebsocketClientsEvicted       prometheus.Counter
+	prometheusP2PGossipKafkaPublishDropped     *prometheus.CounterVec
 
 	prometheusMetricsInitOnce sync.Once
 )
@@ -42,6 +43,16 @@ func _initPrometheusMetrics() {
 		[]string{"type"},
 	)
 
+	prometheusP2PGossipKafkaPublishDropped = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "gossip_kafka_publish_dropped_total",
+			Help:      "Number of gossip announcements dropped because the Kafka producer's publish channel was full, by topic",
+		},
+		[]string{"topic"},
+	)
+
 	prometheusP2PWebsocketClientsEvicted = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -57,4 +68,13 @@ func _initPrometheusMetrics() {
 func notificationDropped(notificationType string) {
 	initPrometheusMetrics()
 	prometheusP2PWebsocketNotificationsDropped.WithLabelValues(notificationType).Inc()
+}
+
+// gossipPublishDropped records a gossip announcement dropped by TryPublish
+// under producer backpressure. A counter rather than a warn log: a backlogged
+// broker is exactly the state a replay flood produces, and one log line per
+// dropped announcement would bury the log when it most needs to stay readable.
+func gossipPublishDropped(topic string) {
+	initPrometheusMetrics()
+	prometheusP2PGossipKafkaPublishDropped.WithLabelValues(topic).Inc()
 }

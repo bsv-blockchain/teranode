@@ -828,3 +828,7 @@ func (m *MockRepositoryForMerkleProof) GetBlockvalidationClient() blockvalidatio
 func (m *MockRepositoryForMerkleProof) GetP2PClient() p2p.ClientI {
 	return nil
 }
+
+func (m *MockRepositoryForMerkleProof) GetPeerRegistryClient() blockchain.PeerRegistryClientI {
+	return nil
+}
